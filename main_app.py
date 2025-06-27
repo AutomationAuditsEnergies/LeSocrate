@@ -39,10 +39,10 @@ print(f"🔗 RAG Service URL: {RAG_SERVICE_URL}")
 if os.getenv("AZURE_SQL_CONNECTION_STRING"):
     # TODO: Configuration Azure SQL Database
     print("🗄️ Mode Azure SQL Database")
-    DB_PATH = "data/database.db"  # Temporaire
+    DB_PATH = "/tmp/database.db"
 else:
     print("🗄️ Mode SQLite local (développement)")
-    DB_PATH = "data/database.db"
+    DB_PATH = "/tmp/database.db"
 
 # SocketIO configuration
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode="eventlet")
