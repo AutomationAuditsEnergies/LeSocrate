@@ -242,7 +242,7 @@
 
           <!-- Balise audio modifiée pour la synchronisation -->
           <audio id="audio">
-            <source src="{{ url_for('static', filename=audio_filename) if audio_filename else '' }}" type="audio/wav">
+            <source src="{{ audio_filename if audio_filename else '' }}" type="audio/wav">
           </audio>
         </div>
 
