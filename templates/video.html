@@ -657,7 +657,7 @@ style="display: none;">
             const currentTime = audio.currentTime;
             const diff = Math.abs(expectedTime - currentTime);
             
-            if (diff > 3) {
+            if (diff > 10 && !audio.paused && audio.readyState >= 2) {
               audio.currentTime = expectedTime;
               console.log(`Resynchronisation: ${currentTime} -> ${expectedTime}`);
             }
