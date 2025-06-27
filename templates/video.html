@@ -241,7 +241,7 @@
           </div>
 
           <!-- Balise audio modifiée pour la synchronisation -->
-          <p>Debug audio_filename: {{ audio_filename }}</p>
+          
           <audio id="audio">
             <source src="{{ audio_filename if audio_filename else '' }}" type="audio/wav">
           </audio>
@@ -697,11 +697,12 @@ style="display: none;">
       // Attendre que l'audio soit chargé ET prêt
       const playAudio = () => {
         console.log(`✅ Audio chargé, démarrage à ${offset}s`);
-        audio.currentTime = offset;
+        
         
         const tryPlay = (attempts = 3) => {
           audio.play()
             .then(() => {
+              audio.currentTime = offset;
               console.log("✅ Audio démarré avec succès");
               isChangingAudio = false;
             })
