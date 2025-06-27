@@ -504,66 +504,38 @@ style="display: none;">
       setupAudioEventListeners();
     });
 
-    // ✅ FONCTION initializeAudio CORRIGÉE
-    function initializeAudio() {
-      console.log("Initialisation de l'audio...");
-      console.log("Audio src:", audio.src);
-      console.log("AudioOffset:", audioOffset);
-      console.log("CurrentAudioId:", currentAudioId);
-      
-      videoZone.classList.remove("hidden");
-      
-      // Vérifier si on a une source audio valide
-      if (!audio.src || audio.src === "" || audio.src.includes("undefined")) {
-        console.warn("Source audio manquante, demande de synchronisation...");
-        socket.emit('sync_request');
-        
+function initializeAudio() {
+  console.log("Initialisation de l'audio...");
+  console.log("Audio src:", audio.src);
+  console.log("AudioOffset:", audioOffset);
+  
+  if (!audio.src || audio.src === "" || audio.src.includes("undefined")) {
+    console.warn("Source audio manquante");
+    socket.emit('sync_request');
+    return;
+  }
+  
+  // ✅ NOUVELLE APPROCHE
+  audio.addEventListener('loadedmetadata', () => {
+    console.log(`Audio chargé, démarrage puis positionnement à ${audioOffset}s`);
+    
+    // D'abord jouer
+    audio.play()
+      .then(() => {
+        // PUIS positionner après que la lecture ait commencé
         setTimeout(() => {
-          if (!audio.src || audio.src === "") {
-            console.error("Impossible d'obtenir la source audio après 3 secondes");
-            fetch('/api/cours-status')
-              .then(response => response.json())
-              .then(data => {
-                if (data.status === 'playing') {
-                  console.log("Récupération via API:", data);
-                  changeAudio(data.audio_filename, data.audio_id, data.offset);
-                }
-              })
-              .catch(e => console.error("Erreur API:", e));
-          }
-        }, 3000);
-        
-        return;
-      }
-      
-      // ✅ CORRECTION: Attendre que l'audio soit chargé AVANT de définir currentTime
-      audio.addEventListener('loadedmetadata', () => {
-        if (audioOffset >= 0 && !isNaN(audioOffset)) {
           audio.currentTime = audioOffset;
-          console.log(`Audio configuré à ${audio.currentTime}s`);
-          
-          audio.play()
-            .then(() => {
-              console.log("Audio démarré avec succès");
-            })
-            .catch(e => {
-              console.log("Lecture audio bloquée, tentative de déblocage:", e);
-              showAudioUnlockButton();
-            });
-        } else {
-          console.warn("Offset audio invalide:", audioOffset);
-          audio.currentTime = 0;
-          audio.play().catch(e => {
-            console.log("Erreur lecture audio:", e);
-            showAudioUnlockButton();
-          });
-        }
-      }, { once: true });
-      
-      // Charger l'audio
-      audio.load();
-    }
-
+          console.log(`✅ Audio repositionné à ${audio.currentTime}s`);
+        }, 100);
+      })
+      .catch(e => {
+        console.log("Lecture bloquée:", e);
+        showAudioUnlockButton();
+      });
+  }, { once: true });
+  
+  audio.load();
+}
     // Fonction pour débloquer l'audio
     function showAudioUnlockButton() {
       const existingBtn = document.getElementById('unlock-audio-btn');
