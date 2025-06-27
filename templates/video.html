@@ -694,30 +694,42 @@ style="display: none;">
       // Mettre à jour l'ID actuel
       currentAudioId = audioId;
 
-      // Attendre que l'audio soit chargé ET prêt
-      const playAudio = () => {
-        console.log(`✅ Audio chargé, démarrage à ${offset}s`);
+    const playAudio = () => {
+  console.log(`✅ Audio chargé, démarrage à ${offset}s`);
+  
+  const tryPlay = (attempts = 3) => {
+    // D'abord démarrer la lecture
+    audio.play()
+      .then(() => {
+        console.log(`✅ Audio démarré, positionnement à ${offset}s`);
         
-        
-        const tryPlay = (attempts = 3) => {
-          audio.play()
-            .then(() => {
-              audio.currentTime = offset;
-              console.log("✅ Audio démarré avec succès");
-              isChangingAudio = false;
-            })
-            .catch(e => {
-              console.warn(`❌ Tentative ${4-attempts} échouée:`, e);
-              if (attempts > 1) {
-                setTimeout(() => tryPlay(attempts - 1), 500);
-              } else {
-                console.error("❌ Impossible de démarrer l'audio automatiquement");
-                showAudioUnlockButton();
-                isChangingAudio = false;
-              }
-            });
+        // Attendre que l'audio soit stable puis positionner
+        const setPosition = () => {
+          if (audio.duration && !isNaN(audio.duration)) {
+            audio.currentTime = offset;
+            console.log(`✅ Position définie: ${audio.currentTime}s`);
+            isChangingAudio = false;
+          } else {
+            // Réessayer si la durée n'est pas encore disponible
+            setTimeout(setPosition, 100);
+          }
         };
         
+        // Attendre un court délai puis positionner
+        setTimeout(setPosition, 200);
+      })
+      .catch(e => {
+        console.warn(`❌ Tentative ${4-attempts} échouée:`, e);
+        if (attempts > 1) {
+          setTimeout(() => tryPlay(attempts - 1), 500);
+        } else {
+          console.error("❌ Impossible de démarrer l'audio automatiquement");
+          showAudioUnlockButton();
+          isChangingAudio = false;
+        }
+      });
+  };
+
         tryPlay();
       };
 
