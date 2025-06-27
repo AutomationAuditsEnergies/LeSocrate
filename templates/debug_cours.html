@@ -1,0 +1,346 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <title>Debug - État du cours</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <meta http-equiv="refresh" content="5">
+</head>
+<body class="bg-gray-900 text-white p-8">
+    <div class="max-w-4xl mx-auto">
+        <h1 class="text-3xl font-bold mb-6"> Debug - État du cours</h1>
+        <p class="text-sm text-gray-400 mb-6">Actualisation automatique toutes les 5 secondes</p>
+        
+        <!-- SIMULATEUR D'HEURE - NOUVEAU -->
+        <div class="bg-gray-800 p-6 rounded-lg mb-6 border-2 border-gray-600">
+            <h2 class="text-xl font-semibold mb-4 text-red-400"> Simulateur d'heure</h2>
+            <div class="grid grid-cols-1 gap-4">
+                <div>
+                    <div class="space-y-2">
+                        <button onclick="simulateTime('start')" 
+                                class="bg-green-600 hover:bg-green-700 px-4 py-2 rounded font-medium transition w-full">
+                             Simuler le début du cours
+                        </button>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- NOUVEAU : Contrôleur de temps personnalisé - VERSION ÉTENDUE -->
+            <div class="bg-green-800 p-4 rounded-lg border-2 border-green-600 mt-4">
+                <h3 class="text-lg font-medium mb-3 text-green-400"> Avancer/Reculer dans le temps</h3>
+                
+                <!-- Première ligne - Gros sauts -->
+                <div class="grid grid-cols-2 md:grid-cols-4 gap-2 mb-2">
+                    <button onclick="jumpTime(-3600)" class="bg-red-700 hover:bg-red-800 px-3 py-2 rounded text-sm transition font-bold">
+                         -1h
+                    </button>
+                    <button onclick="jumpTime(-1800)" class="bg-red-600 hover:bg-red-700 px-3 py-2 rounded text-sm transition">
+                         -30min
+                    </button>
+                    <button onclick="jumpTime(1800)" class="bg-blue-600 hover:bg-blue-700 px-3 py-2 rounded text-sm transition">
+                         +30min
+                    </button>
+                    <button onclick="jumpTime(3600)" class="bg-blue-700 hover:bg-blue-800 px-3 py-2 rounded text-sm transition font-bold">
+                         +1h
+                    </button>
+                </div>
+                
+                <!-- Deuxième ligne - Sauts moyens -->
+                <div class="grid grid-cols-2 md:grid-cols-4 gap-2 mb-2">
+                    <button onclick="jumpTime(-900)" class="bg-red-600 hover:bg-red-700 px-3 py-2 rounded text-sm transition">
+                         -15min
+                    </button>
+                    <button onclick="jumpTime(-300)" class="bg-red-600 hover:bg-red-700 px-3 py-2 rounded text-sm transition">
+                         -5min
+                    </button>
+                    <button onclick="jumpTime(300)" class="bg-blue-600 hover:bg-blue-700 px-3 py-2 rounded text-sm transition">
+                         +5min
+                    </button>
+                    <button onclick="jumpTime(900)" class="bg-blue-600 hover:bg-blue-700 px-3 py-2 rounded text-sm transition">
+                         +15min
+                    </button>
+                </div>
+                
+                <!-- Troisième ligne - Petits sauts -->
+                <div class="grid grid-cols-2 md:grid-cols-4 gap-2 mb-3">
+                    <button onclick="jumpTime(-60)" class="bg-red-500 hover:bg-red-600 px-3 py-2 rounded text-sm transition">
+                         -1min
+                    </button>
+                    <button onclick="jumpTime(-10)" class="bg-red-500 hover:bg-red-600 px-3 py-2 rounded text-sm transition">
+                         -10s
+                    </button>
+                    <button onclick="jumpTime(10)" class="bg-blue-500 hover:bg-blue-600 px-3 py-2 rounded text-sm transition">
+                         +10s
+                    </button>
+                    <button onclick="jumpTime(60)" class="bg-blue-500 hover:bg-blue-600 px-3 py-2 rounded text-sm transition">
+                         +1min
+                    </button>
+                </div>
+                
+                <!-- Contrôle personnalisé -->
+                <div class="flex items-center gap-2 bg-gray-800 p-3 rounded-lg">
+                    <label class="text-sm text-green-200 font-medium">Saut personnalisé :</label>
+                    <input type="number" 
+                           id="custom-time-jump" 
+                           class="w-24 px-2 py-1 bg-gray-700 border border-gray-600 rounded text-white text-sm"
+                           placeholder="60"
+                           value="60">
+                    <span class="text-sm text-green-200">secondes</span>
+                    <button onclick="jumpCustomTime()" 
+                            class="bg-purple-600 hover:bg-purple-700 px-4 py-1 rounded text-sm transition font-medium">
+                         Appliquer
+                    </button>
+                </div>
+                
+                <div class="text-xs text-green-300 mt-3 bg-green-900 p-2 rounded">
+                     <strong>Temps actuel : {{ elapsed_time }}s</strong> → Utilisez les boutons pour naviguer dans le scénario
+                    <br>
+                     <strong>Raccourcis :</strong> 10s • 1min • 5min • 15min • 30min • 1h
+                </div>
+            </div>
+            
+            <div id="simulation-status" class="mt-4 p-3 bg-yellow-900 border border-yellow-600 rounded hidden">
+                <p class="text-yellow-200">⚠️ Mode simulation activé</p>
+            </div>
+        </div>
+        
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <!-- Informations temporelles -->
+            <div class="bg-gray-800 p-6 rounded-lg">
+                <h2 class="text-xl font-semibold mb-4 text-blue-400"> Informations temporelles</h2>
+                <div class="space-y-2">
+                    <p><span class="text-gray-400">Heure de début :</span> {{ heure_debut }}</p>
+                    <p><span class="text-gray-400">Heure actuelle :</span> <span id="current-time">{{ heure_actuelle }}</span></p>
+                    <p><span class="text-gray-400">Temps restant avant début :</span> <span id="temps-restant">{{ temps_restant }}</span>s</p>
+                    <p><span class="text-gray-400">Offset actuel :</span> <span id="offset-actuel">{{ offset }}</span>s</p>
+                </div>
+            </div>
+            
+            <!-- État de l'audio -->
+            <div class="bg-gray-800 p-6 rounded-lg">
+                <h2 class="text-xl font-semibold mb-4 text-green-400"> Audio actuel</h2>
+                <div id="audio-info">
+                    {% if audio_info %}
+                    <div class="space-y-2">
+                        <p><span class="text-gray-400">ID :</span> {{ audio_info.id }}</p>
+                        <p><span class="text-gray-400">Fichier :</span> {{ audio_info.filename }}</p>
+                        <p><span class="text-gray-400">Titre :</span> {{ audio_info.title }}</p>
+                        <p><span class="text-gray-400">Position :</span> {{ offset }}s / {{ audio_info.duration }}s</p>
+                        <div class="w-full bg-gray-700 rounded-full h-2 mt-3">
+                            <div class="bg-green-500 h-2 rounded-full" style="width: {{ progress_percent }}%"></div>
+                        </div>
+                    </div>
+                    {% else %}
+                    <p class="text-yellow-400">Aucun audio en cours</p>
+                    {% endif %}
+                </div>
+            </div>
+            
+            <!-- Utilisateurs connectés -->
+            <div class="bg-gray-800 p-6 rounded-lg">
+                <h2 class="text-xl font-semibold mb-4 text-orange-400"> Utilisateurs</h2>
+                <div class="space-y-2">
+                    <p><span class="text-gray-400">Connectés :</span> <span id="users-count">{{ users_count }}</span></p>
+                    <div class="text-sm text-gray-300" id="users-list">
+                        {% if connections_info %}
+                            {% for conn in connections_info %}
+                            <div class="bg-gray-700 p-2 rounded mb-1">
+                                <p><strong>{{ conn.username }}</strong></p>
+                                <p class="text-xs text-gray-400">SID: {{ conn.sid }}</p>
+                            </div>
+                            {% endfor %}
+                        {% else %}
+                            <p>Aucun utilisateur connecté</p>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Playlist complète -->
+            <div class="bg-gray-800 p-6 rounded-lg">
+                <h2 class="text-xl font-semibold mb-4 text-purple-400"> Playlist</h2>
+                <div class="space-y-2" id="playlist-info">
+                    {% for item in playlist %}
+                    <div class="{% if audio_info and audio_info.id == item.id %}bg-green-900{% else %}bg-gray-700{% endif %} p-3 rounded text-sm">
+                        <p><strong>#{{ item.id }} - {{ item.title }}</strong></p>
+                        <p class="text-gray-400">{{ item.filename }} ({{ item.duration }}s)</p>
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+        </div>
+        
+        <!-- Statut du cours -->
+        <div class="mt-6 bg-gray-800 p-6 rounded-lg">
+            <h2 class="text-xl font-semibold mb-4 text-red-400"> Statut global</h2>
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div class="text-center">
+                    <p class="text-2xl font-bold 
+                        {% if status == 'waiting' %}text-yellow-400
+                        {% elif status == 'playing' %}text-green-400
+                        {% elif status == 'finished' %}text-red-400
+                        {% else %}text-gray-400{% endif %}" id="status-display">
+                        {{ status.upper() }}
+                    </p>
+                    <p class="text-sm text-gray-400">Statut</p>
+                </div>
+                <div class="text-center">
+                    <p class="text-2xl font-bold text-blue-400">{{ total_duration }}s</p>
+                    <p class="text-sm text-gray-400">Durée totale</p>
+                </div>
+                <div class="text-center">
+                    <p class="text-2xl font-bold text-purple-400" id="elapsed-time">{{ elapsed_time }}s</p>
+                    <p class="text-sm text-gray-400">Temps écoulé</p>
+                </div>
+            </div>
+        </div>
+        
+        <div class="mt-8 text-center space-x-4">
+            <a href="/admin" class="bg-blue-600 hover:bg-blue-700 px-6 py-3 rounded-lg font-medium transition">
+                Retour à l'Admin
+            </a>
+            <button onclick="location.reload()" class="bg-green-600 hover:bg-green-700 px-6 py-3 rounded-lg font-medium transition">
+                Actualiser maintenant
+            </button>
+        </div>
+    </div>
+
+    <script>
+        let simulationMode = false;
+        
+        function simulateTime(action) {
+            let targetTime = new Date();
+            const coursStart = new Date('{{ heure_debut.replace(" ", "T") }}');
+            
+            switch(action) {
+                case 'start':
+                    // Simuler le début du cours (maintenant)
+                    targetTime = new Date();
+                    updateCoursStartTime(targetTime);
+                    break;
+                case 'middle':
+                    // Simuler 5 minutes après le début
+                    targetTime = new Date();
+                    const startTime = new Date(targetTime.getTime() - 5 * 60 * 1000);
+                    updateCoursStartTime(startTime);
+                    break;
+                case 'end':
+                    // Simuler fin du cours (20 minutes après)
+                    targetTime = new Date();
+                    const endStartTime = new Date(targetTime.getTime() - 20 * 60 * 1000);
+                    updateCoursStartTime(endStartTime);
+                    break;
+                case 'reset':
+                    // Remettre l'heure réelle
+                    resetToRealTime();
+                    return;
+            }
+            
+            showSimulationStatus(true);
+        }
+        
+        function simulateCustomTime() {
+            const customTime = document.getElementById('custom-time').value;
+            if (!customTime) return;
+            
+            // Envoyer l'heure simulée au serveur
+            fetch('/admin/simulate-current-time', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    simulated_current_time: customTime
+                })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    showSimulationStatus(true);
+                    // Recharger la page pour voir les changements
+                    setTimeout(() => location.reload(), 1000);
+                } else {
+                    alert('Erreur: ' + data.error);
+                }
+            })
+            .catch(error => {
+                console.error('Erreur:', error);
+                alert('Erreur de connexion');
+            });
+        }
+        
+        // NOUVELLES FONCTIONS : Contrôle du temps
+        function jumpTime(seconds) {
+            const currentElapsed = {{ elapsed_time }};
+            const newElapsed = Math.max(0, currentElapsed + seconds); // Pas en dessous de 0
+            
+            console.log(`Saut de ${seconds}s : ${currentElapsed} → ${newElapsed}`);
+            
+            // Calculer la nouvelle heure de début du cours
+            const now = new Date();
+            const newStartTime = new Date(now.getTime() - (newElapsed * 1000));
+            
+            // Appliquer le changement
+            updateCoursStartTime(newStartTime);
+        }
+        
+        function jumpCustomTime() {
+            const customSeconds = parseInt(document.getElementById('custom-time-jump').value) || 0;
+            if (customSeconds === 0) {
+                alert('Veuillez saisir un nombre de secondes');
+                return;
+            }
+            
+            jumpTime(customSeconds);
+        }
+        
+        function updateCoursStartTime(newStartTime) {
+            const isoString = newStartTime.toISOString().slice(0, 19).replace('T', ' ');
+            
+            fetch('/admin/config_cours', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                },
+                body: `date_cours=${newStartTime.toISOString().slice(0, 10)}&heure_cours=${newStartTime.toTimeString().slice(0, 5)}`
+            })
+            .then(() => {
+                showSimulationStatus(true);
+                setTimeout(() => location.reload(), 1000);
+            })
+            .catch(e => console.error('Erreur:', e));
+        }
+        
+        function resetToRealTime() {
+            // Remettre l'heure de début à dans 1 heure (ou à votre convenance)
+            const futureTime = new Date();
+            futureTime.setHours(futureTime.getHours() + 1);
+            updateCoursStartTime(futureTime);
+            showSimulationStatus(false);
+        }
+        
+        function showSimulationStatus(active) {
+            const statusDiv = document.getElementById('simulation-status');
+            if (active) {
+                statusDiv.classList.remove('hidden');
+                statusDiv.innerHTML = '<p class="text-yellow-200">⚠️ Mode simulation activé - Temps artificiel</p>';
+            } else {
+                statusDiv.classList.add('hidden');
+            }
+            simulationMode = active;
+        }
+        
+        // Vérifier si on est en mode simulation au chargement
+        window.addEventListener('DOMContentLoaded', () => {
+            const coursStart = new Date('{{ heure_debut.replace(" ", "T") }}');
+            const now = new Date();
+            const diff = Math.abs(now - coursStart);
+            
+            // Si l'heure de début est très proche de maintenant (moins de 2 minutes), on est probablement en simulation
+            if (diff < 2 * 60 * 1000) {
+                showSimulationStatus(true);
+            }
+        });
+    </script>
+</body>
+</html>

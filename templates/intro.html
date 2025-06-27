@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <title>Présentation du site</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-900 text-white min-h-screen flex items-center justify-center">
+    <div class="text-center">
+        <h1 class="text-4xl font-bold mb-6">🎓 Formation terminée !</h1>
+        <p class="text-xl mb-8">Bienvenue {{ prenom }} {{ nom }}</p>
+        <p class="text-lg mb-8">Découvrez maintenant les fonctionnalités de notre plateforme</p>
+        
+        <div class="space-x-4">
+            <button onclick="window.location.href='/video'" 
+                    class="bg-blue-600 hover:bg-blue-700 px-6 py-3 rounded-lg font-medium transition">
+                Retour au cours
+            </button>
+            <button onclick="window.location.href='/logout'" 
+                    class="bg-gray-600 hover:bg-gray-700 px-6 py-3 rounded-lg font-medium transition">
+                Se déconnecter
+            </button>
+        </div>
+    </div>
+</body>
+</html>

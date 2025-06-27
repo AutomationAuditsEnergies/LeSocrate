@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <title>Admin - Historique</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;600&display=swap" rel="stylesheet" />
+  <style>
+    body {
+      font-family: 'Poppins', sans-serif;
+      background-image: url("/static/images/rocket.jpg");
+      background-size: cover;
+      background-position: center;
+    }
+  </style>
+</head>
+<body class="min-h-screen px-8 py-12 text-white backdrop-blur-sm">
+
+  <!-- 🔝 Titre avec bouton debug -->
+  <div class="flex items-center justify-between mb-6">
+    <h2 class="text-3xl font-bold text-center flex-1">Historique de Connexions</h2>
+    <a href="/debug/cours-info" 
+       class="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg font-medium transition shadow-lg flex items-center gap-2">
+      <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5" viewBox="0 0 24 24" fill="currentColor">
+        <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/>
+      </svg>
+      Debug Cours
+    </a>
+  </div>
+
+  <!-- Messages Flash -->
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+      {% for category, message in messages %}
+        <div class="mb-4 p-4 rounded-xl text-center {% if category == 'error' %}bg-red-500/90 border border-red-400{% else %}bg-green-500/90 border border-green-400{% endif %}">
+          {{ message }}
+        </div>
+      {% endfor %}
+    {% endif %}
+  {% endwith %}
+
+  <!-- ⏰ Configuration de l'heure du cours -->
+  <div class="bg-white/10 backdrop-blur-md rounded-xl p-6 mb-6 border border-white/20">
+    <h3 class="text-xl font-semibold mb-4 text-center">⏰ Configuration de l'heure du cours</h3>
+    
+    <div class="bg-blue-500/20 border border-blue-300/50 rounded-lg p-4 mb-4 text-center">
+      <p class="text-blue-100">
+        <strong>Heure actuelle du cours :</strong> 
+        {{ heure_debut_cours.strftime('%d/%m/%Y à %H:%M') }}
+      </p>
+    </div>
+
+    <form action="/admin/config_cours" method="POST" class="flex flex-wrap gap-4 items-end justify-center">
+      <div>
+        <label for="date_cours" class="block text-sm font-medium text-white mb-1">Date du cours</label>
+        <input type="date" 
+               id="date_cours" 
+               name="date_cours" 
+               value="{{ heure_debut_cours.strftime('%Y-%m-%d') }}"
+               class="px-4 py-2 rounded-full text-gray-800 border border-gray-300 focus:outline-none focus:ring-2 focus:ring-pink-400"
+               required>
+      </div>
+      
+      <div>
+        <label for="heure_cours" class="block text-sm font-medium text-white mb-1">Heure du cours</label>
+        <input type="time" 
+               id="heure_cours" 
+               name="heure_cours" 
+               value="{{ heure_debut_cours.strftime('%H:%M') }}"
+               class="px-4 py-2 rounded-full text-gray-800 border border-gray-300 focus:outline-none focus:ring-2 focus:ring-pink-400"
+               required>
+      </div>
+      
+      <button type="submit" 
+              class="bg-purple-500 text-white px-6 py-2 rounded-full hover:bg-purple-600 shadow-md transition">
+        Mettre à jour
+      </button>
+    </form>
+  </div>
+
+  <!-- ⏳ Temps cumulé -->
+  <p class="text-lg mb-4 text-center"><strong>Temps total cumulé :</strong> {{ temps_total }}</p>
+
+  <!-- 🔍 Formulaire de recherche -->
+  <form method="get" action="/admin" class="flex flex-wrap items-center justify-center gap-4 mb-6">
+    <input type="text" id="prenom" name="prenom" placeholder="Prénom à rechercher"
+           value="{{ prenom_recherche }}"
+           class="px-4 py-2 rounded-full text-gray-800 border border-gray-300 focus:outline-none focus:ring-2 focus:ring-pink-400" />
+    <button type="submit"
+            class="bg-pink-500 text-white px-5 py-2 rounded-full hover:bg-pink-600 shadow-md transition">Rechercher</button>
+    <a href="/admin" class="bg-gray-400 text-white px-5 py-2 rounded-full hover:bg-gray-500 shadow-md transition">Réinitialiser</a>
+    <a href="/export_excel?prenom={{ prenom_recherche }}" class="bg-green-500 text-white px-5 py-2 rounded-full hover:bg-green-600 shadow-md transition">Exporter en Excel</a>
+  </form>
+
+  <!-- 📊 Tableau -->
+  <div class="overflow-x-auto">
+    <table class="w-full bg-white/90 text-black rounded-xl overflow-hidden shadow-xl">
+      <thead class="bg-gradient-to-r from-pink-500 to-fuchsia-600 text-white">
+        <tr>
+          <th class="px-4 py-2 text-left">ID</th>
+          <th class="px-4 py-2 text-left">Nom</th>
+          <th class="px-4 py-2 text-left">Prénom</th>
+          <th class="px-4 py-2 text-left">Arrivée</th>
+          <th class="px-4 py-2 text-left">Départ</th>
+          <th class="px-4 py-2 text-left">Durée</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for log in logs %}
+        <tr class="border-t border-gray-200 hover:bg-gray-100/80">
+          <td class="px-4 py-2">{{ log[0] }}</td>
+          <td class="px-4 py-2">{{ log[1] }}</td>
+          <td class="px-4 py-2">{{ log[2] }}</td>
+          <td class="px-4 py-2">{{ log[3] }}</td>
+          <td class="px-4 py-2">{{ log[4] or "Encore connecté" }}</td>
+          <td class="px-4 py-2">{{ log[5] }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <!-- 🚪 Bouton de déconnexion admin -->
+  <div class="text-center mt-8">
+    <a href="/logout_admin" 
+       class="bg-red-600 hover:bg-red-700 text-white px-6 py-3 rounded-full font-medium transition shadow-lg">
+      Se déconnecter (Admin)
+    </a>
+  </div>
+
+</body>
+</html>

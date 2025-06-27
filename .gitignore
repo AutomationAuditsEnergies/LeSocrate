@@ -1,0 +1,12 @@
+# Base de données
+data/
+*.db
+*.sqlite
+
+# Fichiers système
+.DS_Store
+__pycache__/
+*.pyc
+
+# Variables d'environnement
+.env

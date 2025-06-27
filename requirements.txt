@@ -1,0 +1,8 @@
+azure_storage==0.37.0
+eventlet==0.40.1
+Flask==3.1.1
+Flask_SocketIO==5.5.1
+openpyxl==3.1.5
+python-dotenv==1.1.1
+pytz==2023.3.post1
+Requests==2.32.4

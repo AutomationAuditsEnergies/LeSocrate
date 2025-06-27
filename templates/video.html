@@ -1,0 +1,1067 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <title>Cours audio</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.socket.io/4.6.1/socket.io.min.js"></script>
+
+  <style>
+    html, body {
+      height: 100%;
+      margin: 0;
+      overflow: hidden;
+    }
+  
+    #send-btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+  
+    audio {
+      display: none;
+    }
+  
+    /* ✅ Redimensionnement animé quand le chat s'ouvre */
+    .main-content {
+      transition: all 0.4s ease;
+    }
+    
+    .main-content.decale-gauche {
+      transform: translateX(-8%);
+    }
+
+    /* Animation fade-in pour les messages */
+    @keyframes fade-in {
+      from {
+        opacity: 0;
+        transform: translateY(10px);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+
+    .animate-fade-in {
+      animation: fade-in 0.3s ease-out;
+    }
+
+    /* Scrollbar personnalisée */
+    .scrollbar-thin::-webkit-scrollbar {
+      width: 6px;
+    }
+
+    .scrollbar-thumb-gray-600::-webkit-scrollbar-thumb {
+      background-color: #4b5563;
+      border-radius: 3px;
+    }
+
+    .scrollbar-track-transparent::-webkit-scrollbar-track {
+      background: transparent;
+    }
+  
+    /* Lemon Milk */
+    @font-face {
+      font-family: 'Lemon Milk';
+      src: url("{{ url_for('static', filename='fonts/LEMONMILK-Regular.otf') }}") format("opentype");
+      font-weight: normal;
+      font-style: normal;
+    }
+  
+    .lemon-title {
+      font-family: 'Lemon Milk', sans-serif;
+      letter-spacing: 1px;
+    }
+
+    /* Transition fluide pour le changement d'image de fond */
+    body {
+      transition: background-image 0.7s ease-in-out;
+    }
+
+    /* Animation pour le compteur de participants */
+    #participants-count {
+      transition: transform 0.2s ease-out;
+    }
+
+    /* Notification de changement d'audio */
+    .audio-notification {
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      background: rgba(0, 0, 0, 0.9);
+      color: white;
+      padding: 20px 30px;
+      border-radius: 12px;
+      border: 2px solid #3b82f6;
+      z-index: 1000;
+      text-align: center;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+    }
+
+    /* Animation "en train d'écrire" */
+.typing-indicator {
+  background: rgba(55, 65, 81, 0.9);
+  border: 1px solid rgba(75, 85, 99, 0.5);
+  border-radius: 1rem;
+  padding: 0.75rem 1rem;
+  margin-bottom: 0.75rem;
+  backdrop-filter: blur(8px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+.typing-dots {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.typing-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background-color: #9ca3af;
+  animation: typing-bounce 1.4s infinite ease-in-out;
+}
+
+.typing-dot:nth-child(1) { animation-delay: -0.32s; }
+.typing-dot:nth-child(2) { animation-delay: -0.16s; }
+
+@keyframes typing-bounce {
+  0%, 80%, 100% {
+    transform: scale(0.8);
+    opacity: 0.5;
+  }
+  40% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+.professor-avatar {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #3b82f6, #8b5cf6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: white;
+  font-size: 12px;
+  font-weight: bold;
+  margin-right: 8px;
+}
+
+  </style>
+  
+</head>
+
+<body class="flex flex-col h-full w-full bg-cover bg-center relative overflow-hidden"style="background-image: url('{{ url_for('static', filename='images/prof-avatar.jpg') }}');">
+  <!-- Calque noir semi-transparent -->
+  <div id="background-overlay" class="absolute inset-0 bg-red-900/30 z-0 transition-all duration-700"></div>
+
+  <header class="relative z-10 w-full px-6 py-3">
+    <div class="bg-black backdrop-blur-sm border border-white rounded-2xl px-4 py-3 flex items-center justify-between shadow-md">
+      
+      <!-- Partie utilisateur à gauche -->
+      <div class="flex items-center gap-3">
+        <img src="{{ url_for('static', filename='images/user.webp') }}"
+             alt="Photo utilisateur"
+             class="w-10 h-10 rounded-full object-cover bg-gray-700" />
+
+        <div class="text-sm text-white leading-tight">
+          <div class="font-semibold">{{ prenom }} {{ nom }}</div>
+          <div class="text-xs text-gray-400">Participant</div>
+        </div>
+      </div>
+
+      <!-- Titre centré avec police Lemon Milk -->
+      <div class="absolute left-1/2 transform -translate-x-1/2 text-white text-2xl lemon-title">
+        Formation TP CRCD
+      </div>
+
+      <!-- Boutons à droite -->
+      <div class="flex items-center gap-3">
+        <!-- Bouton Mode Sombre -->
+        <button id="dark-mode-btn" class="flex items-center justify-center hover:opacity-90 transition">
+          <svg xmlns="http://www.w3.org/2000/svg" 
+               viewBox="0 0 24 24" 
+               fill="currentColor" 
+               class="w-8 h-8 text-indigo-400 drop-shadow-[0_0_3px_rgba(99,102,241,0.4)]">
+            <path fill-rule="evenodd" d="M9.528 1.718a.75.75 0 0 1 .162.819A8.97 8.97 0 0 0 9 6a9 9 0 0 0 9 9 8.97 8.97 0 0 0 3.463-.69.75.75 0 0 1 .981.98 10.503 10.503 0 0 1-9.694 6.46c-5.799 0-10.5-4.7-10.5-10.5 0-4.368 2.667-8.112 6.46-9.694a.75.75 0 0 1 .818.162Z" clip-rule="evenodd" />
+          </svg>
+        </button>
+
+        <!-- Bouton Quitter -->
+        <button onclick="window.location.href='/logout'" 
+                class="flex items-center justify-center hover:opacity-90 transition">
+          <svg xmlns="http://www.w3.org/2000/svg" 
+               viewBox="0 0 24 24" 
+               fill="currentColor" 
+               class="w-8 h-8 text-purple-400 drop-shadow-[0_0_3px_rgba(147,51,234,0.4)]">
+            <path fill-rule="evenodd" d="M7.5 3.75A1.5 1.5 0 0 0 6 5.25v13.5a1.5 1.5 0 0 0 1.5 1.5h6a1.5 1.5 0 0 0 1.5-1.5V15a.75.75 0 0 1 1.5 0v3.75a3 3 0 0 1-3 3h-6a3 3 0 0 1-3-3V5.25a3 3 0 0 1 3-3h6a3 3 0 0 1 3 3V9A.75.75 0 0 1 15 9V5.25a1.5 1.5 0 0 0-1.5-1.5h-6Zm5.03 4.72a.75.75 0 0 1 0 1.06l-1.72 1.72h10.94a.75.75 0 0 1 0 1.5H10.81l1.72 1.72a.75.75 0 1 1-1.06 1.06l-3-3a.75.75 0 0 1 0-1.06l3-3a.75.75 0 0 1 1.06 0Z" clip-rule="evenodd" />
+          </svg>
+        </button>
+      </div>
+
+    </div>
+  </header>
+
+  <!-- CONTENEUR PRINCIPAL ZOOM-LIKE -->
+  <div class="flex flex-1 overflow-hidden">
+    
+    <!-- CONTENEUR PRINCIPAL POUR VIDÉO + BARRE (nouveau wrapper) -->
+    <div class="main-content flex flex-col flex-1">
+      
+      <!-- ZONE VIDÉO PROFESSEUR -->
+      <div class="flex-1 flex flex-col items-center justify-center p-4">
+        <div id="video-zone"
+        class="relative aspect-video w-full max-w-3xl rounded-xl overflow-hidden bg-gray-800 flex items-center justify-center border-2 border-white shadow-[0_0_12px_rgba(255,255,255,0.2)]">
+          <!-- Pictogramme utilisateur centré -->
+          <div class="flex flex-col items-center justify-center">
+            <!-- Cercle blanc avec icône utilisateur sombre -->
+            <div class="w-32 h-32 rounded-full bg-white flex items-center justify-center">
+              <!-- Vous pouvez remplacer ce SVG par votre propre image si vous préférez -->
+              <svg xmlns="http://www.w3.org/2000/svg"
+                   class="w-20 h-20 text-gray-800"
+                   fill="currentColor" viewBox="0 0 24 24">
+                <path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 
+                         1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 
+                         4v2h16v-2c0-2.66-5.33-4-8-4z"/>
+              </svg>
+            </div>
+            <!-- Légende en dessous -->
+            <span class="mt-3 text-white text-lg font-medium">Alain</span>
+          </div>
+
+          <!-- Étiquette (optionnelle) "Prof. IA" toujours en bas à gauche -->
+          <div class="absolute bottom-2 left-2 bg-black/50 text-white text-sm px-3 py-1 rounded-lg">
+            Professeur
+          </div>
+
+          <!-- Balise audio modifiée pour la synchronisation -->
+          <audio id="audio">
+            <source src="{{ url_for('static', filename=audio_filename) if audio_filename else '' }}" type="audio/wav">
+          </audio>
+        </div>
+
+<!-- BOUTON D'ACTIVATION AUDIO - VERSION DISCRÈTE -->
+<button id="unlock-audio-btn" 
+onclick="unlockAudio()" 
+class="fixed bottom-6 left-6 bg-black/60 hover:bg-black/80 backdrop-blur-md text-white px-4 py-3 rounded-lg font-medium z-[9999] shadow-lg border border-white/10 transition-all duration-300 hover:scale-105 cursor-pointer hover:shadow-xl"
+style="display: none;">
+<div class="flex items-center gap-2">
+<svg class="w-5 h-5 text-white/70" fill="currentColor" viewBox="0 0 24 24">
+<path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02z"/>
+</svg>
+<span class="text-sm text-white/90">Cliquez pour activer l'audio</span>
+</div>
+</button>
+        
+        <!-- Affichage du titre de l'audio en cours (optionnel) -->
+        <div id="audio-title-display" class="text-white text-sm mt-2 text-center opacity-0">
+          En cours : {{ audio_title if audio_title else 'Formation terminée' }}
+        </div>
+      </div>
+
+      <!-- BARRE DE COMMANDES BASSE AMÉLIORÉE -->
+      <div id="command-bar" class="w-full flex justify-center pb-6 z-20">
+        <div class="bg-black/80 border border-white rounded-2xl px-10 py-4 shadow-xl flex items-center gap-10 backdrop-blur-sm">
+          
+          <!-- Bouton "Mute" -->
+          <button id="mute-btn" class="flex flex-col items-center hover:opacity-80 transition">
+            <svg xmlns="http://www.w3.org/2000/svg"
+                 viewBox="0 0 24 24"
+                 fill="currentColor"
+                 class="w-8 h-8 text-pink-400 drop-shadow-[0_0_3px_rgba(255,105,180,0.4)]">
+              <path d="M13.5 4.06c0-1.336-1.616-2.005-2.56-1.06l-4.5 4.5H4.508c-1.141 0-2.318.664-2.66 1.905A9.76 9.76 0 0 0 1.5 12c0 .898.121 1.768.35 2.595.341 1.24 1.518 1.905 2.659 1.905h1.93l4.5 4.5c.945.945 2.561.276 2.561-1.06V4.06ZM17.78 9.22a.75.75 0 1 0-1.06 1.06L18.44 12l-1.72 1.72a.75.75 0 1 0 1.06 1.06l1.72-1.72 1.72 1.72a.75.75 0 1 0 1.06-1.06L20.56 12l1.72-1.72a.75.75 0 1 0-1.06-1.06l-1.72 1.72-1.72-1.72Z" />
+            </svg>
+            <span class="text-xs text-white mt-1">Désactiver le son</span>
+          </button>
+
+          <!-- Bouton "Participants" avec compteur -->
+          <div id="participants-container" class="flex flex-col items-center hover:opacity-80 transition cursor-pointer">
+            <div class="relative">
+              <svg xmlns="http://www.w3.org/2000/svg"
+                   viewBox="0 0 24 24"
+                   fill="currentColor"
+                   class="w-8 h-8 text-orange-400 drop-shadow-[0_0_3px_rgba(255,165,0,0.3)]">
+                <path d="M4.5 6.375a4.125 4.125 0 1 1 8.25 0 4.125 4.125 0 0 1-8.25 0ZM14.25 8.625a3.375 3.375 0 1 1 6.75 0 3.375 3.375 0 0 1-6.75 0ZM1.5 19.125a7.125 7.125 0 0 1 14.25 0v.003l-.001.119a.75.75 0 0 1-.363.63 13.067 13.067 0 0 1-6.761 1.873c-2.472 0-4.786-.684-6.76-1.873a.75.75 0 0 1-.364-.63l-.001-.122ZM17.25 19.128l-.001.144a2.25 2.25 0 0 1-.233.96 10.088 10.088 0 0 0 5.06-1.01.75.75 0 0 0 .42-.643 4.875 4.875 0 0 0-6.957-4.611 8.586 8.586 0 0 1 1.71 5.157v.003Z" />
+              </svg>
+              <!-- Badge compteur -->
+              <div id="participants-count" class="absolute -top-1 -right-1 bg-green-500 text-white text-xs font-bold rounded-full w-5 h-5 flex items-center justify-center shadow-lg hidden">
+                1
+              </div>
+            </div>
+            <span class="text-xs text-white mt-1">Participants</span>
+          </div>
+
+          <!-- Bouton "Open Chat" -->
+          <button id="chat-toggle-btn" class="flex flex-col items-center hover:opacity-80 transition">
+            <svg xmlns="http://www.w3.org/2000/svg"
+                 viewBox="0 0 24 24"
+                 fill="currentColor"
+                 class="w-8 h-8 text-yellow-300 drop-shadow-[0_0_3px_rgba(253,224,71,0.4)]">
+              <path fill-rule="evenodd"
+                    d="M4.804 21.644A6.707 6.707 0 0 0 6 21.75a6.721 6.721 0 0 0 3.583-1.029c.774.182 1.584.279 2.417.279 5.322 0 9.75-3.97 9.75-9 0-5.03-4.428-9-9.75-9s-9.75 3.97-9.75 9c0 2.409 1.025 4.587 2.674 6.192.232.226.277.428.254.543a3.73 3.73 0 0 1-.814 1.686.75.75 0 0 0 .44 1.223ZM8.25 10.875a1.125 1.125 0 1 0 0 2.25 1.125 1.125 0 0 0 0-2.25ZM10.875 12a1.125 1.125 0 1 1 2.25 0 1.125 1.125 0 0 1-2.25 0Zm4.875-1.125a1.125 1.125 0 1 0 0 2.25 1.125 1.125 0 0 0 0-2.25Z"
+                    clip-rule="evenodd" />
+            </svg>
+            <span class="text-xs text-white mt-1">Ouvrir le tchat</span>
+          </button>
+
+        </div>
+      </div>
+      
+    </div>
+
+    <!-- ZONE CHAT LATÉRAL FLOTTANT -->
+    <div id="chat"
+         style="display:none;"
+         class="fixed top-24 right-6 bottom-6 w-96 bg-black border-2 border-white rounded-2xl flex flex-col shadow-2xl z-30 transform translate-x-full transition-transform duration-500 ease-out">
+      
+      <!-- En-tête du chat -->
+      <div class="px-6 py-4 border-b border-white/30 flex-shrink-0 rounded-t-2xl">
+        <div class="flex items-center justify-between">
+          <div class="flex items-center gap-3">
+            <div class="w-3 h-3 bg-green-400 rounded-full animate-pulse"></div>
+            <h3 class="text-lg font-semibold text-white"> Chat en direct</h3>
+          </div>
+          <button id="close-chat-btn" class="text-white/60 hover:text-white transition-colors">
+            <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/>
+            </svg>
+          </button>
+        </div>
+        <p class="text-xs text-gray-400 mt-1">Posez vos questions au professeur</p>
+      </div>
+
+      <!-- Zone des messages -->
+      <div id="messages" class="flex-1 overflow-y-auto p-4 space-y-3 scrollbar-thin scrollbar-thumb-gray-600 scrollbar-track-transparent min-h-0"></div>
+      
+      <!-- Zone de saisie -->
+      <div class="p-4 border-t border-white/30 flex-shrink-0 rounded-b-2xl">
+        <div class="flex gap-3">
+          <div class="flex-1 relative">
+            <input id="question"
+                   placeholder="Écris ta question..."
+                   class="w-full px-4 py-3 bg-gray-800/80 border border-gray-600/50 rounded-xl text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500/50 transition-all" />
+          </div>
+          <button id="send-btn"
+                  disabled
+                  class="px-6 py-3 bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 disabled:from-gray-600 disabled:to-gray-700 disabled:cursor-not-allowed text-white rounded-xl font-medium transition-all duration-200 transform hover:scale-105 disabled:hover:scale-100 shadow-lg">
+            <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
+            </svg>
+          </button>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Champs cachés pour la synchronisation -->
+  <input type="hidden" id="username" value="{{ prenom }} {{ nom }}">
+  <input type="hidden" id="audio-id" value="{{ audio_id if audio_id else 0 }}">
+  <input type="hidden" id="audio-filename" value="{{ audio_filename if audio_filename else '' }}">
+
+  <script>
+    // Variables pour la synchronisation
+    let currentAudioId = parseInt(document.getElementById("audio-id").value);
+    let syncInterval;
+    let isChangingAudio = false;
+
+    const COURS_PLAYLIST = [
+        {"id": 1, "filename": "cours_9h00_9h45.wav", "duration": 2700, "title": "Cours - Bloc 1 (9h00-9h45)", "type": "cours"},
+        {"id": 2, "filename": "qa_9h45_9h55.wav", "duration": 600, "title": "Questions-Réponses IA (9h45-9h55)", "type": "qa"},
+        {"id": 3, "filename": "pause_9h55_10h05.wav", "duration": 600, "title": "Pause (9h55-10h05)", "type": "pause"},
+        {"id": 4, "filename": "cours_10h05_10h50.wav", "duration": 2862, "title": "Cours - Bloc 2 (10h05-10h50)", "type": "cours"},
+        {"id": 5, "filename": "qa_10h50_11h00.wav", "duration": 600, "title": "Questions-Réponses IA (10h50-11h00)", "type": "qa"},
+        {"id": 6, "filename": "pause_11h00_11h05.wav", "duration": 300, "title": "Pause (11h00-11h05)", "type": "pause"},
+        {"id": 7, "filename": "cours_11h05_12h00.wav", "duration": 3300, "title": "Cours - Bloc 3 (11h05-12h00)", "type": "cours"},
+        {"id": 8, "filename": "qa_12h00_12h10.wav", "duration": 600, "title": "Questions-Réponses IA (12h00-12h10)", "type": "qa"},
+        {"id": 9, "filename": "pause_12h10_12h20.wav", "duration": 600, "title": "Pause (12h10-12h20)", "type": "pause"},
+        {"id": 10, "filename": "cours_12h20_13h05.wav", "duration": 2700, "title": "Cours - Bloc 4 (12h20-13h05)", "type": "cours"},
+        {"id": 11, "filename": "qa_13h05_13h15.wav", "duration": 600, "title": "Questions-Réponses IA (13h05-13h15)", "type": "qa"},
+        {"id": 12, "filename": "pause_midi_13h15_14h45.wav", "duration": 5400, "title": "Pause déjeuner (13h15-14h45)", "type": "pause_midi"},
+        {"id": 13, "filename": "cours_14h45_15h45.wav", "duration": 3640, "title": "Cours - Bloc 5 (14h45-15h45)", "type": "cours"},
+        {"id": 14, "filename": "qa_15h45_16h00.wav", "duration": 900, "title": "Questions-Réponses IA (15h45-16h00)", "type": "qa"},
+        {"id": 15, "filename": "cours_16h00_17h00.wav", "duration": 3600, "title": "Cours - Bloc 6 (16h00-17h00)", "type": "cours"},
+        {"id": 16, "filename": "qa_17h00_17h15.wav", "duration": 900, "title": "Questions-Réponses IA (17h00-17h15)", "type": "qa"},
+        {"id": 17, "filename": "pause_17h15_17h25.wav", "duration": 600, "title": "Pause (17h15-17h25)", "type": "pause"},
+        {"id": 18, "filename": "cours_17h25_18h15.wav", "duration": 3023, "title": "Cours - Bloc 7 (17h25-18h15)", "type": "cours"},
+        {"id": 19, "filename": "qa_18h15_18h30.wav", "duration": 900, "title": "Questions-Réponses IA (18h15-18h30)", "type": "qa"}
+    ];
+    
+    // Variable pour détecter si le cours est terminé
+    const coursTermine = {{ cours_termine|tojson if cours_termine is defined else 'false' }};
+
+    // Références DOM
+    const audioOffset     = parseInt("{{ offset if offset else 0 }}");
+    const videoZone       = document.getElementById("video-zone");
+    const audio           = document.getElementById("audio");
+    const chat            = document.getElementById("chat");
+    const sendBtn         = document.getElementById("send-btn");
+    const questionInput   = document.getElementById("question");
+    const messagesDiv     = document.getElementById("messages");
+    const username        = document.getElementById("username").value;
+    const muteBtn         = document.getElementById("mute-btn");
+    const participantsContainer = document.getElementById("participants-container");
+    const participantsCount = document.getElementById("participants-count");
+    let participantsOnline = 1;
+    const chatToggleBtn   = document.getElementById("chat-toggle-btn");
+    const mainContent     = document.querySelector(".main-content");
+    const darkModeBtn     = document.getElementById("dark-mode-btn");
+    const backgroundOverlay = document.getElementById("background-overlay");
+
+    const socket = io();
+    let isMuted = false;
+    let isDarkMode = false;
+    let isProgressVisible = true;
+
+    // Fonction pour gérer l'état du chat selon le type d'audio
+    function updateChatAvailability(audioType) {
+      const chatToggleBtn = document.getElementById("chat-toggle-btn");
+      const chatToggleText = chatToggleBtn.querySelector("span");
+      
+      if (audioType === "qa") {
+        // Activer le chat pendant les Q&R
+        chatToggleBtn.disabled = false;
+        chatToggleBtn.classList.remove("opacity-50", "cursor-not-allowed");
+        chatToggleBtn.classList.add("hover:opacity-80");
+        chatToggleText.textContent = "Ouvrir le tchat";
+        chatToggleBtn.title = "Posez vos questions à l'IA";
+      } else {
+        // Désactiver le chat pendant cours/pauses
+        chatToggleBtn.disabled = true;
+        chatToggleBtn.classList.add("opacity-50", "cursor-not-allowed");
+        chatToggleBtn.classList.remove("hover:opacity-80");
+        chatToggleText.textContent = "Tchat indisponible";
+        chatToggleBtn.title = "Le tchat n'est disponible que pendant les sessions Q&R";
+        
+        // Fermer le chat s'il est ouvert
+        if (!chat.classList.contains("translate-x-full")) {
+          chat.classList.add("translate-x-full");
+          mainContent.classList.remove("decale-gauche");
+          setTimeout(() => {
+            chat.style.display = "none";
+          }, 500);
+        }
+      }
+    }
+
+    // Au chargement de la page
+    window.addEventListener("DOMContentLoaded", () => {
+      // Vérifier si le cours est terminé
+      if (coursTermine) {
+        showCourseFinishedMessage();
+        socket.emit('user_connected', { username });
+        return;
+      }
+
+      // Déterminer le type d'audio initial
+      const initialAudio = COURS_PLAYLIST.find(audio => audio.id === currentAudioId);
+      const initialType = initialAudio ? initialAudio.type : "cours";
+      
+      console.log(`🎯 Type d'audio initial: ${initialType} (ID: ${currentAudioId})`);
+      
+      // Configurer l'état initial du chat
+      updateChatAvailability(initialType);
+      
+      // Délai avant de lancer l'audio pour laisser le temps à la synchronisation
+      setTimeout(() => {
+        initializeAudio();
+      }, 1000);
+
+      // Émettre l'événement de connexion
+      console.log("Émission de user_connected pour:", username);
+      socket.emit('user_connected', { username });
+
+      // Forcer plusieurs tentatives de connexion
+      let connectionAttempts = 0;
+      const maxAttempts = 5;
+      
+      const ensureConnection = () => {
+        connectionAttempts++;
+        console.log(`Tentative de connexion ${connectionAttempts}/${maxAttempts}`);
+        socket.emit('user_connected', { username });
+        
+        if (connectionAttempts < maxAttempts) {
+          setTimeout(ensureConnection, 2000);
+        }
+      };
+      
+      setTimeout(ensureConnection, 2000);
+
+      // Démarrer la vérification de synchronisation
+      syncInterval = setInterval(checkSync, 5000);
+      socket.emit('sync_request');
+
+      // Gestionnaires d'événements audio
+      setupAudioEventListeners();
+    });
+
+    // Fonction pour initialiser l'audio
+    function initializeAudio() {
+      console.log("Initialisation de l'audio...");
+      console.log("Audio src:", audio.src);
+      console.log("AudioOffset:", audioOffset);
+      console.log("CurrentAudioId:", currentAudioId);
+      
+      videoZone.classList.remove("hidden");
+      showUnlockButton();
+      
+      // Vérifier si on a une source audio valide
+      if (!audio.src || audio.src === "" || audio.src.includes("undefined")) {
+        console.warn("Source audio manquante, demande de synchronisation...");
+        socket.emit('sync_request');
+        
+        setTimeout(() => {
+          if (!audio.src || audio.src === "") {
+            console.error("Impossible d'obtenir la source audio après 3 secondes");
+            fetch('/api/cours-status')
+              .then(response => response.json())
+              .then(data => {
+                if (data.status === 'playing') {
+                  console.log("Récupération via API:", data);
+                  changeAudio(data.audio_filename, data.audio_id, data.offset);
+                }
+              })
+              .catch(e => console.error("Erreur API:", e));
+          }
+        }, 3000);
+        
+        return;
+      }
+      
+      if (audioOffset >= 0 && !isNaN(audioOffset)) {
+        audio.currentTime = Math.min(audioOffset, audio.duration || audioOffset);
+        console.log(`Audio configuré à ${audio.currentTime}s`);
+        
+        audio.play()
+          .then(() => {
+            console.log("Audio démarré avec succès");
+          })
+          .catch(e => {
+            console.log("Lecture audio bloquée, tentative de déblocage:", e);
+            showAudioUnlockButton();
+          });
+      } else {
+        console.warn("Offset audio invalide:", audioOffset);
+        audio.currentTime = 0;
+        audio.play().catch(e => console.log("Erreur lecture audio:", e));
+      }
+    }
+
+    // Fonction pour débloquer l'audio
+    function showAudioUnlockButton() {
+      const existingBtn = document.getElementById('unlock-audio-btn');
+      if (existingBtn) existingBtn.remove();
+      
+      const unlockBtn = document.createElement('button');
+      unlockBtn.id = 'unlock-audio-btn';
+      unlockBtn.innerHTML = `
+        <div class="flex items-center gap-2">
+          <svg class="w-5 h-5 text-white/70" fill="currentColor" viewBox="0 0 24 24">
+            <path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02z"/>
+          </svg>
+          <span class="text-sm text-white/90">Cliquez pour activer l'audio</span>
+        </div>
+      `;
+
+      unlockBtn.className = `
+        fixed bottom-6 right-6
+        bg-black/60 hover:bg-black/80
+        backdrop-blur-md
+        text-white px-4 py-3 rounded-lg
+        font-medium z-[9999] 
+        shadow-lg border border-white/10
+        transition-all duration-300 hover:scale-105 cursor-pointer
+        hover:shadow-xl
+      `.replace(/\s+/g, ' ').trim();
+
+      unlockBtn.onclick = () => {
+        console.log("Tentative de déblocage audio par l'utilisateur...");
+        
+        if (!audio.src || audio.src === "") {
+          console.log("Pas de source, récupération via API...");
+          fetch('/api/cours-status')
+            .then(response => response.json())
+            .then(data => {
+              if (data.status === 'playing') {
+                const source = audio.querySelector('source');
+                source.src = `/static/${data.audio_filename}`;
+                audio.load();
+                
+                audio.addEventListener('loadeddata', () => {
+                  audio.currentTime = data.offset;
+                  audio.play().then(() => {
+                    unlockBtn.remove();
+                    console.log("✅ Audio débloqué et démarré avec succès");
+                  });
+                }, { once: true });
+              }
+            });
+        } else {
+          audio.play().then(() => {
+            unlockBtn.remove();
+            console.log("✅ Audio débloqué et démarré avec succès");
+          }).catch(e => {
+            console.error("❌ Échec du déblocage:", e);
+            unlockBtn.innerHTML = `
+              <div class="text-center">
+                <div class="text-lg font-bold">❌ Erreur</div>
+                <div class="text-sm">Impossible de démarrer l'audio</div>
+              </div>
+            `;
+          });
+        }
+      };
+      
+      document.body.appendChild(unlockBtn);
+      console.log("🔊 Bouton d'activation audio affiché - L'utilisateur doit cliquer pour débloquer");
+    }
+
+    // Configurer les événements audio
+    function setupAudioEventListeners() {
+      audio.addEventListener("error", (e) => {
+        console.error("Erreur audio:", e);
+        setTimeout(() => {
+          console.log("Tentative de rechargement de l'audio...");
+          audio.load();
+        }, 2000);
+      });
+
+      audio.addEventListener("canplay", () => {
+        console.log("Audio prêt à être joué");
+      });
+    }
+
+    // Fonction pour vérifier la synchronisation
+    async function checkSync() {
+      if (isChangingAudio) return;
+      
+      try {
+        const response = await fetch('/api/cours-status');
+        const data = await response.json();
+        
+        if (data.status === 'finished') {
+          clearInterval(syncInterval);
+          showCourseFinishedMessage();
+        } else if (data.status === 'playing') {
+          if (data.audio_id !== currentAudioId) {
+            changeAudio(data.audio_filename, data.audio_id, data.offset);
+          } else {
+            const expectedTime = data.offset;
+            const currentTime = audio.currentTime;
+            const diff = Math.abs(expectedTime - currentTime);
+            
+            if (diff > 3) {
+              audio.currentTime = expectedTime;
+              console.log(`Resynchronisation: ${currentTime} -> ${expectedTime}`);
+            }
+          }
+        }
+      } catch (error) {
+        console.error('Erreur de synchronisation:', error);
+      }
+    }
+
+    // Fonction pour changer d'audio avec gestion du chat
+    function changeAudio(filename, audioId, offset) {
+      isChangingAudio = true;
+      console.log(`🔄 Changement d'audio: ${filename} (ID: ${audioId}, Offset: ${offset}s)`);
+      
+      // Trouver le type d'audio dans la playlist
+      const currentAudio = COURS_PLAYLIST.find(audio => audio.id === audioId);
+      const audioType = currentAudio ? currentAudio.type : "cours";
+      
+      console.log(`🎯 Type d'audio détecté: ${audioType}`);
+      
+      // Mettre à jour la disponibilité du chat
+      updateChatAvailability(audioType);
+      
+      // Arrêter l'audio actuel
+      audio.pause();
+      audio.currentTime = 0;
+      
+      // Changer la source audio
+      const source = audio.querySelector('source');
+      source.src = `/static/${filename}`;
+      audio.load();
+
+      // Mettre à jour l'ID actuel
+      currentAudioId = audioId;
+
+      // Attendre que l'audio soit chargé ET prêt
+      const playAudio = () => {
+        console.log(`✅ Audio chargé, démarrage à ${offset}s`);
+        audio.currentTime = offset;
+        
+        const tryPlay = (attempts = 3) => {
+          audio.play()
+            .then(() => {
+              console.log("✅ Audio démarré avec succès");
+              isChangingAudio = false;
+            })
+            .catch(e => {
+              console.warn(`❌ Tentative ${4-attempts} échouée:`, e);
+              if (attempts > 1) {
+                setTimeout(() => tryPlay(attempts - 1), 500);
+              } else {
+                console.error("❌ Impossible de démarrer l'audio automatiquement");
+                showAudioUnlockButton();
+                isChangingAudio = false;
+              }
+            });
+        };
+        
+        tryPlay();
+      };
+
+      audio.addEventListener('loadeddata', playAudio, { once: true });
+      audio.addEventListener('canplaythrough', playAudio, { once: true });
+      
+      setTimeout(() => {
+        if (isChangingAudio) {
+          console.warn("⚠️ Timeout: tentative de démarrage forcé");
+          playAudio();
+        }
+      }, 3000);
+    }
+
+    // Fonction pour afficher le message de fin de cours
+    function showCourseFinishedMessage() {
+      const videoZone = document.getElementById("video-zone");
+      videoZone.innerHTML = `
+        <div class="flex flex-col items-center justify-center text-white h-full">
+          <div class="text-6xl mb-6">🎓</div>
+          <h2 class="text-3xl font-bold mb-4">Cours terminé !</h2>
+          <p class="text-lg mb-6 text-center opacity-80">
+            Merci d'avoir participé au premier cours de cette formation.
+          </p>
+          <div class="space-y-4">
+            <button onclick="window.location.href='/logout'" 
+                    class="bg-gray-600 hover:bg-gray-700 px-6 py-3 rounded-lg font-medium transition ml-4">
+              Se déconnecter
+            </button>
+          </div>
+        </div>
+      `;
+      
+      const audioTitleDisplay = document.getElementById('audio-title-display');
+      if (audioTitleDisplay) {
+        audioTitleDisplay.textContent = "Formation terminée";
+      }
+    }
+
+    // Gérer la synchronisation via Socket.IO
+    socket.on('sync_audio', (data) => {
+      console.log("Réception sync_audio:", data);
+      
+      if (data.audio_id !== currentAudioId) {
+        console.log(`Changement d'audio: ${currentAudioId} → ${data.audio_id}`);
+        changeAudio(data.audio_filename, data.audio_id, data.offset);
+      } else {
+        if (!audio.src || audio.src === "" || audio.src.includes("undefined")) {
+          console.log("Définition de la source audio manquante:", data.audio_filename);
+          const source = audio.querySelector('source');
+          source.src = `/static/${data.audio_filename}`;
+          audio.load();
+          
+          audio.addEventListener('loadeddata', () => {
+            audio.currentTime = data.offset;
+            audio.play().catch(e => console.log("Erreur lecture audio:", e));
+          }, { once: true });
+          
+          return;
+        }
+        
+        const diff = Math.abs(data.offset - audio.currentTime);
+        if (diff > 2) {
+          audio.currentTime = data.offset;
+          console.log(`Synchronisation: ${audio.currentTime} → ${data.offset}`);
+        }
+      }
+    });
+
+    // Fonction Mute / Unmute
+    muteBtn.addEventListener("click", () => {
+      isMuted = !isMuted;
+      audio.muted = isMuted;
+      muteBtn.querySelector("span:last-child").textContent = isMuted ? "Réactiver le son" : "Désactiver le son";
+    });
+
+    // Fonction Mode Sombre
+    darkModeBtn.addEventListener("click", () => {
+      isDarkMode = !isDarkMode;
+      
+      if (isDarkMode) {
+        document.body.style.backgroundImage = "url('{{ url_for('static', filename='images/wallpaper.jpg') }}')";
+        backgroundOverlay.style.background = "rgba(0, 0, 0, 0.5)";
+      } else {
+        document.body.style.backgroundImage = "url('{{ url_for('static', filename='images/prof-avatar.jpg') }}')";
+        backgroundOverlay.style.background = "";
+        backgroundOverlay.className = "absolute inset-0 bg-red-900/30 z-0 transition-all duration-700";
+      }
+    });
+
+    // Toggle du chat avec vérification d'état
+    chatToggleBtn.addEventListener("click", () => {
+      if (chatToggleBtn.disabled) {
+        console.log("💬 Chat indisponible pendant cette session");
+        return;
+      }
+      
+      const isChatOpen = !chat.classList.contains("translate-x-full");
+
+      if (isChatOpen) {
+        chat.classList.add("translate-x-full");
+        mainContent.classList.remove("decale-gauche");
+        setTimeout(() => {
+          chat.style.display = "none";
+        }, 500);
+      } else {
+        chat.style.display = "flex";
+        setTimeout(() => {
+          chat.classList.remove("translate-x-full");
+          mainContent.classList.add("decale-gauche");
+        }, 10);
+      }
+    });
+
+    // Bouton de fermeture du chat
+    document.getElementById("close-chat-btn").addEventListener("click", () => {
+      chat.classList.add("translate-x-full");
+      mainContent.classList.remove("decale-gauche");
+      setTimeout(() => {
+        chat.style.display = "none";
+      }, 500);
+    });
+
+    // Activation du bouton d'envoi
+    questionInput.addEventListener('input', () => {
+      sendBtn.disabled = questionInput.value.trim() === '';
+    });
+
+    // Envoi de la question
+    function sendQuestion() {
+      const question = questionInput.value.trim();
+      if (!question) return;
+      // showTypingIndicator();
+      socket.emit('send_question', { username, question });
+      questionInput.value = '';
+      sendBtn.disabled = true;
+    }
+
+    sendBtn.addEventListener('click', sendQuestion);
+    questionInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !sendBtn.disabled) {
+        e.preventDefault();
+        sendQuestion();
+      }
+    });
+
+    // Affichage d'un nouveau message dans le chat
+    function addMessage(user, msg, time) {
+      const isMine = (user === username);
+      const alignment = isMine ? 'items-end self-end' : 'items-start self-start';
+      const bubbleColor = isMine 
+        ? 'bg-gradient-to-r from-blue-500 to-purple-600 text-white' 
+        : 'bg-gray-800/80 text-white border border-gray-600/30';
+      const nameColor = isMine ? 'text-blue-100' : 'text-gray-300';
+      const timeColor = isMine ? 'text-blue-200' : 'text-gray-500';
+
+      const newMessage = document.createElement('div');
+      newMessage.className = `flex flex-col ${alignment} max-w-[85%] animate-fade-in`;
+      newMessage.innerHTML = `
+        <div class="text-xs ${timeColor} mb-1 px-1">${time}</div>
+        <div class="px-4 py-3 rounded-2xl ${bubbleColor} shadow-lg backdrop-blur-sm">
+          <span class="text-xs ${nameColor} block font-medium mb-1">${user}</span>
+          <span class="text-sm whitespace-pre-wrap leading-relaxed">${msg}</span>
+        </div>
+      `;
+      messagesDiv.appendChild(newMessage);
+      messagesDiv.scrollTop = messagesDiv.scrollHeight;
+    }
+
+    // Réception des messages
+    socket.on('receive_question', (data) => {
+      if (data.username === "Professeur") {
+         hideTypingIndicator();
+      }
+      addMessage(data.username, data.question, data.timestamp);
+      if (data.username !== "Professeur") {
+    showTypingIndicator();
+  }
+
+    });
+
+    socket.on("receive_audio", (data) => {
+      const audioB64 = data.audio_b64;
+      const byteArray = Uint8Array.from(atob(audioB64), c => c.charCodeAt(0));
+      const audioBlob  = new Blob([byteArray], { type: "audio/mp3" });
+      const audioUrl   = URL.createObjectURL(audioBlob);
+
+      const newMessage = document.createElement('div');
+      newMessage.className = "flex flex-col items-start self-start max-w-[85%] animate-fade-in";
+      newMessage.innerHTML = `
+        <div class="text-xs text-gray-500 mb-1 px-1">${new Date().toLocaleTimeString()}</div>
+        <div class="px-4 py-3 rounded-2xl bg-gray-800/80 border border-gray-600/30 shadow-lg backdrop-blur-sm">
+          <span class="text-xs text-gray-300 block font-medium mb-2">🤖 Prof IA</span>
+          <audio controls class="w-full mt-2 rounded-lg">
+            <source src="${audioUrl}" type="audio/mp3">
+            Votre navigateur ne supporte pas l'audio.
+          </audio>
+        </div>
+      `;
+      messagesDiv.appendChild(newMessage);
+      messagesDiv.scrollTop = messagesDiv.scrollHeight;
+
+      const audioClient = new Audio(audioUrl);
+      audioClient.play().catch(e => console.log("Erreur lecture audio:", e));
+    });
+
+    // Fonction pour débloquer l'audio
+    function unlockAudio() {
+      console.log("🔊 Tentative de déblocage audio...");
+      
+      document.getElementById('unlock-audio-btn').style.display = 'none';
+      
+      if (!audio.src || audio.src === "" || audio.src.includes("undefined")) {
+        console.log("Récupération de la source audio...");
+        
+        fetch('/api/cours-status')
+          .then(response => response.json())
+          .then(data => {
+            if (data.status === 'playing') {
+              console.log("Chargement de:", data.audio_filename);
+              
+              const source = audio.querySelector('source');
+              source.src = `/static/${data.audio_filename}`;
+              audio.load();
+              
+              audio.addEventListener('loadeddata', () => {
+                audio.currentTime = data.offset;
+                audio.play()
+                  .then(() => console.log("✅ Audio démarré avec succès"))
+                  .catch(e => console.error("❌ Erreur:", e));
+              }, { once: true });
+            }
+          })
+          .catch(e => console.error("Erreur API:", e));
+      } else {
+        audio.play()
+          .then(() => console.log("✅ Audio démarré"))
+          .catch(e => console.error("❌ Erreur:", e));
+      }
+    }
+
+    // Afficher le bouton quand nécessaire
+    function showUnlockButton() {
+      document.getElementById('unlock-audio-btn').style.display = 'block';
+      console.log("🔊 Bouton d'activation affiché");
+    }
+
+    // Code pour les participants
+    let isBadgeVisible = false;
+
+    function updateParticipantsCount(count) {
+  participantsCount.textContent = "6"; // Toujours afficher 6
+  if (isBadgeVisible) {
+    participantsCount.style.transform = 'scale(1.2)';
+    setTimeout(() => {
+      participantsCount.style.transform = 'scale(1)';
+    }, 200);
+  }
+}
+
+// Afficher l'indicateur "Alain écrit..." - Version alignée à gauche
+function showTypingIndicator() {
+  hideTypingIndicator();
+  
+  const typingDiv = document.createElement('div');
+  typingDiv.id = 'typing-indicator';
+  // ← CHANGEMENT ICI : items-start self-start (aligné à gauche comme le prof)
+  typingDiv.className = 'flex items-start self-start max-w-[85%] animate-fade-in';
+  typingDiv.innerHTML = `
+    <div class="typing-indicator">
+      <div class="flex items-center gap-2">
+        <div class="professor-avatar">P</div>
+        <span class="text-xs text-gray-300 font-medium"></span>
+        <div class="typing-dots">
+          <div class="typing-dot"></div>
+          <div class="typing-dot"></div>
+          <div class="typing-dot"></div>
+        </div>
+      </div>
+    </div>
+  `;
+  
+  messagesDiv.appendChild(typingDiv);
+  messagesDiv.scrollTop = messagesDiv.scrollHeight;
+}
+
+// Supprimer l'indicateur de frappe
+function hideTypingIndicator() {
+  const typingIndicator = document.getElementById('typing-indicator');
+  if (typingIndicator) {
+    typingIndicator.remove();
+  }
+}
+
+    participantsContainer.addEventListener("click", () => {
+      isBadgeVisible = !isBadgeVisible;
+      
+      if (isBadgeVisible) {
+        participantsCount.classList.remove('hidden');
+        participantsCount.style.transform = 'scale(0)';
+        setTimeout(() => {
+          participantsCount.style.transform = 'scale(1)';
+        }, 10);
+      } else {
+        participantsCount.style.transform = 'scale(0)';
+        setTimeout(() => {
+          participantsCount.classList.add('hidden');
+          participantsCount.style.transform = 'scale(1)';
+        }, 200);
+      }
+    });
+
+    socket.on('participants_update', (data) => {
+      participantsOnline = data.count;
+      updateParticipantsCount(participantsOnline);
+    });
+
+    socket.on('user_disconnected', (data) => {
+      if (data.username && data.username !== username) {
+        const isChatOpen = !chat.classList.contains("translate-x-full");
+        if (isChatOpen) {
+          addMessage('Système', `${data.username} a quitté la session`, new Date().toLocaleTimeString());
+        }
+      }
+    });
+
+    // Empêche la déconnexion "fantôme"
+    let isReload = false;
+    window.addEventListener("pageshow", (event) => {
+      if (event.persisted || performance.navigation.type === 1) isReload = true;
+      if (event.persisted || performance.navigation.type === 2) window.location.href = "/logout";
+    });
+    
+    window.addEventListener("beforeunload", () => {
+      if (!isReload) navigator.sendBeacon("/deconnexion-auto");
+      if (syncInterval) {
+        clearInterval(syncInterval);
+      }
+    });
+
+    window.addEventListener("beforeunload", () => {
+      if (syncInterval) {
+        clearInterval(syncInterval);
+      }
+    });
+  </script>
+
+</body>
+</html>
