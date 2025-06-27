@@ -371,6 +371,7 @@ style="display: none;">
     let currentAudioId = parseInt(document.getElementById("audio-id").value);
     let syncInterval;
     let isChangingAudio = false;
+    let lastSyncTime = 0; // Pour éviter les resync trop fréquentes
 
     // ✅ PLAYLIST CORRIGÉE AVEC URLs COMPLÈTES
     const COURS_PLAYLIST = [
@@ -496,7 +497,7 @@ style="display: none;">
       setTimeout(ensureConnection, 2000);
 
       // Démarrer la vérification de synchronisation
-      syncInterval = setInterval(checkSync, 5000);
+      syncInterval = setInterval(checkSync, 10000); // Augmenté à 10 secondes
       socket.emit('sync_request');
 
       // Gestionnaires d'événements audio
@@ -647,7 +648,7 @@ style="display: none;">
       });
     }
 
-    // ✅ FONCTION checkSync AVEC RESYNC DÉSACTIVÉE TEMPORAIREMENT
+    // ✅ FONCTION checkSync AVEC SYNCHRONISATION INTELLIGENTE
     async function checkSync() {
       if (isChangingAudio) return;
       
@@ -660,20 +661,26 @@ style="display: none;">
           showCourseFinishedMessage();
         } else if (data.status === 'playing') {
           if (data.audio_id !== currentAudioId) {
+            // ✅ CHANGEMENT D'AUDIO - Toujours synchroniser
             changeAudio(data.audio_filename, data.audio_id, data.offset);
           } else {
-            // ✅ RESYNC DÉSACTIVÉE - Laisser l'audio jouer normalement
-            console.log(`Audio OK - Serveur: ${data.offset}s, Client: ${audio.currentTime}s`);
-            /*
+            // ✅ SYNCHRONISATION INTELLIGENTE - Seulement si très désynchronisé
             const expectedTime = data.offset;
             const currentTime = audio.currentTime;
             const diff = Math.abs(expectedTime - currentTime);
+            const now = Date.now();
             
-            if (diff > 10 && !audio.paused && audio.readyState >= 2) {
+            // Synchroniser seulement si écart > 30 secondes ET audio stable ET pas de resync récente
+            if (diff > 30 && !audio.paused && audio.readyState >= 2 && !audio.seeking && (now - lastSyncTime) > 60000) {
+              console.log(`⚠️ Grosse désynchronisation détectée: ${diff}s`);
               audio.currentTime = expectedTime;
-              console.log(`Resynchronisation: ${currentTime} -> ${expectedTime}`);
+              lastSyncTime = now;
+              console.log(`🔄 Resynchronisation majeure: ${currentTime} → ${expectedTime}`);
+            } else if (diff > 5) {
+              console.log(`📊 Écart acceptable: ${diff.toFixed(1)}s (pas de resync)`);
+            } else {
+              console.log(`✅ Audio synchronisé: écart ${diff.toFixed(1)}s`);
             }
-            */
           }
         }
       } catch (error) {
@@ -723,6 +730,7 @@ style="display: none;">
                   audio.currentTime = offset;
                   console.log(`✅ Position définie: ${audio.currentTime}s`);
                   isChangingAudio = false;
+                  lastSyncTime = Date.now(); // Marquer comme synchronisé
                 } else {
                   // Réessayer si la durée n'est pas encore disponible
                   setTimeout(setPosition, 100);
@@ -783,37 +791,45 @@ style="display: none;">
       }
     }
 
-    // Gérer la synchronisation via Socket.IO
+    // ✅ GÉRER LA SYNCHRONISATION VIA SOCKET.IO - VERSION INTELLIGENTE
     socket.on('sync_audio', (data) => {
       console.log("Réception sync_audio:", data);
       
       if (data.audio_id !== currentAudioId) {
-        console.log(`Changement d'audio: ${currentAudioId} → ${data.audio_id}`);
+        // ✅ CHANGEMENT D'AUDIO - Toujours synchroniser
+        console.log(`Changement d'audio via Socket: ${currentAudioId} → ${data.audio_id}`);
         changeAudio(data.audio_filename, data.audio_id, data.offset);
       } else {
+        // ✅ SYNC POUR NOUVEAUX UTILISATEURS OU SOURCE MANQUANTE
         if (!audio.src || audio.src === "" || audio.src.includes("undefined")) {
-          console.log("Définition de la source audio manquante:", data.audio_filename);
+          console.log("Source audio manquante, synchronisation:", data.audio_filename);
           const source = audio.querySelector('source');
           source.src = data.audio_filename;
           audio.load();
           
-          audio.addEventListener('loadeddata', () => {
+          audio.addEventListener('loadedmetadata', () => {
             audio.currentTime = data.offset;
-            audio.play().catch(e => console.log("Erreur lecture audio:", e));
+            audio.play()
+              .then(() => {
+                console.log("✅ Nouvel utilisateur synchronisé");
+                lastSyncTime = Date.now();
+              })
+              .catch(e => console.log("Erreur lecture audio:", e));
           }, { once: true });
+        } else {
+          // ✅ RESYNC INTELLIGENTE VIA SOCKET - Seulement si très désynchronisé
+          const diff = Math.abs(data.offset - audio.currentTime);
+          const now = Date.now();
           
-          return;
+          if (diff > 30 && !audio.paused && audio.readyState >= 2 && (now - lastSyncTime) > 30000) {
+            console.log(`⚠️ Resync Socket nécessaire: écart ${diff}s`);
+            audio.currentTime = data.offset;
+            lastSyncTime = now;
+            console.log(`🔄 Synchronisation Socket: ${audio.currentTime} → ${data.offset}`);
+          } else {
+            console.log(`📊 Sync Socket ignorée - écart acceptable: ${diff.toFixed(1)}s`);
+          }
         }
-        
-        // ✅ RESYNC SOCKET.IO DÉSACTIVÉE AUSSI
-        console.log(`Sync Socket.IO ignorée - Serveur: ${data.offset}s, Client: ${audio.currentTime}s`);
-        /*
-        const diff = Math.abs(data.offset - audio.currentTime);
-        if (diff > 2) {
-          audio.currentTime = data.offset;
-          console.log(`Synchronisation: ${audio.currentTime} → ${data.offset}`);
-        }
-        */
       }
     });
 
