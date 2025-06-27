@@ -591,7 +591,7 @@ style="display: none;">
             .then(data => {
               if (data.status === 'playing') {
                 const source = audio.querySelector('source');
-                source.src = `/static/${data.audio_filename}`;
+                source.src = data.audio_filename;
                 audio.load();
                 
                 audio.addEventListener('loadeddata', () => {
@@ -688,7 +688,7 @@ style="display: none;">
       
       // Changer la source audio
       const source = audio.querySelector('source');
-      source.src = `/static/${filename}`;
+      source.src = filename;
       audio.load();
 
       // Mettre à jour l'ID actuel
@@ -767,7 +767,7 @@ style="display: none;">
         if (!audio.src || audio.src === "" || audio.src.includes("undefined")) {
           console.log("Définition de la source audio manquante:", data.audio_filename);
           const source = audio.querySelector('source');
-          source.src = `/static/${data.audio_filename}`;
+          source.src = data.audio_filename;
           audio.load();
           
           audio.addEventListener('loadeddata', () => {
@@ -939,7 +939,7 @@ style="display: none;">
               console.log("Chargement de:", data.audio_filename);
               
               const source = audio.querySelector('source');
-              source.src = `/static/${data.audio_filename}`;
+              source.src = data.audio_filename;
               audio.load();
               
               audio.addEventListener('loadeddata', () => {
