@@ -372,26 +372,27 @@ style="display: none;">
     let syncInterval;
     let isChangingAudio = false;
 
+    // ✅ PLAYLIST CORRIGÉE AVEC URLs COMPLÈTES
     const COURS_PLAYLIST = [
-        {"id": 1, "filename": "cours_9h00_9h45.wav", "duration": 2700, "title": "Cours - Bloc 1 (9h00-9h45)", "type": "cours"},
-        {"id": 2, "filename": "qa_9h45_9h55.wav", "duration": 600, "title": "Questions-Réponses IA (9h45-9h55)", "type": "qa"},
-        {"id": 3, "filename": "pause_9h55_10h05.wav", "duration": 600, "title": "Pause (9h55-10h05)", "type": "pause"},
-        {"id": 4, "filename": "cours_10h05_10h50.wav", "duration": 2862, "title": "Cours - Bloc 2 (10h05-10h50)", "type": "cours"},
-        {"id": 5, "filename": "qa_10h50_11h00.wav", "duration": 600, "title": "Questions-Réponses IA (10h50-11h00)", "type": "qa"},
-        {"id": 6, "filename": "pause_11h00_11h05.wav", "duration": 300, "title": "Pause (11h00-11h05)", "type": "pause"},
-        {"id": 7, "filename": "cours_11h05_12h00.wav", "duration": 3300, "title": "Cours - Bloc 3 (11h05-12h00)", "type": "cours"},
-        {"id": 8, "filename": "qa_12h00_12h10.wav", "duration": 600, "title": "Questions-Réponses IA (12h00-12h10)", "type": "qa"},
-        {"id": 9, "filename": "pause_12h10_12h20.wav", "duration": 600, "title": "Pause (12h10-12h20)", "type": "pause"},
-        {"id": 10, "filename": "cours_12h20_13h05.wav", "duration": 2700, "title": "Cours - Bloc 4 (12h20-13h05)", "type": "cours"},
-        {"id": 11, "filename": "qa_13h05_13h15.wav", "duration": 600, "title": "Questions-Réponses IA (13h05-13h15)", "type": "qa"},
-        {"id": 12, "filename": "pause_midi_13h15_14h45.wav", "duration": 5400, "title": "Pause déjeuner (13h15-14h45)", "type": "pause_midi"},
-        {"id": 13, "filename": "cours_14h45_15h45.wav", "duration": 3640, "title": "Cours - Bloc 5 (14h45-15h45)", "type": "cours"},
-        {"id": 14, "filename": "qa_15h45_16h00.wav", "duration": 900, "title": "Questions-Réponses IA (15h45-16h00)", "type": "qa"},
-        {"id": 15, "filename": "cours_16h00_17h00.wav", "duration": 3600, "title": "Cours - Bloc 6 (16h00-17h00)", "type": "cours"},
-        {"id": 16, "filename": "qa_17h00_17h15.wav", "duration": 900, "title": "Questions-Réponses IA (17h00-17h15)", "type": "qa"},
-        {"id": 17, "filename": "pause_17h15_17h25.wav", "duration": 600, "title": "Pause (17h15-17h25)", "type": "pause"},
-        {"id": 18, "filename": "cours_17h25_18h15.wav", "duration": 3023, "title": "Cours - Bloc 7 (17h25-18h15)", "type": "cours"},
-        {"id": 19, "filename": "qa_18h15_18h30.wav", "duration": 900, "title": "Questions-Réponses IA (18h15-18h30)", "type": "qa"}
+        {"id": 1, "filename": "https://formationaudios.blob.core.windows.net/audios/cours_9h00_9h45.wav", "duration": 2700, "title": "Cours - Bloc 1 (9h00-9h45)", "type": "cours"},
+        {"id": 2, "filename": "https://formationaudios.blob.core.windows.net/audios/qa_9h45_9h55.wav", "duration": 600, "title": "Questions-Réponses IA (9h45-9h55)", "type": "qa"},
+        {"id": 3, "filename": "https://formationaudios.blob.core.windows.net/audios/pause_9h55_10h05.wav", "duration": 600, "title": "Pause (9h55-10h05)", "type": "pause"},
+        {"id": 4, "filename": "https://formationaudios.blob.core.windows.net/audios/cours_10h05_10h50.wav", "duration": 2862, "title": "Cours - Bloc 2 (10h05-10h50)", "type": "cours"},
+        {"id": 5, "filename": "https://formationaudios.blob.core.windows.net/audios/qa_10h50_11h00.wav", "duration": 600, "title": "Questions-Réponses IA (10h50-11h00)", "type": "qa"},
+        {"id": 6, "filename": "https://formationaudios.blob.core.windows.net/audios/pause_11h00_11h05.wav", "duration": 300, "title": "Pause (11h00-11h05)", "type": "pause"},
+        {"id": 7, "filename": "https://formationaudios.blob.core.windows.net/audios/cours_11h05_12h00.wav", "duration": 3300, "title": "Cours - Bloc 3 (11h05-12h00)", "type": "cours"},
+        {"id": 8, "filename": "https://formationaudios.blob.core.windows.net/audios/qa_12h00_12h10.wav", "duration": 600, "title": "Questions-Réponses IA (12h00-12h10)", "type": "qa"},
+        {"id": 9, "filename": "https://formationaudios.blob.core.windows.net/audios/pause_12h10_12h20.wav", "duration": 600, "title": "Pause (12h10-12h20)", "type": "pause"},
+        {"id": 10, "filename": "https://formationaudios.blob.core.windows.net/audios/cours_12h20_13h05.wav", "duration": 2700, "title": "Cours - Bloc 4 (12h20-13h05)", "type": "cours"},
+        {"id": 11, "filename": "https://formationaudios.blob.core.windows.net/audios/qa_13h05_13h15.wav", "duration": 600, "title": "Questions-Réponses IA (13h05-13h15)", "type": "qa"},
+        {"id": 12, "filename": "https://formationaudios.blob.core.windows.net/audios/pause_midi_13h15_14h45.wav", "duration": 5400, "title": "Pause déjeuner (13h15-14h45)", "type": "pause_midi"},
+        {"id": 13, "filename": "https://formationaudios.blob.core.windows.net/audios/cours_14h45_15h45.wav", "duration": 3640, "title": "Cours - Bloc 5 (14h45-15h45)", "type": "cours"},
+        {"id": 14, "filename": "https://formationaudios.blob.core.windows.net/audios/qa_15h45_16h00.wav", "duration": 900, "title": "Questions-Réponses IA (15h45-16h00)", "type": "qa"},
+        {"id": 15, "filename": "https://formationaudios.blob.core.windows.net/audios/cours_16h00_17h00.wav", "duration": 3600, "title": "Cours - Bloc 6 (16h00-17h00)", "type": "cours"},
+        {"id": 16, "filename": "https://formationaudios.blob.core.windows.net/audios/qa_17h00_17h15.wav", "duration": 900, "title": "Questions-Réponses IA (17h00-17h15)", "type": "qa"},
+        {"id": 17, "filename": "https://formationaudios.blob.core.windows.net/audios/pause_17h15_17h25.wav", "duration": 600, "title": "Pause (17h15-17h25)", "type": "pause"},
+        {"id": 18, "filename": "https://formationaudios.blob.core.windows.net/audios/cours_17h25_18h15.wav", "duration": 3023, "title": "Cours - Bloc 7 (17h25-18h15)", "type": "cours"},
+        {"id": 19, "filename": "https://formationaudios.blob.core.windows.net/audios/qa_18h15_18h30.wav", "duration": 900, "title": "Questions-Réponses IA (18h15-18h30)", "type": "qa"}
     ];
     
     // Variable pour détecter si le cours est terminé
@@ -502,7 +503,7 @@ style="display: none;">
       setupAudioEventListeners();
     });
 
-    // Fonction pour initialiser l'audio
+    // ✅ FONCTION initializeAudio CORRIGÉE
     function initializeAudio() {
       console.log("Initialisation de l'audio...");
       console.log("Audio src:", audio.src);
@@ -510,7 +511,6 @@ style="display: none;">
       console.log("CurrentAudioId:", currentAudioId);
       
       videoZone.classList.remove("hidden");
-      showUnlockButton();
       
       // Vérifier si on a une source audio valide
       if (!audio.src || audio.src === "" || audio.src.includes("undefined")) {
@@ -535,23 +535,32 @@ style="display: none;">
         return;
       }
       
-      if (audioOffset >= 0 && !isNaN(audioOffset)) {
-        audio.currentTime = Math.min(audioOffset, audio.duration || audioOffset);
-        console.log(`Audio configuré à ${audio.currentTime}s`);
-        
-        audio.play()
-          .then(() => {
-            console.log("Audio démarré avec succès");
-          })
-          .catch(e => {
-            console.log("Lecture audio bloquée, tentative de déblocage:", e);
+      // ✅ CORRECTION: Attendre que l'audio soit chargé AVANT de définir currentTime
+      audio.addEventListener('loadedmetadata', () => {
+        if (audioOffset >= 0 && !isNaN(audioOffset)) {
+          audio.currentTime = audioOffset;
+          console.log(`Audio configuré à ${audio.currentTime}s`);
+          
+          audio.play()
+            .then(() => {
+              console.log("Audio démarré avec succès");
+            })
+            .catch(e => {
+              console.log("Lecture audio bloquée, tentative de déblocage:", e);
+              showAudioUnlockButton();
+            });
+        } else {
+          console.warn("Offset audio invalide:", audioOffset);
+          audio.currentTime = 0;
+          audio.play().catch(e => {
+            console.log("Erreur lecture audio:", e);
             showAudioUnlockButton();
           });
-      } else {
-        console.warn("Offset audio invalide:", audioOffset);
-        audio.currentTime = 0;
-        audio.play().catch(e => console.log("Erreur lecture audio:", e));
-      }
+        }
+      }, { once: true });
+      
+      // Charger l'audio
+      audio.load();
     }
 
     // Fonction pour débloquer l'audio
@@ -638,7 +647,7 @@ style="display: none;">
       });
     }
 
-    // Fonction pour vérifier la synchronisation
+    // ✅ FONCTION checkSync AVEC RESYNC DÉSACTIVÉE TEMPORAIREMENT
     async function checkSync() {
       if (isChangingAudio) return;
       
@@ -653,6 +662,9 @@ style="display: none;">
           if (data.audio_id !== currentAudioId) {
             changeAudio(data.audio_filename, data.audio_id, data.offset);
           } else {
+            // ✅ RESYNC DÉSACTIVÉE - Laisser l'audio jouer normalement
+            console.log(`Audio OK - Serveur: ${data.offset}s, Client: ${audio.currentTime}s`);
+            /*
             const expectedTime = data.offset;
             const currentTime = audio.currentTime;
             const diff = Math.abs(expectedTime - currentTime);
@@ -661,6 +673,7 @@ style="display: none;">
               audio.currentTime = expectedTime;
               console.log(`Resynchronisation: ${currentTime} -> ${expectedTime}`);
             }
+            */
           }
         }
       } catch (error) {
@@ -668,7 +681,7 @@ style="display: none;">
       }
     }
 
-    // Fonction pour changer d'audio avec gestion du chat
+    // ✅ FONCTION changeAudio CORRIGÉE
     function changeAudio(filename, audioId, offset) {
       isChangingAudio = true;
       console.log(`🔄 Changement d'audio: ${filename} (ID: ${audioId}, Offset: ${offset}s)`);
@@ -694,46 +707,47 @@ style="display: none;">
       // Mettre à jour l'ID actuel
       currentAudioId = audioId;
 
-    const playAudio = () => {
-  console.log(`✅ Audio chargé, démarrage à ${offset}s`);
-  
-  const tryPlay = (attempts = 3) => {
-    // D'abord démarrer la lecture
-    audio.play()
-      .then(() => {
-        console.log(`✅ Audio démarré, positionnement à ${offset}s`);
+      // ✅ FONCTION playAudio CORRIGÉE
+      const playAudio = () => {
+        console.log(`✅ Audio chargé, démarrage à ${offset}s`);
         
-        // Attendre que l'audio soit stable puis positionner
-        const setPosition = () => {
-          if (audio.duration && !isNaN(audio.duration)) {
-            audio.currentTime = offset;
-            console.log(`✅ Position définie: ${audio.currentTime}s`);
-            isChangingAudio = false;
-          } else {
-            // Réessayer si la durée n'est pas encore disponible
-            setTimeout(setPosition, 100);
-          }
+        const tryPlay = (attempts = 3) => {
+          // D'abord démarrer la lecture
+          audio.play()
+            .then(() => {
+              console.log(`✅ Audio démarré, positionnement à ${offset}s`);
+              
+              // Attendre que l'audio soit stable puis positionner
+              const setPosition = () => {
+                if (audio.duration && !isNaN(audio.duration) && audio.readyState >= 2) {
+                  audio.currentTime = offset;
+                  console.log(`✅ Position définie: ${audio.currentTime}s`);
+                  isChangingAudio = false;
+                } else {
+                  // Réessayer si la durée n'est pas encore disponible
+                  setTimeout(setPosition, 100);
+                }
+              };
+              
+              // Attendre un court délai puis positionner
+              setTimeout(setPosition, 300);
+            })
+            .catch(e => {
+              console.warn(`❌ Tentative ${4-attempts} échouée:`, e);
+              if (attempts > 1) {
+                setTimeout(() => tryPlay(attempts - 1), 500);
+              } else {
+                console.error("❌ Impossible de démarrer l'audio automatiquement");
+                showAudioUnlockButton();
+                isChangingAudio = false;
+              }
+            });
         };
-        
-        // Attendre un court délai puis positionner
-        setTimeout(setPosition, 200);
-      })
-      .catch(e => {
-        console.warn(`❌ Tentative ${4-attempts} échouée:`, e);
-        if (attempts > 1) {
-          setTimeout(() => tryPlay(attempts - 1), 500);
-        } else {
-          console.error("❌ Impossible de démarrer l'audio automatiquement");
-          showAudioUnlockButton();
-          isChangingAudio = false;
-        }
-      });
-  };
 
         tryPlay();
       };
 
-      audio.addEventListener('loadeddata', playAudio, { once: true });
+      audio.addEventListener('loadedmetadata', playAudio, { once: true });
       audio.addEventListener('canplaythrough', playAudio, { once: true });
       
       setTimeout(() => {
@@ -791,11 +805,15 @@ style="display: none;">
           return;
         }
         
+        // ✅ RESYNC SOCKET.IO DÉSACTIVÉE AUSSI
+        console.log(`Sync Socket.IO ignorée - Serveur: ${data.offset}s, Client: ${audio.currentTime}s`);
+        /*
         const diff = Math.abs(data.offset - audio.currentTime);
         if (diff > 2) {
           audio.currentTime = data.offset;
           console.log(`Synchronisation: ${audio.currentTime} → ${data.offset}`);
         }
+        */
       }
     });
 
@@ -862,7 +880,6 @@ style="display: none;">
     function sendQuestion() {
       const question = questionInput.value.trim();
       if (!question) return;
-      // showTypingIndicator();
       socket.emit('send_question', { username, question });
       questionInput.value = '';
       sendBtn.disabled = true;
@@ -901,14 +918,13 @@ style="display: none;">
 
     // Réception des messages
     socket.on('receive_question', (data) => {
-      if (data.username === "Professeur") {
+      if (data.username === "Alain") {
          hideTypingIndicator();
       }
       addMessage(data.username, data.question, data.timestamp);
-      if (data.username !== "Professeur") {
-    showTypingIndicator();
-  }
-
+      if (data.username !== "Alain") {
+        showTypingIndicator();
+      }
     });
 
     socket.on("receive_audio", (data) => {
@@ -971,58 +987,51 @@ style="display: none;">
       }
     }
 
-    // Afficher le bouton quand nécessaire
-    function showUnlockButton() {
-      document.getElementById('unlock-audio-btn').style.display = 'block';
-      console.log("🔊 Bouton d'activation affiché");
-    }
-
     // Code pour les participants
     let isBadgeVisible = false;
 
     function updateParticipantsCount(count) {
-  participantsCount.textContent = "6"; // Toujours afficher 6
-  if (isBadgeVisible) {
-    participantsCount.style.transform = 'scale(1.2)';
-    setTimeout(() => {
-      participantsCount.style.transform = 'scale(1)';
-    }, 200);
-  }
-}
+      participantsCount.textContent = "6"; // Toujours afficher 6
+      if (isBadgeVisible) {
+        participantsCount.style.transform = 'scale(1.2)';
+        setTimeout(() => {
+          participantsCount.style.transform = 'scale(1)';
+        }, 200);
+      }
+    }
 
-// Afficher l'indicateur "Alain écrit..." - Version alignée à gauche
-function showTypingIndicator() {
-  hideTypingIndicator();
-  
-  const typingDiv = document.createElement('div');
-  typingDiv.id = 'typing-indicator';
-  // ← CHANGEMENT ICI : items-start self-start (aligné à gauche comme le prof)
-  typingDiv.className = 'flex items-start self-start max-w-[85%] animate-fade-in';
-  typingDiv.innerHTML = `
-    <div class="typing-indicator">
-      <div class="flex items-center gap-2">
-        <div class="professor-avatar">P</div>
-        <span class="text-xs text-gray-300 font-medium"></span>
-        <div class="typing-dots">
-          <div class="typing-dot"></div>
-          <div class="typing-dot"></div>
-          <div class="typing-dot"></div>
+    // Afficher l'indicateur "Alain écrit..."
+    function showTypingIndicator() {
+      hideTypingIndicator();
+      
+      const typingDiv = document.createElement('div');
+      typingDiv.id = 'typing-indicator';
+      typingDiv.className = 'flex items-start self-start max-w-[85%] animate-fade-in';
+      typingDiv.innerHTML = `
+        <div class="typing-indicator">
+          <div class="flex items-center gap-2">
+            <div class="professor-avatar">A</div>
+            <span class="text-xs text-gray-300 font-medium">Alain écrit...</span>
+            <div class="typing-dots">
+              <div class="typing-dot"></div>
+              <div class="typing-dot"></div>
+              <div class="typing-dot"></div>
+            </div>
+          </div>
         </div>
-      </div>
-    </div>
-  `;
-  
-  messagesDiv.appendChild(typingDiv);
-  messagesDiv.scrollTop = messagesDiv.scrollHeight;
-}
+      `;
+      
+      messagesDiv.appendChild(typingDiv);
+      messagesDiv.scrollTop = messagesDiv.scrollHeight;
+    }
 
-// Supprimer l'indicateur de frappe
-function hideTypingIndicator() {
-  const typingIndicator = document.getElementById('typing-indicator');
-  if (typingIndicator) {
-    typingIndicator.remove();
-  }
-}
+    // Supprimer l'indicateur de frappe
+    function hideTypingIndicator() {
+      const typingIndicator = document.getElementById('typing-indicator');
+      if (typingIndicator) {
+        typingIndicator.remove();
+      }
+    }
 
     participantsContainer.addEventListener("click", () => {
       isBadgeVisible = !isBadgeVisible;
