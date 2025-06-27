@@ -193,7 +193,7 @@ COURS_PLAYLIST = [
 ]
 
 # Création de la BDD si elle n'existe pas
-os.makedirs("data", exist_ok=True)
+# os.makedirs("data", exist_ok=True)
 conn = sqlite3.connect(DB_PATH)
 cursor = conn.cursor()
 
