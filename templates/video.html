@@ -241,6 +241,7 @@
           </div>
 
           <!-- Balise audio modifiée pour la synchronisation -->
+          <p>Debug audio_filename: {{ audio_filename }}</p>
           <audio id="audio">
             <source src="{{ audio_filename if audio_filename else '' }}" type="audio/wav">
           </audio>
