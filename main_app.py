@@ -77,22 +77,22 @@ COURS_PLAYLIST = [
     # === BLOC 1 : 9h00 - 10h05 ===
     {
         "id": 1,
-        "filename": "https://formationaudios.blob.core.windows.net/audios/cours_9h00_9h45.wav",
-        "duration": 2700,  # 45 minutes (9h00 à 9h45)
+        "filename": "https://formationaudios.blob.core.windows.net/audios/cours_9h00_9h45.mp3",
+        "duration": 2700,
         "title": "Cours - Bloc 1 (9h00-9h45)",
         "type": "cours",
     },
     {
         "id": 2,
         "filename": "https://formationaudios.blob.core.windows.net/audios/qa_9h45_9h55.wav",
-        "duration": 600,  # 10 minutes (9h45 à 9h55)
+        "duration": 600,
         "title": "Questions-Réponses IA (9h45-9h55)",
         "type": "qa",
     },
     {
         "id": 3,
         "filename": "https://formationaudios.blob.core.windows.net/audios/pause_9h55_10h05.wav",
-        "duration": 600,  # 10 minutes (9h55 à 10h05)
+        "duration": 600,
         "title": "Pause (9h55-10h05)",
         "type": "pause",
     },
@@ -100,21 +100,21 @@ COURS_PLAYLIST = [
     {
         "id": 4,
         "filename": "https://formationaudios.blob.core.windows.net/audios/cours_10h05_10h50.wav",
-        "duration": 2862,  # 45 minutes (10h05 à 10h50)
+        "duration": 2862,
         "title": "Cours - Bloc 2 (10h05-10h50)",
         "type": "cours",
     },
     {
         "id": 5,
         "filename": "https://formationaudios.blob.core.windows.net/audios/qa_10h50_11h00.wav",
-        "duration": 600,  # 10 minutes (10h50 à 11h00)
+        "duration": 600,
         "title": "Questions-Réponses IA (10h50-11h00)",
         "type": "qa",
     },
     {
         "id": 6,
         "filename": "https://formationaudios.blob.core.windows.net/audios/pause_11h00_11h05.wav",
-        "duration": 300,  # 5 minutes (11h00 à 11h05)
+        "duration": 300,
         "title": "Pause (11h00-11h05)",
         "type": "pause",
     },
@@ -122,21 +122,21 @@ COURS_PLAYLIST = [
     {
         "id": 7,
         "filename": "https://formationaudios.blob.core.windows.net/audios/cours_11h05_12h00.wav",
-        "duration": 3300,  # 55 minutes (11h05 à 12h00)
+        "duration": 3300,
         "title": "Cours - Bloc 3 (11h05-12h00)",
         "type": "cours",
     },
     {
         "id": 8,
         "filename": "https://formationaudios.blob.core.windows.net/audios/qa_12h00_12h10.wav",
-        "duration": 600,  # 10 minutes (12h00 à 12h10)
+        "duration": 600,
         "title": "Questions-Réponses IA (12h00-12h10)",
         "type": "qa",
     },
     {
         "id": 9,
         "filename": "https://formationaudios.blob.core.windows.net/audios/pause_12h10_12h20.wav",
-        "duration": 600,  # 10 minutes (12h10 à 12h20)
+        "duration": 600,
         "title": "Pause (12h10-12h20)",
         "type": "pause",
     },
@@ -144,21 +144,21 @@ COURS_PLAYLIST = [
     {
         "id": 10,
         "filename": "https://formationaudios.blob.core.windows.net/audios/cours_12h20_13h05.wav",
-        "duration": 2700,  # 45 minutes (12h20 à 13h05)
+        "duration": 2700,
         "title": "Cours - Bloc 4 (12h20-13h05)",
         "type": "cours",
     },
     {
         "id": 11,
         "filename": "https://formationaudios.blob.core.windows.net/audios/qa_13h05_13h15.wav",
-        "duration": 600,  # 10 minutes (13h05 à 13h15)
+        "duration": 600,
         "title": "Questions-Réponses IA (13h05-13h15)",
         "type": "qa",
     },
     {
         "id": 12,
         "filename": "https://formationaudios.blob.core.windows.net/audios/pause_midi_13h15_14h45.wav",
-        "duration": 5400,  # 90 minutes (13h15 à 14h45)
+        "duration": 5400,
         "title": "Pause déjeuner (13h15-14h45)",
         "type": "pause_midi",
     },
@@ -166,14 +166,14 @@ COURS_PLAYLIST = [
     {
         "id": 13,
         "filename": "https://formationaudios.blob.core.windows.net/audios/cours_14h45_15h45.wav",
-        "duration": 3640,  # 60 minutes (14h45 à 15h45)
+        "duration": 3640,
         "title": "Cours - Bloc 5 (14h45-15h45)",
         "type": "cours",
     },
     {
         "id": 14,
         "filename": "https://formationaudios.blob.core.windows.net/audios/qa_15h45_16h00.wav",
-        "duration": 900,  # 15 minutes (15h45 à 16h00)
+        "duration": 900,
         "title": "Questions-Réponses IA (15h45-16h00)",
         "type": "qa",
     },
@@ -181,21 +181,21 @@ COURS_PLAYLIST = [
     {
         "id": 15,
         "filename": "https://formationaudios.blob.core.windows.net/audios/cours_16h00_17h00.wav",
-        "duration": 3600,  # 60 minutes (16h00 à 17h00)
+        "duration": 3600,
         "title": "Cours - Bloc 6 (16h00-17h00)",
         "type": "cours",
     },
     {
         "id": 16,
         "filename": "https://formationaudios.blob.core.windows.net/audios/qa_17h00_17h15.wav",
-        "duration": 900,  # 15 minutes (17h00 à 17h15)
+        "duration": 900,
         "title": "Questions-Réponses IA (17h00-17h15)",
         "type": "qa",
     },
     {
         "id": 17,
         "filename": "https://formationaudios.blob.core.windows.net/audios/pause_17h15_17h25.wav",
-        "duration": 600,  # 10 minutes (17h15 à 17h25)
+        "duration": 600,
         "title": "Pause (17h15-17h25)",
         "type": "pause",
     },
@@ -203,14 +203,14 @@ COURS_PLAYLIST = [
     {
         "id": 18,
         "filename": "https://formationaudios.blob.core.windows.net/audios/cours_17h25_18h15.wav",
-        "duration": 3023,  # 50 minutes (17h25 à 18h15)
+        "duration": 3023,
         "title": "Cours - Bloc 7 (17h25-18h15)",
         "type": "cours",
     },
     {
         "id": 19,
         "filename": "https://formationaudios.blob.core.windows.net/audios/qa_18h15_18h30.wav",
-        "duration": 900,  # 15 minutes (18h15 à 18h30)
+        "duration": 900,
         "title": "Questions-Réponses IA (18h15-18h30)",
         "type": "qa",
     },
