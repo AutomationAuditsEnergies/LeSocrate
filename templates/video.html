@@ -258,7 +258,7 @@ audio {
           </div>
 
           <!-- Balise audio modifiée pour la synchronisation -->
-          <audio id="audio" class="visually-hidden">
+          <audio id="audio" class="visually-hidden" controlslist="nodownload noplaybackrate noremoteplayback" disablepictureinpicture disableremoteplayback>
             {% if audio_filename %}
               <source src="{{ audio_filename }}" type="audio/mpeg">
             {% endif %}
