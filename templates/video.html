@@ -763,6 +763,7 @@ function setupAudioEventListeners() {
             .then(data => {
               if (data.status === 'playing') {
                 const source = audio.querySelector('source');
+                const audioInfo = COURS_PLAYLIST.find(a => a.id === data.audio_id);
                 source.src = audioInfo ? audioInfo.filename : data.audio_filename;
                 audio.load();
                 
