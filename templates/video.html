@@ -763,7 +763,7 @@ function setupAudioEventListeners() {
             .then(data => {
               if (data.status === 'playing') {
                 const source = audio.querySelector('source');
-                source.src = `/static/${data.audio_filename}`;
+                source.src = audioInfo ? audioInfo.filename : data.audio_filename;
                 audio.load();
                 
                 audio.addEventListener('loadeddata', () => {
