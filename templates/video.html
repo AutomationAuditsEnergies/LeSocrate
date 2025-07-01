@@ -392,6 +392,79 @@ const COURS_PLAYLIST = [
     { id: 19, filename: "https://formationaudios-ebbgcnh0hbcxdjcq.z02.azurefd.net/audios/qa_18h15_18h30.wav", duration: 900, title: "Questions-Réponses IA (18h15-18h30)", type: "qa" }
 ];
 
+
+// 🔧 AJOUTEZ CE CODE AU DÉBUT DE VOTRE SCRIPT, JUSTE APRÈS LES VARIABLES
+
+// === DÉTECTION ET GESTION MODE PRIVÉ ===
+let isPrivateMode = false;
+let userHasInteracted = false;
+let privateModeDetected = false;
+
+// Fonction de détection du mode privé améliorée
+function detectPrivateMode() {
+  return new Promise((resolve) => {
+    // Test 1: LocalStorage
+    try {
+      localStorage.setItem('test', '1');
+      localStorage.removeItem('test');
+    } catch (e) {
+      console.log('🔒 Mode privé détecté via localStorage');
+      resolve(true);
+      return;
+    }
+
+    // Test 2: Cookies
+    if (!navigator.cookieEnabled) {
+      console.log('🔒 Mode privé détecté via cookies');
+      resolve(true);
+      return;
+    }
+
+    // Test 3: UserAgent
+    const ua = navigator.userAgent;
+    if (ua.includes('InPrivate') || ua.includes('Private')) {
+      console.log('🔒 Mode privé détecté via UserAgent');
+      resolve(true);
+      return;
+    }
+
+    // Test 4: Comportement spécifique au mode privé
+    const img = new Image();
+    img.onload = () => resolve(false);
+    img.onerror = () => resolve(true);
+    img.src = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+    
+    // Timeout de sécurité
+    setTimeout(() => resolve(false), 100);
+  });
+}
+
+// Fonction pour gérer l'interaction utilisateur en mode privé
+function waitForUserInteraction() {
+  return new Promise((resolve) => {
+    if (userHasInteracted) {
+      resolve();
+      return;
+    }
+
+    const handleInteraction = (event) => {
+      console.log('✅ Interaction utilisateur détectée:', event.type);
+      userHasInteracted = true;
+      
+      // Nettoyer les listeners
+      ['click', 'touchstart', 'keydown', 'mousedown'].forEach(eventType => {
+        document.removeEventListener(eventType, handleInteraction, true);
+      });
+      
+      resolve();
+    };
+
+    // Écouter tous les types d'interaction
+    ['click', 'touchstart', 'keydown', 'mousedown'].forEach(eventType => {
+      document.addEventListener(eventType, handleInteraction, { once: true, capture: true });
+    });
+  });
+
     // Variable pour détecter si le cours est terminé
     const coursTermine = {{ cours_termine|tojson if cours_termine is defined else 'false' }};
 
@@ -498,14 +571,34 @@ const COURS_PLAYLIST = [
 
       // Gestionnaires d'événements audio
       setupAudioEventListeners();
+      setupPrivateModeAudioListeners();
     });
 
     // Fonction pour initialiser l'audio
  // Fonction pour initialiser l'audio
-function initializeAudio() {
-  console.log("Initialisation de l'audio...");
+async function initializeAudio() {
+  console.log("🎵 Initialisation de l'audio...");
   console.log("AudioOffset:", audioOffset);
   console.log("CurrentAudioId:", currentAudioId);
+  
+  // Détecter le mode privé
+  isPrivateMode = await detectPrivateMode();
+  
+  if (isPrivateMode) {
+    console.log("🔒 MODE PRIVÉ DÉTECTÉ - Configuration spéciale");
+    privateModeDetected = true;
+    
+    // Configuration spéciale pour mode privé
+    audio.preload = 'none';
+    audio.crossOrigin = 'anonymous';
+    
+    // Attendre l'interaction utilisateur OBLIGATOIRE
+    if (!userHasInteracted) {
+      console.log("⏳ Attente interaction utilisateur...");
+      showUnlockButton(); // Afficher immédiatement le bouton
+      await waitForUserInteraction();
+    }
+  }
   
   videoZone.classList.remove("hidden");
   
@@ -522,7 +615,15 @@ function initializeAudio() {
           if (audioInfo) {
             const source = audio.querySelector('source');
             source.src = audioInfo.filename;
-            audio.load();
+            
+            // Configuration différente selon le mode
+            if (isPrivateMode) {
+              // En mode privé, pas de preload
+              audio.removeAttribute('preload');
+              audio.load();
+            } else {
+              audio.load();
+            }
             
             // Attendre que les métadonnées soient chargées
             audio.addEventListener('loadedmetadata', () => {
@@ -535,11 +636,8 @@ function initializeAudio() {
               
               // Attendre un court instant pour que le seeking se fasse
               setTimeout(() => {
-                audio.play().catch(e => {
-                  console.log("Lecture bloquée, affichage du bouton:", e);
-                  showUnlockButton();
-                });
-              }, 100);
+                startAudioPlayback();
+              }, isPrivateMode ? 500 : 100); // Plus de temps en mode privé
             }, { once: true });
           }
         }
@@ -554,10 +652,7 @@ function initializeAudio() {
         audio.currentTime = targetTime;
         console.log(`Audio déjà prêt, position: ${targetTime}s`);
         
-        audio.play().catch(e => {
-          console.log("Lecture bloquée:", e);
-          showUnlockButton();
-        });
+        startAudioPlayback();
       } else {
         // Attendre les métadonnées
         audio.addEventListener('loadedmetadata', () => {
@@ -566,16 +661,41 @@ function initializeAudio() {
           console.log(`Position définie à ${targetTime}s / ${audio.duration}s`);
           
           setTimeout(() => {
-            audio.play().catch(e => {
-              console.log("Lecture bloquée:", e);
-              showUnlockButton();
-            });
-          }, 100);
+            startAudioPlayback();
+          }, isPrivateMode ? 500 : 100);
         }, { once: true });
       }
     }
   }
 }
+
+// Fonction pour cacher le bouton d'activation
+function hideUnlockButton() {
+  const btn = document.getElementById('unlock-audio-btn');
+  if (btn) {
+    btn.style.display = 'none';
+  }
+}
+
+
+async function startAudioPlayback() {
+  try {
+    if (isPrivateMode && !userHasInteracted) {
+      console.log("🔒 Mode privé: attente interaction...");
+      showUnlockButton();
+      await waitForUserInteraction();
+    }
+    
+    await audio.play();
+    console.log("✅ Audio démarré avec succès");
+    hideUnlockButton();
+    
+  } catch (error) {
+    console.log("❌ Lecture bloquée:", error);
+    showUnlockButton();
+  }
+}
+
 
     // Fonction pour débloquer l'audio
     function showAudioUnlockButton() {
@@ -661,6 +781,39 @@ function initializeAudio() {
       });
     }
 
+    // Ajoutez ces listeners après votre fonction setupAudioEventListeners() :
+function setupPrivateModeAudioListeners() {
+  // Gestion d'erreur spécifique au mode privé
+  audio.addEventListener('error', (e) => {
+    console.error('Erreur audio:', e);
+    
+    if (isPrivateMode) {
+      console.log('🔧 Mode privé: tentative de récupération...');
+      
+      // Attendre et réessayer
+      setTimeout(() => {
+        if (userHasInteracted) {
+          console.log('🔄 Rechargement audio en mode privé...');
+          audio.load();
+        }
+      }, 1000);
+    }
+  });
+  
+  // Listener pour les changements de ready state
+  audio.addEventListener('loadstart', () => {
+    if (isPrivateMode) {
+      console.log('🔒 Mode privé: début de chargement');
+    }
+  });
+  
+  audio.addEventListener('loadeddata', () => {
+    if (isPrivateMode) {
+      console.log('🔒 Mode privé: données chargées');
+    }
+  });
+} 
+
     // Fonction pour vérifier la synchronisation
     async function checkSync() {
       if (isChangingAudio) return;
@@ -692,7 +845,7 @@ function initializeAudio() {
     }
 
    // Fonction pour changer d'audio avec gestion du chat
-function changeAudio(filename, audioId, offset) {
+async function changeAudio(filename, audioId, offset) {
   isChangingAudio = true;
   console.log(`🔄 Changement d'audio: ${filename} (ID: ${audioId}, Offset: ${offset}s)`);
   
@@ -717,6 +870,11 @@ function changeAudio(filename, audioId, offset) {
     const audioInfo = COURS_PLAYLIST.find(a => a.id === audioId);
     source.src = audioInfo ? audioInfo.filename : filename;
   }
+  
+  // Configuration différente selon le mode
+  if (isPrivateMode) {
+    audio.removeAttribute('preload');
+  }
   audio.load();
 
   // Mettre à jour l'ID actuel
@@ -732,20 +890,27 @@ function changeAudio(filename, audioId, offset) {
     console.log(`Position définie à ${targetTime}s`);
     
     // Écouter l'événement seeked pour confirmer
-    audio.addEventListener('seeked', () => {
+    audio.addEventListener('seeked', async () => {
       console.log(`✅ Seek réussi à ${audio.currentTime}s`);
       
-      // Démarrer la lecture
-      audio.play()
-        .then(() => {
-          console.log("✅ Audio démarré avec succès");
-          isChangingAudio = false;
-        })
-        .catch(e => {
-          console.warn("❌ Erreur lecture:", e);
+      // Démarrer la lecture avec gestion mode privé
+      try {
+        if (isPrivateMode && !userHasInteracted) {
+          console.log("🔒 Mode privé: interaction requise pour nouveau audio");
           showUnlockButton();
-          isChangingAudio = false;
-        });
+          await waitForUserInteraction();
+        }
+        
+        await audio.play();
+        console.log("✅ Audio démarré avec succès");
+        hideUnlockButton();
+        isChangingAudio = false;
+        
+      } catch (e) {
+        console.warn("❌ Erreur lecture:", e);
+        showUnlockButton();
+        isChangingAudio = false;
+      }
     }, { once: true });
   }, { once: true });
   
@@ -757,6 +922,7 @@ function changeAudio(filename, audioId, offset) {
     }
   }, 5000);
 }
+
     // Fonction pour afficher le message de fin de cours
     function showCourseFinishedMessage() {
       const videoZone = document.getElementById("video-zone");
@@ -951,64 +1117,78 @@ function changeAudio(filename, audioId, offset) {
 
     // Fonction pour débloquer l'audio
   // Fonction pour débloquer l'audio
-function unlockAudio() {
+async function unlockAudio() {
   console.log("🔊 Tentative de déblocage audio...");
   
-  document.getElementById('unlock-audio-btn').style.display = 'none';
+  // Marquer l'interaction utilisateur
+  userHasInteracted = true;
   
-  fetch('/api/cours-status')
-    .then(response => response.json())
-    .then(data => {
-      if (data.status === 'playing') {
-        const audioInfo = COURS_PLAYLIST.find(a => a.id === data.audio_id);
+  try {
+    const response = await fetch('/api/cours-status');
+    const data = await response.json();
+    
+    if (data.status === 'playing') {
+      const audioInfo = COURS_PLAYLIST.find(a => a.id === data.audio_id);
+      
+      if (!audio.src || audio.src === "" || audio.src.includes("undefined")) {
+        // Charger la source si elle n'existe pas
+        const source = audio.querySelector('source');
+        source.src = audioInfo ? audioInfo.filename : data.audio_filename;
         
-        if (!audio.src || audio.src === "" || audio.src.includes("undefined")) {
-          // Charger la source si elle n'existe pas
-          const source = audio.querySelector('source');
-          source.src = audioInfo ? audioInfo.filename : data.audio_filename;
-          audio.load();
+        if (isPrivateMode) {
+          audio.removeAttribute('preload');
+        }
+        audio.load();
+        
+        audio.addEventListener('loadedmetadata', () => {
+          const targetTime = Math.min(data.offset, audio.duration);
+          audio.currentTime = targetTime;
+          console.log(`Position définie à ${targetTime}s`);
           
-          audio.addEventListener('loadedmetadata', () => {
-            const targetTime = Math.min(data.offset, audio.duration);
-            audio.currentTime = targetTime;
-            console.log(`Position définie à ${targetTime}s`);
-            
-            setTimeout(() => {
-              audio.play()
-                .then(() => console.log("✅ Audio démarré"))
-                .catch(e => console.error("❌ Erreur:", e));
-            }, 100);
-          }, { once: true });
+          setTimeout(async () => {
+            try {
+              await audio.play();
+              console.log("✅ Audio démarré");
+              hideUnlockButton();
+            } catch (e) {
+              console.error("❌ Erreur:", e);
+            }
+          }, isPrivateMode ? 500 : 100);
+        }, { once: true });
+      } else {
+        // Si la source existe déjà, juste ajuster la position et jouer
+        if (audio.readyState >= 2) {
+          const targetTime = Math.min(data.offset, audio.duration);
+          audio.currentTime = targetTime;
+          
+          await audio.play();
+          console.log("✅ Audio démarré");
+          hideUnlockButton();
         } else {
-          // Si la source existe déjà, juste ajuster la position et jouer
-          if (audio.readyState >= 2) {
+          // Attendre que l'audio soit prêt
+          audio.addEventListener('canplay', async () => {
             const targetTime = Math.min(data.offset, audio.duration);
             audio.currentTime = targetTime;
             
-            audio.play()
-              .then(() => console.log("✅ Audio démarré"))
-              .catch(e => console.error("❌ Erreur:", e));
-          } else {
-            // Attendre que l'audio soit prêt
-            audio.addEventListener('canplay', () => {
-              const targetTime = Math.min(data.offset, audio.duration);
-              audio.currentTime = targetTime;
-              
-              audio.play()
-                .then(() => console.log("✅ Audio démarré"))
-                .catch(e => console.error("❌ Erreur:", e));
-            }, { once: true });
-          }
+            await audio.play();
+            console.log("✅ Audio démarré");
+            hideUnlockButton();
+          }, { once: true });
         }
       }
-    })
-    .catch(e => {
-      console.error("Erreur API:", e);
-      // Tenter quand même de jouer si on a une source
-      if (audio.src) {
-        audio.play().catch(err => console.error("Erreur lecture:", err));
+    }
+  } catch (e) {
+    console.error("Erreur:", e);
+    // Tenter quand même de jouer si on a une source
+    if (audio.src) {
+      try {
+        await audio.play();
+        hideUnlockButton();
+      } catch (err) {
+        console.error("Erreur lecture:", err);
       }
-    });
+    }
+  }
 }
 
     // Afficher le bouton quand nécessaire
