@@ -18,9 +18,26 @@
       cursor: not-allowed;
     }
   
-    audio {
-      display: none;
-    }
+audio {
+  position: absolute;
+  opacity: 0;
+  width: 1px;
+  height: 1px;
+  pointer-events: none;
+}
+
+.visually-hidden {
+  position: absolute !important;
+  width: 1px !important;
+  height: 1px !important;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
   
     /* ✅ Redimensionnement animé quand le chat s'ouvre */
     .main-content {
@@ -241,8 +258,10 @@
           </div>
 
           <!-- Balise audio modifiée pour la synchronisation -->
-          <audio id="audio">
-            <source src="{{ url_for('static', filename=audio_filename) if audio_filename else '' }}" type="audio/wav">
+          <audio id="audio" class="visually-hidden">
+            {% if audio_filename %}
+              <source src="{{ audio_filename }}" type="audio/mpeg">
+            {% endif %}
           </audio>
         </div>
 
@@ -414,9 +433,85 @@ const COURS_PLAYLIST = [
     const backgroundOverlay = document.getElementById("background-overlay");
 
     const socket = io();
+
+    let isAudioPlaying = false;
+    let lastSyncReceived = 0;
+
     let isMuted = false;
     let isDarkMode = false;
     let isProgressVisible = true;
+
+    // ✅ HANDLER PRINCIPAL : Synchronisation audio depuis le backend
+    socket.on('sync_audio', (data) => {
+      console.log('🔄 Synchronisation reçue:', data);
+      
+      const { audio_id, audio_filename, offset, audio_changed } = data;
+      
+      // Éviter les traitements multiples rapprochés
+      const now = Date.now();
+      if (now - lastSyncReceived < 1000) {
+        console.log('⚠️ Sync ignorée (trop récente)');
+        return;
+      }
+      lastSyncReceived = now;
+      
+      if (audio_changed || audio_id !== currentAudioId) {
+        // CHANGEMENT D'AUDIO détecté
+        console.log(`🚨 CHANGEMENT AUDIO: ${currentAudioId} → ${audio_id}`);
+        changeAudio(audio_filename, audio_id, offset);
+      } else {
+        // MÊME AUDIO : juste resynchroniser la position
+        const currentTime = audio.currentTime;
+        const diff = Math.abs(offset - currentTime);
+        
+        if (diff > 3) {
+          console.log(`🔄 Resync position: ${currentTime.toFixed(1)}s → ${offset}s`);
+          audio.currentTime = offset;
+        }
+      }
+    });
+
+    // ✅ HANDLER : Cours pas commencé ou terminé
+    socket.on('cours_not_started_or_finished', () => {
+      console.log('🏁 Cours pas commencé ou terminé');
+      
+      // Vérifier via API pour déterminer si c'est "waiting" ou "finished"
+      fetch('/api/cours-status')
+        .then(response => response.json())
+        .then(data => {
+          if (data.status === 'finished') {
+            clearInterval(syncInterval);
+            showCourseFinishedMessage();
+          } else if (data.status === 'waiting') {
+            // Rediriger vers page d'attente
+            console.log('⏳ Redirection vers page d\'attente');
+            window.location.href = '/video'; // Recharge la page qui gérera l'attente
+          }
+        })
+        .catch(e => console.error('Erreur vérification statut:', e));
+    });
+
+    // ✅ HANDLER : Gestion des erreurs de connexion
+    socket.on('connect_error', (error) => {
+      console.error('❌ Erreur connexion Socket:', error);
+      
+      // Fallback : utiliser la sync API si SocketIO échoue
+      if (!syncInterval) {
+        console.log('🔄 Fallback : activation sync API');
+        syncInterval = setInterval(checkSync, 10000); // Plus long intervalle
+      }
+    });
+
+    // ✅ HANDLER : Reconnexion réussie
+    socket.on('connect', () => {
+      console.log('✅ Socket connecté/reconnecté');
+      
+      // Re-émettre la connexion utilisateur
+      socket.emit('user_connected', { username });
+      
+      // Demander une synchronisation immédiate
+      socket.emit('sync_request');
+    });
 
     // Fonction pour gérer l'état du chat selon le type d'audio
     function updateChatAvailability(audioType) {
@@ -493,7 +588,7 @@ const COURS_PLAYLIST = [
       setTimeout(ensureConnection, 2000);
 
       // Démarrer la vérification de synchronisation
-      syncInterval = setInterval(checkSync, 5000);
+      syncInterval = setInterval(checkSync, 30000);
       socket.emit('sync_request');
 
       // Gestionnaires d'événements audio
@@ -501,7 +596,7 @@ const COURS_PLAYLIST = [
     });
 
     // Fonction pour initialiser l'audio
- // Fonction pour initialiser l'audio
+// ✅ CORRIGER la fonction initializeAudio() - Remplacer par ceci :
 function initializeAudio() {
   console.log("Initialisation de l'audio...");
   console.log("AudioOffset:", audioOffset);
@@ -535,10 +630,18 @@ function initializeAudio() {
               
               // Attendre un court instant pour que le seeking se fasse
               setTimeout(() => {
-                audio.play().catch(e => {
-                  console.log("Lecture bloquée, affichage du bouton:", e);
-                  showUnlockButton();
-                });
+                if (!isAudioPlaying) {  // ✅ Utiliser la variable de protection
+                  isAudioPlaying = true;
+                  audio.play()
+                    .then(() => {
+                      console.log("✅ Audio initial démarré");
+                    })
+                    .catch(e => {
+                      console.log("Lecture bloquée, affichage du bouton:", e);
+                      isAudioPlaying = false;
+                      showAudioUnlockButton();  // ✅ Nom correct de la fonction
+                    });
+                }
               }, 100);
             }, { once: true });
           }
@@ -554,10 +657,18 @@ function initializeAudio() {
         audio.currentTime = targetTime;
         console.log(`Audio déjà prêt, position: ${targetTime}s`);
         
-        audio.play().catch(e => {
-          console.log("Lecture bloquée:", e);
-          showUnlockButton();
-        });
+        if (!isAudioPlaying) {  // ✅ Protection contre double play
+          isAudioPlaying = true;
+          audio.play()
+            .then(() => {
+              console.log("✅ Audio démarré");
+            })
+            .catch(e => {
+              console.log("Lecture bloquée:", e);
+              isAudioPlaying = false;
+              showAudioUnlockButton();  // ✅ Nom correct
+            });
+        }
       } else {
         // Attendre les métadonnées
         audio.addEventListener('loadedmetadata', () => {
@@ -566,10 +677,18 @@ function initializeAudio() {
           console.log(`Position définie à ${targetTime}s / ${audio.duration}s`);
           
           setTimeout(() => {
-            audio.play().catch(e => {
-              console.log("Lecture bloquée:", e);
-              showUnlockButton();
-            });
+            if (!isAudioPlaying) {  // ✅ Protection
+              isAudioPlaying = true;
+              audio.play()
+                .then(() => {
+                  console.log("✅ Audio démarré après métadonnées");
+                })
+                .catch(e => {
+                  console.log("Lecture bloquée:", e);
+                  isAudioPlaying = false;
+                  showAudioUnlockButton();  // ✅ Nom correct
+                });
+            }
           }, 100);
         }, { once: true });
       }
@@ -577,6 +696,47 @@ function initializeAudio() {
   }
 }
 
+// ✅ AMÉLIORER setupAudioEventListeners() avec gestion d'erreur pour re-sync
+function setupAudioEventListeners() {
+  audio.addEventListener("error", (e) => {
+    console.error("Erreur audio:", e);
+    isAudioPlaying = false;  // ✅ Reset état
+    
+    // ✅ NOUVEAU : Émettre l'erreur au backend pour re-sync
+    socket.emit('audio_playback_error', { 
+      error: e.message || 'Audio error',
+      audio_id: currentAudioId,
+      current_time: audio.currentTime
+    });
+    
+    setTimeout(() => {
+      console.log("Tentative de rechargement de l'audio...");
+      audio.load();
+    }, 2000);
+  });
+
+  audio.addEventListener("canplay", () => {
+    console.log("Audio prêt à être joué");
+  });
+
+  // ✅ NOUVEAU : Événement quand l'audio se termine
+  audio.addEventListener("ended", () => {
+    console.log("Audio terminé");
+    isAudioPlaying = false;
+  });
+
+  // ✅ NOUVEAU : Événement quand l'audio est en pause
+  audio.addEventListener("pause", () => {
+    console.log("Audio en pause");
+    isAudioPlaying = false;
+  });
+
+  // ✅ NOUVEAU : Événement quand l'audio démarre
+  audio.addEventListener("play", () => {
+    console.log("Audio en lecture");
+    isAudioPlaying = true;
+  });
+}
     // Fonction pour débloquer l'audio
     function showAudioUnlockButton() {
       const existingBtn = document.getElementById('unlock-audio-btn');
@@ -646,20 +806,6 @@ function initializeAudio() {
       console.log("🔊 Bouton d'activation audio affiché - L'utilisateur doit cliquer pour débloquer");
     }
 
-    // Configurer les événements audio
-    function setupAudioEventListeners() {
-      audio.addEventListener("error", (e) => {
-        console.error("Erreur audio:", e);
-        setTimeout(() => {
-          console.log("Tentative de rechargement de l'audio...");
-          audio.load();
-        }, 2000);
-      });
-
-      audio.addEventListener("canplay", () => {
-        console.log("Audio prêt à être joué");
-      });
-    }
 
     // Fonction pour vérifier la synchronisation
     async function checkSync() {
@@ -692,8 +838,17 @@ function initializeAudio() {
     }
 
    // Fonction pour changer d'audio avec gestion du chat
+// ✅ REMPLACER ta fonction changeAudio par celle-ci :
 function changeAudio(filename, audioId, offset) {
+  // ✅ Protection contre changements concurrents
+  if (isChangingAudio) {
+    console.log('⚠️ Changement audio déjà en cours, ignoré');
+    return;
+  }
+  
   isChangingAudio = true;
+  isAudioPlaying = false;  // ✅ Reset état audio
+  
   console.log(`🔄 Changement d'audio: ${filename} (ID: ${audioId}, Offset: ${offset}s)`);
   
   // Trouver le type d'audio dans la playlist
@@ -735,17 +890,32 @@ function changeAudio(filename, audioId, offset) {
     audio.addEventListener('seeked', () => {
       console.log(`✅ Seek réussi à ${audio.currentTime}s`);
       
-      // Démarrer la lecture
-      audio.play()
-        .then(() => {
-          console.log("✅ Audio démarré avec succès");
-          isChangingAudio = false;
-        })
-        .catch(e => {
-          console.warn("❌ Erreur lecture:", e);
-          showUnlockButton();
-          isChangingAudio = false;
-        });
+      // ✅ AMÉLIORATION : Vérifier qu'on n'est pas déjà en train de jouer
+      if (!isAudioPlaying) {
+        isAudioPlaying = true;
+        audio.play()
+          .then(() => {
+            console.log("✅ Audio démarré avec succès");
+            isChangingAudio = false;
+          })
+          .catch(e => {
+            console.warn("❌ Erreur lecture:", e);
+            isAudioPlaying = false;
+            
+            // ✅ CORRECTION : Bon nom de fonction + émission erreur backend
+            socket.emit('audio_playback_error', { 
+              error: e.message,
+              audio_id: audioId,
+              attempted_offset: offset
+            });
+            
+            showAudioUnlockButton();  // ✅ Nom correct
+            isChangingAudio = false;
+          });
+      } else {
+        console.log('⚠️ Audio déjà en cours de lecture');
+        isChangingAudio = false;
+      }
     }, { once: true });
   }, { once: true });
   
@@ -754,9 +924,11 @@ function changeAudio(filename, audioId, offset) {
     if (isChangingAudio) {
       console.warn("⚠️ Timeout: forçage de l'état");
       isChangingAudio = false;
+      isAudioPlaying = false;
     }
   }, 5000);
 }
+
     // Fonction pour afficher le message de fin de cours
     function showCourseFinishedMessage() {
       const videoZone = document.getElementById("video-zone");
@@ -781,36 +953,6 @@ function changeAudio(filename, audioId, offset) {
         audioTitleDisplay.textContent = "Formation terminée";
       }
     }
-
-    // Gérer la synchronisation via Socket.IO
-    socket.on('sync_audio', (data) => {
-      console.log("Réception sync_audio:", data);
-      
-      if (data.audio_id !== currentAudioId) {
-        console.log(`Changement d'audio: ${currentAudioId} → ${data.audio_id}`);
-        changeAudio(data.audio_filename, data.audio_id, data.offset);
-      } else {
-        if (!audio.src || audio.src === "" || audio.src.includes("undefined")) {
-          console.log("Définition de la source audio manquante:", data.audio_filename);
-          const source = audio.querySelector('source');
-          source.src = `/static/${data.audio_filename}`;
-          audio.load();
-          
-          audio.addEventListener('loadeddata', () => {
-            audio.currentTime = data.offset;
-            audio.play().catch(e => console.log("Erreur lecture audio:", e));
-          }, { once: true });
-          
-          return;
-        }
-        
-        const diff = Math.abs(data.offset - audio.currentTime);
-        if (diff > 2) {
-          audio.currentTime = data.offset;
-          console.log(`Synchronisation: ${audio.currentTime} → ${data.offset}`);
-        }
-      }
-    });
 
     // Fonction Mute / Unmute
     muteBtn.addEventListener("click", () => {
@@ -951,6 +1093,7 @@ function changeAudio(filename, audioId, offset) {
 
     // Fonction pour débloquer l'audio
   // Fonction pour débloquer l'audio
+// ✅ AMÉLIORATION MINEURE de unlockAudio() :
 function unlockAudio() {
   console.log("🔊 Tentative de déblocage audio...");
   
@@ -974,9 +1117,17 @@ function unlockAudio() {
             console.log(`Position définie à ${targetTime}s`);
             
             setTimeout(() => {
-              audio.play()
-                .then(() => console.log("✅ Audio démarré"))
-                .catch(e => console.error("❌ Erreur:", e));
+              if (!isAudioPlaying) {  // ✅ AJOUT : Protection cohérente
+                isAudioPlaying = true;
+                audio.play()
+                  .then(() => {
+                    console.log("✅ Audio démarré");
+                  })
+                  .catch(e => {
+                    console.error("❌ Erreur:", e);
+                    isAudioPlaying = false;  // ✅ Reset en cas d'erreur
+                  });
+              }
             }, 100);
           }, { once: true });
         } else {
@@ -985,18 +1136,30 @@ function unlockAudio() {
             const targetTime = Math.min(data.offset, audio.duration);
             audio.currentTime = targetTime;
             
-            audio.play()
-              .then(() => console.log("✅ Audio démarré"))
-              .catch(e => console.error("❌ Erreur:", e));
+            if (!isAudioPlaying) {  // ✅ AJOUT : Protection
+              isAudioPlaying = true;
+              audio.play()
+                .then(() => console.log("✅ Audio démarré"))
+                .catch(e => {
+                  console.error("❌ Erreur:", e);
+                  isAudioPlaying = false;  // ✅ Reset
+                });
+            }
           } else {
             // Attendre que l'audio soit prêt
             audio.addEventListener('canplay', () => {
               const targetTime = Math.min(data.offset, audio.duration);
               audio.currentTime = targetTime;
               
-              audio.play()
-                .then(() => console.log("✅ Audio démarré"))
-                .catch(e => console.error("❌ Erreur:", e));
+              if (!isAudioPlaying) {  // ✅ AJOUT : Protection
+                isAudioPlaying = true;
+                audio.play()
+                  .then(() => console.log("✅ Audio démarré"))
+                  .catch(e => {
+                    console.error("❌ Erreur:", e);
+                    isAudioPlaying = false;  // ✅ Reset
+                  });
+              }
             }, { once: true });
           }
         }
@@ -1005,17 +1168,17 @@ function unlockAudio() {
     .catch(e => {
       console.error("Erreur API:", e);
       // Tenter quand même de jouer si on a une source
-      if (audio.src) {
-        audio.play().catch(err => console.error("Erreur lecture:", err));
+      if (audio.src && !isAudioPlaying) {  // ✅ AJOUT : Protection
+        isAudioPlaying = true;
+        audio.play()
+          .then(() => console.log("✅ Audio démarré"))
+          .catch(err => {
+            console.error("Erreur lecture:", err);
+            isAudioPlaying = false;  // ✅ Reset
+          });
       }
     });
 }
-
-    // Afficher le bouton quand nécessaire
-    function showUnlockButton() {
-      document.getElementById('unlock-audio-btn').style.display = 'block';
-      console.log("🔊 Bouton d'activation affiché");
-    }
 
     // Code pour les participants
     let isBadgeVisible = false;

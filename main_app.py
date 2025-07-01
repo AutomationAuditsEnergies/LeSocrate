@@ -425,40 +425,136 @@ def get_current_audio_info():
         return None, 0, 0
 
 
-def sync_all_clients_periodically():
-    """Fonction qui synchronise tous les clients toutes les 10 secondes"""
-    logger.info("🔄 Démarrage thread synchronisation périodique")
-    while True:
-        try:
-            if connected_users:  # Seulement s'il y a des utilisateurs connectés
-                logger.debug(
-                    f"🔄 Synchronisation automatique pour {len(connected_users)} utilisateurs"
+# ========== AJOUTER CES LIGNES APRÈS LA DÉFINITION DE sync_all_clients_periodically() ==========
+# ========== ET AVANT LES HANDLERS @socketio.on ==========
+
+
+# ✅ ÉTAT GLOBAL CENTRALISÉ pour éviter les race conditions
+class AudioSyncState:
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.current_audio = None
+        self.current_offset = 0
+        self.last_update_time = None
+        self.pending_clients = set()  # Clients qui attendent une sync
+
+    def update_state(self, audio_info, offset):
+        """Met à jour l'état global de manière thread-safe"""
+        with self.lock:
+            old_audio_id = self.current_audio["id"] if self.current_audio else None
+            new_audio_id = audio_info["id"] if audio_info else None
+
+            # Détection changement de bloc
+            audio_changed = old_audio_id != new_audio_id
+
+            self.current_audio = audio_info
+            self.current_offset = offset
+            self.last_update_time = datetime.now(FRANCE_TZ)
+
+            logger.info(
+                f"🔄 État audio mis à jour - ID: {new_audio_id}, Offset: {offset}s"
+            )
+
+            return audio_changed
+
+    def get_current_state(self):
+        """Récupère l'état actuel de manière thread-safe"""
+        with self.lock:
+            if self.current_audio is None:
+                return None, 0, False
+
+            # Recalcul de l'offset basé sur le temps écoulé
+            if self.last_update_time:
+                elapsed = (
+                    datetime.now(FRANCE_TZ) - self.last_update_time
+                ).total_seconds()
+                adjusted_offset = self.current_offset + int(elapsed)
+
+                # Vérifier si on a dépassé la durée de l'audio actuel
+                if adjusted_offset >= self.current_audio["duration"]:
+                    logger.info(f"🔄 Audio terminé, recalcul nécessaire")
+                    return None, 0, True  # Nécessite recalcul complet
+
+                return self.current_audio, adjusted_offset, False
+
+            return self.current_audio, self.current_offset, False
+
+
+# Instance globale
+audio_sync_state = AudioSyncState()
+
+
+def smart_sync_clients(force_recalculate=False, target_client_sid=None):
+    """
+    Synchronise les clients de manière intelligente
+    - force_recalculate: Force un nouveau calcul depuis get_current_audio_info()
+    - target_client_sid: Synchronise seulement un client spécifique
+    """
+    try:
+        logger.debug(
+            f"🔄 Smart sync - Force recalc: {force_recalculate}, Target: {target_client_sid}"
+        )
+
+        if force_recalculate or audio_sync_state.current_audio is None:
+            # Recalcul complet depuis la playlist
+            audio_info, offset, _ = (
+                get_current_audio_info()
+            )  # ✅ _ au lieu de temps_restant
+            audio_changed = audio_sync_state.update_state(audio_info, offset)
+        else:
+            # Utilisation de l'état existant avec ajustement temporel
+            audio_info, offset, needs_recalc = audio_sync_state.get_current_state()
+            audio_changed = False
+
+            if needs_recalc:
+                # Recalcul nécessaire (audio probablement terminé)
+                audio_info, offset, _ = (
+                    get_current_audio_info()
+                )  # ✅ _ au lieu de temps_restant
+                audio_changed = audio_sync_state.update_state(audio_info, offset)
+
+        # Préparation du message de sync
+        if audio_info:
+            sync_message = {
+                "audio_id": audio_info["id"],
+                "audio_filename": audio_info["filename"],
+                "offset": offset,
+                "audio_changed": audio_changed,  # ✅ Info importante pour le frontend
+            }
+
+            if target_client_sid:
+                # Sync d'un client spécifique
+                socketio.emit("sync_audio", sync_message, room=target_client_sid)
+                logger.info(
+                    f"🎯 Sync client spécifique {target_client_sid} - Audio ID: {audio_info['id']}"
                 )
-                audio_info, offset, _ = get_current_audio_info()
-
-                if audio_info:
-                    socketio.emit(
-                        "sync_audio",
-                        {
-                            "audio_id": audio_info["id"],
-                            "audio_filename": audio_info["filename"],
-                            "offset": offset,
-                        },
-                    )
-                    logger.debug(
-                        f"🔄 Synchronisation automatique - Audio ID: {audio_info['id']}, Offset: {offset}s"
-                    )
-                else:
-                    logger.debug(
-                        "🔄 Pas d'audio à synchroniser (cours pas commencé ou terminé)"
-                    )
             else:
-                logger.debug("🔄 Pas d'utilisateurs connectés, pas de synchronisation")
+                # Broadcast à tous les clients
+                socketio.emit("sync_audio", sync_message)
+                logger.info(
+                    f"📡 Sync broadcast - Audio ID: {audio_info['id']}, Clients: {len(connected_users)}"
+                )
 
-        except Exception as e:
-            logger.error(f"❌ Erreur lors de la synchronisation automatique: {e}")
+                # ✅ Log détaillé pour débugger
+                if audio_changed:
+                    logger.warning(
+                        f"🔄 CHANGEMENT AUDIO DÉTECTÉ ET DIFFUSÉ - Audio ID: {audio_info['id']}"
+                    )
+        else:
+            # Cours pas commencé ou terminé
+            if target_client_sid:
+                socketio.emit(
+                    "cours_not_started_or_finished", {}, room=target_client_sid
+                )
+            else:
+                socketio.emit("cours_not_started_or_finished", {})
+            logger.debug("🔄 Sync: Cours pas commencé ou terminé")
 
-        time.sleep(10)  # Attendre 10 secondes
+    except Exception as e:
+        logger.error(f"❌ Erreur smart_sync_clients: {e}")
+
+
+logger.info("✅ Système de synchronisation intelligent initialisé")
 
 
 def call_rag_service(question):
@@ -557,9 +653,20 @@ def video():
         prenom = session.get("prenom")
         logger.info(f"🎥 Accès page vidéo par {nom} {prenom}")
 
-        audio_info, offset, temps_restant = get_current_audio_info()
+        # ✅ NOUVEAU : Utiliser l'état global au lieu de recalculer
+        audio_info, offset, needs_recalc = audio_sync_state.get_current_state()
+
+        # Si recalcul nécessaire ou pas d'état, calculer
+        if needs_recalc or audio_info is None:
+            audio_info, offset, temps_restant = get_current_audio_info()
+            if audio_info:
+                audio_sync_state.update_state(audio_info, offset)
+        else:
+            # Pour les cas d'attente, on a besoin de temps_restant
+            _, _, temps_restant = get_current_audio_info()
+
         logger.debug(
-            f"🎥 Info audio: {audio_info['title'] if audio_info else 'None'}, offset: {offset}, temps_restant: {temps_restant}"
+            f"🎥 Info audio: {audio_info['title'] if audio_info else 'None'}, offset: {offset}, temps_restant: {temps_restant if 'temps_restant' in locals() else 0}"
         )
 
         # Si le cours n'a pas encore commencé
@@ -614,10 +721,21 @@ def video():
 
 @app.route("/api/cours-status")
 def cours_status():
-    """API endpoint pour obtenir l'état actuel du cours"""
+    """API endpoint pour obtenir l'état actuel du cours - Version thread-safe"""
     try:
-        logger.debug("📊 Demande statut cours")
-        audio_info, offset, temps_restant = get_current_audio_info()
+        logger.debug("📊 Demande statut cours (via état global)")
+
+        # ✅ NOUVEAU : Utiliser l'état global au lieu de recalculer
+        audio_info, offset, needs_recalc = audio_sync_state.get_current_state()
+
+        if needs_recalc or audio_info is None:
+            # Recalcul si nécessaire
+            audio_info, offset, temps_restant = get_current_audio_info()
+            if audio_info:
+                audio_sync_state.update_state(audio_info, offset)
+        else:
+            # Pour déterminer waiting vs finished, on a besoin de temps_restant
+            _, _, temps_restant = get_current_audio_info()
 
         if audio_info is None and temps_restant > 0:
             result = {"status": "waiting", "temps_restant": temps_restant}
@@ -1091,6 +1209,10 @@ def handle_disconnect():
     try:
         logger.info(f"🔌 Client déconnecté: {request.sid}")
         username = connected_users.pop(request.sid, None)
+
+        # ✅ AJOUT: Nettoyage des pending clients dans l'état global
+        audio_sync_state.pending_clients.discard(request.sid)
+
         if username:
             logger.info(f"👤 Utilisateur {username} déconnecté")
             socketio.emit("user_disconnected", {"username": username})
@@ -1124,20 +1246,11 @@ def handle_user_connected(data):
 
         socketio.emit("participants_update", {"count": len(connected_users)})
 
-        # Synchroniser immédiatement le nouvel utilisateur
-        audio_info, offset, _ = get_current_audio_info()
-        if audio_info:
-            emit(
-                "sync_audio",
-                {
-                    "audio_id": audio_info["id"],
-                    "audio_filename": audio_info["filename"],
-                    "offset": offset,
-                },
-            )
-            logger.info(
-                f"🎵 Synchronisation immédiate pour {username} - Audio ID: {audio_info['id']}"
-            )
+        # ✅ NOUVEAU: Synchronisation via smart_sync au lieu de recalcul direct
+        # Cette fonction utilise l'état global et force un recalcul seulement pour ce client
+        smart_sync_clients(force_recalculate=True, target_client_sid=request.sid)
+
+        logger.info(f"🎵 Synchronisation immédiate demandée pour {username}")
 
     except Exception as e:
         logger.error(f"❌ Erreur user_connected handler: {e}")
@@ -1162,27 +1275,11 @@ def handle_get_participants():
 def handle_sync_request():
     """Synchronise l'audio pour un client qui en fait la demande"""
     try:
-        logger.debug("🔄 Demande de synchronisation reçue")
-        audio_info, offset, temps_restant = get_current_audio_info()
+        username = connected_users.get(request.sid, "Inconnu")
+        logger.info(f"🔄 Demande sync de {username} (SID: {request.sid})")
 
-        if audio_info:
-            emit(
-                "sync_audio",
-                {
-                    "audio_id": audio_info["id"],
-                    "audio_filename": audio_info["filename"],
-                    "offset": offset,
-                },
-            )
-            logger.debug(
-                f"🔄 Synchronisation demandée - Audio ID: {audio_info['id']}, Offset: {offset}s"
-            )
-        elif temps_restant > 0:
-            emit("cours_not_started", {"temps_restant": temps_restant})
-            logger.debug(f"🔄 Cours pas commencé, temps restant: {temps_restant}s")
-        else:
-            emit("cours_finished", {})
-            logger.debug("🔄 Cours terminé")
+        # ✅ NOUVEAU: Sync intelligente pour ce client seulement
+        smart_sync_clients(force_recalculate=False, target_client_sid=request.sid)
 
     except Exception as e:
         logger.error(f"❌ Erreur sync_request handler: {e}")
@@ -1192,12 +1289,25 @@ def handle_sync_request():
 def handle_cours_finished_check():
     """Vérifie si le cours est terminé"""
     try:
-        logger.debug("🏁 Vérification fin de cours")
-        audio_info, _, _ = get_current_audio_info()
+        username = connected_users.get(request.sid, "Inconnu")
+        logger.debug(f"🏁 Vérification fin de cours par {username}")
+
+        # ✅ NOUVEAU: Utilise l'état global au lieu de recalculer
+        audio_info, _, needs_recalc = audio_sync_state.get_current_state()
+
+        # Si recalcul nécessaire, on vérifie vraiment
+        if needs_recalc or audio_info is None:
+            audio_info, _, _ = get_current_audio_info()
+            if audio_info:
+                audio_sync_state.update_state(audio_info, 0)
 
         if audio_info is None:
             emit("cours_finished", {})
-            logger.debug("🏁 Cours confirmé terminé")
+            logger.debug(f"🏁 Cours confirmé terminé pour {username}")
+        else:
+            logger.debug(
+                f"🏁 Cours encore en cours pour {username} - Audio: {audio_info['title']}"
+            )
 
     except Exception as e:
         logger.error(f"❌ Erreur cours_finished_check handler: {e}")
@@ -1259,13 +1369,68 @@ def handle_send_question(data):
         logger.error(f"❌ Erreur send_question handler: {e}")
 
 
-# Démarrer la synchronisation automatique en arrière-plan
+# ❌ SUPPRIMER CES LIGNES (l'ancien thread problématique) :
+# try:
+#     sync_thread = threading.Thread(target=sync_all_clients_periodically, daemon=True)
+#     sync_thread.start()
+#     logger.info("🔄 Thread synchronisation automatique démarré")
+# except Exception as e:
+#     logger.error(f"❌ Erreur démarrage thread synchronisation: {e}")
+
+
+# ✅ REMPLACER PAR CES LIGNES (nouveau thread intelligent) :
+def intelligent_audio_monitor():
+    """Thread qui surveille les changements d'audio et synchronise uniquement quand nécessaire"""
+    logger.info("🔄 Démarrage moniteur audio intelligent")
+    last_audio_id = None
+
+    while True:
+        try:
+            if connected_users:  # Seulement si des clients sont connectés
+                # Vérification légère de l'état actuel
+                current_audio, _, needs_recalc = audio_sync_state.get_current_state()
+
+                if needs_recalc or current_audio is None:
+                    # Recalcul nécessaire
+                    audio_info, offset, _ = get_current_audio_info()
+                    current_audio_id = audio_info["id"] if audio_info else None
+
+                    # Détection changement de bloc
+                    if last_audio_id != current_audio_id:
+                        logger.warning(
+                            f"🚨 CHANGEMENT AUDIO DÉTECTÉ: {last_audio_id} → {current_audio_id}"
+                        )
+                        smart_sync_clients(force_recalculate=True)  # Broadcast à tous
+                        last_audio_id = current_audio_id
+                    elif needs_recalc:
+                        # Mise à jour de l'état sans changement d'audio
+                        audio_sync_state.update_state(audio_info, offset)
+                else:
+                    # État stable, vérifier juste l'ID pour les changements
+                    current_audio_id = current_audio["id"] if current_audio else None
+                    if last_audio_id != current_audio_id:
+                        logger.warning(
+                            f"🚨 CHANGEMENT AUDIO DÉTECTÉ (état stable): {last_audio_id} → {current_audio_id}"
+                        )
+                        smart_sync_clients(force_recalculate=True)  # Broadcast à tous
+                        last_audio_id = current_audio_id
+
+            time.sleep(5)  # Vérification toutes les 5 secondes
+
+        except Exception as e:
+            logger.error(f"❌ Erreur moniteur audio intelligent: {e}")
+            time.sleep(5)
+
+
+# Démarrer le nouveau moniteur intelligent
 try:
-    sync_thread = threading.Thread(target=sync_all_clients_periodically, daemon=True)
-    sync_thread.start()
-    logger.info("🔄 Thread synchronisation automatique démarré")
+    intelligent_monitor_thread = threading.Thread(
+        target=intelligent_audio_monitor, daemon=True
+    )
+    intelligent_monitor_thread.start()
+    logger.info("🔄 Thread moniteur audio intelligent démarré")
 except Exception as e:
-    logger.error(f"❌ Erreur démarrage thread synchronisation: {e}")
+    logger.error(f"❌ Erreur démarrage moniteur intelligent: {e}")
 
 
 # ✅ Configuration pour Azure App Service
