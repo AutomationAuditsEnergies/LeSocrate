@@ -1004,14 +1004,21 @@ function changeAudio(filename, audioId, offset) {
     });
 
     // Envoi de la question
-    function sendQuestion() {
-      const question = questionInput.value.trim();
-      if (!question) return;
-      // showTypingIndicator();
-      socket.emit('send_question', { username, question });
-      questionInput.value = '';
-      sendBtn.disabled = true;
-    }
+// Envoi de la question
+function sendQuestion() {
+  const question = questionInput.value.trim();
+  if (!question) return;
+  
+  // ✅ AJOUTER : Afficher IMMÉDIATEMENT mon message
+  addMessage(username, question, new Date().toLocaleTimeString());
+  
+  // ✅ AJOUTER : Afficher l'animation "est en train d'écrire"
+  showTypingIndicator();
+  
+  socket.emit('send_question', { username, question });
+  questionInput.value = '';
+  sendBtn.disabled = true;
+}
 
     sendBtn.addEventListener('click', sendQuestion);
     questionInput.addEventListener('keydown', (e) => {
@@ -1044,17 +1051,15 @@ function changeAudio(filename, audioId, offset) {
       messagesDiv.scrollTop = messagesDiv.scrollHeight;
     }
 
-    // Réception des messages
-    socket.on('receive_question', (data) => {
-      if (data.username === "Professeur") {
-         hideTypingIndicator();
-      }
-      addMessage(data.username, data.question, data.timestamp);
-      if (data.username !== "Professeur") {
-    showTypingIndicator();
+// Réception des messages
+socket.on('receive_question', (data) => {
+  // Afficher SEULEMENT les réponses du Professeur, pas ma question
+  if (data.username === "Professeur") {
+    hideTypingIndicator();
+    addMessage(data.username, data.question, data.timestamp);
   }
-
-    });
+  // Plus rien d'autre !
+});
 
     socket.on("receive_audio", (data) => {
       const audioB64 = data.audio_b64;
