@@ -49,7 +49,9 @@ app.secret_key = os.getenv("SECRET_KEY", "fallback_secret_key_for_dev")
 logger.info(f"🔐 Secret key configuré: {'***' if app.secret_key else 'MANQUANT'}")
 
 # ✅ Configuration Azure - URL du service RAG
-RAG_SERVICE_URL = os.getenv("RAG_SERVICE_URL", "http://127.0.0.1:7000")
+RAG_SERVICE_URL = os.getenv(
+    "RAG_SERVICE_URL", "https://rag-b0fndpa9fycaafcr.francecentral-01.azurewebsites.net"
+)
 logger.info(f"🔗 RAG Service URL: {RAG_SERVICE_URL}")
 
 # ✅ Base de données - SQLite local en dev, Azure SQL en prod
