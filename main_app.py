@@ -1349,7 +1349,7 @@ def handle_send_question(data):
             socketio.emit(
                 "receive_question",
                 {
-                    "username": "Alain",
+                    "username": "Professeur",
                     "question": response_text,
                     "timestamp": datetime.now(FRANCE_TZ).strftime("%H:%M:%S"),
                 },
