@@ -1052,14 +1052,30 @@ function sendQuestion() {
     }
 
 // Réception des messages
+// NOUVEAU CODE - SOLUTION COMPLÈTE
 socket.on('receive_question', (data) => {
-  console.log("Message reçu:", data);
-  // Afficher SEULEMENT les réponses du Professeur, pas ma question
-  if (data.username === "Professeur") {
-    hideTypingIndicator();
-    addMessage(data.username, data.question, data.timestamp);
+  console.log("=== MESSAGE REÇU ===");
+  console.log("Username:", data.username);
+  console.log("Question:", data.question);
+  console.log("Mon username:", username);
+  
+  // Ne pas afficher mes propres messages (ils sont déjà affichés)
+  if (data.username === username) {
+    console.log("💬 Mon propre message ignoré (déjà affiché)");
+    return;
   }
-  // Plus rien d'autre !
+  
+  // Afficher les messages du Professeur
+  if (data.username === "Professeur" || data.username === "Alain") {
+    console.log("✅ Message du professeur");
+    hideTypingIndicator();
+    addMessage("Professeur", data.question, data.timestamp);
+    return;
+  }
+  
+  // Afficher les messages des autres participants
+  console.log("👥 Message d'un autre participant");
+  addMessage(data.username, data.question, data.timestamp);
 });
 
     socket.on("receive_audio", (data) => {
