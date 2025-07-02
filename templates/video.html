@@ -1053,6 +1053,7 @@ function sendQuestion() {
 
 // Réception des messages
 socket.on('receive_question', (data) => {
+  console.log("Message reçu:", data);
   // Afficher SEULEMENT les réponses du Professeur, pas ma question
   if (data.username === "Professeur") {
     hideTypingIndicator();
