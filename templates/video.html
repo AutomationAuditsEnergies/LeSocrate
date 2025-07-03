@@ -374,162 +374,110 @@ audio {
   <input type="hidden" id="audio-filename" value="{{ audio_filename if audio_filename else '' }}">
 
   <script>
-    // ✅ AJOUTEZ CE CODE EN PREMIER dans votre script pour arrêter toutes les synchronisations
+    // ✅ VERSION ULTRA-SIMPLE - Ajoutez SEULEMENT ceci à la fin de votre script
 
-console.log('🛑 ARRÊT DE TOUS LES SYSTÈMES DE SYNCHRONISATION');
+// 1. DÉSACTIVER SEULEMENT LES SYNCHRONISATIONS PROBLÉMATIQUES
+console.log('🔧 Désactivation des synchronisations uniquement');
 
-// 1. ARRÊTER TOUS LES INTERVALLES POSSIBLES
-const highestIntervalId = setInterval(() => {}, 0);
-for (let i = 0; i < highestIntervalId; i++) {
-    clearInterval(i);
-}
-console.log('✅ Tous les intervalles arrêtés');
-
-// 2. SUPPRIMER TOUS LES LISTENERS SOCKETIO DE SYNCHRONISATION
-if (typeof socket !== 'undefined') {
-    socket.off('sync_audio');
-    socket.off('sync_request');
-    socket.off('cours_not_started_or_finished');
-    socket.off('participants_update');
-    socket.off('user_disconnected');
-    console.log('✅ Listeners SocketIO de sync supprimés');
-}
-
-// 3. DÉSACTIVER LES VARIABLES DE SYNCHRONISATION
-window.syncInterval = null;
-window.audioMonitoringInterval = null;
-window.simpleMonitoring = null;
-window.syncCheckInterval = null;
-window.lastSyncReceived = 0;
-
-// 4. FONCTION POUR EMPÊCHER LES NOUVELLES SYNCHRONISATIONS
-function blockSync() {
-    // Bloquer les appels de synchronisation
-    if (window.socket) {
-        const originalEmit = window.socket.emit;
-        window.socket.emit = function(event, ...args) {
-            if (event === 'sync_request' || event === 'sync_audio') {
-                console.log(`🚫 Appel ${event} bloqué`);
-                return;
-            }
-            return originalEmit.apply(this, [event, ...args]);
-        };
+// Attendre que tout soit chargé
+setTimeout(() => {
+    // Désactiver les listeners de synchronisation si ils existent
+    if (typeof socket !== 'undefined') {
+        socket.off('sync_audio');
+        console.log('✅ sync_audio désactivé');
     }
     
-    // Bloquer les setInterval
-    const originalSetInterval = window.setInterval;
-    window.setInterval = function(func, delay) {
-        if (delay < 10000) { // Bloquer les intervalles de moins de 10 secondes
-            console.log(`🚫 Interval de ${delay}ms bloqué`);
-            return null;
-        }
-        return originalSetInterval.apply(this, arguments);
-    };
-}
-
-// 5. ACTIVER LE BLOCAGE
-blockSync();
-
-// 6. FONCTION AUDIO ULTRA-SIMPLIFIÉE
-function playAudioSimple(audioId, filename, offset) {
-    console.log(`🎵 Lecture audio simple: ${filename} (ID: ${audioId}, offset: ${offset}s)`);
-    
-    // Arrêter l'audio actuel
-    if (audio) {
-        audio.pause();
-        audio.currentTime = 0;
+    // Arrêter seulement les intervalles de synchronisation
+    if (typeof syncInterval !== 'undefined') {
+        clearInterval(syncInterval);
+        console.log('✅ syncInterval arrêté');
     }
     
-    // Configurer la nouvelle source
-    const source = audio.querySelector('source');
-    source.src = filename;
-    audio.src = filename;
-    audio.load();
-    
-    // Quand l'audio est prêt
-    audio.addEventListener('loadedmetadata', function onLoaded() {
-        console.log(`✅ Audio chargé: ${audio.duration}s`);
-        
-        // Définir la position
-        const targetTime = Math.min(offset, audio.duration);
-        audio.currentTime = targetTime;
-        
-        // Lancer l'audio
+    if (typeof audioMonitoringInterval !== 'undefined') {
+        clearInterval(audioMonitoringInterval);
+        console.log('✅ audioMonitoringInterval arrêté');
+    }
+}, 2000);
+
+// 2. FONCTION POUR DIAGNOSTIQUER L'AUDIO
+function debugAudio() {
+    console.log('🔍 DIAGNOSTIC AUDIO:');
+    console.log('  - Audio existe:', !!audio);
+    console.log('  - Audio src:', audio ? audio.src : 'N/A');
+    console.log('  - Audio paused:', audio ? audio.paused : 'N/A');
+    console.log('  - Audio currentTime:', audio ? audio.currentTime : 'N/A');
+    console.log('  - Audio duration:', audio ? audio.duration : 'N/A');
+    console.log('  - isAudioPlaying:', typeof isAudioPlaying !== 'undefined' ? isAudioPlaying : 'N/A');
+    console.log('  - currentAudioId:', typeof currentAudioId !== 'undefined' ? currentAudioId : 'N/A');
+}
+
+// 3. FONCTION POUR FORCER LA LECTURE AUDIO
+function forcePlayAudio() {
+    if (audio && audio.src) {
+        console.log('🔊 Tentative de lecture forcée...');
         audio.play()
             .then(() => {
-                console.log('✅ Audio lancé avec succès');
+                console.log('✅ Audio forcé avec succès');
                 isAudioPlaying = true;
-                currentAudioId = audioId;
             })
             .catch(e => {
-                console.error('❌ Erreur lecture:', e);
-                isAudioPlaying = false;
+                console.error('❌ Erreur audio forcé:', e);
+                console.log('🔊 Essayez de cliquer sur la page puis retapez forcePlayAudio()');
             });
-        
-        // Supprimer le listener
-        audio.removeEventListener('loadedmetadata', onLoaded);
-    });
-}
-
-// 7. REMPLACER LA FONCTION CHANGEAUDIO
-window.changeAudio = function(filename, audioId, offset) {
-    console.log('🔄 ChangeAudio appelé mais redirigé vers playAudioSimple');
-    playAudioSimple(audioId, filename, offset);
-};
-
-// 8. GESTIONNAIRE D'ERREURS ULTRA-SIMPLE
-if (audio) {
-    // Supprimer tous les anciens listeners
-    audio.removeEventListener('error', arguments.callee);
-    audio.removeEventListener('pause', arguments.callee);
-    audio.removeEventListener('ended', arguments.callee);
-    
-    // Ajouter des listeners simples
-    audio.addEventListener('error', (e) => {
-        console.error('❌ Erreur audio simple:', e);
-        isAudioPlaying = false;
-    });
-    
-    audio.addEventListener('pause', (e) => {
-        console.log('⏸️ Audio en pause');
-        isAudioPlaying = false;
-    });
-    
-    audio.addEventListener('ended', (e) => {
-        console.log('🏁 Audio terminé');
-        isAudioPlaying = false;
-    });
-}
-
-// 9. FONCTION DE DIAGNOSTIC
-function diagnosticAudio() {
-    console.log('🔍 DIAGNOSTIC AUDIO:');
-    console.log('  - Audio src:', audio.src);
-    console.log('  - Audio paused:', audio.paused);
-    console.log('  - Audio currentTime:', audio.currentTime);
-    console.log('  - Audio duration:', audio.duration);
-    console.log('  - Audio readyState:', audio.readyState);
-    console.log('  - isAudioPlaying:', isAudioPlaying);
-    console.log('  - currentAudioId:', currentAudioId);
-}
-
-// 10. COMMANDES DISPONIBLES
-window.playAudioSimple = playAudioSimple;
-window.diagnosticAudio = diagnosticAudio;
-window.stopAllAudio = () => {
-    if (audio) {
-        audio.pause();
-        audio.currentTime = 0;
-        isAudioPlaying = false;
-        console.log('🛑 Audio arrêté');
+    } else {
+        console.log('❌ Pas d\'audio à lire');
     }
-};
+}
 
-console.log('✅ Système de synchronisation complètement désactivé');
+// 4. FONCTION POUR RECHARGER L'AUDIO ACTUEL
+function reloadCurrentAudio() {
+    fetch('/api/cours-status')
+        .then(response => response.json())
+        .then(data => {
+            if (data.status === 'playing') {
+                console.log('🔄 Rechargement audio:', data.audio_title);
+                
+                const audioInfo = COURS_PLAYLIST.find(a => a.id === data.audio_id);
+                if (audioInfo && audio) {
+                    const source = audio.querySelector('source');
+                    source.src = audioInfo.filename;
+                    audio.src = audioInfo.filename;
+                    audio.load();
+                    
+                    audio.addEventListener('loadedmetadata', () => {
+                        const targetTime = Math.min(data.offset, audio.duration);
+                        audio.currentTime = targetTime;
+                        console.log(`📍 Position: ${targetTime}s`);
+                        
+                        audio.play()
+                            .then(() => {
+                                console.log('✅ Audio rechargé et lancé');
+                                isAudioPlaying = true;
+                                currentAudioId = data.audio_id;
+                            })
+                            .catch(e => {
+                                console.error('❌ Erreur lecture:', e);
+                                console.log('🔊 Interaction utilisateur requise');
+                            });
+                    }, { once: true });
+                }
+            } else {
+                console.log('📊 Status cours:', data.status);
+            }
+        })
+        .catch(e => console.error('❌ Erreur API:', e));
+}
+
+// 5. COMMANDES DISPONIBLES
+window.debugAudio = debugAudio;
+window.forcePlayAudio = forcePlayAudio;
+window.reloadCurrentAudio = reloadCurrentAudio;
+
+console.log('✅ Outils de debug audio installés');
 console.log('💡 Commandes disponibles:');
-console.log('  - playAudioSimple(id, filename, offset)');
-console.log('  - diagnosticAudio()');
-console.log('  - stopAllAudio()');
+console.log('  - debugAudio() : Diagnostic complet');
+console.log('  - forcePlayAudio() : Force la lecture');
+console.log('  - reloadCurrentAudio() : Recharge l\'audio actuel');
     // Variables pour la synchronisation
     let currentAudioId = parseInt(document.getElementById("audio-id").value);
     let syncInterval;
