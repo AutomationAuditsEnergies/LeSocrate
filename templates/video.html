@@ -728,50 +728,7 @@ function hideActivationButton() {
     }
 }
 
-// 4. MODIFICATION de la fonction initializeAudio
-function initializeAudio() {
-    console.log("🎵 Initialisation audio...");
-    
-    // Toujours afficher le bouton au démarrage
-    showActivationButton();
-    
-    // Émettre la connexion utilisateur
-    socket.emit('user_connected', { username });
-    
-    // Configurer les listeners audio basiques
-    setupBasicAudioListeners();
-}
 
-// 5. LISTENERS AUDIO BASIQUES (sans synchronisation)
-function setupBasicAudioListeners() {
-    audio.addEventListener('ended', () => {
-        console.log('🏁 Audio terminé');
-        isAudioPlaying = false;
-        
-        // Afficher le bouton pour le prochain audio
-        if (audioActivated) {
-            showActivationButton();
-        }
-    });
-    
-    audio.addEventListener('error', (e) => {
-        console.error('❌ Erreur audio:', e);
-        isAudioPlaying = false;
-        
-        // Afficher le bouton en cas d'erreur
-        showActivationButton();
-    });
-    
-    audio.addEventListener('pause', () => {
-        console.log('⏸️ Audio en pause');
-        isAudioPlaying = false;
-    });
-    
-    audio.addEventListener('play', () => {
-        console.log('▶️ Audio en lecture');
-        isAudioPlaying = true;
-    });
-}
 
 // 6. FONCTION pour changer d'audio (simplifiée)
 function changeAudio(filename, audioId, offset) {
@@ -1006,104 +963,348 @@ console.log('  - resetAudioSystem() : Reset complet');
     });
 
     // Fonction pour initialiser l'audio
-// ✅ CORRIGER la fonction initializeAudio() - Remplacer par ceci :
+// ✅ FONCTION UNIFIÉE - Remplace les deux versions existantes
 function initializeAudio() {
-  console.log("Initialisation de l'audio...");
-  console.log("AudioOffset:", audioOffset);
-  console.log("CurrentAudioId:", currentAudioId);
-  
-  videoZone.classList.remove("hidden");
-  
-  // Si on n'a pas de source audio valide, récupérer via API
-  if (!audio.src || audio.src === "" || audio.src.includes("undefined")) {
-    console.warn("Source audio manquante, récupération via API...");
+    console.log("🎵 Initialisation audio...");
+    console.log("AudioOffset:", audioOffset);
+    console.log("CurrentAudioId:", currentAudioId);
     
-    fetch('/api/cours-status')
-      .then(response => response.json())
-      .then(data => {
-        if (data.status === 'playing') {
-          console.log("État du cours:", data);
-          const audioInfo = COURS_PLAYLIST.find(a => a.id === data.audio_id);
-          if (audioInfo) {
-            const source = audio.querySelector('source');
-            source.src = audioInfo.filename;
-            audio.load();
-            
-            // Attendre que les métadonnées soient chargées
-            audio.addEventListener('loadedmetadata', () => {
-              console.log(`Métadonnées chargées, durée: ${audio.duration}s`);
-              const targetTime = Math.min(data.offset, audio.duration);
-              
-              // Définir le temps et démarrer
-              audio.currentTime = targetTime;
-              console.log(`Position définie à ${targetTime}s`);
-              
-              // Attendre un court instant pour que le seeking se fasse
-              setTimeout(() => {
-                if (!isAudioPlaying) {  // ✅ Utiliser la variable de protection
-                  isAudioPlaying = true;
-                  audio.play()
-                    .then(() => {
-                      console.log("✅ Audio initial démarré");
-                    })
-                    .catch(e => {
-                      console.log("Lecture bloquée, affichage du bouton:", e);
-                      isAudioPlaying = false;
-                      showAudioUnlockButton();  // ✅ Nom correct de la fonction
-                    });
-                }
-              }, 100);
-            }, { once: true });
-          }
-        }
-      })
-      .catch(e => console.error("Erreur API:", e));
-  } else {
-    // Si on a déjà une source, utiliser l'offset fourni
-    if (audioOffset >= 0 && !isNaN(audioOffset)) {
-      if (audio.readyState >= 2) {
-        // Si les métadonnées sont déjà chargées
-        const targetTime = Math.min(audioOffset, audio.duration || audioOffset);
-        audio.currentTime = targetTime;
-        console.log(`Audio déjà prêt, position: ${targetTime}s`);
+    // Configurer les listeners audio basiques
+    setupBasicAudioListeners();
+    
+    // Émettre la connexion utilisateur
+    socket.emit('user_connected', { username });
+    
+    videoZone.classList.remove("hidden");
+    
+    // Si on n'a pas de source audio valide, récupérer via API
+    if (!audio.src || audio.src === "" || audio.src.includes("undefined")) {
+        console.warn("Source audio manquante, récupération via API...");
         
-        if (!isAudioPlaying) {  // ✅ Protection contre double play
-          isAudioPlaying = true;
-          audio.play()
-            .then(() => {
-              console.log("✅ Audio démarré");
+        fetch('/api/cours-status')
+            .then(response => response.json())
+            .then(data => {
+                if (data.status === 'playing') {
+                    console.log("État du cours:", data);
+                    const audioInfo = COURS_PLAYLIST.find(a => a.id === data.audio_id);
+                    if (audioInfo) {
+                        const source = audio.querySelector('source');
+                        source.src = audioInfo.filename;
+                        audio.src = audioInfo.filename;
+                        audio.load();
+                        
+                        currentAudioId = data.audio_id;
+                        
+                        // Attendre que les métadonnées soient chargées
+                        audio.addEventListener('loadedmetadata', () => {
+                            console.log(`Métadonnées chargées, durée: ${audio.duration}s`);
+                            const targetTime = Math.min(data.offset, audio.duration);
+                            
+                            // Définir le temps
+                            audio.currentTime = targetTime;
+                            console.log(`Position définie à ${targetTime}s`);
+                            
+                            // Mettre à jour l'interface
+                            updateChatAvailability(audioInfo.type);
+                            
+                            // Attendre un court instant pour que le seeking se fasse
+                            setTimeout(() => {
+                                if (!isAudioPlaying) {
+                                    isAudioPlaying = true;
+                                    audio.play()
+                                        .then(() => {
+                                            console.log("✅ Audio initial démarré");
+                                            audioActivated = true;
+                                        })
+                                        .catch(e => {
+                                            console.log("Lecture bloquée, affichage du bouton:", e);
+                                            isAudioPlaying = false;
+                                            showActivationButton();
+                                        });
+                                }
+                            }, 100);
+                        }, { once: true });
+                    } else {
+                        console.warn("Audio non trouvé dans la playlist");
+                        showActivationButton();
+                    }
+                } else if (data.status === 'finished') {
+                    console.log("Cours terminé");
+                    showCourseFinishedMessage();
+                } else {
+                    console.log("Cours en attente");
+                    showActivationButton();
+                }
             })
             .catch(e => {
-              console.log("Lecture bloquée:", e);
-              isAudioPlaying = false;
-              showAudioUnlockButton();  // ✅ Nom correct
+                console.error("Erreur API:", e);
+                showActivationButton();
             });
-        }
-      } else {
-        // Attendre les métadonnées
-        audio.addEventListener('loadedmetadata', () => {
-          const targetTime = Math.min(audioOffset, audio.duration);
-          audio.currentTime = targetTime;
-          console.log(`Position définie à ${targetTime}s / ${audio.duration}s`);
-          
-          setTimeout(() => {
-            if (!isAudioPlaying) {  // ✅ Protection
-              isAudioPlaying = true;
-              audio.play()
-                .then(() => {
-                  console.log("✅ Audio démarré après métadonnées");
-                })
-                .catch(e => {
-                  console.log("Lecture bloquée:", e);
-                  isAudioPlaying = false;
-                  showAudioUnlockButton();  // ✅ Nom correct
-                });
+    } else {
+        // Si on a déjà une source, utiliser l'offset fourni
+        if (audioOffset >= 0 && !isNaN(audioOffset)) {
+            if (audio.readyState >= 2) {
+                // Si les métadonnées sont déjà chargées
+                const targetTime = Math.min(audioOffset, audio.duration || audioOffset);
+                audio.currentTime = targetTime;
+                console.log(`Audio déjà prêt, position: ${targetTime}s`);
+                
+                if (!isAudioPlaying) {
+                    isAudioPlaying = true;
+                    audio.play()
+                        .then(() => {
+                            console.log("✅ Audio démarré");
+                            audioActivated = true;
+                        })
+                        .catch(e => {
+                            console.log("Lecture bloquée:", e);
+                            isAudioPlaying = false;
+                            showActivationButton();
+                        });
+                }
+            } else {
+                // Attendre les métadonnées
+                audio.addEventListener('loadedmetadata', () => {
+                    const targetTime = Math.min(audioOffset, audio.duration);
+                    audio.currentTime = targetTime;
+                    console.log(`Position définie à ${targetTime}s / ${audio.duration}s`);
+                    
+                    setTimeout(() => {
+                        if (!isAudioPlaying) {
+                            isAudioPlaying = true;
+                            audio.play()
+                                .then(() => {
+                                    console.log("✅ Audio démarré après métadonnées");
+                                    audioActivated = true;
+                                })
+                                .catch(e => {
+                                    console.log("Lecture bloquée:", e);
+                                    isAudioPlaying = false;
+                                    showActivationButton();
+                                });
+                        }
+                    }, 100);
+                }, { once: true });
             }
-          }, 100);
-        }, { once: true });
-      }
+        } else {
+            // Pas d'offset valide, afficher le bouton
+            showActivationButton();
+        }
     }
-  }
+}
+
+// ✅ FONCTION AMÉLIORÉE - Remplace setupBasicAudioListeners()
+function setupBasicAudioListeners() {
+    audio.addEventListener('ended', () => {
+        console.log('🏁 Audio terminé');
+        isAudioPlaying = false;
+        
+        // Afficher le bouton pour le prochain audio
+        if (audioActivated) {
+            showActivationButton();
+        }
+    });
+    
+    audio.addEventListener('error', (e) => {
+        console.error('❌ Erreur audio:', e);
+        isAudioPlaying = false;
+        
+        // Afficher le bouton en cas d'erreur
+        showActivationButton();
+    });
+    
+    audio.addEventListener('pause', () => {
+        console.log('⏸️ Audio en pause');
+        isAudioPlaying = false;
+    });
+    
+    audio.addEventListener('play', () => {
+        console.log('▶️ Audio en lecture');
+        isAudioPlaying = true;
+    });
+    
+    audio.addEventListener('loadstart', () => {
+        console.log('🔄 Début chargement audio');
+    });
+
+    audio.addEventListener('canplay', () => {
+        console.log('✅ Audio prêt à être joué');
+    });
+}
+
+// ✅ FONCTION AMÉLIORÉE - Version plus robuste de showActivationButton()
+function showActivationButton() {
+    // Éviter les doublons
+    if (activationButtonShown) {
+        console.log('🔊 Bouton d\'activation déjà affiché');
+        return;
+    }
+    
+    // Supprimer tout bouton existant
+    const existingBtn = document.getElementById('audio-activation-btn');
+    if (existingBtn) {
+        existingBtn.remove();
+    }
+    
+    console.log('🔊 Affichage du bouton d\'activation audio');
+    
+    const activationBtn = document.createElement('button');
+    activationBtn.id = 'audio-activation-btn';
+    activationBtn.innerHTML = `
+        <div class="text-center">
+            <div class="text-3xl mb-4">🔊</div>
+            <div class="text-xl font-bold mb-2">Formation en cours</div>
+            <div class="text-sm mb-4 opacity-80">Cliquez pour activer le son</div>
+            <div class="bg-blue-600 hover:bg-blue-700 px-6 py-3 rounded-lg font-medium transition-colors">
+                Activer l'audio
+            </div>
+        </div>
+    `;
+    
+    // Style ultra-visible et fixe
+    activationBtn.style.cssText = `
+        position: fixed !important;
+        top: 50% !important;
+        left: 50% !important;
+        transform: translate(-50%, -50%) !important;
+        background: rgba(0, 0, 0, 0.95) !important;
+        color: white !important;
+        padding: 40px !important;
+        border-radius: 20px !important;
+        border: 3px solid #3b82f6 !important;
+        z-index: 999999 !important;
+        box-shadow: 0 0 50px rgba(59, 130, 246, 0.5) !important;
+        font-family: Arial, sans-serif !important;
+        cursor: pointer !important;
+        min-width: 350px !important;
+        text-align: center !important;
+        backdrop-filter: blur(10px) !important;
+    `;
+    
+    // Gestionnaire de clic
+    activationBtn.onclick = async () => {
+        console.log('🔊 Bouton d\'activation cliqué !');
+        
+        try {
+            // Changer l'apparence du bouton
+            activationBtn.innerHTML = `
+                <div class="text-center">
+                    <div class="text-3xl mb-4">⏳</div>
+                    <div class="text-xl font-bold mb-2">Activation en cours...</div>
+                    <div class="w-8 h-8 border-4 border-white border-t-transparent rounded-full animate-spin mx-auto"></div>
+                </div>
+            `;
+            
+            // Récupérer l'état actuel du cours
+            const response = await fetch('/api/cours-status');
+            const data = await response.json();
+            
+            console.log('📊 État du cours:', data);
+            
+            if (data.status === 'playing') {
+                // Trouver l'audio dans la playlist
+                const audioInfo = COURS_PLAYLIST.find(a => a.id === data.audio_id);
+                
+                if (audioInfo) {
+                    console.log('🎵 Configuration audio:', audioInfo.title);
+                    
+                    // Configurer l'audio
+                    const source = audio.querySelector('source');
+                    source.src = audioInfo.filename;
+                    audio.src = audioInfo.filename;
+                    audio.load();
+                    
+                    // Attendre que l'audio soit prêt
+                    await new Promise((resolve, reject) => {
+                        const timeout = setTimeout(() => reject(new Error('Timeout')), 10000);
+                        
+                        const onReady = () => {
+                            clearTimeout(timeout);
+                            audio.removeEventListener('canplay', onReady);
+                            audio.removeEventListener('error', onError);
+                            resolve();
+                        };
+                        
+                        const onError = (e) => {
+                            clearTimeout(timeout);
+                            audio.removeEventListener('canplay', onReady);
+                            audio.removeEventListener('error', onError);
+                            reject(e);
+                        };
+                        
+                        audio.addEventListener('canplay', onReady);
+                        audio.addEventListener('error', onError);
+                    });
+                    
+                    // Définir la position
+                    const targetTime = Math.min(data.offset, audio.duration);
+                    audio.currentTime = targetTime;
+                    
+                    console.log(`📍 Position: ${targetTime}s / ${audio.duration}s`);
+                    
+                    // Attendre le seeking si nécessaire
+                    if (targetTime > 0) {
+                        await new Promise(resolve => {
+                            const onSeeked = () => {
+                                audio.removeEventListener('seeked', onSeeked);
+                                resolve();
+                            };
+                            audio.addEventListener('seeked', onSeeked);
+                        });
+                    }
+                    
+                    // Lancer l'audio
+                    await audio.play();
+                    
+                    console.log('✅ Audio lancé avec succès !');
+                    
+                    // Marquer comme activé
+                    audioActivated = true;
+                    isAudioPlaying = true;
+                    currentAudioId = data.audio_id;
+                    
+                    // Supprimer le bouton
+                    activationBtn.remove();
+                    activationButtonShown = false;
+                    
+                    // Mettre à jour l'interface
+                    updateChatAvailability(audioInfo.type);
+                    
+                } else {
+                    throw new Error('Audio non trouvé dans la playlist');
+                }
+            } else {
+                throw new Error(`Cours non disponible (status: ${data.status})`);
+            }
+            
+        } catch (error) {
+            console.error('❌ Erreur activation audio:', error);
+            
+            // Afficher l'erreur
+            activationBtn.innerHTML = `
+                <div class="text-center">
+                    <div class="text-3xl mb-4">❌</div>
+                    <div class="text-xl font-bold mb-2">Erreur</div>
+                    <div class="text-sm mb-4">${error.message}</div>
+                    <div class="bg-red-600 hover:bg-red-700 px-6 py-3 rounded-lg font-medium transition-colors">
+                        Réessayer
+                    </div>
+                </div>
+            `;
+            
+            // Permettre de réessayer
+            setTimeout(() => {
+                activationBtn.onclick = () => showActivationButton();
+                activationBtn.click();
+            }, 1000);
+        }
+    };
+    
+    // Ajouter au DOM
+    document.body.appendChild(activationBtn);
+    activationButtonShown = true;
+    
+    console.log('✅ Bouton d\'activation ajouté au DOM');
 }
 
 // ✅ AMÉLIORER setupAudioEventListeners() avec gestion d'erreur pour re-sync
