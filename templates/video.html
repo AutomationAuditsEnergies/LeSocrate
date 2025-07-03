@@ -1133,6 +1133,7 @@ function setupBasicAudioListeners() {
 }
 
 // ✅ FONCTION AMÉLIORÉE - Version plus robuste de showActivationButton()
+// ✅ VERSION DISCRÈTE - Remplace showActivationButton() dans la fonction unifiée
 function showActivationButton() {
     // Éviter les doublons
     if (activationButtonShown) {
@@ -1146,55 +1147,45 @@ function showActivationButton() {
         existingBtn.remove();
     }
     
-    console.log('🔊 Affichage du bouton d\'activation audio');
+    console.log('🔊 Affichage du bouton d\'activation audio (discret)');
     
     const activationBtn = document.createElement('button');
     activationBtn.id = 'audio-activation-btn';
     activationBtn.innerHTML = `
-        <div class="text-center">
-            <div class="text-3xl mb-4">🔊</div>
-            <div class="text-xl font-bold mb-2">Formation en cours</div>
-            <div class="text-sm mb-4 opacity-80">Cliquez pour activer le son</div>
-            <div class="bg-blue-600 hover:bg-blue-700 px-6 py-3 rounded-lg font-medium transition-colors">
-                Activer l'audio
-            </div>
+        <div class="flex items-center gap-2">
+            <svg class="w-5 h-5 text-white/70" fill="currentColor" viewBox="0 0 24 24">
+                <path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02z"/>
+            </svg>
+            <span class="text-sm text-white/90">Cliquez pour activer l'audio</span>
         </div>
     `;
     
-    // Style ultra-visible et fixe
-    activationBtn.style.cssText = `
-        position: fixed !important;
-        top: 50% !important;
-        left: 50% !important;
-        transform: translate(-50%, -50%) !important;
-        background: rgba(0, 0, 0, 0.95) !important;
-        color: white !important;
-        padding: 40px !important;
-        border-radius: 20px !important;
-        border: 3px solid #3b82f6 !important;
-        z-index: 999999 !important;
-        box-shadow: 0 0 50px rgba(59, 130, 246, 0.5) !important;
-        font-family: Arial, sans-serif !important;
-        cursor: pointer !important;
-        min-width: 350px !important;
-        text-align: center !important;
-        backdrop-filter: blur(10px) !important;
-    `;
+    // Style discret comme l'ancien bouton
+    activationBtn.className = `
+        fixed bottom-6 right-6
+        bg-black/60 hover:bg-black/80
+        backdrop-blur-md
+        text-white px-4 py-3 rounded-lg
+        font-medium z-[9999] 
+        shadow-lg border border-white/10
+        transition-all duration-300 hover:scale-105 cursor-pointer
+        hover:shadow-xl
+    `.replace(/\s+/g, ' ').trim();
     
-    // Gestionnaire de clic
+    // Gestionnaire de clic amélioré
     activationBtn.onclick = async () => {
         console.log('🔊 Bouton d\'activation cliqué !');
         
+        // Changer temporairement l'apparence
+        const originalHTML = activationBtn.innerHTML;
+        activationBtn.innerHTML = `
+            <div class="flex items-center gap-2">
+                <div class="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                <span class="text-sm text-white/90">Activation...</span>
+            </div>
+        `;
+        
         try {
-            // Changer l'apparence du bouton
-            activationBtn.innerHTML = `
-                <div class="text-center">
-                    <div class="text-3xl mb-4">⏳</div>
-                    <div class="text-xl font-bold mb-2">Activation en cours...</div>
-                    <div class="w-8 h-8 border-4 border-white border-t-transparent rounded-full animate-spin mx-auto"></div>
-                </div>
-            `;
-            
             // Récupérer l'état actuel du cours
             const response = await fetch('/api/cours-status');
             const data = await response.json();
@@ -1214,9 +1205,9 @@ function showActivationButton() {
                     audio.src = audioInfo.filename;
                     audio.load();
                     
-                    // Attendre que l'audio soit prêt
+                    // Attendre que l'audio soit prêt avec timeout
                     await new Promise((resolve, reject) => {
-                        const timeout = setTimeout(() => reject(new Error('Timeout')), 10000);
+                        const timeout = setTimeout(() => reject(new Error('Timeout chargement')), 10000);
                         
                         const onReady = () => {
                             clearTimeout(timeout);
@@ -1280,23 +1271,20 @@ function showActivationButton() {
         } catch (error) {
             console.error('❌ Erreur activation audio:', error);
             
-            // Afficher l'erreur
+            // Afficher l'erreur de façon discrète
             activationBtn.innerHTML = `
-                <div class="text-center">
-                    <div class="text-3xl mb-4">❌</div>
-                    <div class="text-xl font-bold mb-2">Erreur</div>
-                    <div class="text-sm mb-4">${error.message}</div>
-                    <div class="bg-red-600 hover:bg-red-700 px-6 py-3 rounded-lg font-medium transition-colors">
-                        Réessayer
-                    </div>
+                <div class="flex items-center gap-2">
+                    <svg class="w-5 h-5 text-red-400" fill="currentColor" viewBox="0 0 24 24">
+                        <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/>
+                    </svg>
+                    <span class="text-sm text-red-400">Erreur - Réessayer</span>
                 </div>
             `;
             
-            // Permettre de réessayer
+            // Réinitialiser après quelques secondes
             setTimeout(() => {
-                activationBtn.onclick = () => showActivationButton();
-                activationBtn.click();
-            }, 1000);
+                activationBtn.innerHTML = originalHTML;
+            }, 3000);
         }
     };
     
@@ -1304,7 +1292,109 @@ function showActivationButton() {
     document.body.appendChild(activationBtn);
     activationButtonShown = true;
     
-    console.log('✅ Bouton d\'activation ajouté au DOM');
+    console.log('✅ Bouton d\'activation discret ajouté');
+}
+
+// ✅ Alternative : Si vous préférez garder l'ancien nom et style
+function showAudioUnlockButton() {
+    // Éviter les doublons
+    const existingBtn = document.getElementById('unlock-audio-btn');
+    if (existingBtn) existingBtn.remove();
+    
+    console.log('🔊 Affichage du bouton d\'activation audio (style original)');
+    
+    const unlockBtn = document.createElement('button');
+    unlockBtn.id = 'unlock-audio-btn';
+    unlockBtn.innerHTML = `
+        <div class="flex items-center gap-2">
+            <svg class="w-5 h-5 text-white/70" fill="currentColor" viewBox="0 0 24 24">
+                <path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02z"/>
+            </svg>
+            <span class="text-sm text-white/90">Cliquez pour activer l'audio</span>
+        </div>
+    `;
+
+    unlockBtn.className = `
+        fixed bottom-6 right-6
+        bg-black/60 hover:bg-black/80
+        backdrop-blur-md
+        text-white px-4 py-3 rounded-lg
+        font-medium z-[9999] 
+        shadow-lg border border-white/10
+        transition-all duration-300 hover:scale-105 cursor-pointer
+        hover:shadow-xl
+    `.replace(/\s+/g, ' ').trim();
+
+    unlockBtn.onclick = async () => {
+        console.log("🔊 Bouton d'activation cliqué (style original)");
+        
+        // Animation de chargement
+        const originalHTML = unlockBtn.innerHTML;
+        unlockBtn.innerHTML = `
+            <div class="flex items-center gap-2">
+                <div class="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                <span class="text-sm text-white/90">Activation...</span>
+            </div>
+        `;
+        
+        try {
+            // Récupérer l'état via API
+            const response = await fetch('/api/cours-status');
+            const data = await response.json();
+            
+            if (data.status === 'playing') {
+                const audioInfo = COURS_PLAYLIST.find(a => a.id === data.audio_id);
+                
+                if (audioInfo) {
+                    const source = audio.querySelector('source');
+                    source.src = audioInfo.filename;
+                    audio.src = audioInfo.filename;
+                    audio.load();
+                    
+                    // Attendre chargement
+                    await new Promise((resolve) => {
+                        audio.addEventListener('canplay', resolve, { once: true });
+                    });
+                    
+                    // Positionner et lancer
+                    audio.currentTime = Math.min(data.offset, audio.duration);
+                    await audio.play();
+                    
+                    // Nettoyer
+                    unlockBtn.remove();
+                    isAudioPlaying = true;
+                    currentAudioId = data.audio_id;
+                    
+                    console.log("✅ Audio activé avec succès (style original)");
+                } else {
+                    throw new Error('Audio non trouvé');
+                }
+            } else {
+                throw new Error('Cours non disponible');
+            }
+            
+        } catch (error) {
+            console.error("❌ Erreur activation:", error);
+            
+            // Afficher erreur discrète
+            unlockBtn.innerHTML = `
+                <div class="flex items-center gap-2">
+                    <svg class="w-5 h-5 text-red-400" fill="currentColor" viewBox="0 0 24 24">
+                        <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/>
+                    </svg>
+                    <span class="text-sm text-red-400">Erreur</span>
+                </div>
+            `;
+            
+            // Réinitialiser après 3 secondes
+            setTimeout(() => {
+                unlockBtn.innerHTML = originalHTML;
+            }, 3000);
+        }
+    };
+    
+    document.body.appendChild(unlockBtn);
+    console.log("🔊 Bouton d'activation discret ajouté");
 }
 
 // ✅ AMÉLIORER setupAudioEventListeners() avec gestion d'erreur pour re-sync
