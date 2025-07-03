@@ -1315,6 +1315,51 @@ def handle_cours_finished_check():
         logger.error(f"❌ Erreur cours_finished_check handler: {e}")
 
 
+@app.route("/api/force-logout-finished-users", methods=["POST"])
+def force_logout_finished_users():
+    """Force la déconnexion de tous les utilisateurs quand le cours est terminé"""
+    try:
+        if not session.get("is_admin"):
+            return jsonify({"success": False, "error": "Accès refusé"}), 403
+
+        logger.info("🔒 Forçage déconnexion utilisateurs cours terminé")
+
+        # Mettre à jour tous les utilisateurs encore "En cours"
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        depart_time = datetime.now(FRANCE_TZ).strftime("%Y-%m-%d %H:%M:%S")
+        cursor.execute(
+            "UPDATE logs SET depart = ? WHERE depart IS NULL OR depart = ''",
+            (depart_time,),
+        )
+        affected_rows = cursor.rowcount
+        conn.commit()
+        conn.close()
+
+        # ✅ IMPORTANT : Envoyer le signal à tous les clients connectés
+        socketio.emit(
+            "force_logout",
+            {
+                "message": "Formation terminée - Déconnexion automatique",
+                "redirect_url": "/logout",
+            },
+        )
+
+        logger.info(f"✅ {affected_rows} utilisateurs déconnectés automatiquement")
+
+        return jsonify(
+            {
+                "success": True,
+                "message": f"{affected_rows} utilisateurs déconnectés",
+                "disconnected_count": affected_rows,
+            }
+        )
+
+    except Exception as e:
+        logger.error(f"❌ Erreur force logout: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
 @socketio.on("send_question")
 def handle_send_question(data):
     try:
