@@ -391,13 +391,13 @@ const COURS_PLAYLIST = [
     { id: 10, filename: "https://formationaudios-ebbgcnh0hbcxdjcq.z02.azurefd.net/audios/cours_12h20_13h05.mp3", duration: 2400, title: "Cours - Bloc 4 (12h20-13h05)", type: "cours" },
     { id: 11, filename: "https://formationaudios-ebbgcnh0hbcxdjcq.z02.azurefd.net/audios/qa_13h05_13h15.mp3", duration: 900, title: "Questions-Réponses IA (13h05-13h15)", type: "qa" },
     { id: 12, filename: "https://formationaudios-ebbgcnh0hbcxdjcq.z02.azurefd.net/audios/pause_midi_13h15_14h45.mp3", duration: 5400, title: "Pause déjeuner (13h15-14h45)", type: "pause_midi" },
-    { id: 13, filename: "https://formationaudios-ebbgcnh0hbcxdjcq.z02.azurefd.net/audios/cours_14h45_15h45.mp3", duration: 3640, title: "Cours - Bloc 5 (14h45-15h45)", type: "cours" },
-    { id: 14, filename: "https://formationaudios-ebbgcnh0hbcxdjcq.z02.azurefd.net/audios/qa_15h45_16h00.mp3", duration: 900, title: "Questions-Réponses IA (15h45-16h00)", type: "qa" },
-    { id: 15, filename: "https://formationaudios-ebbgcnh0hbcxdjcq.z02.azurefd.net/audios/cours_16h00_17h00.mp3", duration: 3600, title: "Cours - Bloc 6 (16h00-17h00)", type: "cours" },
-    { id: 16, filename: "https://formationaudios-ebbgcnh0hbcxdjcq.z02.azurefd.net/audios/qa_17h00_17h15.mp3", duration: 900, title: "Questions-Réponses IA (17h00-17h15)", type: "qa" },
+    { id: 13, filename: "https://formationaudios-ebbgcnh0hbcxdjcq.z02.azurefd.net/audios/cours_14h45_15h45.mp3", duration: 2700, title: "Cours - Bloc 5 (14h45-15h45)", type: "cours" },
+    { id: 14, filename: "https://formationaudios-ebbgcnh0hbcxdjcq.z02.azurefd.net/audios/qa_15h45_16h00.mp3", duration: 1800, title: "Questions-Réponses IA (15h45-16h00)", type: "qa" },
+    { id: 15, filename: "https://formationaudios-ebbgcnh0hbcxdjcq.z02.azurefd.net/audios/cours_16h00_17h00.mp3", duration: 2400, title: "Cours - Bloc 6 (16h00-17h00)", type: "cours" },
+    { id: 16, filename: "https://formationaudios-ebbgcnh0hbcxdjcq.z02.azurefd.net/audios/qa_17h00_17h15.mp3", duration: 2100, title: "Questions-Réponses IA (17h00-17h15)", type: "qa" },
     { id: 17, filename: "https://formationaudios-ebbgcnh0hbcxdjcq.z02.azurefd.net/audios/pause_17h15_17h25.mp3", duration: 600, title: "Pause (17h15-17h25)", type: "pause" },
-    { id: 18, filename: "https://formationaudios-ebbgcnh0hbcxdjcq.z02.azurefd.net/audios/cours_17h25_18h15.mp3", duration: 3023, title: "Cours - Bloc 7 (17h25-18h15)", type: "cours" },
-    { id: 19, filename: "https://formationaudios-ebbgcnh0hbcxdjcq.z02.azurefd.net/audios/qa_18h15_18h30.mp3", duration: 900, title: "Questions-Réponses IA (18h15-18h30)", type: "qa" }
+    { id: 18, filename: "https://formationaudios-ebbgcnh0hbcxdjcq.z02.azurefd.net/audios/cours_17h25_18h15.mp3", duration: 2460, title: "Cours - Bloc 7 (17h25-18h15)", type: "cours" },
+    { id: 19, filename: "https://formationaudios-ebbgcnh0hbcxdjcq.z02.azurefd.net/audios/qa_18h15_18h30.mp3", duration: 1440, title: "Questions-Réponses IA (18h15-18h30)", type: "qa" }
 ];
 
     // Variable pour détecter si le cours est terminé
@@ -422,6 +422,323 @@ const COURS_PLAYLIST = [
     const backgroundOverlay = document.getElementById("background-overlay");
 
     const socket = io();
+
+    // ✅ SYSTÈME D'ACTIVATION AUDIO FIABLE ET TOUJOURS VISIBLE
+
+// 1. VARIABLES GLOBALES
+let audioActivated = false;
+let activationButtonShown = false;
+
+// 2. FONCTION pour afficher le bouton d'activation (toujours visible)
+function showActivationButton() {
+    // Éviter les doublons
+    if (activationButtonShown) {
+        console.log('🔊 Bouton d\'activation déjà affiché');
+        return;
+    }
+    
+    // Supprimer tout bouton existant
+    const existingBtn = document.getElementById('audio-activation-btn');
+    if (existingBtn) {
+        existingBtn.remove();
+    }
+    
+    console.log('🔊 Affichage du bouton d\'activation audio');
+    
+    const activationBtn = document.createElement('button');
+    activationBtn.id = 'audio-activation-btn';
+    activationBtn.innerHTML = `
+        <div class="text-center">
+            <div class="text-3xl mb-4">🔊</div>
+            <div class="text-xl font-bold mb-2">Formation en cours</div>
+            <div class="text-sm mb-4 opacity-80">Cliquez pour activer le son</div>
+            <div class="bg-blue-600 hover:bg-blue-700 px-6 py-3 rounded-lg font-medium transition-colors">
+                Activer l'audio
+            </div>
+        </div>
+    `;
+    
+    // Style ultra-visible et fixe
+    activationBtn.style.cssText = `
+        position: fixed !important;
+        top: 50% !important;
+        left: 50% !important;
+        transform: translate(-50%, -50%) !important;
+        background: rgba(0, 0, 0, 0.95) !important;
+        color: white !important;
+        padding: 40px !important;
+        border-radius: 20px !important;
+        border: 3px solid #3b82f6 !important;
+        z-index: 999999 !important;
+        box-shadow: 0 0 50px rgba(59, 130, 246, 0.5) !important;
+        font-family: Arial, sans-serif !important;
+        cursor: pointer !important;
+        min-width: 350px !important;
+        text-align: center !important;
+        backdrop-filter: blur(10px) !important;
+    `;
+    
+    // Gestionnaire de clic
+    activationBtn.onclick = async () => {
+        console.log('🔊 Bouton d\'activation cliqué !');
+        
+        try {
+            // Changer l'apparence du bouton
+            activationBtn.innerHTML = `
+                <div class="text-center">
+                    <div class="text-3xl mb-4">⏳</div>
+                    <div class="text-xl font-bold mb-2">Activation en cours...</div>
+                    <div class="w-8 h-8 border-4 border-white border-t-transparent rounded-full animate-spin mx-auto"></div>
+                </div>
+            `;
+            
+            // Récupérer l'état actuel du cours
+            const response = await fetch('/api/cours-status');
+            const data = await response.json();
+            
+            console.log('📊 État du cours:', data);
+            
+            if (data.status === 'playing') {
+                // Trouver l'audio dans la playlist
+                const audioInfo = COURS_PLAYLIST.find(a => a.id === data.audio_id);
+                
+                if (audioInfo) {
+                    console.log('🎵 Configuration audio:', audioInfo.title);
+                    
+                    // Configurer l'audio
+                    const source = audio.querySelector('source');
+                    source.src = audioInfo.filename;
+                    audio.src = audioInfo.filename;
+                    audio.load();
+                    
+                    // Attendre que l'audio soit prêt
+                    await new Promise((resolve, reject) => {
+                        const timeout = setTimeout(() => reject(new Error('Timeout')), 10000);
+                        
+                        const onReady = () => {
+                            clearTimeout(timeout);
+                            audio.removeEventListener('canplay', onReady);
+                            audio.removeEventListener('error', onError);
+                            resolve();
+                        };
+                        
+                        const onError = (e) => {
+                            clearTimeout(timeout);
+                            audio.removeEventListener('canplay', onReady);
+                            audio.removeEventListener('error', onError);
+                            reject(e);
+                        };
+                        
+                        audio.addEventListener('canplay', onReady);
+                        audio.addEventListener('error', onError);
+                    });
+                    
+                    // Définir la position
+                    const targetTime = Math.min(data.offset, audio.duration);
+                    audio.currentTime = targetTime;
+                    
+                    console.log(`📍 Position: ${targetTime}s / ${audio.duration}s`);
+                    
+                    // Attendre le seeking si nécessaire
+                    if (targetTime > 0) {
+                        await new Promise(resolve => {
+                            const onSeeked = () => {
+                                audio.removeEventListener('seeked', onSeeked);
+                                resolve();
+                            };
+                            audio.addEventListener('seeked', onSeeked);
+                        });
+                    }
+                    
+                    // Lancer l'audio
+                    await audio.play();
+                    
+                    console.log('✅ Audio lancé avec succès !');
+                    
+                    // Marquer comme activé
+                    audioActivated = true;
+                    isAudioPlaying = true;
+                    currentAudioId = data.audio_id;
+                    
+                    // Supprimer le bouton
+                    activationBtn.remove();
+                    activationButtonShown = false;
+                    
+                    // Mettre à jour l'interface
+                    updateChatAvailability(audioInfo.type);
+                    
+                } else {
+                    throw new Error('Audio non trouvé dans la playlist');
+                }
+            } else {
+                throw new Error(`Cours non disponible (status: ${data.status})`);
+            }
+            
+        } catch (error) {
+            console.error('❌ Erreur activation audio:', error);
+            
+            // Afficher l'erreur
+            activationBtn.innerHTML = `
+                <div class="text-center">
+                    <div class="text-3xl mb-4">❌</div>
+                    <div class="text-xl font-bold mb-2">Erreur</div>
+                    <div class="text-sm mb-4">${error.message}</div>
+                    <div class="bg-red-600 hover:bg-red-700 px-6 py-3 rounded-lg font-medium transition-colors">
+                        Réessayer
+                    </div>
+                </div>
+            `;
+            
+            // Permettre de réessayer
+            setTimeout(() => {
+                activationBtn.onclick = () => showActivationButton();
+                activationBtn.click();
+            }, 1000);
+        }
+    };
+    
+    // Ajouter au DOM
+    document.body.appendChild(activationBtn);
+    activationButtonShown = true;
+    
+    console.log('✅ Bouton d\'activation ajouté au DOM');
+    
+    // Vérifier que le bouton est bien visible
+    setTimeout(() => {
+        const btnCheck = document.getElementById('audio-activation-btn');
+        if (btnCheck) {
+            console.log('✅ Bouton confirmé visible');
+        } else {
+            console.error('❌ Bouton introuvable après ajout !');
+        }
+    }, 100);
+}
+
+// 3. FONCTION pour cacher le bouton d'activation
+function hideActivationButton() {
+    const btn = document.getElementById('audio-activation-btn');
+    if (btn) {
+        btn.remove();
+        activationButtonShown = false;
+        console.log('🔊 Bouton d\'activation supprimé');
+    }
+}
+
+// 4. MODIFICATION de la fonction initializeAudio
+function initializeAudio() {
+    console.log("🎵 Initialisation audio...");
+    
+    // Toujours afficher le bouton au démarrage
+    showActivationButton();
+    
+    // Émettre la connexion utilisateur
+    socket.emit('user_connected', { username });
+    
+    // Configurer les listeners audio basiques
+    setupBasicAudioListeners();
+}
+
+// 5. LISTENERS AUDIO BASIQUES (sans synchronisation)
+function setupBasicAudioListeners() {
+    audio.addEventListener('ended', () => {
+        console.log('🏁 Audio terminé');
+        isAudioPlaying = false;
+        
+        // Afficher le bouton pour le prochain audio
+        if (audioActivated) {
+            showActivationButton();
+        }
+    });
+    
+    audio.addEventListener('error', (e) => {
+        console.error('❌ Erreur audio:', e);
+        isAudioPlaying = false;
+        
+        // Afficher le bouton en cas d'erreur
+        showActivationButton();
+    });
+    
+    audio.addEventListener('pause', () => {
+        console.log('⏸️ Audio en pause');
+        isAudioPlaying = false;
+    });
+    
+    audio.addEventListener('play', () => {
+        console.log('▶️ Audio en lecture');
+        isAudioPlaying = true;
+    });
+}
+
+// 6. FONCTION pour changer d'audio (simplifiée)
+function changeAudio(filename, audioId, offset) {
+    console.log(`🔄 Changement audio: ${filename} (ID: ${audioId})`);
+    
+    // Trouver le type d'audio
+    const audioInfo = COURS_PLAYLIST.find(a => a.id === audioId);
+    if (audioInfo) {
+        updateChatAvailability(audioInfo.type);
+    }
+    
+    // Si l'audio n'est pas encore activé, juste afficher le bouton
+    if (!audioActivated) {
+        showActivationButton();
+        return;
+    }
+    
+    // Sinon, changer l'audio directement
+    audio.pause();
+    audio.currentTime = 0;
+    
+    const source = audio.querySelector('source');
+    source.src = filename;
+    audio.src = filename;
+    audio.load();
+    
+    currentAudioId = audioId;
+    
+    audio.addEventListener('loadedmetadata', () => {
+        const targetTime = Math.min(offset, audio.duration);
+        audio.currentTime = targetTime;
+        
+        audio.addEventListener('seeked', () => {
+            audio.play()
+                .then(() => {
+                    console.log('✅ Audio changé et lancé');
+                    isAudioPlaying = true;
+                })
+                .catch(e => {
+                    console.error('❌ Erreur changement audio:', e);
+                    showActivationButton();
+                });
+        }, { once: true });
+    }, { once: true });
+}
+
+// 7. INITIALISATION au chargement de la page
+window.addEventListener('DOMContentLoaded', () => {
+    console.log('🚀 Initialisation du système audio');
+    
+    // Attendre un peu puis initialiser
+    setTimeout(() => {
+        initializeAudio();
+    }, 1000);
+});
+
+// 8. COMMANDES DE DEBUG
+window.showActivationButton = showActivationButton;
+window.hideActivationButton = hideActivationButton;
+window.resetAudioSystem = () => {
+    audioActivated = false;
+    activationButtonShown = false;
+    hideActivationButton();
+    showActivationButton();
+};
+
+console.log('✅ Système d\'activation audio fiable installé');
+console.log('💡 Commandes disponibles:');
+console.log('  - showActivationButton() : Affiche le bouton');
+console.log('  - hideActivationButton() : Cache le bouton');
+console.log('  - resetAudioSystem() : Reset complet');
 
     let isAudioPlaying = false;
     let lastSyncReceived = 0;
