@@ -827,17 +827,15 @@ function setupAudioEventListeners() {
       }
     }
 
-   // Fonction pour changer d'audio avec gestion du chat
-// ✅ REMPLACER ta fonction changeAudio par celle-ci :
-function changeAudio(filename, audioId, offset) {
-  // ✅ Protection contre changements concurrents
+ function changeAudio(filename, audioId, offset) {
+  // Protection contre changements concurrents
   if (isChangingAudio) {
     console.log('⚠️ Changement audio déjà en cours, ignoré');
     return;
   }
   
   isChangingAudio = true;
-  isAudioPlaying = false;  // ✅ Reset état audio
+  isAudioPlaying = false;
   
   console.log(`🔄 Changement d'audio: ${filename} (ID: ${audioId}, Offset: ${offset}s)`);
   
@@ -854,14 +852,22 @@ function changeAudio(filename, audioId, offset) {
   audio.pause();
   audio.currentTime = 0;
   
-  // Changer la source audio
+  // ✅ ÉTAPE CRUCIALE : Vider complètement l'ancienne source
   const source = audio.querySelector('source');
+  source.src = '';  // ← CETTE LIGNE EST ESSENTIELLE !
+  audio.load();     // ← Vider le cache audio
+  
+  // Définir la nouvelle source
+  let newSource;
   if (filename.startsWith('https://')) {
-    source.src = filename;
+    newSource = filename;
   } else {
     const audioInfo = COURS_PLAYLIST.find(a => a.id === audioId);
-    source.src = audioInfo ? audioInfo.filename : filename;
+    newSource = audioInfo ? audioInfo.filename : filename;
   }
+  
+  // Charger la nouvelle source
+  source.src = newSource;
   audio.load();
 
   // Mettre à jour l'ID actuel
@@ -880,7 +886,6 @@ function changeAudio(filename, audioId, offset) {
     audio.addEventListener('seeked', () => {
       console.log(`✅ Seek réussi à ${audio.currentTime}s`);
       
-      // ✅ AMÉLIORATION : Vérifier qu'on n'est pas déjà en train de jouer
       if (!isAudioPlaying) {
         isAudioPlaying = true;
         audio.play()
@@ -891,15 +896,7 @@ function changeAudio(filename, audioId, offset) {
           .catch(e => {
             console.warn("❌ Erreur lecture:", e);
             isAudioPlaying = false;
-            
-            // ✅ CORRECTION : Bon nom de fonction + émission erreur backend
-            socket.emit('audio_playback_error', { 
-              error: e.message,
-              audio_id: audioId,
-              attempted_offset: offset
-            });
-            
-            showAudioUnlockButton();  // ✅ Nom correct
+            showAudioUnlockButton();
             isChangingAudio = false;
           });
       } else {
