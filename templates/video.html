@@ -827,7 +827,9 @@ function setupAudioEventListeners() {
       }
     }
 
- function changeAudio(filename, audioId, offset) {
+ // ✅ AMÉLIOREZ votre fonction changeAudio() pour éviter les AbortError :
+
+function changeAudio(filename, audioId, offset) {
   // Protection contre changements concurrents
   if (isChangingAudio) {
     console.log('⚠️ Changement audio déjà en cours, ignoré');
@@ -839,81 +841,171 @@ function setupAudioEventListeners() {
   
   console.log(`🔄 Changement d'audio: ${filename} (ID: ${audioId}, Offset: ${offset}s)`);
   
-  // Trouver le type d'audio dans la playlist
+  // Type d'audio et chat
   const currentAudio = COURS_PLAYLIST.find(audio => audio.id === audioId);
   const audioType = currentAudio ? currentAudio.type : "cours";
-  
-  console.log(`🎯 Type d'audio détecté: ${audioType}`);
-  
-  // Mettre à jour la disponibilité du chat
   updateChatAvailability(audioType);
   
-  // Arrêter l'audio actuel
-  audio.pause();
-  audio.currentTime = 0;
-  
-  // ✅ ÉTAPE CRUCIALE : Vider complètement l'ancienne source
-  const source = audio.querySelector('source');
-  source.src = '';  // ← CETTE LIGNE EST ESSENTIELLE !
-  audio.load();     // ← Vider le cache audio
-  
-  // Définir la nouvelle source
-  let newSource;
-  if (filename.startsWith('https://')) {
-    newSource = filename;
-  } else {
-    const audioInfo = COURS_PLAYLIST.find(a => a.id === audioId);
-    newSource = audioInfo ? audioInfo.filename : filename;
-  }
-  
-  // Charger la nouvelle source
-  source.src = newSource;
-  audio.load();
-
-  // Mettre à jour l'ID actuel
-  currentAudioId = audioId;
-
-  // Attendre que les métadonnées soient chargées
-  audio.addEventListener('loadedmetadata', () => {
-    console.log(`✅ Métadonnées chargées, durée: ${audio.duration}s`);
-    
-    // Définir la position cible
-    const targetTime = Math.min(offset, audio.duration);
-    audio.currentTime = targetTime;
-    console.log(`Position définie à ${targetTime}s`);
-    
-    // Écouter l'événement seeked pour confirmer
-    audio.addEventListener('seeked', () => {
-      console.log(`✅ Seek réussi à ${audio.currentTime}s`);
+  // ✅ AMÉLIORATION : Arrêt plus propre pour éviter AbortError
+  const stopCurrentAudio = async () => {
+    try {
+      // Si l'audio est en cours de lecture, l'arrêter proprement
+      if (!audio.paused) {
+        audio.pause();
+        // Attendre un peu pour que la pause soit effective
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
       
-      if (!isAudioPlaying) {
-        isAudioPlaying = true;
-        audio.play()
-          .then(() => {
+      // Réinitialiser la position
+      audio.currentTime = 0;
+      
+      // Vider les sources
+      audio.src = '';
+      const source = audio.querySelector('source');
+      if (source) {
+        source.src = '';
+      }
+      
+      // Forcer le déchargement
+      audio.load();
+      
+      // Attendre que le déchargement soit effectif
+      await new Promise(resolve => setTimeout(resolve, 200));
+      
+      console.log('🧹 Audio arrêté et nettoyé proprement');
+      
+    } catch (error) {
+      console.warn('⚠️ Erreur lors de l\'arrêt audio:', error);
+    }
+  };
+  
+  // ✅ Arrêt asynchrone de l'audio
+  stopCurrentAudio().then(() => {
+    // Définir la nouvelle source
+    let newSource;
+    if (filename.startsWith('https://')) {
+      newSource = filename;
+    } else {
+      const audioInfo = COURS_PLAYLIST.find(a => a.id === audioId);
+      newSource = audioInfo ? audioInfo.filename : filename;
+    }
+    
+    console.log(`🔗 Nouvelle source: ${newSource.split('/').pop()}`);
+    
+    // Charger la nouvelle source
+    const source = audio.querySelector('source');
+    source.src = newSource;
+    audio.src = newSource;
+    audio.load();
+    
+    // Mettre à jour l'ID
+    currentAudioId = audioId;
+    
+    // ✅ AMÉLIORATION : Gestion plus robuste du chargement
+    let hasLoaded = false;
+    let loadTimeout;
+    
+    const handleLoadComplete = async () => {
+      if (hasLoaded) return;
+      hasLoaded = true;
+      
+      // Nettoyer le timeout
+      if (loadTimeout) {
+        clearTimeout(loadTimeout);
+      }
+      
+      console.log(`✅ Audio chargé, durée: ${audio.duration}s`);
+      
+      try {
+        // Définir la position
+        const targetTime = Math.min(offset, audio.duration);
+        audio.currentTime = targetTime;
+        
+        console.log(`📍 Position définie: ${targetTime}s`);
+        
+        // Attendre le seeking si nécessaire
+        if (targetTime > 0) {
+          await new Promise(resolve => {
+            const onSeeked = () => {
+              audio.removeEventListener('seeked', onSeeked);
+              resolve();
+            };
+            audio.addEventListener('seeked', onSeeked);
+          });
+        }
+        
+        // ✅ AMÉLIORATION : Lecture avec gestion d'erreur
+        if (!isAudioPlaying) {
+          isAudioPlaying = true;
+          
+          try {
+            await audio.play();
             console.log("✅ Audio démarré avec succès");
             isChangingAudio = false;
-          })
-          .catch(e => {
-            console.warn("❌ Erreur lecture:", e);
+          } catch (playError) {
+            console.warn("❌ Erreur lecture:", playError);
             isAudioPlaying = false;
-            showAudioUnlockButton();
             isChangingAudio = false;
-          });
-      } else {
-        console.log('⚠️ Audio déjà en cours de lecture');
+            
+            // Gestion spécifique des erreurs
+            if (playError.name === 'AbortError') {
+              console.log('🔄 AbortError, retry dans 1 seconde');
+              setTimeout(() => {
+                socket.emit('sync_request');
+              }, 1000);
+            } else {
+              showAudioUnlockButton();
+            }
+          }
+        } else {
+          isChangingAudio = false;
+        }
+        
+      } catch (error) {
+        console.error('❌ Erreur lors du setup audio:', error);
+        isAudioPlaying = false;
         isChangingAudio = false;
+        showAudioUnlockButton();
       }
-    }, { once: true });
-  }, { once: true });
-  
-  // Timeout de sécurité
-  setTimeout(() => {
-    if (isChangingAudio) {
-      console.warn("⚠️ Timeout: forçage de l'état");
-      isChangingAudio = false;
-      isAudioPlaying = false;
-    }
-  }, 5000);
+    };
+    
+    // Écouter les événements de chargement
+    audio.addEventListener('loadedmetadata', handleLoadComplete, { once: true });
+    audio.addEventListener('canplaythrough', handleLoadComplete, { once: true });
+    
+    // Timeout de sécurité
+    loadTimeout = setTimeout(() => {
+      if (!hasLoaded) {
+        console.warn('⚠️ Timeout chargement audio, retry...');
+        hasLoaded = true;
+        
+        // Retry avec une approche plus simple
+        audio.addEventListener('canplay', async () => {
+          try {
+            const targetTime = Math.min(offset, audio.duration || offset);
+            audio.currentTime = targetTime;
+            
+            if (!isAudioPlaying) {
+              isAudioPlaying = true;
+              await audio.play();
+              console.log("✅ Audio démarré après timeout");
+              isChangingAudio = false;
+            }
+          } catch (error) {
+            console.error('❌ Retry échoué:', error);
+            isAudioPlaying = false;
+            isChangingAudio = false;
+            showAudioUnlockButton();
+          }
+        }, { once: true });
+      }
+    }, 8000);
+    
+  }).catch(error => {
+    console.error('❌ Erreur dans stopCurrentAudio:', error);
+    isChangingAudio = false;
+    showAudioUnlockButton();
+  });
 }
 
     // Fonction pour afficher le message de fin de cours
