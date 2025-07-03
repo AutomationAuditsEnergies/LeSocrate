@@ -920,29 +920,38 @@ function changeAudio(filename, audioId, offset) {
 }
 
     // Fonction pour afficher le message de fin de cours
-    function showCourseFinishedMessage() {
-      const videoZone = document.getElementById("video-zone");
-      videoZone.innerHTML = `
-        <div class="flex flex-col items-center justify-center text-white h-full">
-          <div class="text-6xl mb-6">🎓</div>
-          <h2 class="text-3xl font-bold mb-4">Cours terminé !</h2>
-          <p class="text-lg mb-6 text-center opacity-80">
-            Merci d'avoir participé au premier cours de cette formation.
-          </p>
-          <div class="space-y-4">
-            <button onclick="window.location.href='/logout'" 
-                    class="bg-gray-600 hover:bg-gray-700 px-6 py-3 rounded-lg font-medium transition ml-4">
-              Se déconnecter
-            </button>
-          </div>
-        </div>
-      `;
-      
-      const audioTitleDisplay = document.getElementById('audio-title-display');
-      if (audioTitleDisplay) {
-        audioTitleDisplay.textContent = "Formation terminée";
-      }
-    }
+// NOUVELLE VERSION AVEC DÉCONNEXION AUTO
+function showCourseFinishedMessage() {
+  const videoZone = document.getElementById("video-zone");
+  videoZone.innerHTML = `
+    <div class="flex flex-col items-center justify-center text-white h-full">
+      <div class="text-6xl mb-6">🎓</div>
+      <h2 class="text-3xl font-bold mb-4">Cours terminé !</h2>
+      <p class="text-lg mb-6 text-center opacity-80">
+        Merci d'avoir participé au premier cours de cette formation.
+      </p>
+      <div class="bg-yellow-900/50 border border-yellow-500 rounded-lg p-4 mb-6">
+        <p class="text-yellow-200 text-center">
+          ⏰ Déconnexion automatique dans <span id="countdown">30</span> secondes
+        </p>
+      </div>
+      <div class="space-y-4">
+        <button onclick="window.location.href='/logout'" 
+                class="bg-blue-600 hover:bg-blue-700 px-6 py-3 rounded-lg font-medium transition">
+          Se déconnecter maintenant
+        </button>
+      </div>
+    </div>
+  `;
+  
+  const audioTitleDisplay = document.getElementById('audio-title-display');
+  if (audioTitleDisplay) {
+    audioTitleDisplay.textContent = "Formation terminée";
+  }
+  
+  // ✅ NOUVEAU : Démarrer le compte à rebours
+  startLogoutCountdown();
+}
 
     // Fonction Mute / Unmute
     muteBtn.addEventListener("click", () => {
@@ -1205,6 +1214,40 @@ function unlockAudio() {
   }
 }
 
+// Fonction de compte à rebours pour déconnexion auto
+function startLogoutCountdown() {
+  let seconds = 30;
+  const countdownElement = document.getElementById('countdown');
+  
+  const interval = setInterval(() => {
+    seconds--;
+    if (countdownElement) {
+      countdownElement.textContent = seconds;
+    }
+    
+    if (seconds <= 0) {
+      clearInterval(interval);
+      forceLogoutAfterCourse();
+    }
+  }, 1000);
+}
+
+// Fonction pour forcer la déconnexion en fin de cours
+function forceLogoutAfterCourse() {
+  console.log("🔒 Déconnexion automatique en cours...");
+  
+  // Enregistrer la déconnexion
+  fetch('/deconnexion-auto', { method: 'POST' })
+    .then(() => {
+      console.log("✅ Déconnexion enregistrée");
+    })
+    .catch(e => console.error("❌ Erreur déconnexion:", e))
+    .finally(() => {
+      // Rediriger vers la page de déconnexion
+      window.location.href = '/logout';
+    });
+}
+
 // Afficher l'indicateur "Alain écrit..." - Version alignée à gauche
 function showTypingIndicator() {
   hideTypingIndicator();
@@ -1257,6 +1300,27 @@ function hideTypingIndicator() {
       }
     });
 
+    // Écouter le signal de déconnexion forcée (à ajouter avec les autres socket.on)
+socket.on('force_logout', (data) => {
+  console.log("🔒 Déconnexion forcée reçue:", data.message);
+  
+  // Afficher une notification
+  const notification = document.createElement('div');
+  notification.className = 'fixed top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 bg-red-600 text-white p-6 rounded-lg z-[10000] text-center shadow-2xl border-2 border-red-400';
+  notification.innerHTML = `
+    <div class="text-xl font-bold mb-2">🔒 Formation terminée</div>
+    <div class="text-sm">${data.message}</div>
+    <div class="text-xs mt-2 opacity-80">Redirection automatique...</div>
+  `;
+  
+  document.body.appendChild(notification);
+  
+  // Rediriger après 2 secondes
+  setTimeout(() => {
+    window.location.href = data.redirect_url || '/logout';
+  }, 2000);
+});
+
     socket.on('participants_update', (data) => {
       participantsOnline = data.count;
       updateParticipantsCount(participantsOnline);
@@ -1290,6 +1354,67 @@ function hideTypingIndicator() {
         clearInterval(syncInterval);
       }
     });
+
+    // ===== SYSTÈME DE DÉCONNEXION AUTOMATIQUE =====
+
+// Fonction de compte à rebours pour déconnexion auto
+function startLogoutCountdown() {
+  let seconds = 30;
+  const countdownElement = document.getElementById('countdown');
+  
+  const interval = setInterval(() => {
+    seconds--;
+    if (countdownElement) {
+      countdownElement.textContent = seconds;
+    }
+    
+    if (seconds <= 0) {
+      clearInterval(interval);
+      forceLogoutAfterCourse();
+    }
+  }, 1000);
+}
+
+// Fonction pour forcer la déconnexion en fin de cours
+function forceLogoutAfterCourse() {
+  console.log("🔒 Déconnexion automatique en cours...");
+  
+  // Enregistrer la déconnexion
+  fetch('/deconnexion-auto', { method: 'POST' })
+    .then(() => {
+      console.log("✅ Déconnexion enregistrée");
+    })
+    .catch(e => console.error("❌ Erreur déconnexion:", e))
+    .finally(() => {
+      // Rediriger vers la page de déconnexion
+      window.location.href = '/logout';
+    });
+}
+
+// Écouter le signal de déconnexion forcée par admin
+socket.on('force_logout', (data) => {
+  console.log("🔒 Déconnexion forcée reçue:", data.message);
+  
+  // Créer notification visuelle
+  const notification = document.createElement('div');
+  notification.className = `
+    fixed top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 
+    bg-red-600 text-white p-6 rounded-lg z-[10000] text-center 
+    shadow-2xl border-2 border-red-400 min-w-[300px]
+  `;
+  notification.innerHTML = `
+    <div class="text-xl font-bold mb-2">🔒 Formation terminée</div>
+    <div class="text-sm">${data.message}</div>
+    <div class="text-xs mt-2 opacity-80">Redirection automatique...</div>
+  `;
+  
+  document.body.appendChild(notification);
+  
+  // Rediriger après 2 secondes
+  setTimeout(() => {
+    window.location.href = data.redirect_url || '/logout';
+  }, 2000);
+});
 
   </script>
 
