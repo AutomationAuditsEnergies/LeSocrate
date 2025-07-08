@@ -701,7 +701,6 @@ def deconnexion_auto_tous():
             cursor = conn.cursor()
             depart = datetime.now(FRANCE_TZ).strftime("%Y-%m-%d %H:%M:%S")
 
-            # Fermer toutes les sessions actives (sans heure de départ)
             cursor.execute(
                 "UPDATE logs SET depart=? WHERE depart IS NULL OR depart = ''",
                 (depart,),
@@ -710,6 +709,16 @@ def deconnexion_auto_tous():
             nb_deconnectes = cursor.rowcount
             conn.commit()
             logger.info(f"✅ {nb_deconnectes} utilisateurs déconnectés automatiquement")
+
+        # ✅ NOUVEAU : Forcer la redirection de tous les utilisateurs connectés
+        socketio.emit(
+            "force_logout",
+            {
+                "message": "Fin de formation - Déconnexion automatique",
+                "redirect_url": "/logout",
+            },
+        )
+        logger.info("📢 Signal de déconnexion envoyé à tous les utilisateurs connectés")
 
         return {"success": True, "users_disconnected": nb_deconnectes}, 200
 
