@@ -690,6 +690,34 @@ def deconnexion_auto():
         return "", 500
 
 
+@app.route("/deconnexion-auto-tous", methods=["POST"])
+def deconnexion_auto_tous():
+    try:
+        logger.info(
+            "🔄 Déconnexion automatique de TOUS les utilisateurs (Azure Logic Apps)"
+        )
+
+        with sqlite3.connect(DB_PATH) as conn:
+            cursor = conn.cursor()
+            depart = datetime.now(FRANCE_TZ).strftime("%Y-%m-%d %H:%M:%S")
+
+            # Fermer toutes les sessions actives (sans heure de départ)
+            cursor.execute(
+                "UPDATE logs SET depart=? WHERE depart IS NULL OR depart = ''",
+                (depart,),
+            )
+
+            nb_deconnectes = cursor.rowcount
+            conn.commit()
+            logger.info(f"✅ {nb_deconnectes} utilisateurs déconnectés automatiquement")
+
+        return {"success": True, "users_disconnected": nb_deconnectes}, 200
+
+    except Exception as e:
+        logger.error(f"❌ Erreur déconnexion auto: {e}")
+        return {"success": False, "error": str(e)}, 500
+
+
 @app.route("/admin", methods=["GET", "POST"])
 def admin():
     try:
