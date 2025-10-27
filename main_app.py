@@ -142,27 +142,27 @@ COURS_PLAYLIST = [
         "title": "Pause (12h10-12h20)",
         "type": "pause",
     },
-    # === BLOC 4 : 12h20 - 14h45 ===
+    # === BLOC 4 : 12h15 - 14h40 ===
     {
         "id": 10,
-        "filename": "https://formationaudios-ebbgcnh0hbcxdjcq.z02.azurefd.net/audios/cours_12h20_13h05.mp3",
-        "duration": 2700,  # 45 minutes = 2700 secondes
-        "title": "Cours - Bloc 4 (12h20-13h05)",
-        "type": "cours",
+        "filename": "https://formationaudios-ebbgcnh0hbcxdjcq.z02.azurefd.net/audios/pause_midi_13h15_14h45.mp3",
+        "duration": 5400,  # 90 minutes = 5400 secondes
+        "title": "Pause déjeuner (12h20-13h50)",
+        "type": "pause_midi",
     },
     {
         "id": 11,
-        "filename": "https://formationaudios-ebbgcnh0hbcxdjcq.z02.azurefd.net/audios/qa_13h05_13h15.mp3",
-        "duration": 600,  # 10 minutes = 600 secondes
-        "title": "Questions-Réponses IA (13h05-13h15)",
-        "type": "qa",
+        "filename": "https://formationaudios-ebbgcnh0hbcxdjcq.z02.azurefd.net/audios/cours_12h20_13h05.mp3",
+        "duration": 2700,  # 45 minutes = 2700 secondes
+        "title": "Cours - Bloc 4 (13h50-14h35)",
+        "type": "cours",
     },
     {
         "id": 12,
-        "filename": "https://formationaudios-ebbgcnh0hbcxdjcq.z02.azurefd.net/audios/pause_midi_13h15_14h45.mp3",
-        "duration": 5400,  # 90 minutes = 5400 secondes
-        "title": "Pause déjeuner (13h15-14h45)",
-        "type": "pause_midi",
+        "filename": "https://formationaudios-ebbgcnh0hbcxdjcq.z02.azurefd.net/audios/qa_13h05_13h15.mp3",
+        "duration": 600,  # 10 minutes = 600 secondes
+        "title": "Questions-Réponses IA (14h35-14h45)",
+        "type": "qa",
     },
     # === BLOC 5 : 14h45 - 16h00 ===
     {
