@@ -1,0 +1,165 @@
+/* OpinionTemplate.css */
+@import url("https://fonts.googleapis.com/css2?family=Fredoka:wght@500;600;700&family=Poppins:wght@400;500;600;700&display=swap");
+
+.opinion-slide {
+  --bg-cream: #fff9e6;
+  --text-brown: #2d241e;
+  --color-purple: #a855f7;
+  --color-purple-light: #faf5ff;
+  --color-purple-dark: #9333ea;
+
+  aspect-ratio: 16/9;
+  width: 90vw;
+  max-width: 1200px;
+  background-color: var(--bg-cream);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+  position: relative;
+  font-family: "Poppins", sans-serif;
+  color: var(--text-brown);
+}
+
+/* Container principal */
+.opinion-container {
+  max-width: 800px;
+  width: 90%;
+  text-align: center;
+  position: relative;
+}
+
+/* Citation en arrière-plan */
+.opinion-quote-bg {
+  position: absolute;
+  top: -20px;
+  left: -20px;
+  opacity: 0.08;
+  pointer-events: none;
+}
+
+.opinion-quote-icon {
+  width: 120px;
+  height: 120px;
+  color: var(--color-purple);
+}
+
+/* Badge */
+.opinion-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  background-color: var(--color-purple-light);
+  border: 2px solid var(--color-purple);
+  padding: 0.5rem 1.25rem;
+  border-radius: 25px;
+  margin-bottom: 1.5rem;
+}
+
+.opinion-badge span {
+  font-family: "Fredoka", sans-serif;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--color-purple-dark);
+  letter-spacing: 0.1em;
+}
+
+.opinion-user-icon {
+  width: 18px;
+  height: 18px;
+  color: var(--color-purple);
+}
+
+/* Titre */
+.opinion-title {
+  color: var(--text-brown);
+  margin-bottom: 2rem;
+  line-height: 1.3;
+}
+
+/* Bulle d'opinion */
+.opinion-bubble {
+  background-color: white;
+  border-radius: 20px;
+  padding: 2rem 2.5rem;
+  position: relative;
+  box-shadow: 0 8px 30px -10px rgba(168, 85, 247, 0.25);
+  border: 2px solid var(--color-purple-light);
+  margin-bottom: 1.5rem;
+}
+
+.opinion-bubble::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: -12px;
+  transform: translateX(-50%);
+  width: 0;
+  height: 0;
+  border-left: 15px solid transparent;
+  border-right: 15px solid transparent;
+  border-top: 15px solid white;
+}
+
+.opinion-bubble::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: -16px;
+  transform: translateX(-50%);
+  width: 0;
+  height: 0;
+  border-left: 17px solid transparent;
+  border-right: 17px solid transparent;
+  border-top: 17px solid var(--color-purple-light);
+  z-index: -1;
+}
+
+.opinion-text {
+  color: #374151;
+  line-height: 1.7;
+  font-style: italic;
+  margin: 0;
+}
+
+/* Signature */
+.opinion-signature {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 1rem;
+}
+
+.opinion-avatar {
+  width: 50px;
+  height: 50px;
+  background: linear-gradient(135deg, var(--color-purple) 0%, var(--color-purple-dark) 100%);
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 4px 15px -3px rgba(168, 85, 247, 0.5);
+}
+
+.opinion-avatar .opinion-user-icon {
+  width: 28px;
+  height: 28px;
+  color: white;
+}
+
+.opinion-author-label {
+  font-family: "Poppins", sans-serif;
+  font-size: 0.85rem;
+  color: #6b7280;
+  font-weight: 500;
+}
+
+/* Fonts custom */
+.font-fredoka {
+  font-family: "Fredoka", sans-serif;
+}
+
+.font-poppins {
+  font-family: "Poppins", sans-serif;
+}

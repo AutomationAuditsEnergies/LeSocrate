@@ -1,0 +1,135 @@
+/* AnalogyTemplate.css */
+@import url("https://fonts.googleapis.com/css2?family=Fredoka:wght@500;600;700&family=Poppins:wght@400;500;600;700&display=swap");
+
+.analogy-slide {
+  --bg-cream: #fff9e6;
+  --text-brown: #2d241e;
+  --color-teal: #14b8a6;
+  --color-teal-light: #ccfbf1;
+  --color-purple: #8b5cf6;
+  --color-purple-light: #ede9fe;
+
+  aspect-ratio: 16/9;
+  width: 90vw;
+  max-width: 1200px;
+  background-color: var(--bg-cream);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+  position: relative;
+  font-family: "Poppins", sans-serif;
+  color: var(--text-brown);
+}
+
+.analogy-title {
+  color: var(--text-brown);
+}
+
+/* Zone de comparaison */
+.analogy-comparison-zone {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2rem;
+  margin-bottom: 3rem;
+}
+
+/* Boîtes concept et comparaison */
+.analogy-box {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1rem;
+  padding: 2rem 3rem;
+  border-radius: 16px;
+  min-width: 200px;
+  transition: transform 0.3s ease;
+}
+
+.analogy-box:hover {
+  transform: translateY(-4px);
+}
+
+.analogy-concept {
+  background-color: var(--color-teal-light);
+  border: 3px solid var(--color-teal);
+}
+
+.analogy-like {
+  background-color: var(--color-purple-light);
+  border: 3px solid var(--color-purple);
+}
+
+/* Icônes */
+.analogy-icon {
+  width: 60px;
+  height: 60px;
+  padding: 12px;
+  border-radius: 50%;
+  background-color: var(--color-teal);
+  color: white;
+}
+
+.analogy-icon-like {
+  background-color: var(--color-purple);
+}
+
+.analogy-icon svg {
+  width: 100%;
+  height: 100%;
+}
+
+/* Labels */
+.analogy-label {
+  font-family: "Fredoka", sans-serif;
+  font-size: 1.3rem;
+  font-weight: 600;
+  text-align: center;
+  color: var(--text-brown);
+}
+
+/* Symbole égal */
+.analogy-equals {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.analogy-equals span:first-child {
+  font-family: "Fredoka", sans-serif;
+  font-size: 3rem;
+  font-weight: 700;
+  color: var(--text-brown);
+  line-height: 1;
+}
+
+.analogy-comme {
+  font-family: "Poppins", sans-serif;
+  font-size: 0.9rem;
+  font-weight: 500;
+  color: #6b7280;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+}
+
+/* Explication */
+.analogy-explanation {
+  max-width: 700px;
+  text-align: center;
+  padding: 1.5rem 2rem;
+  background-color: white;
+  border-radius: 12px;
+  border-left: 4px solid var(--color-teal);
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+}
+
+/* Fonts custom */
+.font-fredoka {
+  font-family: "Fredoka", sans-serif;
+}
+
+.font-poppins {
+  font-family: "Poppins", sans-serif;
+}

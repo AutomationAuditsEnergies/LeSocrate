@@ -1,0 +1,126 @@
+/* WarningTemplate.css */
+@import url("https://fonts.googleapis.com/css2?family=Fredoka:wght@500;600;700&family=Poppins:wght@400;500;600;700&display=swap");
+
+.warning-slide {
+  --bg-cream: #fff9e6;
+  --text-brown: #2d241e;
+  --color-red: #dc2626;
+  --color-red-light: #fef2f2;
+  --color-orange: #f97316;
+  --color-orange-light: #fff7ed;
+
+  aspect-ratio: 16/9;
+  width: 90vw;
+  max-width: 1200px;
+  background-color: var(--bg-cream);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+  position: relative;
+  font-family: "Poppins", sans-serif;
+  color: var(--text-brown);
+}
+
+/* Container principal */
+.warning-container {
+  display: flex;
+  background-color: white;
+  border-radius: 16px;
+  overflow: hidden;
+  box-shadow: 0 10px 25px -5px rgba(220, 38, 38, 0.2);
+  max-width: 800px;
+  width: 90%;
+}
+
+/* Bande latérale rouge */
+.warning-stripe {
+  width: 12px;
+  background: linear-gradient(180deg, var(--color-red) 0%, var(--color-orange) 100%);
+  flex-shrink: 0;
+}
+
+/* Contenu */
+.warning-content {
+  padding: 2.5rem 3rem;
+  flex: 1;
+}
+
+/* En-tête avec icône */
+.warning-header {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+}
+
+.warning-icon-wrapper {
+  width: 50px;
+  height: 50px;
+  background-color: var(--color-red-light);
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.warning-icon {
+  width: 32px;
+  height: 32px;
+  color: var(--color-red);
+}
+
+.warning-badge {
+  font-family: "Fredoka", sans-serif;
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: var(--color-red);
+  background-color: var(--color-red-light);
+  padding: 0.4rem 1rem;
+  border-radius: 20px;
+  letter-spacing: 0.1em;
+}
+
+/* Titre */
+.warning-title {
+  color: var(--text-brown);
+  margin-bottom: 1rem;
+  line-height: 1.3;
+}
+
+/* Ligne de séparation */
+.warning-divider {
+  height: 3px;
+  width: 80px;
+  background: linear-gradient(90deg, var(--color-red), var(--color-orange));
+  border-radius: 2px;
+  margin-bottom: 1.5rem;
+}
+
+/* Texte explicatif */
+.warning-text {
+  color: #4b5563;
+  line-height: 1.7;
+}
+
+/* Footer */
+.warning-footer {
+  margin-top: 2rem;
+}
+
+.warning-footer-text {
+  font-family: "Poppins", sans-serif;
+  font-size: 0.85rem;
+  color: #9ca3af;
+  text-transform: uppercase;
+  letter-spacing: 0.15em;
+}
+
+/* Fonts custom */
+.font-fredoka {
+  font-family: "Fredoka", sans-serif;
+}
+
+.font-poppins {
+  font-family: "Poppins", sans-serif;
+}

@@ -1,0 +1,147 @@
+/* TransitionTemplate.css */
+@import url("https://fonts.googleapis.com/css2?family=Fredoka:wght@500;600;700&family=Poppins:wght@400;500;600;700&display=swap");
+
+.transition-slide {
+  --bg-cream: #fff9e6;
+  --text-brown: #2d241e;
+  --color-gray: #6b7280;
+  --color-blue: #3b82f6;
+  --color-blue-light: #eff6ff;
+
+  aspect-ratio: 16/9;
+  width: 90vw;
+  max-width: 1200px;
+  background-color: var(--bg-cream);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+  position: relative;
+  font-family: "Poppins", sans-serif;
+  color: var(--text-brown);
+}
+
+/* Titre */
+.transition-title {
+  color: var(--text-brown);
+  margin-bottom: 3rem;
+  text-align: center;
+}
+
+/* Zone de transition */
+.transition-flow {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2rem;
+  margin-bottom: 3rem;
+}
+
+/* Topics */
+.transition-topic {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 1.5rem 2.5rem;
+  border-radius: 16px;
+  min-width: 180px;
+  background-color: white;
+  box-shadow: 0 4px 15px -5px rgba(0, 0, 0, 0.1);
+}
+
+.transition-from {
+  border: 2px dashed var(--color-gray);
+  opacity: 0.7;
+}
+
+.transition-to {
+  border: 3px solid var(--color-blue);
+  background-color: var(--color-blue-light);
+}
+
+.transition-label {
+  font-family: "Poppins", sans-serif;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--color-gray);
+}
+
+.transition-to .transition-label {
+  color: var(--color-blue);
+}
+
+.transition-topic-text {
+  font-family: "Fredoka", sans-serif;
+  font-size: 1.25rem;
+  font-weight: 600;
+  color: var(--text-brown);
+  text-align: center;
+}
+
+/* Flèche */
+.transition-arrow-container {
+  display: flex;
+  align-items: center;
+  position: relative;
+}
+
+.transition-arrow-line {
+  width: 60px;
+  height: 3px;
+  background: linear-gradient(90deg, var(--color-gray) 0%, var(--color-blue) 100%);
+  border-radius: 2px;
+}
+
+.transition-arrow {
+  width: 32px;
+  height: 32px;
+  color: var(--color-blue);
+  margin-left: -8px;
+  animation: pulse 2s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% {
+    transform: translateX(0);
+    opacity: 1;
+  }
+  50% {
+    transform: translateX(5px);
+    opacity: 0.7;
+  }
+}
+
+/* Points décoratifs */
+.transition-dots {
+  display: flex;
+  gap: 0.75rem;
+}
+
+.transition-dots span {
+  width: 10px;
+  height: 10px;
+  background-color: var(--color-gray);
+  border-radius: 50%;
+  opacity: 0.3;
+}
+
+.transition-dots span:nth-child(2) {
+  opacity: 0.5;
+}
+
+.transition-dots span:nth-child(3) {
+  opacity: 0.7;
+  background-color: var(--color-blue);
+}
+
+/* Fonts custom */
+.font-fredoka {
+  font-family: "Fredoka", sans-serif;
+}
+
+.font-poppins {
+  font-family: "Poppins", sans-serif;
+}

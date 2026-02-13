@@ -1,0 +1,66 @@
+/* StoryTemplate.css */
+@import url("https://fonts.googleapis.com/css2?family=Fredoka:wght@500;600;700&family=Poppins:wght@400;500;600;700&display=swap");
+
+.story-slide {
+  --bg-cream: #fff9e6;
+  --text-brown: #2d241e;
+  --color-orange: #ffb74d;
+
+  aspect-ratio: 16/9;
+  width: 90vw;
+  max-width: 1200px;
+  background-color: var(--bg-cream);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+  position: relative;
+  font-family: "Poppins", sans-serif;
+  color: var(--text-brown);
+}
+
+/* Bandeau titre avec rotation */
+.story-title-banner {
+  background-color: var(--text-brown);
+  transform: rotate(-1deg);
+}
+
+/* Zone citation */
+.story-quote-wrapper {
+  position: relative;
+}
+
+/* Guillemets géants */
+.quote-mark {
+  position: absolute;
+  width: 60px;
+  height: 60px;
+  fill: var(--text-brown);
+}
+
+.quote-left {
+  top: -20px;
+  left: -20px;
+}
+
+.quote-right {
+  bottom: -20px;
+  right: -10px;
+  transform: rotate(180deg);
+}
+
+/* Bloc morale orange avec rotation */
+.story-moral-box {
+  background-color: var(--color-orange);
+  transform: rotate(1deg);
+  box-shadow: 4px 4px 0 rgba(0, 0, 0, 0.1);
+}
+
+/* Fonts custom */
+.font-fredoka {
+  font-family: "Fredoka", sans-serif;
+}
+
+.font-poppins {
+  font-family: "Poppins", sans-serif;
+}

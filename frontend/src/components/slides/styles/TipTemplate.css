@@ -1,0 +1,135 @@
+/* TipTemplate.css */
+@import url("https://fonts.googleapis.com/css2?family=Fredoka:wght@500;600;700&family=Poppins:wght@400;500;600;700&display=swap");
+
+.tip-slide {
+  --bg-cream: #fff9e6;
+  --text-brown: #2d241e;
+  --color-green: #22c55e;
+  --color-green-light: #dcfce7;
+  --color-green-dark: #16a34a;
+  --color-yellow: #fbbf24;
+
+  aspect-ratio: 16/9;
+  width: 90vw;
+  max-width: 1200px;
+  background-color: var(--bg-cream);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+  position: relative;
+  font-family: "Poppins", sans-serif;
+  color: var(--text-brown);
+}
+
+/* Carte principale */
+.tip-card {
+  background-color: white;
+  border-radius: 24px;
+  padding: 3rem 4rem;
+  max-width: 750px;
+  width: 90%;
+  text-align: center;
+  position: relative;
+  box-shadow: 0 10px 40px -10px rgba(34, 197, 94, 0.3);
+  border: 3px solid var(--color-green-light);
+}
+
+/* Icône ampoule */
+.tip-icon-container {
+  position: absolute;
+  top: -35px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 70px;
+  height: 70px;
+  background: linear-gradient(135deg, var(--color-green) 0%, var(--color-green-dark) 100%);
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 8px 20px -5px rgba(34, 197, 94, 0.5);
+}
+
+.tip-icon {
+  width: 36px;
+  height: 36px;
+  color: white;
+}
+
+/* Badge Astuce */
+.tip-badge-container {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  margin-top: 1rem;
+  margin-bottom: 1.5rem;
+}
+
+.tip-badge {
+  font-family: "Fredoka", sans-serif;
+  font-size: 0.9rem;
+  font-weight: 700;
+  color: var(--color-green-dark);
+  letter-spacing: 0.15em;
+}
+
+.tip-star {
+  width: 18px;
+  height: 18px;
+  color: var(--color-yellow);
+}
+
+/* Titre */
+.tip-title {
+  color: var(--text-brown);
+  margin-bottom: 1.5rem;
+  line-height: 1.3;
+}
+
+/* Contenu */
+.tip-content {
+  background-color: var(--color-green-light);
+  border-radius: 12px;
+  padding: 1.5rem 2rem;
+  margin-bottom: 1.5rem;
+}
+
+.tip-text {
+  color: #374151;
+  line-height: 1.7;
+  margin: 0;
+}
+
+/* Décoration bottom */
+.tip-decoration {
+  display: flex;
+  justify-content: center;
+  gap: 0.5rem;
+}
+
+.tip-dot {
+  width: 8px;
+  height: 8px;
+  background-color: var(--color-green);
+  border-radius: 50%;
+  opacity: 0.6;
+}
+
+.tip-dot:nth-child(2) {
+  opacity: 0.8;
+}
+
+.tip-dot:nth-child(3) {
+  opacity: 1;
+}
+
+/* Fonts custom */
+.font-fredoka {
+  font-family: "Fredoka", sans-serif;
+}
+
+.font-poppins {
+  font-family: "Poppins", sans-serif;
+}

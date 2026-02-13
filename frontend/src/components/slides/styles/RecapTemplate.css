@@ -1,0 +1,79 @@
+/* RecapTemplate.css */
+@import url("https://fonts.googleapis.com/css2?family=Fredoka:wght@500;600;700&family=Poppins:wght@400;500;600;700&display=swap");
+
+.recap-slide {
+  --bg-cream: #fff9e6;
+  --text-brown: #2d241e;
+  --color-green: #dce775;
+  --color-purple: #ce93d8;
+
+  aspect-ratio: 16/9;
+  width: 90vw;
+  max-width: 1200px;
+  background-color: var(--bg-cream);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+  position: relative;
+  font-family: "Poppins", sans-serif;
+  color: var(--text-brown);
+}
+
+.recap-title-text {
+  color: var(--text-brown);
+}
+
+/* La feuille de papier */
+.recap-sheet {
+  background-color: white;
+  width: 70%;
+  max-width: 800px;
+  padding: 3rem 4rem;
+  position: relative;
+  border: 2px solid var(--text-brown);
+  border-radius: 4px;
+  box-shadow: 10px 10px 0 rgba(0, 0, 0, 0.1);
+  transform: rotate(-1deg);
+}
+
+/* Le scotch en haut */
+.tape-strip {
+  position: absolute;
+  top: -15px;
+  left: 50%;
+  transform: translateX(-50%) rotate(2deg);
+  width: 140px;
+  height: 35px;
+  background-color: var(--color-purple);
+  opacity: 0.8;
+  box-shadow: 2px 2px 0 rgba(0, 0, 0, 0.1);
+}
+
+/* Liste a puces */
+.check-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.check-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 1.5rem;
+  margin-bottom: 1.5rem;
+  font-size: 1.3rem;
+  line-height: 1.5;
+  color: #444;
+}
+
+.check-icon {
+  width: 36px;
+  height: 36px;
+  flex-shrink: 0;
+}
+
+/* Fonts custom */
+.font-fredoka {
+  font-family: "Fredoka", sans-serif;
+}

@@ -1,0 +1,165 @@
+# config.py - Configuration centralisée pour l'application
+import os
+import pytz
+
+# Fuseau horaire français
+FRANCE_TZ = pytz.timezone("Europe/Paris")
+
+# Configuration Flask
+SECRET_KEY = os.getenv("SECRET_KEY", "fallback_secret_key_for_dev")
+
+# Configuration Azure - URL du service RAG
+RAG_SERVICE_URL = os.getenv(
+    "RAG_SERVICE_URL", "https://rag-b0fndpa9fycaafcr.francecentral-01.azurewebsites.net"
+)
+
+# Base de données - SQLite local en dev, Azure SQL en prod
+if os.getenv("AZURE_SQL_CONNECTION_STRING"):
+    # TODO: Configuration Azure SQL Database
+    DB_PATH = "/tmp/database.db"
+else:
+    DB_PATH = "/tmp/database.db"
+
+# Configuration du cours - PLAYLIST DES AUDIOS (Azure Storage)
+COURS_PLAYLIST = [
+    # === BLOC 1 : 9h00 - 10h05 ===
+    {
+        "id": 1,
+        "filename": "https://formationaudios-ebbgcnh0hbcxdjcq.z02.azurefd.net/audios/cours_9h00_9h45.mp3",
+        "duration": 2700,  # 45 minutes = 2700 secondes
+        "title": "Cours - Bloc 1 (9h00-9h45)",
+        "type": "cours",
+    },
+    {
+        "id": 2,
+        "filename": "https://formationaudios-ebbgcnh0hbcxdjcq.z02.azurefd.net/audios/qa_9h45_9h55.mp3",
+        "duration": 600,  # 10 minutes = 600 secondes
+        "title": "Questions-Réponses IA (9h45-9h55)",
+        "type": "qa",
+    },
+    {
+        "id": 3,
+        "filename": "https://formationaudios-ebbgcnh0hbcxdjcq.z02.azurefd.net/audios/pause_9h55_10h05.mp3",
+        "duration": 600,  # 10 minutes = 600 secondes
+        "title": "Pause (9h55-10h05)",
+        "type": "pause",
+    },
+    # === BLOC 2 : 10h05 - 11h05 ===
+    {
+        "id": 4,
+        "filename": "https://formationaudios-ebbgcnh0hbcxdjcq.z02.azurefd.net/audios/cours_10h05_10h50.mp3",
+        "duration": 2700,  # 45 minutes = 2700 secondes
+        "title": "Cours - Bloc 2 (10h05-10h50)",
+        "type": "cours",
+    },
+    {
+        "id": 5,
+        "filename": "https://formationaudios-ebbgcnh0hbcxdjcq.z02.azurefd.net/audios/qa_10h50_11h00.mp3",
+        "duration": 600,  # 10 minutes = 600 secondes
+        "title": "Questions-Réponses IA (10h50-11h00)",
+        "type": "qa",
+    },
+    {
+        "id": 6,
+        "filename": "https://formationaudios-ebbgcnh0hbcxdjcq.z02.azurefd.net/audios/pause_11h00_11h05.mp3",
+        "duration": 300,  # 5 minutes = 300 secondes
+        "title": "Pause (11h00-11h05)",
+        "type": "pause",
+    },
+    # === BLOC 3 : 11h05 - 12h20 ===
+    {
+        "id": 7,
+        "filename": "https://formationaudios-ebbgcnh0hbcxdjcq.z02.azurefd.net/audios/cours_11h05_12h00.mp3",
+        "duration": 3300,  # 55 minutes = 3300 secondes
+        "title": "Cours - Bloc 3 (11h05-12h00)",
+        "type": "cours",
+    },
+    {
+        "id": 8,
+        "filename": "https://formationaudios-ebbgcnh0hbcxdjcq.z02.azurefd.net/audios/qa_12h00_12h10.mp3",
+        "duration": 600,  # 10 minutes = 600 secondes
+        "title": "Questions-Réponses IA (12h00-12h10)",
+        "type": "qa",
+    },
+    {
+        "id": 9,
+        "filename": "https://formationaudios-ebbgcnh0hbcxdjcq.z02.azurefd.net/audios/pause_12h10_12h20.mp3",
+        "duration": 600,  # 10 minutes = 600 secondes
+        "title": "Pause (12h10-12h20)",
+        "type": "pause",
+    },
+    # === BLOC 4 : 12h15 - 14h40 ===
+    {
+        "id": 10,
+        "filename": "https://formationaudios-ebbgcnh0hbcxdjcq.z02.azurefd.net/audios/pause_midi_13h15_14h45.mp3",
+        "duration": 5400,  # 90 minutes = 5400 secondes
+        "title": "Pause déjeuner (12h20-13h50)",
+        "type": "pause_midi",
+    },
+    {
+        "id": 11,
+        "filename": "https://formationaudios-ebbgcnh0hbcxdjcq.z02.azurefd.net/audios/cours_12h20_13h05.mp3",
+        "duration": 2700,  # 45 minutes = 2700 secondes
+        "title": "Cours - Bloc 4 (13h50-14h35)",
+        "type": "cours",
+    },
+    {
+        "id": 12,
+        "filename": "https://formationaudios-ebbgcnh0hbcxdjcq.z02.azurefd.net/audios/qa_13h05_13h15.mp3",
+        "duration": 600,  # 10 minutes = 600 secondes
+        "title": "Questions-Réponses IA (14h35-14h45)",
+        "type": "qa",
+    },
+    # === BLOC 5 : 14h45 - 16h00 ===
+    {
+        "id": 13,
+        "filename": "https://formationaudios-ebbgcnh0hbcxdjcq.z02.azurefd.net/audios/cours_14h45_15h45.mp3",
+        "duration": 3600,  # 60 minutes = 3600 secondes
+        "title": "Cours - Bloc 5 (14h45-15h45)",
+        "type": "cours",
+    },
+    {
+        "id": 14,
+        "filename": "https://formationaudios-ebbgcnh0hbcxdjcq.z02.azurefd.net/audios/qa_15h45_16h00.mp3",
+        "duration": 900,  # 15 minutes = 900 secondes
+        "title": "Questions-Réponses IA (15h45-16h00)",
+        "type": "qa",
+    },
+    # === BLOC 6 : 16h00 - 17h25 ===
+    {
+        "id": 15,
+        "filename": "https://formationaudios-ebbgcnh0hbcxdjcq.z02.azurefd.net/audios/cours_16h00_17h00.mp3",
+        "duration": 3600,  # 60 minutes = 3600 secondes
+        "title": "Cours - Bloc 6 (16h00-17h00)",
+        "type": "cours",
+    },
+    {
+        "id": 16,
+        "filename": "https://formationaudios-ebbgcnh0hbcxdjcq.z02.azurefd.net/audios/qa_17h00_17h15.mp3",
+        "duration": 900,  # 15 minutes = 900 secondes
+        "title": "Questions-Réponses IA (17h00-17h15)",
+        "type": "qa",
+    },
+    {
+        "id": 17,
+        "filename": "https://formationaudios-ebbgcnh0hbcxdjcq.z02.azurefd.net/audios/pause_17h15_17h25.mp3",
+        "duration": 600,  # 10 minutes = 600 secondes
+        "title": "Pause (17h15-17h25)",
+        "type": "pause",
+    },
+    # === BLOC 7 : 17h25 - 18h30 ===
+    {
+        "id": 18,
+        "filename": "https://formationaudios-ebbgcnh0hbcxdjcq.z02.azurefd.net/audios/cours_17h25_18h15.mp3",
+        "duration": 3000,  # 50 minutes = 3000 secondes
+        "title": "Cours - Bloc 7 (17h25-18h15)",
+        "type": "cours",
+    },
+    {
+        "id": 19,
+        "filename": "https://formationaudios-ebbgcnh0hbcxdjcq.z02.azurefd.net/audios/qa_18h15_18h30.mp3",
+        "duration": 900,  # 15 minutes = 900 secondes
+        "title": "Questions-Réponses IA (18h15-18h30)",
+        "type": "qa",
+    },
+]
