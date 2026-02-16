@@ -2,6 +2,12 @@
 
 ## 2026-02-16
 
+### Fix : Routing SPA sur Azure Static Web Apps (staticwebapp.config.json)
+
+- **Probleme** : les routes React (`/admin`, `/login-admin`, `/attente`, etc.) renvoyaient une 404 quand accedees directement dans la barre d'adresse, car Azure Static Web Apps cherchait un fichier physique
+- **Solution** : ajout de `staticwebapp.config.json` dans `frontend/public/` avec `navigationFallback` vers `index.html`
+- Toutes les routes non-statiques sont maintenant redirigees vers React Router
+
 ### Fix : Session cross-origin pour deploiement Azure (backend + frontend)
 
 - **Probleme** : apres login, la session Flask n'etait pas transmise aux requetes suivantes. Deux causes :
