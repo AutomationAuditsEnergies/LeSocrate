@@ -105,6 +105,27 @@ export default function Admin() {
     [logs]
   )
 
+  const handleExportExcel = async () => {
+    try {
+      const response = await fetch(apiUrl('/api/admin/export_excel'), {
+        credentials: 'include',
+      })
+      if (!response.ok) {
+        alert('Erreur lors de l\'export Excel')
+        return
+      }
+      const blob = await response.blob()
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = 'export_logs.xlsx'
+      a.click()
+      URL.revokeObjectURL(url)
+    } catch {
+      alert('Erreur de connexion au serveur')
+    }
+  }
+
   const handleConfigSubmit = async (e) => {
     e.preventDefault()
     setSuccessMessage('')
@@ -431,12 +452,12 @@ export default function Admin() {
               >
                 Réinitialiser
               </a>
-              <a
-                href="/export_excel"
-                className="rounded-lg bg-blue-600 px-3 py-2 text-sm font-medium !text-white shadow-sm visited:!text-white hover:!text-white focus:!text-white active:!text-white transition hover:-translate-y-0.5 hover:bg-blue-700"
+              <button
+                onClick={handleExportExcel}
+                className="rounded-lg bg-blue-600 px-3 py-2 text-sm font-medium text-white shadow-sm transition hover:-translate-y-0.5 hover:bg-blue-700"
               >
                 Exporter en Excel
-              </a>
+              </button>
             </div>
           </div>
 
