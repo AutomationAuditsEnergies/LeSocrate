@@ -31,6 +31,12 @@ logger = get_logger(__name__)
 app = Flask(__name__)
 app.config["SECRET_KEY"] = SECRET_KEY
 
+# Configuration des cookies de session pour le cross-origin (Azure)
+is_azure = os.environ.get("WEBSITE_SITE_NAME") is not None
+if is_azure:
+    app.config["SESSION_COOKIE_SAMESITE"] = "None"
+    app.config["SESSION_COOKIE_SECURE"] = True
+
 # Configuration CORS pour permettre les requêtes du frontend React
 CORS(app, resources={
     r"/*": {

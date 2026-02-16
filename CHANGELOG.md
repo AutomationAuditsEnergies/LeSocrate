@@ -2,6 +2,12 @@
 
 ## 2026-02-16
 
+### Fix : Session cross-origin pour deploiement Azure (main_app.py)
+
+- **Probleme** : apres login, la session Flask n'etait pas transmise aux requetes suivantes car les cookies de session ne traversent pas les domaines differents (frontend sur Static Web Apps, backend sur App Service)
+- **Solution** : ajout de `SESSION_COOKIE_SAMESITE = "None"` et `SESSION_COOKIE_SECURE = True` en mode Azure
+- Ces parametres permettent au navigateur d'envoyer le cookie de session dans les requetes cross-origin avec `credentials: 'include'`
+
 ### Refactor : Migration de tous les fetch('/api/...') vers apiUrl('/api/...') dans le frontend
 
 - **Objectif** : centraliser la construction des URLs API via le helper `apiUrl()` (defini dans `frontend/src/api.js`) pour faciliter le deploiement multi-environnement (dev, staging, production)
