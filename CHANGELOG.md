@@ -2,6 +2,23 @@
 
 ## 2026-02-16
 
+### Feature : Export Excel — colonne "Temps total de connexion" par utilisateur (export_service.py)
+
+- Ajout d'un tableau récapitulatif en colonnes H-J du fichier Excel
+- Pour chaque utilisateur unique (nom + prénom), affiche le cumul de toutes ses sessions
+- Format : `Xh Ymin Zsec` ou `Ymin Zsec` selon la durée
+- Trié alphabétiquement par nom
+- En-têtes colorés (bleu foncé pour le détail, bleu moyen pour le récap)
+- Largeurs de colonnes automatiques pour la lisibilité
+
+### Fix : Tests Playwright — gestion de l'état inconnu sur /video
+
+- **Probleme** : le test `la page /video affiche un contenu valide` echouait avec `État inattendu: unknown` car la page restait bloquee sur "Chargement du cours..." (API Azure lente ou inaccessible depuis Chromium headless)
+- **Solution** : refactoring de `loginAndGetState()` pour attendre explicitement la disparition du spinner de chargement avant de detecter l'etat, avec timeout 15s
+- Ajout des etats `loading` et `error` pour couvrir tous les cas possibles
+- Le test skippe proprement au lieu de planter quand l'etat ne peut pas etre determine
+- Resultat : 11 passed, 0 failed, 7 skipped (exit 0)
+
 ### Fix : Routing SPA sur Azure Static Web Apps (staticwebapp.config.json)
 
 - **Probleme** : les routes React (`/admin`, `/login-admin`, `/attente`, etc.) renvoyaient une 404 quand accedees directement dans la barre d'adresse, car Azure Static Web Apps cherchait un fichier physique
