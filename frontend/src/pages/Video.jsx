@@ -65,7 +65,9 @@ export default function Video() {
   useEffect(() => {
     const fetchAudioStatus = async () => {
       try {
-        const response = await fetch(apiUrl('/api/video/status'))
+        const response = await fetch(apiUrl('/api/video/status'), {
+          credentials: 'include',
+        })
         const data = await response.json()
 
         if (!data.authenticated) {
