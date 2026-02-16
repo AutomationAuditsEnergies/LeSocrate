@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { apiUrl } from '../api'
 
 export default function Attente() {
   const navigate = useNavigate()
@@ -24,7 +25,7 @@ export default function Attente() {
   useEffect(() => {
     const fetchStatus = async () => {
       try {
-        const res = await fetch('/api/cours-status')
+        const res = await fetch(apiUrl('/api/cours-status'))
         const data = await res.json()
         if (data.status === 'waiting' && data.temps_restant > 0) {
           setTimeLeft(Math.ceil(data.temps_restant))

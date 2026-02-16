@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { apiUrl } from '../api';
 import PlayfulTemplate from '../components/slides/templates/PlayfulTemplate';
 import ReflectionTemplate from '../components/slides/templates/ReflectionTemplate';
 import CaseStudyTemplate from '../components/slides/templates/CaseStudyTemplate';
@@ -32,7 +33,7 @@ export default function GeneratedSlides() {
 
   const fetchExistingSlides = async () => {
     try {
-      const response = await fetch('/api/slides/data', {
+      const response = await fetch(apiUrl('/api/slides/data'), {
         credentials: 'include'
       });
       const data = await response.json();
@@ -57,7 +58,7 @@ export default function GeneratedSlides() {
 
     try {
       // Utilise le nouveau endpoint v3
-      const response = await fetch('/api/slides/generate-v3', {
+      const response = await fetch(apiUrl('/api/slides/generate-v3'), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'
@@ -92,7 +93,7 @@ export default function GeneratedSlides() {
 
   const clearSlides = async () => {
     try {
-      await fetch('/api/slides/clear', {
+      await fetch(apiUrl('/api/slides/clear'), {
         method: 'POST',
         credentials: 'include'
       });

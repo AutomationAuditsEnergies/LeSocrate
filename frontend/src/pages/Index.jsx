@@ -1,6 +1,7 @@
 import { useNavigate } from 'react-router-dom'
 import { useState } from 'react'
 import Spline from '@splinetool/react-spline'
+import { apiUrl } from '../api'
 
 export default function Index() {
   const navigate = useNavigate()
@@ -14,7 +15,7 @@ export default function Index() {
     const prenom = formData.get('prenom')
 
     try {
-      const response = await fetch('/api/auth/login', {
+      const response = await fetch(apiUrl('/api/auth/login'), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

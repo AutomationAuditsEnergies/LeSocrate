@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import Sidebar from '../components/Sidebar.jsx'
+import { apiUrl } from '../api'
 
 export default function Recorder() {
   const [audioFiles, setAudioFiles] = useState([])
@@ -85,7 +86,7 @@ export default function Recorder() {
     stopPolling()
     pollingRef.current = setInterval(async () => {
       try {
-        const resp = await fetch('/api/admin/audio-upload-status', { credentials: 'include' })
+        const resp = await fetch(apiUrl('/api/admin/audio-upload-status'), { credentials: 'include' })
         const data = await resp.json()
         handleStatusUpdate(data)
       } catch {
@@ -98,7 +99,7 @@ export default function Recorder() {
   useEffect(() => {
     const checkExistingJob = async () => {
       try {
-        const resp = await fetch('/api/admin/audio-upload-status', { credentials: 'include' })
+        const resp = await fetch(apiUrl('/api/admin/audio-upload-status'), { credentials: 'include' })
         const data = await resp.json()
         if (!data.success) return
 
@@ -156,7 +157,7 @@ export default function Recorder() {
       const formData = new FormData()
       audioFiles.forEach(f => formData.append('files', f))
 
-      const resp = await fetch('/api/admin/upload-audios', {
+      const resp = await fetch(apiUrl('/api/admin/upload-audios'), {
         method: 'POST',
         credentials: 'include',
         body: formData,
@@ -185,7 +186,7 @@ export default function Recorder() {
     setAzureLoading(true)
     setAzureError('')
     try {
-      const resp = await fetch('/api/admin/audio-list', { credentials: 'include' })
+      const resp = await fetch(apiUrl('/api/admin/audio-list'), { credentials: 'include' })
       const data = await resp.json()
       if (data.success) {
         setAzureAudios(data.audios)

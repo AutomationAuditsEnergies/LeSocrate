@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import ChatPanel from '../components/ChatPanel.jsx'
 import LeftSidebar from '../components/LeftSidebar.jsx'
+import { apiUrl } from '../api'
 
 export default function Video() {
   const navigate = useNavigate()
@@ -29,7 +30,7 @@ export default function Video() {
   // Fonction pour raccrocher (déconnexion)
   const handleHangup = async () => {
     try {
-      await fetch('/api/auth/logout', {
+      await fetch(apiUrl('/api/auth/logout'), {
         method: 'POST',
         credentials: 'include'
       })
@@ -64,7 +65,7 @@ export default function Video() {
   useEffect(() => {
     const fetchAudioStatus = async () => {
       try {
-        const response = await fetch('/api/video/status')
+        const response = await fetch(apiUrl('/api/video/status'))
         const data = await response.json()
 
         if (!data.authenticated) {

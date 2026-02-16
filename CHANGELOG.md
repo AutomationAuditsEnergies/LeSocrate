@@ -1,5 +1,24 @@
 # Changelog
 
+## 2026-02-16
+
+### Refactor : Migration de tous les fetch('/api/...') vers apiUrl('/api/...') dans le frontend
+
+- **Objectif** : centraliser la construction des URLs API via le helper `apiUrl()` (defini dans `frontend/src/api.js`) pour faciliter le deploiement multi-environnement (dev, staging, production)
+- **Fichiers modifies** (10 fichiers, 26 appels fetch au total) :
+  - `pages/LoginAdmin.jsx` (1 fetch)
+  - `pages/Recorder.jsx` (4 fetches)
+  - `pages/Video.jsx` (2 fetches)
+  - `pages/Attente.jsx` (1 fetch)
+  - `pages/Admin.jsx` (7 fetches)
+  - `pages/Index.jsx` (1 fetch)
+  - `pages/DebugCours.jsx` (5 fetches)
+  - `components/ChatPanel.jsx` (1 fetch)
+  - `components/ProtectedAdminRoute.jsx` (1 fetch)
+  - `pages/GeneratedSlides.jsx` (3 fetches)
+- Chaque fichier importe desormais `{ apiUrl } from '../api'`
+- Aucun changement de comportement : refactor pur
+
 ## 2026-02-13
 
 ### Fix : Page d'attente affiche maintenant la vraie heure de debut (Attente.jsx)

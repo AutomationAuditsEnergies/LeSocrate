@@ -34,7 +34,11 @@ app.config["SECRET_KEY"] = SECRET_KEY
 # Configuration CORS pour permettre les requêtes du frontend React
 CORS(app, resources={
     r"/*": {
-        "origins": ["http://localhost:5173", "http://localhost:3000"],
+        "origins": [
+            "http://localhost:5173",
+            "http://localhost:3000",
+            "https://thankful-wave-043aa3b03.4.azurestaticapps.net",
+        ],
         "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
         "allow_headers": ["Content-Type", "Authorization"],
         "supports_credentials": True
@@ -47,7 +51,11 @@ logger.info("✅ CORS configuré pour frontend React")
 # Initialisation de SocketIO avec eventlet et CORS
 socketio = SocketIO(
     app,
-    cors_allowed_origins=["http://localhost:5173", "http://localhost:3000", "*"],
+    cors_allowed_origins=[
+        "http://localhost:5173",
+        "http://localhost:3000",
+        "https://thankful-wave-043aa3b03.4.azurestaticapps.net",
+    ],
     async_mode="eventlet"
 )
 logger.info("✅ SocketIO initialisé avec eventlet et CORS")

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import Sidebar from '../components/Sidebar.jsx'
+import { apiUrl } from '../api'
 
 export default function Admin() {
   const [search, setSearch] = useState('')
@@ -30,7 +31,7 @@ export default function Admin() {
   useEffect(() => {
     const checkIndexerOnLoad = async () => {
       try {
-        const resp = await fetch('/api/admin/indexer-status', { credentials: 'include' })
+        const resp = await fetch(apiUrl('/api/admin/indexer-status'), { credentials: 'include' })
         const data = await resp.json()
         if (data.success && data.status === 'inProgress') {
           // Indexation en cours détectée → lancer le polling
@@ -40,7 +41,7 @@ export default function Admin() {
 
           const interval = setInterval(async () => {
             try {
-              const r = await fetch('/api/admin/indexer-status', { credentials: 'include' })
+              const r = await fetch(apiUrl('/api/admin/indexer-status'), { credentials: 'include' })
               const d = await r.json()
               if (d.success) {
                 if (d.status === 'success') {
@@ -75,7 +76,7 @@ export default function Admin() {
         ? `/api/admin/logs?prenom=${encodeURIComponent(search)}`
         : '/api/admin/logs'
 
-      const response = await fetch(url, {
+      const response = await fetch(apiUrl(url), {
         credentials: 'include',
       })
 
@@ -110,7 +111,7 @@ export default function Admin() {
     setErrorMessage('')
 
     try {
-      const response = await fetch('/api/admin/config_cours', {
+      const response = await fetch(apiUrl('/api/admin/config_cours'), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -143,7 +144,7 @@ export default function Admin() {
     }
 
     try {
-      const response = await fetch('/api/admin/force-logout-finished-users', {
+      const response = await fetch(apiUrl('/api/admin/force-logout-finished-users'), {
         method: 'POST',
         credentials: 'include',
       })
@@ -190,7 +191,7 @@ export default function Admin() {
 
     const interval = setInterval(async () => {
       try {
-        const resp = await fetch('/api/admin/indexer-status', { credentials: 'include' })
+        const resp = await fetch(apiUrl('/api/admin/indexer-status'), { credentials: 'include' })
         const data = await resp.json()
 
         if (data.success) {
@@ -227,7 +228,7 @@ export default function Admin() {
       const formData = new FormData()
       formData.append('file', pdfFile)
 
-      const resp = await fetch('/api/admin/upload-pdf', {
+      const resp = await fetch(apiUrl('/api/admin/upload-pdf'), {
         method: 'POST',
         credentials: 'include',
         body: formData,

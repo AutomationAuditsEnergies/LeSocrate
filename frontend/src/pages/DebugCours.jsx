@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { apiUrl } from '../api'
 
 export default function DebugCours() {
   const [debugInfo, setDebugInfo] = useState(null)
@@ -31,7 +32,7 @@ export default function DebugCours() {
       const dateStr = `${year}-${month}-${day}`
       const timeStr = `${hours}:${minutes}:${secs}`
 
-      const response = await fetch('/api/admin/config_cours', {
+      const response = await fetch(apiUrl('/api/admin/config_cours'), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -67,7 +68,7 @@ export default function DebugCours() {
       const dateStr = `${year}-${month}-${day}`
       const timeStr = `${hours}:${minutes}:${secs}`
 
-      const response = await fetch('/api/admin/config_cours', {
+      const response = await fetch(apiUrl('/api/admin/config_cours'), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -91,7 +92,7 @@ export default function DebugCours() {
   const handleResetSimulation = async () => {
     try {
       // Remettre l'heure de début à l'heure par défaut (28 mai 2025 16:35)
-      const response = await fetch('/api/admin/config_cours', {
+      const response = await fetch(apiUrl('/api/admin/config_cours'), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -120,7 +121,7 @@ export default function DebugCours() {
 
   const fetchDebugInfo = async () => {
     try {
-      const response = await fetch('/api/debug/cours-info', {
+      const response = await fetch(apiUrl('/api/debug/cours-info'), {
         credentials: 'include',
       })
 
@@ -144,7 +145,7 @@ export default function DebugCours() {
 
   const fetchPlaylist = async () => {
     try {
-      const response = await fetch('/api/debug/playlist', {
+      const response = await fetch(apiUrl('/api/debug/playlist'), {
         credentials: 'include',
       })
       if (response.ok) {

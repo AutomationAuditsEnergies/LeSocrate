@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
+import { apiUrl } from '../api'
 
 function formatMarkdown(text) {
   // Gras **texte**
@@ -70,7 +71,7 @@ export default function ChatPanel({ open, onClose }) {
     setLoading(true)
 
     try {
-      const response = await fetch('/api/chat', {
+      const response = await fetch(apiUrl('/api/chat'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
