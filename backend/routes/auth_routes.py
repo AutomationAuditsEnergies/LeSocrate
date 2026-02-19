@@ -1,4 +1,4 @@
-# auth_routes.py - Routes d'authentification et connexion utilisateur (API JSON)
+# auth_routes.py -- Routes d'authentification et connexion utilisateur (API JSON)
 from flask import Blueprint, request, session, jsonify
 from datetime import datetime
 from config import FRANCE_TZ
@@ -47,15 +47,23 @@ def create_auth_blueprint(socketio):
 
             logger.info(f"✅ Utilisateur enregistré en base avec ID: {log_id}")
 
-            return jsonify({
-                "success": True,
-                "user": {"nom": nom, "prenom": prenom},
-                "log_id": log_id
-            }), 200
+            return (
+                jsonify(
+                    {
+                        "success": True,
+                        "user": {"nom": nom, "prenom": prenom},
+                        "log_id": log_id,
+                    }
+                ),
+                200,
+            )
 
         except Exception as e:
             logger.error(f"❌ Erreur connexion utilisateur: {e}")
-            return jsonify({"success": False, "error": "Erreur lors de la connexion"}), 500
+            return (
+                jsonify({"success": False, "error": "Erreur lors de la connexion"}),
+                500,
+            )
 
     @auth_bp.route("/api/auth/logout", methods=["POST"])
     def logout():
@@ -82,7 +90,10 @@ def create_auth_blueprint(socketio):
         except Exception as e:
             logger.error(f"❌ Erreur déconnexion: {e}")
             session.clear()
-            return jsonify({"success": False, "error": "Erreur lors de la déconnexion"}), 500
+            return (
+                jsonify({"success": False, "error": "Erreur lors de la déconnexion"}),
+                500,
+            )
 
     @auth_bp.route("/deconnexion-auto", methods=["POST"])
     def deconnexion_auto():
@@ -127,9 +138,7 @@ def create_auth_blueprint(socketio):
             nb_deconnectes = cursor.rowcount
             conn.commit()
             conn.close()
-            logger.info(
-                f"✅ {nb_deconnectes} utilisateurs déconnectés automatiquement"
-            )
+            logger.info(f"✅ {nb_deconnectes} utilisateurs déconnectés automatiquement")
 
             # Forcer la redirection de tous les utilisateurs connectés
             socketio.emit(
