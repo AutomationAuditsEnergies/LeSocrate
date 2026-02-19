@@ -45,6 +45,7 @@ _cors_origins = [
     "http://localhost:3000",
     "https://thankful-wave-043aa3b03.4.azurestaticapps.net",
     "https://brave-mud-064e06d03.2.azurestaticapps.net",
+    "https://polite-bush-07d4fdd03.1.azurestaticapps.net",
 ]
 for _i in range(1, 4):
     _url = os.environ.get(f"PLATFORM_{_i}_FRONTEND_URL", "").rstrip("/")
