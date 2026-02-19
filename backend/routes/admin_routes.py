@@ -1,4 +1,4 @@
-# admin_routes.py - Routes d'administration (API JSON uniquement)
+# admin_routes.py -- Routes d'administration (API JSON uniquement)
 from flask import Blueprint, request, session, jsonify, send_file
 from datetime import datetime, timedelta, timezone
 import os
@@ -73,29 +73,40 @@ def create_admin_blueprint(socketio):
                 else:
                     duree = "En cours..."
 
-                logs_with_duration.append({
-                    "id": id_,
-                    "nom": nom,
-                    "prenom": prenom,
-                    "arrivee": arrivee,
-                    "depart": depart,
-                    "duree": duree
-                })
+                logs_with_duration.append(
+                    {
+                        "id": id_,
+                        "nom": nom,
+                        "prenom": prenom,
+                        "arrivee": arrivee,
+                        "depart": depart,
+                        "duree": duree,
+                    }
+                )
 
             # Calcul du temps total cumulé
             total_minutes = int(total_seconds // 60)
             total_heures = total_minutes // 60
             total_minutes_restant = total_minutes % 60
             total_secondes = int(total_seconds % 60)
-            temps_total_format = f"{total_heures} h {total_minutes_restant} min {total_secondes} sec"
+            temps_total_format = (
+                f"{total_heures} h {total_minutes_restant} min {total_secondes} sec"
+            )
 
-            return jsonify({
-                "success": True,
-                "logs": logs_with_duration,
-                "prenom_recherche": prenom_recherche,
-                "temps_total": temps_total_format,
-                "heure_debut_cours": heure_debut_cours.strftime("%Y-%m-%d %H:%M:%S")
-            }), 200
+            return (
+                jsonify(
+                    {
+                        "success": True,
+                        "logs": logs_with_duration,
+                        "prenom_recherche": prenom_recherche,
+                        "temps_total": temps_total_format,
+                        "heure_debut_cours": heure_debut_cours.strftime(
+                            "%Y-%m-%d %H:%M:%S"
+                        ),
+                    }
+                ),
+                200,
+            )
 
         except Exception as e:
             logger.error(f"❌ Erreur récupération logs admin: {e}")
@@ -108,11 +119,16 @@ def create_admin_blueprint(socketio):
             if not session.get("is_admin"):
                 return jsonify({"success": False, "error": "Accès refusé"}), 403
             heure = get_heure_debut_cours()
-            return jsonify({
-                "success": True,
-                "date_cours": heure.strftime("%Y-%m-%d"),
-                "heure_cours": heure.strftime("%H:%M"),
-            }), 200
+            return (
+                jsonify(
+                    {
+                        "success": True,
+                        "date_cours": heure.strftime("%Y-%m-%d"),
+                        "heure_cours": heure.strftime("%H:%M"),
+                    }
+                ),
+                200,
+            )
         except Exception as e:
             logger.error(f"❌ Erreur récupération heure cours: {e}")
             return jsonify({"success": False, "error": str(e)}), 500
@@ -135,10 +151,13 @@ def create_admin_blueprint(socketio):
 
             if not date_str or not heure_str:
                 logger.warning("⚠️ Date ou heure manquante")
-                return jsonify({"success": False, "error": "Date et heure requises"}), 400
+                return (
+                    jsonify({"success": False, "error": "Date et heure requises"}),
+                    400,
+                )
 
             # Ajouter :00 pour les secondes seulement si elles ne sont pas déjà présentes
-            if heure_str.count(':') == 1:
+            if heure_str.count(":") == 1:
                 datetime_str = f"{date_str} {heure_str}:00"
             else:
                 datetime_str = f"{date_str} {heure_str}"
@@ -151,14 +170,22 @@ def create_admin_blueprint(socketio):
             # Sauvegarder en base
             set_heure_debut_cours(nouvelle_heure_fr)
 
-            return jsonify({
-                "success": True,
-                "message": f"Heure de début mise à jour : {nouvelle_heure_fr.strftime('%d/%m/%Y à %H:%M')}"
-            }), 200
+            return (
+                jsonify(
+                    {
+                        "success": True,
+                        "message": f"Heure de début mise à jour : {nouvelle_heure_fr.strftime('%d/%m/%Y à %H:%M')}",
+                    }
+                ),
+                200,
+            )
 
         except ValueError as e:
             logger.error(f"❌ Format date/heure invalide: {e}")
-            return jsonify({"success": False, "error": "Format de date/heure invalide"}), 400
+            return (
+                jsonify({"success": False, "error": "Format de date/heure invalide"}),
+                400,
+            )
         except Exception as e:
             logger.error(f"❌ Erreur configuration cours: {e}")
             return jsonify({"success": False, "error": str(e)}), 500
@@ -183,7 +210,9 @@ def create_admin_blueprint(socketio):
             )
             conn.commit()
             conn.close()
-            logger.info(f"🔒 Lock interne mis à jour: {'verrouillé' if locked else 'déverrouillé'}")
+            logger.info(
+                f"🔒 Lock interne mis à jour: {'verrouillé' if locked else 'déverrouillé'}"
+            )
             return jsonify({"success": True, "upload_locked": locked}), 200
         except Exception as e:
             logger.error(f"❌ Erreur internal set-lock: {e}")
@@ -200,8 +229,11 @@ def create_admin_blueprint(socketio):
             date_str = data.get("date_cours", "").strip()
             heure_str = data.get("heure_cours", "").strip()
             if not date_str or not heure_str:
-                return jsonify({"success": False, "error": "Date et heure requises"}), 400
-            if heure_str.count(':') == 1:
+                return (
+                    jsonify({"success": False, "error": "Date et heure requises"}),
+                    400,
+                )
+            if heure_str.count(":") == 1:
                 datetime_str = f"{date_str} {heure_str}:00"
             else:
                 datetime_str = f"{date_str} {heure_str}"
@@ -209,7 +241,15 @@ def create_admin_blueprint(socketio):
             nouvelle_heure_fr = FRANCE_TZ.localize(nouvelle_heure_naive)
             set_heure_debut_cours(nouvelle_heure_fr)
             logger.info(f"⚙️ Heure cours configurée en interne: {nouvelle_heure_fr}")
-            return jsonify({"success": True, "message": f"Heure mise à jour : {nouvelle_heure_fr.strftime('%d/%m/%Y à %H:%M')}"}), 200
+            return (
+                jsonify(
+                    {
+                        "success": True,
+                        "message": f"Heure mise à jour : {nouvelle_heure_fr.strftime('%d/%m/%Y à %H:%M')}",
+                    }
+                ),
+                200,
+            )
         except Exception as e:
             logger.error(f"❌ Erreur internal config-cours: {e}")
             return jsonify({"success": False, "error": str(e)}), 500
@@ -276,7 +316,10 @@ def create_admin_blueprint(socketio):
                 return jsonify({"success": True, "message": "Connexion réussie"}), 200
             else:
                 logger.warning("❌ Échec connexion admin - identifiants incorrects")
-                return jsonify({"success": False, "error": "Identifiants incorrects"}), 401
+                return (
+                    jsonify({"success": False, "error": "Identifiants incorrects"}),
+                    401,
+                )
 
         except Exception as e:
             logger.error(f"❌ Erreur login admin: {e}")
@@ -319,16 +362,24 @@ def create_admin_blueprint(socketio):
                         simulated_time_str, "%Y-%m-%dT%H:%M"
                     )
                 except ValueError:
-                    return jsonify({"success": False, "error": "Format date invalide"}), 400
+                    return (
+                        jsonify({"success": False, "error": "Format date invalide"}),
+                        400,
+                    )
 
             state.simulated_time_offset = FRANCE_TZ.localize(simulated_time_naive)
 
             logger.info(f"✅ Heure simulée: {state.simulated_time_offset}")
 
-            return jsonify({
-                "success": True,
-                "message": f"Heure simulée: {state.simulated_time_offset.strftime('%Y-%m-%d %H:%M:%S')}"
-            }), 200
+            return (
+                jsonify(
+                    {
+                        "success": True,
+                        "message": f"Heure simulée: {state.simulated_time_offset.strftime('%Y-%m-%d %H:%M:%S')}",
+                    }
+                ),
+                200,
+            )
 
         except Exception as e:
             logger.error(f"❌ Erreur simulation temps: {e}")
@@ -382,11 +433,16 @@ def create_admin_blueprint(socketio):
 
             logger.info(f"✅ {affected_rows} utilisateurs déconnectés")
 
-            return jsonify({
-                "success": True,
-                "message": f"{affected_rows} utilisateurs déconnectés",
-                "disconnected_count": affected_rows,
-            }), 200
+            return (
+                jsonify(
+                    {
+                        "success": True,
+                        "message": f"{affected_rows} utilisateurs déconnectés",
+                        "disconnected_count": affected_rows,
+                    }
+                ),
+                200,
+            )
 
         except Exception as e:
             logger.error(f"❌ Erreur force logout: {e}")
@@ -404,7 +460,15 @@ def create_admin_blueprint(socketio):
 
             file = request.files["file"]
             if not file.filename or not file.filename.lower().endswith(".pdf"):
-                return jsonify({"success": False, "error": "Seuls les fichiers PDF sont acceptés"}), 400
+                return (
+                    jsonify(
+                        {
+                            "success": False,
+                            "error": "Seuls les fichiers PDF sont acceptés",
+                        }
+                    ),
+                    400,
+                )
 
             logger.info(f"📄 Upload PDF: {file.filename}")
 
@@ -413,9 +477,19 @@ def create_admin_blueprint(socketio):
             container_name = os.environ.get("AZURE_STORAGE_CONTAINER", "formationpdf")
 
             if not connection_string:
-                return jsonify({"success": False, "error": "Configuration Azure Storage manquante"}), 500
+                return (
+                    jsonify(
+                        {
+                            "success": False,
+                            "error": "Configuration Azure Storage manquante",
+                        }
+                    ),
+                    500,
+                )
 
-            blob_service_client = BlobServiceClient.from_connection_string(connection_string)
+            blob_service_client = BlobServiceClient.from_connection_string(
+                connection_string
+            )
             container_client = blob_service_client.get_container_client(container_name)
 
             # Supprimer tous les anciens blobs
@@ -433,7 +507,9 @@ def create_admin_blueprint(socketio):
             # Le reset purge le tracking des anciens documents supprimés du container
             search_endpoint = os.environ.get("AZURE_SEARCH_ENDPOINT")
             search_api_key = os.environ.get("AZURE_SEARCH_API_KEY")
-            indexer_name = os.environ.get("AZURE_SEARCH_INDEXER_NAME", "rag-1770824229421-indexer")
+            indexer_name = os.environ.get(
+                "AZURE_SEARCH_INDEXER_NAME", "rag-1770824229421-indexer"
+            )
             index_name = os.environ.get("AZURE_SEARCH_INDEX_NAME", "rag-1770824229421")
 
             if search_endpoint and search_api_key:
@@ -444,17 +520,30 @@ def create_admin_blueprint(socketio):
 
                 # 1. Vider l'index existant (supprimer tous les documents)
                 search_url = f"{search_endpoint}/indexes/{index_name}/docs/search?api-version=2024-07-01"
-                search_resp = http_requests.post(search_url, headers=headers, json={"search": "*", "select": "chunk_id", "top": 1000})
+                search_resp = http_requests.post(
+                    search_url,
+                    headers=headers,
+                    json={"search": "*", "select": "chunk_id", "top": 1000},
+                )
                 if search_resp.status_code == 200:
                     docs = search_resp.json().get("value", [])
                     if docs:
-                        delete_actions = [{"@search.action": "delete", "chunk_id": doc["chunk_id"]} for doc in docs]
+                        delete_actions = [
+                            {"@search.action": "delete", "chunk_id": doc["chunk_id"]}
+                            for doc in docs
+                        ]
                         delete_url = f"{search_endpoint}/indexes/{index_name}/docs/index?api-version=2024-07-01"
-                        del_resp = http_requests.post(delete_url, headers=headers, json={"value": delete_actions})
+                        del_resp = http_requests.post(
+                            delete_url, headers=headers, json={"value": delete_actions}
+                        )
                         if del_resp.status_code in (200, 207):
-                            logger.info(f"🗑️ {len(delete_actions)} documents supprimés de l'index")
+                            logger.info(
+                                f"🗑️ {len(delete_actions)} documents supprimés de l'index"
+                            )
                         else:
-                            logger.warning(f"⚠️ Suppression index: {del_resp.status_code} - {del_resp.text}")
+                            logger.warning(
+                                f"⚠️ Suppression index: {del_resp.status_code} - {del_resp.text}"
+                            )
 
                 # 2. Reset l'indexer (purge son tracking interne)
                 reset_url = f"{search_endpoint}/indexers/{indexer_name}/reset?api-version=2024-07-01"
@@ -462,7 +551,9 @@ def create_admin_blueprint(socketio):
                 if reset_resp.status_code in (204, 200):
                     logger.info("🔄 Indexer réinitialisé")
                 else:
-                    logger.warning(f"⚠️ Reset indexer: {reset_resp.status_code} - {reset_resp.text}")
+                    logger.warning(
+                        f"⚠️ Reset indexer: {reset_resp.status_code} - {reset_resp.text}"
+                    )
 
                 # 3. Relancer l'indexer (ne verra que le nouveau PDF)
                 indexer_url = f"{search_endpoint}/indexers/{indexer_name}/run?api-version=2024-07-01"
@@ -470,12 +561,19 @@ def create_admin_blueprint(socketio):
                 if resp.status_code in (202, 204):
                     logger.info("✅ Indexer déclenché avec succès")
                 else:
-                    logger.warning(f"⚠️ Indexer réponse: {resp.status_code} - {resp.text}")
+                    logger.warning(
+                        f"⚠️ Indexer réponse: {resp.status_code} - {resp.text}"
+                    )
 
-            return jsonify({
-                "success": True,
-                "message": f"PDF '{file.filename}' uploadé, indexation lancée"
-            }), 200
+            return (
+                jsonify(
+                    {
+                        "success": True,
+                        "message": f"PDF '{file.filename}' uploadé, indexation lancée",
+                    }
+                ),
+                200,
+            )
 
         except Exception as e:
             logger.error(f"❌ Erreur upload PDF: {e}")
@@ -490,10 +588,20 @@ def create_admin_blueprint(socketio):
 
             search_endpoint = os.environ.get("AZURE_SEARCH_ENDPOINT")
             search_api_key = os.environ.get("AZURE_SEARCH_API_KEY")
-            indexer_name = os.environ.get("AZURE_SEARCH_INDEXER_NAME", "rag-1770824229421-indexer")
+            indexer_name = os.environ.get(
+                "AZURE_SEARCH_INDEXER_NAME", "rag-1770824229421-indexer"
+            )
 
             if not search_endpoint or not search_api_key:
-                return jsonify({"success": False, "error": "Configuration Azure Search manquante"}), 500
+                return (
+                    jsonify(
+                        {
+                            "success": False,
+                            "error": "Configuration Azure Search manquante",
+                        }
+                    ),
+                    500,
+                )
 
             status_url = f"{search_endpoint}/indexers/{indexer_name}/status?api-version=2024-07-01"
             headers = {
@@ -503,7 +611,15 @@ def create_admin_blueprint(socketio):
             resp = http_requests.get(status_url, headers=headers)
 
             if resp.status_code != 200:
-                return jsonify({"success": False, "error": f"Erreur API Azure: {resp.status_code}"}), 500
+                return (
+                    jsonify(
+                        {
+                            "success": False,
+                            "error": f"Erreur API Azure: {resp.status_code}",
+                        }
+                    ),
+                    500,
+                )
 
             data = resp.json()
             last_result = data.get("lastResult", {})
@@ -517,11 +633,16 @@ def create_admin_blueprint(socketio):
                 "reset": "Indexer réinitialisé",
             }
 
-            return jsonify({
-                "success": True,
-                "status": status,
-                "message": status_messages.get(status, f"Statut: {status}"),
-            }), 200
+            return (
+                jsonify(
+                    {
+                        "success": True,
+                        "status": status,
+                        "message": status_messages.get(status, f"Statut: {status}"),
+                    }
+                ),
+                200,
+            )
 
         except Exception as e:
             logger.error(f"❌ Erreur statut indexer: {e}")
@@ -544,9 +665,9 @@ def create_admin_blueprint(socketio):
         # Cas 1 : extraire le pattern playlist (séparateurs _ ou - tolérés partout)
         # Ex: pause_17h15_17h25, pause-17h15_17h25, cours_9h00-9h45, etc.
         playlist_pattern = re.search(
-            r'(cours|qa|pause_midi|pause)[_-](\d{1,2}h\d{2})[_-](\d{1,2}h\d{2})',
+            r"(cours|qa|pause_midi|pause)[_-](\d{1,2}h\d{2})[_-](\d{1,2}h\d{2})",
             name,
-            re.IGNORECASE
+            re.IGNORECASE,
         )
         if playlist_pattern:
             type_part = playlist_pattern.group(1).lower()
@@ -555,10 +676,10 @@ def create_admin_blueprint(socketio):
             return f"{type_part}_{start_time}_{end_time}.mp3"
 
         # Cas 2 : nettoyage générique
-        name = re.sub(r'\s+', '_', name)
-        name = re.sub(r'\.{2,}', '.', name)
-        name = re.sub(r'[^\w.\-]', '', name)
-        name = name.strip('.')
+        name = re.sub(r"\s+", "_", name)
+        name = re.sub(r"\.{2,}", ".", name)
+        name = re.sub(r"[^\w.\-]", "", name)
+        name = name.strip(".")
         if not name:
             name = "audio"
         return f"{name}.mp3"
@@ -572,10 +693,10 @@ def create_admin_blueprint(socketio):
 
             # Refuser si un job est déjà en cours
             if state.audio_upload_job["status"] in ("saving", "processing"):
-                return jsonify({
-                    "success": False,
-                    "error": "Un upload est déjà en cours"
-                }), 409
+                return (
+                    jsonify({"success": False, "error": "Un upload est déjà en cours"}),
+                    409,
+                )
 
             files = request.files.getlist("files")
             if not files or len(files) == 0:
@@ -585,9 +706,26 @@ def create_admin_blueprint(socketio):
 
             connection_string = os.environ.get("AZURE_AUDIO_STORAGE_CONNECTION_STRING")
             if not connection_string:
-                return jsonify({"success": False, "error": "Configuration AZURE_AUDIO_STORAGE_CONNECTION_STRING manquante"}), 500
+                return (
+                    jsonify(
+                        {
+                            "success": False,
+                            "error": "Configuration AZURE_AUDIO_STORAGE_CONNECTION_STRING manquante",
+                        }
+                    ),
+                    500,
+                )
 
-            AUDIO_EXTENSIONS = {'.mp3', '.wav', '.ogg', '.m4a', '.flac', '.aac', '.wma', '.webm'}
+            AUDIO_EXTENSIONS = {
+                ".mp3",
+                ".wav",
+                ".ogg",
+                ".m4a",
+                ".flac",
+                ".aac",
+                ".wma",
+                ".webm",
+            }
 
             # Phase 1 : sauvegarder les fichiers dans /tmp immédiatement
             state.reset_audio_upload_job()
@@ -603,13 +741,15 @@ def create_admin_blueprint(socketio):
 
                 _name, ext = os.path.splitext(file.filename.lower())
                 if ext not in AUDIO_EXTENSIONS:
-                    skipped_report.append({
-                        "original": file.filename,
-                        "cleaned": None,
-                        "converted": False,
-                        "skipped": True,
-                        "reason": f"Format non supporté ({ext})"
-                    })
+                    skipped_report.append(
+                        {
+                            "original": file.filename,
+                            "cleaned": None,
+                            "converted": False,
+                            "skipped": True,
+                            "reason": f"Format non supporté ({ext})",
+                        }
+                    )
                     continue
 
                 cleaned_name = clean_audio_filename(file.filename)
@@ -620,28 +760,47 @@ def create_admin_blueprint(socketio):
 
             if not saved_files:
                 state.reset_audio_upload_job()
-                return jsonify({
-                    "success": False,
-                    "error": "Aucun fichier audio valide à uploader",
-                    "report": skipped_report
-                }), 400
+                return (
+                    jsonify(
+                        {
+                            "success": False,
+                            "error": "Aucun fichier audio valide à uploader",
+                            "report": skipped_report,
+                        }
+                    ),
+                    400,
+                )
 
             state.audio_upload_job["total"] = len(saved_files)
-            state.audio_upload_job["files_status"] = {cleaned_name: "pending" for _, cleaned_name, _, _ in saved_files}
-            state.audio_upload_job["message"] = f"{len(saved_files)} fichier(s) sauvegardé(s), traitement lancé..."
-
-            # Phase 2 : lancer le traitement en arrière-plan
-            container_name = os.environ.get("AZURE_AUDIO_CONTAINER", "formationaudio-dev")
-            socketio.start_background_task(
-                _process_audio_upload,
-                saved_files, skipped_report, connection_string, container_name
+            state.audio_upload_job["files_status"] = {
+                cleaned_name: "pending" for _, cleaned_name, _, _ in saved_files
+            }
+            state.audio_upload_job["message"] = (
+                f"{len(saved_files)} fichier(s) sauvegardé(s), traitement lancé..."
             )
 
-            return jsonify({
-                "success": True,
-                "job_status": "saving",
-                "message": f"{len(saved_files)} fichier(s) en cours de traitement"
-            }), 202
+            # Phase 2 : lancer le traitement en arrière-plan
+            container_name = os.environ.get(
+                "AZURE_AUDIO_CONTAINER", "formationaudio-dev"
+            )
+            socketio.start_background_task(
+                _process_audio_upload,
+                saved_files,
+                skipped_report,
+                connection_string,
+                container_name,
+            )
+
+            return (
+                jsonify(
+                    {
+                        "success": True,
+                        "job_status": "saving",
+                        "message": f"{len(saved_files)} fichier(s) en cours de traitement",
+                    }
+                ),
+                202,
+            )
 
         except Exception as e:
             logger.error(f"❌ Erreur upload audios: {e}")
@@ -649,7 +808,9 @@ def create_admin_blueprint(socketio):
             state.audio_upload_job["message"] = str(e)
             return jsonify({"success": False, "error": str(e)}), 500
 
-    def _process_audio_upload(saved_files, skipped_report, connection_string, container_name):
+    def _process_audio_upload(
+        saved_files, skipped_report, connection_string, container_name
+    ):
         """Tâche de fond : conversion MP3 + upload Azure (parallèle via eventlet)"""
         import eventlet
 
@@ -659,7 +820,9 @@ def create_admin_blueprint(socketio):
             state.audio_upload_job["status"] = "processing"
 
             # Connexion Azure (une seule fois)
-            blob_service_client = BlobServiceClient.from_connection_string(connection_string)
+            blob_service_client = BlobServiceClient.from_connection_string(
+                connection_string
+            )
             container_client = blob_service_client.get_container_client(container_name)
 
             try:
@@ -677,12 +840,14 @@ def create_admin_blueprint(socketio):
                 try:
                     # Phase 1 : Conversion
                     state.audio_upload_job["files_status"][cleaned_name] = "converting"
-                    needs_conversion = ext != '.mp3'
+                    needs_conversion = ext != ".mp3"
 
                     if needs_conversion:
                         logger.info(f"  🔄 Conversion {original_name} ({ext} → .mp3)")
                         audio_seg = AudioSegment.from_file(tmp_path)
-                        tmp_output = tempfile.NamedTemporaryFile(delete=False, suffix='.mp3')
+                        tmp_output = tempfile.NamedTemporaryFile(
+                            delete=False, suffix=".mp3"
+                        )
                         audio_seg.export(tmp_output.name, format="mp3")
                         tmp_output.close()
                         upload_path = tmp_output.name
@@ -707,20 +872,28 @@ def create_admin_blueprint(socketio):
                     completed_count[0] += 1
                     state.audio_upload_job["progress"] = completed_count[0]
                     state.audio_upload_job["current_file"] = cleaned_name
-                    state.audio_upload_job["message"] = f"{completed_count[0]}/{len(saved_files)} fichier(s) traité(s)"
+                    state.audio_upload_job["message"] = (
+                        f"{completed_count[0]}/{len(saved_files)} fichier(s) traité(s)"
+                    )
 
-                    file_reports.append({
-                        "original": original_name,
-                        "cleaned": cleaned_name,
-                        "converted": needs_conversion,
-                        "skipped": False
-                    })
+                    file_reports.append(
+                        {
+                            "original": original_name,
+                            "cleaned": cleaned_name,
+                            "converted": needs_conversion,
+                            "skipped": False,
+                        }
+                    )
 
                 except Exception as e:
                     logger.error(f"  ❌ Erreur {original_name}: {e}")
                     state.audio_upload_job["files_status"][cleaned_name] = "error"
                     err_msg = str(e)
-                    if "Invalid data" in err_msg or "Decoding failed" in err_msg or "Error opening input" in err_msg:
+                    if (
+                        "Invalid data" in err_msg
+                        or "Decoding failed" in err_msg
+                        or "Error opening input" in err_msg
+                    ):
                         friendly_reason = "Fichier audio corrompu ou format non lisible"
                     elif "No such file" in err_msg:
                         friendly_reason = "Fichier introuvable"
@@ -728,13 +901,15 @@ def create_admin_blueprint(socketio):
                         friendly_reason = "Codec audio non supporté"
                     else:
                         friendly_reason = "Erreur de conversion"
-                    file_reports.append({
-                        "original": original_name,
-                        "cleaned": None,
-                        "converted": False,
-                        "skipped": True,
-                        "reason": friendly_reason
-                    })
+                    file_reports.append(
+                        {
+                            "original": original_name,
+                            "cleaned": None,
+                            "converted": False,
+                            "skipped": True,
+                            "reason": friendly_reason,
+                        }
+                    )
                     completed_count[0] += 1
                     state.audio_upload_job["progress"] = completed_count[0]
                     try:
@@ -748,11 +923,19 @@ def create_admin_blueprint(socketio):
                 pass
 
             report.extend(file_reports)
-            uploaded_count = sum(1 for s in state.audio_upload_job["files_status"].values() if s == "done")
-            logger.info(f"✅ {uploaded_count} fichier(s) audio uploadé(s) dans {container_name}")
+            uploaded_count = sum(
+                1
+                for s in state.audio_upload_job["files_status"].values()
+                if s == "done"
+            )
+            logger.info(
+                f"✅ {uploaded_count} fichier(s) audio uploadé(s) dans {container_name}"
+            )
 
             state.audio_upload_job["status"] = "completed"
-            state.audio_upload_job["message"] = f"{uploaded_count} fichier(s) uploadé(s) dans {container_name}"
+            state.audio_upload_job["message"] = (
+                f"{uploaded_count} fichier(s) uploadé(s) dans {container_name}"
+            )
             state.audio_upload_job["report"] = report
 
         except Exception as e:
@@ -773,10 +956,7 @@ def create_admin_blueprint(socketio):
             if not session.get("is_admin"):
                 return jsonify({"success": False, "error": "Accès refusé"}), 403
 
-            return jsonify({
-                "success": True,
-                **state.audio_upload_job
-            }), 200
+            return jsonify({"success": True, **state.audio_upload_job}), 200
 
         except Exception as e:
             logger.error(f"❌ Erreur statut upload audio: {e}")
@@ -791,10 +971,19 @@ def create_admin_blueprint(socketio):
 
             connection_string = os.environ.get("AZURE_AUDIO_STORAGE_CONNECTION_STRING")
             if not connection_string:
-                return jsonify({"success": False, "error": "Configuration Azure manquante"}), 500
+                return (
+                    jsonify(
+                        {"success": False, "error": "Configuration Azure manquante"}
+                    ),
+                    500,
+                )
 
-            container_name = os.environ.get("AZURE_AUDIO_CONTAINER", "formationaudio-dev")
-            blob_service_client = BlobServiceClient.from_connection_string(connection_string)
+            container_name = os.environ.get(
+                "AZURE_AUDIO_CONTAINER", "formationaudio-dev"
+            )
+            blob_service_client = BlobServiceClient.from_connection_string(
+                connection_string
+            )
             container_client = blob_service_client.get_container_client(container_name)
             container_client.delete_blob(filename)
 
@@ -814,10 +1003,22 @@ def create_admin_blueprint(socketio):
 
             connection_string = os.environ.get("AZURE_AUDIO_STORAGE_CONNECTION_STRING")
             if not connection_string:
-                return jsonify({"success": False, "error": "Configuration AZURE_AUDIO_STORAGE_CONNECTION_STRING manquante"}), 500
+                return (
+                    jsonify(
+                        {
+                            "success": False,
+                            "error": "Configuration AZURE_AUDIO_STORAGE_CONNECTION_STRING manquante",
+                        }
+                    ),
+                    500,
+                )
 
-            container_name = os.environ.get("AZURE_AUDIO_CONTAINER", "formationaudio-dev")
-            blob_service_client = BlobServiceClient.from_connection_string(connection_string)
+            container_name = os.environ.get(
+                "AZURE_AUDIO_CONTAINER", "formationaudio-dev"
+            )
+            blob_service_client = BlobServiceClient.from_connection_string(
+                connection_string
+            )
             container_client = blob_service_client.get_container_client(container_name)
 
             account_name = blob_service_client.account_name
@@ -836,11 +1037,13 @@ def create_admin_blueprint(socketio):
                     expiry=expiry,
                 )
                 url = f"https://{account_name}.blob.core.windows.net/{container_name}/{blob.name}?{sas_token}"
-                audios.append({
-                    "name": blob.name,
-                    "size": blob.size,
-                    "url": url,
-                })
+                audios.append(
+                    {
+                        "name": blob.name,
+                        "size": blob.size,
+                        "url": url,
+                    }
+                )
 
             return jsonify({"success": True, "audios": audios}), 200
 
