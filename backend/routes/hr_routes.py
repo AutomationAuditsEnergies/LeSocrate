@@ -14,10 +14,24 @@ logger = get_logger(__name__)
 
 PDF_UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "..", "uploads", "pdfs")
 
+HR_ENABLED = os.environ.get("HR_DASHBOARD_ENABLED", "false").lower() == "true"
+
 
 def create_hr_blueprint(socketio):
     """Factory pour créer le blueprint HR avec accès à socketio"""
     hr_bp = Blueprint("hr", __name__)
+
+    @hr_bp.route("/api/hr/enabled")
+    def get_hr_enabled():
+        return jsonify({"enabled": HR_ENABLED})
+
+    @hr_bp.before_request
+    def check_hr_enabled():
+        from flask import request as req
+        if req.endpoint == "hr.get_hr_enabled":
+            return None
+        if not HR_ENABLED:
+            return jsonify({"success": False, "error": "Feature non disponible"}), 404
 
     def _require_admin():
         if not session.get("is_admin"):

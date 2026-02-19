@@ -1,3 +1,4 @@
+import { useState, useEffect } from 'react'
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
 import Admin from './pages/Admin.jsx'
 import Attente from './pages/Attente.jsx'
@@ -11,6 +12,21 @@ import GeneratedSlides from './pages/GeneratedSlides.jsx'
 import Recorder from './pages/Recorder.jsx'
 import HRDashboard from './pages/HRDashboard.jsx'
 import ProtectedAdminRoute from './components/ProtectedAdminRoute.jsx'
+
+function ProtectedHRRoute({ children }) {
+  const [status, setStatus] = useState('loading')
+
+  useEffect(() => {
+    fetch('/api/hr/enabled', { credentials: 'include' })
+      .then(r => r.json())
+      .then(data => setStatus(data.enabled ? 'enabled' : 'disabled'))
+      .catch(() => setStatus('disabled'))
+  }, [])
+
+  if (status === 'loading') return null
+  if (status === 'disabled') return <Navigate to="/" replace />
+  return children
+}
 
 export default function App() {
   return (
@@ -49,9 +65,11 @@ export default function App() {
         <Route
           path="/hr-dashboard"
           element={
-            <ProtectedAdminRoute>
-              <HRDashboard />
-            </ProtectedAdminRoute>
+            <ProtectedHRRoute>
+              <ProtectedAdminRoute>
+                <HRDashboard />
+              </ProtectedAdminRoute>
+            </ProtectedHRRoute>
           }
         />
 

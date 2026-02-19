@@ -124,7 +124,7 @@ export default function ChatPanel({ open, onClose }) {
       <div className="px-6 border-b border-gray-200 flex-shrink-0 flex flex-col justify-center" style={{ height: '64px' }}>
         <h3 className="text-xl font-semibold text-gray-800">Messages</h3>
         <p className="text-sm text-gray-400 mt-0.5 truncate">
-          Posez vos questions sur le cours, l'assistant vous répond en temps réel.
+          Posez vos questions sur le cours, on vous répond en temps réel.
         </p>
       </div>
 
