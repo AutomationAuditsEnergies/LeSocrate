@@ -1,4 +1,4 @@
-# video_routes.py -- Routes pour l'API vidéo et cours (JSON uniquement)
+# video_routes.py --- Routes pour l'API vidéo et cours (JSON uniquement)
 from flask import Blueprint, session, jsonify
 from services.audio_service import get_current_audio_info
 from services.time_service import get_heure_debut_cours, get_current_simulated_time
