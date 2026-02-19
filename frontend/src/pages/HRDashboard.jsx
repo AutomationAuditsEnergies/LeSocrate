@@ -362,6 +362,7 @@ export default function HRDashboard() {
           loading={audiosLoading === selectedPlatformId}
           onClose={() => setShowAudiosModal(false)}
           darkMode={darkMode}
+          recorderUrl={`${(platforms.find(p => p.id === selectedPlatformId)?.frontend_url || window.location.origin)}/recorder`}
         />
       )}
 
@@ -431,7 +432,7 @@ export default function HRDashboard() {
 }
 
 // ─── Audios Modal ────────────────────────────────────────────────────────────
-function AudiosModal({ platformId, audios, loading, onClose, darkMode }) {
+function AudiosModal({ platformId, audios, loading, onClose, darkMode, recorderUrl }) {
   const EXPECTED_AUDIOS = [
     'cours_9h00_9h45.mp3',
     'qa_9h45_9h55.mp3',
@@ -481,12 +482,26 @@ function AudiosModal({ platformId, audios, loading, onClose, darkMode }) {
             <Icon name="audiotrack" className="text-2xl" />
             <h3 className="text-lg font-bold">AUDIOS FORMATION</h3>
           </div>
-          <button
-            onClick={onClose}
-            className="text-white hover:bg-white/20 rounded-full p-1 transition-colors"
-          >
-            <Icon name="close" className="text-2xl" />
-          </button>
+          <div className="flex items-center gap-2">
+            <a
+              href={recorderUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium transition-colors"
+              style={{ backgroundColor: 'rgba(255,255,255,0.2)', color: 'white' }}
+              onMouseEnter={e => e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.3)'}
+              onMouseLeave={e => e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.2)'}
+            >
+              <Icon name="upload" className="text-base" />
+              <span>Uploader</span>
+            </a>
+            <button
+              onClick={onClose}
+              className="text-white hover:bg-white/20 rounded-full p-1 transition-colors"
+            >
+              <Icon name="close" className="text-2xl" />
+            </button>
+          </div>
         </div>
 
         {/* Modal Body */}
