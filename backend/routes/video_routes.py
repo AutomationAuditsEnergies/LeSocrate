@@ -1,4 +1,4 @@
-# video_routes.py - Routes pour l'API vidéo et cours (JSON uniquement)
+# video_routes.py -- Routes pour l'API vidéo et cours (JSON uniquement)
 from flask import Blueprint, session, jsonify
 from services.audio_service import get_current_audio_info
 from services.time_service import get_heure_debut_cours, get_current_simulated_time
@@ -35,38 +35,55 @@ def video_status():
 
             logger.info(f"⏳ Cours pas encore commencé, attente de {temps_restant}s")
 
-            return jsonify({
-                "authenticated": True,
-                "user": {"nom": nom, "prenom": prenom},
-                "status": "waiting",
-                "heure_debut": heure_debut_cours.strftime("%Y-%m-%d %H:%M:%S"),
-                "heure_actuelle": heure_actuelle_simulee.strftime("%Y-%m-%d %H:%M:%S"),
-                "temps_restant": temps_restant
-            }), 200
+            return (
+                jsonify(
+                    {
+                        "authenticated": True,
+                        "user": {"nom": nom, "prenom": prenom},
+                        "status": "waiting",
+                        "heure_debut": heure_debut_cours.strftime("%Y-%m-%d %H:%M:%S"),
+                        "heure_actuelle": heure_actuelle_simulee.strftime(
+                            "%Y-%m-%d %H:%M:%S"
+                        ),
+                        "temps_restant": temps_restant,
+                    }
+                ),
+                200,
+            )
 
         # Si le cours est terminé
         if audio_info is None:
             logger.info("🏁 Cours terminé")
-            return jsonify({
-                "authenticated": True,
-                "user": {"nom": nom, "prenom": prenom},
-                "status": "finished",
-                "cours_termine": True
-            }), 200
+            return (
+                jsonify(
+                    {
+                        "authenticated": True,
+                        "user": {"nom": nom, "prenom": prenom},
+                        "status": "finished",
+                        "cours_termine": True,
+                    }
+                ),
+                200,
+            )
 
         # Le cours est en cours
         logger.info(f"▶️ Cours en cours: {audio_info['title']}")
-        return jsonify({
-            "authenticated": True,
-            "user": {"nom": nom, "prenom": prenom},
-            "status": "playing",
-            "audio_filename": audio_info["filename"],
-            "audio_title": audio_info["title"],
-            "audio_id": audio_info["id"],
-            "audio_type": audio_info["type"],
-            "offset": offset,
-            "cours_termine": False
-        }), 200
+        return (
+            jsonify(
+                {
+                    "authenticated": True,
+                    "user": {"nom": nom, "prenom": prenom},
+                    "status": "playing",
+                    "audio_filename": audio_info["filename"],
+                    "audio_title": audio_info["title"],
+                    "audio_id": audio_info["id"],
+                    "audio_type": audio_info["type"],
+                    "offset": offset,
+                    "cours_termine": False,
+                }
+            ),
+            200,
+        )
 
     except Exception as e:
         logger.error(f"❌ Erreur API video/status: {e}")
@@ -121,11 +138,16 @@ def intro():
         prenom = session.get("prenom")
         logger.info(f"📺 Demande page intro par {nom} {prenom}")
 
-        return jsonify({
-            "authenticated": True,
-            "user": {"nom": nom, "prenom": prenom},
-            "message": "Page d'introduction"
-        }), 200
+        return (
+            jsonify(
+                {
+                    "authenticated": True,
+                    "user": {"nom": nom, "prenom": prenom},
+                    "message": "Page d'introduction",
+                }
+            ),
+            200,
+        )
 
     except Exception as e:
         logger.error(f"❌ Erreur API intro: {e}")
