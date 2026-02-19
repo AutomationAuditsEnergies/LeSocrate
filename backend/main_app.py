@@ -39,15 +39,16 @@ if is_azure:
     app.config["SESSION_COOKIE_SECURE"] = True
 
 # Configuration CORS pour permettre les requêtes du frontend React
-# Construction dynamique des origines CORS
-# Chaque plateforme déclare son URL via PLATFORM_N_FRONTEND_URL dans ses env vars
+# URLs connues en dur (fonctionnent toujours) + URLs dynamiques via env vars
 _cors_origins = [
     "http://localhost:5173",
     "http://localhost:3000",
+    "https://thankful-wave-043aa3b03.4.azurestaticapps.net",
+    "https://brave-mud-064e06d03.2.azurestaticapps.net",
 ]
 for _i in range(1, 4):
     _url = os.environ.get(f"PLATFORM_{_i}_FRONTEND_URL", "").rstrip("/")
-    if _url:
+    if _url and _url not in _cors_origins:
         _cors_origins.append(_url)
 
 CORS(app, resources={
