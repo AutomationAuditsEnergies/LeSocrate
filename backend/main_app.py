@@ -19,6 +19,7 @@ from routes.admin_routes import create_admin_blueprint
 from routes.debug_routes import debug_bp
 from routes.slides_routes import slides_bp
 from routes.chat_routes import chat_bp
+from routes.hr_routes import create_hr_blueprint
 
 # SocketIO handlers
 from socketio_handlers.handlers import register_socketio_handlers
@@ -70,6 +71,7 @@ logger.info("✅ SocketIO initialisé avec eventlet et CORS")
 # Les blueprints qui ont besoin de socketio sont créés via factory
 auth_bp = create_auth_blueprint(socketio)
 admin_bp = create_admin_blueprint(socketio)
+hr_bp = create_hr_blueprint(socketio)
 
 app.register_blueprint(auth_bp)
 app.register_blueprint(video_bp)
@@ -77,6 +79,7 @@ app.register_blueprint(admin_bp)
 app.register_blueprint(debug_bp)
 app.register_blueprint(slides_bp)
 app.register_blueprint(chat_bp)
+app.register_blueprint(hr_bp)
 
 logger.info("✅ Tous les blueprints enregistrés")
 
@@ -90,7 +93,7 @@ logger.info("✅ Base de données initialisée")
 
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
+    port = int(os.environ.get("PORT", 5001))
 
     # Détection environnement Azure
     is_azure = os.environ.get("WEBSITE_SITE_NAME") is not None

@@ -1,11 +1,18 @@
 import { useNavigate } from 'react-router-dom'
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import Spline from '@splinetool/react-spline'
 import { apiUrl } from '../api'
 
 export default function Index() {
   const navigate = useNavigate()
   const [splineLoaded, setSplineLoaded] = useState(false)
+
+  useEffect(() => {
+    document.body.style.overflow = 'hidden'
+    return () => {
+      document.body.style.overflow = ''
+    }
+  }, [])
 
   const handleFormSubmit = async (event) => {
     event.preventDefault()

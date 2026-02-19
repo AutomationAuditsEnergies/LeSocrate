@@ -10,12 +10,13 @@ simulated_time_offset = None
 
 # État du job d'upload audio en arrière-plan
 audio_upload_job = {
-    "status": "idle",        # idle | saving | converting | uploading | completed | error
-    "progress": 0,           # index du fichier en cours
+    "status": "idle",        # idle | saving | processing | completed | error
+    "progress": 0,           # nombre de fichiers terminés
     "total": 0,              # nombre total de fichiers
-    "current_file": "",      # nom du fichier en cours
+    "current_file": "",      # gardé pour compatibilité
     "message": "",           # message humain
     "report": None,          # rapport final [{original, cleaned, converted, skipped}]
+    "files_status": {},      # {cleaned_name: "pending"|"converting"|"uploading"|"done"|"error"}
 }
 
 
@@ -27,3 +28,21 @@ def reset_audio_upload_job():
     audio_upload_job["current_file"] = ""
     audio_upload_job["message"] = ""
     audio_upload_job["report"] = None
+    audio_upload_job["files_status"] = {}
+
+
+# État du job de backup-and-unlock par plateforme
+# Format: { platform_id: { step, step_status, total, progress, error, archive_folder } }
+backup_jobs = {}
+
+
+def reset_backup_job(platform_id):
+    """Remet le job de backup d'une plateforme à l'état initial"""
+    backup_jobs[platform_id] = {
+        "step": 0,          # 0=idle, 1=backup, 2=verify+delete, 3=done
+        "step_status": "idle",   # idle | running | done | error
+        "total": 0,
+        "progress": 0,
+        "archive_folder": "",
+        "error": None,
+    }

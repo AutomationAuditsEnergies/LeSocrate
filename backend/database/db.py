@@ -76,6 +76,55 @@ def init_database():
         else:
             logger.info("ℹ️ Configuration cours déjà présente")
 
+        # Table de configuration par plateforme (3 lignes fixes)
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS platform_config (
+                id INTEGER PRIMARY KEY,
+                name TEXT NOT NULL,
+                upload_locked INTEGER DEFAULT 1,
+                pdf_filename TEXT,
+                pdf_uploaded_at TEXT,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        logger.info("✅ Table platform_config créée/vérifiée")
+
+        # Table des demandes de suppression des contributeurs
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS deletion_requests (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                platform_id INTEGER NOT NULL,
+                filename TEXT NOT NULL,
+                requester_name TEXT NOT NULL,
+                reason TEXT,
+                status TEXT DEFAULT 'pending',
+                created_at TEXT NOT NULL,
+                resolved_at TEXT
+            )
+            """
+        )
+        logger.info("✅ Table deletion_requests créée/vérifiée")
+
+        # Seed 3 plateformes si la table est vide
+        cursor.execute("SELECT COUNT(*) FROM platform_config")
+        pc_count = cursor.fetchone()[0]
+        if pc_count == 0:
+            now_str = datetime.now(FRANCE_TZ).strftime("%Y-%m-%d %H:%M:%S")
+            cursor.executemany(
+                "INSERT INTO platform_config (id, name, upload_locked, updated_at) VALUES (?, ?, 1, ?)",
+                [
+                    (1, "Plateforme 1", now_str),
+                    (2, "Plateforme 2", now_str),
+                    (3, "Plateforme 3", now_str),
+                ],
+            )
+            logger.info("✅ 3 plateformes insérées dans platform_config")
+        else:
+            logger.info("ℹ️ platform_config déjà peuplée")
+
         conn.commit()
         conn.close()
         logger.info("✅ Base de données initialisée avec succès")

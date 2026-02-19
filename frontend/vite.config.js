@@ -10,13 +10,13 @@ export default defineConfig({
     proxy: {
       // Proxy API calls vers le backend Flask
       '/api': {
-        target: 'http://localhost:5000',
+        target: 'http://localhost:5001',
         changeOrigin: true,
         secure: false,
       },
       // Proxy SocketIO vers le backend Flask
       '/socket.io': {
-        target: 'http://localhost:5000',
+        target: 'http://localhost:5001',
         changeOrigin: true,
         ws: true,
       },

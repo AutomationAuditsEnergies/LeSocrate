@@ -285,6 +285,12 @@ export default function Admin() {
           </div>
           <div className="flex items-center gap-2">
             <a
+              href="/hr-dashboard"
+              className="rounded-lg border border-fuchsia-500/40 bg-fuchsia-900/30 px-4 py-2 text-sm font-medium text-fuchsia-200 transition hover:-translate-y-0.5 hover:bg-fuchsia-900/50"
+            >
+              Dashboard RH
+            </a>
+            <a
               href="/debug"
               className="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-900 transition hover:-translate-y-0.5 hover:bg-gray-100"
             >

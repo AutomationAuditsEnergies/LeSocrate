@@ -80,19 +80,24 @@ export default function ChatPanel({ open, onClose }) {
       const data = await response.json()
       const answer = data.answer || "Désolé, je n'ai pas pu répondre."
 
-      setMessages((prev) => [...prev, { id: Date.now() + 1, role: 'assistant', content: answer }])
-      setHistory((prev) => [
-        ...prev,
-        { role: 'user', content: text },
-        { role: 'assistant', content: answer },
-      ])
+      // Délai de 5 secondes avant d'afficher la réponse
+      setTimeout(() => {
+        setMessages((prev) => [...prev, { id: Date.now() + 1, role: 'assistant', content: answer }])
+        setHistory((prev) => [
+          ...prev,
+          { role: 'user', content: text },
+          { role: 'assistant', content: answer },
+        ])
+        setLoading(false)
+      }, 5000)
     } catch {
-      setMessages((prev) => [
-        ...prev,
-        { id: Date.now() + 1, role: 'assistant', content: "Erreur de connexion au serveur." },
-      ])
-    } finally {
-      setLoading(false)
+      setTimeout(() => {
+        setMessages((prev) => [
+          ...prev,
+          { id: Date.now() + 1, role: 'assistant', content: "Erreur de connexion au serveur." },
+        ])
+        setLoading(false)
+      }, 5000)
     }
   }
 
@@ -140,11 +145,8 @@ export default function ChatPanel({ open, onClose }) {
         {messages.map((msg) => (
           <div key={msg.id} className={`flex gap-3 items-start ${msg.role === 'user' ? 'flex-row-reverse' : ''}`}>
             {msg.role === 'assistant' && (
-              <div className="w-8 h-8 rounded-full flex-shrink-0 flex items-center justify-center bg-amber-100">
-                <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5 text-amber-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M9 18h6" /><path d="M10 22h4" />
-                  <path d="M12 2a7 7 0 0 0-4 12.7V17h8v-2.3A7 7 0 0 0 12 2z" />
-                </svg>
+              <div className="w-8 h-8 rounded-full flex-shrink-0 flex items-center justify-center bg-amber-100 border border-black">
+                <img src="/professor-icon.png" alt="Professeur" className="w-5 h-5" />
               </div>
             )}
             <div className={`max-w-[80%] px-4 py-2.5 rounded-2xl text-sm leading-relaxed ${
@@ -162,17 +164,11 @@ export default function ChatPanel({ open, onClose }) {
 
         {loading && (
           <div className="flex gap-3 items-start">
-            <div className="w-8 h-8 rounded-full flex-shrink-0 flex items-center justify-center bg-amber-100">
-              <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5 text-amber-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M9 18h6" /><path d="M10 22h4" />
-                <path d="M12 2a7 7 0 0 0-4 12.7V17h8v-2.3A7 7 0 0 0 12 2z" />
-              </svg>
+            <div className="w-8 h-8 rounded-full flex-shrink-0 flex items-center justify-center bg-amber-100 border border-black">
+              <img src="/professor-icon.png" alt="Professeur" className="w-5 h-5" />
             </div>
-            <div className="relative w-8 h-8">
-              <span className="absolute w-2 h-2 bg-purple-600 rounded-full" style={{ top: 0, left: '50%', marginLeft: '-4px', animation: 'spinDot 1.2s linear infinite' }} />
-              <span className="absolute w-2 h-2 bg-purple-400 rounded-full" style={{ top: '50%', right: 0, marginTop: '-4px', animation: 'spinDot 1.2s linear infinite', animationDelay: '0.3s' }} />
-              <span className="absolute w-2 h-2 bg-purple-300 rounded-full" style={{ bottom: 0, left: '50%', marginLeft: '-4px', animation: 'spinDot 1.2s linear infinite', animationDelay: '0.6s' }} />
-              <span className="absolute w-2 h-2 bg-purple-500 rounded-full" style={{ top: '50%', left: 0, marginTop: '-4px', animation: 'spinDot 1.2s linear infinite', animationDelay: '0.9s' }} />
+            <div className="max-w-[80%] px-4 py-2.5 rounded-2xl text-sm leading-relaxed bg-white text-gray-700 border border-gray-200 rounded-tl-sm">
+              Un instant, le professeur va vous répondre...
             </div>
           </div>
         )}

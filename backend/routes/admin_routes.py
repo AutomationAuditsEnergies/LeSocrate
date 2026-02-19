@@ -101,6 +101,22 @@ def create_admin_blueprint(socketio):
             logger.error(f"❌ Erreur récupération logs admin: {e}")
             return jsonify({"success": False, "error": "Erreur serveur"}), 500
 
+    @admin_bp.route("/api/admin/course-time", methods=["GET"])
+    def get_course_time():
+        """Retourne l'heure de début du cours actuellement configurée"""
+        try:
+            if not session.get("is_admin"):
+                return jsonify({"success": False, "error": "Accès refusé"}), 403
+            heure = get_heure_debut_cours()
+            return jsonify({
+                "success": True,
+                "date_cours": heure.strftime("%Y-%m-%d"),
+                "heure_cours": heure.strftime("%H:%M"),
+            }), 200
+        except Exception as e:
+            logger.error(f"❌ Erreur récupération heure cours: {e}")
+            return jsonify({"success": False, "error": str(e)}), 500
+
     @admin_bp.route("/api/admin/config_cours", methods=["POST"])
     def config_cours():
         """Met à jour la configuration du cours (heure de début)"""
@@ -504,7 +520,7 @@ def create_admin_blueprint(socketio):
                 return jsonify({"success": False, "error": "Accès refusé"}), 403
 
             # Refuser si un job est déjà en cours
-            if state.audio_upload_job["status"] in ("saving", "converting", "uploading"):
+            if state.audio_upload_job["status"] in ("saving", "processing"):
                 return jsonify({
                     "success": False,
                     "error": "Un upload est déjà en cours"
@@ -560,6 +576,7 @@ def create_admin_blueprint(socketio):
                 }), 400
 
             state.audio_upload_job["total"] = len(saved_files)
+            state.audio_upload_job["files_status"] = {cleaned_name: "pending" for _, cleaned_name, _, _ in saved_files}
             state.audio_upload_job["message"] = f"{len(saved_files)} fichier(s) sauvegardé(s), traitement lancé..."
 
             # Phase 2 : lancer le traitement en arrière-plan
@@ -582,72 +599,15 @@ def create_admin_blueprint(socketio):
             return jsonify({"success": False, "error": str(e)}), 500
 
     def _process_audio_upload(saved_files, skipped_report, connection_string, container_name):
-        """Tâche de fond : conversion MP3 + upload Azure"""
+        """Tâche de fond : conversion MP3 + upload Azure (parallèle via eventlet)"""
+        import eventlet
+
         report = list(skipped_report)
 
         try:
-            # Phase conversion
-            state.audio_upload_job["status"] = "converting"
-            processed_files = []  # (cleaned_name, tmp_path)
+            state.audio_upload_job["status"] = "processing"
 
-            for idx, (original_name, cleaned_name, ext, tmp_path) in enumerate(saved_files):
-                state.audio_upload_job["progress"] = idx + 1
-                state.audio_upload_job["current_file"] = original_name
-                state.audio_upload_job["message"] = f"Conversion {idx + 1}/{len(saved_files)} : {original_name}"
-
-                needs_conversion = ext != '.mp3'
-
-                try:
-                    if needs_conversion:
-                        logger.info(f"  🔄 Conversion {original_name} ({ext} → .mp3)")
-                        audio = AudioSegment.from_file(tmp_path)
-                        tmp_output = tempfile.NamedTemporaryFile(delete=False, suffix='.mp3')
-                        audio.export(tmp_output.name, format="mp3")
-                        tmp_output.close()
-                        processed_files.append((cleaned_name, tmp_output.name))
-                        os.unlink(tmp_path)
-                    else:
-                        processed_files.append((cleaned_name, tmp_path))
-
-                    report.append({
-                        "original": original_name,
-                        "cleaned": cleaned_name,
-                        "converted": needs_conversion,
-                        "skipped": False
-                    })
-                except Exception as conv_err:
-                    logger.error(f"  ❌ Erreur conversion {original_name}: {conv_err}")
-                    err_msg = str(conv_err)
-                    if "Invalid data" in err_msg or "Decoding failed" in err_msg or "Error opening input" in err_msg:
-                        friendly_reason = "Fichier audio corrompu ou format non lisible"
-                    elif "No such file" in err_msg:
-                        friendly_reason = "Fichier introuvable"
-                    elif "codec" in err_msg.lower():
-                        friendly_reason = "Codec audio non supporté"
-                    else:
-                        friendly_reason = "Erreur de conversion"
-                    report.append({
-                        "original": original_name,
-                        "cleaned": None,
-                        "converted": False,
-                        "skipped": True,
-                        "reason": friendly_reason
-                    })
-                    try:
-                        os.unlink(tmp_path)
-                    except OSError:
-                        pass
-
-            if not processed_files:
-                state.audio_upload_job["status"] = "error"
-                state.audio_upload_job["message"] = "Aucun fichier converti avec succès"
-                state.audio_upload_job["report"] = report
-                return
-
-            # Phase upload Azure
-            state.audio_upload_job["status"] = "uploading"
-            state.audio_upload_job["message"] = "Upload vers Azure..."
-
+            # Connexion Azure (une seule fois)
             blob_service_client = BlobServiceClient.from_connection_string(connection_string)
             container_client = blob_service_client.get_container_client(container_name)
 
@@ -657,26 +617,87 @@ def create_admin_blueprint(socketio):
             except ResourceExistsError:
                 pass
 
-            logger.info(f"🗑️ Suppression des anciens audios dans {container_name}...")
-            for blob in container_client.list_blobs():
-                container_client.delete_blob(blob.name)
-                logger.debug(f"  Supprimé: {blob.name}")
+            completed_count = [0]
+            file_reports = []
 
-            for idx, (cleaned_name, tmp_path) in enumerate(processed_files):
-                state.audio_upload_job["progress"] = idx + 1
-                state.audio_upload_job["current_file"] = cleaned_name
-                state.audio_upload_job["message"] = f"Upload {idx + 1}/{len(processed_files)} : {cleaned_name}"
+            def process_single_file(file_info):
+                original_name, cleaned_name, ext, tmp_path = file_info
 
-                blob_client = container_client.get_blob_client(cleaned_name)
-                with open(tmp_path, "rb") as f:
-                    blob_client.upload_blob(f, overwrite=True)
-                logger.info(f"  ✅ Uploadé: {cleaned_name}")
                 try:
-                    os.unlink(tmp_path)
-                except OSError:
-                    pass
+                    # Phase 1 : Conversion
+                    state.audio_upload_job["files_status"][cleaned_name] = "converting"
+                    needs_conversion = ext != '.mp3'
 
-            uploaded_count = len(processed_files)
+                    if needs_conversion:
+                        logger.info(f"  🔄 Conversion {original_name} ({ext} → .mp3)")
+                        audio_seg = AudioSegment.from_file(tmp_path)
+                        tmp_output = tempfile.NamedTemporaryFile(delete=False, suffix='.mp3')
+                        audio_seg.export(tmp_output.name, format="mp3")
+                        tmp_output.close()
+                        upload_path = tmp_output.name
+                        os.unlink(tmp_path)
+                    else:
+                        upload_path = tmp_path
+
+                    # Phase 2 : Upload Azure
+                    state.audio_upload_job["files_status"][cleaned_name] = "uploading"
+                    blob_client = container_client.get_blob_client(cleaned_name)
+                    with open(upload_path, "rb") as f:
+                        blob_client.upload_blob(f, overwrite=True)
+                    logger.info(f"  ✅ Uploadé: {cleaned_name}")
+
+                    try:
+                        os.unlink(upload_path)
+                    except OSError:
+                        pass
+
+                    # Terminé
+                    state.audio_upload_job["files_status"][cleaned_name] = "done"
+                    completed_count[0] += 1
+                    state.audio_upload_job["progress"] = completed_count[0]
+                    state.audio_upload_job["current_file"] = cleaned_name
+                    state.audio_upload_job["message"] = f"{completed_count[0]}/{len(saved_files)} fichier(s) traité(s)"
+
+                    file_reports.append({
+                        "original": original_name,
+                        "cleaned": cleaned_name,
+                        "converted": needs_conversion,
+                        "skipped": False
+                    })
+
+                except Exception as e:
+                    logger.error(f"  ❌ Erreur {original_name}: {e}")
+                    state.audio_upload_job["files_status"][cleaned_name] = "error"
+                    err_msg = str(e)
+                    if "Invalid data" in err_msg or "Decoding failed" in err_msg or "Error opening input" in err_msg:
+                        friendly_reason = "Fichier audio corrompu ou format non lisible"
+                    elif "No such file" in err_msg:
+                        friendly_reason = "Fichier introuvable"
+                    elif "codec" in err_msg.lower():
+                        friendly_reason = "Codec audio non supporté"
+                    else:
+                        friendly_reason = "Erreur de conversion"
+                    file_reports.append({
+                        "original": original_name,
+                        "cleaned": None,
+                        "converted": False,
+                        "skipped": True,
+                        "reason": friendly_reason
+                    })
+                    completed_count[0] += 1
+                    state.audio_upload_job["progress"] = completed_count[0]
+                    try:
+                        os.unlink(tmp_path)
+                    except OSError:
+                        pass
+
+            # Traitement parallèle (max 4 fichiers simultanés)
+            pool = eventlet.GreenPool(size=4)
+            for _ in pool.imap(process_single_file, saved_files):
+                pass
+
+            report.extend(file_reports)
+            uploaded_count = sum(1 for s in state.audio_upload_job["files_status"].values() if s == "done")
             logger.info(f"✅ {uploaded_count} fichier(s) audio uploadé(s) dans {container_name}")
 
             state.audio_upload_job["status"] = "completed"
@@ -688,7 +709,6 @@ def create_admin_blueprint(socketio):
             state.audio_upload_job["status"] = "error"
             state.audio_upload_job["message"] = str(e)
             state.audio_upload_job["report"] = report
-            # Nettoyer les fichiers temporaires restants
             for _, _, _, tmp_path in saved_files:
                 try:
                     os.unlink(tmp_path)
@@ -709,6 +729,29 @@ def create_admin_blueprint(socketio):
 
         except Exception as e:
             logger.error(f"❌ Erreur statut upload audio: {e}")
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    @admin_bp.route("/api/admin/audios/<path:filename>", methods=["DELETE"])
+    def delete_audio(filename):
+        """Supprime un audio individuel du conteneur Azure"""
+        try:
+            if not session.get("is_admin"):
+                return jsonify({"success": False, "error": "Accès refusé"}), 403
+
+            connection_string = os.environ.get("AZURE_AUDIO_STORAGE_CONNECTION_STRING")
+            if not connection_string:
+                return jsonify({"success": False, "error": "Configuration Azure manquante"}), 500
+
+            container_name = os.environ.get("AZURE_AUDIO_CONTAINER", "formationaudio-dev")
+            blob_service_client = BlobServiceClient.from_connection_string(connection_string)
+            container_client = blob_service_client.get_container_client(container_name)
+            container_client.delete_blob(filename)
+
+            logger.info(f"🗑️ Audio supprimé par intervenant : {filename}")
+            return jsonify({"success": True, "message": f"'{filename}' supprimé"}), 200
+
+        except Exception as e:
+            logger.error(f"❌ Erreur suppression audio: {e}")
             return jsonify({"success": False, "error": str(e)}), 500
 
     @admin_bp.route("/api/admin/audio-list", methods=["GET"])

@@ -17,6 +17,13 @@ export default function Video() {
   // Synchroniser la propriété muted directement sur l'élément DOM
   // (React ne met pas à jour muted sur <audio> après le rendu initial)
   useEffect(() => {
+    document.body.style.overflow = 'hidden'
+    return () => {
+      document.body.style.overflow = ''
+    }
+  }, [])
+
+  useEffect(() => {
     if (audioRef.current) {
       audioRef.current.muted = muted
     }
@@ -202,13 +209,13 @@ export default function Video() {
     <>
       <div
         className="h-screen w-full flex"
-        style={{ backgroundColor: '#F8F9FA' }}
+        style={{ backgroundColor: '#f8fafc' }}
         onClick={handlePageClick}
       >
         {/* Carte principale */}
         <div
           className="flex-1 flex flex-col overflow-hidden"
-          style={{ backgroundColor: '#ffffff' }}
+          style={{ backgroundColor: '#f8fafc' }}
         >
 
       {/* Header */}
@@ -273,7 +280,7 @@ export default function Video() {
             {/* Bouton micro/son */}
             <button
               onClick={handleToggleMute}
-              className="w-14 h-14 rounded-xl bg-white hover:bg-gray-50 flex items-center justify-center transition-all duration-200 border-2 border-gray-300 hover:border-gray-400 ring-2 ring-gray-100"
+              className="w-14 h-14 rounded-xl bg-white hover:shadow-lg flex items-center justify-center transition-all duration-200 border-2 border-gray-300 hover:border-gray-400 ring-2 ring-purple-100"
               style={{ boxShadow: '0 2px 8px rgba(0,0,0,0.08), 0 0 0 4px rgba(0,0,0,0.02)' }}
               title={muted ? "Activer le son" : "Couper le son"}
             >
@@ -310,7 +317,7 @@ export default function Video() {
             {/* Bouton chat */}
             <button
               onClick={handleToggleChat}
-              className="w-14 h-14 rounded-xl flex items-center justify-center transition-all duration-200 border-2 bg-white border-gray-300 hover:bg-gray-50 hover:border-gray-400 ring-2 ring-gray-100"
+              className="w-14 h-14 rounded-xl flex items-center justify-center transition-all duration-200 border-2 bg-white border-gray-300 hover:shadow-lg hover:border-gray-400 ring-2 ring-purple-100"
               style={{ boxShadow: '0 2px 8px rgba(0,0,0,0.08), 0 0 0 4px rgba(0,0,0,0.02)' }}
               title={chatOpen ? "Fermer le chat" : "Ouvrir le chat"}
             >

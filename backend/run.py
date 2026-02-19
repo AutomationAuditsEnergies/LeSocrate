@@ -10,7 +10,7 @@ from main_app import app, socketio
 
 if __name__ == "__main__":
     host = "0.0.0.0"
-    port = 5000
+    port = 5001
     print(
         f"🚀 Serveur lance sur http://127.0.0.1:{port} (localhost) et http://{host}:{port} (sur le reseau)"
     )

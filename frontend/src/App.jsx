@@ -9,6 +9,7 @@ import Video from './pages/Video.jsx'
 import TestSlides from './pages/TestSlides.jsx'
 import GeneratedSlides from './pages/GeneratedSlides.jsx'
 import Recorder from './pages/Recorder.jsx'
+import HRDashboard from './pages/HRDashboard.jsx'
 import ProtectedAdminRoute from './components/ProtectedAdminRoute.jsx'
 
 export default function App() {
@@ -42,6 +43,14 @@ export default function App() {
           element={
             <ProtectedAdminRoute>
               <Recorder />
+            </ProtectedAdminRoute>
+          }
+        />
+        <Route
+          path="/hr-dashboard"
+          element={
+            <ProtectedAdminRoute>
+              <HRDashboard />
             </ProtectedAdminRoute>
           }
         />

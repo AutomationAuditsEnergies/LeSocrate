@@ -53,18 +53,23 @@ def generate_excel_export(logs_data):
         # --- Données détail + calcul totaux par utilisateur ---
         totaux_par_user = defaultdict(int)   # clé: (nom, prenom) → secondes totales
 
+        now = datetime.now()
+
         for row in logs_data:
             id_, nom, prenom, arrivee, depart = row
+            dt1 = datetime.strptime(arrivee, "%Y-%m-%d %H:%M:%S")
             if depart:
-                dt1 = datetime.strptime(arrivee, "%Y-%m-%d %H:%M:%S")
                 dt2 = datetime.strptime(depart, "%Y-%m-%d %H:%M:%S")
                 seconds = (dt2 - dt1).total_seconds()
                 minutes = int(seconds // 60)
                 secondes = int(seconds % 60)
                 duree = f"{minutes}min {secondes}sec"
-                totaux_par_user[(nom, prenom)] += seconds
             else:
-                duree = "En cours..."
+                seconds = (now - dt1).total_seconds()
+                minutes = int(seconds // 60)
+                secondes = int(seconds % 60)
+                duree = f"{minutes}min {secondes}sec (en cours)"
+            totaux_par_user[(nom, prenom)] += seconds
             ws.append([id_, nom, prenom, arrivee, depart or "", duree])
 
         # --- En-têtes récapitulatif (colonnes H=8, I=9, J=10) ---
@@ -87,6 +92,11 @@ def generate_excel_export(logs_data):
         column_widths = {1: 6, 2: 18, 3: 18, 4: 20, 5: 20, 6: 16, 8: 18, 9: 18, 10: 28}
         for col, width in column_widths.items():
             ws.column_dimensions[ws.cell(row=1, column=col).column_letter].width = width
+
+        # --- Date d'export en bas du tableau principal ---
+        last_row = ws.max_row + 2
+        date_cell = ws.cell(row=last_row, column=1, value=f"Exporté le {datetime.now().strftime('%d/%m/%Y')}")
+        date_cell.font = Font(italic=True, color="888888")
 
         tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx")
         wb.save(tmp.name)
