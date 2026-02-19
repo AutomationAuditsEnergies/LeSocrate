@@ -39,13 +39,20 @@ if is_azure:
     app.config["SESSION_COOKIE_SECURE"] = True
 
 # Configuration CORS pour permettre les requêtes du frontend React
+# Construction dynamique des origines CORS
+# Chaque plateforme déclare son URL via PLATFORM_N_FRONTEND_URL dans ses env vars
+_cors_origins = [
+    "http://localhost:5173",
+    "http://localhost:3000",
+]
+for _i in range(1, 4):
+    _url = os.environ.get(f"PLATFORM_{_i}_FRONTEND_URL", "").rstrip("/")
+    if _url:
+        _cors_origins.append(_url)
+
 CORS(app, resources={
     r"/*": {
-        "origins": [
-            "http://localhost:5173",
-            "http://localhost:3000",
-            "https://thankful-wave-043aa3b03.4.azurestaticapps.net",
-        ],
+        "origins": _cors_origins,
         "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
         "allow_headers": ["Content-Type", "Authorization"],
         "supports_credentials": True
@@ -53,16 +60,12 @@ CORS(app, resources={
 })
 
 logger.info("🚀 Initialisation de l'application Flask (mode API)")
-logger.info("✅ CORS configuré pour frontend React")
+logger.info(f"✅ CORS configuré pour: {_cors_origins}")
 
 # Initialisation de SocketIO avec eventlet et CORS
 socketio = SocketIO(
     app,
-    cors_allowed_origins=[
-        "http://localhost:5173",
-        "http://localhost:3000",
-        "https://thankful-wave-043aa3b03.4.azurestaticapps.net",
-    ],
+    cors_allowed_origins=_cors_origins,
     async_mode="eventlet"
 )
 logger.info("✅ SocketIO initialisé avec eventlet et CORS")

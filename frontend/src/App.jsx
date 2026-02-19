@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
+import { apiUrl } from './api'
 import Admin from './pages/Admin.jsx'
 import Attente from './pages/Attente.jsx'
 import DebugCours from './pages/DebugCours.jsx'
@@ -17,7 +18,7 @@ function ProtectedHRRoute({ children }) {
   const [status, setStatus] = useState('loading')
 
   useEffect(() => {
-    fetch('/api/hr/enabled', { credentials: 'include' })
+    fetch(apiUrl('/api/hr/enabled'), { credentials: 'include' })
       .then(r => r.json())
       .then(data => setStatus(data.enabled ? 'enabled' : 'disabled'))
       .catch(() => setStatus('disabled'))
