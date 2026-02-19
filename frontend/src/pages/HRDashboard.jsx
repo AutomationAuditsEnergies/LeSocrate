@@ -23,6 +23,7 @@ export default function HRDashboard() {
   const [selectedPlatform, setSelectedPlatform] = useState(null)
   const [showCourseTimeModal, setShowCourseTimeModal] = useState(false)
   const [currentCourseTime, setCurrentCourseTime] = useState(null)
+  const [courseTimePlatformId, setCourseTimePlatformId] = useState(1)
   const [deleteConfirm, setDeleteConfirm] = useState(null)
   const backupPollingRef = useRef({})
   const audioRef = useRef(null)
@@ -186,7 +187,7 @@ export default function HRDashboard() {
 
   const handleSetCourseTime = async (dateCours, heureCours) => {
     try {
-      const resp = await fetch(apiUrl('/api/admin/config_cours'), {
+      const resp = await fetch(apiUrl(`/api/hr/platforms/${courseTimePlatformId}/config-cours`), {
         method: 'POST',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
@@ -325,6 +326,7 @@ export default function HRDashboard() {
                   setShowPdfModal(true)
                 }}
                 onOpenCourseTimeModal={async () => {
+                  setCourseTimePlatformId(p.id)
                   try {
                     const resp = await fetch(apiUrl('/api/admin/course-time'), { credentials: 'include' })
                     const data = await resp.json()
@@ -821,7 +823,7 @@ function PlatformCard({
         {/* Lien vers le cours */}
         {p.active && (
           <a
-            href={`${window.location.origin}/video`}
+            href={`${p.frontend_url || window.location.origin}/video`}
             target="_blank"
             rel="noopener noreferrer"
             className="flex w-full items-center justify-between rounded-lg px-4 py-2.5 text-sm font-medium transition-all mb-3"

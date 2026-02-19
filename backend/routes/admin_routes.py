@@ -163,6 +163,57 @@ def create_admin_blueprint(socketio):
             logger.error(f"❌ Erreur configuration cours: {e}")
             return jsonify({"success": False, "error": str(e)}), 500
 
+    # ─── Endpoints internes service-to-service (P1 HR → P2) ──────────────
+
+    @admin_bp.route("/api/internal/set-lock", methods=["POST"])
+    def internal_set_lock():
+        """Service-to-service : verrouiller/déverrouiller l'upload (appelé par P1 HR)"""
+        api_key = os.environ.get("PLATFORM_API_KEY", "")
+        if not api_key or request.headers.get("X-Platform-Key") != api_key:
+            return jsonify({"success": False, "error": "Non autorisé"}), 401
+        try:
+            data = request.get_json()
+            locked = bool(data.get("locked", True))
+            now = datetime.now(FRANCE_TZ).strftime("%Y-%m-%d %H:%M:%S")
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                "UPDATE platform_config SET upload_locked = ?, updated_at = ? WHERE id = 1",
+                (1 if locked else 0, now),
+            )
+            conn.commit()
+            conn.close()
+            logger.info(f"🔒 Lock interne mis à jour: {'verrouillé' if locked else 'déverrouillé'}")
+            return jsonify({"success": True, "upload_locked": locked}), 200
+        except Exception as e:
+            logger.error(f"❌ Erreur internal set-lock: {e}")
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    @admin_bp.route("/api/internal/config-cours", methods=["POST"])
+    def internal_config_cours():
+        """Service-to-service : configurer l'heure du cours (appelé par P1 HR)"""
+        api_key = os.environ.get("PLATFORM_API_KEY", "")
+        if not api_key or request.headers.get("X-Platform-Key") != api_key:
+            return jsonify({"success": False, "error": "Non autorisé"}), 401
+        try:
+            data = request.get_json()
+            date_str = data.get("date_cours", "").strip()
+            heure_str = data.get("heure_cours", "").strip()
+            if not date_str or not heure_str:
+                return jsonify({"success": False, "error": "Date et heure requises"}), 400
+            if heure_str.count(':') == 1:
+                datetime_str = f"{date_str} {heure_str}:00"
+            else:
+                datetime_str = f"{date_str} {heure_str}"
+            nouvelle_heure_naive = datetime.strptime(datetime_str, "%Y-%m-%d %H:%M:%S")
+            nouvelle_heure_fr = FRANCE_TZ.localize(nouvelle_heure_naive)
+            set_heure_debut_cours(nouvelle_heure_fr)
+            logger.info(f"⚙️ Heure cours configurée en interne: {nouvelle_heure_fr}")
+            return jsonify({"success": True, "message": f"Heure mise à jour : {nouvelle_heure_fr.strftime('%d/%m/%Y à %H:%M')}"}), 200
+        except Exception as e:
+            logger.error(f"❌ Erreur internal config-cours: {e}")
+            return jsonify({"success": False, "error": str(e)}), 500
+
     @admin_bp.route("/api/admin/export_excel")
     def export_excel():
         """Export Excel des logs"""

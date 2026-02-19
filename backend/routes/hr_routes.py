@@ -1,6 +1,7 @@
 # hr_routes.py - Routes du Dashboard RH (centre de contrôle multi-plateformes)
 import os
 import time
+import requests as http_requests
 from datetime import datetime, timedelta, timezone
 from flask import Blueprint, request, session, jsonify
 from azure.storage.blob import BlobServiceClient, generate_blob_sas, BlobSasPermissions
@@ -17,6 +18,44 @@ PDF_UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "..", "uploads", "pdfs"
 HR_ENABLED = os.environ.get("HR_DASHBOARD_ENABLED", "false").lower() == "true"
 
 
+def _get_platform_info(pid):
+    """Retourne la config d'une plateforme distante depuis les env vars"""
+    if pid == 1:
+        return {
+            "backend_url": None,
+            "frontend_url": os.environ.get("PLATFORM_1_FRONTEND_URL", "http://localhost:5173"),
+            "audio_container": os.environ.get("AZURE_AUDIO_CONTAINER", "formationaudio-dev"),
+            "pdf_container": os.environ.get("AZURE_STORAGE_CONTAINER", "formationpdf"),
+        }
+    return {
+        "backend_url": os.environ.get(f"PLATFORM_{pid}_BACKEND_URL"),
+        "frontend_url": os.environ.get(f"PLATFORM_{pid}_FRONTEND_URL"),
+        "audio_container": os.environ.get(f"PLATFORM_{pid}_AUDIO_CONTAINER", f"formationaudio-p{pid}"),
+        "pdf_container": os.environ.get(f"PLATFORM_{pid}_PDF_CONTAINER", f"formationpdf-p{pid}"),
+    }
+
+
+def _call_platform(pid, path, method="POST", json_data=None):
+    """Appel HTTP service-to-service vers le backend d'une plateforme distante"""
+    info = _get_platform_info(pid)
+    backend_url = info.get("backend_url")
+    if not backend_url:
+        return None, "Plateforme non configurée"
+    api_key = os.environ.get("PLATFORM_API_KEY", "")
+    try:
+        resp = http_requests.request(
+            method,
+            f"{backend_url}{path}",
+            json=json_data,
+            headers={"X-Platform-Key": api_key},
+            timeout=10,
+        )
+        return resp.json(), None
+    except Exception as e:
+        logger.warning(f"⚠️ Erreur appel P{pid} {path}: {e}")
+        return None, str(e)
+
+
 def create_hr_blueprint(socketio):
     """Factory pour créer le blueprint HR avec accès à socketio"""
     hr_bp = Blueprint("hr", __name__)
@@ -28,7 +67,9 @@ def create_hr_blueprint(socketio):
     @hr_bp.before_request
     def check_hr_enabled():
         from flask import request as req
-        if req.endpoint == "hr.get_hr_enabled":
+        # Ces endpoints restent accessibles même si HR est désactivé
+        always_allowed = {"hr.get_hr_enabled", "hr.check_upload_permission"}
+        if req.endpoint in always_allowed:
             return None
         if not HR_ENABLED:
             return jsonify({"success": False, "error": "Feature non disponible"}), 404
@@ -121,13 +162,61 @@ def create_hr_blueprint(socketio):
             platforms = []
             for row in rows:
                 pid, name, upload_locked, pdf_filename, pdf_uploaded_at, updated_at = row
-                active = pid == 1
-                audio_count = audio_count_p1 if pid == 1 else 0
-                last_upload = last_upload_p1 if pid == 1 else None
+                pinfo = _get_platform_info(pid)
+                active = pid == 1 or bool(pinfo.get("backend_url"))
+
+                # Stats audio pour P2+ depuis leur container Azure
+                if pid == 1:
+                    audio_count = audio_count_p1
+                    last_upload = last_upload_p1
+                else:
+                    audio_count = 0
+                    last_upload = None
+                    if active:
+                        try:
+                            cs = os.environ.get("AZURE_AUDIO_STORAGE_CONNECTION_STRING")
+                            if cs:
+                                bsc = BlobServiceClient.from_connection_string(cs)
+                                cc = bsc.get_container_client(pinfo["audio_container"])
+                                blobs = list(cc.list_blobs())
+                                audio_count = len(blobs)
+                                if blobs:
+                                    latest = max(blobs, key=lambda b: b.last_modified)
+                                    last_upload = latest.last_modified.astimezone(FRANCE_TZ).strftime("%Y-%m-%d %H:%M")
+                        except Exception:
+                            pass
 
                 # Pour P1, utiliser le vrai fichier Azure comme source de vérité
-                real_pdf_filename = azure_pdf_filename if pid == 1 else pdf_filename
-                real_pdf_url = azure_pdf_url if pid == 1 else None
+                # Pour P2+, chercher dans leur container PDF Azure
+                if pid == 1:
+                    real_pdf_filename = azure_pdf_filename
+                    real_pdf_url = azure_pdf_url
+                else:
+                    real_pdf_filename = pdf_filename
+                    real_pdf_url = None
+                    if active:
+                        try:
+                            cs = os.environ.get("AZURE_STORAGE_CONNECTION_STRING")
+                            if cs:
+                                from azure.storage.blob import generate_blob_sas, BlobSasPermissions
+                                bsc = BlobServiceClient.from_connection_string(cs)
+                                cc = bsc.get_container_client(pinfo["pdf_container"])
+                                blobs = list(cc.list_blobs())
+                                if blobs:
+                                    blob = max(blobs, key=lambda b: b.last_modified)
+                                    real_pdf_filename = blob.name
+                                    expiry = datetime.now(timezone.utc) + timedelta(hours=2)
+                                    sas = generate_blob_sas(
+                                        account_name=bsc.account_name,
+                                        container_name=pinfo["pdf_container"],
+                                        blob_name=blob.name,
+                                        account_key=bsc.credential.account_key,
+                                        permission=BlobSasPermissions(read=True),
+                                        expiry=expiry,
+                                    )
+                                    real_pdf_url = f"https://{bsc.account_name}.blob.core.windows.net/{pinfo['pdf_container']}/{blob.name}?{sas}"
+                        except Exception:
+                            pass
 
                 alerts = []
                 if active:
@@ -151,6 +240,7 @@ def create_hr_blueprint(socketio):
                     "pdf_uploaded_at": pdf_uploaded_at,
                     "alerts": alerts,
                     "updated_at": updated_at,
+                    "frontend_url": pinfo.get("frontend_url"),
                 })
 
             return jsonify({"success": True, "platforms": platforms}), 200
@@ -187,6 +277,10 @@ def create_hr_blueprint(socketio):
             status_label = "verrouillé" if new_value else "déverrouillé"
             logger.info(f"🔒 Plateforme {platform_id} upload {status_label}")
 
+            # Propager le changement vers la plateforme distante (P2+)
+            if platform_id != 1:
+                _call_platform(platform_id, "/api/internal/set-lock", json_data={"locked": bool(new_value)})
+
             return jsonify({
                 "success": True,
                 "upload_locked": bool(new_value),
@@ -200,22 +294,24 @@ def create_hr_blueprint(socketio):
     # ─── GET /api/hr/platforms/<id>/audios ────────────────────────────────
     @hr_bp.route("/api/hr/platforms/<int:platform_id>/audios", methods=["GET"])
     def get_platform_audios(platform_id):
-        """Lister les audios d'une plateforme (P1=Azure, P2/P3=vide)"""
+        """Lister les audios d'une plateforme (tous containers Azure)"""
         denied = _require_admin()
         if denied:
             return denied
 
-        if platform_id != 1:
-            return jsonify({"success": True, "audios": [], "message": "Plateforme pas encore connectée"}), 200
+        pinfo = _get_platform_info(platform_id)
+        connection_string = os.environ.get("AZURE_AUDIO_STORAGE_CONNECTION_STRING")
 
         try:
-            blob_service_client, container_client = _get_azure_audio_clients()
-            if not container_client:
+            if not connection_string:
                 return jsonify({"success": False, "error": "Configuration Azure manquante"}), 500
+
+            container_name = pinfo["audio_container"]
+            blob_service_client = BlobServiceClient.from_connection_string(connection_string)
+            container_client = blob_service_client.get_container_client(container_name)
 
             account_name = blob_service_client.account_name
             account_key = blob_service_client.credential.account_key
-            container_name = os.environ.get("AZURE_AUDIO_CONTAINER", "formationaudio-dev")
             expiry = datetime.now(timezone.utc) + timedelta(hours=1)
 
             audios = []
@@ -239,32 +335,33 @@ def create_hr_blueprint(socketio):
             return jsonify({"success": True, "audios": audios}), 200
 
         except Exception as e:
-            logger.error(f"❌ Erreur liste audios HR: {e}")
+            logger.error(f"❌ Erreur liste audios HR P{platform_id}: {e}")
             return jsonify({"success": False, "error": str(e)}), 500
 
     # ─── DELETE /api/hr/platforms/<id>/audios/<filename> ──────────────────
     @hr_bp.route("/api/hr/platforms/<int:platform_id>/audios/<path:filename>", methods=["DELETE"])
     def delete_audio(platform_id, filename):
-        """Supprimer un audio (P1 seulement)"""
+        """Supprimer un audio depuis le container Azure de la plateforme"""
         denied = _require_admin()
         if denied:
             return denied
 
-        if platform_id != 1:
-            return jsonify({"success": False, "error": "Suppression non disponible pour cette plateforme"}), 400
+        pinfo = _get_platform_info(platform_id)
+        connection_string = os.environ.get("AZURE_AUDIO_STORAGE_CONNECTION_STRING")
 
         try:
-            _, container_client = _get_azure_audio_clients()
-            if not container_client:
+            if not connection_string:
                 return jsonify({"success": False, "error": "Configuration Azure manquante"}), 500
 
+            blob_service_client = BlobServiceClient.from_connection_string(connection_string)
+            container_client = blob_service_client.get_container_client(pinfo["audio_container"])
             container_client.delete_blob(filename)
-            logger.info(f"🗑️ Audio supprimé: {filename}")
+            logger.info(f"🗑️ Audio supprimé (P{platform_id}): {filename}")
 
             return jsonify({"success": True, "message": f"'{filename}' supprimé"}), 200
 
         except Exception as e:
-            logger.error(f"❌ Erreur suppression audio: {e}")
+            logger.error(f"❌ Erreur suppression audio P{platform_id}: {e}")
             return jsonify({"success": False, "error": str(e)}), 500
 
     # ─── POST /api/hr/platforms/<id>/upload-pdf ──────────────────────────
@@ -736,6 +833,46 @@ def create_hr_blueprint(socketio):
         )
         conn.commit()
         conn.close()
+
+    # ─── POST /api/hr/platforms/<id>/config-cours ─────────────────────────
+    @hr_bp.route("/api/hr/platforms/<int:platform_id>/config-cours", methods=["POST"])
+    def proxy_config_cours(platform_id):
+        """Configurer l'heure du cours (P1=local, P2+=proxy service-to-service)"""
+        denied = _require_admin()
+        if denied:
+            return denied
+
+        data = request.get_json()
+        date_str = (data or {}).get("date_cours", "").strip()
+        heure_str = (data or {}).get("heure_cours", "").strip()
+        if not date_str or not heure_str:
+            return jsonify({"success": False, "error": "date_cours et heure_cours requis"}), 400
+
+        if platform_id == 1:
+            # Appel direct au service local
+            try:
+                from services.time_service import set_heure_debut_cours
+                if heure_str.count(':') == 1:
+                    datetime_str = f"{date_str} {heure_str}:00"
+                else:
+                    datetime_str = f"{date_str} {heure_str}"
+                nouvelle_heure_naive = datetime.strptime(datetime_str, "%Y-%m-%d %H:%M:%S")
+                nouvelle_heure_fr = FRANCE_TZ.localize(nouvelle_heure_naive)
+                set_heure_debut_cours(nouvelle_heure_fr)
+                return jsonify({
+                    "success": True,
+                    "message": f"Cours programmé pour le {date_str} à {heure_str}",
+                }), 200
+            except Exception as e:
+                logger.error(f"❌ Erreur config-cours P1: {e}")
+                return jsonify({"success": False, "error": str(e)}), 500
+        else:
+            result, error = _call_platform(platform_id, "/api/internal/config-cours", json_data=data)
+            if error:
+                return jsonify({"success": False, "error": error}), 500
+            if result is None:
+                return jsonify({"success": False, "error": "Plateforme non configurée"}), 400
+            return jsonify(result), 200
 
     # ─── GET /api/hr/platforms/<id>/backup-status ─────────────────────────
     @hr_bp.route("/api/hr/platforms/<int:platform_id>/backup-status", methods=["GET"])

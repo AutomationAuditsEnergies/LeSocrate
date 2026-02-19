@@ -1,5 +1,48 @@
 # Changelog
 
+## 2026-02-19
+
+### Feature : Intégration complète Plateforme 2 dans le Dashboard RH
+
+- **`hr_routes.py`** — Fonctionnalités P2 opérationnelles :
+  - `get_platforms()` : expose `frontend_url` dans la réponse pour chaque plateforme
+  - `toggle_lock()` : propage le changement de lock vers P2 via `_call_platform()` → `/api/internal/set-lock`
+  - `get_platform_audios()` : utilise le container Azure de chaque plateforme (`PLATFORM_2_AUDIO_CONTAINER`)
+  - `delete_audio()` : supporte tous les containers (P1 et P2+)
+  - Nouvelle route `POST /api/hr/platforms/<id>/config-cours` : pour P1 appelle `set_heure_debut_cours` localement, pour P2+ proxy vers `/api/internal/config-cours`
+
+- **`HRDashboard.jsx`** — Adaptations multi-plateformes :
+  - Lien "Accéder au cours" utilise `p.frontend_url` (ou `window.location.origin` en fallback)
+  - Bouton "Heure du cours" mémorise la plateforme sélectionnée (`courseTimePlatformId`)
+  - `handleSetCourseTime` appelle `/api/hr/platforms/<id>/config-cours` (route unifiée)
+
+- **`.env`** — Nouvelles variables multi-plateformes :
+  - `PLATFORM_2_BACKEND_URL`, `PLATFORM_2_FRONTEND_URL`
+  - `PLATFORM_2_AUDIO_CONTAINER`, `PLATFORM_2_PDF_CONTAINER`
+  - `PLATFORM_API_KEY` (clé partagée pour les appels service-to-service)
+
+### Fix : Port backend 5000 → 5001
+
+- Conflit avec un autre projet local
+- Modifié dans `run.py`, `main_app.py`, `vite.config.js` (2 occurrences)
+
+### Fix : Déploiement GitHub Actions Plateforme 2
+
+- Réécriture de `staging_socrate-backend-p2.yml` pour utiliser `working-directory: ./backend`
+- Correction de l'erreur "requirements.txt not found" due à la configuration auto-générée par Azure
+
+### Feature : Feature flag `HR_DASHBOARD_ENABLED`
+
+- Variable d'env `HR_DASHBOARD_ENABLED` (défaut `false`, `true` uniquement sur P1)
+- `hr_routes.py` : `before_request` guard bloque toutes les routes HR si désactivé (sauf `get_hr_enabled` et `check_upload_permission`)
+- `App.jsx` : `ProtectedHRRoute` vérifie `/api/hr/enabled` côté serveur avant d'afficher `/hr-dashboard`
+
+### UX : Indicateurs de chargement gris + blocage scroll
+
+- Recorder.jsx : cercles de chargement gris (`#9ca3af`) avec `animate-spin` (place des couleurs statiques)
+- Index.jsx / Video.jsx : `overflow: hidden` sur `body` pour empêcher le scroll hors page
+- Recorder.jsx / HRDashboard.jsx : `useEffect` pour corriger la couleur de l'overscroll
+
 ## 2026-02-18
 
 ### Feature : Upload audio asynchrone / parallèle
