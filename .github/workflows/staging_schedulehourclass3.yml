@@ -31,7 +31,9 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Install dependencies
-        run: pip install -r azure-function/requirements.txt
+        run: |
+          cd azure-function
+          pip install -r requirements.txt --target=".python_packages/lib/site-packages"
 
       - name: Zip artifact for deployment
         run: |
