@@ -1,4 +1,4 @@
-# Docs for the Azure Web Apps Deploy action: https://github.com/azure/functions-action
+# Docss for the Azure Web Apps Deploy action: https://github.com/azure/functions-action
 # More GitHub Actions for Azure: https://github.com/Azure/actions
 # More info on Python, GitHub Actions, and Azure Functions: https://aka.ms/python-webapps-actions
 
@@ -9,11 +9,11 @@ on:
     branches:
       - staging
     paths:
-      - 'azure-function/**'
+      - "azure-function/**"
   workflow_dispatch:
 
 env:
-  PYTHON_VERSION: '3.11'
+  PYTHON_VERSION: "3.11"
 
 jobs:
   build:
@@ -71,10 +71,10 @@ jobs:
           tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_5451188E764749BAAE5CD95A290C40A9 }}
           subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_CD24C8E0603D4CC689F7C17052BF7B95 }}
 
-      - name: 'Deploy to Azure Functions'
+      - name: "Deploy to Azure Functions"
         uses: Azure/functions-action@v1
         id: deploy-to-function
         with:
-          app-name: 'scheduleHourClass3'
-          slot-name: 'Production'
-          package: '.'
+          app-name: "scheduleHourClass3"
+          slot-name: "Production"
+          package: "."
