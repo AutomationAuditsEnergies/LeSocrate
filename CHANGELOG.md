@@ -2,6 +2,27 @@
 
 ## 2026-02-20
 
+### Feature : Déploiement Azure Function via GitHub Actions
+
+- **`.github/workflows/deploy-azure-function.yml`** — Workflow de déploiement de la Function App d'auto-scheduling
+  - Se déclenche sur push `staging` quand des fichiers `azure-function/**` changent
+  - Utilise `Azure/functions-action@v1` avec `scm-do-build-during-deployment: true`
+  - Le secret `AZURE_FUNCTIONAPP_PUBLISH_PROFILE` doit être ajouté dans GitHub → Settings → Secrets
+  - Le nom de la Function App est à renseigner dans la variable `AZURE_FUNCTIONAPP_NAME` du workflow
+
+### Feature : Azure Function App - Auto-scheduling des cours
+
+- **`azure-function/`** — Nouvelle Azure Function Timer Trigger (modèle Python v1)
+  - `auto_schedule/__init__.py` — S'exécute chaque samedi à 8h UTC (9h Paris)
+  - `auto_schedule/function.json` — CRON `0 0 7 * * 6` (samedi 7h UTC = 8h Paris hiver / 9h été)
+  - Appelle `POST /api/internal/auto-schedule` sur le backend P1 avec la clé `PLATFORM_API_KEY`
+  - P1 programme P1 localement + propage vers P2/P3 via `_call_platform()`
+  - Plan : Consommation Azure (paiement à l'usage, idéal pour 1 exécution/semaine)
+- **`backend/routes/hr_routes.py`** — Route `POST /api/internal/auto-schedule`
+  - Protégée par header `X-Platform-Key` (comparé à `PLATFORM_API_KEY` env var)
+  - Schedule par défaut : P1=vendredi 9h, P2=lundi 9h, P3=mercredi 9h
+- **`.gitignore`** — Ajout de `azure-function/local.settings.json` (contient les clés sensibles)
+
 ### Feature : Recorder accessible sans mot de passe
 
 - **`App.jsx`** — `/recorder` n'est plus protégé par `ProtectedAdminRoute`

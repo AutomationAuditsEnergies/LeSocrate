@@ -68,7 +68,7 @@ def create_hr_blueprint(socketio):
     def check_hr_enabled():
         from flask import request as req
         # Ces endpoints restent accessibles même si HR est désactivé
-        always_allowed = {"hr.get_hr_enabled", "hr.check_upload_permission", "hr.recorder_audio_list"}
+        always_allowed = {"hr.get_hr_enabled", "hr.check_upload_permission", "hr.recorder_audio_list", "hr.auto_schedule"}
         if req.endpoint in always_allowed:
             return None
         if not HR_ENABLED:
@@ -909,6 +909,82 @@ def create_hr_blueprint(socketio):
             if result is None:
                 return jsonify({"success": False, "error": "Plateforme non configurée"}), 400
             return jsonify(result), 200
+
+    # ─── POST /api/internal/auto-schedule ────────────────────────────────
+    @hr_bp.route("/api/internal/auto-schedule", methods=["POST"])
+    def auto_schedule():
+        """Configure automatiquement les horaires des cours pour la semaine suivante.
+        Protégé par X-Platform-Key. Appelé par Azure Function (Timer Trigger).
+
+        Schedule par défaut :
+          - P1 : vendredi à 9h00
+          - P2 : lundi à 9h00
+          - P3 : mercredi à 9h00
+
+        Corps JSON optionnel pour surcharger :
+          { "schedule": [{"platform_id": 1, "weekday": 4, "hour": 9}] }
+          weekday : 0=lundi, 1=mardi, 2=mercredi, 3=jeudi, 4=vendredi, 5=samedi, 6=dimanche
+        """
+        api_key = request.headers.get("X-Platform-Key", "")
+        expected_key = os.environ.get("PLATFORM_API_KEY", "")
+        if not expected_key or api_key != expected_key:
+            return jsonify({"success": False, "error": "Clé invalide"}), 403
+
+        DEFAULT_SCHEDULE = [
+            {"platform_id": 1, "weekday": 4, "hour": 9},  # vendredi
+            {"platform_id": 2, "weekday": 0, "hour": 9},  # lundi
+            {"platform_id": 3, "weekday": 2, "hour": 9},  # mercredi
+        ]
+
+        data = request.get_json() or {}
+        schedule = data.get("schedule", DEFAULT_SCHEDULE)
+
+        today = datetime.now(FRANCE_TZ)
+        results = []
+
+        for item in schedule:
+            platform_id = item["platform_id"]
+            weekday = item["weekday"]
+            hour = item.get("hour", 9)
+            minute = item.get("minute", 0)
+
+            # Prochaine occurrence de ce jour de la semaine (jamais aujourd'hui)
+            days_ahead = weekday - today.weekday()
+            if days_ahead <= 0:
+                days_ahead += 7
+            next_date = today + timedelta(days=days_ahead)
+
+            date_str = next_date.strftime("%Y-%m-%d")
+            heure_str = f"{hour:02d}:{minute:02d}"
+
+            if platform_id == 1:
+                try:
+                    from services.time_service import set_heure_debut_cours
+                    nouvelle_heure_naive = datetime.strptime(
+                        f"{date_str} {heure_str}:00", "%Y-%m-%d %H:%M:%S"
+                    )
+                    nouvelle_heure_fr = FRANCE_TZ.localize(nouvelle_heure_naive)
+                    set_heure_debut_cours(nouvelle_heure_fr)
+                    results.append({"platform_id": 1, "success": True, "scheduled": f"{date_str} {heure_str}"})
+                    logger.info(f"📅 Auto-schedule P1 : {date_str} {heure_str}")
+                except Exception as e:
+                    results.append({"platform_id": 1, "success": False, "error": str(e)})
+                    logger.error(f"❌ Auto-schedule P1 : {e}")
+            else:
+                result, error = _call_platform(
+                    platform_id,
+                    "/api/internal/config-cours",
+                    json_data={"date_cours": date_str, "heure_cours": heure_str},
+                )
+                if error:
+                    results.append({"platform_id": platform_id, "success": False, "error": error})
+                    logger.error(f"❌ Auto-schedule P{platform_id} : {error}")
+                else:
+                    results.append({"platform_id": platform_id, "success": True, "scheduled": f"{date_str} {heure_str}"})
+                    logger.info(f"📅 Auto-schedule P{platform_id} : {date_str} {heure_str}")
+
+        all_ok = all(r["success"] for r in results)
+        return jsonify({"success": all_ok, "results": results}), 200
 
     # ─── GET /api/hr/platforms/<id>/backup-status ─────────────────────────
     @hr_bp.route("/api/hr/platforms/<int:platform_id>/backup-status", methods=["GET"])
