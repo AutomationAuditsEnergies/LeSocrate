@@ -164,20 +164,11 @@ export default function HRDashboard() {
       const formData = new FormData()
       formData.append('file', file)
 
-      const resp = await fetch(apiUrl('/api/admin/upload-pdf'), {
+      const resp = await fetch(apiUrl(`/api/hr/platforms/${platformId}/upload-pdf-rag`), {
         method: 'POST', credentials: 'include', body: formData,
       })
       const data = await resp.json()
-
-      if (data.success) {
-        await fetch(apiUrl(`/api/hr/platforms/${platformId}/set-pdf-name`), {
-          method: 'POST',
-          credentials: 'include',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ filename: file.name }),
-        })
-        fetchPlatforms(platformId)
-      }
+      if (data.success) fetchPlatforms(platformId)
     } catch (e) {
       console.error('Erreur upload PDF:', e)
     } finally {

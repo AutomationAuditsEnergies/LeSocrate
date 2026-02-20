@@ -879,6 +879,87 @@ def create_hr_blueprint(socketio):
         if platform_id != 1:
             _call_platform(platform_id, "/api/internal/set-lock", json_data={"locked": False})
 
+    # ─── POST /api/hr/platforms/<id>/upload-pdf-rag ──────────────────────
+    @hr_bp.route("/api/hr/platforms/<int:platform_id>/upload-pdf-rag", methods=["POST"])
+    def upload_pdf_rag(platform_id):
+        """Upload un PDF dans le bon container Azure et déclenche l'indexer de la plateforme"""
+        denied = _require_admin()
+        if denied:
+            return denied
+
+        if "file" not in request.files:
+            return jsonify({"success": False, "error": "Aucun fichier envoyé"}), 400
+        file = request.files["file"]
+        if not file.filename or not file.filename.lower().endswith(".pdf"):
+            return jsonify({"success": False, "error": "Seuls les fichiers PDF sont acceptés"}), 400
+
+        pinfo = _get_platform_info(platform_id)
+        connection_string = os.environ.get("AZURE_STORAGE_CONNECTION_STRING")
+        if not connection_string:
+            return jsonify({"success": False, "error": "Configuration Azure Storage manquante"}), 500
+
+        pdf_container = pinfo["pdf_container"]
+
+        # Config indexer par plateforme (même service Azure AI Search, noms différents)
+        if platform_id == 1:
+            indexer_name = os.environ.get("AZURE_SEARCH_INDEXER_NAME", "rag-1770824229421-indexer")
+            index_name = os.environ.get("AZURE_SEARCH_INDEX_NAME", "rag-1770824229421")
+        else:
+            indexer_name = os.environ.get(f"PLATFORM_{platform_id}_AZURE_SEARCH_INDEXER_NAME", f"rag-p{platform_id}-indexer")
+            index_name = os.environ.get(f"PLATFORM_{platform_id}_AZURE_SEARCH_INDEX_NAME", f"rag-p{platform_id}")
+
+        try:
+            from azure.storage.blob import BlobServiceClient as _BSC
+            blob_service_client = _BSC.from_connection_string(connection_string)
+            container_client = blob_service_client.get_container_client(pdf_container)
+
+            # Supprimer les anciens PDFs du container
+            for blob in container_client.list_blobs():
+                container_client.delete_blob(blob.name)
+
+            # Upload du nouveau PDF
+            blob_client = container_client.get_blob_client(file.filename)
+            blob_client.upload_blob(file.stream, overwrite=True)
+            logger.info(f"✅ PDF uploadé P{platform_id} → {pdf_container}/{file.filename}")
+
+            # Enregistrer le nom du PDF en base
+            now = _now_str()
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                "UPDATE platform_config SET pdf_filename = ?, pdf_uploaded_at = ?, updated_at = ? WHERE id = ?",
+                (file.filename, now, now, platform_id),
+            )
+            conn.commit()
+            conn.close()
+
+            # Déclencher l'indexer Azure AI Search
+            search_endpoint = os.environ.get("AZURE_SEARCH_ENDPOINT")
+            search_api_key = os.environ.get("AZURE_SEARCH_API_KEY")
+            if search_endpoint and search_api_key:
+                headers = {"Content-Type": "application/json", "api-key": search_api_key}
+
+                # Vider l'index existant
+                search_url = f"{search_endpoint}/indexes/{index_name}/docs/search?api-version=2024-07-01"
+                search_resp = http_requests.post(search_url, headers=headers, json={"search": "*", "select": "chunk_id", "top": 1000})
+                if search_resp.status_code == 200:
+                    docs = search_resp.json().get("value", [])
+                    if docs:
+                        delete_actions = [{"@search.action": "delete", "chunk_id": d["chunk_id"]} for d in docs]
+                        delete_url = f"{search_endpoint}/indexes/{index_name}/docs/index?api-version=2024-07-01"
+                        http_requests.post(delete_url, headers=headers, json={"value": delete_actions})
+
+                # Reset + relance de l'indexer
+                http_requests.post(f"{search_endpoint}/indexers/{indexer_name}/reset?api-version=2024-07-01", headers=headers)
+                http_requests.post(f"{search_endpoint}/indexers/{indexer_name}/run?api-version=2024-07-01", headers=headers)
+                logger.info(f"🔄 Indexer P{platform_id} ({indexer_name}) déclenché")
+
+            return jsonify({"success": True, "message": f"PDF '{file.filename}' uploadé pour P{platform_id}, indexation lancée"}), 200
+
+        except Exception as e:
+            logger.error(f"❌ Erreur upload PDF RAG P{platform_id}: {e}")
+            return jsonify({"success": False, "error": str(e)}), 500
+
     # ─── GET /api/hr/platforms/<id>/course-time ───────────────────────────
     @hr_bp.route("/api/hr/platforms/<int:platform_id>/course-time", methods=["GET"])
     def get_platform_course_time(platform_id):
