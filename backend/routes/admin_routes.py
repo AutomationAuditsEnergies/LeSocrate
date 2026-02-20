@@ -254,6 +254,23 @@ def create_admin_blueprint(socketio):
             logger.error(f"❌ Erreur internal config-cours: {e}")
             return jsonify({"success": False, "error": str(e)}), 500
 
+    @admin_bp.route("/api/internal/course-time", methods=["GET"])
+    def internal_get_course_time():
+        """Service-to-service : lire l'heure du cours (appelé par P1 HR Dashboard)"""
+        api_key = os.environ.get("PLATFORM_API_KEY", "")
+        if not api_key or request.headers.get("X-Platform-Key") != api_key:
+            return jsonify({"success": False, "error": "Non autorisé"}), 401
+        try:
+            heure = get_heure_debut_cours()
+            return jsonify({
+                "success": True,
+                "date_cours": heure.strftime("%Y-%m-%d"),
+                "heure_cours": heure.strftime("%H:%M"),
+            }), 200
+        except Exception as e:
+            logger.error(f"❌ Erreur internal course-time: {e}")
+            return jsonify({"success": False, "error": str(e)}), 500
+
     @admin_bp.route("/api/admin/export_excel")
     def export_excel():
         """Export Excel des logs"""

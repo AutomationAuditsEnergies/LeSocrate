@@ -870,6 +870,33 @@ def create_hr_blueprint(socketio):
         conn.commit()
         conn.close()
 
+    # ─── GET /api/hr/platforms/<id>/course-time ───────────────────────────
+    @hr_bp.route("/api/hr/platforms/<int:platform_id>/course-time", methods=["GET"])
+    def get_platform_course_time(platform_id):
+        """Lire l'heure du cours d'une plateforme (P1=local, P2+=proxy)"""
+        denied = _require_admin()
+        if denied:
+            return denied
+
+        if platform_id == 1:
+            try:
+                from services.time_service import get_heure_debut_cours
+                heure = get_heure_debut_cours()
+                return jsonify({
+                    "success": True,
+                    "date_cours": heure.strftime("%Y-%m-%d"),
+                    "heure_cours": heure.strftime("%H:%M"),
+                }), 200
+            except Exception as e:
+                return jsonify({"success": False, "error": str(e)}), 500
+        else:
+            result, error = _call_platform(platform_id, "/api/internal/course-time", method="GET")
+            if error:
+                return jsonify({"success": False, "error": error}), 500
+            if result is None:
+                return jsonify({"success": False, "error": "Plateforme non configurée"}), 400
+            return jsonify(result), 200
+
     # ─── POST /api/hr/platforms/<id>/config-cours ─────────────────────────
     @hr_bp.route("/api/hr/platforms/<int:platform_id>/config-cours", methods=["POST"])
     def proxy_config_cours(platform_id):

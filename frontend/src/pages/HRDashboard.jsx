@@ -328,7 +328,7 @@ export default function HRDashboard() {
                 onOpenCourseTimeModal={async () => {
                   setCourseTimePlatformId(p.id)
                   try {
-                    const resp = await fetch(apiUrl('/api/admin/course-time'), { credentials: 'include' })
+                    const resp = await fetch(apiUrl(`/api/hr/platforms/${p.id}/course-time`), { credentials: 'include' })
                     const data = await resp.json()
                     if (data.success) setCurrentCourseTime(data)
                     else setCurrentCourseTime(null)
