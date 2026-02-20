@@ -1,5 +1,21 @@
 # Changelog
 
+## 2026-02-20
+
+### Fix : Route publique pour la liste d'audios du Recorder
+
+- **`hr_routes.py`** — Nouvelle route `GET /api/recorder/audio-list` accessible sans session admin
+  - Lit le container Azure configuré sur ce backend (`AZURE_AUDIO_CONTAINER`)
+  - Génère des URLs SAS valides 1h pour chaque fichier
+  - Ajoutée dans `always_allowed` du `before_request` (bypass du feature flag HR)
+- **`Recorder.jsx`** — Utilise `/api/recorder/audio-list` au lieu de `/api/admin/audio-list`
+  - Permet aux intervenants non-admin de voir et uploader leurs fichiers
+
+### Analyse : Les Recorders P2/P3 affichaient les mêmes fichiers
+
+- Cause identifiée : les containers `formationaudio-p2` et `formationaudio-p3` contenaient les mêmes fichiers
+- Chaque container est indépendant mais partage le même compte de stockage Azure (`formationaudios`)
+
 ## 2026-02-19
 
 ### Feature : Intégration complète Plateforme 2 dans le Dashboard RH

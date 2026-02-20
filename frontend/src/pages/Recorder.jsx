@@ -222,7 +222,7 @@ export default function Recorder() {
   const fetchAzureAudios = async () => {
     setAzureLoading(true)
     try {
-      const resp = await fetch(apiUrl('/api/admin/audio-list'), { credentials: 'include' })
+      const resp = await fetch(apiUrl('/api/recorder/audio-list'), { credentials: 'include' })
       const data = await resp.json()
       if (data.success) {
         setAzureAudios(data.audios)

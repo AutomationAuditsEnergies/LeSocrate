@@ -68,7 +68,7 @@ def create_hr_blueprint(socketio):
     def check_hr_enabled():
         from flask import request as req
         # Ces endpoints restent accessibles même si HR est désactivé
-        always_allowed = {"hr.get_hr_enabled", "hr.check_upload_permission"}
+        always_allowed = {"hr.get_hr_enabled", "hr.check_upload_permission", "hr.recorder_audio_list"}
         if req.endpoint in always_allowed:
             return None
         if not HR_ENABLED:
@@ -480,6 +480,42 @@ def create_hr_blueprint(socketio):
         except Exception as e:
             logger.error(f"❌ Erreur suppression PDF HR: {e}")
             return jsonify({"success": False, "error": str(e)}), 500
+
+    # ─── GET /api/recorder/audio-list (PAS d'auth admin) ─────────────────
+    @hr_bp.route("/api/recorder/audio-list", methods=["GET"])
+    def recorder_audio_list():
+        """Liste les audios du container de ce backend (accessible sans session admin)"""
+        try:
+            connection_string = os.environ.get("AZURE_AUDIO_STORAGE_CONNECTION_STRING")
+            if not connection_string:
+                return jsonify({"success": False, "audios": []}), 200
+
+            container_name = os.environ.get("AZURE_AUDIO_CONTAINER", "formationaudio-dev")
+            blob_service_client = BlobServiceClient.from_connection_string(connection_string)
+            container_client = blob_service_client.get_container_client(container_name)
+
+            account_name = blob_service_client.account_name
+            account_key = blob_service_client.credential.account_key
+            expiry = datetime.now(timezone.utc) + timedelta(hours=1)
+
+            audios = []
+            for blob in sorted(container_client.list_blobs(), key=lambda b: b.name):
+                sas_token = generate_blob_sas(
+                    account_name=account_name,
+                    container_name=container_name,
+                    blob_name=blob.name,
+                    account_key=account_key,
+                    permission=BlobSasPermissions(read=True),
+                    expiry=expiry,
+                )
+                url = f"https://{account_name}.blob.core.windows.net/{container_name}/{blob.name}?{sas_token}"
+                audios.append({"name": blob.name, "size": blob.size, "url": url})
+
+            return jsonify({"success": True, "audios": audios}), 200
+
+        except Exception as e:
+            logger.warning(f"⚠️ Erreur recorder audio-list: {e}")
+            return jsonify({"success": False, "audios": []}), 200
 
     # ─── GET /api/hr/upload-permission/<platform_id> (PAS d'auth admin) ──
     @hr_bp.route("/api/hr/upload-permission/<int:platform_id>", methods=["GET"])

@@ -1,4 +1,4 @@
-# admin_routes.py -- Routes d'administration (API JSON uniquement)
+# admin_routes.py --- Routes d'administration (API JSON uniquement)
 from flask import Blueprint, request, session, jsonify, send_file
 from datetime import datetime, timedelta, timezone
 import os
