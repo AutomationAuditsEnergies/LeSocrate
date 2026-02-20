@@ -55,14 +55,7 @@ export default function App() {
             </ProtectedAdminRoute>
           }
         />
-        <Route
-          path="/recorder"
-          element={
-            <ProtectedAdminRoute>
-              <Recorder />
-            </ProtectedAdminRoute>
-          }
-        />
+        <Route path="/recorder" element={<Recorder />} />
         <Route
           path="/hr-dashboard"
           element={

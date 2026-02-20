@@ -2,6 +2,15 @@
 
 ## 2026-02-20
 
+### Feature : Recorder accessible sans mot de passe
+
+- **`App.jsx`** — `/recorder` n'est plus protégé par `ProtectedAdminRoute`
+- **`admin_routes.py`** — Suppression des vérifications `is_admin` sur les routes utilisées par le Recorder :
+  - `POST /api/admin/upload-audios`
+  - `GET /api/admin/audio-upload-status`
+  - `DELETE /api/admin/audios/<filename>`
+- Les intervenants peuvent désormais accéder au Recorder et uploader des audios sans compte admin
+
 ### Fix : Route publique pour la liste d'audios du Recorder
 
 - **`hr_routes.py`** — Nouvelle route `GET /api/recorder/audio-list` accessible sans session admin

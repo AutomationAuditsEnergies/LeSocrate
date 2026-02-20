@@ -688,9 +688,6 @@ def create_admin_blueprint(socketio):
     def upload_audios():
         """Upload multi-audios : sauvegarde les fichiers puis lance le traitement en arrière-plan"""
         try:
-            if not session.get("is_admin"):
-                return jsonify({"success": False, "error": "Accès refusé"}), 403
-
             # Refuser si un job est déjà en cours
             if state.audio_upload_job["status"] in ("saving", "processing"):
                 return (
@@ -953,9 +950,6 @@ def create_admin_blueprint(socketio):
     def audio_upload_status():
         """Retourne le statut du job d'upload audio en arrière-plan"""
         try:
-            if not session.get("is_admin"):
-                return jsonify({"success": False, "error": "Accès refusé"}), 403
-
             return jsonify({"success": True, **state.audio_upload_job}), 200
 
         except Exception as e:
@@ -966,9 +960,6 @@ def create_admin_blueprint(socketio):
     def delete_audio(filename):
         """Supprime un audio individuel du conteneur Azure"""
         try:
-            if not session.get("is_admin"):
-                return jsonify({"success": False, "error": "Accès refusé"}), 403
-
             connection_string = os.environ.get("AZURE_AUDIO_STORAGE_CONNECTION_STRING")
             if not connection_string:
                 return (
