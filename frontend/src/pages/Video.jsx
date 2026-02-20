@@ -221,7 +221,7 @@ export default function Video() {
       {/* Header */}
       <div className="bg-white border-b border-gray-200 px-8 flex items-center justify-between flex-shrink-0" style={{ height: '64px' }}>
         <div>
-          <h1 className="text-xl font-semibold text-gray-800">Formation TP CRCD</h1>
+          <h1 className="text-xl font-semibold text-gray-800">{import.meta.env.VITE_FORMATION_NAME || 'TP CRCD'}</h1>
           <p className="text-sm text-gray-500">{new Date().toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' })}</p>
         </div>
       </div>
