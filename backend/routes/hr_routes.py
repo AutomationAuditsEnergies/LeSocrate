@@ -18,6 +18,13 @@ PDF_UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "..", "uploads", "pdfs"
 HR_ENABLED = os.environ.get("HR_DASHBOARD_ENABLED", "false").lower() == "true"
 
 
+_ARCHIVE_DEFAULTS = {
+    1: "formationaudio-archives",
+    2: "formationaudio-archives-p2",
+    3: "formationaudio-p3-archives",
+}
+
+
 def _get_platform_info(pid):
     """Retourne la config d'une plateforme distante depuis les env vars"""
     if pid == 1:
@@ -25,12 +32,14 @@ def _get_platform_info(pid):
             "backend_url": None,
             "frontend_url": os.environ.get("PLATFORM_1_FRONTEND_URL", "http://localhost:5173"),
             "audio_container": os.environ.get("AZURE_AUDIO_CONTAINER", "formationaudio-dev"),
+            "audio_archive_container": os.environ.get("AZURE_AUDIO_ARCHIVE_CONTAINER", _ARCHIVE_DEFAULTS[1]),
             "pdf_container": os.environ.get("AZURE_STORAGE_CONTAINER", "formationpdf"),
         }
     return {
         "backend_url": os.environ.get(f"PLATFORM_{pid}_BACKEND_URL"),
         "frontend_url": os.environ.get(f"PLATFORM_{pid}_FRONTEND_URL"),
         "audio_container": os.environ.get(f"PLATFORM_{pid}_AUDIO_CONTAINER", f"formationaudio-p{pid}"),
+        "audio_archive_container": os.environ.get(f"PLATFORM_{pid}_AUDIO_ARCHIVE_CONTAINER", _ARCHIVE_DEFAULTS.get(pid, f"formationaudio-archives-p{pid}")),
         "pdf_container": os.environ.get(f"PLATFORM_{pid}_PDF_CONTAINER", f"formationpdf-p{pid}"),
     }
 
@@ -728,12 +737,10 @@ def create_hr_blueprint(socketio):
         if job.get("step_status") == "running":
             return jsonify({"success": False, "error": "Un backup est déjà en cours"}), 409
 
-        if platform_id != 1:
-            return jsonify({"success": False, "error": "Backup non disponible pour cette plateforme"}), 400
-
+        pinfo = _get_platform_info(platform_id)
         connection_string = os.environ.get("AZURE_AUDIO_STORAGE_CONNECTION_STRING")
-        archive_container = os.environ.get("AZURE_AUDIO_ARCHIVE_CONTAINER", "formationaudio-archives")
-        source_container = os.environ.get("AZURE_AUDIO_CONTAINER", "formationaudio-dev")
+        archive_container = pinfo["audio_archive_container"]
+        source_container = pinfo["audio_container"]
 
         if not connection_string:
             return jsonify({"success": False, "error": "Configuration Azure manquante"}), 500
@@ -860,7 +867,7 @@ def create_hr_blueprint(socketio):
             job["error"] = str(e)
 
     def _unlock_platform(platform_id):
-        """Met upload_locked = 0 en base"""
+        """Met upload_locked = 0 en base et propage vers le backend distant (P2/P3)"""
         conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute(
@@ -869,6 +876,8 @@ def create_hr_blueprint(socketio):
         )
         conn.commit()
         conn.close()
+        if platform_id != 1:
+            _call_platform(platform_id, "/api/internal/set-lock", json_data={"locked": False})
 
     # ─── GET /api/hr/platforms/<id>/course-time ───────────────────────────
     @hr_bp.route("/api/hr/platforms/<int:platform_id>/course-time", methods=["GET"])
