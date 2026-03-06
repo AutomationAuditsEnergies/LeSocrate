@@ -23,7 +23,7 @@ else:
 # URL de base pour les audios (Azure CDN ou Blob direct selon la plateforme)
 _AUDIO_BASE = os.getenv(
     "AZURE_AUDIO_BASE_URL",
-    "https://formationaudios.blob.core.windows.net/formationaudio-dev"
+    "https://formationaudios-ebbgcnh0hbcxdjcq.z02.azurefd.net/formationaudio-dev"
 ).rstrip("/")
 
 # Configuration du cours - PLAYLIST DES AUDIOS (Azure Storage)

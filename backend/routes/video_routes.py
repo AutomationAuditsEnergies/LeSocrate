@@ -1,5 +1,6 @@
 # video_routes.py --- Routes pour l'API vidéo et cours (JSON uniquement)
-from flask import Blueprint, session, jsonify
+from flask import Blueprint, session, jsonify, request, Response
+import requests as http_requests
 from services.audio_service import get_current_audio_info
 from services.time_service import get_heure_debut_cours, get_current_simulated_time
 from utils.logger import get_logger
@@ -88,6 +89,47 @@ def video_status():
     except Exception as e:
         logger.error(f"❌ Erreur API video/status: {e}")
         return jsonify({"success": False, "error": "Erreur serveur"}), 500
+
+
+@video_bp.route("/api/audio/stream")
+def audio_stream():
+    """Proxy l'audio depuis Azure Blob Storage avec support des Range requests"""
+    try:
+        audio_info, offset, temps_restant = get_current_audio_info()
+        if not audio_info:
+            return "Pas d'audio en cours", 404
+
+        blob_url = audio_info["filename"]
+        range_header = request.headers.get("Range")
+
+        # Transférer la requête Range à Azure (server-to-server, pas de CORS)
+        headers = {}
+        if range_header:
+            headers["Range"] = range_header
+
+        resp = http_requests.get(blob_url, headers=headers, stream=True)
+
+        # Construire les headers de la réponse
+        response_headers = {
+            "Content-Type": "audio/mpeg",
+            "Accept-Ranges": "bytes",
+            "Cache-Control": "no-cache",
+        }
+        if resp.headers.get("Content-Length"):
+            response_headers["Content-Length"] = resp.headers["Content-Length"]
+        if resp.headers.get("Content-Range"):
+            response_headers["Content-Range"] = resp.headers["Content-Range"]
+
+        status = 206 if resp.status_code == 206 else 200
+        return Response(
+            resp.iter_content(chunk_size=8192),
+            status=status,
+            headers=response_headers,
+        )
+
+    except Exception as e:
+        logger.error(f"❌ Erreur proxy audio: {e}")
+        return "Erreur serveur", 500
 
 
 @video_bp.route("/api/cours-status")
