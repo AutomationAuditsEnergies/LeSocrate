@@ -456,7 +456,7 @@ export default function Recorder() {
                         {audioFiles.length > 0 ? `${audioFiles.length} fichier(s) sélectionné(s)` : 'Glissez vos fichiers ici'}
                       </h3>
                       <p className="text-sm mt-2" style={{ color: '#64748b' }}>ou cliquez pour parcourir</p>
-                      <p className="text-xs mt-1" style={{ color: '#94a3b8' }}>Formats supportés : WAV, MP3, OGG, M4A, FLAC, AAC, WMA, WEBM</p>
+                      <p className="text-xs mt-1" style={{ color: '#94a3b8' }}>Format supporté : MP3</p>
                     </div>
                     {audioFiles.length > 0 && !isJobActive && (
                       <button
