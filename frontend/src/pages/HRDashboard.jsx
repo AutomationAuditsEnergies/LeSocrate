@@ -253,7 +253,7 @@ export default function HRDashboard() {
           <div className="mx-auto max-w-7xl px-6 py-4">
             <div className="flex items-center justify-between gap-4">
               <h1 className="text-2xl font-bold tracking-tight" style={{ fontFamily: 'Inter, sans-serif', color: colors.text }}>
-                Dashboard <span style={{ color: '#8B5CF6' }}>RH</span>
+                Dashboard <span style={{ color: '#8B5CF6' }}>Formations</span>
               </h1>
               <div className="flex items-center gap-3">
                 {/* Dark mode toggle */}

@@ -116,14 +116,24 @@ def init_database():
             cursor.executemany(
                 "INSERT INTO platform_config (id, name, upload_locked, updated_at) VALUES (?, ?, 1, ?)",
                 [
-                    (1, "Plateforme 1", now_str),
-                    (2, "Plateforme 2", now_str),
-                    (3, "Plateforme 3", now_str),
+                    (1, "Formation 1 TP CRCD", now_str),
+                    (2, "Formation 2 TP EC", now_str),
+                    (3, "Formation 3 TP", now_str),
                 ],
             )
             logger.info("✅ 3 plateformes insérées dans platform_config")
         else:
             logger.info("ℹ️ platform_config déjà peuplée")
+
+        # Migration des noms de plateformes
+        cursor.executemany(
+            "UPDATE platform_config SET name = ? WHERE id = ?",
+            [
+                ("Formation 1 TP CRCD", 1),
+                ("Formation 2 TP EC", 2),
+                ("Formation 3 TP", 3),
+            ],
+        )
 
         conn.commit()
         conn.close()
