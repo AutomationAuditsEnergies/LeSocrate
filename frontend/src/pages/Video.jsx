@@ -130,6 +130,13 @@ export default function Video() {
       }
 
       const handleCanPlay = () => {
+        // S'assurer que la position est définie avant de lancer la lecture
+        // (canplay peut se déclencher avant que le seek de loadedmetadata soit terminé)
+        if (!hasSetPosition && audioInfo.offset !== undefined) {
+          audio.currentTime = audioInfo.offset
+          hasSetPosition = true
+          console.log(`Audio repositionné à ${audioInfo.offset}s (dans canplay)`)
+        }
         if (audio.paused) {
           audio.play().catch((err) => {
             if (err.name === 'NotAllowedError') {
