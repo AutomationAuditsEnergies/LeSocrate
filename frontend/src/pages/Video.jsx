@@ -123,24 +123,39 @@ export default function Video() {
 
       console.log(`[Audio] Initialisation — offset: ${targetOffset}s`)
 
+      const handleLoadedMetadata = () => {
+        if (targetOffset > 0) {
+          console.log(`[Audio] Seek vers ${targetOffset}s...`)
+          audio.currentTime = targetOffset
+        }
+      }
+
+      const handleSeeked = () => {
+        console.log(`[Audio] Seek terminé — position: ${audio.currentTime}s`)
+        if (audio.paused) {
+          audio.play().catch(() => {})
+        }
+      }
+
       const handleCanPlay = () => {
         console.log(`[Audio] canplay — currentTime: ${audio.currentTime}s`)
         if (audio.paused) {
-          audio.play().catch((err) => {
-            if (err.name === 'NotAllowedError') {
-              audio.muted = true
-              setMuted(true)
-              audio.play().then(() => {
-                console.log('[Audio] Lancé en muet (autoplay policy)')
-                setShowPlayPrompt(true)
-              }).catch((e) => {
-                console.error('[Audio] Impossible de lire même en muet:', e)
-                setShowPlayPrompt(true)
-              })
-            } else {
-              console.error('[Audio] Erreur lecture:', err)
-            }
-          })
+          // Si pas d'offset ou si le seek a déjà réussi, lancer la lecture
+          if (targetOffset === 0 || audio.currentTime >= targetOffset - 1) {
+            audio.play().catch((err) => {
+              if (err.name === 'NotAllowedError') {
+                audio.muted = true
+                setMuted(true)
+                audio.play().then(() => {
+                  console.log('[Audio] Lancé en muet (autoplay policy)')
+                  setShowPlayPrompt(true)
+                }).catch((e) => {
+                  console.error('[Audio] Impossible de lire même en muet:', e)
+                  setShowPlayPrompt(true)
+                })
+              }
+            })
+          }
         }
       }
 
@@ -148,19 +163,16 @@ export default function Video() {
         console.error('[Audio] Erreur chargement:', audio.error)
       }
 
+      audio.addEventListener('loadedmetadata', handleLoadedMetadata)
+      audio.addEventListener('seeked', handleSeeked)
       audio.addEventListener('canplay', handleCanPlay)
       audio.addEventListener('error', handleError)
 
-      // Utiliser Media Fragment URI pour démarrer à l'offset
-      // Le navigateur gère le positionnement au niveau réseau
-      const srcUrl = targetOffset > 0
-        ? `${audioInfo.filename}#t=${targetOffset}`
-        : audioInfo.filename
-      console.log(`[Audio] Source: ${srcUrl}`)
-      audio.src = srcUrl
       audio.load()
 
       return () => {
+        audio.removeEventListener('loadedmetadata', handleLoadedMetadata)
+        audio.removeEventListener('seeked', handleSeeked)
         audio.removeEventListener('canplay', handleCanPlay)
         audio.removeEventListener('error', handleError)
       }
@@ -258,7 +270,9 @@ export default function Video() {
                 controlsList="nodownload noplaybackrate noremoteplayback"
                 disablePictureInPicture
                 style={{ display: 'none' }}
-              />
+              >
+                <source src={audioInfo.filename} type="audio/mpeg" />
+              </audio>
             )}
           </div>
 

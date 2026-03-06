@@ -1,9 +1,11 @@
-# IMPORTANT: eventlet.monkey_patch() DOIT etre appele EN PREMIER
+# iIMPORTANT: eventlet.monkey_patch() DOIT etre appele EN PREMIER
 import eventlet
+
 eventlet.monkey_patch()
 
 # Maintenant on peut importer le reste
 from dotenv import load_dotenv
+
 load_dotenv()  # Charge le fichier .env
 
 from main_app import app, socketio
