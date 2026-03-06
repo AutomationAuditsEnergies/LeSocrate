@@ -267,6 +267,7 @@ export default function Video() {
               <audio
                 ref={audioRef}
                 id="audio"
+                crossOrigin="anonymous"
                 controlsList="nodownload noplaybackrate noremoteplayback"
                 disablePictureInPicture
                 style={{ display: 'none' }}
