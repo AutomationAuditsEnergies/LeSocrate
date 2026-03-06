@@ -119,42 +119,49 @@ export default function Video() {
   useEffect(() => {
     if (audioInfo?.status === 'playing' && audioRef.current) {
       const audio = audioRef.current
-      let hasSetPosition = false
+      // Deux conditions requises avant de lancer la lecture :
+      // 1. L'audio est à la bonne position (seek terminé, ou offset = 0)
+      // 2. L'audio a assez de données pour jouer (canplay)
+      let isAtCorrectPosition = !audioInfo.offset  // true si offset = 0 ou undefined
+      let isReadyToPlay = false
+
+      const attemptPlay = () => {
+        if (!isAtCorrectPosition || !isReadyToPlay || !audio.paused) return
+        audio.play().catch((err) => {
+          if (err.name === 'NotAllowedError') {
+            // Autoplay avec son bloqué — relancer en muet pour garder la synchro
+            audio.muted = true
+            setMuted(true)
+            audio.play().then(() => {
+              console.log('Audio lancé en muet (autoplay policy)')
+              setShowPlayPrompt(true)
+            }).catch((e) => {
+              console.error('Impossible de lire même en muet:', e)
+              setShowPlayPrompt(true)
+            })
+          } else {
+            console.error('Erreur lecture audio:', err)
+          }
+        })
+      }
 
       const handleLoadedMetadata = () => {
-        if (audioInfo.offset !== undefined && !hasSetPosition) {
+        if (audioInfo.offset) {
+          console.log(`Seek vers ${audioInfo.offset}s...`)
           audio.currentTime = audioInfo.offset
-          hasSetPosition = true
-          console.log(`Audio positionné à ${audioInfo.offset}s`)
+          // isAtCorrectPosition sera mis à true par handleSeeked
         }
       }
 
+      const handleSeeked = () => {
+        console.log(`Seek terminé à ${audio.currentTime}s`)
+        isAtCorrectPosition = true
+        attemptPlay()
+      }
+
       const handleCanPlay = () => {
-        // S'assurer que la position est définie avant de lancer la lecture
-        // (canplay peut se déclencher avant que le seek de loadedmetadata soit terminé)
-        if (!hasSetPosition && audioInfo.offset !== undefined) {
-          audio.currentTime = audioInfo.offset
-          hasSetPosition = true
-          console.log(`Audio repositionné à ${audioInfo.offset}s (dans canplay)`)
-        }
-        if (audio.paused) {
-          audio.play().catch((err) => {
-            if (err.name === 'NotAllowedError') {
-              // Autoplay avec son bloqué — relancer en muet pour garder la synchro
-              audio.muted = true
-              setMuted(true)
-              audio.play().then(() => {
-                console.log('Audio lancé en muet (autoplay policy)')
-                setShowPlayPrompt(true)
-              }).catch((e) => {
-                console.error('Impossible de lire même en muet:', e)
-                setShowPlayPrompt(true)
-              })
-            } else {
-              console.error('Erreur lecture audio:', err)
-            }
-          })
-        }
+        isReadyToPlay = true
+        attemptPlay()
       }
 
       const handleError = () => {
@@ -162,13 +169,13 @@ export default function Video() {
       }
 
       const handleTimeUpdate = () => {
-        // Synchroniser régulièrement (toutes les 10 secondes)
         if (Math.floor(audio.currentTime) % 10 === 0) {
           console.log(`Position audio: ${Math.floor(audio.currentTime)}s`)
         }
       }
 
       audio.addEventListener('loadedmetadata', handleLoadedMetadata)
+      audio.addEventListener('seeked', handleSeeked)
       audio.addEventListener('canplay', handleCanPlay)
       audio.addEventListener('error', handleError)
       audio.addEventListener('timeupdate', handleTimeUpdate)
@@ -178,6 +185,7 @@ export default function Video() {
 
       return () => {
         audio.removeEventListener('loadedmetadata', handleLoadedMetadata)
+        audio.removeEventListener('seeked', handleSeeked)
         audio.removeEventListener('canplay', handleCanPlay)
         audio.removeEventListener('error', handleError)
         audio.removeEventListener('timeupdate', handleTimeUpdate)
