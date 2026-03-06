@@ -119,64 +119,81 @@ export default function Video() {
   useEffect(() => {
     if (audioInfo?.status === 'playing' && audioRef.current) {
       const audio = audioRef.current
-      // Deux conditions requises avant de lancer la lecture :
-      // 1. L'audio est à la bonne position (seek terminé, ou offset = 0)
-      // 2. L'audio a assez de données pour jouer (canplay)
-      let isAtCorrectPosition = !audioInfo.offset  // true si offset = 0 ou undefined
-      let isReadyToPlay = false
+      const targetOffset = audioInfo.offset || 0
+      let hasStartedPlaying = false
 
-      const attemptPlay = () => {
-        if (!isAtCorrectPosition || !isReadyToPlay || !audio.paused) return
+      console.log(`[Audio] Initialisation — offset cible: ${targetOffset}s, fichier: ${audioInfo.filename}`)
+
+      const startPlayback = () => {
+        if (hasStartedPlaying || !audio.paused) return
+        hasStartedPlaying = true
+        console.log(`[Audio] Lancement lecture à currentTime=${audio.currentTime}s`)
         audio.play().catch((err) => {
           if (err.name === 'NotAllowedError') {
-            // Autoplay avec son bloqué — relancer en muet pour garder la synchro
             audio.muted = true
             setMuted(true)
             audio.play().then(() => {
-              console.log('Audio lancé en muet (autoplay policy)')
+              console.log('[Audio] Lancé en muet (autoplay policy)')
               setShowPlayPrompt(true)
             }).catch((e) => {
-              console.error('Impossible de lire même en muet:', e)
+              console.error('[Audio] Impossible de lire même en muet:', e)
               setShowPlayPrompt(true)
             })
           } else {
-            console.error('Erreur lecture audio:', err)
+            hasStartedPlaying = false
+            console.error('[Audio] Erreur lecture:', err)
           }
         })
       }
 
       const handleLoadedMetadata = () => {
-        if (audioInfo.offset) {
-          console.log(`Seek vers ${audioInfo.offset}s...`)
-          audio.currentTime = audioInfo.offset
-          // isAtCorrectPosition sera mis à true par handleSeeked
+        console.log(`[Audio] loadedmetadata — durée: ${audio.duration}s`)
+        if (targetOffset > 0) {
+          console.log(`[Audio] Seek vers ${targetOffset}s...`)
+          audio.currentTime = targetOffset
+        } else {
+          // Pas besoin de seek, on peut jouer directement quand canplay arrivera
         }
       }
 
       const handleSeeked = () => {
-        console.log(`Seek terminé à ${audio.currentTime}s`)
-        isAtCorrectPosition = true
-        attemptPlay()
+        console.log(`[Audio] seeked — position réelle: ${audio.currentTime}s`)
       }
 
       const handleCanPlay = () => {
-        isReadyToPlay = true
-        attemptPlay()
+        console.log(`[Audio] canplay — currentTime: ${audio.currentTime}s, target: ${targetOffset}s`)
+        // Si on doit être à un offset et qu'on est encore à 0, re-seek
+        if (targetOffset > 0 && audio.currentTime < targetOffset - 1) {
+          console.log(`[Audio] Position incorrecte (${audio.currentTime}s), re-seek vers ${targetOffset}s`)
+          audio.currentTime = targetOffset
+          // On attend le prochain canplay après le seek
+          return
+        }
+        startPlayback()
+      }
+
+      const handlePlaying = () => {
+        // Vérification de sécurité : si l'audio joue depuis la mauvaise position, corriger
+        if (targetOffset > 0 && audio.currentTime < targetOffset - 2) {
+          console.log(`[Audio] CORRECTION — joue à ${audio.currentTime}s au lieu de ${targetOffset}s, re-seek`)
+          audio.currentTime = targetOffset
+        }
       }
 
       const handleError = () => {
-        console.error('Erreur chargement audio:', audio.error)
+        console.error('[Audio] Erreur chargement:', audio.error)
       }
 
       const handleTimeUpdate = () => {
-        if (Math.floor(audio.currentTime) % 10 === 0) {
-          console.log(`Position audio: ${Math.floor(audio.currentTime)}s`)
+        if (Math.floor(audio.currentTime) % 30 === 0) {
+          console.log(`[Audio] Position: ${Math.floor(audio.currentTime)}s`)
         }
       }
 
       audio.addEventListener('loadedmetadata', handleLoadedMetadata)
       audio.addEventListener('seeked', handleSeeked)
       audio.addEventListener('canplay', handleCanPlay)
+      audio.addEventListener('playing', handlePlaying)
       audio.addEventListener('error', handleError)
       audio.addEventListener('timeupdate', handleTimeUpdate)
 
@@ -187,6 +204,7 @@ export default function Video() {
         audio.removeEventListener('loadedmetadata', handleLoadedMetadata)
         audio.removeEventListener('seeked', handleSeeked)
         audio.removeEventListener('canplay', handleCanPlay)
+        audio.removeEventListener('playing', handlePlaying)
         audio.removeEventListener('error', handleError)
         audio.removeEventListener('timeupdate', handleTimeUpdate)
       }
