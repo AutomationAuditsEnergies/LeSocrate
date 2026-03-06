@@ -120,63 +120,27 @@ export default function Video() {
     if (audioInfo?.status === 'playing' && audioRef.current) {
       const audio = audioRef.current
       const targetOffset = audioInfo.offset || 0
-      let hasStartedPlaying = false
 
-      console.log(`[Audio] Initialisation — offset cible: ${targetOffset}s, fichier: ${audioInfo.filename}`)
-
-      const startPlayback = () => {
-        if (hasStartedPlaying || !audio.paused) return
-        hasStartedPlaying = true
-        console.log(`[Audio] Lancement lecture à currentTime=${audio.currentTime}s`)
-        audio.play().catch((err) => {
-          if (err.name === 'NotAllowedError') {
-            audio.muted = true
-            setMuted(true)
-            audio.play().then(() => {
-              console.log('[Audio] Lancé en muet (autoplay policy)')
-              setShowPlayPrompt(true)
-            }).catch((e) => {
-              console.error('[Audio] Impossible de lire même en muet:', e)
-              setShowPlayPrompt(true)
-            })
-          } else {
-            hasStartedPlaying = false
-            console.error('[Audio] Erreur lecture:', err)
-          }
-        })
-      }
-
-      const handleLoadedMetadata = () => {
-        console.log(`[Audio] loadedmetadata — durée: ${audio.duration}s`)
-        if (targetOffset > 0) {
-          console.log(`[Audio] Seek vers ${targetOffset}s...`)
-          audio.currentTime = targetOffset
-        } else {
-          // Pas besoin de seek, on peut jouer directement quand canplay arrivera
-        }
-      }
-
-      const handleSeeked = () => {
-        console.log(`[Audio] seeked — position réelle: ${audio.currentTime}s`)
-      }
+      console.log(`[Audio] Initialisation — offset: ${targetOffset}s`)
 
       const handleCanPlay = () => {
-        console.log(`[Audio] canplay — currentTime: ${audio.currentTime}s, target: ${targetOffset}s`)
-        // Si on doit être à un offset et qu'on est encore à 0, re-seek
-        if (targetOffset > 0 && audio.currentTime < targetOffset - 1) {
-          console.log(`[Audio] Position incorrecte (${audio.currentTime}s), re-seek vers ${targetOffset}s`)
-          audio.currentTime = targetOffset
-          // On attend le prochain canplay après le seek
-          return
-        }
-        startPlayback()
-      }
-
-      const handlePlaying = () => {
-        // Vérification de sécurité : si l'audio joue depuis la mauvaise position, corriger
-        if (targetOffset > 0 && audio.currentTime < targetOffset - 2) {
-          console.log(`[Audio] CORRECTION — joue à ${audio.currentTime}s au lieu de ${targetOffset}s, re-seek`)
-          audio.currentTime = targetOffset
+        console.log(`[Audio] canplay — currentTime: ${audio.currentTime}s`)
+        if (audio.paused) {
+          audio.play().catch((err) => {
+            if (err.name === 'NotAllowedError') {
+              audio.muted = true
+              setMuted(true)
+              audio.play().then(() => {
+                console.log('[Audio] Lancé en muet (autoplay policy)')
+                setShowPlayPrompt(true)
+              }).catch((e) => {
+                console.error('[Audio] Impossible de lire même en muet:', e)
+                setShowPlayPrompt(true)
+              })
+            } else {
+              console.error('[Audio] Erreur lecture:', err)
+            }
+          })
         }
       }
 
@@ -184,29 +148,21 @@ export default function Video() {
         console.error('[Audio] Erreur chargement:', audio.error)
       }
 
-      const handleTimeUpdate = () => {
-        if (Math.floor(audio.currentTime) % 30 === 0) {
-          console.log(`[Audio] Position: ${Math.floor(audio.currentTime)}s`)
-        }
-      }
-
-      audio.addEventListener('loadedmetadata', handleLoadedMetadata)
-      audio.addEventListener('seeked', handleSeeked)
       audio.addEventListener('canplay', handleCanPlay)
-      audio.addEventListener('playing', handlePlaying)
       audio.addEventListener('error', handleError)
-      audio.addEventListener('timeupdate', handleTimeUpdate)
 
-      // Forcer le chargement
+      // Utiliser Media Fragment URI pour démarrer à l'offset
+      // Le navigateur gère le positionnement au niveau réseau
+      const srcUrl = targetOffset > 0
+        ? `${audioInfo.filename}#t=${targetOffset}`
+        : audioInfo.filename
+      console.log(`[Audio] Source: ${srcUrl}`)
+      audio.src = srcUrl
       audio.load()
 
       return () => {
-        audio.removeEventListener('loadedmetadata', handleLoadedMetadata)
-        audio.removeEventListener('seeked', handleSeeked)
         audio.removeEventListener('canplay', handleCanPlay)
-        audio.removeEventListener('playing', handlePlaying)
         audio.removeEventListener('error', handleError)
-        audio.removeEventListener('timeupdate', handleTimeUpdate)
       }
     }
   }, [audioInfo])
@@ -302,9 +258,7 @@ export default function Video() {
                 controlsList="nodownload noplaybackrate noremoteplayback"
                 disablePictureInPicture
                 style={{ display: 'none' }}
-              >
-                <source src={audioInfo.filename} type="audio/mpeg" />
-              </audio>
+              />
             )}
           </div>
 
