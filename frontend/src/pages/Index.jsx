@@ -34,7 +34,8 @@ export default function Index() {
       const data = await response.json()
 
       if (data.success) {
-        // Connexion réussie, rediriger vers la page vidéo
+        // Stocker le token pour les navigateurs bloquant les cookies tiers
+        if (data.token) localStorage.setItem('auth_token', data.token)
         navigate('/video')
       } else {
         alert(data.error || 'Erreur lors de la connexion')

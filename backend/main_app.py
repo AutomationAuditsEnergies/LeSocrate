@@ -1,7 +1,7 @@
 # main_app.py - Point d'entrée principal de l'application (refactorisé)
 # Backend API pur pour frontend React
 import os
-from flask import Flask
+from flask import Flask, request, session
 from flask_socketio import SocketIO
 from flask_cors import CORS
 
@@ -87,6 +87,19 @@ app.register_blueprint(chat_bp)
 app.register_blueprint(hr_bp)
 
 logger.info("✅ Tous les blueprints enregistrés")
+
+# Reconstituer la session Flask depuis le header X-Auth-Token
+# (pour navigation privée et navigateurs bloquant les cookies tiers)
+import state as _state
+@app.before_request
+def populate_session_from_token():
+    if "nom" not in session:
+        token = request.headers.get("X-Auth-Token")
+        if token and token in _state.user_tokens:
+            user = _state.user_tokens[token]
+            session["nom"] = user["nom"]
+            session["prenom"] = user["prenom"]
+            session["log_id"] = user["log_id"]
 
 # Enregistrement des gestionnaires SocketIO
 register_socketio_handlers(socketio)

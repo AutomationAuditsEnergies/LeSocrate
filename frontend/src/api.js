@@ -8,11 +8,17 @@ export function apiUrl(path) {
 
 /**
  * Wrapper autour de fetch qui ajoute automatiquement credentials: 'include'
- * Indispensable pour que les cookies de session fonctionnent en cross-origin (prod)
+ * et le token X-Auth-Token pour les navigateurs bloquant les cookies tiers (navigation privée)
  */
 export function apiFetch(path, options = {}) {
+  const token = localStorage.getItem('auth_token')
+  const headers = {
+    ...(options.headers || {}),
+    ...(token ? { 'X-Auth-Token': token } : {}),
+  }
   return fetch(apiUrl(path), {
     ...options,
+    headers,
     credentials: 'include',
   })
 }

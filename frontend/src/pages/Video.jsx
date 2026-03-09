@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import ChatPanel from '../components/ChatPanel.jsx'
 import LeftSidebar from '../components/LeftSidebar.jsx'
-import { apiUrl } from '../api'
+import { apiUrl, apiFetch } from '../api'
 
 export default function Video() {
   const navigate = useNavigate()
@@ -37,10 +37,7 @@ export default function Video() {
   // Fonction pour raccrocher (déconnexion)
   const handleHangup = async () => {
     try {
-      await fetch(apiUrl('/api/auth/logout'), {
-        method: 'POST',
-        credentials: 'include'
-      })
+      await apiFetch('/api/auth/logout', { method: 'POST' })
       navigate('/')
     } catch (err) {
       console.error('Erreur déconnexion:', err)
@@ -72,9 +69,7 @@ export default function Video() {
   useEffect(() => {
     const fetchAudioStatus = async () => {
       try {
-        const response = await fetch(apiUrl('/api/video/status'), {
-          credentials: 'include',
-        })
+        const response = await apiFetch('/api/video/status')
         const data = await response.json()
 
         if (!data.authenticated) {
@@ -120,43 +115,33 @@ export default function Video() {
     if (audioInfo?.status === 'playing' && audioRef.current) {
       const audio = audioRef.current
       const targetOffset = audioInfo.offset || 0
-
-      console.log(`[Audio] Initialisation — offset: ${targetOffset}s`)
+      let hasAttemptedPlay = false
 
       const handleLoadedMetadata = () => {
         if (targetOffset > 0) {
-          console.log(`[Audio] Seek vers ${targetOffset}s...`)
           audio.currentTime = targetOffset
         }
       }
 
       const handleSeeked = () => {
-        console.log(`[Audio] Seek terminé — position: ${audio.currentTime}s`)
-        if (audio.paused) {
-          audio.play().catch(() => {})
-        }
+        // Ne pas lancer play() ici — laisser canplay s'en charger
       }
 
       const handleCanPlay = () => {
-        console.log(`[Audio] canplay — currentTime: ${audio.currentTime}s`)
-        if (audio.paused) {
-          // Si pas d'offset ou si le seek a déjà réussi, lancer la lecture
-          if (targetOffset === 0 || audio.currentTime >= targetOffset - 1) {
-            audio.play().catch((err) => {
-              if (err.name === 'NotAllowedError') {
-                audio.muted = true
-                setMuted(true)
-                audio.play().then(() => {
-                  console.log('[Audio] Lancé en muet (autoplay policy)')
-                  setShowPlayPrompt(true)
-                }).catch((e) => {
-                  console.error('[Audio] Impossible de lire même en muet:', e)
-                  setShowPlayPrompt(true)
-                })
-              }
+        if (hasAttemptedPlay || !audio.paused) return
+        hasAttemptedPlay = true
+        audio.play().catch((err) => {
+          if (err.name === 'NotAllowedError') {
+            audio.muted = true
+            setMuted(true)
+            audio.play().then(() => {
+              setShowPlayPrompt(true)
+            }).catch(() => {
+              // Même en muet bloqué — afficher le bouton pour interaction manuelle
+              setShowPlayPrompt(true)
             })
           }
-        }
+        })
       }
 
       const handleError = () => {

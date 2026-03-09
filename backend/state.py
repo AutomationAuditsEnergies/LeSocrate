@@ -4,6 +4,10 @@
 # Format: {sid: username}
 connected_users = {}
 
+# Tokens d'authentification pour navigation privée / cross-origin
+# Format: {token_uuid: {nom, prenom, log_id}}
+user_tokens = {}
+
 # Variable globale pour stocker l'heure simulée (debug/admin)
 # None = utiliser l'heure réelle, datetime = heure simulée
 simulated_time_offset = None

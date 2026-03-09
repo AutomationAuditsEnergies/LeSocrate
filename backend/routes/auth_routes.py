@@ -1,9 +1,11 @@
 # auth_routes.py -- Routes d'authentification et connexion utilisateur (API JSON)
 from flask import Blueprint, request, session, jsonify
 from datetime import datetime
+import uuid
 from config import FRANCE_TZ
 from database.db import get_db_connection
 from utils.logger import get_logger
+import state
 
 logger = get_logger(__name__)
 
@@ -47,12 +49,17 @@ def create_auth_blueprint(socketio):
 
             logger.info(f"✅ Utilisateur enregistré en base avec ID: {log_id}")
 
+            # Token pour navigation privée / cross-origin (stocké en mémoire)
+            token = str(uuid.uuid4())
+            state.user_tokens[token] = {"nom": nom, "prenom": prenom, "log_id": log_id}
+
             return (
                 jsonify(
                     {
                         "success": True,
                         "user": {"nom": nom, "prenom": prenom},
                         "log_id": log_id,
+                        "token": token,
                     }
                 ),
                 200,
