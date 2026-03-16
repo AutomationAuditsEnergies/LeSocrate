@@ -31,6 +31,7 @@ jobs:
           output_location: "dist"
         env:
           VITE_API_URL: https://formation3-cpdhezh4cdcqecfy.francecentral-01.azurewebsites.net
+          VITE_FORMATION_NAME: "TP EC"
 
   close_pull_request_job:
     if: github.event_name == 'pull_request' && github.event.action == 'closed'
