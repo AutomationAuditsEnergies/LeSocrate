@@ -118,7 +118,7 @@ def init_database():
                 [
                     (1, "Formation 1 TP CRCD", now_str),
                     (2, "Formation 2 TP EC", now_str),
-                    (3, "Formation 3 TP", now_str),
+                    (3, "Formation 3 TP EC", now_str),
                 ],
             )
             logger.info("✅ 3 plateformes insérées dans platform_config")
@@ -131,7 +131,7 @@ def init_database():
             [
                 ("Formation 1 TP CRCD", 1),
                 ("Formation 2 TP EC", 2),
-                ("Formation 3 TP", 3),
+                ("Formation 3 TP EC", 3),
             ],
         )
 
