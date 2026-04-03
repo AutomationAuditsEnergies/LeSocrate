@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { apiUrl } from '../api'
+import CoursFoldersModal from '../components/CoursFolders'
 
 // ─── Material Icon Component ─────────────────────────────────────────────────
 const Icon = ({ name, className = '' }) => (
@@ -25,8 +26,11 @@ export default function HRDashboard() {
   const [currentCourseTime, setCurrentCourseTime] = useState(null)
   const [courseTimePlatformId, setCourseTimePlatformId] = useState(1)
   const [deleteConfirm, setDeleteConfirm] = useState(null)
+  const [deletingItem, setDeletingItem] = useState(false)
   const backupPollingRef = useRef({})
   const audioRef = useRef(null)
+  const [showCoursFoldersModal, setShowCoursFoldersModal] = useState(false)
+  const [selectedCoursPlatform, setSelectedCoursPlatform] = useState(null)
 
   // ─── Fetch data ──────────────────────────────────────────────────────
   const fetchPlatforms = async (refreshSelectedId = null) => {
@@ -129,24 +133,39 @@ export default function HRDashboard() {
   }
 
   const handleDeleteAudio = (platformId, filename) => {
-    setDeleteConfirm({ platformId, filename })
+    setDeleteConfirm({ type: 'audio', platformId, filename })
   }
 
-  const confirmDeleteAudio = async () => {
-    if (!deleteConfirm) return
-    const { platformId, filename } = deleteConfirm
-    setDeleteConfirm(null)
+  const confirmDelete = async () => {
+    if (!deleteConfirm || deletingItem) return
+
+    setDeletingItem(true)
+
     try {
-      const resp = await fetch(apiUrl(`/api/hr/platforms/${platformId}/audios/${encodeURIComponent(filename)}`), {
-        method: 'DELETE', credentials: 'include',
-      })
-      const data = await resp.json()
-      if (data.success) {
-        fetchAudios(platformId)
-        fetchPlatforms()
+      if (deleteConfirm.type === 'audio') {
+        const resp = await fetch(apiUrl(`/api/hr/platforms/${deleteConfirm.platformId}/audios/${encodeURIComponent(deleteConfirm.filename)}`), {
+          method: 'DELETE', credentials: 'include',
+        })
+        const data = await resp.json()
+        if (data.success) {
+          fetchAudios(deleteConfirm.platformId)
+          fetchPlatforms()
+          setDeleteConfirm(null)
+        }
+      } else if (deleteConfirm.type === 'pdf') {
+        const resp = await fetch(apiUrl(`/api/hr/platforms/${deleteConfirm.platformId}/pdf`), {
+          method: 'DELETE', credentials: 'include',
+        })
+        const data = await resp.json()
+        if (data.success) {
+          fetchPlatforms(deleteConfirm.platformId)
+          setDeleteConfirm(null)
+        }
       }
     } catch (e) {
-      console.error('Erreur suppression audio:', e)
+      console.error('Erreur suppression:', e)
+    } finally {
+      setDeletingItem(false)
     }
   }
 
@@ -192,17 +211,14 @@ export default function HRDashboard() {
     }
   }
 
-  const handleDeletePdf = async (platformId) => {
-    if (!confirm('Supprimer le PDF de cette plateforme ?')) return
-    try {
-      const resp = await fetch(apiUrl(`/api/hr/platforms/${platformId}/pdf`), {
-        method: 'DELETE', credentials: 'include',
-      })
-      const data = await resp.json()
-      if (data.success) fetchPlatforms()
-    } catch (e) {
-      console.error('Erreur suppression PDF:', e)
-    }
+  const handleDeletePdf = (platformId) => {
+    const platformName = platforms.find((platform) => platform.id === platformId)?.name
+    setDeleteConfirm({ type: 'pdf', platformId, platformName })
+  }
+
+  const handleOpenCoursFolders = (platform) => {
+    setSelectedCoursPlatform(platform)
+    setShowCoursFoldersModal(true)
   }
 
   // ─── Render ──────────────────────────────────────────────────────────
@@ -327,6 +343,7 @@ export default function HRDashboard() {
                   setShowCourseTimeModal(true)
                 }}
                 onDeleteAudio={(fn) => handleDeleteAudio(p.id, fn)}
+                onOpenCoursFolders={() => handleOpenCoursFolders(p)}
                 onPlayAudio={handlePlayAudio}
                 onPdfUpload={(file) => handlePdfUpload(p.id, file)}
                 onDeletePdf={() => handleDeletePdf(p.id)}
@@ -379,12 +396,23 @@ export default function HRDashboard() {
         />
       )}
 
-      {/* Modal confirmation suppression audio */}
+      {/* Modal Cours Folders */}
+      {showCoursFoldersModal && selectedCoursPlatform && (
+        <CoursFoldersModal
+          platformId={selectedCoursPlatform.id}
+          platformName={selectedCoursPlatform.name}
+          onClose={() => setShowCoursFoldersModal(false)}
+        />
+      )}
+
+      {/* Modal confirmation suppression */}
       {deleteConfirm && (
         <div
           className="fixed inset-0 z-[60] flex items-center justify-center p-4"
           style={{ backgroundColor: 'rgba(0, 0, 0, 0.6)' }}
-          onClick={() => setDeleteConfirm(null)}
+          onClick={() => {
+            if (!deletingItem) setDeleteConfirm(null)
+          }}
         >
           <div
             className="bg-white rounded-2xl shadow-2xl overflow-hidden"
@@ -392,26 +420,38 @@ export default function HRDashboard() {
             onClick={(e) => e.stopPropagation()}
           >
             <div className="p-6 text-center">
-              <h3 className="text-lg font-bold mb-2" style={{ color: '#0f172a' }}>Supprimer cet audio ?</h3>
+              <h3 className="text-lg font-bold mb-2" style={{ color: '#0f172a' }}>
+                {deleteConfirm.type === 'audio' ? 'Supprimer cet audio ?' : 'Supprimer ce PDF ?'}
+              </h3>
               <p className="text-sm mb-6" style={{ color: '#64748b' }}>
-                Voulez-vous vraiment supprimer <strong>"{deleteConfirm.filename}"</strong> ? Cette action est irréversible.
+                {deleteConfirm.type === 'audio' ? (
+                  <>
+                    Voulez-vous vraiment supprimer <strong>"{deleteConfirm.filename}"</strong> ? Cette action est irréversible.
+                  </>
+                ) : (
+                  <>
+                    Voulez-vous vraiment supprimer le PDF de <strong>{deleteConfirm.platformName || 'cette plateforme'}</strong> ? Cette action est irréversible.
+                  </>
+                )}
               </p>
               <div className="flex gap-3">
                 <button
                   onClick={() => setDeleteConfirm(null)}
+                  disabled={deletingItem}
                   className="flex-1 rounded-lg px-4 py-2.5 text-sm font-medium transition-colors"
                   style={{ backgroundColor: '#f1f5f9', color: '#475569', border: '1px solid #e2e8f0' }}
                 >
                   Annuler
                 </button>
                 <button
-                  onClick={confirmDeleteAudio}
-                  className="flex-1 rounded-lg px-4 py-2.5 text-sm font-semibold text-white transition-colors"
+                  onClick={confirmDelete}
+                  disabled={deletingItem}
+                  className="flex-1 rounded-lg px-4 py-2.5 text-sm font-semibold text-white transition-colors disabled:cursor-not-allowed disabled:opacity-60"
                   style={{ backgroundColor: '#dc2626' }}
                   onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = '#b91c1c' }}
                   onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = '#dc2626' }}
                 >
-                  Supprimer
+                  {deletingItem ? 'Suppression...' : 'Supprimer'}
                 </button>
               </div>
             </div>
@@ -747,7 +787,7 @@ function AudioCard({ title, icon, bgColor, audios, iconColor, buttonColor }) {
 // ─── Platform Card ───────────────────────────────────────────────────────────
 function PlatformCard({
   platform: p, expanded, audios, audiosLoading, playingAudio, pdfUploading, backupJob,
-  audioRef, colors, darkMode, onLock, onBackupAndUnlock, onExpand, onOpenPdfModal, onOpenCourseTimeModal, onDeleteAudio, onPlayAudio, onPdfUpload, onDeletePdf,
+  audioRef, colors, darkMode, onLock, onBackupAndUnlock, onExpand, onOpenPdfModal, onOpenCourseTimeModal, onDeleteAudio, onPlayAudio, onPdfUpload, onDeletePdf, onOpenCoursFolders,
 }) {
   const isBackupRunning = backupJob && backupJob.step_status === 'running'
   const isBackupDone = backupJob && backupJob.step_status === 'done'
@@ -970,6 +1010,33 @@ function PlatformCard({
               ))
             )}
           </div>
+        )}
+
+        {/* Cours Folders button */}
+        {p.active && (
+          <button
+            onClick={onOpenCoursFolders}
+            className="mt-3 flex w-full items-center justify-between rounded-lg px-4 py-2.5 text-sm font-medium transition-all"
+            style={{
+              backgroundColor: colors.innerBg,
+              border: `1px solid ${colors.border}`,
+              color: colors.textSecondary,
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.backgroundColor = colors.hoverBg
+              e.currentTarget.style.borderColor = darkMode ? '#475569' : '#94a3b8'
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.backgroundColor = colors.innerBg
+              e.currentTarget.style.borderColor = colors.border
+            }}
+          >
+            <div className="flex items-center gap-2.5">
+              <Icon name="folder_special" className="text-lg" style={{ color: '#8B5CF6' }} />
+              <span>Gérer les cours</span>
+            </div>
+            <Icon name="chevron_right" className="text-xl" />
+          </button>
         )}
 
       </div>

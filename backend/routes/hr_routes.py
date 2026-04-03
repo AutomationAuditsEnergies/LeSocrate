@@ -1117,4 +1117,636 @@ def create_hr_blueprint(socketio):
 
         return jsonify({"success": True, **job}), 200
 
+    # ─── Routes Cours Folders ───────────────────────────────────────────────
+    # Azure Blob Storage pour les cours (plus de stockage local)
+    from services.azure_blob_service import (
+        upload_blob, download_blob, delete_blob, delete_blobs_by_prefix,
+        build_blob_path, CONTAINER_DOCUMENTS, CONTAINER_AUDIOS
+    )
+
+    @hr_bp.route("/api/hr/platforms/<int:platform_id>/cours-folders", methods=["GET"])
+    def get_cours_folders(platform_id):
+        """Liste les dossiers de cours d'une plateforme"""
+        denied = _require_admin()
+        if denied:
+            return denied
+
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT cf.id, cf.name, cf.created_at, COUNT(cd.id) as document_count
+                FROM cours_folders cf
+                LEFT JOIN cours_documents cd ON cf.id = cd.folder_id
+                WHERE cf.platform_id = ?
+                GROUP BY cf.id
+                ORDER BY cf.created_at DESC
+            """, (platform_id,))
+            folders = [{"id": row[0], "name": row[1], "created_at": row[2], "document_count": row[3]} for row in cursor.fetchall()]
+            conn.close()
+            return jsonify({"success": True, "folders": folders}), 200
+        except Exception as e:
+            logger.error(f"❌ Erreur get_cours_folders: {e}")
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    @hr_bp.route("/api/hr/platforms/<int:platform_id>/cours-folders", methods=["POST"])
+    def create_cours_folder(platform_id):
+        """Crée un nouveau dossier de cours"""
+        denied = _require_admin()
+        if denied:
+            return denied
+
+        data = request.get_json()
+        name = data.get("name", "").strip()
+        if not name:
+            return jsonify({"success": False, "error": "Le nom du dossier est requis"}), 400
+
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                "INSERT INTO cours_folders (platform_id, name) VALUES (?, ?)",
+                (platform_id, name)
+            )
+            folder_id = cursor.lastrowid
+            conn.commit()
+            conn.close()
+            return jsonify({"success": True, "id": folder_id, "name": name}), 201
+        except Exception as e:
+            logger.error(f"❌ Erreur create_cours_folder: {e}")
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    @hr_bp.route("/api/hr/cours-folders/<int:folder_id>", methods=["DELETE"])
+    def delete_cours_folder(folder_id):
+        """Supprime un dossier et tous ses documents (Azure + DB)"""
+        denied = _require_admin()
+        if denied:
+            return denied
+
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+
+            # Récupérer le platform_id et les documents
+            cursor.execute("SELECT platform_id FROM cours_folders WHERE id = ?", (folder_id,))
+            folder_row = cursor.fetchone()
+            if not folder_row:
+                conn.close()
+                return jsonify({"success": False, "error": "Dossier non trouvé"}), 404
+            platform_id = folder_row[0]
+
+            # Supprimer tous les blobs Azure avec le préfixe du dossier
+            prefix = f"platform-{platform_id}/folder-{folder_id}/"
+            delete_blobs_by_prefix(CONTAINER_DOCUMENTS, prefix)
+            delete_blobs_by_prefix(CONTAINER_AUDIOS, prefix)
+
+            # Supprimer les entrées DB
+            cursor.execute("DELETE FROM cours_documents WHERE folder_id = ?", (folder_id,))
+            cursor.execute("DELETE FROM cours_folders WHERE id = ?", (folder_id,))
+            conn.commit()
+            conn.close()
+
+            return jsonify({"success": True}), 200
+        except Exception as e:
+            logger.error(f"❌ Erreur delete_cours_folder: {e}")
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    @hr_bp.route("/api/hr/cours-folders/<int:folder_id>", methods=["PATCH"])
+    def rename_cours_folder(folder_id):
+        """Renomme un dossier de cours"""
+        denied = _require_admin()
+        if denied:
+            return denied
+
+        data = request.get_json()
+        name = data.get("name", "").strip()
+        if not name:
+            return jsonify({"success": False, "error": "Le nom du dossier est requis"}), 400
+
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute("UPDATE cours_folders SET name = ? WHERE id = ?", (name, folder_id))
+            conn.commit()
+            conn.close()
+            return jsonify({"success": True}), 200
+        except Exception as e:
+            logger.error(f"❌ Erreur rename_cours_folder: {e}")
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    # ─── Routes Cours Documents ─────────────────────────────────────────────
+    @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/documents", methods=["GET"])
+    def get_cours_documents(folder_id):
+        """Liste les documents d'un dossier"""
+        denied = _require_admin()
+        if denied:
+            return denied
+
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT id, filename, original_name, status, audio_filename, created_at
+                FROM cours_documents
+                WHERE folder_id = ?
+                ORDER BY created_at DESC
+            """, (folder_id,))
+            docs = [{"id": row[0], "filename": row[1], "original_name": row[2], "status": row[3], "audio_filename": row[4], "created_at": row[5]} for row in cursor.fetchall()]
+            conn.close()
+            return jsonify({"success": True, "documents": docs}), 200
+        except Exception as e:
+            logger.error(f"❌ Erreur get_cours_documents: {e}")
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/upload", methods=["POST"])
+    def upload_cours_documents(folder_id):
+        """Upload un ou plusieurs PDFs dans un dossier → Azure Blob Storage"""
+        denied = _require_admin()
+        if denied:
+            return denied
+
+        if "files" not in request.files:
+            return jsonify({"success": False, "error": "Aucun fichier"}), 400
+
+        files = request.files.getlist("files")
+        uploaded = []
+
+        try:
+            import uuid as uuid_mod
+            conn = get_db_connection()
+            cursor = conn.cursor()
+
+            # Récupérer le platform_id du dossier
+            cursor.execute("SELECT platform_id FROM cours_folders WHERE id = ?", (folder_id,))
+            folder_row = cursor.fetchone()
+            if not folder_row:
+                conn.close()
+                return jsonify({"success": False, "error": "Dossier non trouvé"}), 404
+            platform_id = folder_row[0]
+
+            for file in files:
+                if not file or not file.filename:
+                    continue
+                if not file.filename.lower().endswith(".pdf"):
+                    continue
+
+                # Générer un nom unique et construire le blob path
+                unique_name = f"{uuid_mod.uuid4()}.pdf"
+                blob_path = build_blob_path(platform_id, folder_id, unique_name)
+
+                # Upload vers Azure documenttts
+                file_bytes = file.read()
+                upload_blob(CONTAINER_DOCUMENTS, blob_path, file_bytes)
+
+                # Créer l'entrée DB (filename = blob path dans le container)
+                cursor.execute(
+                    "INSERT INTO cours_documents (folder_id, filename, original_name, status) VALUES (?, ?, ?, 'uploaded')",
+                    (folder_id, blob_path, file.filename)
+                )
+                doc_id = cursor.lastrowid
+                uploaded.append({"id": doc_id, "filename": file.filename})
+
+            conn.commit()
+            conn.close()
+
+            return jsonify({"success": True, "uploaded": uploaded}), 200
+        except Exception as e:
+            logger.error(f"❌ Erreur upload_cours_documents: {e}")
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    @hr_bp.route("/api/hr/cours-documents/<int:document_id>", methods=["DELETE"])
+    def delete_cours_document(document_id):
+        """Supprime un document et son audio (Azure + DB)"""
+        denied = _require_admin()
+        if denied:
+            return denied
+
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+
+            cursor.execute("SELECT filename, audio_filename FROM cours_documents WHERE id = ?", (document_id,))
+            row = cursor.fetchone()
+            if not row:
+                conn.close()
+                return jsonify({"success": False, "error": "Document non trouvé"}), 404
+
+            filename, audio_filename = row
+
+            # Supprimer le PDF sur Azure
+            delete_blob(CONTAINER_DOCUMENTS, filename)
+
+            # Supprimer l'audio sur Azure si existe
+            if audio_filename:
+                delete_blob(CONTAINER_AUDIOS, audio_filename)
+
+            # Supprimer l'entrée DB
+            cursor.execute("DELETE FROM cours_documents WHERE id = ?", (document_id,))
+            conn.commit()
+            conn.close()
+
+            return jsonify({"success": True}), 200
+        except Exception as e:
+            logger.error(f"❌ Erreur delete_cours_document: {e}")
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    @hr_bp.route("/api/hr/cours-documents/<int:document_id>/download", methods=["GET"])
+    def download_cours_document(document_id):
+        """Télécharge le PDF depuis Azure"""
+        denied = _require_admin()
+        if denied:
+            return denied
+
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute("SELECT filename, original_name FROM cours_documents WHERE id = ?", (document_id,))
+            row = cursor.fetchone()
+            conn.close()
+
+            if not row:
+                return jsonify({"success": False, "error": "Document non trouvé"}), 404
+
+            filename, original_name = row
+
+            import io
+            from flask import send_file
+            pdf_bytes = download_blob(CONTAINER_DOCUMENTS, filename)
+            return send_file(
+                io.BytesIO(pdf_bytes),
+                as_attachment=True,
+                download_name=original_name,
+                mimetype="application/pdf"
+            )
+        except Exception as e:
+            logger.error(f"❌ Erreur download_cours_document: {e}")
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    @hr_bp.route("/api/hr/cours-documents/<int:document_id>/audio", methods=["GET"])
+    def download_cours_audio(document_id):
+        """Télécharge l'audio depuis Azure"""
+        denied = _require_admin()
+        if denied:
+            return denied
+
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute("SELECT audio_filename, original_name FROM cours_documents WHERE id = ?", (document_id,))
+            row = cursor.fetchone()
+            conn.close()
+
+            if not row:
+                return jsonify({"success": False, "error": "Document non trouvé"}), 404
+
+            audio_filename, original_name = row
+            if not audio_filename:
+                return jsonify({"success": False, "error": "Audio non généré"}), 404
+
+            import io
+            from flask import send_file
+            audio_bytes = download_blob(CONTAINER_AUDIOS, audio_filename)
+            audio_name = os.path.splitext(original_name)[0] + ".mp3"
+            return send_file(
+                io.BytesIO(audio_bytes),
+                as_attachment=True,
+                download_name=audio_name,
+                mimetype="audio/mpeg"
+            )
+        except Exception as e:
+            logger.error(f"❌ Erreur download_cours_audio: {e}")
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    # ─── Routes Pipeline TTS ────────────────────────────────────────────────
+    @hr_bp.route("/api/hr/cours-documents/<int:document_id>/generate-audio", methods=["POST"])
+    def generate_document_audio(document_id):
+        """Lance la génération audio pour un document"""
+        denied = _require_admin()
+        if denied:
+            return denied
+
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+
+            # Mettre à jour le statut
+            cursor.execute("UPDATE cours_documents SET status = 'processing' WHERE id = ?", (document_id,))
+            conn.commit()
+            conn.close()
+
+            # Lancer en background avec eventlet
+            import eventlet
+            eventlet.spawn(_process_document_background, document_id)
+
+            return jsonify({"success": True, "status": "processing"}), 200
+        except Exception as e:
+            logger.error(f"❌ Erreur generate_document_audio: {e}")
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/generate-all-audio", methods=["POST"])
+    def generate_folder_audio(folder_id):
+        """Lance la génération audio pour tous les documents d'un dossier"""
+        denied = _require_admin()
+        if denied:
+            return denied
+
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+
+            # Récupérer les documents sans audio
+            cursor.execute("""
+                SELECT id FROM cours_documents
+                WHERE folder_id = ? AND audio_filename IS NULL
+            """, (folder_id,))
+            docs = [{"id": row[0]} for row in cursor.fetchall()]
+            conn.close()
+
+            if not docs:
+                return jsonify({"success": True, "message": "Tous les documents ont déjà un audio"}), 200
+
+            # Lancer en background (séquentiel)
+            import eventlet
+            eventlet.spawn(_process_folder_background, folder_id)
+
+            return jsonify({"success": True, "processing": len(docs)}), 200
+        except Exception as e:
+            logger.error(f"❌ Erreur generate_folder_audio: {e}")
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/tts-status", methods=["GET"])
+    def get_folder_tts_status(folder_id):
+        """Retourne le statut TTS d'un dossier"""
+        denied = _require_admin()
+        if denied:
+            return denied
+
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT id, original_name, status
+                FROM cours_documents
+                WHERE folder_id = ?
+                ORDER BY created_at DESC
+            """, (folder_id,))
+            docs = [{"id": row[0], "name": row[1], "status": row[2]} for row in cursor.fetchall()]
+            conn.close()
+
+            # Compter par statut
+            status_counts = {}
+            for doc in docs:
+                status = doc["status"]
+                status_counts[status] = status_counts.get(status, 0) + 1
+
+            return jsonify({"success": True, "documents": docs, "counts": status_counts}), 200
+        except Exception as e:
+            logger.error(f"❌ Erreur get_folder_tts_status: {e}")
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    # ─── Pipeline playlist complète (19 fichiers) ─────────────────────────
+
+    # État global de la pipeline playlist (par folder_id)
+    _playlist_jobs = {}
+
+    @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/generate-playlist", methods=["POST"])
+    def generate_playlist(folder_id):
+        """Lance la génération des 19 fichiers MP3 de la playlist pour un dossier."""
+        denied = _require_admin()
+        if denied:
+            return denied
+
+        try:
+            # Vérifier que le dossier existe et récupérer le platform_id
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute("SELECT platform_id FROM cours_folders WHERE id = ?", (folder_id,))
+            row = cursor.fetchone()
+            conn.close()
+
+            if not row:
+                return jsonify({"success": False, "error": "Dossier introuvable"}), 404
+
+            platform_id = row[0]
+
+            # Vérifier qu'il n'y a pas déjà une pipeline en cours
+            if folder_id in _playlist_jobs and _playlist_jobs[folder_id].get("status") == "running":
+                return jsonify({
+                    "success": False,
+                    "error": "Une génération est déjà en cours pour ce dossier"
+                }), 409
+
+            # Initialiser le job
+            _playlist_jobs[folder_id] = {
+                "status": "running",
+                "step": 0,
+                "total_steps": 24,
+                "message": "Démarrage de la pipeline...",
+                "result": None,
+            }
+
+            def _run_playlist_pipeline(platform_id, folder_id):
+                try:
+                    from services.playlist_tts_service import generate_playlist_for_folder
+
+                    def on_progress(step, total, message):
+                        _playlist_jobs[folder_id].update({
+                            "step": step,
+                            "total_steps": total,
+                            "message": message,
+                        })
+
+                    result = generate_playlist_for_folder(
+                        platform_id, folder_id, progress_callback=on_progress
+                    )
+                    _playlist_jobs[folder_id].update({
+                        "status": "completed",
+                        "result": result,
+                        "message": f"Terminé : {result['generated']}/19 fichiers générés",
+                    })
+                except Exception as e:
+                    logger.error(f"❌ Pipeline playlist échouée: {e}")
+                    _playlist_jobs[folder_id].update({
+                        "status": "error",
+                        "message": str(e),
+                    })
+
+            import eventlet
+            eventlet.spawn(_run_playlist_pipeline, platform_id, folder_id)
+
+            return jsonify({"success": True, "message": "Pipeline démarrée"}), 202
+
+        except Exception as e:
+            logger.error(f"❌ Erreur generate_playlist: {e}")
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/playlist-status", methods=["GET"])
+    def get_playlist_status(folder_id):
+        """Retourne l'état de la pipeline playlist pour un dossier."""
+        denied = _require_admin()
+        if denied:
+            return denied
+
+        job = _playlist_jobs.get(folder_id)
+        if not job:
+            return jsonify({"success": True, "status": "idle"}), 200
+
+        return jsonify({"success": True, **job}), 200
+
+    # ─── Fonctions helpers background ───────────────────────────────────────
+    def _process_document_background(document_id):
+        """Traite un document en background: Azure PDF → TTS → Azure MP3"""
+        try:
+            from services.tts_service import process_document_to_audio
+            from services.azure_blob_service import (
+                download_blob, upload_blob, build_blob_path,
+                CONTAINER_DOCUMENTS, CONTAINER_AUDIOS
+            )
+            from database.db import get_db_connection
+            import uuid as uuid_mod
+
+            conn = get_db_connection()
+            cursor = conn.cursor()
+
+            # Récupérer le document et son dossier
+            cursor.execute("""
+                SELECT cd.folder_id, cd.filename, cf.platform_id
+                FROM cours_documents cd
+                JOIN cours_folders cf ON cd.folder_id = cf.id
+                WHERE cd.id = ?
+            """, (document_id,))
+            row = cursor.fetchone()
+            if not row:
+                cursor.execute("UPDATE cours_documents SET status = 'error' WHERE id = ?", (document_id,))
+                conn.commit()
+                conn.close()
+                return
+
+            folder_id, blob_path, platform_id = row
+
+            # 1. Télécharger le PDF depuis Azure (en mémoire)
+            pdf_bytes = download_blob(CONTAINER_DOCUMENTS, blob_path)
+
+            # 2. Pipeline TTS: PDF bytes → MP3 bytes
+            voice_id = os.getenv("FISH_AUDIO_VOICE_ID", "90a39a3f3c0a45c38502fa1d99dabf96")
+            audio_bytes = process_document_to_audio(pdf_bytes, voice_id=voice_id)
+
+            # 3. Upload l'audio vers Azure audiostts
+            audio_name = f"{uuid_mod.uuid4()}.mp3"
+            audio_blob_path = build_blob_path(platform_id, folder_id, audio_name)
+            upload_blob(CONTAINER_AUDIOS, audio_blob_path, audio_bytes)
+
+            # 4. Mettre à jour la DB
+            cursor.execute(
+                "UPDATE cours_documents SET status = 'done', audio_filename = ? WHERE id = ?",
+                (audio_blob_path, document_id)
+            )
+            conn.commit()
+            conn.close()
+
+            logger.info(f"✅ Audio généré pour document {document_id}: {audio_blob_path}")
+
+        except Exception as e:
+            logger.error(f"❌ Erreur traitement document {document_id}: {e}")
+            try:
+                conn = get_db_connection()
+                cursor = conn.cursor()
+                cursor.execute("UPDATE cours_documents SET status = 'error' WHERE id = ?", (document_id,))
+                conn.commit()
+                conn.close()
+            except:
+                pass
+
+    def _process_folder_background(folder_id):
+        """Traite tous les documents d'un dossier en background (séquentiel)"""
+        try:
+            from database.db import get_db_connection
+
+            while True:
+                conn = get_db_connection()
+                cursor = conn.cursor()
+
+                cursor.execute("""
+                    SELECT id FROM cours_documents
+                    WHERE folder_id = ? AND audio_filename IS NULL AND status != 'processing'
+                    LIMIT 1
+                """, (folder_id,))
+                row = cursor.fetchone()
+                if not row:
+                    conn.close()
+                    break
+
+                document_id = row[0]
+                cursor.execute("UPDATE cours_documents SET status = 'processing' WHERE id = ?", (document_id,))
+                conn.commit()
+                conn.close()
+
+                _process_document_background(document_id)
+
+                time.sleep(1)
+
+        except Exception as e:
+            logger.error(f"❌ Erreur traitement dossier {folder_id}: {e}")
+
+    # ─── Routes Config Planning Été/Hiver ──────────────────────────────────
+    @hr_bp.route("/api/hr/schedule-config", methods=["GET"])
+    def get_schedule_config():
+        """Retourne la config été/hiver pour toutes les plateformes"""
+        denied = _require_admin()
+        if denied:
+            return denied
+
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute("SELECT id, name, playlist_mode FROM platform_config ORDER BY id")
+            platforms = []
+            for row in cursor.fetchall():
+                platforms.append({
+                    "id": row[0],
+                    "name": row[1],
+                    "playlist_mode": row[2],
+                })
+            conn.close()
+            return jsonify({"success": True, "platforms": platforms}), 200
+        except Exception as e:
+            logger.error(f"❌ Erreur get_schedule_config: {e}")
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    @hr_bp.route("/api/hr/schedule-config", methods=["POST"])
+    def set_schedule_config():
+        """Met à jour le mode été/hiver pour les plateformes sélectionnées"""
+        denied = _require_admin()
+        if denied:
+            return denied
+
+        data = request.get_json()
+        mode = data.get("mode")  # 'ete' ou 'hiver'
+        platform_ids = data.get("platform_ids", [])  # IDs des plateformes concernées
+
+        if mode not in ("ete", "hiver"):
+            return jsonify({"success": False, "error": "Mode invalide (ete ou hiver)"}), 400
+
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+
+            # Remettre toutes les plateformes à NULL (non concernées)
+            cursor.execute("UPDATE platform_config SET playlist_mode = NULL")
+
+            # Appliquer le mode aux plateformes sélectionnées
+            for pid in platform_ids:
+                cursor.execute(
+                    "UPDATE platform_config SET playlist_mode = ? WHERE id = ?",
+                    (mode, pid)
+                )
+
+            conn.commit()
+            conn.close()
+            logger.info(f"✅ Schedule config: mode={mode}, plateformes={platform_ids}")
+            return jsonify({"success": True}), 200
+        except Exception as e:
+            logger.error(f"❌ Erreur set_schedule_config: {e}")
+            return jsonify({"success": False, "error": str(e)}), 500
+
     return hr_bp

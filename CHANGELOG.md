@@ -1,5 +1,76 @@
 # Changelog
 
+## 2026-04-03
+
+### Feature : Pipeline TTS automatisée - Génération des 19 audios de formation
+
+- **Concept** : Prendre plusieurs PDFs d'un cours → générer automatiquement les 19 fichiers MP3 conformes à la playlist (7 blocs cours + 7 Q&A + 5 pauses)
+- **Approche** : Concaténation des PDFs → découpage proportionnel en 7 blocs de cours (calibration 192 mots/min via fish.audio speed=0.95) → transitions naturelles (pas de mention temporelle pour bloc 4 été/hiver) → TTS via fish.audio → upload Azure avec nommage strict
+- **Technologie** : Claude API pour reformulation/structuration + fish.audio pour TTS + pydub pour mesure durée
+- **Interface** : Intégration dans CoursFolders + pipeline orchestrée en backend
+
+### Implémentation : Pipeline TTS playlist
+
+- **`backend/services/playlist_tts_service.py`** — Nouveau service d'orchestration
+  - `PLAYLIST_SPEC` : définition des 19 fichiers (nom, durée, type, bloc)
+  - `_call_claude_reformulate()` : reformulation **bloc par bloc** (7 appels Claude Sonnet)
+    - Découpage proportionnel du texte source selon les durées des blocs
+    - Contexte du bloc précédent transmis pour continuité narrative
+    - Retry automatique (3 tentatives) si le word count est hors tolérance ±15%
+    - `_count_words_excluding_tags()` : décompte excluant les tags [crochets] fish.audio
+  - Tags fish.audio S2-Pro intégrés **directement par Claude** (pas d'heuristique)
+    - Langage naturel libre en [crochets] : `[pause]`, `[excited]`, `[speak with conviction]`, etc.
+    - Jamais de parenthèses (syntaxe S1 uniquement)
+    - 15-25 tags d'émotion + 15-20 [pause] + 4-6 [long pause] par bloc
+  - `_pad_audio_to_duration()` : 17s silence début + padding/truncate fin
+  - `_build_pause_audio()` : intro TTS + silence + outro TTS
+  - Q&A et pauses : **7 variantes** de textes pour éviter la répétition
+  - Transitions bloc 4 neutres : "Très bien, on reprend." (fonctionne été comme hiver)
+  - `generate_playlist_for_folder()` : pipeline complète avec callback de progression
+  - Résultat enrichi : durée totale (h), taille totale (Mo), word counts par bloc
+- **`backend/routes/hr_routes.py`** — Nouvelles routes
+  - `POST /api/hr/cours-folders/<id>/generate-playlist` — lance la pipeline en background (eventlet)
+  - `GET /api/hr/cours-folders/<id>/playlist-status` — retourne la progression en temps réel
+  - État des jobs en mémoire (`_playlist_jobs`) avec step/total/message
+- **`frontend/src/components/CoursFolders.jsx`** — Bouton "Générer la playlist (19 MP3)"
+  - Barre de progression avec polling toutes les 2s
+  - Affichage statut terminé : X/19 fichiers + durée totale + taille Mo
+  - Affichage erreur avec message
+- **`backend/requirements.txt`** — Ajout `anthropic>=0.30.0`
+
+## 2026-04-02
+
+### Feature : Planning saisonnier été/hiver (swap bloc 4)
+
+- **Concept** : Pour les formations du vendredi (ou toute formation choisie), l'ordre du bloc 4 (pause midi / cours / Q&R) s'inverse selon la saison
+  - **Hiver** : Pause (12h20-13h50) → Cours (13h50-14h35) → Q&R (14h35-14h45)
+  - **Été** : Cours (12h20-13h05) → Q&R (13h05-13h15) → Pause (13h15-14h45)
+  - Durée totale identique (145 min) → zéro décalage sur le reste de la playlist
+- **`backend/database/db.py`** — Ajout colonne `playlist_mode` (NULL/ete/hiver) sur `platform_config`
+- **`backend/services/audio_service.py`** — `get_playlist(platform_id)` retourne la playlist dynamique selon le mode
+- **`backend/routes/video_routes.py`** — Passe `platform_id` à `get_current_audio_info()` via query param optionnel
+- **`backend/routes/hr_routes.py`** — Routes `GET/POST /api/hr/schedule-config` pour lire/écrire la config saison
+- **`frontend/src/pages/ScheduleConfig.jsx`** — Page admin `/schedule-config` : toggle été/hiver + sélection des formations concernées
+- **`frontend/src/App.jsx`** — Route `/schedule-config` protégée par `ProtectedAdminRoute`
+
+### Feature : Migration stockage cours vers Azure Blob Storage
+
+- **`backend/services/azure_blob_service.py`** — Nouveau service Azure Blob Storage
+  - Fonctions `upload_blob`, `download_blob`, `delete_blob`, `delete_blobs_by_prefix`
+  - Deux conteneurs : `documenttts` (PDFs) et `audiostts` (MP3 générés)
+  - Organisation des blobs : `platform-{id}/folder-{id}/{uuid}.pdf|.mp3`
+  - Variable d'environnement : `AZURE_TTS_STORAGE_CONNECTION_STRING`
+- **`backend/services/tts_service.py`** — Adapté pour travailler avec des bytes en mémoire
+  - `extract_text_from_pdf()` accepte des bytes (BytesIO) au lieu d'un chemin fichier
+  - `convert_to_speech()` retourne des bytes MP3 au lieu d'écrire sur disque
+  - `process_document_to_audio()` pipeline complète bytes-in / bytes-out
+- **`backend/routes/hr_routes.py`** — Routes cours migrées de filesystem local vers Azure
+  - Upload PDF → Azure `documenttts` (plus de `file.save()` local)
+  - Download PDF/audio → proxy depuis Azure via `send_file(BytesIO(...))`
+  - Suppression → `delete_blob()` Azure au lieu de `os.remove()`
+  - Pipeline TTS background : télécharge PDF depuis Azure, traite en mémoire, upload MP3 sur Azure
+  - Zéro stockage local, tout passe par Azure Blob Storage
+
 ## 2026-02-20
 
 ### Feature : Déploiement Azure Function via GitHub Actions

@@ -10,6 +10,14 @@ logger = get_logger(__name__)
 video_bp = Blueprint("video", __name__)
 
 
+def _get_platform_id():
+    """Récupère le platform_id depuis le query param ou la session (défaut: 1)"""
+    pid = request.args.get("platform_id", type=int)
+    if pid:
+        return pid
+    return session.get("platform_id", 1)
+
+
 @video_bp.route("/api/video/status")
 def video_status():
     """Retourne l'état actuel du cours pour l'utilisateur connecté"""
@@ -22,8 +30,8 @@ def video_status():
         prenom = session.get("prenom")
         logger.info(f"🎥 Demande statut vidéo par {nom} {prenom}")
 
-        # Appel direct sans synchronisation
-        audio_info, offset, temps_restant = get_current_audio_info()
+        platform_id = _get_platform_id()
+        audio_info, offset, temps_restant = get_current_audio_info(platform_id)
 
         logger.debug(
             f"🎥 Info audio: {audio_info['title'] if audio_info else 'None'}, offset: {offset}, temps_restant: {temps_restant}"
@@ -95,7 +103,8 @@ def video_status():
 def audio_stream():
     """Proxy l'audio depuis Azure Blob Storage avec support des Range requests"""
     try:
-        audio_info, offset, temps_restant = get_current_audio_info()
+        platform_id = _get_platform_id()
+        audio_info, offset, temps_restant = get_current_audio_info(platform_id)
         if not audio_info:
             return "Pas d'audio en cours", 404
 
@@ -138,8 +147,8 @@ def cours_status():
     try:
         logger.debug("📊 Demande statut cours")
 
-        # Appel direct sans synchronisation
-        audio_info, offset, temps_restant = get_current_audio_info()
+        platform_id = _get_platform_id()
+        audio_info, offset, temps_restant = get_current_audio_info(platform_id)
 
         if audio_info is None and temps_restant > 0:
             heure_debut_cours = get_heure_debut_cours()

@@ -12,6 +12,7 @@ import TestSlides from './pages/TestSlides.jsx'
 import GeneratedSlides from './pages/GeneratedSlides.jsx'
 import Recorder from './pages/Recorder.jsx'
 import HRDashboard from './pages/HRDashboard.jsx'
+import ScheduleConfig from './pages/ScheduleConfig.jsx'
 import ProtectedAdminRoute from './components/ProtectedAdminRoute.jsx'
 
 function ProtectedHRRoute({ children }) {
@@ -67,6 +68,14 @@ export default function App() {
           }
         />
 
+        <Route
+          path="/schedule-config"
+          element={
+            <ProtectedAdminRoute>
+              <ScheduleConfig />
+            </ProtectedAdminRoute>
+          }
+        />
         <Route path="/intro" element={<Intro />} />
         <Route path="/test-slides" element={<TestSlides />} />
         <Route path="/generated-slides" element={<GeneratedSlides />} />

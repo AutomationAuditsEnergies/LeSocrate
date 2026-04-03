@@ -135,6 +135,43 @@ def init_database():
             ],
         )
 
+        # Migration : ajout colonne playlist_mode si absente
+        cursor.execute("PRAGMA table_info(platform_config)")
+        columns = [col[1] for col in cursor.fetchall()]
+        if "playlist_mode" not in columns:
+            cursor.execute("ALTER TABLE platform_config ADD COLUMN playlist_mode TEXT DEFAULT NULL")
+            logger.info("✅ Colonne playlist_mode ajoutée à platform_config")
+
+        # Table des dossiers de cours
+        cursor.execute(
+            """
+        CREATE TABLE IF NOT EXISTS cours_folders (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            platform_id INTEGER NOT NULL DEFAULT 1,
+            name TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+        )
+        logger.info("✅ Table cours_folders créée/vérifiée")
+
+        # Table des documents de cours (PDFs + audios générés)
+        cursor.execute(
+            """
+        CREATE TABLE IF NOT EXISTS cours_documents (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            folder_id INTEGER NOT NULL,
+            filename TEXT NOT NULL,
+            original_name TEXT NOT NULL,
+            status TEXT DEFAULT 'uploaded',
+            audio_filename TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (folder_id) REFERENCES cours_folders(id)
+        )
+        """
+        )
+        logger.info("✅ Table cours_documents créée/vérifiée")
+
         conn.commit()
         conn.close()
         logger.info("✅ Base de données initialisée avec succès")
