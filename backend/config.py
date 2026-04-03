@@ -13,12 +13,13 @@ RAG_SERVICE_URL = os.getenv(
     "RAG_SERVICE_URL", "https://rag-b0fndpa9fycaafcr.francecentral-01.azurewebsites.net"
 )
 
-# Base de données - SQLite local en dev, Azure SQL en prod
-if os.getenv("AZURE_SQL_CONNECTION_STRING"):
-    # TODO: Configuration Azure SQL Database
-    DB_PATH = "/tmp/database.db"
+# Base de données - /home est persistant sur Azure App Service, /tmp ne l'est pas
+if os.getenv("WEBSITE_SITE_NAME"):
+    # Azure App Service → /home est persistant entre les restarts
+    DB_PATH = "/home/database.db"
 else:
-    DB_PATH = "/tmp/database.db"
+    # Local dev
+    DB_PATH = os.path.join(os.path.dirname(__file__), "database", "socrate.db")
 
 # URL de base pour les audios (Azure CDN ou Blob direct selon la plateforme)
 _AUDIO_BASE = os.getenv(
