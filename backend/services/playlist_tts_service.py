@@ -159,19 +159,26 @@ def _count_words_excluding_tags(text):
 
 def _call_claude_reformulate(course_text, progress_callback=None):
     """
-    Appelle Claude pour reformuler le cours en 7 blocs avec les bons nombres de mots.
-    Le texte est long (~68k mots en sortie), donc on fait un appel par bloc pour :
-    - Rester dans les limites de tokens
-    - Avoir un contrôle précis sur le word count de chaque bloc
-    - Pouvoir retenter un bloc en cas d'erreur
+    Appelle Claude pour reformuler le cours en 7 blocs.
+
+    Logique :
+    - On avance dans le texte source séquentiellement
+    - Claude reformule fidèlement le contenu, il ne DOIT PAS inventer ou étirer
+    - Si le contenu s'épuise avant le bloc 7, les blocs restants sont vides
+    - Si du contenu reste après le bloc 7, on le signale dans le résultat
     """
     client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 
     word_targets = {i: _target_word_count(d) for i, d in COURS_DURATIONS_MIN.items()}
-    total_target = sum(word_targets.values())
 
-    logger.info(f"📝 Reformulation en 7 blocs ({total_target} mots cible total)")
-    logger.info(f"   Texte source: {len(course_text.split())} mots")
+    source_words = course_text.split()
+    total_source_words = len(source_words)
+    logger.info(f"📝 Texte source: {total_source_words} mots")
+
+    # On découpe le source en 7 parts proportionnelles aux durées
+    # Mais c'est juste une SUGGESTION — Claude utilise ce qu'il y a, pas plus
+    total_duration = sum(COURS_DURATIONS_MIN.values())
+    cursor = 0  # position dans le texte source
 
     blocs = []
 
@@ -180,42 +187,55 @@ def _call_claude_reformulate(course_text, progress_callback=None):
         duration = COURS_DURATIONS_MIN[bloc_num]
 
         if progress_callback:
-            progress_callback(f"Reformulation bloc {bloc_num}/7 ({target} mots, {duration}min)...")
+            progress_callback(f"Reformulation bloc {bloc_num}/7 ({duration}min)...")
 
-        # Calculer la proportion du texte source pour ce bloc
-        proportion = duration / sum(COURS_DURATIONS_MIN.values())
-        words = course_text.split()
-        total_words = len(words)
-        start_idx = int(sum(COURS_DURATIONS_MIN[i] for i in range(1, bloc_num)) / sum(COURS_DURATIONS_MIN.values()) * total_words)
-        end_idx = int(sum(COURS_DURATIONS_MIN[i] for i in range(1, bloc_num + 1)) / sum(COURS_DURATIONS_MIN.values()) * total_words)
-        chunk = " ".join(words[start_idx:end_idx])
+        # Calculer combien de mots source donner à ce bloc (proportionnel à la durée)
+        proportion = duration / total_duration
+        chunk_size = int(total_source_words * proportion)
+        chunk_end = min(cursor + chunk_size, total_source_words)
+        chunk = " ".join(source_words[cursor:chunk_end])
+        cursor = chunk_end
 
-        # Contexte des blocs précédents (résumé)
+        # Si plus de contenu source → bloc vide
+        if not chunk.strip():
+            logger.info(f"   ⏭️ Bloc {bloc_num}: plus de contenu source, bloc vide")
+            blocs.append({
+                "bloc_number": bloc_num,
+                "content": "",
+                "word_count": 0,
+                "target_words": target,
+                "skipped": True,
+            })
+            continue
+
+        # Contexte des blocs précédents
         context_prev = ""
-        if blocs:
+        if blocs and blocs[-1].get("content"):
             last_content = blocs[-1]["content"]
-            last_sentences = last_content.replace("[", "").replace("]", "").split(".")[-3:]
-            context_prev = f"\nLe bloc précédent se terminait par : \"{'.' .join(last_sentences).strip()}\"\nFais une reprise naturelle."
+            last_sentences = re.sub(r'\[.*?\]', '', last_content).split(".")[-3:]
+            context_prev = f"\nLe bloc précédent se terminait par : \"{'. '.join(s.strip() for s in last_sentences if s.strip())}\"\nFais une reprise naturelle."
 
         bloc_prompt = f"""Tu es un professeur passionné qui donne un cours en présentiel à ses élèves.
-Tu dois reformuler le contenu ci-dessous en un script oral pour TTS (fish.audio S2-Pro).
+Reformule le contenu ci-dessous en un script oral pour TTS (fish.audio S2-Pro).
 
-BLOC {bloc_num}/7 — {duration} minutes — EXACTEMENT {target} mots (hors tags entre crochets).
+BLOC {bloc_num}/7 — durée max : {duration} minutes — vise environ {target} mots (hors tags entre crochets).
 {context_prev}
+
+RÈGLE ABSOLUE : REFORMULE FIDÈLEMENT LE CONTENU SOURCE CI-DESSOUS.
+- N'invente RIEN. Ne rajoute RIEN qui ne soit pas dans le contenu source.
+- Si le contenu source est court, le bloc sera court. C'est NORMAL. Ne rallonge pas artificiellement.
+- Tu peux reformuler, illustrer avec des exemples issus du texte, expliquer autrement, mais
+  le fond doit rester fidèle au contenu fourni.
 
 TON ET POSTURE — Tu es un VRAI prof devant sa classe :
 - Tu T'ADRESSES DIRECTEMENT aux élèves : "vous voyez ?", "c'est clair pour tout le monde ?",
   "imaginez que...", "regardez bien ce point", "est-ce que ça vous parle ?",
   "je vais vous donner un exemple concret", "retenez bien ceci"
-- Tu ILLUSTRES avec des exemples concrets, des anecdotes, des analogies du quotidien
+- Tu ILLUSTRES avec des exemples concrets, des analogies du quotidien tirées du contenu
 - Tu REFORMULES les concepts difficiles : "autrement dit...", "pour simplifier...",
   "concrètement ça veut dire que..."
-- Tu fais des TRANSITIONS pédagogiques : "maintenant qu'on a vu ça, on va passer à...",
-  "vous vous souvenez de ce qu'on a dit sur... ? Eh bien..."
-- Tu INSISTES sur les points importants : "attention, ça c'est fondamental",
-  "je veux que vous reteniez une chose de cette partie..."
-- Tu rends le cours VIVANT : tu poses des questions rhétoriques, tu anticipes les
-  incompréhensions, tu fais des parallèles avec la vie réelle
+- Tu fais des TRANSITIONS pédagogiques entre les idées
+- Tu INSISTES sur les points importants : "attention, ça c'est fondamental"
 - NE LIS PAS un texte — ENSEIGNE. Le résultat doit sonner comme un cours filmé, pas un livre audio
 
 RÈGLES :
@@ -230,7 +250,7 @@ Place des tags en langage naturel libre dans le texte pour le rendre vivant :
 - Émotions : [excited], [calm], [serious], [warm], [whisper], etc.
 - Descriptions libres : [slightly amused], [speak with conviction], [building anticipation], etc.
 - Sons : [sigh], [laugh], [gasp] (ponctuellement)
-Les tags ne comptent PAS dans les {target} mots.
+Les tags ne comptent PAS dans le nombre de mots.
 
 Réponds UNIQUEMENT avec le texte du bloc (pas de JSON, pas d'explication, juste le script oral avec tags).
 
@@ -238,41 +258,33 @@ CONTENU SOURCE POUR CE BLOC :
 
 {chunk[:30000]}"""
 
-        # Appel API avec retry
-        for attempt in range(3):
-            try:
-                response = client.messages.create(
-                    model="claude-sonnet-4-20250514",
-                    max_tokens=32000,
-                    messages=[{"role": "user", "content": bloc_prompt}],
-                )
-                content = response.content[0].text.strip()
+        try:
+            response = client.messages.create(
+                model="claude-sonnet-4-20250514",
+                max_tokens=32000,
+                messages=[{"role": "user", "content": bloc_prompt}],
+            )
+            content = response.content[0].text.strip()
+            actual_words = _count_words_excluding_tags(content)
 
-                actual_words = _count_words_excluding_tags(content)
-                tolerance = 0.15  # 15% de tolérance
-                if actual_words < target * (1 - tolerance) or actual_words > target * (1 + tolerance):
-                    logger.warning(
-                        f"   ⚠️ Bloc {bloc_num} attempt {attempt+1}: {actual_words} mots "
-                        f"(cible {target}, tolérance ±{int(tolerance*100)}%)"
-                    )
-                    if attempt < 2:
-                        continue  # Retenter
+            blocs.append({
+                "bloc_number": bloc_num,
+                "content": content,
+                "word_count": actual_words,
+                "target_words": target,
+            })
+            logger.info(f"   ✅ Bloc {bloc_num}: {actual_words} mots (cible: {target})")
 
-                blocs.append({
-                    "bloc_number": bloc_num,
-                    "content": content,
-                    "word_count": actual_words,
-                    "target_words": target,
-                })
-                logger.info(f"   ✅ Bloc {bloc_num}: {actual_words} mots (cible: {target})")
-                break
+        except Exception as e:
+            logger.error(f"   ❌ Bloc {bloc_num}: {e}")
+            raise ValueError(f"Échec reformulation bloc {bloc_num}: {e}")
 
-            except Exception as e:
-                logger.error(f"   ❌ Bloc {bloc_num} attempt {attempt+1}: {e}")
-                if attempt == 2:
-                    raise ValueError(f"Échec reformulation bloc {bloc_num} après 3 tentatives: {e}")
+    # Contenu source restant non traité
+    remaining_words = total_source_words - cursor
+    if remaining_words > 50:
+        logger.warning(f"⚠️ {remaining_words} mots de contenu source non utilisés (surplus)")
 
-    return blocs
+    return blocs, remaining_words
 
 
 # ─── Textes Q&A et Pauses ───────────────────────────────────────────────────
@@ -439,15 +451,17 @@ def generate_playlist_for_folder(platform_id, folder_id, progress_callback=None)
     def claude_progress(message):
         progress(3, total_steps, message)
 
-    blocs = _call_claude_reformulate(course_text, progress_callback=claude_progress)
+    blocs, remaining_source_words = _call_claude_reformulate(course_text, progress_callback=claude_progress)
 
-    # Mapper les blocs par numéro
-    blocs_by_number = {b["bloc_number"]: b["content"] for b in blocs}
+    # Mapper les blocs par numéro (exclure les blocs vides)
+    blocs_by_number = {b["bloc_number"]: b["content"] for b in blocs if b.get("content")}
 
     # Log résumé
     total_generated_words = sum(b["word_count"] for b in blocs)
-    total_target_words = sum(_target_word_count(d) for d in COURS_DURATIONS_MIN.values())
-    logger.info(f"📝 Total reformulé: {total_generated_words} mots (cible: {total_target_words})")
+    filled_blocs = len(blocs_by_number)
+    logger.info(f"📝 Total reformulé: {total_generated_words} mots, {filled_blocs}/7 blocs remplis")
+    if remaining_source_words > 50:
+        logger.warning(f"⚠️ {remaining_source_words} mots source non utilisés (surplus)")
 
     # ── Étape 4 : préparer le prefix Azure ──
     progress(4, total_steps, "Préparation de l'upload Azure...")
@@ -471,7 +485,9 @@ def generate_playlist_for_folder(platform_id, folder_id, progress_callback=None)
                 # Générer le TTS du bloc cours
                 bloc_text = blocs_by_number.get(bloc_num)
                 if not bloc_text:
-                    raise ValueError(f"Bloc {bloc_num} manquant dans la reformulation")
+                    # Bloc vide (contenu source épuisé) → skip
+                    logger.info(f"   ⏭️ {filename}: bloc {bloc_num} vide, skip")
+                    continue
 
                 # Les tags fish.audio sont déjà intégrés par Claude dans la reformulation
                 audio_bytes = convert_to_speech(bloc_text)
@@ -482,14 +498,24 @@ def generate_playlist_for_folder(platform_id, folder_id, progress_callback=None)
                 final_bytes = _pad_audio_to_duration(audio_bytes, duration_sec)
 
             elif file_type == "qa":
+                # Skip Q&A si le bloc cours correspondant est vide
+                if bloc_num not in blocs_by_number:
+                    logger.info(f"   ⏭️ {filename}: bloc {bloc_num} vide, skip Q&A")
+                    continue
                 intro, outro = _get_qa_text(bloc_num)
                 final_bytes = _build_pause_audio(intro, outro, duration_sec)
 
             elif file_type == "pause":
+                # Skip pause si le bloc cours suivant est aussi vide
+                next_bloc = bloc_num + 1
+                if bloc_num not in blocs_by_number and next_bloc not in blocs_by_number:
+                    logger.info(f"   ⏭️ {filename}: blocs voisins vides, skip pause")
+                    continue
                 intro, outro = _get_pause_text(bloc_num)
                 final_bytes = _build_pause_audio(intro, outro, duration_sec)
 
             elif file_type == "pause_midi":
+                # La pause midi est toujours générée (elle fait partie de la journée)
                 intro, outro = _get_pause_midi_text()
                 final_bytes = _build_pause_audio(intro, outro, duration_sec)
 
@@ -518,10 +544,12 @@ def generate_playlist_for_folder(platform_id, folder_id, progress_callback=None)
     # ── Résultat ──
     total_duration = sum(f["duration"] for f in generated_files)
     total_size = sum(f["size_bytes"] for f in generated_files)
+    skipped_blocs = [b["bloc_number"] for b in blocs if b.get("skipped")]
     result = {
         "status": "completed" if not errors else "partial",
         "total_files": 19,
         "generated": len(generated_files),
+        "skipped": 19 - len(generated_files) - len(errors),
         "errors": len(errors),
         "files": generated_files,
         "error_details": errors,
@@ -529,6 +557,9 @@ def generate_playlist_for_folder(platform_id, folder_id, progress_callback=None)
         "total_duration_hours": round(total_duration / 3600, 1),
         "total_size_mb": round(total_size / (1024 * 1024), 1),
         "word_counts": {b["bloc_number"]: b["word_count"] for b in blocs},
+        "filled_blocs": filled_blocs,
+        "skipped_blocs": skipped_blocs,
+        "remaining_source_words": remaining_source_words,
     }
 
     logger.info(f"🏁 Pipeline terminée: {len(generated_files)}/19 fichiers générés, {len(errors)} erreur(s)")

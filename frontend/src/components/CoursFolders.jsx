@@ -756,20 +756,34 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
                       {playlistJob.result.errors > 0 && ` (${playlistJob.result.errors} erreur(s))`}
                     </p>
                   </div>
-                  <div className="flex items-center gap-4 text-xs" style={{ color: darkMode ? '#86efac' : '#166534' }}>
-                    {playlistJob.result.total_duration_hours && (
+                  <div className="flex items-center gap-4 flex-wrap text-xs" style={{ color: darkMode ? '#86efac' : '#166534' }}>
+                    <span className="flex items-center gap-1">
+                      <Icon name="menu_book" className="text-sm" />
+                      {playlistJob.result.filled_blocs || '?'}/7 blocs remplis
+                    </span>
+                    {playlistJob.result.total_duration_hours > 0 && (
                       <span className="flex items-center gap-1">
                         <Icon name="schedule" className="text-sm" />
-                        {playlistJob.result.total_duration_hours}h de cours
+                        {playlistJob.result.total_duration_hours}h
                       </span>
                     )}
-                    {playlistJob.result.total_size_mb && (
+                    {playlistJob.result.total_size_mb > 0 && (
                       <span className="flex items-center gap-1">
                         <Icon name="storage" className="text-sm" />
                         {playlistJob.result.total_size_mb} Mo
                       </span>
                     )}
                   </div>
+                  {playlistJob.result.skipped > 0 && (
+                    <p className="text-xs mt-2" style={{ color: darkMode ? '#fbbf24' : '#92400e' }}>
+                      {playlistJob.result.skipped} fichier(s) non générés (contenu source insuffisant pour les blocs {playlistJob.result.skipped_blocs?.join(', ')})
+                    </p>
+                  )}
+                  {playlistJob.result.remaining_source_words > 50 && (
+                    <p className="text-xs mt-1" style={{ color: darkMode ? '#fbbf24' : '#92400e' }}>
+                      ~{playlistJob.result.remaining_source_words} mots de contenu source non utilisés (surplus)
+                    </p>
+                  )}
                 </div>
               )}
 
