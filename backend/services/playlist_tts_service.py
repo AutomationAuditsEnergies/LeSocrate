@@ -463,12 +463,46 @@ def generate_playlist_for_folder(platform_id, folder_id, progress_callback=None)
     if remaining_source_words > 50:
         logger.warning(f"⚠️ {remaining_source_words} mots source non utilisés (surplus)")
 
-    # ── Étape 4 : préparer le prefix Azure ──
-    progress(4, total_steps, "Préparation de l'upload Azure...")
+    # ── Étape 4 : préparer le prefix Azure + sauvegarder le script ──
+    progress(4, total_steps, "Sauvegarde du script et préparation Azure...")
     azure_prefix = f"platform-{platform_id}/folder-{folder_id}/playlist/"
 
-    # Nettoyer les anciens fichiers playlist
-    delete_blobs_by_prefix(CONTAINER_AUDIOS, azure_prefix)
+    # Sauvegarder le script reformulé en JSON pour consultation ultérieure
+    import json as _json
+    script_data = {
+        "folder_id": folder_id,
+        "platform_id": platform_id,
+        "source_words": total_words,
+        "filled_blocs": filled_blocs,
+        "remaining_source_words": remaining_source_words,
+        "blocs": [
+            {
+                "bloc_number": b["bloc_number"],
+                "content": b.get("content", ""),
+                "word_count": b.get("word_count", 0),
+                "target_words": b.get("target_words", 0),
+                "skipped": b.get("skipped", False),
+            }
+            for b in blocs
+        ]
+    }
+    script_bytes = _json.dumps(script_data, ensure_ascii=False, indent=2).encode("utf-8")
+    upload_blob(CONTAINER_AUDIOS, f"{azure_prefix}script.json", script_bytes)
+    logger.info(f"📄 Script reformulé sauvegardé dans {azure_prefix}script.json")
+
+    # Nettoyer les anciens fichiers MP3 playlist (mais pas le script)
+    existing_blobs = []
+    try:
+        from azure.storage.blob import BlobServiceClient
+        conn_str = os.getenv("AZURE_TTS_STORAGE_CONNECTION_STRING")
+        if conn_str:
+            bsc = BlobServiceClient.from_connection_string(conn_str)
+            cc = bsc.get_container_client(CONTAINER_AUDIOS)
+            for blob in cc.list_blobs(name_starts_with=azure_prefix):
+                if blob.name.endswith(".mp3"):
+                    cc.delete_blob(blob.name)
+    except Exception as e:
+        logger.warning(f"⚠️ Nettoyage anciens MP3: {e}")
 
     # ── Étape 5 : générer les 19 fichiers ──
     progress(5, total_steps, "Début de la génération TTS des 19 fichiers...")

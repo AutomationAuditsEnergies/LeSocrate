@@ -6,6 +6,8 @@ const Icon = ({ name, className = '' }) => (
   <span className={`material-icons ${className}`}>{name}</span>
 )
 
+const COURS_DURATIONS_MAP = { 1: 45, 2: 45, 3: 55, 4: 45, 5: 60, 6: 60, 7: 50 }
+
 // ─── Component ───────────────────────────────────────────────────────────────
 export default function CoursFoldersModal({ platformId, platformName, onClose }) {
   const [view, setView] = useState('folders') // 'folders' | 'documents'
@@ -27,6 +29,8 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
   const [deletingItem, setDeletingItem] = useState(false)
   const [playlistJob, setPlaylistJob] = useState(null) // {status, step, total_steps, message}
   const playlistPollingRef = useRef(null)
+  const [scriptModal, setScriptModal] = useState(null) // {blocs: [...]}
+  const [loadingScript, setLoadingScript] = useState(false)
   const fileInputRef = useRef(null)
   const createFolderInputRef = useRef(null)
   const pollingRef = useRef(null)
@@ -433,6 +437,24 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
     }
   }
 
+  const handleViewScript = async () => {
+    if (!selectedFolder) return
+    setLoadingScript(true)
+    try {
+      const resp = await fetch(apiUrl(`/api/hr/cours-folders/${selectedFolder.id}/playlist-script`), { credentials: 'include' })
+      const data = await resp.json()
+      if (data.success) {
+        setScriptModal(data)
+      } else {
+        alert(data.error || 'Aucun script disponible')
+      }
+    } catch (e) {
+      console.error('Erreur chargement script:', e)
+    } finally {
+      setLoadingScript(false)
+    }
+  }
+
   // Vérifier le statut playlist quand on entre dans un dossier
   useEffect(() => {
     if (view === 'documents' && selectedFolder) {
@@ -784,7 +806,29 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
                       ~{playlistJob.result.remaining_source_words} mots de contenu source non utilisés (surplus)
                     </p>
                   )}
+                  <button
+                    onClick={handleViewScript}
+                    disabled={loadingScript}
+                    className="mt-3 flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition-colors disabled:opacity-50"
+                    style={{ backgroundColor: darkMode ? '#166534' : '#bbf7d0', color: darkMode ? '#86efac' : '#166534' }}
+                  >
+                    <Icon name="article" className="text-sm" />
+                    {loadingScript ? 'Chargement...' : 'Voir le script reformulé'}
+                  </button>
                 </div>
+              )}
+
+              {/* Bouton voir script même sans pipeline en cours */}
+              {(!playlistJob || playlistJob.status !== 'running') && !playlistJob?.result && (
+                <button
+                  onClick={handleViewScript}
+                  disabled={loadingScript}
+                  className="mb-4 flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition-colors disabled:opacity-50"
+                  style={{ backgroundColor: colors.innerBg, border: `1px solid ${colors.border}`, color: colors.textMuted }}
+                >
+                  <Icon name="article" className="text-sm" />
+                  {loadingScript ? 'Chargement...' : 'Voir le dernier script'}
+                </button>
               )}
 
               {/* Erreur pipeline */}
@@ -912,6 +956,73 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
           )}
         </div>
       </div>
+
+      {/* Modale script reformulé */}
+      {scriptModal && (
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center p-4"
+          style={{ backgroundColor: 'rgba(0,0,0,0.7)' }}
+          onClick={() => setScriptModal(null)}
+        >
+          <div
+            className="w-full overflow-hidden rounded-2xl shadow-2xl flex flex-col"
+            style={{ maxWidth: '800px', maxHeight: '90vh', backgroundColor: colors.cardBg }}
+            onClick={e => e.stopPropagation()}
+          >
+            {/* Header */}
+            <div className="flex items-center justify-between px-6 py-4 border-b flex-shrink-0" style={{ borderColor: colors.border, backgroundColor: '#8B5CF6' }}>
+              <div className="flex items-center gap-3 text-white">
+                <Icon name="article" className="text-2xl" />
+                <div>
+                  <h3 className="text-lg font-bold">Script reformulé par Claude</h3>
+                  <p className="text-xs text-purple-200">
+                    {scriptModal.filled_blocs}/7 blocs · {scriptModal.source_words} mots source
+                    {scriptModal.remaining_source_words > 50 && ` · ${scriptModal.remaining_source_words} mots surplus`}
+                  </p>
+                </div>
+              </div>
+              <button onClick={() => setScriptModal(null)} className="text-white hover:bg-white/20 rounded-full p-1">
+                <Icon name="close" className="text-2xl" />
+              </button>
+            </div>
+
+            {/* Contenu scrollable */}
+            <div className="overflow-y-auto p-6 space-y-6">
+              {scriptModal.blocs?.map(bloc => (
+                <div key={bloc.bloc_number} className="rounded-2xl overflow-hidden" style={{ border: `1px solid ${colors.border}` }}>
+                  <div
+                    className="flex items-center justify-between px-4 py-3"
+                    style={{ backgroundColor: bloc.skipped ? (darkMode ? '#7f1d1d' : '#fee2e2') : (darkMode ? '#1e293b' : '#f8fafc') }}
+                  >
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-bold" style={{ color: bloc.skipped ? '#ef4444' : '#8B5CF6' }}>
+                        Bloc {bloc.bloc_number}
+                      </span>
+                      <span className="text-xs" style={{ color: colors.textMuted }}>
+                        {COURS_DURATIONS_MAP[bloc.bloc_number]}min
+                      </span>
+                      {bloc.skipped ? (
+                        <span className="text-xs px-2 py-0.5 rounded-full" style={{ backgroundColor: '#fee2e2', color: '#ef4444' }}>Vide</span>
+                      ) : (
+                        <span className="text-xs px-2 py-0.5 rounded-full" style={{ backgroundColor: darkMode ? '#312e81' : '#ede9fe', color: '#8B5CF6' }}>
+                          {bloc.word_count} mots / {bloc.target_words} cible
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  {!bloc.skipped && bloc.content && (
+                    <div className="px-4 py-4" style={{ backgroundColor: colors.innerBg }}>
+                      <p className="text-sm leading-relaxed whitespace-pre-wrap" style={{ color: colors.text, fontFamily: 'monospace', fontSize: '12px' }}>
+                        {bloc.content}
+                      </p>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
 
       {deleteConfirm && (
         <div

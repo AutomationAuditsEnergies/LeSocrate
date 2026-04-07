@@ -1580,6 +1580,40 @@ def create_hr_blueprint(socketio):
             logger.error(f"❌ Erreur generate_playlist: {e}")
             return jsonify({"success": False, "error": str(e)}), 500
 
+    @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/playlist-script", methods=["GET"])
+    def get_playlist_script(folder_id):
+        """Retourne le script reformulé par Claude pour un dossier."""
+        denied = _require_admin()
+        if denied:
+            return denied
+
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute("SELECT platform_id FROM cours_folders WHERE id = ?", (folder_id,))
+            row = cursor.fetchone()
+            conn.close()
+
+            if not row:
+                return jsonify({"success": False, "error": "Dossier introuvable"}), 404
+
+            platform_id = row[0]
+
+            from services.azure_blob_service import download_blob, CONTAINER_AUDIOS
+            import json as _json
+
+            blob_path = f"platform-{platform_id}/folder-{folder_id}/playlist/script.json"
+            script_bytes = download_blob(CONTAINER_AUDIOS, blob_path)
+            script_data = _json.loads(script_bytes.decode("utf-8"))
+
+            return jsonify({"success": True, **script_data}), 200
+
+        except Exception as e:
+            if "BlobNotFound" in str(e) or "The specified blob does not exist" in str(e):
+                return jsonify({"success": False, "error": "Aucun script généré pour ce dossier"}), 404
+            logger.error(f"❌ Erreur get_playlist_script: {e}")
+            return jsonify({"success": False, "error": str(e)}), 500
+
     @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/playlist-status", methods=["GET"])
     def get_playlist_status(folder_id):
         """Retourne l'état de la pipeline playlist pour un dossier."""
