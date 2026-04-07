@@ -59,7 +59,7 @@ def create_admin_blueprint(socketio):
             logs_with_duration = []
 
             for log in logs:
-                id_, nom, prenom, arrivee, depart = log
+                id_, nom, prenom, arrivee, depart = log[0], log[1], log[2], log[3], log[4]
                 if depart:
                     dt_arrivee = datetime.strptime(arrivee, "%Y-%m-%d %H:%M:%S")
                     dt_depart = datetime.strptime(depart, "%Y-%m-%d %H:%M:%S")

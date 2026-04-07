@@ -56,7 +56,7 @@ def generate_excel_export(logs_data):
         now = datetime.now()
 
         for row in logs_data:
-            id_, nom, prenom, arrivee, depart = row
+            id_, nom, prenom, arrivee, depart = row[0], row[1], row[2], row[3], row[4]
             dt1 = datetime.strptime(arrivee, "%Y-%m-%d %H:%M:%S")
             if depart:
                 dt2 = datetime.strptime(depart, "%Y-%m-%d %H:%M:%S")
