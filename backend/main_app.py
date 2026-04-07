@@ -107,9 +107,9 @@ def populate_session_from_token():
 
     # Injecter platform_id depuis le header si absent de la session
     if "platform_id" not in session:
-        pid = request.headers.get("X-Platform-Id", type=int)
-        if pid:
-            session["platform_id"] = pid
+        raw = request.headers.get("X-Platform-Id")
+        if raw and raw.isdigit():
+            session["platform_id"] = int(raw)
         elif request.args.get("platform_id"):
             session["platform_id"] = int(request.args["platform_id"])
 
