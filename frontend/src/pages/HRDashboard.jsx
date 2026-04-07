@@ -408,7 +408,7 @@ export default function HRDashboard() {
           loading={audiosLoading === selectedPlatformId}
           onClose={() => setShowAudiosModal(false)}
           darkMode={darkMode}
-          recorderUrl={`${(platforms.find(p => p.id === selectedPlatformId)?.frontend_url || window.location.origin)}/recorder`}
+          recorderUrl={`${(platforms.find(p => p.id === selectedPlatformId)?.frontend_url || window.location.origin)}/recorder?p=${selectedPlatformId}`}
         />
       )}
 
@@ -976,7 +976,7 @@ function PlatformCard({
         {/* Lien vers le cours */}
         {p.active && (
           <a
-            href={`${p.frontend_url || window.location.origin}/video`}
+            href={`${p.frontend_url || window.location.origin}/?p=${p.id}`}
             target="_blank"
             rel="noopener noreferrer"
             className="flex w-full items-center justify-between rounded-lg px-4 py-2.5 text-sm font-medium transition-all mb-3"

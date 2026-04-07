@@ -2,6 +2,11 @@
 
 ## 2026-04-07
 
+### Fix : HR Dashboard — liens "Accéder au cours" avec `?p={id}` pour multi-tenant
+
+- Les liens "Accéder au cours" et recorder dans le HR Dashboard pointaient vers `/video` sans `?p={id}`, donc le frontend ne savait pas quelle plateforme charger (défaut P1 → "cours terminé").
+- Corrigé : le lien pointe maintenant vers `/?p={id}` pour que le `platform_id` soit stocké en localStorage dès le login.
+
 ### Fix : HR Dashboard — actions locales pour plateformes multi-tenant
 
 - **Problème** : Les actions "Heure du cours", "Verrouiller uploads" et "Auto-schedule" faisaient `if platform_id == 1: local` / `else: HTTP distant`. Les plateformes multi-tenant (P4, P5+) n'ont pas de backend séparé → timeout HTTP vers un backend inexistant.
