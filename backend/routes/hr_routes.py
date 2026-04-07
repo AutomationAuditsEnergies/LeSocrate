@@ -45,6 +45,12 @@ def _get_platform_info(pid):
     }
 
 
+def _is_local_platform(pid):
+    """True si la plateforme tourne sur ce backend (pas de backend_url distant)"""
+    info = _get_platform_info(pid)
+    return not info.get("backend_url")
+
+
 def _call_platform(pid, path, method="POST", json_data=None):
     """Appel HTTP service-to-service vers le backend d'une plateforme distante"""
     info = _get_platform_info(pid)
@@ -385,8 +391,8 @@ def create_hr_blueprint(socketio):
             status_label = "verrouillé" if new_value else "déverrouillé"
             logger.info(f"🔒 Plateforme {platform_id} upload {status_label}")
 
-            # Propager le changement vers la plateforme distante (P2+)
-            if platform_id != 1:
+            # Propager le changement vers la plateforme distante (si elle a son propre backend)
+            if not _is_local_platform(platform_id):
                 _call_platform(platform_id, "/api/internal/set-lock", json_data={"locked": bool(new_value)})
 
             return jsonify({
@@ -975,7 +981,7 @@ def create_hr_blueprint(socketio):
         )
         conn.commit()
         conn.close()
-        if platform_id != 1:
+        if not _is_local_platform(platform_id):
             _call_platform(platform_id, "/api/internal/set-lock", json_data={"locked": False})
 
     # ─── POST /api/hr/platforms/<id>/upload-pdf-rag ──────────────────────
@@ -1067,10 +1073,10 @@ def create_hr_blueprint(socketio):
         if denied:
             return denied
 
-        if platform_id == 1:
+        if _is_local_platform(platform_id):
             try:
                 from services.time_service import get_heure_debut_cours
-                heure = get_heure_debut_cours()
+                heure = get_heure_debut_cours(platform_id)
                 return jsonify({
                     "success": True,
                     "date_cours": heure.strftime("%Y-%m-%d"),
@@ -1100,7 +1106,7 @@ def create_hr_blueprint(socketio):
         if not date_str or not heure_str:
             return jsonify({"success": False, "error": "date_cours et heure_cours requis"}), 400
 
-        if platform_id == 1:
+        if _is_local_platform(platform_id):
             # Appel direct au service local
             try:
                 from services.time_service import set_heure_debut_cours
@@ -1110,13 +1116,13 @@ def create_hr_blueprint(socketio):
                     datetime_str = f"{date_str} {heure_str}"
                 nouvelle_heure_naive = datetime.strptime(datetime_str, "%Y-%m-%d %H:%M:%S")
                 nouvelle_heure_fr = FRANCE_TZ.localize(nouvelle_heure_naive)
-                set_heure_debut_cours(nouvelle_heure_fr)
+                set_heure_debut_cours(nouvelle_heure_fr, platform_id)
                 return jsonify({
                     "success": True,
                     "message": f"Cours programmé pour le {date_str} à {heure_str}",
                 }), 200
             except Exception as e:
-                logger.error(f"❌ Erreur config-cours P1: {e}")
+                logger.error(f"❌ Erreur config-cours P{platform_id}: {e}")
                 return jsonify({"success": False, "error": str(e)}), 500
         else:
             result, error = _call_platform(platform_id, "/api/internal/config-cours", json_data=data)
@@ -1174,19 +1180,19 @@ def create_hr_blueprint(socketio):
             date_str = next_date.strftime("%Y-%m-%d")
             heure_str = f"{hour:02d}:{minute:02d}"
 
-            if platform_id == 1:
+            if _is_local_platform(platform_id):
                 try:
                     from services.time_service import set_heure_debut_cours
                     nouvelle_heure_naive = datetime.strptime(
                         f"{date_str} {heure_str}:00", "%Y-%m-%d %H:%M:%S"
                     )
                     nouvelle_heure_fr = FRANCE_TZ.localize(nouvelle_heure_naive)
-                    set_heure_debut_cours(nouvelle_heure_fr)
-                    results.append({"platform_id": 1, "success": True, "scheduled": f"{date_str} {heure_str}"})
-                    logger.info(f"📅 Auto-schedule P1 : {date_str} {heure_str}")
+                    set_heure_debut_cours(nouvelle_heure_fr, platform_id)
+                    results.append({"platform_id": platform_id, "success": True, "scheduled": f"{date_str} {heure_str}"})
+                    logger.info(f"📅 Auto-schedule P{platform_id} : {date_str} {heure_str}")
                 except Exception as e:
-                    results.append({"platform_id": 1, "success": False, "error": str(e)})
-                    logger.error(f"❌ Auto-schedule P1 : {e}")
+                    results.append({"platform_id": platform_id, "success": False, "error": str(e)})
+                    logger.error(f"❌ Auto-schedule P{platform_id} : {e}")
             else:
                 result, error = _call_platform(
                     platform_id,

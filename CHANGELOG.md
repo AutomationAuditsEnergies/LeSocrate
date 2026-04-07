@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-04-07
+
+### Fix : HR Dashboard — actions locales pour plateformes multi-tenant
+
+- **Problème** : Les actions "Heure du cours", "Verrouiller uploads" et "Auto-schedule" faisaient `if platform_id == 1: local` / `else: HTTP distant`. Les plateformes multi-tenant (P4, P5+) n'ont pas de backend séparé → timeout HTTP vers un backend inexistant.
+- **Solution** : Ajout de `_is_local_platform(pid)` qui vérifie si la plateforme a un `backend_url` configuré. Si non → appel local direct au `time_service`. Corrigé dans 5 endroits de `hr_routes.py` : `get_platform_course_time`, `proxy_config_cours`, `toggle_upload_lock`, `_unlock_platform`, `auto_schedule`.
+
 ## 2026-04-03
 
 ### Feature : Pipeline TTS automatisée - Génération des 19 audios de formation
