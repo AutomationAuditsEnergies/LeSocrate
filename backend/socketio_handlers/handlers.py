@@ -1,5 +1,5 @@
 # handlers.py - Gestionnaires d'événements SocketIO
-from flask_socketio import emit
+from flask_socketio import emit, join_room, leave_room
 from flask import request
 import state
 from services.rag_service import call_rag_service
@@ -7,6 +7,17 @@ from services.time_service import get_current_simulated_time
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+
+def _get_room(sid):
+    """Retourne le nom de la room pour un SID donné"""
+    pid = state.connected_users_platform.get(sid, 1)
+    return f"platform_{pid}"
+
+
+def _count_platform_users(platform_id):
+    """Compte les utilisateurs connectés sur une plateforme"""
+    return sum(1 for pid in state.connected_users_platform.values() if pid == platform_id)
 
 
 def register_socketio_handlers(socketio):
@@ -17,10 +28,9 @@ def register_socketio_handlers(socketio):
         """Gestion de la connexion d'un client"""
         try:
             logger.info(f"🔌 Nouvelle connexion WebSocket: {request.sid}")
-            # Broadcast du nombre de participants à tous les clients
+            # Le count sera mis à jour quand user_connected sera reçu
             nb_participants = len(state.connected_users)
             emit("participants_update", {"count": nb_participants}, broadcast=True)
-            logger.debug(f"📢 Participants update broadcast: {nb_participants}")
         except Exception as e:
             logger.error(f"❌ Erreur handle_connect: {e}")
 
@@ -31,15 +41,15 @@ def register_socketio_handlers(socketio):
             sid = request.sid
             logger.info(f"🔌 Déconnexion WebSocket: {sid}")
 
-            # Retirer l'utilisateur de la liste si présent
+            platform_id = state.connected_users_platform.pop(sid, 1)
+            room = f"platform_{platform_id}"
+
             if sid in state.connected_users:
                 username = state.connected_users.pop(sid)
-                logger.info(f"👋 Utilisateur {username} retiré des connectés")
+                logger.info(f"👋 Utilisateur {username} retiré (P{platform_id})")
 
-            # Broadcast du nouveau nombre de participants
-            nb_participants = len(state.connected_users)
-            emit("participants_update", {"count": nb_participants}, broadcast=True)
-            logger.debug(f"📢 Participants update broadcast: {nb_participants}")
+            nb_participants = _count_platform_users(platform_id)
+            emit("participants_update", {"count": nb_participants}, to=room)
         except Exception as e:
             logger.error(f"❌ Erreur handle_disconnect: {e}")
 
@@ -48,37 +58,42 @@ def register_socketio_handlers(socketio):
         """Gestion de l'enregistrement d'un utilisateur connecté"""
         try:
             username = data.get("username", "Anonyme")
+            platform_id = data.get("platform_id", 1)
             sid = request.sid
-            logger.info(f"👤 Utilisateur connecté: {username} (sid: {sid})")
+            room = f"platform_{platform_id}"
 
-            # Vérifier si cet utilisateur était déjà connecté avec un autre SID
+            logger.info(f"👤 Utilisateur connecté: {username} P{platform_id} (sid: {sid})")
+
+            # Nettoyage des anciennes connexions du même utilisateur
             old_sids = [s for s, u in state.connected_users.items() if u == username]
             for old_sid in old_sids:
-                logger.warning(
-                    f"⚠️ Utilisateur {username} déjà connecté avec SID {old_sid}, nettoyage"
-                )
                 state.connected_users.pop(old_sid, None)
+                state.connected_users_platform.pop(old_sid, None)
 
-            # Enregistrer le nouvel utilisateur
+            # Enregistrer
             state.connected_users[sid] = username
+            state.connected_users_platform[sid] = platform_id
+            join_room(room)
 
-            # Broadcast du nouveau nombre de participants
-            nb_participants = len(state.connected_users)
-            emit("participants_update", {"count": nb_participants}, broadcast=True)
-            logger.info(
-                f"✅ Utilisateur {username} enregistré, total: {nb_participants}"
-            )
+            nb_participants = _count_platform_users(platform_id)
+            emit("participants_update", {"count": nb_participants}, to=room)
+            logger.info(f"✅ {username} enregistré P{platform_id}, total room: {nb_participants}")
         except Exception as e:
             logger.error(f"❌ Erreur handle_user_connected: {e}")
 
     @socketio.on("get_participants")
     def handle_get_participants():
-        """Retourne la liste des participants connectés"""
+        """Retourne la liste des participants connectés sur la même plateforme"""
         try:
-            logger.debug("📊 Demande liste participants")
-            participants = list(state.connected_users.values())
+            sid = request.sid
+            platform_id = state.connected_users_platform.get(sid, 1)
+
+            participants = [
+                state.connected_users[s]
+                for s, pid in state.connected_users_platform.items()
+                if pid == platform_id and s in state.connected_users
+            ]
             emit("participants_list", {"participants": participants})
-            logger.debug(f"📊 {len(participants)} participants retournés")
         except Exception as e:
             logger.error(f"❌ Erreur handle_get_participants: {e}")
 
@@ -88,15 +103,17 @@ def register_socketio_handlers(socketio):
         try:
             question = data.get("question", "").strip()
             username = data.get("username", "Anonyme")
-            timestamp = get_current_simulated_time().strftime("%H:%M:%S")
+            sid = request.sid
+            platform_id = state.connected_users_platform.get(sid, 1)
+            room = f"platform_{platform_id}"
+            timestamp = get_current_simulated_time(platform_id).strftime("%H:%M:%S")
 
-            logger.info(f"❓ Question reçue de {username}: {question[:50]}...")
+            logger.info(f"❓ Question de {username} P{platform_id}: {question[:50]}...")
 
             if not question:
-                logger.warning("⚠️ Question vide reçue")
                 return
 
-            # Broadcast de la question à tous les clients
+            # Broadcast de la question à la room de la plateforme
             emit(
                 "new_message",
                 {
@@ -105,18 +122,13 @@ def register_socketio_handlers(socketio):
                     "timestamp": timestamp,
                     "type": "question",
                 },
-                broadcast=True,
+                to=room,
             )
-            logger.debug(f"📢 Question broadcast à tous les clients")
 
             # Appeler le service RAG
-            logger.info(f"🤖 Appel RAG pour la question: {question[:50]}...")
             answer = call_rag_service(question)
-            answer_timestamp = get_current_simulated_time().strftime("%H:%M:%S")
+            answer_timestamp = get_current_simulated_time(platform_id).strftime("%H:%M:%S")
 
-            logger.info(f"🤖 Réponse RAG reçue: {answer[:100]}...")
-
-            # Broadcast de la réponse à tous les clients
             emit(
                 "new_message",
                 {
@@ -125,13 +137,11 @@ def register_socketio_handlers(socketio):
                     "timestamp": answer_timestamp,
                     "type": "answer",
                 },
-                broadcast=True,
+                to=room,
             )
-            logger.debug(f"📢 Réponse RAG broadcast à tous les clients")
 
         except Exception as e:
             logger.error(f"❌ Erreur handle_send_question: {e}")
-            # Envoyer un message d'erreur à l'utilisateur
             emit(
                 "new_message",
                 {

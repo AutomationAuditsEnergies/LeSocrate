@@ -39,8 +39,8 @@ def video_status():
 
         # Si le cours n'a pas encore commencé
         if audio_info is None and temps_restant > 0:
-            heure_debut_cours = get_heure_debut_cours()
-            heure_actuelle_simulee = get_current_simulated_time()
+            heure_debut_cours = get_heure_debut_cours(platform_id)
+            heure_actuelle_simulee = get_current_simulated_time(platform_id)
 
             logger.info(f"⏳ Cours pas encore commencé, attente de {temps_restant}s")
 
@@ -151,7 +151,7 @@ def cours_status():
         audio_info, offset, temps_restant = get_current_audio_info(platform_id)
 
         if audio_info is None and temps_restant > 0:
-            heure_debut_cours = get_heure_debut_cours()
+            heure_debut_cours = get_heure_debut_cours(platform_id)
             result = {
                 "status": "waiting",
                 "temps_restant": temps_restant,

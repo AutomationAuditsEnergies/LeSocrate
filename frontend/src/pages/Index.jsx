@@ -1,18 +1,31 @@
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useState, useEffect } from 'react'
 import Spline from '@splinetool/react-spline'
-import { apiUrl } from '../api'
+import { apiUrl, setPlatformId, setPlatformName } from '../api'
 
 export default function Index() {
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
   const [splineLoaded, setSplineLoaded] = useState(false)
 
   useEffect(() => {
     document.body.style.overflow = 'hidden'
+
+    // Lire le platform_id depuis l'URL (?p=2) et le stocker
+    const pParam = searchParams.get('p')
+    if (pParam) {
+      setPlatformId(pParam)
+      // Récupérer le nom de la plateforme depuis le backend
+      fetch(apiUrl(`/api/platform-info?id=${pParam}`))
+        .then(r => r.json())
+        .then(data => { if (data.name) setPlatformName(data.name) })
+        .catch(() => {})
+    }
+
     return () => {
       document.body.style.overflow = ''
     }
-  }, [])
+  }, [searchParams])
 
   const handleFormSubmit = async (event) => {
     event.preventDefault()
@@ -28,7 +41,7 @@ export default function Index() {
           'Content-Type': 'application/json',
         },
         credentials: 'include',
-        body: JSON.stringify({ nom, prenom }),
+        body: JSON.stringify({ nom, prenom, platform_id: parseInt(localStorage.getItem('platform_id') || '1') }),
       })
 
       const data = await response.json()

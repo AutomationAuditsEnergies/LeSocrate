@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import ChatPanel from '../components/ChatPanel.jsx'
 import LeftSidebar from '../components/LeftSidebar.jsx'
-import { apiUrl, apiFetch } from '../api'
+import { apiUrl, apiFetch, getPlatformName } from '../api'
 
 export default function Video() {
   const navigate = useNavigate()
@@ -207,7 +207,7 @@ export default function Video() {
       {/* Header */}
       <div className="bg-white border-b border-gray-200 px-8 flex items-center justify-between flex-shrink-0" style={{ height: '64px' }}>
         <div>
-          <h1 className="text-xl font-semibold text-gray-800">{import.meta.env.VITE_FORMATION_NAME || 'TP CRCD'}</h1>
+          <h1 className="text-xl font-semibold text-gray-800">{getPlatformName()}</h1>
           <p className="text-sm text-gray-500">{new Date().toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' })}</p>
         </div>
       </div>

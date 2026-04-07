@@ -46,8 +46,9 @@ _cors_origins = [
     "https://thankful-wave-043aa3b03.4.azurestaticapps.net",
     "https://brave-mud-064e06d03.2.azurestaticapps.net",
     "https://polite-bush-07d4fdd03.1.azurestaticapps.net",
+    "https://victorious-smoke-02aaf4e03.6.azurestaticapps.net",
 ]
-for _i in range(1, 4):
+for _i in range(1, 10):
     _url = os.environ.get(f"PLATFORM_{_i}_FRONTEND_URL", "").rstrip("/")
     if _url and _url not in _cors_origins:
         _cors_origins.append(_url)
@@ -56,7 +57,7 @@ CORS(app, resources={
     r"/*": {
         "origins": _cors_origins,
         "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-        "allow_headers": ["Content-Type", "Authorization", "X-Auth-Token"],
+        "allow_headers": ["Content-Type", "Authorization", "X-Auth-Token", "X-Platform-Id"],
         "supports_credentials": True
     }
 })
@@ -90,7 +91,9 @@ logger.info("✅ Tous les blueprints enregistrés")
 
 # Reconstituer la session Flask depuis le header X-Auth-Token
 # (pour navigation privée et navigateurs bloquant les cookies tiers)
+# + injecter platform_id depuis le header X-Platform-Id
 import state as _state
+from flask import jsonify as _jsonify
 @app.before_request
 def populate_session_from_token():
     if "nom" not in session:
@@ -100,6 +103,30 @@ def populate_session_from_token():
             session["nom"] = user["nom"]
             session["prenom"] = user["prenom"]
             session["log_id"] = user["log_id"]
+            session["platform_id"] = user.get("platform_id", 1)
+
+    # Injecter platform_id depuis le header si absent de la session
+    if "platform_id" not in session:
+        pid = request.headers.get("X-Platform-Id", type=int)
+        if pid:
+            session["platform_id"] = pid
+        elif request.args.get("platform_id"):
+            session["platform_id"] = int(request.args["platform_id"])
+
+
+@app.route("/api/platform-info")
+def platform_info():
+    """Retourne les infos d'une plateforme (nom, slug)"""
+    from database.db import get_db_connection
+    pid = request.args.get("id", 1, type=int)
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, name, slug FROM platform_config WHERE id = ?", (pid,))
+    row = cursor.fetchone()
+    conn.close()
+    if not row:
+        return _jsonify({"error": "Platform not found"}), 404
+    return _jsonify({"id": row[0], "name": row[1], "slug": row[2]})
 
 # Enregistrement des gestionnaires SocketIO
 register_socketio_handlers(socketio)

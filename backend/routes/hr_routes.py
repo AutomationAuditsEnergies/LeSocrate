@@ -22,6 +22,7 @@ _ARCHIVE_DEFAULTS = {
     1: "formationaudio-archives",
     2: "formationaudio-archives-p2",
     3: "formationaudio-p3-archives",
+    4: "formationaudio-p4-archives",
 }
 
 
@@ -172,7 +173,8 @@ def create_hr_blueprint(socketio):
             for row in rows:
                 pid, name, upload_locked, pdf_filename, pdf_uploaded_at, updated_at = row
                 pinfo = _get_platform_info(pid)
-                active = pid == 1 or bool(pinfo.get("backend_url"))
+                # En multi-tenant, toute plateforme en BDD est active
+                active = pid == 1 or bool(pinfo.get("backend_url")) or pid >= 4
 
                 # Stats audio pour P2+ depuis leur container Azure
                 if pid == 1:
@@ -256,6 +258,103 @@ def create_hr_blueprint(socketio):
 
         except Exception as e:
             logger.error(f"❌ Erreur get platforms: {e}")
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    # ─── POST /api/hr/platforms (Créer une nouvelle plateforme) ──────────
+    @hr_bp.route("/api/hr/platforms", methods=["POST"])
+    def create_platform():
+        """Crée une nouvelle plateforme : DB + containers Azure Blob"""
+        denied = _require_admin()
+        if denied:
+            return denied
+
+        data = request.get_json() or {}
+        name = data.get("name", "").strip()
+        if not name:
+            return jsonify({"success": False, "error": "Le nom est requis"}), 400
+
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+
+            # Générer le slug depuis le nom
+            import re
+            slug = re.sub(r'[^a-z0-9]+', '-', name.lower()).strip('-')
+
+            # Vérifier unicité du slug
+            cursor.execute("SELECT COUNT(*) FROM platform_config WHERE slug = ?", (slug,))
+            if cursor.fetchone()[0] > 0:
+                conn.close()
+                return jsonify({"success": False, "error": "Ce nom de plateforme existe déjà"}), 409
+
+            now_str = datetime.now(FRANCE_TZ).strftime("%Y-%m-%d %H:%M:%S")
+
+            # Insérer la plateforme (auto-increment)
+            cursor.execute(
+                "INSERT INTO platform_config (name, upload_locked, updated_at, slug) VALUES (?, 1, ?, ?)",
+                (name, now_str, slug),
+            )
+            new_id = cursor.lastrowid
+
+            # Noms des containers
+            audio_container = f"formationaudio-p{new_id}"
+            pdf_container = f"formationpdf-p{new_id}"
+            archive_container = f"formationaudio-p{new_id}-archives"
+
+            # Mettre à jour les noms de containers
+            cursor.execute(
+                "UPDATE platform_config SET audio_container = ?, pdf_container = ?, archive_container = ? WHERE id = ?",
+                (audio_container, pdf_container, archive_container, new_id),
+            )
+
+            # Créer une entrée cours_config par défaut
+            cursor.execute("SELECT heure_debut FROM cours_config WHERE platform_id = 1")
+            default_row = cursor.fetchone()
+            default_heure = default_row[0] if default_row else now_str
+            cursor.execute(
+                "INSERT INTO cours_config (id, heure_debut, platform_id) VALUES (?, ?, ?)",
+                (new_id, default_heure, new_id),
+            )
+
+            conn.commit()
+            conn.close()
+
+            # Créer les containers Azure Blob
+            containers_created = []
+            for cs_env, containers in [
+                ("AZURE_AUDIO_STORAGE_CONNECTION_STRING", [audio_container, archive_container]),
+                ("AZURE_STORAGE_CONNECTION_STRING", [pdf_container]),
+            ]:
+                cs = os.environ.get(cs_env)
+                if cs:
+                    bsc = BlobServiceClient.from_connection_string(cs)
+                    for cname in containers:
+                        try:
+                            bsc.create_container(cname)
+                            containers_created.append(cname)
+                            logger.info(f"✅ Container Azure créé : {cname}")
+                        except ResourceExistsError:
+                            containers_created.append(f"{cname} (existait déjà)")
+                        except Exception as e:
+                            logger.warning(f"⚠️ Erreur création container {cname}: {e}")
+
+            logger.info(f"✅ Plateforme {new_id} '{name}' créée avec containers: {containers_created}")
+
+            return jsonify({
+                "success": True,
+                "platform": {
+                    "id": new_id,
+                    "name": name,
+                    "slug": slug,
+                    "audio_container": audio_container,
+                    "pdf_container": pdf_container,
+                    "archive_container": archive_container,
+                    "containers_created": containers_created,
+                },
+            }), 201
+
+        except Exception as e:
+            logger.error(f"❌ Erreur création plateforme: {e}")
             return jsonify({"success": False, "error": str(e)}), 500
 
     # ─── POST /api/hr/platforms/<id>/toggle-lock ─────────────────────────
@@ -1051,6 +1150,7 @@ def create_hr_blueprint(socketio):
             {"platform_id": 1, "weekday": 4, "hour": 9},  # vendredi
             {"platform_id": 2, "weekday": 0, "hour": 9},  # lundi
             {"platform_id": 3, "weekday": 2, "hour": 9},  # mercredi
+            {"platform_id": 4, "weekday": 3, "hour": 9},  # jeudi
         ]
 
         data = request.get_json() or {}

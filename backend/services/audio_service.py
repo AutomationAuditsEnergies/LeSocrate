@@ -103,8 +103,8 @@ def get_current_audio_info(platform_id=None):
     """
     try:
         logger.debug("🎵 Calcul info audio actuel")
-        heure_debut_cours = get_heure_debut_cours()
-        now = get_current_simulated_time()
+        heure_debut_cours = get_heure_debut_cours(platform_id or 1)
+        now = get_current_simulated_time(platform_id)
 
         logger.debug(f"🎵 Heure début: {heure_debut_cours}")
         logger.debug(f"🎵 Heure actuelle: {now}")

@@ -20,8 +20,9 @@ def create_auth_blueprint(socketio):
             data = request.get_json()
             nom = data.get("nom", "").strip()
             prenom = data.get("prenom", "").strip()
+            platform_id = data.get("platform_id", 1)
 
-            logger.info(f"👤 Tentative connexion: {nom} {prenom}")
+            logger.info(f"👤 Tentative connexion: {nom} {prenom} (P{platform_id})")
 
             if not nom or not prenom:
                 logger.warning("⚠️ Nom ou prénom manquant")
@@ -29,18 +30,19 @@ def create_auth_blueprint(socketio):
 
             session["nom"] = nom
             session["prenom"] = prenom
+            session["platform_id"] = platform_id
             # Enregistrement en heure française
             arrivee_time = datetime.now(FRANCE_TZ).strftime("%Y-%m-%d %H:%M:%S")
             session["arrivee"] = arrivee_time
 
-            logger.info(f"👤 Session créée pour {nom} {prenom} à {arrivee_time}")
+            logger.info(f"👤 Session créée pour {nom} {prenom} P{platform_id} à {arrivee_time}")
 
             # Enregistrement arrivée
             conn = get_db_connection()
             cursor = conn.cursor()
             cursor.execute(
-                "INSERT INTO logs (nom, prenom, arrivee) VALUES (?, ?, ?)",
-                (nom, prenom, arrivee_time),
+                "INSERT INTO logs (nom, prenom, arrivee, platform_id) VALUES (?, ?, ?, ?)",
+                (nom, prenom, arrivee_time, platform_id),
             )
             log_id = cursor.lastrowid
             session["log_id"] = log_id
@@ -51,7 +53,7 @@ def create_auth_blueprint(socketio):
 
             # Token pour navigation privée / cross-origin (stocké en mémoire)
             token = str(uuid.uuid4())
-            state.user_tokens[token] = {"nom": nom, "prenom": prenom, "log_id": log_id}
+            state.user_tokens[token] = {"nom": nom, "prenom": prenom, "log_id": log_id, "platform_id": platform_id}
 
             return (
                 jsonify(

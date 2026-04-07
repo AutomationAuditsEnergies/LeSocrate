@@ -108,7 +108,7 @@ def init_database():
         )
         logger.info("✅ Table deletion_requests créée/vérifiée")
 
-        # Seed 3 plateformes si la table est vide
+        # Seed plateformes si la table est vide
         cursor.execute("SELECT COUNT(*) FROM platform_config")
         pc_count = cursor.fetchone()[0]
         if pc_count == 0:
@@ -119,9 +119,10 @@ def init_database():
                     (1, "Formation 1 TP CRCD", now_str),
                     (2, "Formation 2 TP EC", now_str),
                     (3, "Formation 3 TP EC", now_str),
+                    (4, "Formation Courte", now_str),
                 ],
             )
-            logger.info("✅ 3 plateformes insérées dans platform_config")
+            logger.info("✅ 4 plateformes insérées dans platform_config")
         else:
             logger.info("ℹ️ platform_config déjà peuplée")
 
@@ -135,12 +136,70 @@ def init_database():
             ],
         )
 
+        # Migration : ajouter P4 si absent
+        cursor.execute("SELECT COUNT(*) FROM platform_config WHERE id = 4")
+        if cursor.fetchone()[0] == 0:
+            now_str = datetime.now(FRANCE_TZ).strftime("%Y-%m-%d %H:%M:%S")
+            cursor.execute(
+                "INSERT INTO platform_config (id, name, upload_locked, updated_at) VALUES (?, ?, 1, ?)",
+                (4, "Formation Courte", now_str),
+            )
+            logger.info("✅ Plateforme 4 (Formation Courte) insérée dans platform_config")
+
         # Migration : ajout colonne playlist_mode si absente
         cursor.execute("PRAGMA table_info(platform_config)")
         columns = [col[1] for col in cursor.fetchall()]
         if "playlist_mode" not in columns:
             cursor.execute("ALTER TABLE platform_config ADD COLUMN playlist_mode TEXT DEFAULT NULL")
             logger.info("✅ Colonne playlist_mode ajoutée à platform_config")
+
+        # Migration multi-tenant : colonnes containers dans platform_config
+        cursor.execute("PRAGMA table_info(platform_config)")
+        pc_columns = [col[1] for col in cursor.fetchall()]
+        if "audio_container" not in pc_columns:
+            cursor.execute("ALTER TABLE platform_config ADD COLUMN audio_container TEXT")
+            cursor.execute("ALTER TABLE platform_config ADD COLUMN pdf_container TEXT")
+            cursor.execute("ALTER TABLE platform_config ADD COLUMN archive_container TEXT")
+            cursor.execute("ALTER TABLE platform_config ADD COLUMN audio_base_url TEXT")
+            cursor.execute("ALTER TABLE platform_config ADD COLUMN slug TEXT")
+            # Peupler les valeurs par défaut pour les plateformes existantes
+            cursor.execute("UPDATE platform_config SET audio_container = 'formationaudio-dev', pdf_container = 'formationpdf', archive_container = 'formationaudio-archives', slug = 'formation-1' WHERE id = 1")
+            cursor.execute("UPDATE platform_config SET audio_container = 'formationaudio-p2', pdf_container = 'formationpdf-p2', archive_container = 'formationaudio-archives-p2', slug = 'formation-2' WHERE id = 2")
+            cursor.execute("UPDATE platform_config SET audio_container = 'formationaudio-p3', pdf_container = 'formationpdf-p3', archive_container = 'formationaudio-p3-archives', slug = 'formation-3' WHERE id = 3")
+            cursor.execute("UPDATE platform_config SET audio_container = 'formationaudio-p4', pdf_container = 'formationpdf-p4', archive_container = 'formationaudio-p4-archives', slug = 'formation-courte' WHERE id = 4")
+            logger.info("✅ Colonnes multi-tenant ajoutées à platform_config")
+
+        # Migration multi-tenant : platform_id dans logs
+        cursor.execute("PRAGMA table_info(logs)")
+        logs_columns = [col[1] for col in cursor.fetchall()]
+        if "platform_id" not in logs_columns:
+            cursor.execute("ALTER TABLE logs ADD COLUMN platform_id INTEGER DEFAULT 1")
+            logger.info("✅ Colonne platform_id ajoutée à logs")
+
+        # Migration multi-tenant : platform_id dans video_visits
+        cursor.execute("PRAGMA table_info(video_visits)")
+        vv_columns = [col[1] for col in cursor.fetchall()]
+        if "platform_id" not in vv_columns:
+            cursor.execute("ALTER TABLE video_visits ADD COLUMN platform_id INTEGER DEFAULT 1")
+            logger.info("✅ Colonne platform_id ajoutée à video_visits")
+
+        # Migration multi-tenant : cours_config avec platform_id
+        cursor.execute("PRAGMA table_info(cours_config)")
+        cc_columns = [col[1] for col in cursor.fetchall()]
+        if "platform_id" not in cc_columns:
+            # Ajouter platform_id et copier la config existante pour toutes les plateformes
+            cursor.execute("ALTER TABLE cours_config ADD COLUMN platform_id INTEGER")
+            cursor.execute("UPDATE cours_config SET platform_id = 1 WHERE id = 1")
+            # Créer une entrée par défaut pour chaque plateforme existante
+            cursor.execute("SELECT heure_debut FROM cours_config WHERE id = 1")
+            default_row = cursor.fetchone()
+            if default_row:
+                default_heure = default_row[0]
+                for pid in [2, 3, 4]:
+                    cursor.execute("SELECT COUNT(*) FROM cours_config WHERE platform_id = ?", (pid,))
+                    if cursor.fetchone()[0] == 0:
+                        cursor.execute("INSERT INTO cours_config (id, heure_debut, platform_id) VALUES (?, ?, ?)", (pid, default_heure, pid))
+            logger.info("✅ cours_config migrée en multi-platform")
 
         # Table des dossiers de cours
         cursor.execute(
