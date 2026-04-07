@@ -2,6 +2,10 @@
 
 ## 2026-04-07
 
+### Fix : Page Attente — compteur à 00 en multi-tenant
+
+- `Attente.jsx` utilisait `fetch(apiUrl(...))` au lieu de `apiFetch(...)`, donc le header `X-Platform-Id` n'était pas envoyé → le backend retournait le statut de P1 (cours terminé) au lieu de la bonne plateforme.
+
 ### Fix : HR Dashboard — liens "Accéder au cours" avec `?p={id}` pour multi-tenant
 
 - Les liens "Accéder au cours" et recorder dans le HR Dashboard pointaient vers `/video` sans `?p={id}`, donc le frontend ne savait pas quelle plateforme charger (défaut P1 → "cours terminé").
