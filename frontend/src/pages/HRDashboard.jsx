@@ -34,6 +34,8 @@ export default function HRDashboard() {
   const audioRef = useRef(null)
   const [showCoursFoldersModal, setShowCoursFoldersModal] = useState(false)
   const [selectedCoursPlatform, setSelectedCoursPlatform] = useState(null)
+  const [cardPage, setCardPage] = useState(0)
+  const CARDS_PER_PAGE = 3
 
   // ─── Fetch data ──────────────────────────────────────────────────────
   const fetchPlatforms = async (refreshSelectedId = null) => {
@@ -348,9 +350,56 @@ export default function HRDashboard() {
         )}
 
         <div className="relative z-10 mx-auto max-w-7xl px-6 py-8">
-          {/* Platform Cards Grid */}
-          <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-            {platforms.map((p) => (
+          {/* Platform Cards Grid with Pagination */}
+          {platforms.length > CARDS_PER_PAGE && (
+            <div className="flex items-center justify-center gap-3 mb-6">
+              <button
+                onClick={() => setCardPage(p => Math.max(0, p - 1))}
+                disabled={cardPage === 0}
+                className="flex items-center gap-1 px-4 py-2 rounded-lg text-sm font-medium transition-all disabled:opacity-30 disabled:cursor-not-allowed"
+                style={{
+                  backgroundColor: colors.innerBg,
+                  border: `1px solid ${colors.border}`,
+                  color: colors.textPrimary,
+                }}
+              >
+                <Icon name="chevron_left" className="text-lg" />
+                Précédent
+              </button>
+              <div className="flex gap-1.5">
+                {Array.from({ length: Math.ceil(platforms.length / CARDS_PER_PAGE) }).map((_, i) => (
+                  <button
+                    key={i}
+                    onClick={() => setCardPage(i)}
+                    className="w-8 h-8 rounded-full text-sm font-semibold transition-all"
+                    style={{
+                      backgroundColor: cardPage === i ? '#8b5cf6' : colors.innerBg,
+                      color: cardPage === i ? '#fff' : colors.textSecondary,
+                      border: `1px solid ${cardPage === i ? '#8b5cf6' : colors.border}`,
+                    }}
+                  >
+                    {i + 1}
+                  </button>
+                ))}
+              </div>
+              <button
+                onClick={() => setCardPage(p => Math.min(Math.ceil(platforms.length / CARDS_PER_PAGE) - 1, p + 1))}
+                disabled={cardPage >= Math.ceil(platforms.length / CARDS_PER_PAGE) - 1}
+                className="flex items-center gap-1 px-4 py-2 rounded-lg text-sm font-medium transition-all disabled:opacity-30 disabled:cursor-not-allowed"
+                style={{
+                  backgroundColor: colors.innerBg,
+                  border: `1px solid ${colors.border}`,
+                  color: colors.textPrimary,
+                }}
+              >
+                Suivant
+                <Icon name="chevron_right" className="text-lg" />
+              </button>
+            </div>
+          )}
+
+          <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
+            {platforms.slice(cardPage * CARDS_PER_PAGE, (cardPage + 1) * CARDS_PER_PAGE).map((p) => (
               <PlatformCard
                 key={p.id}
                 platform={p}

@@ -2,6 +2,11 @@
 
 ## 2026-04-07
 
+### UI : HR Dashboard — pagination des cartes plateformes
+
+- Grille repassée à 3 colonnes max (`lg:grid-cols-3`) pour des cartes plus grandes et lisibles.
+- Ajout d'une pagination (Précédent / numéros / Suivant) quand il y a plus de 3 plateformes.
+
 ### Fix : Page Attente — compteur à 00 en multi-tenant
 
 - `Attente.jsx` utilisait `fetch(apiUrl(...))` au lieu de `apiFetch(...)`, donc le header `X-Platform-Id` n'était pas envoyé → le backend retournait le statut de P1 (cours terminé) au lieu de la bonne plateforme.
