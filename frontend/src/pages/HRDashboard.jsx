@@ -27,6 +27,9 @@ export default function HRDashboard() {
   const [courseTimePlatformId, setCourseTimePlatformId] = useState(1)
   const [deleteConfirm, setDeleteConfirm] = useState(null)
   const [deletingItem, setDeletingItem] = useState(false)
+  const [showCreateModal, setShowCreateModal] = useState(false)
+  const [newPlatformName, setNewPlatformName] = useState('')
+  const [creating, setCreating] = useState(false)
   const backupPollingRef = useRef({})
   const audioRef = useRef(null)
   const [showCoursFoldersModal, setShowCoursFoldersModal] = useState(false)
@@ -221,6 +224,32 @@ export default function HRDashboard() {
     setShowCoursFoldersModal(true)
   }
 
+  const handleCreatePlatform = async () => {
+    if (!newPlatformName.trim()) return
+    setCreating(true)
+    try {
+      const resp = await fetch(apiUrl('/api/hr/platforms'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ name: newPlatformName.trim() }),
+      })
+      const data = await resp.json()
+      if (data.success) {
+        setShowCreateModal(false)
+        setNewPlatformName('')
+        fetchPlatforms()
+      } else {
+        alert(data.error || 'Erreur lors de la création')
+      }
+    } catch (e) {
+      console.error('Erreur création plateforme:', e)
+      alert('Impossible de créer la plateforme')
+    } finally {
+      setCreating(false)
+    }
+  }
+
   // ─── Render ──────────────────────────────────────────────────────────
   if (loading) {
     return (
@@ -281,6 +310,15 @@ export default function HRDashboard() {
                   <Icon name={darkMode ? 'light_mode' : 'dark_mode'} className="text-base" />
                   <span className="text-sm font-medium">{darkMode ? 'Clair' : 'Sombre'}</span>
                 </button>
+                {/* Nouvelle plateforme */}
+                <button
+                  onClick={() => setShowCreateModal(true)}
+                  className="flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-all text-white"
+                  style={{ backgroundColor: '#8B5CF6' }}
+                >
+                  <Icon name="add" className="text-base" />
+                  <span>Nouvelle plateforme</span>
+                </button>
                 {/* Back to admin */}
                 <a
                   href="/admin"
@@ -311,7 +349,7 @@ export default function HRDashboard() {
 
         <div className="relative z-10 mx-auto max-w-7xl px-6 py-8">
           {/* Platform Cards Grid */}
-          <div className="grid gap-6 lg:grid-cols-3">
+          <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
             {platforms.map((p) => (
               <PlatformCard
                 key={p.id}
@@ -454,6 +492,75 @@ export default function HRDashboard() {
                   {deletingItem ? 'Suppression...' : 'Supprimer'}
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Nouvelle Plateforme */}
+      {showCreateModal && (
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center p-4"
+          style={{ backgroundColor: 'rgba(0, 0, 0, 0.6)' }}
+          onClick={() => { if (!creating) setShowCreateModal(false) }}
+        >
+          <div
+            className="w-full max-w-md rounded-2xl p-6 shadow-2xl"
+            style={{ backgroundColor: darkMode ? '#1e293b' : '#ffffff' }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center gap-3 mb-6">
+              <div className="flex h-10 w-10 items-center justify-center rounded-xl" style={{ backgroundColor: '#8B5CF6' }}>
+                <Icon name="add_business" className="text-white text-xl" />
+              </div>
+              <h3 className="text-lg font-semibold" style={{ color: darkMode ? '#f1f5f9' : '#1e293b' }}>
+                Nouvelle plateforme
+              </h3>
+            </div>
+
+            <div className="mb-6">
+              <label className="block text-sm font-medium mb-2" style={{ color: darkMode ? '#94a3b8' : '#64748b' }}>
+                Nom de la plateforme
+              </label>
+              <input
+                type="text"
+                value={newPlatformName}
+                onChange={(e) => setNewPlatformName(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') handleCreatePlatform() }}
+                placeholder="Ex: Formation Vente B2B"
+                autoFocus
+                className="w-full rounded-lg px-4 py-3 text-sm outline-none transition-all"
+                style={{
+                  backgroundColor: darkMode ? '#0f172a' : '#f8fafc',
+                  color: darkMode ? '#f1f5f9' : '#1e293b',
+                  border: `1px solid ${darkMode ? '#334155' : '#e2e8f0'}`,
+                }}
+              />
+              <p className="mt-2 text-xs" style={{ color: darkMode ? '#64748b' : '#94a3b8' }}>
+                Les containers Azure Blob seront créés automatiquement.
+              </p>
+            </div>
+
+            <div className="flex gap-3 justify-end">
+              <button
+                onClick={() => { setShowCreateModal(false); setNewPlatformName('') }}
+                disabled={creating}
+                className="rounded-lg px-4 py-2 text-sm font-medium transition-all"
+                style={{ backgroundColor: darkMode ? '#334155' : '#f1f5f9', color: darkMode ? '#94a3b8' : '#64748b' }}
+              >
+                Annuler
+              </button>
+              <button
+                onClick={handleCreatePlatform}
+                disabled={creating || !newPlatformName.trim()}
+                className="rounded-lg px-5 py-2 text-sm font-medium text-white transition-all"
+                style={{
+                  backgroundColor: creating || !newPlatformName.trim() ? '#a78bfa' : '#8B5CF6',
+                  opacity: creating || !newPlatformName.trim() ? 0.6 : 1,
+                }}
+              >
+                {creating ? 'Création...' : 'Créer la plateforme'}
+              </button>
             </div>
           </div>
         </div>
