@@ -49,7 +49,9 @@ export default function Index() {
       if (data.success) {
         // Stocker le token pour les navigateurs bloquant les cookies tiers
         if (data.token) localStorage.setItem('auth_token', data.token)
-        navigate('/video')
+        // Transmettre le platform_id dans l'URL pour que /video sache quelle plateforme utiliser
+        const pId = localStorage.getItem('platform_id')
+        navigate(pId && pId !== '1' ? `/video?p=${pId}` : '/video')
       } else {
         alert(data.error || 'Erreur lors de la connexion')
       }

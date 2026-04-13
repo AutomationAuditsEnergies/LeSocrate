@@ -1,11 +1,12 @@
 import { useState, useEffect, useRef } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import ChatPanel from '../components/ChatPanel.jsx'
 import LeftSidebar from '../components/LeftSidebar.jsx'
-import { apiUrl, apiFetch, getPlatformName } from '../api'
+import { apiUrl, apiFetch, getPlatformName, setPlatformId } from '../api'
 
 export default function Video() {
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
   const [chatOpen, setChatOpen] = useState(false)
   const [muted, setMuted] = useState(false)
   const [audioInfo, setAudioInfo] = useState(null)
@@ -16,6 +17,14 @@ export default function Video() {
 
   // Synchroniser la propriété muted directement sur l'élément DOM
   // (React ne met pas à jour muted sur <audio> après le rendu initial)
+  // Lire le platform_id depuis l'URL (?p=2) et le stocker
+  useEffect(() => {
+    const pParam = searchParams.get('p')
+    if (pParam) {
+      setPlatformId(pParam)
+    }
+  }, [searchParams])
+
   useEffect(() => {
     document.body.style.overflow = 'hidden'
     return () => {
