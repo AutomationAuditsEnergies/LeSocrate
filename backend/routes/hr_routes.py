@@ -1125,7 +1125,9 @@ def create_hr_blueprint(socketio):
                 logger.error(f"❌ Erreur config-cours P{platform_id}: {e}")
                 return jsonify({"success": False, "error": str(e)}), 500
         else:
-            result, error = _call_platform(platform_id, "/api/internal/config-cours", json_data=data)
+            # Ajouter platform_id au payload pour que le backend distant sache quelle plateforme mettre à jour
+            payload = {**data, "platform_id": platform_id}
+            result, error = _call_platform(platform_id, "/api/internal/config-cours", json_data=payload)
             if error:
                 return jsonify({"success": False, "error": error}), 500
             if result is None:
@@ -1197,7 +1199,7 @@ def create_hr_blueprint(socketio):
                 result, error = _call_platform(
                     platform_id,
                     "/api/internal/config-cours",
-                    json_data={"date_cours": date_str, "heure_cours": heure_str},
+                    json_data={"date_cours": date_str, "heure_cours": heure_str, "platform_id": platform_id},
                 )
                 if error:
                     results.append({"platform_id": platform_id, "success": False, "error": error})

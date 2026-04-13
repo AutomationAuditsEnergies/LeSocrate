@@ -239,8 +239,10 @@ def create_admin_blueprint(socketio):
                 datetime_str = f"{date_str} {heure_str}"
             nouvelle_heure_naive = datetime.strptime(datetime_str, "%Y-%m-%d %H:%M:%S")
             nouvelle_heure_fr = FRANCE_TZ.localize(nouvelle_heure_naive)
-            set_heure_debut_cours(nouvelle_heure_fr)
-            logger.info(f"⚙️ Heure cours configurée en interne: {nouvelle_heure_fr}")
+            # Récupérer platform_id depuis le body ou la session (défaut: 1)
+            platform_id = data.get("platform_id", session.get("platform_id", 1))
+            set_heure_debut_cours(nouvelle_heure_fr, platform_id)
+            logger.info(f"⚙️ Heure cours P{platform_id} configurée en interne: {nouvelle_heure_fr}")
             return (
                 jsonify(
                     {

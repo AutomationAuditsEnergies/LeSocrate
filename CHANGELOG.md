@@ -1,6 +1,36 @@
 # Changelog
 
+## 2026-04-10
+
+### Pipeline TTS — Résumabilité + persistance Azure Blob
+
+- **Nouveau module** : `tts_pipeline_state.py` (SQLite local + Azure Blob Storage)
+  - Table `tts_jobs` : journal des jobs (status, total_paragraphs, etc.)
+  - Table `tts_segments` : état de chaque paragraphe (done/failed, azure_path, duration_ms)
+  - Helpers Azure : `azure_upload_segment`, `azure_download_segment`, `azure_upload_final`
+- **Refactor `pipeline_tts_v2.py`** :
+  - Nouveau flag `--job-id` (défaut : nom du output-dir) pour identifier un job
+  - `generate_all_tts_parallel` : skip les paragraphes déjà en BDD, upload Azure immédiat après chaque génération
+  - `assemble_slots` : télécharge depuis Azure à la demande au lieu de tout garder en RAM (~4 GB → ~100 MB)
+  - Les 7 MP3 finaux sont uploadés vers Azure dans `{job_id}/final/`
+- **Résultat** : si la pipeline crash ou que le crédit API s'épuise, on relance la même commande et elle reprend pile où elle s'est arrêtée. Aucun appel TTS gaspillé. Tout est dans le container Azure `pipelinebackup`.
+- **Variables .env requises** : `AZURE_AUDIO_STORAGE_CONNECTION_STRING`, `AZURE_BACKUP_CONTAINER` (défaut `pipelinebackup`).
+
+## 2026-04-09
+
+### Prompt : Génération directe cours oral TTS-ready
+
+- **Nouveau prompt** : `prompt-generation-tts-direct.md` — fusionne la génération de contenu ET la reformulation TTS en un seul prompt.
+- **Objectif** : utiliser Claude web (gratuit/Pro) au lieu de l'API pour générer directement du texte oral prêt pour Fish Audio S2-Pro, sans étape de reformulation intermédiaire.
+- **Économie** : ~$13.50 par formation (suppression génération API + reformulation API). Seul le coût Fish Audio TTS reste (~$20).
+- **Process** : 3 passes par sous-partie (fondation, expansion, enrichissement), chaque passe génère directement du texte oral avec tags S2-Pro → envoi direct à `pipeline_tts_v2.py`.
+
 ## 2026-04-07
+
+### Fix : config-cours distant passe maintenant `platform_id`
+
+- L'endpoint `/api/internal/config-cours` (appelé par P1 vers P2/P3) utilisait `set_heure_debut_cours()` sans `platform_id` → mettait à jour `platform_id=1` dans la BDD distante au lieu de la bonne plateforme.
+- Corrigé : le payload inclut maintenant `platform_id` et l'endpoint le lit pour mettre à jour la bonne ligne.
 
 ### UI : HR Dashboard — pagination des cartes plateformes
 
