@@ -1,6 +1,15 @@
 {
   "navigationFallback": {
     "rewrite": "/index.html",
-    "exclude": ["/assets/*", "/static/*", "*.js", "*.css", "*.png", "*.jpg", "*.ico", "*.svg", "*.woff2", "*.otf"]
+    "exclude": ["/assets/*", "/static/*", "*.js", "*.css", "*.png", "*.jpg", "*.ico", "*.svg", "*.woff", "*.woff2", "*.otf", "*.ttf"]
+  },
+  "mimeTypes": {
+    ".woff": "font/woff",
+    ".woff2": "font/woff2",
+    ".otf": "font/otf",
+    ".ttf": "font/ttf"
+  },
+  "globalHeaders": {
+    "Access-Control-Allow-Origin": "*"
   }
 }
