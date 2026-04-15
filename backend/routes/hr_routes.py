@@ -1243,14 +1243,14 @@ def create_hr_blueprint(socketio):
             conn = get_db_connection()
             cursor = conn.cursor()
             cursor.execute("""
-                SELECT cf.id, cf.name, cf.created_at, COUNT(cd.id) as document_count
+                SELECT cf.id, cf.name, cf.created_at, COUNT(cd.id) as document_count, cf.position
                 FROM cours_folders cf
                 LEFT JOIN cours_documents cd ON cf.id = cd.folder_id
                 WHERE cf.platform_id = ?
                 GROUP BY cf.id
-                ORDER BY cf.created_at DESC
+                ORDER BY cf.position ASC, cf.created_at ASC
             """, (platform_id,))
-            folders = [{"id": row[0], "name": row[1], "created_at": row[2], "document_count": row[3]} for row in cursor.fetchall()]
+            folders = [{"id": row[0], "name": row[1], "created_at": row[2], "document_count": row[3], "position": row[4]} for row in cursor.fetchall()]
             conn.close()
             return jsonify({"success": True, "folders": folders}), 200
         except Exception as e:
@@ -1272,14 +1272,18 @@ def create_hr_blueprint(socketio):
         try:
             conn = get_db_connection()
             cursor = conn.cursor()
+            # Position = max existant + 1 pour cette plateforme
+            cursor.execute("SELECT COALESCE(MAX(position), -1) FROM cours_folders WHERE platform_id = ?", (platform_id,))
+            max_pos = cursor.fetchone()[0]
+            new_position = max_pos + 1
             cursor.execute(
-                "INSERT INTO cours_folders (platform_id, name) VALUES (?, ?)",
-                (platform_id, name)
+                "INSERT INTO cours_folders (platform_id, name, position) VALUES (?, ?, ?)",
+                (platform_id, name, new_position)
             )
             folder_id = cursor.lastrowid
             conn.commit()
             conn.close()
-            return jsonify({"success": True, "id": folder_id, "name": name}), 201
+            return jsonify({"success": True, "id": folder_id, "name": name, "position": new_position}), 201
         except Exception as e:
             logger.error(f"❌ Erreur create_cours_folder: {e}")
             return jsonify({"success": False, "error": str(e)}), 500
@@ -1342,6 +1346,34 @@ def create_hr_blueprint(socketio):
             logger.error(f"❌ Erreur rename_cours_folder: {e}")
             return jsonify({"success": False, "error": str(e)}), 500
 
+    @hr_bp.route("/api/hr/platforms/<int:platform_id>/cours-folders/reorder", methods=["PUT"])
+    def reorder_cours_folders(platform_id):
+        """Réordonne les dossiers d'une plateforme — reçoit [{id, position}, ...]"""
+        denied = _require_admin()
+        if denied:
+            return denied
+
+        data = request.get_json()
+        order = data.get("order", [])  # [{id: int, position: int}, ...]
+        if not order:
+            return jsonify({"success": False, "error": "ordre manquant"}), 400
+
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            for item in order:
+                cursor.execute(
+                    "UPDATE cours_folders SET position = ? WHERE id = ? AND platform_id = ?",
+                    (item["position"], item["id"], platform_id)
+                )
+            conn.commit()
+            conn.close()
+            logger.info(f"✅ Dossiers plateforme {platform_id} réordonnés: {[i['id'] for i in order]}")
+            return jsonify({"success": True}), 200
+        except Exception as e:
+            logger.error(f"❌ Erreur reorder_cours_folders: {e}")
+            return jsonify({"success": False, "error": str(e)}), 500
+
     # ─── Routes Cours Documents ─────────────────────────────────────────────
     @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/documents", methods=["GET"])
     def get_cours_documents(folder_id):
@@ -1368,7 +1400,7 @@ def create_hr_blueprint(socketio):
 
     @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/upload", methods=["POST"])
     def upload_cours_documents(folder_id):
-        """Upload un ou plusieurs PDFs dans un dossier → Azure Blob Storage"""
+        """Upload un ou plusieurs fichiers (PDF, TXT, MD) dans un dossier → Azure Blob Storage"""
         denied = _require_admin()
         if denied:
             return denied
@@ -1378,6 +1410,7 @@ def create_hr_blueprint(socketio):
 
         files = request.files.getlist("files")
         uploaded = []
+        _ALLOWED_EXTENSIONS = (".pdf", ".txt", ".md")
 
         try:
             import uuid as uuid_mod
@@ -1395,11 +1428,12 @@ def create_hr_blueprint(socketio):
             for file in files:
                 if not file or not file.filename:
                     continue
-                if not file.filename.lower().endswith(".pdf"):
+                ext = "." + file.filename.lower().rsplit(".", 1)[-1] if "." in file.filename else ""
+                if ext not in _ALLOWED_EXTENSIONS:
                     continue
 
-                # Générer un nom unique et construire le blob path
-                unique_name = f"{uuid_mod.uuid4()}.pdf"
+                # Générer un nom unique en conservant l'extension d'origine
+                unique_name = f"{uuid_mod.uuid4()}{ext}"
                 blob_path = build_blob_path(platform_id, folder_id, unique_name)
 
                 # Upload vers Azure documenttts
@@ -1612,6 +1646,336 @@ def create_hr_blueprint(socketio):
             logger.error(f"❌ Erreur get_folder_tts_status: {e}")
             return jsonify({"success": False, "error": str(e)}), 500
 
+    # ─── Génération de contenu TTS-direct ────────────────────────────────
+
+    # État en mémoire pour le suivi temps-réel (par folder_id)
+    _content_jobs = {}
+
+    @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/content-job", methods=["POST"])
+    def create_content_job(folder_id):
+        """
+        Crée ou réinitialise un job de génération de contenu.
+        Extrait les sous-parties synchroniquement depuis le programme fourni.
+        Body: { program_text: str }
+        """
+        denied = _require_admin()
+        if denied:
+            return denied
+
+        data = request.get_json()
+        program_text = (data.get("program_text") or "").strip()
+        if not program_text or len(program_text) < 50:
+            return jsonify({"success": False, "error": "Programme trop court ou vide"}), 400
+
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute("SELECT platform_id FROM cours_folders WHERE id = ?", (folder_id,))
+            row = cursor.fetchone()
+            conn.close()
+            if not row:
+                return jsonify({"success": False, "error": "Dossier introuvable"}), 404
+            platform_id = row[0]
+
+            # Extraction des sous-parties (synchrone ~5s)
+            from services.content_generation_service import extract_sub_parts
+            extracted = extract_sub_parts(program_text)
+            program_title = extracted["title"]
+            sub_parts = extracted["sub_parts"]
+
+            import json as _json
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            # Supprimer les anciens segments si on réinitialise
+            cursor.execute("""
+                DELETE FROM content_generation_segments WHERE job_id IN (
+                    SELECT id FROM content_generation_jobs WHERE folder_id = ?
+                )
+            """, (folder_id,))
+            cursor.execute("""
+                INSERT OR REPLACE INTO content_generation_jobs
+                    (folder_id, platform_id, program_text, program_title, sub_parts,
+                     status, current_sub_part, current_passe, total_words, error_message)
+                VALUES (?, ?, ?, ?, ?, 'idle', 0, 1, 0, NULL)
+            """, (folder_id, platform_id, program_text, program_title, _json.dumps(sub_parts)))
+            conn.commit()
+            conn.close()
+
+            # Réinitialiser l'état en mémoire
+            _content_jobs[folder_id] = {
+                "status": "idle",
+                "current_sub_part": 0,
+                "current_passe": 1,
+                "total_words": 0,
+                "message": "Sous-parties extraites, prêt à lancer.",
+            }
+
+            return jsonify({
+                "success": True,
+                "program_title": program_title,
+                "sub_parts": sub_parts,
+            }), 200
+
+        except Exception as e:
+            logger.error(f"❌ Erreur create_content_job: {e}")
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/content-job/start", methods=["POST"])
+    def start_content_job(folder_id):
+        """Lance ou reprend la génération de contenu en background."""
+        denied = _require_admin()
+        if denied:
+            return denied
+
+        # Vérifier qu'un job n'est pas déjà en cours
+        if _content_jobs.get(folder_id, {}).get("status") == "running":
+            return jsonify({"success": False, "error": "Génération déjà en cours"}), 409
+
+        from services.content_generation_service import get_job_from_db
+        job = get_job_from_db(folder_id)
+        if not job:
+            return jsonify({"success": False, "error": "Aucun job configuré pour ce dossier"}), 404
+        if job["status"] == "completed":
+            return jsonify({"success": False, "error": "Job déjà terminé"}), 409
+
+        _content_jobs[folder_id] = {
+            "status": "running",
+            "current_sub_part": job["current_sub_part"],
+            "current_passe": job["current_passe"],
+            "total_words": job["total_words"],
+            "message": "Démarrage de la génération...",
+        }
+
+        def _on_progress(sub_idx, total_sub, passe, total_words, message):
+            _content_jobs[folder_id].update({
+                "current_sub_part": sub_idx,
+                "current_passe": passe,
+                "total_words": total_words,
+                "message": message,
+            })
+
+        body = request.get_json(silent=True) or {}
+        mode = body.get("mode", "normal")  # "normal" | "mock" | "mini"
+        if mode not in ("normal", "mock", "mini"):
+            mode = "normal"
+
+        if mode != "normal":
+            _content_jobs[folder_id]["message"] = f"[MODE {mode.upper()}] Démarrage..."
+
+        def _run():
+            try:
+                from services.content_generation_service import run_content_generation
+                run_content_generation(folder_id, on_progress=_on_progress, mode=mode)
+                _content_jobs[folder_id]["status"] = "completed"
+            except Exception as e:
+                _content_jobs[folder_id].update({"status": "error", "message": str(e)})
+
+        import eventlet
+        eventlet.spawn(_run)
+
+        return jsonify({"success": True, "message": "Génération lancée"}), 202
+
+    @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/content-job", methods=["GET"])
+    def get_content_job(folder_id):
+        """Retourne le statut du job de génération de contenu."""
+        denied = _require_admin()
+        if denied:
+            return denied
+
+        from services.content_generation_service import get_job_from_db, get_segments_status
+        job = get_job_from_db(folder_id)
+        if not job:
+            return jsonify({"success": True, "job": None}), 200
+
+        # Fusionner l'état DB avec l'état en mémoire (plus frais)
+        mem = _content_jobs.get(folder_id, {})
+        status = mem.get("status") or job["status"]
+        total_words = mem.get("total_words") or job["total_words"]
+        current_sub_part = mem.get("current_sub_part", job["current_sub_part"])
+        current_passe = mem.get("current_passe", job["current_passe"])
+        message = mem.get("message", "")
+
+        segments = get_segments_status(job["id"]) if job["id"] else []
+
+        return jsonify({
+            "success": True,
+            "job": {
+                "status": status,
+                "program_title": job["program_title"],
+                "sub_parts": job["sub_parts"],
+                "current_sub_part": current_sub_part,
+                "current_passe": current_passe,
+                "total_words": total_words,
+                "message": message,
+                "error_message": job["error_message"],
+                "segments": segments,
+                "num_sub_parts": len(job["sub_parts"]),
+            },
+        }), 200
+
+    @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/content-job/cancel", methods=["POST"])
+    def cancel_content_job(folder_id):
+        """Annule un job en cours (marque cancelled en DB, stoppe le polling)."""
+        denied = _require_admin()
+        if denied:
+            return denied
+
+        from services.content_generation_service import get_job_from_db
+        job = get_job_from_db(folder_id)
+        if job:
+            from database.db import get_db_connection as _gdb
+            conn = _gdb()
+            cursor = conn.cursor()
+            cursor.execute(
+                "UPDATE content_generation_jobs SET status = 'cancelled', updated_at = CURRENT_TIMESTAMP WHERE folder_id = ?",
+                (folder_id,)
+            )
+            conn.commit()
+            conn.close()
+
+        if folder_id in _content_jobs:
+            _content_jobs[folder_id]["status"] = "cancelled"
+
+        return jsonify({"success": True}), 200
+
+    @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/content-job/preview", methods=["GET"])
+    def preview_content_prompt(folder_id):
+        """Retourne le prompt Passe 1 pré-rempli pour prévisualisation."""
+        denied = _require_admin()
+        if denied:
+            return denied
+
+        from services.content_generation_service import get_job_from_db, _get_passe_prompts, _EXTRACT_PROMPT
+        job = get_job_from_db(folder_id)
+        if not job:
+            return jsonify({"success": False, "error": "Aucun job configuré"}), 404
+
+        try:
+            prompts = _get_passe_prompts()
+            sub_parts = job["sub_parts"]
+            first_sub = sub_parts[0] if sub_parts else "Sous-partie 1"
+            preview = prompts[0]
+            preview = preview.replace("{NOM_DU_TITRE_PROFESSIONNEL}", job["program_title"])
+            preview = preview.replace("{NOM_DE_LA_SOUS_PARTIE}", first_sub)
+            preview = preview.replace("{COLLER_LE_PROGRAMME_ICI}", job["program_text"][:3000] + "...")
+            return jsonify({"success": True, "prompt_preview": preview, "sub_part": first_sub}), 200
+        except Exception as e:
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/content-job/dirty-blocs", methods=["GET"])
+    def get_dirty_blocs(folder_id):
+        """Retourne le nombre de blocs audio qui seraient régénérés (segments dirty)."""
+        denied = _require_admin()
+        if denied:
+            return denied
+        from services.content_generation_service import get_script_dirty_blocs
+        result = get_script_dirty_blocs(folder_id)
+        return jsonify({"success": True, **result}), 200
+
+    @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/content-job/script", methods=["GET"])
+    def get_content_script(folder_id):
+        """Retourne le script TTS-direct généré (segments assemblés depuis la DB)."""
+        denied = _require_admin()
+        if denied:
+            return denied
+
+        from services.content_generation_service import get_job_from_db
+        import json as _json
+        job = get_job_from_db(folder_id)
+        if not job:
+            return jsonify({"success": False, "error": "Aucun job pour ce dossier"}), 404
+
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT sub_part_index, sub_part_name, passe, text_content, word_count
+            FROM content_generation_segments
+            WHERE job_id = ? AND status = 'completed'
+            ORDER BY sub_part_index ASC, passe ASC
+        """, (job["id"],))
+        rows = cursor.fetchall()
+        conn.close()
+
+        if not rows:
+            return jsonify({"success": False, "error": "Aucun segment généré"}), 404
+
+        # Grouper par sous-partie
+        sub_parts_data = {}
+        for sub_idx, sub_name, passe, text, word_count in rows:
+            if sub_idx not in sub_parts_data:
+                sub_parts_data[sub_idx] = {"name": sub_name, "passes": {}, "total_words": 0}
+            sub_parts_data[sub_idx]["passes"][passe] = {"text": text, "word_count": word_count}
+            sub_parts_data[sub_idx]["total_words"] += word_count
+
+        sub_parts_list = [
+            {
+                "index": idx,
+                "name": data["name"],
+                "total_words": data["total_words"],
+                "passes": [
+                    {"passe": p, "word_count": data["passes"][p]["word_count"], "text": data["passes"][p]["text"]}
+                    for p in sorted(data["passes"].keys())
+                ]
+            }
+            for idx, data in sorted(sub_parts_data.items())
+        ]
+
+        return jsonify({
+            "success": True,
+            "program_title": job["program_title"],
+            "total_words": job["total_words"],
+            "sub_parts": sub_parts_list,
+        }), 200
+
+    @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/content-job/segment", methods=["PATCH"])
+    def patch_content_segment(folder_id):
+        """Modifie le texte d'un segment généré et recalcule le total_words du job."""
+        denied = _require_admin()
+        if denied:
+            return denied
+
+        data = request.get_json() or {}
+        sub_part_index = data.get("sub_part_index")
+        passe = data.get("passe")
+        new_text = data.get("text", "")
+
+        if sub_part_index is None or passe is None:
+            return jsonify({"success": False, "error": "sub_part_index et passe sont requis"}), 400
+
+        from services.content_generation_service import get_job_from_db
+        job = get_job_from_db(folder_id)
+        if not job:
+            return jsonify({"success": False, "error": "Aucun job pour ce dossier"}), 404
+
+        new_word_count = len(new_text.split())
+
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        # Mettre à jour le segment et le marquer comme modifié (dirty)
+        cursor.execute("""
+            UPDATE content_generation_segments
+            SET text_content = ?, word_count = ?, dirty = 1
+            WHERE job_id = ? AND sub_part_index = ? AND passe = ?
+        """, (new_text, new_word_count, job["id"], sub_part_index, passe))
+
+        # Recalculer total_words depuis tous les segments complétés
+        cursor.execute("""
+            SELECT COALESCE(SUM(word_count), 0)
+            FROM content_generation_segments
+            WHERE job_id = ? AND status = 'completed'
+        """, (job["id"],))
+        new_total = cursor.fetchone()[0]
+
+        cursor.execute("""
+            UPDATE content_generation_jobs SET total_words = ? WHERE id = ?
+        """, (new_total, job["id"]))
+
+        conn.commit()
+        conn.close()
+
+        return jsonify({"success": True, "new_word_count": new_word_count, "new_total_words": new_total}), 200
+
     # ─── Pipeline playlist complète (19 fichiers) ─────────────────────────
 
     # État global de la pipeline playlist (par folder_id)
@@ -1653,10 +2017,17 @@ def create_hr_blueprint(socketio):
                 "result": None,
             }
 
+            req_body = request.get_json(silent=True) or {}
+            playlist_mock = req_body.get("mock", False)   # mock mode classique (sans script)
+            script_mock = req_body.get("script_mock", False)  # mock mode script (silence au lieu TTS)
+            force_all = req_body.get("force_all", False)
+
+            # Vérifier si un script TTS existe pour ce dossier
+            from services.content_generation_service import get_job_from_db as _get_cjob
+            has_script = bool(_get_cjob(folder_id) and _get_cjob(folder_id).get("status") == "completed")
+
             def _run_playlist_pipeline(platform_id, folder_id):
                 try:
-                    from services.playlist_tts_service import generate_playlist_for_folder
-
                     def on_progress(step, total, message):
                         _playlist_jobs[folder_id].update({
                             "step": step,
@@ -1664,13 +2035,34 @@ def create_hr_blueprint(socketio):
                             "message": message,
                         })
 
-                    result = generate_playlist_for_folder(
-                        platform_id, folder_id, progress_callback=on_progress
-                    )
+                    if has_script and not playlist_mock:
+                        # Utiliser le script TTS généré (régénération sélective)
+                        from services.content_generation_service import generate_audio_from_script
+                        result_audio = generate_audio_from_script(
+                            folder_id, on_progress=on_progress, force_all=force_all,
+                            mock=script_mock,
+                        )
+                        result = {
+                            "status": "completed",
+                            "generated": result_audio["generated"],
+                            "skipped": result_audio["skipped"],
+                            "source": "script",
+                        }
+                    else:
+                        # Pipeline classique : reformulation Claude → TTS
+                        from services.playlist_tts_service import generate_playlist_for_folder
+                        result = generate_playlist_for_folder(
+                            platform_id, folder_id, progress_callback=on_progress,
+                            mock=playlist_mock,
+                        )
+                    if has_script and not playlist_mock:
+                        done_msg = f"✅ Terminé : {result['generated']} bloc(s) régénéré(s), {result.get('skipped', 0)} conservé(s)"
+                    else:
+                        done_msg = f"✅ Terminé : {result.get('generated', '?')} fichiers générés"
                     _playlist_jobs[folder_id].update({
                         "status": "completed",
                         "result": result,
-                        "message": f"Terminé : {result['generated']}/19 fichiers générés",
+                        "message": done_msg,
                     })
                 except Exception as e:
                     logger.error(f"❌ Pipeline playlist échouée: {e}")
@@ -1734,6 +2126,373 @@ def create_hr_blueprint(socketio):
             return jsonify({"success": True, "status": "idle"}), 200
 
         return jsonify({"success": True, **job}), 200
+
+    @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/generated-audios", methods=["GET"])
+    def get_generated_audios(folder_id):
+        """Liste les fichiers MP3 cours générés pour un dossier (dans audiostts)."""
+        denied = _require_admin()
+        if denied:
+            return denied
+
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute("SELECT platform_id FROM cours_folders WHERE id = ?", (folder_id,))
+            row = cursor.fetchone()
+            conn.close()
+
+            if not row:
+                return jsonify({"success": False, "error": "Dossier introuvable"}), 404
+
+            platform_id = row[0]
+            tts_conn = os.environ.get("AZURE_TTS_STORAGE_CONNECTION_STRING")
+            if not tts_conn:
+                return jsonify({"success": True, "audios": []}), 200
+
+            prefix = f"platform-{platform_id}/folder-{folder_id}/playlist/"
+            from azure.storage.blob import BlobServiceClient as _BSC
+            bsc = _BSC.from_connection_string(tts_conn)
+            cc = bsc.get_container_client("audiostts")
+
+            audios = []
+            for blob in cc.list_blobs(name_starts_with=prefix):
+                name = blob.name.split("/")[-1]
+                if name.endswith(".mp3"):
+                    audios.append({
+                        "filename": name,
+                        "size_mb": round(blob.size / (1024 * 1024), 1),
+                        "last_modified": blob.last_modified.strftime("%Y-%m-%d %H:%M") if blob.last_modified else None,
+                    })
+
+            return jsonify({"success": True, "audios": audios}), 200
+
+        except Exception as e:
+            logger.error(f"❌ Erreur get_generated_audios: {e}")
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    # ─── Éditeur audio ───────────────────────────────────────────────────────
+
+    _audio_previews = {}  # {preview_id: bytes} — stockage temporaire des TTS preview
+
+    def _get_audio_blob_path(platform_id, folder_id, filename):
+        return f"platform-{platform_id}/folder-{folder_id}/playlist/{filename}"
+
+    def _get_platform_id_for_folder(folder_id):
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT platform_id FROM cours_folders WHERE id = ?", (folder_id,))
+        row = cursor.fetchone()
+        conn.close()
+        if not row:
+            raise ValueError(f"Dossier {folder_id} introuvable")
+        return row[0]
+
+    @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/audio-url/<path:filename>", methods=["GET"])
+    def get_audio_sas_url(folder_id, filename):
+        """Génère une SAS URL temporaire (1h) pour streamer l'audio directement depuis Azure."""
+        denied = _require_admin()
+        if denied:
+            return denied
+        try:
+            platform_id = _get_platform_id_for_folder(folder_id)
+            blob_path = _get_audio_blob_path(platform_id, folder_id, filename)
+            cs = os.environ.get("AZURE_TTS_STORAGE_CONNECTION_STRING")
+            if not cs:
+                return jsonify({"success": False, "error": "AZURE_TTS_STORAGE_CONNECTION_STRING manquant"}), 500
+            blob_service_client = BlobServiceClient.from_connection_string(cs)
+            account_name = blob_service_client.account_name
+            account_key = blob_service_client.credential.account_key
+            expiry = datetime.now(timezone.utc) + timedelta(hours=1)
+            sas_token = generate_blob_sas(
+                account_name=account_name,
+                container_name="audiostts",
+                blob_name=blob_path,
+                account_key=account_key,
+                permission=BlobSasPermissions(read=True),
+                expiry=expiry,
+            )
+            url = f"https://{account_name}.blob.core.windows.net/audiostts/{blob_path}?{sas_token}"
+            return jsonify({"success": True, "url": url})
+        except Exception as e:
+            logger.error(f"❌ get_audio_sas_url: {e}")
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/audio-stream/<path:filename>", methods=["GET"])
+    def stream_audio_file(folder_id, filename):
+        """Proxy l'audio depuis Azure audiostts vers le frontend (fallback si SAS non dispo)."""
+        denied = _require_admin()
+        if denied:
+            return denied
+        try:
+            platform_id = _get_platform_id_for_folder(folder_id)
+            blob_path = _get_audio_blob_path(platform_id, folder_id, filename)
+            from services.azure_blob_service import download_blob, CONTAINER_AUDIOS
+            audio_bytes = download_blob(CONTAINER_AUDIOS, blob_path)
+            from flask import Response
+            return Response(
+                audio_bytes,
+                mimetype="audio/mpeg",
+                headers={
+                    "Content-Disposition": f"inline; filename={filename}",
+                    "Accept-Ranges": "bytes",
+                    "Content-Length": str(len(audio_bytes)),
+                }
+            )
+        except Exception as e:
+            logger.error(f"❌ stream_audio_file: {e}")
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/audio/<path:filename>/cut", methods=["POST"])
+    def cut_audio_region(folder_id, filename):
+        """Coupe une région [start_ms, end_ms] de l'audio et upload le résultat."""
+        denied = _require_admin()
+        if denied:
+            return denied
+        try:
+            data = request.get_json() or {}
+            start_ms = int(data.get("start_ms", 0))
+            end_ms = int(data.get("end_ms", 0))
+            if end_ms <= start_ms:
+                return jsonify({"success": False, "error": "end_ms doit être > start_ms"}), 400
+
+            platform_id = _get_platform_id_for_folder(folder_id)
+            blob_path = _get_audio_blob_path(platform_id, folder_id, filename)
+
+            from services.azure_blob_service import download_blob, upload_blob, CONTAINER_AUDIOS
+            from pydub import AudioSegment
+            import io
+
+            audio_bytes = download_blob(CONTAINER_AUDIOS, blob_path)
+            audio = AudioSegment.from_file(io.BytesIO(audio_bytes), format="mp3")
+
+            result = audio[:start_ms] + audio[end_ms:]
+
+            buf = io.BytesIO()
+            result.export(buf, format="mp3", bitrate="128k")
+            result_bytes = buf.getvalue()
+
+            upload_blob(CONTAINER_AUDIOS, blob_path, result_bytes)
+            logger.info(f"✂️ Cut {filename}: [{start_ms}ms-{end_ms}ms] supprimé → {len(result_bytes)} bytes uploadé")
+
+            return jsonify({
+                "success": True,
+                "original_duration_ms": len(audio),
+                "new_duration_ms": len(result),
+                "cut_ms": end_ms - start_ms,
+            }), 200
+
+        except Exception as e:
+            logger.error(f"❌ cut_audio_region: {e}")
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/audio/<path:filename>/replace-preview", methods=["POST"])
+    def replace_audio_preview(folder_id, filename):
+        """Génère un aperçu TTS du nouveau texte. Retourne preview_id + audio base64."""
+        denied = _require_admin()
+        if denied:
+            return denied
+        try:
+            data = request.get_json() or {}
+            text = data.get("text", "").strip()
+            if not text:
+                return jsonify({"success": False, "error": "Texte requis"}), 400
+
+            from services.tts_service import convert_to_speech
+            import base64, uuid
+
+            audio_bytes = convert_to_speech(text)
+            preview_id = str(uuid.uuid4())
+            _audio_previews[preview_id] = audio_bytes
+
+            return jsonify({
+                "success": True,
+                "preview_id": preview_id,
+                "audio_b64": base64.b64encode(audio_bytes).decode("utf-8"),
+                "duration_ms": len(audio_bytes) // 16,  # approximation
+            }), 200
+
+        except Exception as e:
+            logger.error(f"❌ replace_audio_preview: {e}")
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/audio/<path:filename>/replace-confirm", methods=["POST"])
+    def replace_audio_confirm(folder_id, filename):
+        """Splice le preview TTS dans l'audio original et upload sur Azure (irréversible)."""
+        denied = _require_admin()
+        if denied:
+            return denied
+        try:
+            data = request.get_json() or {}
+            preview_id = data.get("preview_id")
+            start_ms = int(data.get("start_ms", 0))
+            end_ms = int(data.get("end_ms", 0))
+
+            if not preview_id or preview_id not in _audio_previews:
+                return jsonify({"success": False, "error": "Preview introuvable ou expiré"}), 404
+            if end_ms <= start_ms:
+                return jsonify({"success": False, "error": "end_ms doit être > start_ms"}), 400
+
+            platform_id = _get_platform_id_for_folder(folder_id)
+            blob_path = _get_audio_blob_path(platform_id, folder_id, filename)
+
+            from services.azure_blob_service import download_blob, upload_blob, CONTAINER_AUDIOS
+            from pydub import AudioSegment
+            import io
+
+            preview_bytes = _audio_previews.pop(preview_id)  # consommer le preview
+            original_bytes = download_blob(CONTAINER_AUDIOS, blob_path)
+
+            original = AudioSegment.from_file(io.BytesIO(original_bytes), format="mp3")
+            new_segment = AudioSegment.from_file(io.BytesIO(preview_bytes), format="mp3")
+
+            result = original[:start_ms] + new_segment + original[end_ms:]
+
+            buf = io.BytesIO()
+            result.export(buf, format="mp3", bitrate="128k")
+            result_bytes = buf.getvalue()
+
+            upload_blob(CONTAINER_AUDIOS, blob_path, result_bytes)
+            logger.info(f"🔄 Replace {filename}: [{start_ms}ms-{end_ms}ms] → {len(new_segment)}ms de nouveau TTS")
+
+            return jsonify({
+                "success": True,
+                "original_duration_ms": len(original),
+                "new_duration_ms": len(result),
+            }), 200
+
+        except Exception as e:
+            logger.error(f"❌ replace_audio_confirm: {e}")
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    # ─── Analyse mots d'un dossier ───────────────────────────────────────────
+    @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/analyse", methods=["GET"])
+    def analyse_folder_words(folder_id):
+        """Compte les mots des PDFs d'un dossier et indique si le contenu suffit pour une journée."""
+        denied = _require_admin()
+        if denied:
+            return denied
+
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute("SELECT platform_id FROM cours_folders WHERE id = ?", (folder_id,))
+            row = cursor.fetchone()
+            conn.close()
+
+            if not row:
+                return jsonify({"success": False, "error": "Dossier introuvable"}), 404
+
+            platform_id = row[0]
+
+            from services.playlist_tts_service import count_words_in_folder
+            result = count_words_in_folder(platform_id, folder_id)
+
+            return jsonify({"success": True, **result}), 200
+
+        except Exception as e:
+            logger.error(f"❌ Erreur analyse_folder_words: {e}")
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    # ─── Remplir plateforme depuis un dossier ────────────────────────────────
+    @hr_bp.route("/api/hr/platforms/<int:platform_id>/fill-from-folder", methods=["POST"])
+    def fill_from_folder(platform_id):
+        """
+        Copie les 19 fichiers MP3 d'un dossier de cours vers le container audio de la plateforme.
+        - 7 cours : depuis audiostts/platform-X/folder-Y/playlist/
+        - 12 Q&A + pauses : depuis audioqapause (fichiers permanents recyclés)
+        """
+        denied = _require_admin()
+        if denied:
+            return denied
+
+        try:
+            data = request.get_json() or {}
+            folder_id = data.get("folder_id")
+            if not folder_id:
+                return jsonify({"success": False, "error": "folder_id requis"}), 400
+
+            # Vérifier que le dossier appartient à cette plateforme
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute("SELECT name FROM cours_folders WHERE id = ? AND platform_id = ?", (folder_id, platform_id))
+            folder_row = cursor.fetchone()
+            conn.close()
+
+            if not folder_row:
+                return jsonify({"success": False, "error": "Dossier introuvable pour cette plateforme"}), 404
+
+            tts_conn = os.environ.get("AZURE_TTS_STORAGE_CONNECTION_STRING")
+            audio_conn = os.environ.get("AZURE_AUDIO_STORAGE_CONNECTION_STRING")
+
+            if not tts_conn or not audio_conn:
+                return jsonify({"success": False, "error": "Configuration Azure manquante"}), 500
+
+            pinfo = _get_platform_info(platform_id)
+            dest_container = pinfo["audio_container"]
+
+            from azure.storage.blob import BlobServiceClient as _BSC
+            tts_bsc = _BSC.from_connection_string(tts_conn)
+            audio_bsc = _BSC.from_connection_string(audio_conn)
+
+            dest_cc = audio_bsc.get_container_client(dest_container)
+            qa_pause_cc = audio_bsc.get_container_client("audioqapause")
+            playlist_cc = tts_bsc.get_container_client("audiostts")
+
+            playlist_prefix = f"platform-{platform_id}/folder-{folder_id}/playlist/"
+
+            # Lister uniquement les fichiers cours (cours_*.mp3) du dossier
+            # Les Q&A et pauses viennent toujours d'audioqapause, pas d'ici
+            cours_blobs = [
+                b for b in playlist_cc.list_blobs(name_starts_with=playlist_prefix)
+                if b.name.split("/")[-1].startswith("cours_") and b.name.endswith(".mp3")
+            ]
+
+            if not cours_blobs:
+                return jsonify({"success": False, "error": "Aucun fichier cours généré dans ce dossier. Lancez d'abord la pipeline."}), 404
+
+            copied_files = []
+            errors = []
+
+            # Copier les fichiers cours (depuis audiostts)
+            for blob in cours_blobs:
+                filename = blob.name.split("/")[-1]
+                try:
+                    audio_bytes = playlist_cc.get_blob_client(blob.name).download_blob().readall()
+                    dest_cc.get_blob_client(filename).upload_blob(audio_bytes, overwrite=True)
+                    copied_files.append(filename)
+                    logger.info(f"   ✅ Cours copié : {filename}")
+                except Exception as e:
+                    logger.error(f"   ❌ Échec copie cours {filename}: {e}")
+                    errors.append({"filename": filename, "error": str(e)})
+
+            # Copier les Q&A et Pauses (depuis audioqapause)
+            qa_pause_blobs = [b for b in qa_pause_cc.list_blobs() if b.name.endswith(".mp3")]
+
+            for blob in qa_pause_blobs:
+                filename = blob.name
+                try:
+                    audio_bytes = qa_pause_cc.get_blob_client(filename).download_blob().readall()
+                    dest_cc.get_blob_client(filename).upload_blob(audio_bytes, overwrite=True)
+                    copied_files.append(filename)
+                    logger.info(f"   ♻️ Q&A/Pause copié : {filename}")
+                except Exception as e:
+                    logger.error(f"   ❌ Échec copie Q&A/Pause {filename}: {e}")
+                    errors.append({"filename": filename, "error": str(e)})
+
+            logger.info(f"✅ fill-from-folder P{platform_id}/F{folder_id}: {len(copied_files)} fichiers copiés, {len(errors)} erreur(s)")
+
+            return jsonify({
+                "success": True,
+                "copied": len(copied_files),
+                "errors": len(errors),
+                "files": copied_files,
+                "error_details": errors,
+                "folder_name": folder_row[0],
+            }), 200
+
+        except Exception as e:
+            logger.error(f"❌ Erreur fill_from_folder: {e}")
+            return jsonify({"success": False, "error": str(e)}), 500
 
     # ─── Fonctions helpers background ───────────────────────────────────────
     def _process_document_background(document_id):

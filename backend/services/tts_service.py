@@ -36,6 +36,46 @@ def extract_text_from_pdf(pdf_data):
         raise
 
 
+def extract_text_from_file(file_bytes, original_name):
+    """
+    Extrait le texte d'un fichier selon son extension.
+    Supporte : .pdf, .txt, .md
+
+    Args:
+        file_bytes: bytes du fichier
+        original_name: nom original du fichier (pour détecter le type)
+
+    Returns:
+        Texte extrait
+    """
+    ext = original_name.lower().rsplit(".", 1)[-1] if "." in original_name else ""
+
+    if ext == "pdf":
+        return extract_text_from_pdf(file_bytes)
+
+    elif ext in ("txt", "md"):
+        # Décode en UTF-8 (fallback latin-1 si nécessaire)
+        try:
+            text = file_bytes.decode("utf-8")
+        except UnicodeDecodeError:
+            text = file_bytes.decode("latin-1")
+        # Pour le markdown : supprimer les balises de formatage basiques (#, **, __, `)
+        if ext == "md":
+            import re
+            text = re.sub(r"^#{1,6}\s+", "", text, flags=re.MULTILINE)  # titres
+            text = re.sub(r"\*{1,2}(.+?)\*{1,2}", r"\1", text)          # gras/italique
+            text = re.sub(r"_{1,2}(.+?)_{1,2}", r"\1", text)             # soulignement
+            text = re.sub(r"`{1,3}[^`]*`{1,3}", "", text)                # code inline/bloc
+            text = re.sub(r"!\[.*?\]\(.*?\)", "", text)                   # images
+            text = re.sub(r"\[(.+?)\]\(.*?\)", r"\1", text)              # liens
+            text = re.sub(r"^[-*+]\s+", "", text, flags=re.MULTILINE)    # listes
+            text = re.sub(r"^\d+\.\s+", "", text, flags=re.MULTILINE)    # listes numérotées
+        return text
+
+    else:
+        raise ValueError(f"Format non supporté : .{ext} — utilisez .pdf, .txt ou .md")
+
+
 def add_pedagogical_tags(text):
     """
     Améliore le texte pour une lecture pédagogique avec fish.audio S2-Pro.

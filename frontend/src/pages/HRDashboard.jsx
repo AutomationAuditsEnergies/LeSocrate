@@ -458,6 +458,7 @@ export default function HRDashboard() {
           onClose={() => setShowAudiosModal(false)}
           darkMode={darkMode}
           recorderUrl={`${(platforms.find(p => p.id === selectedPlatformId)?.frontend_url || window.location.origin)}/recorder?p=${selectedPlatformId}`}
+          onRefreshAudios={() => fetchAudios(selectedPlatformId)}
         />
       )}
 
@@ -619,7 +620,7 @@ export default function HRDashboard() {
 }
 
 // ─── Audios Modal ────────────────────────────────────────────────────────────
-function AudiosModal({ platformId, audios, loading, onClose, darkMode, recorderUrl }) {
+function AudiosModal({ platformId, audios, loading, onClose, darkMode, recorderUrl, onRefreshAudios }) {
   const EXPECTED_AUDIOS = [
     'cours_9h00_9h45.mp3',
     'qa_9h45_9h55.mp3',
@@ -649,6 +650,54 @@ function AudiosModal({ platformId, audios, loading, onClose, darkMode, recorderU
   )
 
   const coursAudios = mergedAudios.filter(a => a.name.startsWith('cours_'))
+
+  // ─── Remplir avec les audios ─────────────────────────────────────────
+  const [showFillModal, setShowFillModal] = useState(false)
+  const [folders, setFolders] = useState([])
+  const [loadingFolders, setLoadingFolders] = useState(false)
+  const [selectedFillFolderId, setSelectedFillFolderId] = useState('')
+  const [filling, setFilling] = useState(false)
+  const [fillResult, setFillResult] = useState(null)
+
+  const handleOpenFillModal = async () => {
+    setShowFillModal(true)
+    setFillResult(null)
+    setSelectedFillFolderId('')
+    setLoadingFolders(true)
+    try {
+      const resp = await fetch(apiUrl(`/api/hr/platforms/${platformId}/cours-folders`), { credentials: 'include' })
+      const data = await resp.json()
+      if (data.success) setFolders(data.folders)
+    } catch (e) {
+      console.error('Erreur chargement dossiers:', e)
+    } finally {
+      setLoadingFolders(false)
+    }
+  }
+
+  const handleFill = async () => {
+    if (!selectedFillFolderId) return
+    setFilling(true)
+    setFillResult(null)
+    try {
+      const resp = await fetch(apiUrl(`/api/hr/platforms/${platformId}/fill-from-folder`), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ folder_id: parseInt(selectedFillFolderId) }),
+      })
+      const data = await resp.json()
+      setFillResult(data)
+      if (data.success && onRefreshAudios) {
+        onRefreshAudios()
+      }
+    } catch (e) {
+      console.error('Erreur remplissage:', e)
+      setFillResult({ success: false, error: 'Erreur réseau' })
+    } finally {
+      setFilling(false)
+    }
+  }
   const pauseAudios = mergedAudios.filter(a => a.name.startsWith('pause_'))
   const qaAudios = mergedAudios.filter(a => a.name.startsWith('qa_'))
 
@@ -670,6 +719,16 @@ function AudiosModal({ platformId, audios, loading, onClose, darkMode, recorderU
             <h3 className="text-lg font-bold">AUDIOS FORMATION</h3>
           </div>
           <div className="flex items-center gap-2">
+            <button
+              onClick={handleOpenFillModal}
+              className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium transition-colors"
+              style={{ backgroundColor: 'rgba(255,255,255,0.2)', color: 'white' }}
+              onMouseEnter={e => e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.3)'}
+              onMouseLeave={e => e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.2)'}
+            >
+              <Icon name="drive_folder_upload" className="text-base" />
+              <span>Remplir avec les audios</span>
+            </button>
             <a
               href={recorderUrl}
               target="_blank"
@@ -689,6 +748,84 @@ function AudiosModal({ platformId, audios, loading, onClose, darkMode, recorderU
               <Icon name="close" className="text-2xl" />
             </button>
           </div>
+
+          {/* Modal sélection dossier */}
+          {showFillModal && (
+            <div
+              className="fixed inset-0 z-60 flex items-center justify-center p-4"
+              style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}
+              onClick={() => setShowFillModal(false)}
+            >
+              <div
+                className="bg-white rounded-2xl shadow-2xl w-full p-6"
+                style={{ maxWidth: '460px' }}
+                onClick={e => e.stopPropagation()}
+              >
+                <div className="flex items-center gap-3 mb-5">
+                  <div className="flex h-10 w-10 items-center justify-center rounded-xl" style={{ backgroundColor: '#137fec' }}>
+                    <Icon name="drive_folder_upload" className="text-white text-xl" />
+                  </div>
+                  <h4 className="text-base font-bold text-slate-800">Remplir avec les audios</h4>
+                </div>
+
+                <p className="text-sm text-slate-500 mb-4">
+                  Choisissez le dossier de cours à utiliser. Les 7 fichiers cours générés + les Q&A et pauses seront copiés dans la plateforme.
+                </p>
+
+                {loadingFolders ? (
+                  <div className="flex justify-center py-4">
+                    <div className="h-6 w-6 animate-spin rounded-full border-2 border-gray-300 border-t-blue-500" />
+                  </div>
+                ) : (
+                  <select
+                    value={selectedFillFolderId}
+                    onChange={e => setSelectedFillFolderId(e.target.value)}
+                    className="w-full rounded-lg px-3 py-2.5 text-sm mb-4 outline-none"
+                    style={{ border: '1px solid #e2e8f0', color: '#1e293b', backgroundColor: '#f8fafc' }}
+                  >
+                    <option value="">— Sélectionner un dossier —</option>
+                    {folders.map(f => (
+                      <option key={f.id} value={f.id}>{f.name}</option>
+                    ))}
+                  </select>
+                )}
+
+                {fillResult && (
+                  <div
+                    className="rounded-xl p-3 mb-4 text-sm"
+                    style={{
+                      backgroundColor: fillResult.success ? '#dcfce7' : '#fee2e2',
+                      color: fillResult.success ? '#166534' : '#991b1b',
+                    }}
+                  >
+                    {fillResult.success
+                      ? `✓ ${fillResult.copied} fichiers copiés${fillResult.errors > 0 ? ` (${fillResult.errors} erreur(s))` : ''} depuis "${fillResult.folder_name}"`
+                      : `✗ ${fillResult.error}`}
+                  </div>
+                )}
+
+                <div className="flex gap-3 justify-end">
+                  <button
+                    onClick={() => setShowFillModal(false)}
+                    className="rounded-lg px-4 py-2 text-sm font-medium"
+                    style={{ backgroundColor: '#f1f5f9', color: '#64748b' }}
+                  >
+                    {fillResult?.success ? 'Fermer' : 'Annuler'}
+                  </button>
+                  {!fillResult?.success && (
+                    <button
+                      onClick={handleFill}
+                      disabled={!selectedFillFolderId || filling}
+                      className="rounded-lg px-5 py-2 text-sm font-medium text-white transition-all disabled:opacity-50"
+                      style={{ backgroundColor: filling || !selectedFillFolderId ? '#93c5fd' : '#137fec' }}
+                    >
+                      {filling ? 'Copie en cours...' : 'Remplir'}
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Modal Body */}

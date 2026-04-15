@@ -1,5 +1,103 @@
 # Changelog
 
+## 2026-04-14
+
+### Fix : Chargement instantané de la forme d'onde dans l'éditeur audio
+
+- **Backend** `hr_routes.py` — nouveau endpoint `GET /audio-url/<filename>` qui génère une SAS URL Azure valide 1h pour le blob MP3, au lieu de le proxifier intégralement
+- **Frontend** `AudioEditor.jsx` — WaveSurfer reçoit directement la SAS URL : stream depuis le CDN Azure avec range requests natifs → chargement quasi-instantané au lieu de 15 secondes
+- L'ancien endpoint `/audio-stream/<filename>` est conservé en fallback
+- Après cut/replace-confirm, une nouvelle SAS URL est demandée avant le rechargement de la forme d'onde (le blob Azure ayant changé, la SAS précédente pointerait vers un cache potentiellement périmé)
+
+### Feature : Éditeur audio (couper / remplacer une région)
+
+- **Backend** `hr_routes.py` — 4 nouveaux endpoints :
+  - `GET /audio-stream/<filename>` : proxy Azure → frontend pour WaveSurfer
+  - `POST /audio/<filename>/cut` : coupe une région `[start_ms, end_ms]` via pydub, upload Azure (irréversible)
+  - `POST /audio/<filename>/replace-preview` : génère TTS fish.audio pour un texte, stocke en mémoire, retourne base64 + preview_id
+  - `POST /audio/<filename>/replace-confirm` : splice le preview TTS dans l'audio original via pydub, upload Azure (irréversible)
+- **Frontend** `AudioEditor.jsx` (nouveau composant) :
+  - WaveSurfer.js v7 avec plugin Regions — sélection par drag sur la forme d'onde
+  - Mode **Couper** : sélectionner → confirmer → les morceaux se rejoignent
+  - Mode **Remplacer** : sélectionner → écrire le nouveau texte → prévisualiser la voix TTS → confirmer l'intégration
+  - Prévisualisation du TTS jouée directement dans le browser avant confirmation
+  - Rechargement automatique de la forme d'onde après modification
+- **CoursFolders.jsx** : bouton ✂️ sur chaque fichier audio généré dans la liste "Audios générés"
+- `wavesurfer.js` v7.12.6 installé dans les dépendances frontend
+
+### Feature : Régénération audio sélective depuis le script TTS modifié
+
+- **DB** : colonne `dirty INTEGER DEFAULT 0` ajoutée à `content_generation_segments` (migration automatique)
+- **PATCH segment** : marque maintenant `dirty = 1` à chaque modification de texte
+- **Service** `content_generation_service.py` :
+  - `generate_audio_from_script(folder_id, on_progress, force_all)` : assemble les 18 segments → découpe en 7 blocs proportionnels → régénère TTS uniquement pour les blocs dont au moins un segment est `dirty` → marque `dirty = 0` après génération réussie
+  - `get_script_dirty_blocs(folder_id)` : calcule combien de blocs seraient régénérés (pour affichage dans le bouton)
+- **Route** `POST generate-playlist` : si un script TTS complété existe, utilise `generate_audio_from_script` au lieu de la reformulation Claude. Sinon pipeline classique.
+- **Route** `GET /content-job/dirty-blocs` : expose le comptage dirty au frontend
+- **Frontend** : bouton "Générer les 7 cours MP3" affiche dynamiquement "Régénérer X/7 blocs modifiés" quand des segments ont été édités, ou "Générer les 7 cours MP3 (script)" si le script existe sans modification
+
+### Feature : Modes de test pour la génération de contenu (mock / mini / seed)
+
+- **`seed_test_content.py`** (nouveau script à la racine) : insère 18 segments factices directement en DB pour un `folder_id` donné — 0€, instantané, idéal pour tester la modale/édition
+- **Mode `mock`** dans `run_content_generation` : génère du texte factice structuré (~220 mots/segment) avec `time.sleep(0.8)` pour simuler le délai, sans aucun appel Claude — teste le polling, le checkpointing, l'assemblage, l'upload Azure
+- **Mode `mini`** : génère 1 seule sous-partie × 1 seule passe avec max_tokens 300 via le vrai Claude (~0.02€) — valide l'intégration Claude sans coût significatif, pas d'upload Azure
+- **Frontend** : boutons "Mock (0€)" et "Mini (~0.02€)" visibles uniquement en `import.meta.env.DEV` sous les boutons de génération normale
+- **Route** `POST /start` accepte maintenant `{"mode": "normal"|"mock"|"mini"}` dans le body
+
+### Feature : Visionneuse de script TTS avec sommaire latéral et édition par passe
+
+- **Frontend** `CoursFolders.jsx` : redesign complet de la modale "Script TTS généré"
+  - Layout 2 colonnes : sidebar sommaire (260px) + panneau contenu (flex-1)
+  - Sidebar : liste cliquable des 6 sous-parties avec badge numéroté, nom et nombre de mots — navigation instantanée entre sous-parties
+  - Panneau droit : affiche les 3 passes de la sous-partie sélectionnée, chacune avec bouton "Modifier" → textarea inline → "Sauvegarder" / "Annuler"
+  - Réinitialisation de l'état d'édition à chaque changement de sous-partie ou fermeture de la modale
+- **Backend** `hr_routes.py` : nouvelle route `PATCH /api/hr/cours-folders/<id>/content-job/segment`
+  - Sauvegarde le texte modifié dans `content_generation_segments`
+  - Recalcule `word_count` du segment et `total_words` du job depuis les segments complétés
+  - Retourne `new_word_count` et `new_total_words` pour mise à jour optimiste du frontend
+
+## 2026-04-13
+
+### Feature : Pipeline génération de contenu TTS-direct depuis un programme
+
+- **DB** : 2 nouvelles tables `content_generation_jobs` et `content_generation_segments` avec checkpointing
+- **Service** `content_generation_service.py` :
+  - `extract_sub_parts(program_text)` : Claude extrait automatiquement 6 sous-parties depuis le programme
+  - `run_content_generation(folder_id)` : boucle 6 sous-parties × 3 passes (Passe 1/2/3 ~5 100 mots chacune) = ~92 000 mots
+  - Checkpoint après chaque passe : reprise automatique sans repasser les segments déjà générés
+  - Assemblage final + upload Azure comme document `.txt` dans le dossier
+- **Routes** :
+  - `POST /api/hr/cours-folders/<id>/content-job` — crée le job + extraction synchrone des sous-parties
+  - `POST /api/hr/cours-folders/<id>/content-job/start` — lance/reprend la génération (eventlet)
+  - `GET /api/hr/cours-folders/<id>/content-job` — statut en temps réel (polling 3s)
+  - `POST /api/hr/cours-folders/<id>/content-job/cancel` — annule le job
+  - `GET /api/hr/cours-folders/<id>/content-job/preview` — prévisualise le prompt Passe 1 pré-rempli
+- **Frontend** : nouvelle section "Générer le contenu depuis un programme" dans la vue dossier
+  - Textarea programme → bouton "Extraire les sous-parties" (Claude ~5s)
+  - Liste des 6 sous-parties + bouton "Lancer la génération" + "Prévisualiser le prompt"
+  - Barre de progression (passes X/18, mots générés en temps réel)
+  - Bouton "Reprendre depuis le checkpoint" en cas d'erreur
+  - Note utilisateur : "Chaque dossier représente une journée de formation"
+
+### Feature : Réordonnancement drag & drop des dossiers de cours (ordre chronologique)
+
+- **DB** : ajout colonne `position INTEGER` sur `cours_folders` + migration auto des dossiers existants par ordre de création
+- **Backend** : `get_cours_folders` ordonne désormais par `position ASC` et retourne le champ `position`
+- **Backend** : `create_cours_folder` assigne `position = max + 1` automatiquement
+- **Route** : `PUT /api/hr/platforms/<id>/cours-folders/reorder` — reçoit `[{id, position}]` et met à jour en bulk
+- **Frontend** : les cartes dossiers sont maintenant draggables (HTML5 drag & drop), réordonnement optimiste côté client avec rollback en cas d'erreur
+- **Frontend** : badge "Jour X" affiché sur chaque carte selon sa position dans la liste
+- **Frontend** : hint "Glissez les cours pour changer leur ordre chronologique" + icône drag visible au hover
+- **Design** : carte source semi-transparente en cours de drag, carte cible surlignée en violet avec scale(1.02)
+
+### Feature : Intégration pipeline TTS dans la plateforme (analyse + génération + remplissage)
+
+- **Analyse des mots** : nouveau bouton "Analyser le contenu" dans CoursFolders → compte les mots de tous les PDFs du dossier, indique si suffisant pour une journée (seuil 69 120 mots = 192 mots/min × 360 min), affiche le surplus ou le manque
+- **Recyclage Q&A/Pauses** : la pipeline `playlist_tts_service.py` récupère désormais les fichiers Q&A et Pauses depuis le container Azure `audioqapause` (permanent) au lieu de les générer via fish.audio à chaque fois → économie de 12 appels TTS par journée
+- **Route `/analyse`** : `GET /api/hr/cours-folders/<id>/analyse` — analyse mot par mot tous les PDFs du dossier
+- **Route `/fill-from-folder`** : `POST /api/hr/platforms/<id>/fill-from-folder` — copie les 7 cours depuis `audiostts` + les 12 Q&A/Pauses depuis `audioqapause` vers le container audio de la plateforme
+- **Bouton "Remplir avec les audios"** dans AUDIOS FORMATION (HRDashboard) → sélecteur de dossier → copie automatique des 19 fichiers dans la plateforme
+
 ## 2026-04-10
 
 ### Pipeline TTS — Résumabilité + persistance Azure Blob

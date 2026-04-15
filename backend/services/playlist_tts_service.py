@@ -13,10 +13,10 @@ Pipeline TTS complète : PDFs d'un dossier → 19 fichiers MP3 conformes à la p
 import os
 import io
 import re
-import anthropic
+import requests as _http
 from pydub import AudioSegment
 from utils.logger import get_logger
-from services.tts_service import convert_to_speech, extract_text_from_pdf
+from services.tts_service import convert_to_speech, extract_text_from_pdf, extract_text_from_file
 from services.azure_blob_service import (
     upload_blob, download_blob, CONTAINER_DOCUMENTS, CONTAINER_AUDIOS,
     build_blob_path, delete_blobs_by_prefix,
@@ -72,6 +72,9 @@ COURS_DURATIONS_MIN = {
 
 # Marge de sécurité : on vise 30s de moins que la durée max
 MARGIN_SECONDS = 30
+
+# Mots nécessaires pour remplir une journée complète (7 blocs cours)
+WORDS_NEEDED_PER_DAY = WORDS_PER_MINUTE * sum(COURS_DURATIONS_MIN.values())  # 192 * 360 = 69 120
 
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -167,7 +170,12 @@ def _call_claude_reformulate(course_text, progress_callback=None):
     - Si le contenu s'épuise avant le bloc 7, les blocs restants sont vides
     - Si du contenu reste après le bloc 7, on le signale dans le résultat
     """
-    client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+    _anthropic_api_key = os.getenv("ANTHROPIC_API_KEY")
+    _anthropic_headers = {
+        "x-api-key": _anthropic_api_key,
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
+    }
 
     word_targets = {i: _target_word_count(d) for i, d in COURS_DURATIONS_MIN.items()}
 
@@ -187,7 +195,7 @@ def _call_claude_reformulate(course_text, progress_callback=None):
         duration = COURS_DURATIONS_MIN[bloc_num]
 
         if progress_callback:
-            progress_callback(f"Reformulation bloc {bloc_num}/7 ({duration}min)...")
+            progress_callback(f"Reformulation bloc {bloc_num}/7 — cible : {duration} min audio...")
 
         # Calculer combien de mots source donner à ce bloc (proportionnel à la durée)
         proportion = duration / total_duration
@@ -259,12 +267,18 @@ CONTENU SOURCE POUR CE BLOC :
 {chunk[:30000]}"""
 
         try:
-            response = client.messages.create(
-                model="claude-sonnet-4-20250514",
-                max_tokens=32000,
-                messages=[{"role": "user", "content": bloc_prompt}],
+            _resp = _http.post(
+                "https://api.anthropic.com/v1/messages",
+                headers=_anthropic_headers,
+                json={
+                    "model": "claude-sonnet-4-20250514",
+                    "max_tokens": 32000,
+                    "messages": [{"role": "user", "content": bloc_prompt}],
+                },
+                timeout=300,
             )
-            content = response.content[0].text.strip()
+            _resp.raise_for_status()
+            content = _resp.json()["content"][0]["text"].strip()
             actual_words = _count_words_excluding_tags(content)
 
             blocs.append({
@@ -382,9 +396,105 @@ def _get_pause_midi_text():
     return _PAUSE_MIDI_INTRO, _PAUSE_MIDI_OUTRO
 
 
+def _get_recycled_qa_pause(filename):
+    """
+    Télécharge un fichier Q&A ou pause depuis le container audioqapause (Azure).
+    Ces fichiers sont permanents et réutilisés pour toutes les journées.
+    """
+    conn_str = os.getenv("AZURE_AUDIO_STORAGE_CONNECTION_STRING")
+    if not conn_str:
+        raise ValueError("AZURE_AUDIO_STORAGE_CONNECTION_STRING non définie dans .env")
+    from azure.storage.blob import BlobServiceClient as _BSC
+    bsc = _BSC.from_connection_string(conn_str)
+    blob_client = bsc.get_blob_client(container="audioqapause", blob=filename)
+    return blob_client.download_blob().readall()
+
+
+def count_words_in_folder(platform_id, folder_id):
+    """
+    Compte les mots de tous les PDFs d'un dossier.
+    Retourne un dict avec total_words, days_coverable, sufficient, words_missing.
+    """
+    from database.db import get_db_connection
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT id, filename, original_name FROM cours_documents WHERE folder_id = ? ORDER BY id",
+        (folder_id,)
+    )
+    documents = cursor.fetchall()
+    conn.close()
+
+    if not documents:
+        return {"total_words": 0, "days_coverable": 0, "sufficient": False, "words_missing": WORDS_NEEDED_PER_DAY, "documents": []}
+
+    doc_details = []
+    total_words = 0
+    for doc_id, filename, original_name in documents:
+        try:
+            file_bytes = download_blob(CONTAINER_DOCUMENTS, filename)
+            text = extract_text_from_file(file_bytes, original_name)
+            word_count = len(text.split()) if text and text.strip() else 0
+            total_words += word_count
+            doc_details.append({"name": original_name, "words": word_count})
+        except Exception as e:
+            logger.warning(f"   ⚠️ Impossible de lire {original_name}: {e}")
+            doc_details.append({"name": original_name, "words": 0, "error": str(e)})
+
+    days_coverable = round(total_words / WORDS_NEEDED_PER_DAY, 2)
+    sufficient = total_words >= WORDS_NEEDED_PER_DAY
+    words_missing = max(0, WORDS_NEEDED_PER_DAY - total_words)
+    surplus_words = max(0, total_words - WORDS_NEEDED_PER_DAY)
+
+    return {
+        "total_words": total_words,
+        "words_needed_per_day": WORDS_NEEDED_PER_DAY,
+        "days_coverable": days_coverable,
+        "sufficient": sufficient,
+        "words_missing": words_missing,
+        "surplus_words": surplus_words,
+        "documents": doc_details,
+    }
+
+
 # ─── Pipeline principale ────────────────────────────────────────────────────
 
-def generate_playlist_for_folder(platform_id, folder_id, progress_callback=None):
+def _generate_mock_blocs():
+    """Retourne 7 blocs courts factices (aucun appel Claude) pour les tests."""
+    mock_topics = [
+        "l'introduction du cours", "les fondamentaux", "les méthodes pratiques",
+        "les études de cas", "la réglementation", "l'évaluation", "la conclusion",
+    ]
+    blocs = []
+    for i in range(1, 8):
+        target = _target_word_count(COURS_DURATIONS_MIN[i])
+        text = (
+            f"[MOCK BLOC {i}] Bienvenue dans cette partie consacrée à {mock_topics[i-1]}. "
+            f"Ce bloc couvre les points essentiels du programme. "
+            f"Prenez le temps d'assimiler chaque notion. "
+            f"[pause] On continue avec le contenu principal. "
+            f"[warm] Voilà pour ce bloc numéro {i}. "
+            f"[pause] Passons à la suite." * 3
+        )
+        blocs.append({
+            "bloc_number": i,
+            "content": text,
+            "word_count": len(text.split()),
+            "target_words": target,
+            "skipped": False,
+        })
+    return blocs
+
+
+def _generate_silence_mp3(duration_sec=1):
+    """Génère un fichier MP3 de silence de la durée indiquée (pour les tests)."""
+    silence = AudioSegment.silent(duration=duration_sec * 1000)
+    buf = io.BytesIO()
+    silence.export(buf, format="mp3")
+    return buf.getvalue()
+
+
+def generate_playlist_for_folder(platform_id, folder_id, progress_callback=None, mock=False):
     """
     Pipeline complète : génère les 19 fichiers MP3 pour un dossier de cours.
 
@@ -392,6 +502,7 @@ def generate_playlist_for_folder(platform_id, folder_id, progress_callback=None)
         platform_id: ID de la plateforme
         folder_id: ID du dossier de cours
         progress_callback: fonction(step, total, message) pour suivre la progression
+        mock: si True, utilise des blocs factices et du silence 1s au lieu du vrai TTS (tests)
 
     Returns:
         dict avec le statut et les fichiers générés
@@ -426,10 +537,9 @@ def generate_playlist_for_folder(platform_id, folder_id, progress_callback=None)
 
     all_text = []
     for doc_id, filename, original_name in documents:
-        blob_path = build_blob_path(platform_id, folder_id, filename)
         try:
-            pdf_bytes = download_blob(CONTAINER_DOCUMENTS, blob_path)
-            text = extract_text_from_pdf(pdf_bytes)
+            file_bytes = download_blob(CONTAINER_DOCUMENTS, filename)
+            text = extract_text_from_file(file_bytes, original_name)
             if text and text.strip():
                 all_text.append(text)
                 logger.info(f"   ✅ {original_name}: {len(text.split())} mots extraits")
@@ -445,13 +555,20 @@ def generate_playlist_for_folder(platform_id, folder_id, progress_callback=None)
     total_words = len(course_text.split())
     logger.info(f"📝 Texte total: {total_words} mots")
 
-    # ── Étape 3 : reformulation via Claude (bloc par bloc) ──
-    progress(3, total_steps, f"Reformulation du cours en 7 blocs via Claude ({total_words} mots)...")
+    # ── Étape 3 : reformulation via Claude (ou mock) ──
+    if mock:
+        progress(3, total_steps, "[MOCK] Génération de blocs factices (0 appel Claude)...")
+        blocs = _generate_mock_blocs()
+        remaining_source_words = 0
+        logger.info("🧪 MODE MOCK playlist — blocs factices générés")
+    else:
+        progress(3, total_steps, f"Reformulation du cours en 7 blocs via Claude ({total_words} mots source)...")
 
-    def claude_progress(message):
-        progress(3, total_steps, message)
+        def claude_progress(msg):
+            # Reformatter le message pour ne pas afficher "(45min)" qui prête à confusion
+            progress(3, total_steps, msg)
 
-    blocs, remaining_source_words = _call_claude_reformulate(course_text, progress_callback=claude_progress)
+        blocs, remaining_source_words = _call_claude_reformulate(course_text, progress_callback=claude_progress)
 
     # Mapper les blocs par numéro (exclure les blocs vides)
     blocs_by_number = {b["bloc_number"]: b["content"] for b in blocs if b.get("content")}
@@ -515,43 +632,46 @@ def generate_playlist_for_folder(platform_id, folder_id, progress_callback=None)
         progress(step, total_steps, f"Génération {filename} ({file_type}, bloc {bloc_num})...")
 
         try:
-            if file_type == "cours":
+            if mock:
+                if file_type != "cours":
+                    # En mock, on ne génère pas les Q&A et pauses :
+                    # ils viennent toujours d'audioqapause, inutile de les uploader ici
+                    logger.info(f"   🧪 [MOCK] {filename}: skip (Q&A/pause vient d'audioqapause)")
+                    continue
+                # Mode mock cours : 1 seconde de silence
+                final_bytes = _generate_silence_mp3(1)
+                logger.info(f"   🧪 [MOCK] {filename}: silence 1s")
+
+            elif file_type == "cours":
                 # Générer le TTS du bloc cours
                 bloc_text = blocs_by_number.get(bloc_num)
                 if not bloc_text:
-                    # Bloc vide (contenu source épuisé) → skip
                     logger.info(f"   ⏭️ {filename}: bloc {bloc_num} vide, skip")
                     continue
 
-                # Les tags fish.audio sont déjà intégrés par Claude dans la reformulation
                 audio_bytes = convert_to_speech(bloc_text)
                 duration_ms = _measure_duration_ms(audio_bytes)
                 logger.info(f"   TTS brut: {duration_ms/1000:.1f}s (cible: {duration_sec}s)")
-
-                # Padder à la durée cible
                 final_bytes = _pad_audio_to_duration(audio_bytes, duration_sec)
 
             elif file_type == "qa":
-                # Skip Q&A si le bloc cours correspondant est vide
                 if bloc_num not in blocs_by_number:
                     logger.info(f"   ⏭️ {filename}: bloc {bloc_num} vide, skip Q&A")
                     continue
-                intro, outro = _get_qa_text(bloc_num)
-                final_bytes = _build_pause_audio(intro, outro, duration_sec)
+                final_bytes = _get_recycled_qa_pause(filename)
+                logger.info(f"   ♻️ {filename}: recyclé depuis audioqapause")
 
             elif file_type == "pause":
-                # Skip pause si le bloc cours suivant est aussi vide
                 next_bloc = bloc_num + 1
                 if bloc_num not in blocs_by_number and next_bloc not in blocs_by_number:
                     logger.info(f"   ⏭️ {filename}: blocs voisins vides, skip pause")
                     continue
-                intro, outro = _get_pause_text(bloc_num)
-                final_bytes = _build_pause_audio(intro, outro, duration_sec)
+                final_bytes = _get_recycled_qa_pause(filename)
+                logger.info(f"   ♻️ {filename}: recyclé depuis audioqapause")
 
             elif file_type == "pause_midi":
-                # La pause midi est toujours générée (elle fait partie de la journée)
-                intro, outro = _get_pause_midi_text()
-                final_bytes = _build_pause_audio(intro, outro, duration_sec)
+                final_bytes = _get_recycled_qa_pause(filename)
+                logger.info(f"   ♻️ {filename}: recyclé depuis audioqapause")
 
             else:
                 raise ValueError(f"Type inconnu: {file_type}")

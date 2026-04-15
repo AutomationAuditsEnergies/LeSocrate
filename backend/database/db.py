@@ -208,10 +208,26 @@ def init_database():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             platform_id INTEGER NOT NULL DEFAULT 1,
             name TEXT NOT NULL,
+            position INTEGER NOT NULL DEFAULT 0,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
         """
         )
+        # Migration : ajouter la colonne position si elle n'existe pas encore
+        try:
+            cursor.execute("ALTER TABLE cours_folders ADD COLUMN position INTEGER NOT NULL DEFAULT 0")
+            logger.info("✅ Colonne position ajoutée à cours_folders")
+            # Initialiser les positions existantes par ordre de création
+            cursor.execute("""
+                UPDATE cours_folders SET position = (
+                    SELECT COUNT(*) FROM cours_folders cf2
+                    WHERE cf2.platform_id = cours_folders.platform_id
+                    AND cf2.created_at <= cours_folders.created_at
+                    AND cf2.id <= cours_folders.id
+                ) - 1
+            """)
+        except Exception:
+            pass  # Colonne déjà présente
         logger.info("✅ Table cours_folders créée/vérifiée")
 
         # Table des documents de cours (PDFs + audios générés)
@@ -230,6 +246,52 @@ def init_database():
         """
         )
         logger.info("✅ Table cours_documents créée/vérifiée")
+
+        # Table des jobs de génération de contenu TTS-direct
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS content_generation_jobs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            folder_id INTEGER NOT NULL UNIQUE,
+            platform_id INTEGER NOT NULL,
+            program_text TEXT NOT NULL,
+            program_title TEXT DEFAULT '',
+            sub_parts TEXT DEFAULT '[]',
+            status TEXT DEFAULT 'idle',
+            current_sub_part INTEGER DEFAULT 0,
+            current_passe INTEGER DEFAULT 1,
+            total_words INTEGER DEFAULT 0,
+            error_message TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (folder_id) REFERENCES cours_folders(id)
+        )
+        """)
+        logger.info("✅ Table content_generation_jobs créée/vérifiée")
+
+        # Table des segments générés (checkpointing)
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS content_generation_segments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            job_id INTEGER NOT NULL,
+            sub_part_index INTEGER NOT NULL,
+            sub_part_name TEXT NOT NULL,
+            passe INTEGER NOT NULL,
+            status TEXT DEFAULT 'pending',
+            text_content TEXT DEFAULT '',
+            word_count INTEGER DEFAULT 0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (job_id) REFERENCES content_generation_jobs(id),
+            UNIQUE(job_id, sub_part_index, passe)
+        )
+        """)
+        logger.info("✅ Table content_generation_segments créée/vérifiée")
+
+        # Migration : ajouter colonne dirty si elle n'existe pas
+        try:
+            cursor.execute("ALTER TABLE content_generation_segments ADD COLUMN dirty INTEGER DEFAULT 0")
+            logger.info("✅ Colonne dirty ajoutée à content_generation_segments")
+        except Exception:
+            pass  # Colonne déjà présente
 
         conn.commit()
         conn.close()
