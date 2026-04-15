@@ -13,9 +13,51 @@ export default function ScheduleConfig() {
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
 
+  // Éditeur prompt TTS
+  const [promptContent, setPromptContent] = useState('')
+  const [promptLoading, setPromptLoading] = useState(true)
+  const [promptSaving, setPromptSaving] = useState(false)
+  const [promptSaved, setPromptSaved] = useState(false)
+  const [promptOpen, setPromptOpen] = useState(false)
+
   useEffect(() => {
     fetchConfig()
+    fetchPrompt()
   }, [])
+
+  const fetchPrompt = async () => {
+    try {
+      const resp = await fetch(apiUrl('/api/hr/tts-prompt'), { credentials: 'include' })
+      const data = await resp.json()
+      if (data.success) setPromptContent(data.content || '')
+    } catch (e) {
+      console.error('Erreur chargement prompt:', e)
+    } finally {
+      setPromptLoading(false)
+    }
+  }
+
+  const handleSavePrompt = async () => {
+    setPromptSaving(true)
+    setPromptSaved(false)
+    try {
+      const resp = await fetch(apiUrl('/api/hr/tts-prompt'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ content: promptContent }),
+      })
+      const data = await resp.json()
+      if (data.success) {
+        setPromptSaved(true)
+        setTimeout(() => setPromptSaved(false), 3000)
+      }
+    } catch (e) {
+      console.error('Erreur sauvegarde prompt:', e)
+    } finally {
+      setPromptSaving(false)
+    }
+  }
 
   const fetchConfig = async () => {
     try {
@@ -251,6 +293,100 @@ export default function ScheduleConfig() {
               </span>
             </label>
           ))}
+        </div>
+
+        {/* Éditeur prompt TTS */}
+        <div style={{
+          backgroundColor: '#1e293b',
+          borderRadius: 16,
+          padding: 24,
+          marginBottom: 32,
+          border: '1px solid #334155',
+        }}>
+          <button
+            onClick={() => setPromptOpen(o => !o)}
+            style={{
+              width: '100%',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              background: 'none',
+              border: 'none',
+              color: '#94a3b8',
+              cursor: 'pointer',
+              padding: 0,
+              marginBottom: promptOpen ? 16 : 0,
+            }}
+          >
+            <span style={{ fontSize: 13, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 1, display: 'flex', alignItems: 'center', gap: 10 }}>
+              <Icon name="auto_awesome" style={{ color: '#8B5CF6', fontSize: 18 }} />
+              Prompt TTS (génération de contenu)
+            </span>
+            <Icon name={promptOpen ? 'expand_less' : 'expand_more'} />
+          </button>
+
+          {promptOpen && (
+            <>
+              <p style={{ fontSize: 12, color: '#64748b', marginBottom: 12, lineHeight: 1.5 }}>
+                Ce prompt est utilisé pour générer le texte des cours en 3 passes.
+                Les variables <code style={{ backgroundColor: '#0f172a', padding: '2px 6px', borderRadius: 4, color: '#c4b5fd' }}>{'{NOM_DU_TITRE_PROFESSIONNEL}'}</code>, <code style={{ backgroundColor: '#0f172a', padding: '2px 6px', borderRadius: 4, color: '#c4b5fd' }}>{'{NOM_DE_LA_SOUS_PARTIE}'}</code> et <code style={{ backgroundColor: '#0f172a', padding: '2px 6px', borderRadius: 4, color: '#c4b5fd' }}>{'{COLLER_LE_PROGRAMME_ICI}'}</code> sont remplacées automatiquement.
+              </p>
+
+              {promptLoading ? (
+                <div style={{ padding: 40, textAlign: 'center', color: '#64748b', fontSize: 13 }}>
+                  Chargement du prompt...
+                </div>
+              ) : (
+                <>
+                  <textarea
+                    value={promptContent}
+                    onChange={(e) => { setPromptContent(e.target.value); setPromptSaved(false) }}
+                    spellCheck={false}
+                    style={{
+                      width: '100%',
+                      minHeight: 360,
+                      padding: 14,
+                      borderRadius: 10,
+                      border: '1px solid #334155',
+                      backgroundColor: '#0f172a',
+                      color: '#e2e8f0',
+                      fontSize: 12,
+                      fontFamily: "'Fira Code', 'Courier New', monospace",
+                      lineHeight: 1.6,
+                      resize: 'vertical',
+                      outline: 'none',
+                    }}
+                  />
+
+                  <button
+                    onClick={handleSavePrompt}
+                    disabled={promptSaving}
+                    style={{
+                      width: '100%',
+                      padding: '12px',
+                      marginTop: 12,
+                      borderRadius: 10,
+                      border: 'none',
+                      backgroundColor: promptSaved ? '#16a34a' : '#8B5CF6',
+                      color: 'white',
+                      fontSize: 14,
+                      fontWeight: 600,
+                      cursor: promptSaving ? 'not-allowed' : 'pointer',
+                      opacity: promptSaving ? 0.6 : 1,
+                      transition: 'all 0.3s',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      gap: 8,
+                    }}
+                  >
+                    <Icon name={promptSaved ? 'check_circle' : 'save'} />
+                    {promptSaving ? 'Enregistrement...' : promptSaved ? 'Prompt enregistré !' : 'Enregistrer le prompt'}
+                  </button>
+                </>
+              )}
+            </>
+          )}
         </div>
 
         {/* Save button */}

@@ -2650,4 +2650,51 @@ def create_hr_blueprint(socketio):
             logger.error(f"❌ Erreur set_schedule_config: {e}")
             return jsonify({"success": False, "error": str(e)}), 500
 
+    # ─── Routes Prompt TTS ─────────────────────────────────────────────────
+    _TTS_PROMPT_FILE = os.path.join(
+        os.path.dirname(__file__), "..", "..", "prompt-generation-tts-direct.md"
+    )
+
+    @hr_bp.route("/api/hr/tts-prompt", methods=["GET"])
+    def get_tts_prompt():
+        """Retourne le contenu du fichier prompt-generation-tts-direct.md"""
+        denied = _require_admin()
+        if denied:
+            return denied
+        try:
+            if not os.path.exists(_TTS_PROMPT_FILE):
+                return jsonify({"success": True, "content": "", "exists": False}), 200
+            with open(_TTS_PROMPT_FILE, "r", encoding="utf-8") as f:
+                content = f.read()
+            return jsonify({"success": True, "content": content, "exists": True}), 200
+        except Exception as e:
+            logger.error(f"❌ Erreur get_tts_prompt: {e}")
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    @hr_bp.route("/api/hr/tts-prompt", methods=["POST"])
+    def set_tts_prompt():
+        """Écrase le contenu du fichier prompt-generation-tts-direct.md"""
+        denied = _require_admin()
+        if denied:
+            return denied
+        data = request.get_json() or {}
+        content = data.get("content")
+        if content is None:
+            return jsonify({"success": False, "error": "content manquant"}), 400
+        try:
+            os.makedirs(os.path.dirname(_TTS_PROMPT_FILE), exist_ok=True)
+            with open(_TTS_PROMPT_FILE, "w", encoding="utf-8") as f:
+                f.write(content)
+            # Invalider le cache des prompts chargés en mémoire
+            try:
+                from services import content_generation_service as _cgs
+                _cgs._PASSE_PROMPTS = None
+            except Exception:
+                pass
+            logger.info(f"✅ Prompt TTS mis à jour ({len(content)} caractères)")
+            return jsonify({"success": True}), 200
+        except Exception as e:
+            logger.error(f"❌ Erreur set_tts_prompt: {e}")
+            return jsonify({"success": False, "error": str(e)}), 500
+
     return hr_bp
