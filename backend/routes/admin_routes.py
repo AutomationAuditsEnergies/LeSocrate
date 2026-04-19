@@ -263,7 +263,11 @@ def create_admin_blueprint(socketio):
         if not api_key or request.headers.get("X-Platform-Key") != api_key:
             return jsonify({"success": False, "error": "Non autorisé"}), 401
         try:
-            heure = get_heure_debut_cours()
+            try:
+                platform_id = int(request.args.get("platform_id", 1))
+            except (TypeError, ValueError):
+                platform_id = 1
+            heure = get_heure_debut_cours(platform_id)
             return jsonify({
                 "success": True,
                 "date_cours": heure.strftime("%Y-%m-%d"),

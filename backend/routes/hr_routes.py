@@ -1085,7 +1085,7 @@ def create_hr_blueprint(socketio):
             except Exception as e:
                 return jsonify({"success": False, "error": str(e)}), 500
         else:
-            result, error = _call_platform(platform_id, "/api/internal/course-time", method="GET")
+            result, error = _call_platform(platform_id, f"/api/internal/course-time?platform_id={platform_id}", method="GET")
             if error:
                 return jsonify({"success": False, "error": error}), 500
             if result is None:
