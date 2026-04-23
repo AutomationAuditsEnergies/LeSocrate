@@ -3107,7 +3107,7 @@ def create_hr_blueprint(socketio):
     # prompt-generation-tts-direct.md qu'on peut ignorer tant qu'on n'utilise
     # pas le HR Dashboard → Cours Folders en mode manuel.
     _TTS_PROMPT_FILE = os.path.join(
-        os.path.dirname(__file__), "..", "..", "prompt-generation-tts-scratch.md"
+        os.path.dirname(__file__), "..", "prompts", "prompt-generation-tts-scratch.md"
     )
 
     @hr_bp.route("/api/hr/tts-prompt", methods=["GET"])

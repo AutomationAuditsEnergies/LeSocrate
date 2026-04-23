@@ -53,7 +53,7 @@ _DB_WRITE_LOCK = threading.Lock()
 # (identique à direct.md sauf pour les consignes de passe — cf. README scratch.md).
 
 _TTS_PROMPT_FILE = os.path.join(
-    os.path.dirname(__file__), "..", "..", "prompt-generation-tts-scratch.md"
+    os.path.dirname(__file__), "..", "prompts", "prompt-generation-tts-scratch.md"
 )
 
 _EDITORIAL_RULES_CACHE = None

@@ -58,12 +58,14 @@ def _generate_mock_text(passe, sub_part_name, sub_idx):
     ]
     return "\n".join(lines)
 
-# Chemins vers les fichiers de prompts
+# Chemins vers les fichiers de prompts (dans backend/prompts/ pour qu'ils soient
+# embarqués dans l'artifact de déploiement backend — le workflow ne package que
+# ./backend/, donc des fichiers à la racine du repo seraient introuvables en prod).
 _PROMPT_FILE = os.path.join(
-    os.path.dirname(__file__), "..", "..", "prompt-generation-tts-direct.md"
+    os.path.dirname(__file__), "..", "prompts", "prompt-generation-tts-direct.md"
 )
 _PROMPT_FILE_SCRATCH = os.path.join(
-    os.path.dirname(__file__), "..", "..", "prompt-generation-tts-scratch.md"
+    os.path.dirname(__file__), "..", "prompts", "prompt-generation-tts-scratch.md"
 )
 
 # Cache des prompts invalidé sur mtime du fichier source — permet d'éditer
