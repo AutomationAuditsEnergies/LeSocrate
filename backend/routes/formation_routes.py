@@ -730,7 +730,13 @@ def launch_audio(job_id):
         }), 400
 
     data = request.get_json(silent=True) or {}
-    force_all = bool(data.get("force_all", False))
+    # force_all=True par défaut au lancement initial : les segments fraîchement
+    # générés ont dirty=0, donc sans force_all, generate_audio_from_script
+    # skipperait tous les blocs ("non modifiés, conservés") et aucun MP3 ne
+    # serait produit. force_all=True garantit la 1re synthèse complète. Les
+    # régénérations partielles ultérieures (via édition segment) utilisent le
+    # dirty flag naturellement.
+    force_all = bool(data.get("force_all", True))
     # Mode mock : génère des MP3 de silence 1s au lieu d'appeler Fish Audio.
     # Utile pour tester le flux bout-en-bout sans consommer le budget TTS
     # (cf. generate_audio_from_script → _generate_silence_mp3).
