@@ -245,6 +245,7 @@ def _generate_segment_text(passe, sub_part_name, program_title, program_text, pr
     mode_label = "from_scratch" if from_scratch else "expansion"
     logger.info(f"  📝 Génération passe {passe} [{mode_label}] pour '{sub_part_name}'...")
 
+    generated = None
     for attempt in range(3):
         try:
             generated = _anthropic_post(
@@ -252,10 +253,7 @@ def _generate_segment_text(passe, sub_part_name, program_title, program_text, pr
                 max_tokens=16000,
                 model=model,
             )
-            words = len(generated.split())
-            logger.info(f"  ✅ Passe {passe} terminée : {words} mots")
-            return generated.strip()
-
+            break
         except Exception as e:
             if attempt < 2:
                 wait = 15 * (attempt + 1)
@@ -263,6 +261,58 @@ def _generate_segment_text(passe, sub_part_name, program_title, program_text, pr
                 time.sleep(wait)
             else:
                 raise
+
+    # Couche 2 — Boucle de continuation si volume insuffisant
+    # La cible par passe est ~5 000 mots. Si Claude rend moins de 4 000,
+    # on relance une continuation pour compléter. Max 2 continuations pour
+    # éviter une boucle infinie + coût maîtrisé.
+    MIN_WORDS = 4000
+    TARGET_WORDS = 5000
+    MAX_CONTINUATIONS = 2
+
+    words = len(generated.split())
+    logger.info(f"  ✅ Passe {passe} — 1er rendu : {words} mots")
+
+    continuations = 0
+    while words < MIN_WORDS and continuations < MAX_CONTINUATIONS:
+        continuations += 1
+        logger.info(f"  🔁 Passe {passe} sous seuil ({words}/{TARGET_WORDS} mots) — continuation {continuations}/{MAX_CONTINUATIONS}")
+
+        # Prompt de continuation : on rappelle le contexte, on donne le texte
+        # déjà écrit, on demande de poursuivre SANS reprendre le début.
+        # Les règles éthiques/style sont héritées du premier prompt (même conversation).
+        continuation_prompt = (
+            f"Tu as écrit {words} mots sur un minimum exigé de {TARGET_WORDS}. "
+            f"Continue le cours là où tu t'es arrêté, avec le même ton oral, "
+            f"les mêmes règles TTS (tags Fish Audio, pas de musique/alcool/fêtes, "
+            f"discours indirect, pas de visuel), et la même voix narrative.\n\n"
+            f"CONSIGNE DE DÉVELOPPEMENT (minimum 2 500 mots supplémentaires) :\n"
+            f"- 2 à 4 exemples fictifs supplémentaires dans des contextes variés\n"
+            f"- 1 cas contraste explicite : ce qu'il ne FAUT PAS faire + pourquoi\n"
+            f"- Nuances selon le profil client (novice vs expert, pressé vs exploratoire)\n"
+            f"- Mini-récap oral à la fin de chaque nouvelle section\n\n"
+            f"NE RÉPÈTE PAS ce qui a déjà été dit. Continue vraiment — enchaîne "
+            f"avec une transition naturelle type \"Allons plus loin maintenant…\" "
+            f"ou \"On va creuser un autre angle…\".\n\n"
+            f"═══ TEXTE DÉJÀ ÉCRIT (à ne pas répéter) ═══\n"
+            f"{generated[-6000:]}"  # on envoie juste la fin pour contexte
+        )
+
+        try:
+            additional = _anthropic_post(
+                messages=[{"role": "user", "content": continuation_prompt}],
+                max_tokens=16000,
+                model=model,
+            )
+            generated = generated.strip() + "\n\n" + additional.strip()
+            words = len(generated.split())
+            logger.info(f"  ➕ Passe {passe} après continuation {continuations} : {words} mots")
+        except Exception as e:
+            logger.warning(f"  ⚠️ Continuation {continuations} échouée : {e} — on garde le rendu actuel")
+            break
+
+    logger.info(f"  ✅ Passe {passe} terminée : {words} mots ({continuations} continuation(s))")
+    return generated.strip()
 
 
 # ─── Helpers DB ──────────────────────────────────────────────────────────────

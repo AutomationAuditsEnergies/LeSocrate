@@ -37,6 +37,25 @@ Chaque passe génère TTS-ready, depuis le MÊME contenu de programme, sous un a
 ## PASSE 1 — Fondation (à exécuter pour chaque sous-partie)
 
 ```
+╔══════════════════════════════════════════════════════════════════════╗
+║ 🎯  VOLUME EXIGÉ — NON NÉGOCIABLE                                     ║
+╠══════════════════════════════════════════════════════════════════════╣
+║ Cette passe DOIT faire MINIMUM 5 000 mots (hors tags Fish Audio).    ║
+║                                                                       ║
+║ Tout contenu sous 4 000 mots déclenchera une boucle de continuation  ║
+║ automatique côté système — autant le faire bien du premier coup.     ║
+║                                                                       ║
+║ Si ta structure tient en 3 000 mots, DÉVELOPPE :                     ║
+║   • 2-3 exemples fictifs supplémentaires (contextes variés)          ║
+║   • 1 cas contraste : ce qu'il ne FAUT PAS faire + pourquoi          ║
+║   • Nuances terrain selon le profil client / la situation            ║
+║   • Mini-récap oral en fin de chaque sous-section                    ║
+║   • Reformulations avec angles différents                            ║
+║                                                                       ║
+║ Ne conclus PAS avant 5 000 mots. La densité vient de la variété      ║
+║ des exemples et des angles, pas de la redite.                        ║
+╚══════════════════════════════════════════════════════════════════════╝
+
 Tu es un formateur expert qui anime un COURS À DISTANCE pour des adultes
 en formation professionnelle. Les apprenants suivent ce cours depuis
 chez eux, à heure fixe, via une playlist audio horodatée (par exemple
@@ -886,6 +905,11 @@ Réponds UNIQUEMENT avec le script oral.
 - Pas de métadonnées (nombre de mots, durée estimée, etc.)
 - Juste le texte prêt à être envoyé à Fish Audio S2-Pro
 
+⚠️  RAPPEL VOLUME : minimum 5 000 mots obligatoires. Si tu atteins la
+conclusion naturelle en 3 000-4 000 mots, REMONTE dans le cours et
+développe davantage (exemples fictifs supplémentaires, contrastes,
+nuances terrain, mini-récaps). Pas de conclusion avant 5 000 mots.
+
 
 PROGRAMME DE FORMATION :
 {COLLER_LE_PROGRAMME_ICI}
@@ -895,6 +919,25 @@ PROGRAMME DE FORMATION :
 ## PASSE 2 — Pratique (à exécuter pour chaque sous-partie)
 
 ```
+╔══════════════════════════════════════════════════════════════════════╗
+║ 🎯  VOLUME EXIGÉ — NON NÉGOCIABLE                                     ║
+╠══════════════════════════════════════════════════════════════════════╣
+║ Cette passe DOIT faire MINIMUM 5 000 mots (hors tags Fish Audio).    ║
+║                                                                       ║
+║ Tout contenu sous 4 000 mots déclenchera une boucle de continuation  ║
+║ automatique côté système — autant le faire bien du premier coup.     ║
+║                                                                       ║
+║ Si ta structure tient en 3 000 mots, DÉVELOPPE :                     ║
+║   • 2-3 exemples fictifs supplémentaires (contextes variés)          ║
+║   • 1 cas contraste : ce qu'il ne FAUT PAS faire + pourquoi          ║
+║   • Nuances terrain selon le profil client / la situation            ║
+║   • Mini-récap oral en fin de chaque sous-section                    ║
+║   • Reformulations avec angles différents                            ║
+║                                                                       ║
+║ Ne conclus PAS avant 5 000 mots. La densité vient de la variété      ║
+║ des exemples et des angles, pas de la redite.                        ║
+╚══════════════════════════════════════════════════════════════════════╝
+
 Tu es un formateur expert qui anime un COURS À DISTANCE pour des adultes
 en formation professionnelle. Les apprenants suivent ce cours depuis
 chez eux, à heure fixe, via une playlist audio horodatée (par exemple
@@ -1743,6 +1786,11 @@ Réponds UNIQUEMENT avec le script oral.
 - Pas de métadonnées (nombre de mots, durée estimée, etc.)
 - Juste le texte prêt à être envoyé à Fish Audio S2-Pro
 
+⚠️  RAPPEL VOLUME : minimum 5 000 mots obligatoires. Si tu atteins la
+conclusion naturelle en 3 000-4 000 mots, REMONTE dans le cours et
+développe davantage (exemples fictifs supplémentaires, contrastes,
+nuances terrain, mini-récaps). Pas de conclusion avant 5 000 mots.
+
 
 PROGRAMME DE FORMATION :
 {COLLER_LE_PROGRAMME_ICI}
@@ -1752,6 +1800,25 @@ PROGRAMME DE FORMATION :
 ## PASSE 3 — Maîtrise (à exécuter pour chaque sous-partie)
 
 ```
+╔══════════════════════════════════════════════════════════════════════╗
+║ 🎯  VOLUME EXIGÉ — NON NÉGOCIABLE                                     ║
+╠══════════════════════════════════════════════════════════════════════╣
+║ Cette passe DOIT faire MINIMUM 5 000 mots (hors tags Fish Audio).    ║
+║                                                                       ║
+║ Tout contenu sous 4 000 mots déclenchera une boucle de continuation  ║
+║ automatique côté système — autant le faire bien du premier coup.     ║
+║                                                                       ║
+║ Si ta structure tient en 3 000 mots, DÉVELOPPE :                     ║
+║   • 2-3 exemples fictifs supplémentaires (contextes variés)          ║
+║   • 1 cas contraste : ce qu'il ne FAUT PAS faire + pourquoi          ║
+║   • Nuances terrain selon le profil client / la situation            ║
+║   • Mini-récap oral en fin de chaque sous-section                    ║
+║   • Reformulations avec angles différents                            ║
+║                                                                       ║
+║ Ne conclus PAS avant 5 000 mots. La densité vient de la variété      ║
+║ des exemples et des angles, pas de la redite.                        ║
+╚══════════════════════════════════════════════════════════════════════╝
+
 Tu es un formateur expert qui anime un COURS À DISTANCE pour des adultes
 en formation professionnelle. Les apprenants suivent ce cours depuis
 chez eux, à heure fixe, via une playlist audio horodatée (par exemple
@@ -2601,6 +2668,11 @@ Réponds UNIQUEMENT avec le script oral.
 - Pas de JSON, pas d'explication, pas de commentaire
 - Pas de métadonnées (nombre de mots, durée estimée, etc.)
 - Juste le texte prêt à être envoyé à Fish Audio S2-Pro
+
+⚠️  RAPPEL VOLUME : minimum 5 000 mots obligatoires. Si tu atteins la
+conclusion naturelle en 3 000-4 000 mots, REMONTE dans le cours et
+développe davantage (exemples fictifs supplémentaires, contrastes,
+nuances terrain, mini-récaps). Pas de conclusion avant 5 000 mots.
 
 
 PROGRAMME DE FORMATION :
