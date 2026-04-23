@@ -139,10 +139,55 @@ def create_hr_blueprint(socketio):
             logger.warning(f"⚠️ Erreur lecture PDF Azure: {e}")
             return None, None
 
+    # ─── GET /api/hr/formation-modules ───────────────────────────────────
+    # Liste des modules maîtres disponibles pour créer une nouvelle plateforme.
+    # Principe "1 RNCP = 1 module durable" : un module est un produit fini
+    # autonome (sortie d'une pipeline), indépendant des plateformes qui le
+    # consomment. Le module pointe vers sa plateforme source (d'où sont clonés
+    # les blobs pour chaque nouvelle promo).
+    @hr_bp.route("/api/hr/formation-modules", methods=["GET"])
+    def list_formation_modules():
+        """Modules formation disponibles (regroupement canonique des pipelines terminées)."""
+        denied = _require_admin()
+        if denied:
+            return denied
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT m.id, m.rncp_code, m.tp_name, m.version, m.status,
+                       m.source_pipeline_job_id, m.source_platform_id, m.created_at,
+                       (SELECT COUNT(*) FROM cours_folders WHERE platform_id = m.source_platform_id) AS nb_folders,
+                       pc.name AS source_platform_name
+                FROM formation_modules m
+                LEFT JOIN platform_config pc ON pc.id = m.source_platform_id
+                WHERE m.status != 'archived'
+                ORDER BY m.created_at DESC
+            """)
+            rows = cursor.fetchall()
+            conn.close()
+            modules = [{
+                "id": r[0],
+                "rncp_code": r[1] or "",
+                "tp_name": r[2],
+                "version": r[3],
+                "status": r[4],
+                "source_pipeline_job_id": r[5],
+                "source_platform_id": r[6],
+                "created_at": r[7],
+                "nb_folders": r[8],
+                "source_platform_name": r[9],
+                "reusable": r[4] == "validated" and r[8] > 0,
+            } for r in rows]
+            return jsonify({"success": True, "modules": modules}), 200
+        except Exception as e:
+            logger.error(f"❌ Erreur list formation-modules: {e}")
+            return jsonify({"success": False, "error": str(e)}), 500
+
     # ─── GET /api/hr/formations ──────────────────────────────────────────
-    # Liste des formations (jobs pipeline) disponibles pour réutilisation lors
-    # de la création d'une nouvelle plateforme. Principe "1 RNCP = 1 module
-    # durable" : une formation complétée peut servir N promos sans régénération.
+    # Legacy : liste des jobs pipeline (kept pour compat backward si autre code
+    # l'appelle encore). La modale "Nouvelle plateforme" utilise désormais
+    # /api/hr/formation-modules à la place.
     @hr_bp.route("/api/hr/formations", methods=["GET"])
     def list_formations():
         """Liste les formations pipeline (completed ou en cours) pour le select de création plateforme."""
@@ -415,12 +460,16 @@ def create_hr_blueprint(socketio):
     # ─── POST /api/hr/platforms (Créer une nouvelle plateforme) ──────────
     @hr_bp.route("/api/hr/platforms", methods=["POST"])
     def create_platform():
-        """Crée une nouvelle plateforme. 3 modes exclusifs :
+        """Crée une nouvelle plateforme. 4 modes exclusifs :
 
         1. {name} — plateforme vide, pas de cours (comportement historique)
-        2. {name, formation_id} — clone une formation existante (1 RNCP = 1 module
-           réutilisé par N promos). Status 'pending' jusqu'à fin de copie blobs.
-        3. {name, new_formation: {tp_name, rncp_code, total_hours}} — crée un job
+        2. {name, module_id} — crée une promo liée à un module maître (nouveau).
+           Clone les cours+blobs depuis la plateforme source du module. Statut
+           'pending' jusqu'à fin de copie.
+        3. {name, formation_id} — legacy : clone depuis une formation pipeline
+           (équivalent à module_id mais pointe vers le job au lieu du module).
+           Gardé pour compat, la modale utilise maintenant module_id.
+        4. {name, new_formation: {tp_name, rncp_code, total_hours}} — crée un job
            pipeline lié à cette plateforme, statut 'pending' jusqu'à fin pipeline.
            L'admin finit les étapes (validation humaine) sur /formation-pipeline.
         """
@@ -430,13 +479,16 @@ def create_hr_blueprint(socketio):
 
         data = request.get_json() or {}
         name = data.get("name", "").strip()
-        formation_id = data.get("formation_id")  # mode réutilisation
-        new_formation = data.get("new_formation")  # mode pipeline
+        module_id = data.get("module_id")         # NOUVEAU — mode module maître
+        formation_id = data.get("formation_id")   # legacy
+        new_formation = data.get("new_formation") # mode pipeline
 
         if not name:
             return jsonify({"success": False, "error": "Le nom est requis"}), 400
-        if formation_id and new_formation:
-            return jsonify({"success": False, "error": "Choisir une formation existante OU en créer une, pas les deux"}), 400
+        # Vérif qu'au plus un des 3 modes "avec contenu" est fourni
+        content_modes = sum(1 for x in (module_id, formation_id, new_formation) if x)
+        if content_modes > 1:
+            return jsonify({"success": False, "error": "Choisir UN seul mode : module existant, formation existante, ou nouvelle formation"}), 400
 
         try:
             conn = get_db_connection()
@@ -452,9 +504,32 @@ def create_hr_blueprint(socketio):
                 conn.close()
                 return jsonify({"success": False, "error": "Ce nom de plateforme existe déjà"}), 409
 
-            # Valider le mode formation_id (réutilisation) : vérifier que la formation existe et a des cours
             source_platform_id = None
-            if formation_id:
+
+            # Mode module_id (nouveau — priorité sur formation_id si les deux présents)
+            if module_id:
+                cursor.execute(
+                    "SELECT source_platform_id, status, source_pipeline_job_id FROM formation_modules WHERE id = ?",
+                    (module_id,),
+                )
+                row = cursor.fetchone()
+                if not row:
+                    conn.close()
+                    return jsonify({"success": False, "error": "Module introuvable"}), 404
+                source_platform_id, m_status, m_job_id = row
+                if m_status == "archived":
+                    conn.close()
+                    return jsonify({"success": False, "error": "Ce module est archivé"}), 400
+                cursor.execute("SELECT COUNT(*) FROM cours_folders WHERE platform_id = ?", (source_platform_id,))
+                if cursor.fetchone()[0] == 0:
+                    conn.close()
+                    return jsonify({"success": False, "error": "Le module n'a pas de cours générés (source vide)"}), 400
+                # On aligne formation_id sur le job pipeline du module pour compat avec
+                # l'ancien _clone_formation_async (3e argument = source_formation_id)
+                formation_id = m_job_id
+
+            # Mode formation_id (legacy) : vérifier que la formation existe et a des cours
+            elif formation_id:
                 cursor.execute(
                     "SELECT platform_id, status FROM formation_pipeline_jobs WHERE id = ?",
                     (formation_id,),
@@ -483,15 +558,16 @@ def create_hr_blueprint(socketio):
 
             now_str = datetime.now(FRANCE_TZ).strftime("%Y-%m-%d %H:%M:%S")
 
-            # Statut initial : 'pending' pour les 2 modes qui lancent un travail
+            # Statut initial : 'pending' pour les modes qui lancent un travail
             # async, 'ready' pour une plateforme vide
-            initial_status = "pending" if (formation_id or new_formation) else "ready"
+            has_content = bool(module_id or formation_id or new_formation)
+            initial_status = "pending" if has_content else "ready"
 
             # Insérer la plateforme
             cursor.execute(
-                """INSERT INTO platform_config (name, upload_locked, updated_at, slug, status, source_formation_id)
-                   VALUES (?, 1, ?, ?, ?, ?)""",
-                (name, now_str, slug, initial_status, formation_id),
+                """INSERT INTO platform_config (name, upload_locked, updated_at, slug, status, source_formation_id, source_module_id)
+                   VALUES (?, 1, ?, ?, ?, ?, ?)""",
+                (name, now_str, slug, initial_status, formation_id, module_id),
             )
             new_id = cursor.lastrowid
 
@@ -573,6 +649,7 @@ def create_hr_blueprint(socketio):
                     "slug": slug,
                     "status": initial_status,
                     "source_formation_id": formation_id,
+                    "source_module_id": module_id,
                     "pipeline_job_id": linked_job_id,
                     "audio_container": audio_container,
                     "pdf_container": pdf_container,

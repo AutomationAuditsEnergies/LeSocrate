@@ -384,6 +384,69 @@ def init_database():
         """)
         logger.info("✅ Table formation_knowledge_base créée/vérifiée")
 
+        # ─── Table formation_modules : produits durables des pipelines ────────
+        # Principe "1 RNCP = 1 module durable" matérialisé : quand une pipeline
+        # atteint audio_launched, un module est auto-créé. Les plateformes
+        # (promos) créées ensuite pointent vers un module et clonent son contenu.
+        # UNIQUE(source_pipeline_job_id) : un job pipeline produit 0 ou 1 module.
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS formation_modules (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            rncp_code TEXT,
+            tp_name TEXT NOT NULL,
+            version TEXT NOT NULL,
+            status TEXT DEFAULT 'validated',
+            source_pipeline_job_id INTEGER UNIQUE,
+            source_platform_id INTEGER,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            validated_at TIMESTAMP,
+            archived_at TIMESTAMP,
+            FOREIGN KEY (source_pipeline_job_id) REFERENCES formation_pipeline_jobs(id),
+            FOREIGN KEY (source_platform_id) REFERENCES platform_config(id)
+        )
+        """)
+        logger.info("✅ Table formation_modules créée/vérifiée")
+
+        # Colonne source_module_id sur platform_config (nullable, FK vers le module)
+        cursor.execute("PRAGMA table_info(platform_config)")
+        pc_cols_mod = [col[1] for col in cursor.fetchall()]
+        if "source_module_id" not in pc_cols_mod:
+            cursor.execute("ALTER TABLE platform_config ADD COLUMN source_module_id INTEGER")
+            logger.info("✅ Colonne source_module_id ajoutée à platform_config")
+
+        # Migration rétroactive idempotente : pour chaque job pipeline terminé
+        # sans module, créer un module automatiquement. L'UNIQUE constraint sur
+        # source_pipeline_job_id garantit qu'on ne duplique pas si on tourne
+        # cette migration plusieurs fois.
+        cursor.execute("""
+            SELECT j.id, j.rncp_code, j.tp_name, j.platform_id, j.created_at
+            FROM formation_pipeline_jobs j
+            WHERE j.status IN ('audio_launched', 'completed')
+              AND NOT EXISTS (
+                SELECT 1 FROM formation_modules WHERE source_pipeline_job_id = j.id
+              )
+            ORDER BY j.created_at ASC
+        """)
+        jobs_to_migrate = cursor.fetchall()
+        current_year = datetime.now(FRANCE_TZ).year
+        for j_id, j_rncp, j_tp, j_pid, j_created in jobs_to_migrate:
+            # Version = {year}-v{n} où n = modules existants pour ce RNCP + 1
+            cursor.execute(
+                "SELECT COUNT(*) FROM formation_modules WHERE rncp_code = ?",
+                (j_rncp or "",),
+            )
+            n = cursor.fetchone()[0] + 1
+            version = f"{current_year}-v{n}"
+            cursor.execute("""
+                INSERT OR IGNORE INTO formation_modules
+                (rncp_code, tp_name, version, status, source_pipeline_job_id, source_platform_id, validated_at)
+                VALUES (?, ?, ?, 'validated', ?, ?, CURRENT_TIMESTAMP)
+            """, (j_rncp, j_tp, version, j_id, j_pid))
+            if cursor.rowcount > 0:
+                logger.info(f"🔄 Module rétro-créé : {j_tp} {version} (job {j_id})")
+        if jobs_to_migrate:
+            logger.info(f"🔄 Migration rétroactive formation_modules : {len(jobs_to_migrate)} job(s) traités")
+
         conn.commit()
         conn.close()
         logger.info("✅ Base de données initialisée avec succès")

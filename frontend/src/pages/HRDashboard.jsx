@@ -30,10 +30,12 @@ export default function HRDashboard() {
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [newPlatformName, setNewPlatformName] = useState('')
   const [creating, setCreating] = useState(false)
-  // Formations disponibles pour réutilisation (principe 1 RNCP = 1 module durable)
-  const [formations, setFormations] = useState([])
+  // Modules formation disponibles (produits persistants des pipelines terminées).
+  // Principe "1 RNCP = 1 module durable" : le select liste les modules, pas les
+  // pipelines ni les plateformes sources.
+  const [modules, setModules] = useState([])
   const [formationMode, setFormationMode] = useState('existing') // 'existing' | 'new' | 'none'
-  const [selectedFormationId, setSelectedFormationId] = useState('')
+  const [selectedModuleId, setSelectedModuleId] = useState('')
   const [newFormTpName, setNewFormTpName] = useState('')
   const [newFormRncp, setNewFormRncp] = useState('')
   const [newFormHours, setNewFormHours] = useState('')
@@ -233,20 +235,20 @@ export default function HRDashboard() {
     setShowCoursFoldersModal(true)
   }
 
-  const fetchFormations = async () => {
+  const fetchModules = async () => {
     try {
-      const resp = await fetch(apiUrl('/api/hr/formations'), { credentials: 'include' })
+      const resp = await fetch(apiUrl('/api/hr/formation-modules'), { credentials: 'include' })
       const data = await resp.json()
-      if (data.success) setFormations(data.formations || [])
+      if (data.success) setModules(data.modules || [])
     } catch (e) {
-      console.error('Erreur chargement formations:', e)
+      console.error('Erreur chargement modules:', e)
     }
   }
 
   const resetCreateForm = () => {
     setNewPlatformName('')
     setFormationMode('existing')
-    setSelectedFormationId('')
+    setSelectedModuleId('')
     setNewFormTpName('')
     setNewFormRncp('')
     setNewFormHours('')
@@ -254,7 +256,7 @@ export default function HRDashboard() {
 
   const openCreateModal = () => {
     resetCreateForm()
-    fetchFormations()
+    fetchModules()
     setShowCreateModal(true)
   }
 
@@ -264,11 +266,11 @@ export default function HRDashboard() {
     // Validation selon le mode
     let body = { name: newPlatformName.trim() }
     if (formationMode === 'existing') {
-      if (!selectedFormationId) {
-        alert('Sélectionne une formation ou bascule sur "Nouvelle formation"')
+      if (!selectedModuleId) {
+        alert('Sélectionne un module ou bascule sur "Nouvelle formation"')
         return
       }
-      body.formation_id = parseInt(selectedFormationId, 10)
+      body.module_id = parseInt(selectedModuleId, 10)
     } else if (formationMode === 'new') {
       const tpName = newFormTpName.trim()
       const rncp = newFormRncp.trim()
@@ -658,18 +660,18 @@ export default function HRDashboard() {
 
             <div className="mb-5">
               <label className="block text-sm font-medium mb-2" style={{ color: darkMode ? '#94a3b8' : '#64748b' }}>
-                Formation
+                Module formation
               </label>
               {(() => {
-                const reusable = formations.filter(f => f.reusable)
+                const reusable = modules.filter(m => m.reusable)
                 return (
                   <select
-                    value={formationMode === 'existing' ? selectedFormationId : (formationMode === 'new' ? '__new__' : '__none__')}
+                    value={formationMode === 'existing' ? selectedModuleId : (formationMode === 'new' ? '__new__' : '__none__')}
                     onChange={(e) => {
                       const v = e.target.value
-                      if (v === '__new__') { setFormationMode('new'); setSelectedFormationId('') }
-                      else if (v === '__none__') { setFormationMode('none'); setSelectedFormationId('') }
-                      else { setFormationMode('existing'); setSelectedFormationId(v) }
+                      if (v === '__new__') { setFormationMode('new'); setSelectedModuleId('') }
+                      else if (v === '__none__') { setFormationMode('none'); setSelectedModuleId('') }
+                      else { setFormationMode('existing'); setSelectedModuleId(v) }
                     }}
                     className="w-full rounded-lg px-4 py-3 text-sm outline-none transition-all"
                     style={{
@@ -678,12 +680,12 @@ export default function HRDashboard() {
                       border: `1px solid ${darkMode ? '#334155' : '#e2e8f0'}`,
                     }}
                   >
-                    <option value="" disabled>Sélectionner une formation…</option>
+                    <option value="" disabled>Sélectionner un module…</option>
                     {reusable.length > 0 && (
-                      <optgroup label="Formations disponibles (cours déjà générés)">
-                        {reusable.map(f => (
-                          <option key={f.id} value={f.id}>
-                            {f.tp_name} — RNCP {f.rncp_code || '?'} — {f.nb_days}j — {f.nb_folders} dossiers
+                      <optgroup label="Modules disponibles (cours + audios prêts)">
+                        {reusable.map(m => (
+                          <option key={m.id} value={m.id}>
+                            {m.tp_name} — RNCP {m.rncp_code || '?'} — {m.version} — {m.nb_folders} journée{m.nb_folders > 1 ? 's' : ''}
                           </option>
                         ))}
                       </optgroup>
@@ -693,9 +695,9 @@ export default function HRDashboard() {
                   </select>
                 )
               })()}
-              {formationMode === 'existing' && selectedFormationId && (
+              {formationMode === 'existing' && selectedModuleId && (
                 <p className="mt-2 text-xs" style={{ color: '#10b981' }}>
-                  ✓ Les cours de la formation seront clonés vers la nouvelle plateforme (quelques secondes).
+                  ✓ Les cours + audios du module seront clonés vers la nouvelle plateforme (quelques secondes). Module intact.
                 </p>
               )}
               {formationMode === 'new' && (

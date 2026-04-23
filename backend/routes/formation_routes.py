@@ -778,6 +778,36 @@ def launch_audio(job_id):
     except Exception as e:
         logger.warning(f"⚠️ Impossible de marquer la plateforme ready : {e}")
 
+    # Auto-création du module persistant (idempotent via UNIQUE constraint sur
+    # source_pipeline_job_id). Principe "1 RNCP = 1 module durable" : ce module
+    # devient sélectionnable dans la modale "Nouvelle plateforme" pour créer
+    # les futures promos sans re-lancer la pipeline.
+    try:
+        from database.db import get_db_connection as _gc
+        from datetime import datetime as _dt
+        from config import FRANCE_TZ as _tz
+        _c2 = _gc()
+        _cur2 = _c2.cursor()
+        # Version = {year}-v{n} où n = modules existants pour ce RNCP + 1
+        year = _dt.now(_tz).year
+        rncp = job.get("rncp_code") or ""
+        _cur2.execute("SELECT COUNT(*) FROM formation_modules WHERE rncp_code = ?", (rncp,))
+        n = _cur2.fetchone()[0] + 1
+        version = f"{year}-v{n}"
+        _cur2.execute("""
+            INSERT OR IGNORE INTO formation_modules
+            (rncp_code, tp_name, version, status, source_pipeline_job_id, source_platform_id, validated_at)
+            VALUES (?, ?, ?, 'validated', ?, ?, CURRENT_TIMESTAMP)
+        """, (rncp, job["tp_name"], version, job_id, job["platform_id"]))
+        if _cur2.rowcount > 0:
+            logger.info(f"📦 Module créé : {job['tp_name']} {version} (job {job_id})")
+        else:
+            logger.info(f"ℹ️ Module déjà existant pour job {job_id} (idempotent)")
+        _c2.commit()
+        _c2.close()
+    except Exception as e:
+        logger.warning(f"⚠️ Création module échouée : {e}")
+
     mode_suffix = " (MOCK — silence 1s)" if mock else ""
     logger.info(f"🚀 Job {job_id} : synthèse audio lancée pour {len(folder_ids)} dossiers{mode_suffix}")
     return jsonify({
