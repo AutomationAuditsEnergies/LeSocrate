@@ -752,6 +752,26 @@ def launch_audio(job_id):
         eventlet.spawn(_run_audio, fid)
 
     update_job(job_id, status="audio_launched")
+
+    # Marquer la plateforme comme 'ready' : le contenu est validé, la synthèse
+    # audio tourne en background. Côté HR Dashboard, l'overlay "Module en
+    # construction" disparaît dès ce moment — le module est exploitable même
+    # si les derniers MP3 finissent de s'uploader (surtout en mode mock où
+    # c'est instantané).
+    try:
+        from database.db import get_db_connection as _get_conn
+        _c = _get_conn()
+        _cur = _c.cursor()
+        _cur.execute(
+            "UPDATE platform_config SET status = 'ready' WHERE id = ? AND status = 'pending'",
+            (job["platform_id"],),
+        )
+        _c.commit()
+        _c.close()
+        logger.info(f"✅ Plateforme {job['platform_id']} : status pending → ready")
+    except Exception as e:
+        logger.warning(f"⚠️ Impossible de marquer la plateforme ready : {e}")
+
     mode_suffix = " (MOCK — silence 1s)" if mock else ""
     logger.info(f"🚀 Job {job_id} : synthèse audio lancée pour {len(folder_ids)} dossiers{mode_suffix}")
     return jsonify({

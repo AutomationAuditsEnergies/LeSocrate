@@ -192,6 +192,24 @@ def create_hr_blueprint(socketio):
         try:
             conn = get_db_connection()
             cursor = conn.cursor()
+
+            # Auto-repair lazy : plateformes coincées en 'pending' alors que leur
+            # job pipeline a atteint audio_launched (ou étape ultérieure) → les
+            # promouvoir automatiquement en 'ready'. Rattrape les cas où la
+            # transition n'a pas eu lieu (pre-fix, ou exception silencieuse).
+            cursor.execute("""
+                UPDATE platform_config
+                SET status = 'ready'
+                WHERE status = 'pending'
+                  AND id IN (
+                    SELECT platform_id FROM formation_pipeline_jobs
+                    WHERE status IN ('audio_launched', 'completed')
+                  )
+            """)
+            if cursor.rowcount > 0:
+                conn.commit()
+                logger.info(f"🔧 Auto-repair : {cursor.rowcount} plateforme(s) stuck pending → ready")
+
             cursor.execute("SELECT id, name, upload_locked, pdf_filename, pdf_uploaded_at, updated_at, status, source_formation_id FROM platform_config ORDER BY id")
             rows = cursor.fetchall()
 
