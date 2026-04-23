@@ -34,6 +34,7 @@ export default function HRDashboard() {
   // Principe "1 RNCP = 1 module durable" : le select liste les modules, pas les
   // pipelines ni les plateformes sources.
   const [modules, setModules] = useState([])
+  const [showModulesModal, setShowModulesModal] = useState(false)
   const [formationMode, setFormationMode] = useState('existing') // 'existing' | 'new' | 'none'
   const [selectedModuleId, setSelectedModuleId] = useState('')
   const [newFormTpName, setNewFormTpName] = useState('')
@@ -380,6 +381,16 @@ export default function HRDashboard() {
                   <Icon name={darkMode ? 'light_mode' : 'dark_mode'} className="text-base" />
                   <span className="text-sm font-medium">{darkMode ? 'Clair' : 'Sombre'}</span>
                 </button>
+                {/* Modules formation — catalogue des produits des pipelines */}
+                <button
+                  onClick={() => { fetchModules(); setShowModulesModal(true) }}
+                  className="flex items-center gap-2 rounded-lg px-4 py-2 transition-colors"
+                  style={{ backgroundColor: colors.innerBg, color: colors.textSecondary, border: `1px solid ${colors.border}` }}
+                  title="Catalogue des modules formation produits par les pipelines (réutilisables pour créer des plateformes)"
+                >
+                  <Icon name="inventory_2" className="text-base" />
+                  <span className="text-sm font-medium">Modules</span>
+                </button>
                 {/* Nouvelle plateforme */}
                 <button
                   onClick={openCreateModal}
@@ -616,6 +627,115 @@ export default function HRDashboard() {
       )}
 
       {/* Modal Nouvelle Plateforme */}
+      {/* Modal Catalogue Modules formation — liste les modules produits par les
+          pipelines, avec leur statut, version, et plateforme source. Point de
+          référence pour l'admin qui veut voir quels modules sont réutilisables
+          avant de créer une nouvelle plateforme. */}
+      {showModulesModal && (
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center p-4"
+          style={{ backgroundColor: 'rgba(0, 0, 0, 0.6)' }}
+          onClick={() => setShowModulesModal(false)}
+        >
+          <div
+            className="w-full max-w-3xl rounded-2xl shadow-2xl overflow-hidden"
+            style={{ backgroundColor: darkMode ? '#1e293b' : '#ffffff', maxHeight: '85vh', display: 'flex', flexDirection: 'column' }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between px-6 py-5" style={{ borderBottom: `1px solid ${colors.borderLight}` }}>
+              <div className="flex items-center gap-3">
+                <div className="flex h-10 w-10 items-center justify-center rounded-xl" style={{ backgroundColor: '#8B5CF6' }}>
+                  <Icon name="inventory_2" className="text-white text-xl" />
+                </div>
+                <div>
+                  <h3 className="text-lg font-semibold" style={{ color: colors.text }}>Modules formation</h3>
+                  <p className="text-xs" style={{ color: colors.textMuted }}>
+                    Produits persistants des pipelines — réutilisables pour créer des plateformes
+                  </p>
+                </div>
+              </div>
+              <button onClick={() => setShowModulesModal(false)} className="p-1 rounded-full transition-colors" style={{ color: colors.textMuted }} onMouseEnter={(e) => e.currentTarget.style.color = colors.text}>
+                <Icon name="close" className="text-2xl" />
+              </button>
+            </div>
+            <div style={{ flex: 1, overflow: 'auto', padding: '20px 24px' }}>
+              {modules.length === 0 ? (
+                <div className="text-center py-12" style={{ color: colors.textMuted }}>
+                  <Icon name="inbox" className="text-4xl mb-2" />
+                  <p className="text-sm">Aucun module disponible pour l'instant.</p>
+                  <p className="text-xs mt-2">Les modules sont créés automatiquement à la fin d'une pipeline formation.</p>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {modules.map(m => (
+                    <div
+                      key={m.id}
+                      className="rounded-xl p-4 transition-all"
+                      style={{
+                        backgroundColor: colors.innerBg,
+                        border: `1px solid ${m.reusable ? 'rgba(139, 92, 246, 0.35)' : colors.border}`,
+                      }}
+                    >
+                      <div className="flex items-start justify-between gap-4">
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 mb-1 flex-wrap">
+                            <span className="text-base font-semibold" style={{ color: colors.text }}>
+                              {m.tp_name}
+                            </span>
+                            <span className="text-xs font-mono rounded px-2 py-0.5" style={{ backgroundColor: darkMode ? '#0f172a' : '#e2e8f0', color: '#a78bfa' }}>
+                              {m.version}
+                            </span>
+                            {m.status === 'validated' && (
+                              <span className="text-xs rounded px-2 py-0.5" style={{ backgroundColor: 'rgba(16, 185, 129, 0.15)', color: '#10b981' }}>
+                                ✓ Validé
+                              </span>
+                            )}
+                            {m.status === 'draft' && (
+                              <span className="text-xs rounded px-2 py-0.5" style={{ backgroundColor: 'rgba(245, 158, 11, 0.15)', color: '#f59e0b' }}>
+                                Brouillon
+                              </span>
+                            )}
+                          </div>
+                          <div className="text-xs mb-2" style={{ color: colors.textMuted }}>
+                            RNCP {m.rncp_code || '?'} · {m.nb_folders} journée{m.nb_folders > 1 ? 's' : ''} · Source : <span style={{ color: '#a78bfa' }}>{m.source_platform_name || `P${m.source_platform_id}`}</span>
+                          </div>
+                          <div className="text-xs" style={{ color: colors.textMuted }}>
+                            Créé le {m.created_at ? new Date(m.created_at).toLocaleDateString('fr-FR') : '—'}
+                          </div>
+                        </div>
+                        <div className="flex-shrink-0">
+                          {m.reusable ? (
+                            <button
+                              onClick={() => {
+                                setShowModulesModal(false)
+                                openCreateModal()
+                                // Pré-sélectionner ce module dans la modale création
+                                setTimeout(() => {
+                                  setFormationMode('existing')
+                                  setSelectedModuleId(String(m.id))
+                                }, 100)
+                              }}
+                              className="text-xs rounded-lg px-3 py-2 font-medium transition-all text-white"
+                              style={{ backgroundColor: '#8B5CF6' }}
+                            >
+                              <Icon name="add" className="text-sm" /> Créer une plateforme
+                            </button>
+                          ) : (
+                            <span className="text-xs" style={{ color: colors.textMuted }}>
+                              {m.nb_folders === 0 ? 'Cours non générés' : 'Non réutilisable'}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       {showCreateModal && (
         <div
           className="fixed inset-0 z-[60] flex items-center justify-center p-4"

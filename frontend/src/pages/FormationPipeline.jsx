@@ -496,6 +496,10 @@ export default function FormationPipeline() {
   const [launchingAudio, setLaunchingAudio] = useState(false)
   const [audioError, setAudioError] = useState('')
 
+  // Module persistant lié à ce job (créé automatiquement à la fin de la pipeline).
+  // Fetché depuis /api/hr/formation-modules, filtré par source_pipeline_job_id.
+  const [linkedModule, setLinkedModule] = useState(null)
+
   // État Knowledge Base (Couche 1)
   const [kb, setKb] = useState({ entries: [], stats: { total: 0, completed: 0, error: 0, total_words: 0 } })
 
@@ -545,11 +549,25 @@ export default function FormationPipeline() {
     } catch (e) { console.error(e) }
   }, [])
 
+  // ─── Fetch module lié au job courant ──────────────────────────────────────
+  const fetchLinkedModule = useCallback(async (jobId) => {
+    if (!jobId) { setLinkedModule(null); return }
+    try {
+      const resp = await fetch(apiUrl('/api/hr/formation-modules'), { credentials: 'include' })
+      const data = await resp.json()
+      if (data.success) {
+        const mod = (data.modules || []).find(m => m.source_pipeline_job_id === jobId)
+        setLinkedModule(mod || null)
+      }
+    } catch (e) { console.error('Erreur fetch module:', e) }
+  }, [])
+
   // ─── Polling automatique ──────────────────────────────────────────────────
   useEffect(() => {
     if (!selectedJobId) return
     fetchJob(selectedJobId)
     fetchKb(selectedJobId)
+    fetchLinkedModule(selectedJobId)
 
     const startPolling = () => {
       pollingRef.current = setInterval(async () => {
@@ -568,6 +586,11 @@ export default function FormationPipeline() {
           // Arrêter le polling quand le statut n'est plus "en cours"
           if (!POLLING_STATUSES.has(data.status)) {
             clearInterval(pollingRef.current)
+          }
+          // Quand la pipeline atteint audio_launched, un module est auto-créé côté
+          // backend. On le récupère pour l'afficher dans le bloc Synthèse TTS.
+          if (data.status === 'audio_launched') {
+            fetchLinkedModule(selectedJobId)
           }
         }
       }, 3000)
@@ -1366,6 +1389,36 @@ export default function FormationPipeline() {
                     <strong style={{ color: '#a78bfa' }}>{job.platform_name || `#${job.platform_id}`}</strong>.
                     Suivez la progression audio (19 MP3 par journée) dans le <strong style={{ color: '#a78bfa' }}>HR Dashboard → Cours Folders</strong>.
                   </div>
+
+                  {/* Module persistant créé à la fin de la pipeline — matérialise le
+                      principe "1 RNCP = 1 module durable" : ce module est sélectionnable
+                      dans la modale "Nouvelle plateforme" pour créer des promos. */}
+                  {linkedModule && (
+                    <div style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '12px',
+                      padding: '14px 16px',
+                      marginBottom: '16px',
+                      borderRadius: '10px',
+                      background: 'linear-gradient(135deg, rgba(139, 92, 246, 0.12), rgba(139, 92, 246, 0.04))',
+                      border: '1px solid rgba(139, 92, 246, 0.35)',
+                    }}>
+                      <Icon name="inventory_2" className="text-2xl" style={{ color: '#a78bfa' }} />
+                      <div style={{ flex: 1 }}>
+                        <div style={{ fontSize: '13px', color: '#a78bfa', fontWeight: 600, marginBottom: '2px' }}>
+                          <Icon name="check" className="text-sm" /> Module créé et disponible
+                        </div>
+                        <div style={{ fontSize: '15px', color: '#e2e8f0', fontWeight: 600 }}>
+                          {linkedModule.tp_name} — RNCP {linkedModule.rncp_code || '?'} — <span style={{ color: '#a78bfa' }}>{linkedModule.version}</span>
+                        </div>
+                        <div style={{ fontSize: '12px', color: '#94a3b8', marginTop: '2px' }}>
+                          Ce module peut désormais être sélectionné dans "Nouvelle plateforme" pour créer autant de promos que nécessaire sans relancer la pipeline.
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
                   {/* Bouton relancer : utile quand le précédent run a échoué (ex: force_all bug)
                       ou si on veut re-générer les MP3 suite à une édition de texte. */}
                   <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>

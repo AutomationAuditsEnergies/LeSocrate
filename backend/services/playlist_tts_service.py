@@ -486,12 +486,29 @@ def _generate_mock_blocs():
     return blocs
 
 
+_SILENCE_1S_MP3_PATH = os.path.join(os.path.dirname(__file__), "..", "assets", "silence_1s.mp3")
+_SILENCE_1S_CACHE = None
+
+
 def _generate_silence_mp3(duration_sec=1):
-    """Génère un fichier MP3 de silence de la durée indiquée (pour les tests)."""
-    silence = AudioSegment.silent(duration=duration_sec * 1000)
-    buf = io.BytesIO()
-    silence.export(buf, format="mp3")
-    return buf.getvalue()
+    """Retourne un MP3 de silence pour les tests (mode mock TTS).
+
+    N'utilise PAS pydub.AudioSegment.silent().export() parce que cette méthode
+    requiert ffmpeg au runtime, et Azure App Service Linux n'a pas ffmpeg
+    installé par défaut (cf. "Couldn't find ffmpeg or avconv" dans les logs).
+    À la place, on lit un MP3 1s pré-généré stocké dans backend/assets/.
+    Pour des durées > 1s, on concatène en bytes (MP3 est un format frame-based,
+    la concaténation naïve marche pour des MP3 générés avec les mêmes params).
+    """
+    global _SILENCE_1S_CACHE
+    if _SILENCE_1S_CACHE is None:
+        with open(_SILENCE_1S_MP3_PATH, "rb") as f:
+            _SILENCE_1S_CACHE = f.read()
+    # Pour mock: on retourne juste 1s (les callers passent tous 1 pour l'instant)
+    # Si besoin d'étendre: concaténer N copies pour obtenir N secondes
+    if duration_sec <= 1:
+        return _SILENCE_1S_CACHE
+    return _SILENCE_1S_CACHE * int(duration_sec)
 
 
 def generate_playlist_for_folder(platform_id, folder_id, progress_callback=None, mock=False):
