@@ -293,6 +293,82 @@ def init_database():
         except Exception:
             pass  # Colonne déjà présente
 
+        # Migration : ajouter colonnes from_scratch + module_contents (pipeline formation)
+        cursor.execute("PRAGMA table_info(content_generation_jobs)")
+        cg_columns = [col[1] for col in cursor.fetchall()]
+        if "from_scratch" not in cg_columns:
+            cursor.execute("ALTER TABLE content_generation_jobs ADD COLUMN from_scratch INTEGER DEFAULT 0")
+            logger.info("✅ Colonne from_scratch ajoutée à content_generation_jobs")
+        if "module_contents" not in cg_columns:
+            cursor.execute("ALTER TABLE content_generation_jobs ADD COLUMN module_contents TEXT DEFAULT '{}'")
+            logger.info("✅ Colonne module_contents ajoutée à content_generation_jobs")
+
+        # Table des jobs pipeline formation automatisé
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS formation_pipeline_jobs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            platform_id INTEGER NOT NULL DEFAULT 1,
+            tp_name TEXT NOT NULL,
+            rncp_code TEXT,
+            total_hours INTEGER NOT NULL,
+            nb_days INTEGER NOT NULL,
+            reac_text TEXT,
+            global_program TEXT,
+            global_program_validated INTEGER DEFAULT 0,
+            daily_programs TEXT DEFAULT '[]',
+            daily_programs_validated INTEGER DEFAULT 0,
+            status TEXT DEFAULT 'init',
+            error_message TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """)
+        logger.info("✅ Table formation_pipeline_jobs créée/vérifiée")
+
+        # Migration : colonnes rc_text + rome_text
+        cursor.execute("PRAGMA table_info(formation_pipeline_jobs)")
+        fpj_cols = [col[1] for col in cursor.fetchall()]
+        if "rc_text" not in fpj_cols:
+            cursor.execute("ALTER TABLE formation_pipeline_jobs ADD COLUMN rc_text TEXT")
+            logger.info("✅ Colonne rc_text ajoutée à formation_pipeline_jobs")
+        if "rome_text" not in fpj_cols:
+            cursor.execute("ALTER TABLE formation_pipeline_jobs ADD COLUMN rome_text TEXT")
+            logger.info("✅ Colonne rome_text ajoutée à formation_pipeline_jobs")
+
+        # ─── Couche 1 : Knowledge Base enrichie depuis REAC ──────────────────
+        # Chaque compétence du REAC est enrichie par Claude avec définition
+        # pédagogique, études de cas, pièges, vocabulaire, contexte terrain,
+        # liens connexes. Objectif : passer le matériau source de ~15k mots
+        # (REAC brut) à ~120-150k mots exploitables pour la génération du
+        # programme de formation. Checkpointing + flag dirty permettent de
+        # régénérer sélectivement une compétence éditée.
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS formation_knowledge_base (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            job_id INTEGER NOT NULL,
+            competence_index INTEGER NOT NULL,
+            competence_key TEXT NOT NULL,
+            competence_title TEXT NOT NULL,
+            bloc TEXT,
+            raw_source TEXT,
+            definition_pedagogique TEXT DEFAULT '',
+            etudes_de_cas TEXT DEFAULT '[]',
+            pieges_frequents TEXT DEFAULT '[]',
+            vocabulaire_metier TEXT DEFAULT '{}',
+            contexte_terrain TEXT DEFAULT '',
+            liens_connexes TEXT DEFAULT '[]',
+            status TEXT DEFAULT 'pending',
+            dirty INTEGER DEFAULT 0,
+            error_message TEXT,
+            total_words INTEGER DEFAULT 0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (job_id) REFERENCES formation_pipeline_jobs(id),
+            UNIQUE(job_id, competence_index)
+        )
+        """)
+        logger.info("✅ Table formation_knowledge_base créée/vérifiée")
+
         conn.commit()
         conn.close()
         logger.info("✅ Base de données initialisée avec succès")

@@ -20,6 +20,7 @@ from routes.debug_routes import debug_bp
 from routes.slides_routes import slides_bp
 from routes.chat_routes import chat_bp
 from routes.hr_routes import create_hr_blueprint
+from routes.formation_routes import formation_bp
 
 # SocketIO handlers
 from socketio_handlers.handlers import register_socketio_handlers
@@ -86,6 +87,7 @@ app.register_blueprint(debug_bp)
 app.register_blueprint(slides_bp)
 app.register_blueprint(chat_bp)
 app.register_blueprint(hr_bp)
+app.register_blueprint(formation_bp)
 
 logger.info("✅ Tous les blueprints enregistrés")
 

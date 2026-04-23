@@ -58,32 +58,52 @@ def _generate_mock_text(passe, sub_part_name, sub_idx):
     ]
     return "\n".join(lines)
 
-# Chemin vers le prompt (à la racine du projet, 2 niveaux au-dessus de services/)
+# Chemins vers les fichiers de prompts
 _PROMPT_FILE = os.path.join(
     os.path.dirname(__file__), "..", "..", "prompt-generation-tts-direct.md"
 )
+_PROMPT_FILE_SCRATCH = os.path.join(
+    os.path.dirname(__file__), "..", "..", "prompt-generation-tts-scratch.md"
+)
 
-# Cache des prompts (chargé une fois au premier appel)
-_PASSE_PROMPTS = None
+# Cache des prompts invalidé sur mtime du fichier source — permet d'éditer
+# les prompts .md sans redémarrer le backend (watchmedo ne watch que *.py).
+# Structure : (prompts_list, mtime) ou None.
+_PASSE_PROMPTS = None           # mode expansion
+_PASSE_PROMPTS_SCRATCH = None   # mode from_scratch
 
 
-def _load_passe_prompts():
-    """Charge les 3 prompts de passe depuis prompt-generation-tts-direct.md."""
-    with open(_PROMPT_FILE, "r", encoding="utf-8") as f:
+def _parse_passe_prompts_from_file(path: str) -> list:
+    """Extrait les 3 blocs ``` ``` sous les titres ## PASSE N du fichier."""
+    with open(path, "r", encoding="utf-8") as f:
         content = f.read()
-    # Extraire le contenu entre les ``` de chaque section ## PASSE
     pattern = r"## PASSE \d[^`]*```(.*?)```"
     matches = re.findall(pattern, content, re.DOTALL)
     if len(matches) < 3:
-        raise ValueError(f"Impossible de trouver les 3 prompts dans {_PROMPT_FILE} ({len(matches)} trouvés)")
+        raise ValueError(f"Impossible de trouver les 3 prompts dans {path} ({len(matches)} trouvés)")
     return [m.strip() for m in matches[:3]]
 
 
-def _get_passe_prompts():
-    global _PASSE_PROMPTS
-    if _PASSE_PROMPTS is None:
-        _PASSE_PROMPTS = _load_passe_prompts()
-    return _PASSE_PROMPTS
+def _get_passe_prompts(from_scratch=False):
+    """
+    Retourne les 3 prompts (Passe 1/2/3) depuis le bon fichier .md.
+    Recharge automatiquement si le fichier a été modifié depuis la dernière lecture.
+    """
+    global _PASSE_PROMPTS, _PASSE_PROMPTS_SCRATCH
+    path = _PROMPT_FILE_SCRATCH if from_scratch else _PROMPT_FILE
+    mtime = os.path.getmtime(path)
+
+    cached = _PASSE_PROMPTS_SCRATCH if from_scratch else _PASSE_PROMPTS
+    if cached is not None and cached[1] == mtime:
+        return cached[0]
+
+    prompts = _parse_passe_prompts_from_file(path)
+    if from_scratch:
+        _PASSE_PROMPTS_SCRATCH = (prompts, mtime)
+    else:
+        _PASSE_PROMPTS = (prompts, mtime)
+    logger.info(f"📖 Prompts rechargés depuis {os.path.basename(path)}")
+    return prompts
 
 
 # ─── Extraction des sous-parties ─────────────────────────────────────────────
@@ -178,39 +198,57 @@ def extract_sub_parts(program_text):
 
 # ─── Génération d'un segment (une passe) ─────────────────────────────────────
 
-def _generate_segment_text(passe, sub_part_name, program_title, program_text, prev_text):
+def _generate_segment_text(passe, sub_part_name, program_title, program_text, prev_text,
+                           from_scratch=False, module_content="", model=None):
     """
-    Génère le texte d'un segment via Claude (streaming).
+    Génère le texte d'un segment via Claude.
     passe : 1, 2 ou 3
-    prev_text : texte passe 1 pour passe 2, texte passe 1+2 pour passe 3
-    Retourne le texte généré (~5 100 mots).
+
+    Mode expansion (from_scratch=False) — comportement historique :
+      - prev_text : texte passe 1 pour passe 2, texte passe 1+2 pour passe 3
+
+    Mode from_scratch (from_scratch=True) — nouveau pipeline formation :
+      - Chaque passe génère depuis module_content (pas du texte précédent)
+      - Passe 1 = Fondation, Passe 2 = Pratique, Passe 3 = Maîtrise
+
+    Retourne le texte généré (~5 000 mots).
     """
-    prompts = _get_passe_prompts()
+    prompts = _get_passe_prompts(from_scratch=from_scratch)
     template = prompts[passe - 1]
 
-    if passe == 1:
+    if from_scratch:
+        # Mode from_scratch : toutes les passes reçoivent le contenu du module
         prompt = template
         prompt = prompt.replace("{NOM_DU_TITRE_PROFESSIONNEL}", program_title)
         prompt = prompt.replace("{NOM_DE_LA_SOUS_PARTIE}", sub_part_name)
-        prompt = prompt.replace("{COLLER_LE_PROGRAMME_ICI}", program_text[:12000])
-    elif passe == 2:
-        prompt = template
-        prompt = prompt.replace("{NOM_DU_TITRE_PROFESSIONNEL}", program_title)
-        prompt = prompt.replace("{NOM_DE_LA_SOUS_PARTIE}", sub_part_name)
-        prompt = prompt.replace("{COLLER_LE_TEXTE_DE_LA_PASSE_1}", prev_text[:40000])
-    else:  # passe 3
-        prompt = template
-        prompt = prompt.replace("{NOM_DU_TITRE_PROFESSIONNEL}", program_title)
-        prompt = prompt.replace("{NOM_DE_LA_SOUS_PARTIE}", sub_part_name)
-        prompt = prompt.replace("{COLLER_LE_TEXTE_COMPLET_PASSE_1_ET_2}", prev_text[:60000])
+        prompt = prompt.replace("{CONTENU_DU_MODULE}", (module_content or program_text)[:15000])
+    else:
+        # Mode expansion (comportement historique)
+        if passe == 1:
+            prompt = template
+            prompt = prompt.replace("{NOM_DU_TITRE_PROFESSIONNEL}", program_title)
+            prompt = prompt.replace("{NOM_DE_LA_SOUS_PARTIE}", sub_part_name)
+            prompt = prompt.replace("{COLLER_LE_PROGRAMME_ICI}", program_text[:12000])
+        elif passe == 2:
+            prompt = template
+            prompt = prompt.replace("{NOM_DU_TITRE_PROFESSIONNEL}", program_title)
+            prompt = prompt.replace("{NOM_DE_LA_SOUS_PARTIE}", sub_part_name)
+            prompt = prompt.replace("{COLLER_LE_TEXTE_DE_LA_PASSE_1}", prev_text[:40000])
+        else:  # passe 3
+            prompt = template
+            prompt = prompt.replace("{NOM_DU_TITRE_PROFESSIONNEL}", program_title)
+            prompt = prompt.replace("{NOM_DE_LA_SOUS_PARTIE}", sub_part_name)
+            prompt = prompt.replace("{COLLER_LE_TEXTE_COMPLET_PASSE_1_ET_2}", prev_text[:60000])
 
-    logger.info(f"  📝 Génération passe {passe} pour '{sub_part_name}'...")
+    mode_label = "from_scratch" if from_scratch else "expansion"
+    logger.info(f"  📝 Génération passe {passe} [{mode_label}] pour '{sub_part_name}'...")
 
     for attempt in range(3):
         try:
             generated = _anthropic_post(
                 messages=[{"role": "user", "content": prompt}],
                 max_tokens=16000,
+                model=model,
             )
             words = len(generated.split())
             logger.info(f"  ✅ Passe {passe} terminée : {words} mots")
@@ -227,13 +265,74 @@ def _generate_segment_text(passe, sub_part_name, program_title, program_text, pr
 
 # ─── Helpers DB ──────────────────────────────────────────────────────────────
 
+def start_generation_job(folder_id: int, platform_id: int, program_text: str,
+                         program_title: str, sub_parts_override: list = None,
+                         module_contents: dict = None, from_scratch: bool = False,
+                         model: str = None):
+    """
+    Crée le job DB et lance la génération en background thread.
+    Utilisé par le pipeline formation automatisé.
+
+    sub_parts_override : liste de noms de sous-parties (bypass extraction Claude)
+    module_contents    : dict {sub_part_name: contenu_module} pour le mode from_scratch
+    from_scratch       : True = passes indépendantes depuis module_content (nouveau paradigme)
+    """
+    import threading
+
+    # Extraction des sous-parties si pas fournie
+    if sub_parts_override:
+        sub_parts = sub_parts_override[:NUM_SUB_PARTS]
+        while len(sub_parts) < NUM_SUB_PARTS:
+            sub_parts.append(f"Sous-partie {len(sub_parts) + 1}")
+        title = program_title
+    else:
+        extracted = extract_sub_parts(program_text)
+        sub_parts = extracted["sub_parts"]
+        title = extracted.get("title", program_title) or program_title
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    # Supprimer anciens segments si réinitialisation
+    cursor.execute("""
+        DELETE FROM content_generation_segments WHERE job_id IN (
+            SELECT id FROM content_generation_jobs WHERE folder_id = ?
+        )
+    """, (folder_id,))
+    cursor.execute("""
+        INSERT OR REPLACE INTO content_generation_jobs
+            (folder_id, platform_id, program_text, program_title, sub_parts,
+             from_scratch, module_contents,
+             status, current_sub_part, current_passe, total_words, error_message)
+        VALUES (?, ?, ?, ?, ?, ?, ?, 'idle', 0, 1, 0, NULL)
+    """, (
+        folder_id, platform_id, program_text, title,
+        json.dumps(sub_parts, ensure_ascii=False),
+        1 if from_scratch else 0,
+        json.dumps(module_contents or {}, ensure_ascii=False),
+    ))
+    conn.commit()
+    conn.close()
+
+    # Lancer génération en background
+    def _run():
+        try:
+            run_content_generation(folder_id, mode="normal", model=model)
+        except Exception as e:
+            logger.error(f"❌ Génération background dossier {folder_id} : {e}")
+
+    thread = threading.Thread(target=_run, daemon=True)
+    thread.start()
+    logger.info(f"🚀 Génération lancée en background pour dossier {folder_id} (from_scratch={from_scratch})")
+
+
 def get_job_from_db(folder_id):
     """Retourne le job DB pour un dossier, ou None."""
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("""
         SELECT id, platform_id, program_text, program_title, sub_parts, status,
-               current_sub_part, current_passe, total_words, error_message
+               current_sub_part, current_passe, total_words, error_message,
+               from_scratch, module_contents
         FROM content_generation_jobs WHERE folder_id = ?
     """, (folder_id,))
     row = cursor.fetchone()
@@ -245,6 +344,8 @@ def get_job_from_db(folder_id):
         "program_title": row[3], "sub_parts": json.loads(row[4] or "[]"),
         "status": row[5], "current_sub_part": row[6], "current_passe": row[7],
         "total_words": row[8], "error_message": row[9],
+        "from_scratch": bool(row[10]),
+        "module_contents": json.loads(row[11] or "{}"),
     }
 
 
@@ -377,7 +478,7 @@ def _assemble_and_upload(folder_id, platform_id, job_id):
 
 # ─── Pipeline principale ──────────────────────────────────────────────────────
 
-def run_content_generation(folder_id, on_progress=None, mode="normal"):
+def run_content_generation(folder_id, on_progress=None, mode="normal", model=None):
     """
     Lance ou reprend la génération de contenu pour un dossier.
     Doit être appelé dans un greenlet eventlet (non-bloquant).
@@ -403,6 +504,8 @@ def run_content_generation(folder_id, on_progress=None, mode="normal"):
     program_text = job["program_text"]
     program_title = job["program_title"]
     sub_parts = job["sub_parts"]
+    from_scratch = job.get("from_scratch", False)
+    module_contents = job.get("module_contents", {})
 
     is_mock = mode == "mock"
     is_mini = mode == "mini"
@@ -445,9 +548,17 @@ def run_content_generation(folder_id, on_progress=None, mode="normal"):
                     text = _generate_mock_text(passe, sub_part_name, sub_idx)
                 elif is_mini:
                     text = _generate_segment_mini(sub_part_name, program_title, program_text)
+                elif from_scratch:
+                    # Mode from_scratch : chaque passe génère depuis le contenu du module
+                    module_content = module_contents.get(sub_part_name, "")
+                    text = _generate_segment_text(
+                        passe, sub_part_name, program_title, program_text,
+                        prev_text="", from_scratch=True, module_content=module_content,
+                        model=model,
+                    )
                 else:
                     prev = "" if passe == 1 else (passe1_text if passe == 2 else passe1_2_text)
-                    text = _generate_segment_text(passe, sub_part_name, program_title, program_text, prev)
+                    text = _generate_segment_text(passe, sub_part_name, program_title, program_text, prev, model=model)
 
                 _save_segment_db(job_id, sub_idx, sub_part_name, passe, text)
                 words_added = len(text.split())

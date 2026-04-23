@@ -14,6 +14,7 @@ import Recorder from './pages/Recorder.jsx'
 import HRDashboard from './pages/HRDashboard.jsx'
 import ScheduleConfig from './pages/ScheduleConfig.jsx'
 import ProtectedAdminRoute from './components/ProtectedAdminRoute.jsx'
+import FormationPipeline from './pages/FormationPipeline.jsx'
 
 function ProtectedHRRoute({ children }) {
   const [status, setStatus] = useState('loading')
@@ -73,6 +74,14 @@ export default function App() {
           element={
             <ProtectedAdminRoute>
               <ScheduleConfig />
+            </ProtectedAdminRoute>
+          }
+        />
+        <Route
+          path="/formation-pipeline"
+          element={
+            <ProtectedAdminRoute>
+              <FormationPipeline />
             </ProtectedAdminRoute>
           }
         />
