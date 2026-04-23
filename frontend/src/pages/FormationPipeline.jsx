@@ -1361,11 +1361,34 @@ export default function FormationPipeline() {
                   <div style={{ display: 'flex', alignItems: 'center', gap: '10px', color: '#34d399', fontSize: '15px', fontWeight: 600, marginBottom: '12px' }}>
                     <Icon name="check_circle" /> Synthèse audio lancée avec succès !
                   </div>
-                  <div style={{ fontSize: '14px', color: '#94a3b8' }}>
+                  <div style={{ fontSize: '14px', color: '#94a3b8', marginBottom: '16px' }}>
                     {contentFolders.length || job.nb_days} dossiers cours en cours de synthèse dans la plateforme{' '}
                     <strong style={{ color: '#a78bfa' }}>{job.platform_name || `#${job.platform_id}`}</strong>.
                     Suivez la progression audio (19 MP3 par journée) dans le <strong style={{ color: '#a78bfa' }}>HR Dashboard → Cours Folders</strong>.
                   </div>
+                  {/* Bouton relancer : utile quand le précédent run a échoué (ex: force_all bug)
+                      ou si on veut re-générer les MP3 suite à une édition de texte. */}
+                  <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
+                    <button
+                      style={{ ...S.btn('neutral'), border: '1px dashed #64748b' }}
+                      onClick={() => handleLaunchAudio(true)}
+                      disabled={launchingAudio || !allContentCompleted}
+                      title="Re-génère les 7 MP3 cours en mode mock (silence 1s). Utile si le précédent run n'a pas produit les blobs Azure (bug force_all résolu)."
+                    >
+                      <Icon name="refresh" /> {launchingAudio ? '…' : 'Relancer TTS test (gratuit)'}
+                    </button>
+                    <button
+                      style={S.btn('success')}
+                      onClick={() => handleLaunchAudio(false)}
+                      disabled={launchingAudio || !allContentCompleted}
+                      title="Re-synthèse payante Fish Audio S2-Pro (~9$/journée)."
+                    >
+                      <Icon name="refresh" /> {launchingAudio ? 'Lancement…' : 'Relancer TTS payant'}
+                    </button>
+                  </div>
+                  {audioError && (
+                    <div style={{ fontSize: '12px', color: '#f87171', marginTop: '8px' }}>{audioError}</div>
+                  )}
                 </div>
               ) : (
                 <div>
