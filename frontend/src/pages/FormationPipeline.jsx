@@ -697,7 +697,9 @@ export default function FormationPipeline() {
   }
 
   // ─── Étape 6 — lancement de la synthèse audio Fish Audio ──────────────────
-  const handleLaunchAudio = async () => {
+  // mock=true génère des MP3 de silence 1s au lieu d'appeler Fish Audio (0 €).
+  // Utile pour tester le flux bout-en-bout sans consommer le budget TTS.
+  const handleLaunchAudio = async (mock = false) => {
     setLaunchingAudio(true)
     setAudioError('')
     try {
@@ -705,7 +707,7 @@ export default function FormationPipeline() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
-        body: JSON.stringify({}),
+        body: JSON.stringify({ mock }),
       })
       const data = await resp.json()
       if (data.error) setAudioError(data.error)
@@ -1373,13 +1375,23 @@ export default function FormationPipeline() {
                   <p style={{ fontSize: '13px', color: '#475569', marginBottom: '16px' }}>
                     Compter ~1h à 2h par journée. Étape irréversible côté facturation Fish Audio — vérifiez d'abord les textes via "Voir" ou "PDF" ci-dessus.
                   </p>
-                  <button
-                    style={S.btn('success')}
-                    onClick={handleLaunchAudio}
-                    disabled={launchingAudio || !allContentCompleted}
-                  >
-                    <Icon name="record_voice_over" /> {launchingAudio ? 'Lancement…' : `Lancer le TTS (${contentFolders.length || job.nb_days} journées)`}
-                  </button>
+                  <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
+                    <button
+                      style={S.btn('success')}
+                      onClick={() => handleLaunchAudio(false)}
+                      disabled={launchingAudio || !allContentCompleted}
+                    >
+                      <Icon name="record_voice_over" /> {launchingAudio ? 'Lancement…' : `Lancer le TTS (${contentFolders.length || job.nb_days} journées)`}
+                    </button>
+                    <button
+                      style={{ ...S.btn('neutral'), border: '1px dashed #64748b' }}
+                      onClick={() => handleLaunchAudio(true)}
+                      disabled={launchingAudio || !allContentCompleted}
+                      title="Mode test : génère des MP3 de silence 1s au lieu d'appeler Fish Audio. 0 € de coût, permet de tester le flux jusqu'à la diffusion sans consommer ton budget TTS."
+                    >
+                      <Icon name="science" /> {launchingAudio ? '…' : 'TTS test (gratuit)'}
+                    </button>
+                  </div>
                   {!allContentCompleted && (
                     <div style={{ fontSize: '12px', color: '#f87171', marginTop: '8px' }}>
                       Toutes les journées doivent avoir leur texte généré pour lancer la synthèse.

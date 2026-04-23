@@ -731,15 +731,20 @@ def launch_audio(job_id):
 
     data = request.get_json(silent=True) or {}
     force_all = bool(data.get("force_all", False))
+    # Mode mock : génère des MP3 de silence 1s au lieu d'appeler Fish Audio.
+    # Utile pour tester le flux bout-en-bout sans consommer le budget TTS
+    # (cf. generate_audio_from_script → _generate_silence_mp3).
+    mock = bool(data.get("mock", False))
 
     import eventlet
     from services.content_generation_service import generate_audio_from_script
 
     def _run_audio(folder_id):
         try:
-            logger.info(f"🎙️ Job {job_id} folder {folder_id} : synthèse audio démarrée")
-            generate_audio_from_script(folder_id, force_all=force_all, mock=False)
-            logger.info(f"✅ Job {job_id} folder {folder_id} : synthèse audio terminée")
+            mode_label = "[MOCK]" if mock else ""
+            logger.info(f"🎙️ {mode_label} Job {job_id} folder {folder_id} : synthèse audio démarrée")
+            generate_audio_from_script(folder_id, force_all=force_all, mock=mock)
+            logger.info(f"✅ {mode_label} Job {job_id} folder {folder_id} : synthèse audio terminée")
         except Exception as e:
             logger.error(f"❌ Job {job_id} folder {folder_id} : synthèse audio échouée : {e}")
 
@@ -747,11 +752,13 @@ def launch_audio(job_id):
         eventlet.spawn(_run_audio, fid)
 
     update_job(job_id, status="audio_launched")
-    logger.info(f"🚀 Job {job_id} : synthèse audio lancée pour {len(folder_ids)} dossiers")
+    mode_suffix = " (MOCK — silence 1s)" if mock else ""
+    logger.info(f"🚀 Job {job_id} : synthèse audio lancée pour {len(folder_ids)} dossiers{mode_suffix}")
     return jsonify({
-        "message": f"Synthèse audio lancée pour {len(folder_ids)} journées",
+        "message": f"Synthèse audio lancée pour {len(folder_ids)} journées{mode_suffix}",
         "folder_ids": folder_ids,
         "status": "audio_launched",
+        "mock": mock,
     })
 
 
