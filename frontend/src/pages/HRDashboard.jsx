@@ -30,6 +30,13 @@ export default function HRDashboard() {
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [newPlatformName, setNewPlatformName] = useState('')
   const [creating, setCreating] = useState(false)
+  // Formations disponibles pour réutilisation (principe 1 RNCP = 1 module durable)
+  const [formations, setFormations] = useState([])
+  const [formationMode, setFormationMode] = useState('existing') // 'existing' | 'new' | 'none'
+  const [selectedFormationId, setSelectedFormationId] = useState('')
+  const [newFormTpName, setNewFormTpName] = useState('')
+  const [newFormRncp, setNewFormRncp] = useState('')
+  const [newFormHours, setNewFormHours] = useState('')
   const backupPollingRef = useRef({})
   const audioRef = useRef(null)
   const [showCoursFoldersModal, setShowCoursFoldersModal] = useState(false)
@@ -226,21 +233,71 @@ export default function HRDashboard() {
     setShowCoursFoldersModal(true)
   }
 
+  const fetchFormations = async () => {
+    try {
+      const resp = await fetch(apiUrl('/api/hr/formations'), { credentials: 'include' })
+      const data = await resp.json()
+      if (data.success) setFormations(data.formations || [])
+    } catch (e) {
+      console.error('Erreur chargement formations:', e)
+    }
+  }
+
+  const resetCreateForm = () => {
+    setNewPlatformName('')
+    setFormationMode('existing')
+    setSelectedFormationId('')
+    setNewFormTpName('')
+    setNewFormRncp('')
+    setNewFormHours('')
+  }
+
+  const openCreateModal = () => {
+    resetCreateForm()
+    fetchFormations()
+    setShowCreateModal(true)
+  }
+
   const handleCreatePlatform = async () => {
     if (!newPlatformName.trim()) return
+
+    // Validation selon le mode
+    let body = { name: newPlatformName.trim() }
+    if (formationMode === 'existing') {
+      if (!selectedFormationId) {
+        alert('Sélectionne une formation ou bascule sur "Nouvelle formation"')
+        return
+      }
+      body.formation_id = parseInt(selectedFormationId, 10)
+    } else if (formationMode === 'new') {
+      const tpName = newFormTpName.trim()
+      const rncp = newFormRncp.trim()
+      const hours = parseInt(newFormHours, 10)
+      if (!tpName || !rncp || !hours || hours <= 0) {
+        alert('Nom du TP, code RNCP et durée (h) requis pour une nouvelle formation')
+        return
+      }
+      body.new_formation = { tp_name: tpName, rncp_code: rncp, total_hours: hours }
+    }
+    // formationMode === 'none' → body reste {name} (plateforme vide, comportement historique)
+
     setCreating(true)
     try {
       const resp = await fetch(apiUrl('/api/hr/platforms'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
-        body: JSON.stringify({ name: newPlatformName.trim() }),
+        body: JSON.stringify(body),
       })
       const data = await resp.json()
       if (data.success) {
         setShowCreateModal(false)
-        setNewPlatformName('')
+        resetCreateForm()
         fetchPlatforms()
+        // Si une pipeline a été lancée, rediriger vers /formation-pipeline pour suivi
+        if (data.platform?.pipeline_job_id) {
+          window.open(`/formation-pipeline?job=${data.platform.pipeline_job_id}`, '_blank')
+        }
       } else {
         alert(data.error || 'Erreur lors de la création')
       }
@@ -251,6 +308,15 @@ export default function HRDashboard() {
       setCreating(false)
     }
   }
+
+  // Polling des plateformes en pending (clone blobs en cours, ou pipeline en cours)
+  // pour rafraîchir l'UI quand elles passent à 'ready' ou 'error'.
+  useEffect(() => {
+    const hasPending = platforms.some(p => p.status === 'pending')
+    if (!hasPending) return
+    const interval = setInterval(fetchPlatforms, 5000)
+    return () => clearInterval(interval)
+  }, [platforms])
 
   // ─── Render ──────────────────────────────────────────────────────────
   if (loading) {
@@ -314,7 +380,7 @@ export default function HRDashboard() {
                 </button>
                 {/* Nouvelle plateforme */}
                 <button
-                  onClick={() => setShowCreateModal(true)}
+                  onClick={openCreateModal}
                   className="flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-all text-white"
                   style={{ backgroundColor: '#8B5CF6' }}
                 >
@@ -568,7 +634,7 @@ export default function HRDashboard() {
               </h3>
             </div>
 
-            <div className="mb-6">
+            <div className="mb-5">
               <label className="block text-sm font-medium mb-2" style={{ color: darkMode ? '#94a3b8' : '#64748b' }}>
                 Nom de la plateforme
               </label>
@@ -576,8 +642,7 @@ export default function HRDashboard() {
                 type="text"
                 value={newPlatformName}
                 onChange={(e) => setNewPlatformName(e.target.value)}
-                onKeyDown={(e) => { if (e.key === 'Enter') handleCreatePlatform() }}
-                placeholder="Ex: Formation Vente B2B"
+                placeholder="Ex: TP CRCD Septembre 2026"
                 autoFocus
                 className="w-full rounded-lg px-4 py-3 text-sm outline-none transition-all"
                 style={{
@@ -587,13 +652,90 @@ export default function HRDashboard() {
                 }}
               />
               <p className="mt-2 text-xs" style={{ color: darkMode ? '#64748b' : '#94a3b8' }}>
-                Les containers Azure Blob seront créés automatiquement.
+                Nom libre — identifie la promo/session. Ex: "TP CRCD Septembre 2026".
               </p>
             </div>
 
+            <div className="mb-5">
+              <label className="block text-sm font-medium mb-2" style={{ color: darkMode ? '#94a3b8' : '#64748b' }}>
+                Formation
+              </label>
+              {(() => {
+                const reusable = formations.filter(f => f.reusable)
+                return (
+                  <select
+                    value={formationMode === 'existing' ? selectedFormationId : (formationMode === 'new' ? '__new__' : '__none__')}
+                    onChange={(e) => {
+                      const v = e.target.value
+                      if (v === '__new__') { setFormationMode('new'); setSelectedFormationId('') }
+                      else if (v === '__none__') { setFormationMode('none'); setSelectedFormationId('') }
+                      else { setFormationMode('existing'); setSelectedFormationId(v) }
+                    }}
+                    className="w-full rounded-lg px-4 py-3 text-sm outline-none transition-all"
+                    style={{
+                      backgroundColor: darkMode ? '#0f172a' : '#f8fafc',
+                      color: darkMode ? '#f1f5f9' : '#1e293b',
+                      border: `1px solid ${darkMode ? '#334155' : '#e2e8f0'}`,
+                    }}
+                  >
+                    <option value="" disabled>Sélectionner une formation…</option>
+                    {reusable.length > 0 && (
+                      <optgroup label="Formations disponibles (cours déjà générés)">
+                        {reusable.map(f => (
+                          <option key={f.id} value={f.id}>
+                            {f.tp_name} — RNCP {f.rncp_code || '?'} — {f.nb_days}j — {f.nb_folders} dossiers
+                          </option>
+                        ))}
+                      </optgroup>
+                    )}
+                    <option value="__new__">+ Nouvelle formation (lance la pipeline)</option>
+                    <option value="__none__">Plateforme vide (sans cours)</option>
+                  </select>
+                )
+              })()}
+              {formationMode === 'existing' && selectedFormationId && (
+                <p className="mt-2 text-xs" style={{ color: '#10b981' }}>
+                  ✓ Les cours de la formation seront clonés vers la nouvelle plateforme (quelques secondes).
+                </p>
+              )}
+              {formationMode === 'new' && (
+                <p className="mt-2 text-xs" style={{ color: '#a78bfa' }}>
+                  ⚙ Un job pipeline va être initié — tu finiras les étapes de validation sur /formation-pipeline.
+                </p>
+              )}
+              {formationMode === 'none' && (
+                <p className="mt-2 text-xs" style={{ color: darkMode ? '#64748b' : '#94a3b8' }}>
+                  Plateforme sans cours — tu pourras uploader du contenu manuellement.
+                </p>
+              )}
+            </div>
+
+            {formationMode === 'new' && (
+              <div className="mb-5 p-4 rounded-lg" style={{ backgroundColor: darkMode ? '#0f172a' : '#f8fafc', border: `1px dashed ${darkMode ? '#334155' : '#cbd5e1'}` }}>
+                <div className="mb-3">
+                  <label className="block text-xs font-medium mb-1" style={{ color: darkMode ? '#94a3b8' : '#64748b' }}>Nom du TP</label>
+                  <input type="text" value={newFormTpName} onChange={(e) => setNewFormTpName(e.target.value)} placeholder="Ex: TP CRCD"
+                    className="w-full rounded-lg px-3 py-2 text-sm outline-none"
+                    style={{ backgroundColor: darkMode ? '#1e293b' : '#ffffff', color: darkMode ? '#f1f5f9' : '#1e293b', border: `1px solid ${darkMode ? '#334155' : '#e2e8f0'}` }} />
+                </div>
+                <div className="mb-3">
+                  <label className="block text-xs font-medium mb-1" style={{ color: darkMode ? '#94a3b8' : '#64748b' }}>Code RNCP</label>
+                  <input type="text" value={newFormRncp} onChange={(e) => setNewFormRncp(e.target.value)} placeholder="Ex: 35304"
+                    className="w-full rounded-lg px-3 py-2 text-sm outline-none"
+                    style={{ backgroundColor: darkMode ? '#1e293b' : '#ffffff', color: darkMode ? '#f1f5f9' : '#1e293b', border: `1px solid ${darkMode ? '#334155' : '#e2e8f0'}` }} />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium mb-1" style={{ color: darkMode ? '#94a3b8' : '#64748b' }}>Durée totale (heures)</label>
+                  <input type="number" value={newFormHours} onChange={(e) => setNewFormHours(e.target.value)} placeholder="Ex: 70" min="1"
+                    className="w-full rounded-lg px-3 py-2 text-sm outline-none"
+                    style={{ backgroundColor: darkMode ? '#1e293b' : '#ffffff', color: darkMode ? '#f1f5f9' : '#1e293b', border: `1px solid ${darkMode ? '#334155' : '#e2e8f0'}` }} />
+                </div>
+              </div>
+            )}
+
             <div className="flex gap-3 justify-end">
               <button
-                onClick={() => { setShowCreateModal(false); setNewPlatformName('') }}
+                onClick={() => { setShowCreateModal(false); resetCreateForm() }}
                 disabled={creating}
                 className="rounded-lg px-4 py-2 text-sm font-medium transition-all"
                 style={{ backgroundColor: darkMode ? '#334155' : '#f1f5f9', color: darkMode ? '#94a3b8' : '#64748b' }}
@@ -1107,6 +1249,59 @@ function PlatformCard({
               <Icon name="schedule" className="text-2xl" style={{ color: colors.textMuted }} />
             </div>
             <p className="text-sm font-semibold" style={{ color: colors.textSecondary }}>BIENTÔT DISPONIBLE</p>
+          </div>
+        </div>
+      )}
+
+      {/* Pending overlay : clone de formation en cours ou pipeline initiée */}
+      {p.active && p.status === 'pending' && (
+        <div
+          className="absolute inset-0 z-20 flex items-center justify-center rounded-2xl"
+          style={{ backgroundColor: darkMode ? 'rgba(15, 23, 42, 0.92)' : 'rgba(248, 250, 252, 0.98)', backdropFilter: 'blur(4px)' }}
+        >
+          <div className="text-center px-6">
+            <div className="mx-auto mb-4 h-10 w-10 animate-spin rounded-full border-[3px]"
+              style={{ borderColor: darkMode ? '#334155' : '#e2e8f0', borderTopColor: '#8B5CF6' }} />
+            <p className="text-sm font-semibold mb-1" style={{ color: colors.text }}>
+              {p.source_formation_id ? 'Clone des cours en cours' : 'Module en construction'}
+            </p>
+            <p className="text-xs mb-4" style={{ color: colors.textMuted }}>
+              {p.source_formation_id
+                ? 'Copie des cours + blobs Azure — quelques instants…'
+                : 'La pipeline est initiée. Finalise les étapes sur la page de suivi.'}
+            </p>
+            {!p.source_formation_id && (
+              <a
+                href="/formation-pipeline"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-2 rounded-lg px-4 py-2 text-xs font-medium transition-all"
+                style={{
+                  backgroundColor: '#8B5CF6',
+                  color: 'white',
+                  textDecoration: 'none',
+                }}
+              >
+                <Icon name="open_in_new" className="text-sm" />
+                Suivre la pipeline
+              </a>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Error overlay : clone ou pipeline échoué */}
+      {p.active && p.status === 'error' && (
+        <div
+          className="absolute inset-0 z-20 flex items-center justify-center rounded-2xl"
+          style={{ backgroundColor: darkMode ? 'rgba(15, 23, 42, 0.92)' : 'rgba(248, 250, 252, 0.98)', backdropFilter: 'blur(4px)' }}
+        >
+          <div className="text-center px-6">
+            <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full" style={{ backgroundColor: '#fee2e2' }}>
+              <Icon name="error" className="text-2xl" style={{ color: '#dc2626' }} />
+            </div>
+            <p className="text-sm font-semibold mb-1" style={{ color: colors.text }}>Erreur de setup</p>
+            <p className="text-xs" style={{ color: colors.textMuted }}>Voir les logs backend pour le détail.</p>
           </div>
         </div>
       )}

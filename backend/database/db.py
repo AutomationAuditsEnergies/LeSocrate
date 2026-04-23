@@ -169,6 +169,21 @@ def init_database():
             cursor.execute("UPDATE platform_config SET audio_container = 'formationaudio-p4', pdf_container = 'formationpdf-p4', archive_container = 'formationaudio-p4-archives', slug = 'formation-courte' WHERE id = 4")
             logger.info("✅ Colonnes multi-tenant ajoutées à platform_config")
 
+        # Migration formations durables : statut + référence vers la formation source
+        # status : 'ready' (cours disponibles), 'pending' (pipeline en cours), 'error'
+        # source_formation_id : pointe vers formation_pipeline_jobs.id quand cette
+        # plateforme réutilise les cours d'une formation existante (1 RNCP = 1 module
+        # réutilisé pour N promos).
+        cursor.execute("PRAGMA table_info(platform_config)")
+        pc_columns = [col[1] for col in cursor.fetchall()]
+        if "status" not in pc_columns:
+            cursor.execute("ALTER TABLE platform_config ADD COLUMN status TEXT DEFAULT 'ready'")
+            cursor.execute("UPDATE platform_config SET status = 'ready' WHERE status IS NULL")
+            logger.info("✅ Colonne status ajoutée à platform_config (default 'ready')")
+        if "source_formation_id" not in pc_columns:
+            cursor.execute("ALTER TABLE platform_config ADD COLUMN source_formation_id INTEGER")
+            logger.info("✅ Colonne source_formation_id ajoutée à platform_config")
+
         # Migration multi-tenant : platform_id dans logs
         cursor.execute("PRAGMA table_info(logs)")
         logs_columns = [col[1] for col in cursor.fetchall()]

@@ -59,3 +59,28 @@ def delete_blobs_by_prefix(container_name, prefix):
     if count:
         logger.info(f"🗑️ {count} blob(s) supprimé(s) avec préfixe {container_name}/{prefix}")
     return count
+
+
+def copy_blobs_by_prefix(container_name, source_prefix, target_prefix):
+    """Copie tous les blobs d'un préfixe source vers un préfixe target (server-side copy).
+
+    Utilisé pour cloner les cours d'une plateforme source vers une plateforme cible
+    (principe 1 RNCP = 1 module durable réutilisé par N promos).
+
+    Retourne le nombre de blobs copiés.
+    """
+    client = _get_blob_service_client()
+    container_client = client.get_container_client(container_name)
+    blobs = list(container_client.list_blobs(name_starts_with=source_prefix))
+    count = 0
+    for blob in blobs:
+        # Reconstruire le chemin cible en remplaçant le préfixe
+        target_path = target_prefix + blob.name[len(source_prefix):]
+        source_blob = container_client.get_blob_client(blob.name)
+        target_blob = container_client.get_blob_client(target_path)
+        # Server-side copy Azure (rapide, pas de download local)
+        target_blob.start_copy_from_url(source_blob.url)
+        count += 1
+    if count:
+        logger.info(f"📋 {count} blob(s) copiés : {container_name}/{source_prefix} → {target_prefix}")
+    return count

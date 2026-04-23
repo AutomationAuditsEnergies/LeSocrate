@@ -139,6 +139,48 @@ def create_hr_blueprint(socketio):
             logger.warning(f"⚠️ Erreur lecture PDF Azure: {e}")
             return None, None
 
+    # ─── GET /api/hr/formations ──────────────────────────────────────────
+    # Liste des formations (jobs pipeline) disponibles pour réutilisation lors
+    # de la création d'une nouvelle plateforme. Principe "1 RNCP = 1 module
+    # durable" : une formation complétée peut servir N promos sans régénération.
+    @hr_bp.route("/api/hr/formations", methods=["GET"])
+    def list_formations():
+        """Liste les formations pipeline (completed ou en cours) pour le select de création plateforme."""
+        denied = _require_admin()
+        if denied:
+            return denied
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT j.id, j.tp_name, j.rncp_code, j.total_hours, j.nb_days,
+                       j.status, j.platform_id, pc.name,
+                       (SELECT COUNT(*) FROM cours_folders WHERE platform_id = j.platform_id) as nb_folders,
+                       j.created_at
+                FROM formation_pipeline_jobs j
+                LEFT JOIN platform_config pc ON pc.id = j.platform_id
+                ORDER BY j.created_at DESC
+            """)
+            rows = cursor.fetchall()
+            conn.close()
+            formations = [{
+                "id": r[0],
+                "tp_name": r[1],
+                "rncp_code": r[2] or "",
+                "total_hours": r[3],
+                "nb_days": r[4],
+                "status": r[5],
+                "platform_id": r[6],
+                "platform_name": r[7] or f"Plateforme {r[6]}",
+                "nb_folders": r[8],
+                "created_at": r[9],
+                "reusable": r[5] == "completed" and r[8] > 0,
+            } for r in rows]
+            return jsonify({"success": True, "formations": formations}), 200
+        except Exception as e:
+            logger.error(f"❌ Erreur list formations: {e}")
+            return jsonify({"success": False, "error": str(e)}), 500
+
     # ─── GET /api/hr/platforms ────────────────────────────────────────────
     @hr_bp.route("/api/hr/platforms", methods=["GET"])
     def get_platforms():
@@ -150,7 +192,7 @@ def create_hr_blueprint(socketio):
         try:
             conn = get_db_connection()
             cursor = conn.cursor()
-            cursor.execute("SELECT id, name, upload_locked, pdf_filename, pdf_uploaded_at, updated_at FROM platform_config ORDER BY id")
+            cursor.execute("SELECT id, name, upload_locked, pdf_filename, pdf_uploaded_at, updated_at, status, source_formation_id FROM platform_config ORDER BY id")
             rows = cursor.fetchall()
 
             # Compter demandes en attente par plateforme
@@ -177,7 +219,7 @@ def create_hr_blueprint(socketio):
 
             platforms = []
             for row in rows:
-                pid, name, upload_locked, pdf_filename, pdf_uploaded_at, updated_at = row
+                pid, name, upload_locked, pdf_filename, pdf_uploaded_at, updated_at, p_status, p_source_formation_id = row
                 pinfo = _get_platform_info(pid)
                 # En multi-tenant, toute plateforme en BDD est active
                 active = pid == 1 or bool(pinfo.get("backend_url")) or pid >= 4
@@ -258,6 +300,8 @@ def create_hr_blueprint(socketio):
                     "alerts": alerts,
                     "updated_at": updated_at,
                     "frontend_url": pinfo.get("frontend_url"),
+                    "status": p_status or "ready",
+                    "source_formation_id": p_source_formation_id,
                 })
 
             return jsonify({"success": True, "platforms": platforms}), 200
@@ -266,18 +310,115 @@ def create_hr_blueprint(socketio):
             logger.error(f"❌ Erreur get platforms: {e}")
             return jsonify({"success": False, "error": str(e)}), 500
 
+    def _clone_formation_async(source_platform_id, target_platform_id, source_formation_id):
+        """Clone les cours_folders + cours_documents + blobs Azure d'une plateforme
+        source vers une cible. Lancé en thread de fond : la plateforme cible reste
+        en status 'pending' jusqu'à la fin, puis passe à 'ready'.
+
+        Les blobs sont copiés en server-side copy (rapide, pas de download local).
+        """
+        from services.azure_blob_service import (
+            copy_blobs_by_prefix, CONTAINER_DOCUMENTS, CONTAINER_AUDIOS,
+        )
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            # 1. Cloner chaque cours_folder en préservant l'ordre
+            cursor.execute(
+                """SELECT id, name, position, created_at FROM cours_folders
+                   WHERE platform_id = ? ORDER BY position ASC, id ASC""",
+                (source_platform_id,),
+            )
+            source_folders = cursor.fetchall()
+            folder_id_map = {}  # source_folder_id -> new_folder_id
+
+            for src_fid, fname, position, created_at in source_folders:
+                cursor.execute(
+                    "INSERT INTO cours_folders (platform_id, name, position) VALUES (?, ?, ?)",
+                    (target_platform_id, fname, position),
+                )
+                new_fid = cursor.lastrowid
+                folder_id_map[src_fid] = new_fid
+
+                # 2. Cloner les documents liés
+                cursor.execute(
+                    """SELECT filename, original_name, status, audio_filename
+                       FROM cours_documents WHERE folder_id = ?""",
+                    (src_fid,),
+                )
+                for filename, original_name, status, audio_filename in cursor.fetchall():
+                    cursor.execute(
+                        """INSERT INTO cours_documents
+                           (folder_id, filename, original_name, status, audio_filename)
+                           VALUES (?, ?, ?, ?, ?)""",
+                        (new_fid, filename, original_name, status, audio_filename),
+                    )
+            conn.commit()
+            conn.close()
+
+            # 3. Copier les blobs Azure (server-side) pour chaque folder source → cible
+            total_copied = 0
+            for src_fid, new_fid in folder_id_map.items():
+                src_prefix_docs = f"platform-{source_platform_id}/folder-{src_fid}/"
+                dst_prefix_docs = f"platform-{target_platform_id}/folder-{new_fid}/"
+                try:
+                    total_copied += copy_blobs_by_prefix(CONTAINER_DOCUMENTS, src_prefix_docs, dst_prefix_docs)
+                    total_copied += copy_blobs_by_prefix(CONTAINER_AUDIOS, src_prefix_docs, dst_prefix_docs)
+                except Exception as e:
+                    logger.warning(f"⚠️ Copie blobs folder {src_fid}→{new_fid} : {e}")
+
+            # 4. Marquer la plateforme comme ready
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                "UPDATE platform_config SET status = 'ready', updated_at = ? WHERE id = ?",
+                (_now_str(), target_platform_id),
+            )
+            conn.commit()
+            conn.close()
+            logger.info(
+                f"✅ Clone formation {source_formation_id} : P{source_platform_id}→P{target_platform_id} "
+                f"— {len(folder_id_map)} folders, {total_copied} blobs copiés"
+            )
+        except Exception as e:
+            logger.error(f"❌ Clone formation {source_formation_id} P{source_platform_id}→P{target_platform_id} : {e}")
+            try:
+                conn = get_db_connection()
+                cursor = conn.cursor()
+                cursor.execute(
+                    "UPDATE platform_config SET status = 'error', updated_at = ? WHERE id = ?",
+                    (_now_str(), target_platform_id),
+                )
+                conn.commit()
+                conn.close()
+            except Exception:
+                pass
+
     # ─── POST /api/hr/platforms (Créer une nouvelle plateforme) ──────────
     @hr_bp.route("/api/hr/platforms", methods=["POST"])
     def create_platform():
-        """Crée une nouvelle plateforme : DB + containers Azure Blob"""
+        """Crée une nouvelle plateforme. 3 modes exclusifs :
+
+        1. {name} — plateforme vide, pas de cours (comportement historique)
+        2. {name, formation_id} — clone une formation existante (1 RNCP = 1 module
+           réutilisé par N promos). Status 'pending' jusqu'à fin de copie blobs.
+        3. {name, new_formation: {tp_name, rncp_code, total_hours}} — crée un job
+           pipeline lié à cette plateforme, statut 'pending' jusqu'à fin pipeline.
+           L'admin finit les étapes (validation humaine) sur /formation-pipeline.
+        """
         denied = _require_admin()
         if denied:
             return denied
 
         data = request.get_json() or {}
         name = data.get("name", "").strip()
+        formation_id = data.get("formation_id")  # mode réutilisation
+        new_formation = data.get("new_formation")  # mode pipeline
+
         if not name:
             return jsonify({"success": False, "error": "Le nom est requis"}), 400
+        if formation_id and new_formation:
+            return jsonify({"success": False, "error": "Choisir une formation existante OU en créer une, pas les deux"}), 400
 
         try:
             conn = get_db_connection()
@@ -293,12 +434,46 @@ def create_hr_blueprint(socketio):
                 conn.close()
                 return jsonify({"success": False, "error": "Ce nom de plateforme existe déjà"}), 409
 
+            # Valider le mode formation_id (réutilisation) : vérifier que la formation existe et a des cours
+            source_platform_id = None
+            if formation_id:
+                cursor.execute(
+                    "SELECT platform_id, status FROM formation_pipeline_jobs WHERE id = ?",
+                    (formation_id,),
+                )
+                row = cursor.fetchone()
+                if not row:
+                    conn.close()
+                    return jsonify({"success": False, "error": "Formation introuvable"}), 404
+                source_platform_id, fstatus = row
+                if fstatus != "completed":
+                    conn.close()
+                    return jsonify({"success": False, "error": f"La formation n'est pas complétée (statut : {fstatus})"}), 400
+                cursor.execute("SELECT COUNT(*) FROM cours_folders WHERE platform_id = ?", (source_platform_id,))
+                if cursor.fetchone()[0] == 0:
+                    conn.close()
+                    return jsonify({"success": False, "error": "La formation n'a pas encore de cours générés"}), 400
+
+            # Valider le mode new_formation
+            if new_formation:
+                tp_name = (new_formation.get("tp_name") or "").strip()
+                rncp_code = (new_formation.get("rncp_code") or "").strip()
+                total_hours = new_formation.get("total_hours")
+                if not tp_name or not rncp_code or not total_hours:
+                    conn.close()
+                    return jsonify({"success": False, "error": "tp_name, rncp_code et total_hours requis pour une nouvelle formation"}), 400
+
             now_str = datetime.now(FRANCE_TZ).strftime("%Y-%m-%d %H:%M:%S")
 
-            # Insérer la plateforme (auto-increment)
+            # Statut initial : 'pending' pour les 2 modes qui lancent un travail
+            # async, 'ready' pour une plateforme vide
+            initial_status = "pending" if (formation_id or new_formation) else "ready"
+
+            # Insérer la plateforme
             cursor.execute(
-                "INSERT INTO platform_config (name, upload_locked, updated_at, slug) VALUES (?, 1, ?, ?)",
-                (name, now_str, slug),
+                """INSERT INTO platform_config (name, upload_locked, updated_at, slug, status, source_formation_id)
+                   VALUES (?, 1, ?, ?, ?, ?)""",
+                (name, now_str, slug, initial_status, formation_id),
             )
             new_id = cursor.lastrowid
 
@@ -307,7 +482,6 @@ def create_hr_blueprint(socketio):
             pdf_container = f"formationpdf-p{new_id}"
             archive_container = f"formationaudio-p{new_id}-archives"
 
-            # Mettre à jour les noms de containers
             cursor.execute(
                 "UPDATE platform_config SET audio_container = ?, pdf_container = ?, archive_container = ? WHERE id = ?",
                 (audio_container, pdf_container, archive_container, new_id),
@@ -325,7 +499,7 @@ def create_hr_blueprint(socketio):
             conn.commit()
             conn.close()
 
-            # Créer les containers Azure Blob
+            # Créer les containers Azure Blob (toujours, quel que soit le mode)
             containers_created = []
             for cs_env, containers in [
                 ("AZURE_AUDIO_STORAGE_CONNECTION_STRING", [audio_container, archive_container]),
@@ -344,7 +518,34 @@ def create_hr_blueprint(socketio):
                         except Exception as e:
                             logger.warning(f"⚠️ Erreur création container {cname}: {e}")
 
-            logger.info(f"✅ Plateforme {new_id} '{name}' créée avec containers: {containers_created}")
+            # Mode réutilisation : lancer le clone en background
+            linked_job_id = None
+            if formation_id and source_platform_id:
+                import threading
+                t = threading.Thread(
+                    target=_clone_formation_async,
+                    args=(source_platform_id, new_id, formation_id),
+                    daemon=True,
+                )
+                t.start()
+                logger.info(f"🔄 Clone formation {formation_id} (P{source_platform_id}→P{new_id}) lancé en background")
+
+            # Mode nouvelle formation : créer le job pipeline (l'admin finit les étapes sur /formation-pipeline)
+            elif new_formation:
+                import math
+                from services.formation_pipeline_service import create_job, HOURS_PER_DAY
+                th = int(total_hours)
+                nb_days = math.ceil(th / HOURS_PER_DAY)
+                linked_job_id = create_job(
+                    platform_id=new_id,
+                    tp_name=tp_name,
+                    rncp_code=rncp_code,
+                    total_hours=th,
+                    nb_days=nb_days,
+                )
+                logger.info(f"🚀 Pipeline formation job {linked_job_id} initié pour plateforme {new_id} — l'admin doit continuer sur /formation-pipeline")
+
+            logger.info(f"✅ Plateforme {new_id} '{name}' créée (status={initial_status}) avec containers: {containers_created}")
 
             return jsonify({
                 "success": True,
@@ -352,6 +553,9 @@ def create_hr_blueprint(socketio):
                     "id": new_id,
                     "name": name,
                     "slug": slug,
+                    "status": initial_status,
+                    "source_formation_id": formation_id,
+                    "pipeline_job_id": linked_job_id,
                     "audio_container": audio_container,
                     "pdf_container": pdf_container,
                     "archive_container": archive_container,
