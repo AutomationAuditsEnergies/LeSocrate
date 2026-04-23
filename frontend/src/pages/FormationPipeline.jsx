@@ -754,7 +754,15 @@ export default function FormationPipeline() {
     }
   }
 
-  const currentStep = job ? statusToStep(job.status, job) : -1
+  // Le statut backend reste 'tts_launched' tant que l'admin n'a pas cliqué
+  // "Lancer la synthèse TTS". Mais si tous les folders ont leur texte généré,
+  // l'étape 5 est en réalité terminée et l'étape 6 attend l'action utilisateur.
+  // On avance currentStep à 6 pour que l'UI reflète l'état réel : étape 5 OK,
+  // étape 6 active (bouton "Lancer le TTS" disponible).
+  let currentStep = job ? statusToStep(job.status, job) : -1
+  if (job?.status === 'tts_launched' && allContentCompleted) {
+    currentStep = 6
+  }
 
   // ─── Render ───────────────────────────────────────────────────────────────
   return (
