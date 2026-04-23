@@ -393,7 +393,11 @@ def create_hr_blueprint(socketio):
 
             # Propager le changement vers la plateforme distante (si elle a son propre backend)
             if not _is_local_platform(platform_id):
-                _call_platform(platform_id, "/api/internal/set-lock", json_data={"locked": bool(new_value)})
+                _call_platform(
+                    platform_id,
+                    "/api/internal/set-lock",
+                    json_data={"locked": bool(new_value), "platform_id": platform_id},
+                )
 
             return jsonify({
                 "success": True,
@@ -982,7 +986,11 @@ def create_hr_blueprint(socketio):
         conn.commit()
         conn.close()
         if not _is_local_platform(platform_id):
-            _call_platform(platform_id, "/api/internal/set-lock", json_data={"locked": False})
+            _call_platform(
+                platform_id,
+                "/api/internal/set-lock",
+                json_data={"locked": False, "platform_id": platform_id},
+            )
 
     # ─── POST /api/hr/platforms/<id>/upload-pdf-rag ──────────────────────
     @hr_bp.route("/api/hr/platforms/<int:platform_id>/upload-pdf-rag", methods=["POST"])
@@ -2242,6 +2250,108 @@ def create_hr_blueprint(socketio):
             logger.error(f"❌ stream_audio_file: {e}")
             return jsonify({"success": False, "error": str(e)}), 500
 
+    @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/mock-upload-local", methods=["POST"])
+    def mock_upload_local(folder_id):
+        """
+        [DEV ONLY] Upload automatique de tous les cours_*.mp3 depuis un dossier
+        local du projet (ex: output_jour1) vers audiostts.
+        Les fichiers locaux ne sont pas modifiés — seuls les octets sont copiés.
+        """
+        denied = _require_admin()
+        if denied:
+            return denied
+        try:
+            data = request.get_json() or {}
+            source_dir = data.get("source_dir", "output_jour1")
+
+            # Sécurité : empêcher toute traversée de chemin
+            if "/" in source_dir or "\\" in source_dir or ".." in source_dir:
+                return jsonify({"success": False, "error": "source_dir invalide"}), 400
+
+            project_root = os.path.join(os.path.dirname(__file__), "..", "..")
+            local_folder = os.path.abspath(os.path.join(project_root, source_dir))
+
+            if not os.path.isdir(local_folder):
+                return jsonify({"success": False, "error": f"Dossier introuvable: {source_dir}"}), 404
+
+            platform_id = _get_platform_id_for_folder(folder_id)
+
+            from services.azure_blob_service import upload_blob, CONTAINER_AUDIOS
+
+            uploaded = []
+            failed = []
+            for name in sorted(os.listdir(local_folder)):
+                if not name.lower().startswith("cours_") or not name.lower().endswith(".mp3"):
+                    continue
+                full_path = os.path.join(local_folder, name)
+                try:
+                    with open(full_path, "rb") as f:
+                        audio_bytes = f.read()
+                    blob_path = _get_audio_blob_path(platform_id, folder_id, name)
+                    upload_blob(CONTAINER_AUDIOS, blob_path, audio_bytes)
+                    size_mb = round(len(audio_bytes) / (1024 * 1024), 2)
+                    uploaded.append({"filename": name, "size_mb": size_mb})
+                    logger.info(f"🧪 Mock local upload: {name} ({size_mb} Mo) → {blob_path}")
+                except Exception as fe:
+                    logger.error(f"❌ Mock local upload {name}: {fe}")
+                    failed.append({"filename": name, "error": str(fe)})
+
+            return jsonify({
+                "success": True,
+                "source_dir": source_dir,
+                "uploaded": uploaded,
+                "failed": failed,
+                "count": len(uploaded),
+            }), 200
+
+        except Exception as e:
+            logger.error(f"❌ mock_upload_local: {e}")
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/mock-upload-audio", methods=["POST"])
+    def mock_upload_audio(folder_id):
+        """
+        [DEV ONLY] Upload direct d'un fichier audio local dans audiostts,
+        au chemin attendu par la playlist (platform-X/folder-Y/playlist/<filename>).
+        Sert à tester le découpage/remplacement sans avoir à générer le TTS.
+        """
+        denied = _require_admin()
+        if denied:
+            return denied
+        try:
+            if "file" not in request.files:
+                return jsonify({"success": False, "error": "Aucun fichier envoyé"}), 400
+
+            file = request.files["file"]
+            if not file or not file.filename:
+                return jsonify({"success": False, "error": "Fichier vide"}), 400
+
+            # Optionnellement accepter un nom cible distinct (target_filename)
+            target_filename = request.form.get("target_filename") or file.filename
+            if not target_filename.lower().endswith(".mp3"):
+                return jsonify({"success": False, "error": "Seuls les .mp3 sont acceptés"}), 400
+
+            platform_id = _get_platform_id_for_folder(folder_id)
+            blob_path = _get_audio_blob_path(platform_id, folder_id, target_filename)
+
+            from services.azure_blob_service import upload_blob, CONTAINER_AUDIOS
+            audio_bytes = file.read()
+            upload_blob(CONTAINER_AUDIOS, blob_path, audio_bytes)
+
+            size_mb = round(len(audio_bytes) / (1024 * 1024), 2)
+            logger.info(f"🧪 Mock upload: {target_filename} ({size_mb} Mo) → {blob_path}")
+
+            return jsonify({
+                "success": True,
+                "filename": target_filename,
+                "size_mb": size_mb,
+                "blob_path": blob_path,
+            }), 200
+
+        except Exception as e:
+            logger.error(f"❌ mock_upload_audio: {e}")
+            return jsonify({"success": False, "error": str(e)}), 500
+
     @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/audio/<path:filename>/cut", methods=["POST"])
     def cut_audio_region(folder_id, filename):
         """Coupe une région [start_ms, end_ms] de l'audio et upload le résultat."""
@@ -2362,6 +2472,143 @@ def create_hr_blueprint(socketio):
 
         except Exception as e:
             logger.error(f"❌ replace_audio_confirm: {e}")
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    # ─── Détection anomalies audio ───────────────────────────────────────────
+    @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/audio/<path:filename>/detect-bugs", methods=["POST"])
+    def detect_audio_bugs(folder_id, filename):
+        """
+        Détecte les passages où la voix TTS change de caractère (timbre, pitch anormal).
+        Utilise les MFCCs (empreinte vocale) sur les frames vocalisées uniquement.
+        Ignore les silences et pauses normales.
+        """
+        denied = _require_admin()
+        if denied:
+            return denied
+        try:
+            import tempfile
+            import numpy as np
+            import librosa
+            from services.azure_blob_service import download_blob, CONTAINER_AUDIOS
+
+            data = request.get_json() or {}
+            seuil = float(data.get("seuil", 4.5))
+            duree_min = float(data.get("duree_min", 1.5))
+
+            platform_id = _get_platform_id_for_folder(folder_id)
+            blob_path = _get_audio_blob_path(platform_id, folder_id, filename)
+
+            logger.info(f"🔍 Analyse bugs audio : {blob_path}")
+            audio_bytes = download_blob(CONTAINER_AUDIOS, blob_path)
+
+            with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as tmp:
+                tmp.write(audio_bytes)
+                tmp_path = tmp.name
+
+            try:
+                y, sr = librosa.load(tmp_path, sr=22050, mono=True)
+            finally:
+                import os as _os
+                _os.unlink(tmp_path)
+
+            hop_length = 512  # ~23ms par frame
+
+            # ── Étape 1 : masque de silence ──────────────────────────────────
+            # On ignore les frames silencieuses (pauses normales entre phrases)
+            rms = librosa.feature.rms(y=y, hop_length=hop_length)[0]
+            seuil_silence = np.percentile(rms, 20)  # les 20% les plus calmes = silence
+            voiced_mask = rms > (seuil_silence * 3)   # frame active si énergie > 3x le bruit de fond
+
+            # ── Étape 2 : MFCCs — empreinte du timbre vocal ──────────────────
+            # 13 coefficients cepstraux = signature du caractère de la voix
+            mfcc = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=13, hop_length=hop_length)
+
+            # ── Étape 3 : centroïde spectral — détecte les aigus/graves anormaux
+            centroide = librosa.feature.spectral_centroid(y=y, sr=sr, hop_length=hop_length)[0]
+
+            # ── Étape 4 : pitch (hauteur fondamentale) ───────────────────────
+            pitch = librosa.yin(y, fmin=60, fmax=400, hop_length=hop_length)
+
+            n_frames = min(len(voiced_mask), mfcc.shape[1], len(centroide), len(pitch))
+            suspicion = np.zeros(n_frames, dtype=float)
+
+            # Calculer les stats uniquement sur les frames vocalisées
+            voiced_indices = np.where(voiced_mask[:n_frames])[0]
+            if len(voiced_indices) < 10:
+                return jsonify({"success": True, "bugs": [], "total": 0}), 200
+
+            # Anomalie sur chaque MFCC coefficient (timbre)
+            for i in range(mfcc.shape[0]):
+                coef = mfcc[i, :n_frames]
+                voiced_vals = coef[voiced_indices]
+                median = np.median(voiced_vals)
+                std = np.std(voiced_vals)
+                if std < 1e-6:
+                    continue
+                z = np.abs((coef - median) / std)
+                # Compter seulement sur les frames vocalisées
+                suspicion += (z > seuil) * voiced_mask[:n_frames]
+
+            # Anomalie sur le centroïde spectral (aigus/graves)
+            c_voiced = centroide[:n_frames][voiced_indices]
+            c_median = np.median(c_voiced)
+            c_std = np.std(c_voiced)
+            if c_std > 1e-6:
+                z_c = np.abs((centroide[:n_frames] - c_median) / c_std)
+                suspicion += (z_c > seuil) * voiced_mask[:n_frames] * 2  # poids double car très discriminant
+
+            # Anomalie sur le pitch
+            p_voiced = pitch[:n_frames][voiced_indices]
+            p_voiced = p_voiced[p_voiced > 0]  # ignorer les frames non-pitchées (consonnes, silences)
+            if len(p_voiced) > 10:
+                p_median = np.median(p_voiced)
+                p_std = np.std(p_voiced)
+                if p_std > 1e-6:
+                    z_p = np.abs((pitch[:n_frames] - p_median) / p_std)
+                    suspicion += (z_p > seuil) * voiced_mask[:n_frames] * 2  # poids double
+
+            # Normaliser : seuil de suspicion global pour marquer une frame comme bug
+            seuil_bug = 3  # au moins 3 points de suspicion cumulés
+            bug_frames = suspicion > seuil_bug
+
+            # ── Étape 5 : regrouper les frames consécutives en segments ──────
+            frames_temps = librosa.frames_to_time(np.arange(n_frames), sr=sr, hop_length=hop_length)
+
+            bugs = []
+            en_bug = False
+            debut_bug = 0.0
+            score_max = 0.0
+
+            for i in range(n_frames):
+                t = float(frames_temps[i])
+                is_bug = bool(bug_frames[i])
+                score = float(suspicion[i])
+
+                if is_bug and not en_bug:
+                    en_bug = True
+                    debut_bug = t
+                    score_max = score
+                elif is_bug and en_bug:
+                    score_max = max(score_max, score)
+                elif not is_bug and en_bug:
+                    duree = t - debut_bug
+                    if duree >= duree_min:
+                        severity = 3 if score_max > 15 else 2 if score_max > 8 else 1
+                        bugs.append({"start": debut_bug, "end": t, "severity": severity})
+                    en_bug = False
+                    score_max = 0.0
+
+            if en_bug and n_frames > 0:
+                duree = float(frames_temps[-1]) - debut_bug
+                if duree >= duree_min:
+                    severity = 3 if score_max > 15 else 2 if score_max > 8 else 1
+                    bugs.append({"start": debut_bug, "end": float(frames_temps[-1]), "severity": severity})
+
+            logger.info(f"✅ {len(bugs)} anomalies vocales détectées dans {filename}")
+            return jsonify({"success": True, "bugs": bugs, "total": len(bugs)}), 200
+
+        except Exception as e:
+            logger.error(f"❌ detect_audio_bugs: {e}")
             return jsonify({"success": False, "error": str(e)}), 500
 
     # ─── Analyse mots d'un dossier ───────────────────────────────────────────
@@ -2651,13 +2898,17 @@ def create_hr_blueprint(socketio):
             return jsonify({"success": False, "error": str(e)}), 500
 
     # ─── Routes Prompt TTS ─────────────────────────────────────────────────
+    # Édite le prompt de la pipeline formation (mode from_scratch) — c'est le
+    # prompt actif pour /formation-pipeline. Le mode expansion legacy utilise
+    # prompt-generation-tts-direct.md qu'on peut ignorer tant qu'on n'utilise
+    # pas le HR Dashboard → Cours Folders en mode manuel.
     _TTS_PROMPT_FILE = os.path.join(
-        os.path.dirname(__file__), "..", "..", "prompt-generation-tts-direct.md"
+        os.path.dirname(__file__), "..", "..", "prompt-generation-tts-scratch.md"
     )
 
     @hr_bp.route("/api/hr/tts-prompt", methods=["GET"])
     def get_tts_prompt():
-        """Retourne le contenu du fichier prompt-generation-tts-direct.md"""
+        """Retourne le contenu du fichier prompt-generation-tts-scratch.md"""
         denied = _require_admin()
         if denied:
             return denied
@@ -2673,7 +2924,7 @@ def create_hr_blueprint(socketio):
 
     @hr_bp.route("/api/hr/tts-prompt", methods=["POST"])
     def set_tts_prompt():
-        """Écrase le contenu du fichier prompt-generation-tts-direct.md"""
+        """Écrase le contenu du fichier prompt-generation-tts-scratch.md"""
         denied = _require_admin()
         if denied:
             return denied
@@ -2686,12 +2937,15 @@ def create_hr_blueprint(socketio):
             with open(_TTS_PROMPT_FILE, "w", encoding="utf-8") as f:
                 f.write(content)
             # Invalider le cache des prompts chargés en mémoire
+            # (le cache mtime du service rechargera automatiquement, mais on
+            # force au cas où le mtime n'a pas changé avec précision suffisante)
             try:
                 from services import content_generation_service as _cgs
+                _cgs._PASSE_PROMPTS_SCRATCH = None
                 _cgs._PASSE_PROMPTS = None
             except Exception:
                 pass
-            logger.info(f"✅ Prompt TTS mis à jour ({len(content)} caractères)")
+            logger.info(f"✅ Prompt TTS (scratch) mis à jour ({len(content)} caractères)")
             return jsonify({"success": True}), 200
         except Exception as e:
             logger.error(f"❌ Erreur set_tts_prompt: {e}")

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import Sidebar from '../components/Sidebar.jsx'
-import { apiUrl } from '../api'
+import { apiFetch, apiUrl, setPlatformId, setPlatformName } from '../api'
 
 export default function Admin() {
   const [search, setSearch] = useState('')
@@ -21,6 +22,18 @@ export default function Admin() {
   const [pdfMessageType, setPdfMessageType] = useState('') // 'success', 'error', 'info'
   const [indexerPolling, setIndexerPolling] = useState(false)
 
+  // Restaurer platform_id depuis ?p= si présent (cas refresh en navigation privée).
+  const [searchParams] = useSearchParams()
+  useEffect(() => {
+    const pParam = searchParams.get('p')
+    if (pParam) {
+      setPlatformId(pParam)
+      fetch(apiUrl(`/api/platform-info?id=${pParam}`))
+        .then(r => r.json())
+        .then(data => { if (data.name) setPlatformName(data.name) })
+        .catch(() => {})
+    }
+  }, [searchParams])
 
   // Charger les logs depuis l'API
   useEffect(() => {
@@ -76,9 +89,7 @@ export default function Admin() {
         ? `/api/admin/logs?prenom=${encodeURIComponent(search)}`
         : '/api/admin/logs'
 
-      const response = await fetch(apiUrl(url), {
-        credentials: 'include',
-      })
+      const response = await apiFetch(url)
 
       if (response.ok) {
         const data = await response.json()
@@ -107,9 +118,7 @@ export default function Admin() {
 
   const handleExportExcel = async () => {
     try {
-      const response = await fetch(apiUrl('/api/admin/export_excel'), {
-        credentials: 'include',
-      })
+      const response = await apiFetch('/api/admin/export_excel')
       if (!response.ok) {
         alert('Erreur lors de l\'export Excel')
         return
@@ -132,12 +141,11 @@ export default function Admin() {
     setErrorMessage('')
 
     try {
-      const response = await fetch(apiUrl('/api/admin/config_cours'), {
+      const response = await apiFetch('/api/admin/config_cours', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        credentials: 'include',
         body: JSON.stringify({
           date_cours: configDate,
           heure_cours: configHeure,
@@ -165,9 +173,8 @@ export default function Admin() {
     }
 
     try {
-      const response = await fetch(apiUrl('/api/admin/force-logout-finished-users'), {
+      const response = await apiFetch('/api/admin/force-logout-finished-users', {
         method: 'POST',
-        credentials: 'include',
       })
 
       const data = await response.json()

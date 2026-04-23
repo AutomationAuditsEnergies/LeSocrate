@@ -1,6 +1,6 @@
-import { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
-import { apiUrl } from '../api'
+import { useEffect, useState } from 'react'
+import { useNavigate, useSearchParams } from 'react-router-dom'
+import { apiFetch, apiUrl, setPlatformId, setPlatformName } from '../api'
 
 export default function LoginAdmin() {
   const [username, setUsername] = useState('')
@@ -8,6 +8,22 @@ export default function LoginAdmin() {
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
+  const pParam = searchParams.get('p')
+
+  // Si on arrive via le bouton "Admin" du HR Dashboard (ex. /login-admin?p=2),
+  // fixer platform_id en localStorage pour que apiFetch injecte X-Platform-Id: 2.
+  // Sans ça, sur un domaine Azure distinct, le localStorage est vide et tout
+  // retombe sur le default '1' → session admin créée pour P1 au lieu de P2.
+  useEffect(() => {
+    if (pParam) {
+      setPlatformId(pParam)
+      fetch(apiUrl(`/api/platform-info?id=${pParam}`))
+        .then(r => r.json())
+        .then(data => { if (data.name) setPlatformName(data.name) })
+        .catch(() => {})
+    }
+  }, [pParam])
 
   const handleSubmit = async (e) => {
     e.preventDefault()
@@ -15,12 +31,11 @@ export default function LoginAdmin() {
     setLoading(true)
 
     try {
-      const response = await fetch(apiUrl('/api/admin/login'), {
+      const response = await apiFetch('/api/admin/login', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        credentials: 'include', // Important pour les sessions
         body: JSON.stringify({
           username: username.trim(),
           password: password.trim(),
@@ -30,10 +45,10 @@ export default function LoginAdmin() {
       const data = await response.json()
 
       if (response.ok && data.success) {
-        // Connexion réussie, rediriger vers la page admin
-        navigate('/admin')
+        // Propager ?p= vers /admin pour qu'un refresh en navigation privée
+        // (localStorage volatile) puisse restaurer le bon tenant.
+        navigate(pParam ? `/admin?p=${pParam}` : '/admin')
       } else {
-        // Échec de connexion
         setError(data.error || 'Identifiants incorrects')
       }
     } catch (err) {

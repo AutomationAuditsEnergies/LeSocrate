@@ -18,6 +18,29 @@ from utils.logger import get_logger
 logger = get_logger(__name__)
 
 
+def _get_platform_id():
+    """Extrait platform_id pour la requête courante avec priorité explicite.
+
+    Ordre : X-Platform-Id header → query ?platform_id ou ?p → session → fallback 1.
+    Le fallback log un warning pour repérer les oublis d'injection côté appelant.
+    """
+    raw = request.headers.get("X-Platform-Id")
+    if raw and raw.isdigit():
+        return int(raw)
+    for key in ("platform_id", "p"):
+        arg = request.args.get(key)
+        if arg and str(arg).isdigit():
+            return int(arg)
+    pid = session.get("platform_id")
+    if pid:
+        try:
+            return int(pid)
+        except (TypeError, ValueError):
+            pass
+    logger.warning("⚠️ platform_id introuvable (header/query/session absents) — fallback sur 1 pour %s", request.path)
+    return 1
+
+
 def create_admin_blueprint(socketio):
     """Factory pour créer le blueprint admin avec accès à socketio"""
     admin_bp = Blueprint("admin", __name__)
@@ -30,25 +53,26 @@ def create_admin_blueprint(socketio):
                 logger.warning("⚠️ Tentative accès admin sans authentification")
                 return jsonify({"authenticated": False, "error": "Accès refusé"}), 403
 
-            logger.info("👑 Accès admin logs")
+            platform_id = _get_platform_id()
+            logger.info(f"👑 Accès admin logs P{platform_id}")
             prenom_recherche = request.args.get("prenom", "")
 
             if prenom_recherche:
                 logger.debug(f"🔍 Recherche admin par prénom: {prenom_recherche}")
 
             # Récupération de l'heure actuelle du cours
-            heure_debut_cours = get_heure_debut_cours()
+            heure_debut_cours = get_heure_debut_cours(platform_id)
 
             conn = get_db_connection()
             cursor = conn.cursor()
 
             if prenom_recherche:
                 cursor.execute(
-                    "SELECT * FROM logs WHERE prenom LIKE ?",
-                    ("%" + prenom_recherche + "%",),
+                    "SELECT * FROM logs WHERE platform_id = ? AND prenom LIKE ?",
+                    (platform_id, "%" + prenom_recherche + "%"),
                 )
             else:
-                cursor.execute("SELECT * FROM logs")
+                cursor.execute("SELECT * FROM logs WHERE platform_id = ?", (platform_id,))
 
             logs = cursor.fetchall()
             conn.close()
@@ -118,7 +142,8 @@ def create_admin_blueprint(socketio):
         try:
             if not session.get("is_admin"):
                 return jsonify({"success": False, "error": "Accès refusé"}), 403
-            heure = get_heure_debut_cours()
+            platform_id = _get_platform_id()
+            heure = get_heure_debut_cours(platform_id)
             return (
                 jsonify(
                     {
@@ -165,10 +190,11 @@ def create_admin_blueprint(socketio):
             nouvelle_heure_naive = datetime.strptime(datetime_str, "%Y-%m-%d %H:%M:%S")
             nouvelle_heure_fr = FRANCE_TZ.localize(nouvelle_heure_naive)
 
-            logger.info(f"⚙️ Nouvelle heure calculée: {nouvelle_heure_fr}")
+            platform_id = _get_platform_id()
+            logger.info(f"⚙️ Nouvelle heure calculée P{platform_id}: {nouvelle_heure_fr}")
 
             # Sauvegarder en base
-            set_heure_debut_cours(nouvelle_heure_fr)
+            set_heure_debut_cours(nouvelle_heure_fr, platform_id)
 
             return (
                 jsonify(
@@ -194,26 +220,38 @@ def create_admin_blueprint(socketio):
 
     @admin_bp.route("/api/internal/set-lock", methods=["POST"])
     def internal_set_lock():
-        """Service-to-service : verrouiller/déverrouiller l'upload (appelé par P1 HR)"""
+        """Service-to-service : verrouiller/déverrouiller l'upload (appelé par P1 HR).
+
+        Le body doit contenir {"locked": bool, "platform_id": int}. Sans platform_id,
+        refus 400 — l'ancien fallback hardcodé WHERE id=1 produisait un bug symétrique
+        à celui de course-time (écriture sur la mauvaise ligne côté backend distant).
+        """
         api_key = os.environ.get("PLATFORM_API_KEY", "")
         if not api_key or request.headers.get("X-Platform-Key") != api_key:
             return jsonify({"success": False, "error": "Non autorisé"}), 401
         try:
-            data = request.get_json()
+            data = request.get_json() or {}
             locked = bool(data.get("locked", True))
+            raw_pid = data.get("platform_id")
+            if raw_pid is None:
+                return jsonify({"success": False, "error": "platform_id requis"}), 400
+            try:
+                platform_id = int(raw_pid)
+            except (TypeError, ValueError):
+                return jsonify({"success": False, "error": "platform_id invalide"}), 400
             now = datetime.now(FRANCE_TZ).strftime("%Y-%m-%d %H:%M:%S")
             conn = get_db_connection()
             cursor = conn.cursor()
             cursor.execute(
-                "UPDATE platform_config SET upload_locked = ?, updated_at = ? WHERE id = 1",
-                (1 if locked else 0, now),
+                "UPDATE platform_config SET upload_locked = ?, updated_at = ? WHERE id = ?",
+                (1 if locked else 0, now, platform_id),
             )
             conn.commit()
             conn.close()
             logger.info(
-                f"🔒 Lock interne mis à jour: {'verrouillé' if locked else 'déverrouillé'}"
+                f"🔒 Lock interne P{platform_id} mis à jour: {'verrouillé' if locked else 'déverrouillé'}"
             )
-            return jsonify({"success": True, "upload_locked": locked}), 200
+            return jsonify({"success": True, "upload_locked": locked, "platform_id": platform_id}), 200
         except Exception as e:
             logger.error(f"❌ Erreur internal set-lock: {e}")
             return jsonify({"success": False, "error": str(e)}), 500
@@ -284,7 +322,8 @@ def create_admin_blueprint(socketio):
             if not session.get("is_admin"):
                 return jsonify({"success": False, "error": "Accès refusé"}), 403
 
-            logger.info("📊 Export Excel demandé")
+            platform_id = _get_platform_id()
+            logger.info(f"📊 Export Excel demandé P{platform_id}")
             prenom = request.args.get("prenom", "")
 
             conn = get_db_connection()
@@ -292,10 +331,11 @@ def create_admin_blueprint(socketio):
 
             if prenom:
                 cursor.execute(
-                    "SELECT * FROM logs WHERE prenom LIKE ?", ("%" + prenom + "%",)
+                    "SELECT * FROM logs WHERE platform_id = ? AND prenom LIKE ?",
+                    (platform_id, "%" + prenom + "%"),
                 )
             else:
-                cursor.execute("SELECT * FROM logs")
+                cursor.execute("SELECT * FROM logs WHERE platform_id = ?", (platform_id,))
 
             rows = cursor.fetchall()
             conn.close()
@@ -390,15 +430,17 @@ def create_admin_blueprint(socketio):
                         400,
                     )
 
-            state.simulated_time_offset = FRANCE_TZ.localize(simulated_time_naive)
+            platform_id = _get_platform_id()
+            offset_fr = FRANCE_TZ.localize(simulated_time_naive)
+            state.simulated_time_offsets[platform_id] = offset_fr
 
-            logger.info(f"✅ Heure simulée: {state.simulated_time_offset}")
+            logger.info(f"✅ Heure simulée P{platform_id}: {offset_fr}")
 
             return (
                 jsonify(
                     {
                         "success": True,
-                        "message": f"Heure simulée: {state.simulated_time_offset.strftime('%Y-%m-%d %H:%M:%S')}",
+                        "message": f"Heure simulée: {offset_fr.strftime('%Y-%m-%d %H:%M:%S')}",
                     }
                 ),
                 200,
@@ -415,9 +457,10 @@ def create_admin_blueprint(socketio):
             if not session.get("is_admin"):
                 return jsonify({"success": False, "error": "Accès refusé"}), 403
 
-            logger.info("⏰ Reset simulation demandé")
-            state.simulated_time_offset = None
-            logger.info("✅ Simulation désactivée")
+            platform_id = _get_platform_id()
+            logger.info(f"⏰ Reset simulation demandé P{platform_id}")
+            state.simulated_time_offsets.pop(platform_id, None)
+            logger.info(f"✅ Simulation désactivée P{platform_id}")
 
             return jsonify({"success": True, "message": "Heure réelle restaurée"}), 200
 
@@ -432,29 +475,31 @@ def create_admin_blueprint(socketio):
             if not session.get("is_admin"):
                 return jsonify({"success": False, "error": "Accès refusé"}), 403
 
-            logger.info("🔒 Forçage déconnexion utilisateurs")
+            platform_id = _get_platform_id()
+            logger.info(f"🔒 Forçage déconnexion utilisateurs P{platform_id}")
 
             conn = get_db_connection()
             cursor = conn.cursor()
             depart_time = datetime.now(FRANCE_TZ).strftime("%Y-%m-%d %H:%M:%S")
             cursor.execute(
-                "UPDATE logs SET depart = ? WHERE depart IS NULL OR depart = ''",
-                (depart_time,),
+                "UPDATE logs SET depart = ? WHERE platform_id = ? AND (depart IS NULL OR depart = '')",
+                (depart_time, platform_id),
             )
             affected_rows = cursor.rowcount
             conn.commit()
             conn.close()
 
-            # Signal à tous les clients
+            # Signal uniquement aux clients de la plateforme concernée
             socketio.emit(
                 "force_logout",
                 {
                     "message": "Formation terminée - Déconnexion automatique",
                     "redirect_url": "/logout",
                 },
+                room=f"platform_{platform_id}",
             )
 
-            logger.info(f"✅ {affected_rows} utilisateurs déconnectés")
+            logger.info(f"✅ {affected_rows} utilisateurs déconnectés P{platform_id}")
 
             return (
                 jsonify(

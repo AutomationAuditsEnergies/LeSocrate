@@ -1186,6 +1186,39 @@ function PlatformCard({
           </a>
         )}
 
+        {/* Lien vers la page admin de la plateforme (ouvre le login-admin sur le
+            domaine de la plateforme pour que la session admin se crée localement
+            sur le bon backend). Le ?p= garantit que le localStorage du domaine
+            distant reçoit le bon platform_id (sinon fallback '1' silencieux). */}
+        {p.active && (
+          <a
+            href={`${p.frontend_url || window.location.origin}/login-admin?p=${p.id}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex w-full items-center justify-between rounded-lg px-4 py-2.5 text-sm font-medium transition-all mb-3"
+            style={{
+              backgroundColor: colors.innerBg,
+              border: `1px solid ${colors.border}`,
+              color: colors.textSecondary,
+              textDecoration: 'none',
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.backgroundColor = colors.hoverBg
+              e.currentTarget.style.borderColor = darkMode ? '#475569' : '#94a3b8'
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.backgroundColor = colors.innerBg
+              e.currentTarget.style.borderColor = colors.border
+            }}
+          >
+            <div className="flex items-center gap-2.5">
+              <Icon name="admin_panel_settings" className="text-lg" style={{ color: '#8B5CF6' }} />
+              <span>Admin</span>
+            </div>
+            <Icon name="open_in_new" className="text-xl" />
+          </a>
+        )}
+
         {/* Bouton heure du cours */}
         {p.active && (
           <button
