@@ -13,30 +13,55 @@ const POLLING_STATUSES = new Set([
 
 // ─── Mapping statut → étape active (0-indexed) ────────────────────────────────
 function statusToStep(status, job = null) {
-  if (!status) return -1
-  if (status === 'init') return 1
-  if (status === 'reac_fetching') return 1
-  if (status === 'reac_ready') return 2
-  if (status === 'kb_building') return 2
-  if (status === 'kb_ready') return 3
-  if (status === 'global_generating') return 3
-  if (status === 'global_ready') return 3
-  if (status === 'global_validated') return 4
-  if (status === 'daily_splitting') return 4
-  if (status === 'daily_ready') return 4
-  if (status === 'daily_validated') return 5
-  if (status === 'tts_launched') return 5         // textes en cours ou prêts
-  if (status === 'audio_launched') return 6       // synthèse audio lancée
-  if (status === 'error') {
-    // Déduire l'étape où l'erreur s'est produite pour rester cliquable
-    if (!job) return 1
-    if (job.daily_programs) return 4
-    if (job.global_program_validated) return 4
-    if (job.global_program) return 3
-    if (job.kb_total > 0) return 3
-    if (job.reac_available) return 2
-    return 1
+  // Une fois qu'une étape est validée, elle DOIT rester validée même si une
+  // étape ultérieure plante (ex: audio_error ne doit pas faire perdre les
+  // étapes 1-5 déjà OK). Pour ça, on déduit l'étape max atteinte à partir
+  // des CHAMPS CONCRETS du job (champs `*_validated` / `*_ready`) plutôt
+  // que du status enum, qui peut être cassé/erreur/inattendu.
+
+  if (!job && !status) return -1
+  if (!job) {
+    // Sans job, on retombe sur l'enum status pour les premiers états
+    if (status === 'init' || status === 'reac_fetching') return 1
+    return -1
   }
+
+  // ─── Cascade descendante : on prend l'étape MAX atteinte, peu importe ───
+  //    le status. audio_error / audio_launched / tts_launched / etc. ne ────
+  //    peuvent pas faire régresser au-delà de ce qui a été validé. ─────────
+
+  // Étape 7 (synthèse TTS audio en cours)
+  if (status === 'audio_launched') return 6
+
+  // Étape 6 (génération texte cours) — texte lancé OU audio en erreur
+  // (audio_error = on était à l'étape 7 ; les textes restent validés et
+  // l'utilisateur peut relancer le TTS)
+  if (status === 'tts_launched' || status === 'audio_error') return 6
+
+  // Étape 5 (programmes journée validés)
+  if (job.daily_programs_validated) return 5
+
+  // Étape 4 (programmes journée prêts à valider — daily_programs non vide)
+  if (job.daily_programs && job.daily_programs !== '[]' && job.daily_programs !== '"[]"') return 4
+
+  // Étape 4 (global validé)
+  if (job.global_program_validated) return 4
+
+  // Étape 3 (programme global prêt à valider)
+  if (job.global_program) return 3
+
+  // Étape 3 (KB enrichie disponible)
+  if ((job.kb_total || 0) > 0) return 3
+
+  // Étape 2 (REAC téléchargé)
+  if (job.reac_available) return 2
+
+  // Status enum reconnus pour les phases en cours sans champ équivalent
+  if (status === 'kb_building' || status === 'reac_fetching') return 2
+  if (status === 'global_generating') return 3
+  if (status === 'daily_splitting') return 4
+
+  // Erreur générique : on cascade comme ci-dessus mais sans rien trouver
   return 1
 }
 
@@ -49,6 +74,173 @@ const STEP_LABELS = [
   { icon: 'edit_note', label: 'Génération cours' },
   { icon: 'record_voice_over', label: 'Synthèse TTS' },
 ]
+
+// ─── Connecteurs visuels entre étapes du pipeline ─────────────────────────────
+// Matérialise le flux de données : RNCP → REAC → split (API/CC) → ... → merge → TTS.
+// Trois primitives :
+//   - FlowArrowDown : flèche verticale ↓ entre 2 cards consécutives.
+//   - FlowSplit     : Y-fork qui part d'un tronc commun vers les 2 colonnes.
+//   - FlowMerge     : Y-merge inverse qui rejoint les 2 colonnes vers un tronc.
+const FLOW_COLOR = 'rgba(167, 139, 250, 0.35)'  // violet sobre cohérent avec l'accent
+const FLOW_STROKE = 2
+
+function FlowArrowDown({ height = 28, color = FLOW_COLOR }) {
+  return (
+    <div style={{
+      display: 'flex',
+      justifyContent: 'center',
+      alignItems: 'flex-end',
+      height: `${height}px`,
+      margin: '4px 0',
+    }}>
+      <div style={{
+        width: `${FLOW_STROKE}px`,
+        height: `${height - 7}px`,
+        background: color,
+        position: 'relative',
+      }}>
+        <div style={{
+          position: 'absolute',
+          bottom: '-7px',
+          left: '50%',
+          transform: 'translateX(-50%)',
+          width: 0,
+          height: 0,
+          borderLeft: '5px solid transparent',
+          borderRight: '5px solid transparent',
+          borderTop: `7px solid ${color}`,
+        }}/>
+      </div>
+    </div>
+  )
+}
+
+// Y-fork (1 → 2) : tronc descend du centre, bifurque horizontalement vers les
+// centres des deux colonnes du grid (1fr 1fr, gap 40px → centres à 25%-10px et
+// 75%+10px), puis chute verticale + tête de flèche dans chaque colonne.
+function FlowSplit({ color = FLOW_COLOR }) {
+  const stem = 18      // tronc vertical depuis le haut
+  const drop = 22      // chute dans chaque branche
+  const arrow = 7      // hauteur de la tête de flèche
+  const total = stem + drop + arrow
+  return (
+    <div style={{ position: 'relative', height: `${total}px`, margin: '4px 0' }}>
+      {/* tronc central */}
+      <div style={{
+        position: 'absolute',
+        left: '50%', top: 0,
+        width: `${FLOW_STROKE}px`, height: `${stem}px`,
+        background: color, transform: 'translateX(-50%)',
+      }}/>
+      {/* barre horizontale entre centres des 2 colonnes */}
+      <div style={{
+        position: 'absolute',
+        left: 'calc(25% - 10px)', right: 'calc(25% - 10px)',
+        top: `${stem}px`, height: `${FLOW_STROKE}px`,
+        background: color,
+      }}/>
+      {/* chute gauche */}
+      <div style={{
+        position: 'absolute',
+        left: `calc(25% - 10px - ${FLOW_STROKE / 2}px)`, top: `${stem}px`,
+        width: `${FLOW_STROKE}px`, height: `${drop}px`,
+        background: color,
+      }}/>
+      {/* chute droite */}
+      <div style={{
+        position: 'absolute',
+        right: `calc(25% - 10px - ${FLOW_STROKE / 2}px)`, top: `${stem}px`,
+        width: `${FLOW_STROKE}px`, height: `${drop}px`,
+        background: color,
+      }}/>
+      {/* tête de flèche gauche */}
+      <div style={{
+        position: 'absolute',
+        left: 'calc(25% - 10px)', top: `${stem + drop}px`,
+        transform: 'translateX(-50%)',
+        width: 0, height: 0,
+        borderLeft: '5px solid transparent',
+        borderRight: '5px solid transparent',
+        borderTop: `${arrow}px solid ${color}`,
+      }}/>
+      {/* tête de flèche droite */}
+      <div style={{
+        position: 'absolute',
+        right: 'calc(25% - 10px)', top: `${stem + drop}px`,
+        transform: 'translateX(50%)',
+        width: 0, height: 0,
+        borderLeft: '5px solid transparent',
+        borderRight: '5px solid transparent',
+        borderTop: `${arrow}px solid ${color}`,
+      }}/>
+    </div>
+  )
+}
+
+// Y-merge (2 → 1) : symétrique inverse de FlowSplit. Les 2 colonnes remontent
+// vers une barre horizontale, qui descend en tronc central avec une seule tête.
+function FlowMerge({ color = FLOW_COLOR }) {
+  const drop = 22
+  const stem = 18
+  const arrow = 7
+  const total = drop + stem + arrow
+  return (
+    <div style={{ position: 'relative', height: `${total}px`, margin: '4px 0' }}>
+      {/* montée gauche */}
+      <div style={{
+        position: 'absolute',
+        left: `calc(25% - 10px - ${FLOW_STROKE / 2}px)`, top: 0,
+        width: `${FLOW_STROKE}px`, height: `${drop}px`,
+        background: color,
+      }}/>
+      {/* montée droite */}
+      <div style={{
+        position: 'absolute',
+        right: `calc(25% - 10px - ${FLOW_STROKE / 2}px)`, top: 0,
+        width: `${FLOW_STROKE}px`, height: `${drop}px`,
+        background: color,
+      }}/>
+      {/* barre horizontale */}
+      <div style={{
+        position: 'absolute',
+        left: 'calc(25% - 10px)', right: 'calc(25% - 10px)',
+        top: `${drop}px`, height: `${FLOW_STROKE}px`,
+        background: color,
+      }}/>
+      {/* tronc central descendant */}
+      <div style={{
+        position: 'absolute',
+        left: '50%', top: `${drop}px`,
+        width: `${FLOW_STROKE}px`, height: `${stem}px`,
+        background: color, transform: 'translateX(-50%)',
+      }}/>
+      {/* tête de flèche bas */}
+      <div style={{
+        position: 'absolute',
+        left: '50%', top: `${drop + stem}px`,
+        transform: 'translateX(-50%)',
+        width: 0, height: 0,
+        borderLeft: '5px solid transparent',
+        borderRight: '5px solid transparent',
+        borderTop: `${arrow}px solid ${color}`,
+      }}/>
+    </div>
+  )
+}
+
+// ─── Voix TTS : labels + couleurs pour l'affichage du module persistant ──────
+function voiceLabel(t) {
+  if (t === 'fish_audio') return 'Fish Audio S2-Pro (payant)'
+  if (t === 'gtts') return 'gTTS — voix basique gratuite'
+  if (t === 'mock') return 'Mock — silence (test)'
+  return t || 'inconnue'
+}
+function voiceColor(t) {
+  if (t === 'fish_audio') return '#34d399'
+  if (t === 'gtts') return '#fb923c'
+  if (t === 'mock') return '#94a3b8'
+  return '#94a3b8'
+}
 
 // ─── Styles communs ───────────────────────────────────────────────────────────
 const S = {
@@ -172,7 +364,8 @@ function Stepper({ currentStep, status }) {
       {STEP_LABELS.map((s, i) => {
         const done = i < currentStep
         const active = i === currentStep
-        const err = status === 'error' && active
+        // err inclut audio_error pour afficher l'icône erreur sur l'étape TTS
+        const err = (status === 'error' || status === 'audio_error') && active
         return (
           <div key={i} style={{ display: 'flex', alignItems: 'center', flex: i < STEP_LABELS.length - 1 ? 1 : 0 }}>
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', minWidth: '80px' }}>
@@ -203,9 +396,9 @@ function Stepper({ currentStep, status }) {
 
 // ─── Carte d'un job existant ──────────────────────────────────────────────────
 function JobCard({ job, onSelect, selected }) {
-  const step = statusToStep(job.status)
+  const step = statusToStep(job.status, job)
   const statusColor = job.status === 'audio_launched' ? 'green'
-    : job.status === 'error' ? 'red'
+    : (job.status === 'error' || job.status === 'audio_error') ? 'red'
     : POLLING_STATUSES.has(job.status) ? 'amber'
     : 'violet'
 
@@ -435,6 +628,401 @@ function RefinePanel({ jobId, contentType, currentContent, onRevised }) {
 }
 
 // ─── Bloc d'étape individuel ──────────────────────────────────────────────────
+// ─── Double colonne API / Claude Code — Phase 2 ─────────────────────────────
+// Activation par `import.meta.env.DEV` : colonne droite visible uniquement en
+// dev (localhost:5173 via Vite). Les build prod Azure Static Web Apps gardent
+// la mono-colonne API. Pattern cohérent avec le gating backend `LOCAL_DEV=true`
+// documenté dans memoire/03-decisions/pipeline-dual-api-et-claude-code.md.
+const DUAL_COLUMN_ENABLED = import.meta.env.DEV
+
+const CC_MODELS = [
+  { value: 'haiku', label: 'Haiku', hint: 'rapide, volume' },
+  { value: 'sonnet', label: 'Sonnet', hint: 'qualité fine' },
+]
+const CC_DEFAULT_MODEL_BY_STEP = {
+  kb: 'haiku',
+  global: 'haiku',
+  daily: 'haiku',
+  content: 'sonnet',
+  review: 'sonnet',
+}
+// Subprocess auto : global + daily + kb en mode mono-chunk, content + review
+// en mode chunked (boucle séquentielle de N appels CLI dans le backend, voir
+// claude_code_mission_service.py:_execute_chunked).
+// kb : prompt borné à 1500-2500 mots/compétence × ~10 = ~25K mots ≈ 38K tokens
+// (largement sous la limite Sonnet 64K output). Parsing tolérant à la
+// troncature dans `_import_kb` via `_repair_truncated_json`.
+const CC_AUTO_EXEC_ENABLED = { global: true, kb: true, daily: true, content: true, review: true }
+
+function StepDualLayout({ apiContent, claudeCodeContent }) {
+  // En mono-colonne (DUAL_COLUMN_ENABLED=false), on ne rend que le contenu
+  // API ; aucun visuel n'évoque Claude Code. Le code reste présent mais
+  // dormant côté front de prod.
+  if (!DUAL_COLUMN_ENABLED) return apiContent
+  return (
+    <div
+      style={{
+        display: 'grid',
+        gridTemplateColumns: '1fr 1px 1fr',
+        gap: '24px',
+        alignItems: 'start',
+      }}
+    >
+      <div style={{ minWidth: 0 }}>
+        <div
+          style={{
+            fontSize: '11px',
+            fontWeight: 700,
+            color: '#60a5fa',
+            textTransform: 'uppercase',
+            letterSpacing: '0.1em',
+            marginBottom: '10px',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '6px',
+          }}
+        >
+          <Icon name="cloud" style={{ fontSize: '14px' }} /> API Cloud
+        </div>
+        {apiContent}
+      </div>
+      <div
+        aria-hidden
+        style={{
+          alignSelf: 'stretch',
+          background: 'rgba(255,255,255,0.12)',
+          width: '1px',
+        }}
+      />
+      <div style={{ minWidth: 0 }}>
+        <div
+          style={{
+            fontSize: '11px',
+            fontWeight: 700,
+            color: '#f59e0b',
+            textTransform: 'uppercase',
+            letterSpacing: '0.1em',
+            marginBottom: '10px',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '6px',
+          }}
+        >
+          <Icon name="terminal" style={{ fontSize: '14px' }} /> Claude Code local
+        </div>
+        {claudeCodeContent}
+      </div>
+    </div>
+  )
+}
+
+function ClaudeCodeStepActions({
+  stepKey,
+  stepLabel,
+  jobId,
+  disabled,
+  disabledReason,
+  onExport,
+  onExecute,
+  pendingMission,
+  onImport,
+  generatedVia,
+  defaultModel,
+}) {
+  const [model, setModel] = useState(defaultModel || CC_DEFAULT_MODEL_BY_STEP[stepKey] || 'haiku')
+  const [exporting, setExporting] = useState(false)
+  const [executing, setExecuting] = useState(false)
+  const [importing, setImporting] = useState(false)
+  const [showLogs, setShowLogs] = useState(false)
+
+  const isRunning = pendingMission?.execution_status === 'running'
+  const execDone = pendingMission?.execution_status === 'done'
+  const execError = pendingMission?.execution_status === 'error'
+
+  const handleExport = async () => {
+    if (disabled || exporting) return
+    setExporting(true)
+    try {
+      await onExport({ stepKey, model })
+    } finally {
+      setExporting(false)
+    }
+  }
+  const handleExecute = async () => {
+    if (disabled || executing || isRunning) return
+    setExecuting(true)
+    try {
+      await onExecute({ stepKey, model })
+    } finally {
+      setExecuting(false)
+    }
+  }
+  const handleImport = async () => {
+    if (importing || !pendingMission) return
+    setImporting(true)
+    try {
+      await onImport({ stepKey })
+    } finally {
+      setImporting(false)
+    }
+  }
+
+  return (
+    <div
+      style={{
+        padding: '14px',
+        border: '1px dashed rgba(245, 158, 11, 0.3)',
+        borderRadius: '10px',
+        background: 'rgba(245, 158, 11, 0.04)',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: '10px',
+      }}
+    >
+      <div style={{ fontSize: '13px', color: '#fbbf24', fontWeight: 600 }}>{stepLabel}</div>
+
+      {/* Badge de provenance — UNIQUEMENT si la dernière génération vient
+          de Claude Code. La colonne API a déjà ses propres indicateurs ;
+          afficher "Généré via API" sur la colonne CC est trompeur (le user
+          se demande pourquoi son côté CC parle d'API). */}
+      {generatedVia && generatedVia !== 'api' && (
+        <div style={{ fontSize: '11px', color: '#94a3b8', display: 'flex', alignItems: 'center', gap: '6px' }}>
+          <Icon name="terminal" style={{ fontSize: '12px' }} />
+          Généré via {generatedVia === 'claude_code_haiku' ? 'Claude Code Haiku' : 'Claude Code Sonnet'}
+        </div>
+      )}
+
+      <label style={{ fontSize: '12px', color: '#94a3b8', display: 'flex', alignItems: 'center', gap: '8px' }}>
+        Modèle :
+        <select
+          value={model}
+          onChange={e => setModel(e.target.value)}
+          disabled={disabled || exporting}
+          style={{
+            background: 'rgba(15,23,42,0.8)',
+            color: '#e2e8f0',
+            border: '1px solid rgba(245,158,11,0.3)',
+            borderRadius: '6px',
+            padding: '4px 8px',
+            fontSize: '12px',
+            outline: 'none',
+          }}
+        >
+          {CC_MODELS.map(m => (
+            <option key={m.value} value={m.value}>{m.label} — {m.hint}</option>
+          ))}
+        </select>
+      </label>
+
+      {/* Bouton principal : exécution automatique via subprocess `claude`.
+          Scope V1 : uniquement pour `global`. Les autres étapes affichent
+          un message "à venir" + bouton d'export manuel pour ceux qui
+          veulent vraiment essayer. */}
+      {CC_AUTO_EXEC_ENABLED[stepKey] ? (
+        <button
+          onClick={handleExecute}
+          disabled={disabled || executing || isRunning}
+          title={
+            disabled ? (disabledReason || 'Non disponible à cette étape')
+            : isRunning ? 'Exécution en cours — Claude Code travaille'
+            : 'Exporte la mission + lance `claude -p` + importe le résultat automatiquement'
+          }
+          style={{
+            ...S.btn('primary'),
+            padding: '7px 12px',
+            fontSize: '12px',
+            background: isRunning
+              ? 'linear-gradient(135deg, #78350f, #d97706)'
+              : 'linear-gradient(135deg, #d97706, #f59e0b)',
+            color: '#fff',
+            boxShadow: '0 4px 12px rgba(245,158,11,0.25)',
+            opacity: disabled ? 0.5 : 1,
+            cursor: (disabled || isRunning) ? 'wait' : 'pointer',
+          }}
+        >
+          <Icon name={isRunning || executing ? 'hourglass_empty' : 'play_circle'} />{' '}
+          {isRunning ? 'Claude Code travaille…' : executing ? 'Lancement…' : 'Exécuter avec Claude Code'}
+        </button>
+      ) : (
+        <div
+          style={{
+            padding: '8px 10px',
+            border: '1px dashed rgba(148,163,184,0.25)',
+            borderRadius: '8px',
+            fontSize: '11px',
+            color: '#94a3b8',
+            lineHeight: 1.4,
+          }}
+        >
+          <strong style={{ color: '#cbd5e1' }}>Exécution auto à venir</strong><br />
+          V1 : on valide le subprocess Claude Code d'abord sur <em>Programme global</em>.
+          Ensuite on l'étendra aux autres étapes avec une stratégie adaptée
+          (chunking pour KB/content, etc.).
+        </div>
+      )}
+
+      {/* État d'exécution : en cours / terminé / erreur */}
+      {isRunning && (
+        <div style={{ fontSize: '11px', color: '#fbbf24', lineHeight: 1.4 }}>
+          Peut prendre de quelques minutes à ~30 min selon l'étape et le modèle.
+          L'import se fait automatiquement à la fin.
+        </div>
+      )}
+
+      {/* Progression chunked (content/review) : "X/N — chunk_id" */}
+      {pendingMission?.progress && pendingMission.progress.total > 0 && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+          <div style={{ fontSize: '11px', color: '#cbd5e1', display: 'flex', justifyContent: 'space-between' }}>
+            <span>
+              <strong>{pendingMission.progress.current}/{pendingMission.progress.total}</strong>
+              {pendingMission.progress.current_chunk ? ` · ${pendingMission.progress.current_chunk}` : ''}
+            </span>
+            {pendingMission.progress.errors?.length > 0 && (
+              <span style={{ color: '#f87171' }}>
+                {pendingMission.progress.errors.length} erreur(s)
+              </span>
+            )}
+          </div>
+          <div style={{ height: '4px', background: 'rgba(148,163,184,0.15)', borderRadius: '2px', overflow: 'hidden' }}>
+            <div style={{
+              height: '100%',
+              width: `${Math.round((pendingMission.progress.current / pendingMission.progress.total) * 100)}%`,
+              background: pendingMission.progress.errors?.length > 0
+                ? 'linear-gradient(90deg, #d97706, #f59e0b)'
+                : 'linear-gradient(90deg, #34d399, #10b981)',
+              transition: 'width 0.3s ease',
+            }} />
+          </div>
+          {(pendingMission.progress.status === 'throttling' || pendingMission.progress.status === 'rate_limited') && (
+            <div style={{
+              fontSize: '10px',
+              color: pendingMission.progress.status === 'rate_limited' ? '#f87171' : '#fbbf24',
+              fontStyle: 'italic',
+            }}>
+              {pendingMission.progress.status === 'rate_limited'
+                ? '⏳ Rate limit Anthropic atteint — attente avant retry automatique…'
+                : '⏸ Pause anti-rate-limit (75s) entre chunks…'}
+            </div>
+          )}
+        </div>
+      )}
+      {(isRunning || execDone || execError) && (
+        <button
+          onClick={() => setShowLogs(true)}
+          style={{ ...S.btn('ghost'), padding: '4px 10px', fontSize: '11px' }}
+          title="Voir les logs de Claude Code (stdout du subprocess)"
+        >
+          <Icon name="terminal" style={{ fontSize: '13px' }} /> Voir les logs
+        </button>
+      )}
+      {showLogs && (
+        <ClaudeCodeLogsModal
+          jobId={jobId}
+          stepKey={stepKey}
+          onClose={() => setShowLogs(false)}
+          autoPoll={isRunning}
+        />
+      )}
+      {execDone && (
+        <div style={{ fontSize: '11px', color: '#34d399', display: 'flex', alignItems: 'center', gap: '4px' }}>
+          <Icon name="check_circle" style={{ fontSize: '13px' }} />
+          Exécution terminée et importée
+        </div>
+      )}
+      {execError && (
+        <div style={{ fontSize: '11px', color: '#f87171', lineHeight: 1.4 }}>
+          <Icon name="error" style={{ fontSize: '12px' }} /> Échec : {pendingMission.execution_error}
+        </div>
+      )}
+
+      {/* Bouton avancé : export manuel (pour cas où on veut intervenir) */}
+      <button
+        onClick={handleExport}
+        disabled={disabled || exporting || isRunning}
+        title={disabled ? disabledReason || 'Non disponible à cette étape' : 'Avancé : exporter les fichiers sans lancer Claude Code (tu lances manuellement dans ton terminal)'}
+        style={{
+          ...S.btn('ghost'),
+          padding: '5px 10px',
+          fontSize: '11px',
+          borderColor: 'rgba(148,163,184,0.25)',
+          color: '#94a3b8',
+          opacity: disabled || isRunning ? 0.4 : 0.8,
+        }}
+      >
+        <Icon name="file_download" style={{ fontSize: '13px' }} />{' '}
+        {exporting ? 'Export…' : 'Exporter manuellement'}
+      </button>
+
+      {pendingMission && pendingMission.has_output && !isRunning && (
+        <div
+          style={{
+            padding: '8px 10px',
+            border: '1px solid rgba(245,158,11,0.4)',
+            borderRadius: '8px',
+            background: 'rgba(245,158,11,0.08)',
+            fontSize: '11px',
+            color: '#fbbf24',
+          }}
+        >
+          <div style={{ fontWeight: 600, marginBottom: '4px' }}>Résultat présent</div>
+          <div style={{ color: '#fde68a', marginBottom: '6px', lineHeight: 1.4 }}>
+            output.md existe dans <code style={{ fontSize: '10px' }}>{pendingMission.path}</code>
+          </div>
+          <button
+            onClick={handleImport}
+            disabled={importing}
+            style={{
+              ...S.btn('ghost'),
+              padding: '4px 10px',
+              fontSize: '11px',
+              width: '100%',
+              justifyContent: 'center',
+            }}
+          >
+            <Icon name={importing ? 'hourglass_empty' : 'file_upload'} />{' '}
+            {importing ? 'Import…' : 'Importer le résultat manuellement'}
+          </button>
+        </div>
+      )}
+    </div>
+  )
+}
+
+
+// Variante StepBlock pour la colonne Claude Code — même hauteur d'alignement
+// que son pendant API (via grid-row partagée), mais style ambre distinct et
+// label allégé (pas de numéro d'étape en grand).
+function StepBlockCC({ stepIndex, currentStep, status, title, icon, children }) {
+  const active = stepIndex === currentStep
+  const done = stepIndex < currentStep
+  const pending = stepIndex > currentStep
+  return (
+    <div style={{
+      ...S.card,
+      border: `1px solid ${active ? 'rgba(245,158,11,0.35)' : done ? 'rgba(245,158,11,0.2)' : 'rgba(245,158,11,0.12)'}`,
+      background: 'rgba(245,158,11,0.03)',
+      opacity: pending ? 0.5 : 1,
+      transition: 'all 0.3s',
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: active || done ? '16px' : '0' }}>
+        <div style={{
+          width: '32px', height: '32px', borderRadius: '8px', fontSize: '16px',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          background: 'rgba(245,158,11,0.12)',
+          color: '#fbbf24',
+        }}>
+          <Icon name={icon} />
+        </div>
+        <span style={{ fontWeight: 600, color: '#fbbf24', flex: 1, fontSize: '14px' }}>
+          {title}
+        </span>
+      </div>
+      {(active || done) && children}
+    </div>
+  )
+}
+
+
 function StepBlock({ stepIndex, currentStep, status, title, icon, children }) {
   const active = stepIndex === currentStep
   const done = stepIndex < currentStep
@@ -460,7 +1048,7 @@ function StepBlock({ stepIndex, currentStep, status, title, icon, children }) {
           {title}
         </span>
         {done && <span style={S.tag('green')}>Terminé</span>}
-        {active && POLLING_STATUSES.has(status) && <span style={S.tag('amber')}><Icon name="hourglass_empty" /> En cours…</span>}
+        {active && POLLING_STATUSES.has(status) && status !== 'audio_launched' && <span style={S.tag('amber')}><Icon name="hourglass_empty" /> En cours…</span>}
       </div>
       {(active || done) && children}
     </div>
@@ -491,6 +1079,7 @@ export default function FormationPipeline() {
   const [ttsResult, setTtsResult] = useState(null)
   const [contentFolders, setContentFolders] = useState([])
   const [viewingFolder, setViewingFolder] = useState(null)    // folder object affiché en modal
+  const [reportFolder, setReportFolder] = useState(null)      // folder dont on affiche le rapport de révision
 
   // États étape 6 — Synthèse audio Fish Audio
   const [launchingAudio, setLaunchingAudio] = useState(false)
@@ -548,6 +1137,28 @@ export default function FormationPipeline() {
       if (data.stats) setKb({ entries: data.entries || [], stats: data.stats })
     } catch (e) { console.error(e) }
   }, [])
+
+  // ─── Auto-pilot : statut + polling pendant l'orchestration auto ────────────
+  const [autoPilotState, setAutoPilotState] = useState(null)  // {step, status, error?, ...} ou null
+
+  const fetchAutoPilotStatus = useCallback(async (jobId) => {
+    if (!jobId) return
+    try {
+      const resp = await fetch(apiUrl(`/api/formation/${jobId}/run-auto/status`), { credentials: 'include' })
+      const data = await resp.json()
+      setAutoPilotState(data && data.status && data.status !== 'idle' ? data : null)
+    } catch (e) { /* silent */ }
+  }, [])
+
+  // Poll l'auto-pilot toutes les 5s tant qu'il tourne
+  useEffect(() => {
+    if (!selectedJobId) return
+    fetchAutoPilotStatus(selectedJobId)
+    const interval = setInterval(() => {
+      fetchAutoPilotStatus(selectedJobId)
+    }, 5000)
+    return () => clearInterval(interval)
+  }, [selectedJobId, fetchAutoPilotStatus])
 
   // ─── Fetch module lié au job courant ──────────────────────────────────────
   const fetchLinkedModule = useCallback(async (jobId) => {
@@ -678,7 +1289,7 @@ export default function FormationPipeline() {
   // Fetch dès que la génération texte a été lancée, puis poll pendant qu'elle tourne.
   useEffect(() => {
     if (!job || !selectedJobId) return
-    if (!['tts_launched', 'audio_launched'].includes(job.status)) return
+    if (!['tts_launched', 'audio_launched', 'audio_error'].includes(job.status)) return
     fetchContentFolders(selectedJobId)
     // Poll toutes les 3s tant qu'au moins un dossier n'a pas fini son texte
     const interval = setInterval(() => {
@@ -692,9 +1303,12 @@ export default function FormationPipeline() {
   const allContentCompleted = contentFolders.length > 0 &&
     contentFolders.every(f => f.content_status === 'completed')
 
-  const handleDownloadDocx = (folderId) => {
-    // Ouvre directement l'URL backend (Content-Disposition: attachment)
-    window.open(apiUrl(`/api/formation/${selectedJobId}/content/${folderId}/docx`), '_blank')
+  const handleDownloadDocx = (folderId, version = 'current') => {
+    // Ouvre directement l'URL backend (Content-Disposition: attachment).
+    // version='current' = état actuel (post-révision si appliquée)
+    // version='pre_review' = snapshot pris au finalize content (avant révision)
+    const url = apiUrl(`/api/formation/${selectedJobId}/content/${folderId}/docx?version=${version}`)
+    window.open(url, '_blank')
   }
 
   // ─── Étape 5 — reprise de la génération texte après crash backend ──────────
@@ -719,10 +1333,281 @@ export default function FormationPipeline() {
     }
   }
 
+  // ─── Étape 6bis — révision conformité via reviewer API (Claude Sonnet) ────
+  // Spec : memoire/03-decisions/pipeline-dual-api-et-claude-code.md — Phase 1.
+  // Le backend spawn un greenlet qui audit segment par segment. Côté front on
+  // suit l'avancement via `segments_reviewed` / `segments_completed` polled.
+  const [reviewingFolders, setReviewingFolders] = useState({})  // { [folderId]: true }
+  const [reviewError, setReviewError] = useState('')
+
+  const handleReviewFolder = async (folderId) => {
+    setReviewError('')
+    setReviewingFolders(prev => ({ ...prev, [folderId]: true }))
+    try {
+      const resp = await fetch(
+        apiUrl(`/api/formation/${selectedJobId}/content/${folderId}/review`),
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({}),
+        }
+      )
+      const data = await resp.json()
+      if (resp.status !== 202 && data.error) {
+        setReviewError(data.error)
+        setReviewingFolders(prev => { const n = { ...prev }; delete n[folderId]; return n })
+        return
+      }
+      // 202 Accepted — on garde le folder dans reviewingFolders, le polling
+      // (plus bas) le retirera automatiquement une fois reviewed === completed.
+      await fetchContentFolders(selectedJobId)
+    } catch (e) {
+      setReviewError('Erreur réseau')
+      setReviewingFolders(prev => { const n = { ...prev }; delete n[folderId]; return n })
+    }
+  }
+
+  // Polling dédié pendant une révision — indépendant du polling génération.
+  useEffect(() => {
+    const ids = Object.keys(reviewingFolders)
+    if (ids.length === 0) return
+    const interval = setInterval(() => {
+      fetchContentFolders(selectedJobId)
+    }, 3000)
+    return () => clearInterval(interval)
+  }, [reviewingFolders, selectedJobId, fetchContentFolders])
+
+  // À chaque refresh de contentFolders, retirer du set les folders dont la
+  // révision est "terminée" = tous les segments ont été **traités** : soit
+  // audités avec succès (reviewed=1), soit marqués en échec (review_error
+  // défini). Un segment en échec compte pour arrêter le polling sans
+  // mentir sur la conformité.
+  useEffect(() => {
+    setReviewingFolders(prev => {
+      const next = { ...prev }
+      let changed = false
+      for (const f of contentFolders) {
+        const processed = (f.segments_reviewed || 0) + (f.segments_review_errors || 0)
+        if (next[f.folder_id] && processed >= f.segments_completed && f.segments_completed > 0) {
+          delete next[f.folder_id]
+          changed = true
+        }
+      }
+      return changed ? next : prev
+    })
+  }, [contentFolders])
+
+  // ─── Étape 6.5 — Sécurité volume (audit + enrichissement à la demande) ────
+  // Filet de sécurité POST-génération : si une journée totalise <90 000 mots,
+  // l'utilisateur peut lancer un agent Claude Code qui enrichit (append-only)
+  // les segments les plus courts en respectant les règles #1-#27.
+  const [volumeAudit, setVolumeAudit] = useState(null)              // { target, folders[] }
+  const [safetyRunning, setSafetyRunning] = useState({})            // { [folderId]: true }
+  const [safetyError, setSafetyError] = useState('')
+  const [safetyModel, setSafetyModel] = useState('sonnet')
+
+  const fetchVolumeAudit = useCallback(async (jobId) => {
+    if (!jobId) return
+    try {
+      const resp = await fetch(apiUrl(`/api/formation/${jobId}/volume-audit`), { credentials: 'include' })
+      if (resp.status === 403) return
+      const data = await resp.json()
+      if (data.folders) setVolumeAudit(data)
+    } catch (e) {
+      // Silencieux : endpoint optionnel
+    }
+  }, [])
+
+  // Fetch dès qu'au moins une journée est completed
+  useEffect(() => {
+    if (!selectedJobId) return
+    const hasCompleted = contentFolders.some(f => f.content_status === 'completed')
+    if (!hasCompleted) return
+    fetchVolumeAudit(selectedJobId)
+  }, [selectedJobId, contentFolders, fetchVolumeAudit])
+
+  // Polling pendant une exécution volume safety
+  useEffect(() => {
+    const ids = Object.keys(safetyRunning)
+    if (ids.length === 0) return
+    const interval = setInterval(async () => {
+      for (const folderId of ids) {
+        try {
+          const resp = await fetch(
+            apiUrl(`/api/formation/${selectedJobId}/content/${folderId}/volume-safety/status`),
+            { credentials: 'include' },
+          )
+          const data = await resp.json()
+          if (data.status === 'done' || data.status === 'error') {
+            setSafetyRunning(prev => { const n = { ...prev }; delete n[folderId]; return n })
+            if (data.status === 'error') {
+              setSafetyError(`Folder ${folderId} : ${data.error || 'erreur inconnue'}`)
+            }
+            await fetchVolumeAudit(selectedJobId)
+            await fetchContentFolders(selectedJobId)
+          }
+        } catch (e) { /* ignore */ }
+      }
+    }, 4000)
+    return () => clearInterval(interval)
+  }, [safetyRunning, selectedJobId, fetchVolumeAudit, fetchContentFolders])
+
+  const handleLaunchVolumeSafety = async (folderId, mode = 'cc') => {
+    setSafetyError('')
+    setSafetyRunning(prev => ({ ...prev, [folderId]: true }))
+    try {
+      const resp = await fetch(
+        apiUrl(`/api/formation/${selectedJobId}/content/${folderId}/volume-safety`),
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({ model: safetyModel, mode }),
+        },
+      )
+      const data = await resp.json()
+      if (resp.status !== 202 && data.error) {
+        setSafetyError(data.error)
+        setSafetyRunning(prev => { const n = { ...prev }; delete n[folderId]; return n })
+      }
+    } catch (e) {
+      setSafetyError('Erreur réseau')
+      setSafetyRunning(prev => { const n = { ...prev }; delete n[folderId]; return n })
+    }
+  }
+
+  // ─── Missions Claude Code (Phase 3) — export / import manuel ──────────────
+  // Spec : memoire/03-decisions/pipeline-dual-api-et-claude-code.md
+  // Le backend écrit des fichiers dans review_queue/<job>/<step>/, l'utilisateur
+  // lance `claude --model <haiku|sonnet>` dans son terminal, Claude Code écrit
+  // le résultat, puis le frontend importe via un second bouton.
+  const [pendingMissions, setPendingMissions] = useState({})  // { [stepKey]: { path, exported_at, command, ... } }
+  const [missionModal, setMissionModal] = useState(null)       // { stepKey, mission } quand une mission vient d'être exportée
+  const [missionError, setMissionError] = useState('')
+
+  const fetchPendingMissions = useCallback(async (jobId) => {
+    if (!DUAL_COLUMN_ENABLED || !jobId) return
+    try {
+      const resp = await fetch(apiUrl(`/api/formation/${jobId}/missions/pending`), { credentials: 'include' })
+      if (resp.status === 403) return  // LOCAL_DEV non activé côté backend, on ignore
+      const data = await resp.json()
+      if (data.missions) setPendingMissions(data.missions)
+    } catch (e) {
+      // Silencieux : endpoint pas indispensable
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!selectedJobId) return
+    fetchPendingMissions(selectedJobId)
+  }, [selectedJobId, fetchPendingMissions])
+
+  const handleExportMission = async ({ stepKey, model }) => {
+    setMissionError('')
+    try {
+      const resp = await fetch(
+        apiUrl(`/api/formation/${selectedJobId}/missions/${stepKey}/export`),
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({ model }),
+        }
+      )
+      const data = await resp.json()
+      if (!resp.ok || data.error) {
+        setMissionError(data.error || `Erreur ${resp.status}`)
+        return
+      }
+      setPendingMissions(prev => ({ ...prev, [stepKey]: data.mission }))
+      setMissionModal({ stepKey, mission: data.mission })
+    } catch (e) {
+      setMissionError('Erreur réseau')
+    }
+  }
+
+  const handleExecuteMission = async ({ stepKey, model }) => {
+    setMissionError('')
+    try {
+      const resp = await fetch(
+        apiUrl(`/api/formation/${selectedJobId}/missions/${stepKey}/execute`),
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({ model }),
+        }
+      )
+      const data = await resp.json()
+      if (!resp.ok || data.error) {
+        setMissionError(data.error || `Erreur ${resp.status}`)
+        return
+      }
+      // 202 Accepted — le greenlet tourne. Le polling fetchPendingMissions
+      // va refresh l'UI avec execution_status='running' puis 'done'/'error'.
+      await fetchPendingMissions(selectedJobId)
+    } catch (e) {
+      setMissionError('Erreur réseau')
+    }
+  }
+
+  // Polling continu tant qu'au moins une mission est en execution_status='running'
+  useEffect(() => {
+    if (!selectedJobId || !DUAL_COLUMN_ENABLED) return
+    const hasRunning = Object.values(pendingMissions).some(m => m.execution_status === 'running')
+    if (!hasRunning) return
+    const interval = setInterval(() => {
+      fetchPendingMissions(selectedJobId)
+      // Si un done récent, on refresh aussi le job et les folders
+      fetchJob(selectedJobId)
+      fetchContentFolders(selectedJobId)
+    }, 4000)
+    return () => clearInterval(interval)
+  }, [pendingMissions, selectedJobId, fetchPendingMissions])
+
+  const handleImportMission = async ({ stepKey }) => {
+    setMissionError('')
+    try {
+      const resp = await fetch(
+        apiUrl(`/api/formation/${selectedJobId}/missions/${stepKey}/import`),
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({}),
+        }
+      )
+      const data = await resp.json()
+      // Si 501 (not_implemented) ou autre erreur : on affiche le message et
+      // on GARDE la mission dans la file + la modale reste ouverte.
+      // L'utilisateur doit savoir que rien n'a été importé.
+      if (!resp.ok || data.error) {
+        const prefix = data.not_implemented ? 'Import non implémenté : ' : ''
+        setMissionError(`${prefix}${data.error || `Erreur ${resp.status}`}`)
+        return
+      }
+      setPendingMissions(prev => {
+        const next = { ...prev }
+        delete next[stepKey]
+        return next
+      })
+      setMissionModal(null)
+      // Re-fetch l'état courant du job et des folders
+      await fetchJob(selectedJobId)
+      await fetchContentFolders(selectedJobId)
+    } catch (e) {
+      setMissionError('Erreur réseau')
+    }
+  }
+
   // ─── Étape 6 — lancement de la synthèse audio Fish Audio ──────────────────
-  // mock=true génère des MP3 de silence 1s au lieu d'appeler Fish Audio (0 €).
-  // Utile pour tester le flux bout-en-bout sans consommer le budget TTS.
-  const handleLaunchAudio = async (mock = false) => {
+  // 3 modes de synthèse audio dans l'étape 7 :
+  // - mock=true       → MP3 silence 1s, test gratuit (ne produit aucun audio réel)
+  // - basicTts=true   → gTTS (Google, voix basique gratuite) — vraie voix, utile
+  //                      pour vérifier le flux et écouter le texte sans payer Fish
+  // - (par défaut)    → Fish Audio S2-Pro (voix studio payante)
+  const handleLaunchAudio = async (mock = false, basicTts = false) => {
     setLaunchingAudio(true)
     setAudioError('')
     try {
@@ -730,13 +1615,16 @@ export default function FormationPipeline() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
-        body: JSON.stringify({ mock }),
+        body: JSON.stringify({ mock, basic_tts: basicTts }),
       })
       const data = await resp.json()
       if (data.error) setAudioError(data.error)
       else {
         await fetchJob(selectedJobId)
         await fetchJobs()
+        // Re-fetch le module : son champ voice_type vient d'être mis à jour
+        // par le backend (cf. launch_audio → UPDATE formation_modules).
+        await fetchLinkedModule(selectedJobId)
       }
     } catch (e) {
       setAudioError('Erreur réseau')
@@ -843,8 +1731,14 @@ export default function FormationPipeline() {
                     {job.rome_length > 0 && <span style={{ color: '#34d399', marginLeft: 6 }}>✓ ROME {(job.rome_length / 1000).toFixed(0)}k</span>}
                   </div>
                 </div>
-                <span style={S.tag(job.status === 'audio_launched' ? 'green' : job.status === 'error' ? 'red' : 'violet')}>
-                  {job.status?.replace(/_/g, ' ')}
+                <span style={S.tag(
+                  job.status === 'audio_launched' ? 'green'
+                  : (job.status === 'error' || job.status === 'audio_error') ? 'red'
+                  : 'violet'
+                )}>
+                  {job.status === 'audio_launched'
+                    ? 'Clôturée'
+                    : job.status?.replace(/_/g, ' ')}
                 </span>
               </div>
               {job.error_message && (
@@ -854,13 +1748,209 @@ export default function FormationPipeline() {
               )}
             </div>
 
+            {/* Bandeau auto-pilot — affiché quand l'orchestration automatique
+                est active. Permet à l'utilisateur de comprendre que la pipeline
+                tourne sans intervention et qu'il n'a pas besoin de cliquer. */}
+            {autoPilotState && autoPilotState.status === 'running' && (
+              <div style={{
+                padding: '14px 18px',
+                marginBottom: '20px',
+                borderRadius: '12px',
+                background: 'linear-gradient(135deg, rgba(59,130,246,0.15), rgba(139,92,246,0.08))',
+                border: '1px solid rgba(59,130,246,0.4)',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '14px',
+                flexWrap: 'wrap',
+              }}>
+                <div style={{
+                  width: '38px', height: '38px', borderRadius: '10px',
+                  background: 'rgba(59,130,246,0.2)',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                }}>
+                  <Icon name="autorenew" style={{ fontSize: '22px', color: '#60a5fa' }} className="material-icons" />
+                </div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: '14px', fontWeight: 700, color: '#60a5fa' }}>
+                    Auto-pilot en cours — étape : {(() => {
+                      const labels = {
+                        start: 'démarrage', reac: 'téléchargement REAC',
+                        kb: 'enrichissement Knowledge Base', global: 'programme global',
+                        daily: 'programmes journée', content: 'génération texte (long)',
+                        audio: 'synthèse audio', done: 'terminé', '?': '—',
+                      }
+                      return labels[autoPilotState.step] || autoPilotState.step
+                    })()}
+                  </div>
+                  <div style={{ fontSize: '12px', color: '#94a3b8', marginTop: '2px' }}>
+                    Toutes les étapes s'enchaînent automatiquement — TTS : <strong>{autoPilotState.tts_mode || 'gtts'}</strong>
+                    {' · '}modèle : <strong>{autoPilotState.model || 'sonnet'}</strong>
+                    {' · '}stop-on-error
+                  </div>
+                </div>
+              </div>
+            )}
+            {autoPilotState && autoPilotState.status === 'error' && (
+              <div style={{
+                padding: '12px 16px',
+                marginBottom: '20px',
+                borderRadius: '10px',
+                background: 'rgba(239,68,68,0.1)',
+                border: '1px solid rgba(239,68,68,0.4)',
+                color: '#f87171',
+                fontSize: '13px',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '12px',
+                flexWrap: 'wrap',
+              }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <Icon name="error_outline" /> <strong>Auto-pilot interrompu</strong> à l'étape <em>{autoPilotState.step || '?'}</em> : {autoPilotState.error}
+                </div>
+                <button
+                  style={{
+                    ...S.btn('primary'),
+                    background: 'linear-gradient(135deg, #3b82f6, #60a5fa)',
+                    boxShadow: '0 4px 15px rgba(59,130,246,0.3)',
+                    padding: '6px 14px',
+                    fontSize: '12px',
+                  }}
+                  onClick={async () => {
+                    try {
+                      const resp = await fetch(
+                        apiUrl(`/api/formation/${selectedJobId}/run-auto`),
+                        {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          credentials: 'include',
+                          body: JSON.stringify({
+                            tts_mode: autoPilotState.tts_mode || 'gtts',
+                            model: autoPilotState.model || 'sonnet',
+                          }),
+                        },
+                      )
+                      const data = await resp.json()
+                      if (resp.status !== 202 && data.error) {
+                        alert(`Reprise impossible : ${data.error}`)
+                      } else {
+                        await fetchAutoPilotStatus(selectedJobId)
+                        await fetchJob(selectedJobId)
+                      }
+                    } catch (e) {
+                      alert('Erreur réseau lors de la reprise')
+                    }
+                  }}
+                >
+                  <Icon name="autorenew" /> Reprendre auto-pilot
+                </button>
+              </div>
+            )}
+
+            {/* Bandeau de clôture — affiché quand audio_launched (toutes les
+                étapes ont abouti). Marque visuellement la fin de la pipeline.
+                Le module persistant créé est affiché dedans (matérialise "1 RNCP
+                = 1 module durable", réutilisable pour de nouvelles promos). */}
+            {job.status === 'audio_launched' && (
+              <div style={{
+                position: 'relative',
+                padding: '20px 24px',
+                marginBottom: '24px',
+                borderRadius: '14px',
+                background: 'linear-gradient(135deg, rgba(16,185,129,0.18), rgba(52,211,153,0.08))',
+                border: '1px solid rgba(16,185,129,0.45)',
+                boxShadow: '0 8px 30px rgba(16,185,129,0.15)',
+                overflow: 'hidden',
+              }}>
+                <div style={{
+                  position: 'absolute', top: 0, right: 0,
+                  width: '180px', height: '180px',
+                  background: 'radial-gradient(circle, rgba(52,211,153,0.18), transparent 70%)',
+                  pointerEvents: 'none',
+                }} />
+                <div style={{ display: 'flex', alignItems: 'center', gap: '16px', flexWrap: 'wrap', position: 'relative' }}>
+                  <div style={{
+                    width: '52px', height: '52px', borderRadius: '14px',
+                    background: 'linear-gradient(135deg, #059669, #10b981)',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    boxShadow: '0 4px 18px rgba(16,185,129,0.4)',
+                  }}>
+                    <Icon name="verified" style={{ fontSize: '28px', color: '#fff' }} />
+                  </div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: '20px', fontWeight: 700, color: '#34d399', letterSpacing: '0.3px' }}>
+                      Pipeline terminée — formation prête
+                    </div>
+                    <div style={{ fontSize: '13px', color: '#94a3b8', marginTop: '4px' }}>
+                      <strong style={{ color: '#e2e8f0' }}>{job.tp_name}</strong>
+                      {' · '}{job.nb_days} journée{job.nb_days > 1 ? 's' : ''} générée{job.nb_days > 1 ? 's' : ''}
+                      {' · '}{(job.nb_days || 0) * 19} MP3 (cours + Q&A + pauses)
+                      {job.platform_name && <> {' · '}plateforme <strong style={{ color: '#a78bfa' }}>{job.platform_name}</strong></>}
+                    </div>
+                    {linkedModule && (
+                      <div style={{ fontSize: '12px', color: '#64748b', marginTop: '6px' }}>
+                        Module persistant créé :{' '}
+                        <strong style={{ color: '#a78bfa' }}>
+                          {linkedModule.tp_name} — RNCP {linkedModule.rncp_code || '?'}
+                          {linkedModule.version && <> — {linkedModule.version}</>}
+                        </strong>
+                        {linkedModule.voice_type && (
+                          <> {' · '}voix actuelle : <strong style={{ color: voiceColor(linkedModule.voice_type) }}>{voiceLabel(linkedModule.voice_type)}</strong></>
+                        )}
+                        {' '}— réutilisable pour toutes les promos sans relancer la pipeline.
+                      </div>
+                    )}
+                  </div>
+                  <span style={{
+                    ...S.tag('green'),
+                    padding: '6px 14px',
+                    fontSize: '12px',
+                    fontWeight: 700,
+                    letterSpacing: '0.5px',
+                    textTransform: 'uppercase',
+                  }}>
+                    <Icon name="check_circle" style={{ fontSize: '14px' }} /> Clôturée
+                  </span>
+                </div>
+              </div>
+            )}
+
             {/* Stepper */}
             <Stepper currentStep={currentStep} status={job.status} />
+
+            {/* Bandeau missions Claude Code en attente d'import (Phase 3) */}
+            {DUAL_COLUMN_ENABLED && Object.keys(pendingMissions).length > 0 && (
+              <div
+                style={{
+                  padding: '12px 16px',
+                  background: 'rgba(245,158,11,0.08)',
+                  border: '1px solid rgba(245,158,11,0.35)',
+                  borderRadius: '10px',
+                  fontSize: '13px',
+                  color: '#fbbf24',
+                  marginBottom: '16px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '10px',
+                  flexWrap: 'wrap',
+                }}
+              >
+                <Icon name="warning_amber" />
+                <strong>{Object.keys(pendingMissions).length} mission(s) Claude Code en attente d'import</strong>
+                <span style={{ color: '#fde68a' }}>
+                  · {Object.keys(pendingMissions).join(', ')}
+                </span>
+              </div>
+            )}
 
             {/* Erreur action */}
             {actionError && (
               <div style={{ padding: '10px 14px', background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.2)', borderRadius: '8px', fontSize: '13px', color: '#f87171', marginBottom: '16px' }}>
                 {actionError}
+              </div>
+            )}
+            {missionError && (
+              <div style={{ padding: '10px 14px', background: 'rgba(245,158,11,0.12)', border: '1px solid rgba(245,158,11,0.3)', borderRadius: '8px', fontSize: '13px', color: '#fbbf24', marginBottom: '16px' }}>
+                Mission : {missionError}
               </div>
             )}
 
@@ -870,6 +1960,8 @@ export default function FormationPipeline() {
                 Job initialisé. RNCP <strong style={{ color: '#a78bfa' }}>{job.rncp_code}</strong> sélectionné pour <strong style={{ color: '#a78bfa' }}>{job.tp_name}</strong>.
               </div>
             </StepBlock>
+
+            <FlowArrowDown />
 
             {/* ── Étape 2 : Téléchargement REAC ── */}
             <StepBlock stepIndex={1} currentStep={currentStep} status={job.status} title="Téléchargement REAC" icon="download">
@@ -908,6 +2000,65 @@ export default function FormationPipeline() {
                 </div>
               )}
             </StepBlock>
+
+            {/* ─── Connecteur REAC → split en 2 colonnes (ou ↓ simple en mono) ── */}
+            {DUAL_COLUMN_ENABLED ? <FlowSplit /> : <FlowArrowDown />}
+
+            {/* ─── Labels de colonnes si DUAL — une ligne commune au-dessus ── */}
+            {DUAL_COLUMN_ENABLED && (
+              <div
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: '1fr 1fr',
+                  gap: '24px 40px',
+                  marginBottom: '8px',
+                }}
+              >
+                <div style={{
+                  fontSize: '11px', fontWeight: 700, color: '#60a5fa',
+                  textTransform: 'uppercase', letterSpacing: '0.1em',
+                  display: 'flex', alignItems: 'center', gap: '6px',
+                }}>
+                  <Icon name="cloud" style={{ fontSize: '14px' }} /> API Cloud · Anthropic
+                </div>
+                <div style={{
+                  fontSize: '11px', fontWeight: 700, color: '#f59e0b',
+                  textTransform: 'uppercase', letterSpacing: '0.1em',
+                  display: 'flex', alignItems: 'center', gap: '6px',
+                }}>
+                  <Icon name="terminal" style={{ fontSize: '14px' }} /> Claude Code local · forfait
+                </div>
+              </div>
+            )}
+
+            {/* ─── Wrapper grid des étapes 3-6 (API à gauche, CC à droite) ──
+                 En mono : grid 1fr = stack vertical normal.
+                 En dual : grid 1fr 1fr + séparateur central sobre en absolute.
+                 Chaque paire <StepBlock>/<StepBlockCC> se place auto sur
+                 la même ligne grâce à grid-auto-flow: row. Spec :
+                 memoire/03-decisions/pipeline-dual-api-et-claude-code.md */}
+            <div
+              style={{
+                display: 'grid',
+                gridTemplateColumns: DUAL_COLUMN_ENABLED ? '1fr 1fr' : '1fr',
+                gap: '16px 40px',
+                position: 'relative',
+                marginBottom: '24px',
+              }}
+            >
+              {DUAL_COLUMN_ENABLED && (
+                <div
+                  aria-hidden
+                  style={{
+                    position: 'absolute',
+                    top: 0, bottom: 0, left: '50%',
+                    width: '1px',
+                    background: 'rgba(255,255,255,0.12)',
+                    transform: 'translateX(-50%)',
+                    pointerEvents: 'none',
+                  }}
+                />
+              )}
 
             {/* ── Étape 3 : Enrichissement Knowledge Base (Couche 1) ── */}
             <StepBlock stepIndex={2} currentStep={currentStep} status={job.status} title="Enrichissement Knowledge Base" icon="psychology">
@@ -1090,6 +2241,31 @@ export default function FormationPipeline() {
               )}
             </StepBlock>
 
+            {/* Étape KB en mode Claude Code — réactivée 2026-04-28 :
+                prompt borné (1500-2500 mots/compétence) + parsing tolérant à la
+                troncature. Permet d'économiser des crédits API quand le compte
+                Anthropic est bas. */}
+            {DUAL_COLUMN_ENABLED && (
+              <StepBlockCC stepIndex={2} currentStep={currentStep} status={job.status} title="Enrichissement KB (local)" icon="psychology">
+                <ClaudeCodeStepActions
+                  stepKey="kb"
+                  stepLabel="Enrichissement Knowledge Base"
+                  jobId={selectedJobId}
+                  disabled={!job.reac_length || currentStep < 2}
+                  disabledReason={!job.reac_length ? 'REAC non téléchargé' : undefined}
+                  onExport={handleExportMission}
+                  onExecute={handleExecuteMission}
+                  onImport={handleImportMission}
+                  pendingMission={pendingMissions.kb}
+                  generatedVia={job.kb_generated_via}
+                />
+              </StepBlockCC>
+            )}
+
+            {/* ─── KB → Programme global (1 flèche par colonne) ── */}
+            <FlowArrowDown />
+            {DUAL_COLUMN_ENABLED && <FlowArrowDown />}
+
             {/* ── Étape 4 : Programme global ── */}
             <StepBlock stepIndex={3} currentStep={currentStep} status={job.status} title="Programme global" icon="auto_stories">
               {job.status === 'global_generating' ? (
@@ -1156,6 +2332,28 @@ export default function FormationPipeline() {
                 </div>
               )}
             </StepBlock>
+
+            {/* Pendant Claude Code — étape 4 (Programme global) */}
+            {DUAL_COLUMN_ENABLED && (
+              <StepBlockCC stepIndex={3} currentStep={currentStep} status={job.status} title="Programme global (local)" icon="auto_stories">
+                <ClaudeCodeStepActions
+                  stepKey="global"
+                  stepLabel="Programme global"
+                  jobId={selectedJobId}
+                  disabled={currentStep < 3 || job.status === 'kb_building'}
+                  disabledReason="En attente de la KB"
+                  onExport={handleExportMission}
+                  onExecute={handleExecuteMission}
+                  onImport={handleImportMission}
+                  pendingMission={pendingMissions.global}
+                  generatedVia={job.global_program_generated_via}
+                />
+              </StepBlockCC>
+            )}
+
+            {/* ─── Programme global → Programmes journée (1 flèche par colonne) ── */}
+            <FlowArrowDown />
+            {DUAL_COLUMN_ENABLED && <FlowArrowDown />}
 
             {/* ── Étape 5 : Programmes journée ── */}
             <StepBlock stepIndex={4} currentStep={currentStep} status={job.status} title={`Programmes journée (${job.nb_days} jours)`} icon="calendar_view_week">
@@ -1270,9 +2468,31 @@ export default function FormationPipeline() {
               )}
             </StepBlock>
 
+            {/* Pendant Claude Code — étape 5 (Programmes journée) */}
+            {DUAL_COLUMN_ENABLED && (
+              <StepBlockCC stepIndex={4} currentStep={currentStep} status={job.status} title="Programmes journée (local)" icon="calendar_view_week">
+                <ClaudeCodeStepActions
+                  stepKey="daily"
+                  stepLabel={`Programmes journée (${job.nb_days} jours)`}
+                  jobId={selectedJobId}
+                  disabled={currentStep < 4 || !job.global_program_validated}
+                  disabledReason="En attente du programme global validé"
+                  onExport={handleExportMission}
+                  onExecute={handleExecuteMission}
+                  onImport={handleImportMission}
+                  pendingMission={pendingMissions.daily}
+                  generatedVia={job.daily_programs_generated_via}
+                />
+              </StepBlockCC>
+            )}
+
+            {/* ─── Programmes journée → Génération cours (1 flèche par colonne) ── */}
+            <FlowArrowDown />
+            {DUAL_COLUMN_ENABLED && <FlowArrowDown />}
+
             {/* ── Étape 6 : Génération des cours (texte) + relecture PDF ── */}
             <StepBlock stepIndex={5} currentStep={currentStep} status={job.status} title="Génération des cours (texte)" icon="edit_note">
-              {job.status === 'tts_launched' || job.status === 'audio_launched' || ttsResult ? (
+              {job.status === 'tts_launched' || job.status === 'audio_launched' || job.status === 'audio_error' || ttsResult || (contentFolders.length > 0 && contentFolders.some(f => f.content_status === 'completed')) ? (
                 <div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '10px', color: allContentCompleted ? '#34d399' : '#fbbf24', fontSize: '15px', fontWeight: 600, marginBottom: '12px', flexWrap: 'wrap' }}>
                     <Icon name={allContentCompleted ? 'check_circle' : 'hourglass_top'} />
@@ -1305,8 +2525,8 @@ export default function FormationPipeline() {
                           borderRadius: '10px',
                           padding: '12px 14px',
                         }}>
-                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px', flexWrap: 'wrap' }}>
-                            <div style={{ minWidth: 0, flex: 1 }}>
+                          <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap' }}>
+                            <div style={{ minWidth: 0, flex: '1 1 220px' }}>
                               <div style={{ fontSize: '14px', fontWeight: 600, color: '#e2e8f0', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                                 Jour {folder.day_number} — {folder.day_title}
                               </div>
@@ -1317,29 +2537,256 @@ export default function FormationPipeline() {
                                     ? <span style={{ color: '#f87171' }}>Erreur — {folder.error_message || 'inconnu'}</span>
                                     : `${folder.segments_completed}/${folder.segments_total} segments — ${pct}%`}
                               </div>
+                              {/* Statut révision conformité (étape 6bis).
+                                  Trois états distincts :
+                                  - En cours : ambre, progression X/Y
+                                  - Terminé tout OK : vert, "N segments révisés"
+                                  - Terminé avec erreurs : orange, clairement
+                                    signalé que N segments n'ont PAS été audités
+                                  - Partiel (qq segments en cache) : gris */}
+                              {isDone && (() => {
+                                const reviewing = !!reviewingFolders[folder.folder_id]
+                                const nRev = folder.segments_reviewed || 0
+                                const nErr = folder.segments_review_errors || 0
+                                const nComp = folder.segments_completed || 0
+                                const processed = nRev + nErr
+                                if (reviewing) {
+                                  return (
+                                    <div style={{ fontSize: '12px', color: '#fbbf24', marginTop: '2px' }}>
+                                      <Icon name="hourglass_empty" style={{ fontSize: '12px' }} /> Révision en cours — {processed}/{nComp} segments traités
+                                      {nErr > 0 && <span style={{ color: '#f87171' }}> · {nErr} en erreur</span>}
+                                    </div>
+                                  )
+                                }
+                                if (processed >= nComp && nComp > 0 && nErr === 0) {
+                                  return (
+                                    <div style={{ fontSize: '12px', color: '#34d399', marginTop: '2px' }}>
+                                      <Icon name="verified" style={{ fontSize: '12px' }} /> Conformité révisée ({nRev} segments)
+                                    </div>
+                                  )
+                                }
+                                if (processed >= nComp && nComp > 0 && nErr > 0) {
+                                  return (
+                                    <div style={{ fontSize: '12px', color: '#fb923c', marginTop: '2px' }}>
+                                      <Icon name="error_outline" style={{ fontSize: '12px' }} /> Révision partielle — {nRev} audités, <strong>{nErr} en erreur reviewer</strong> (relancer pour retry)
+                                    </div>
+                                  )
+                                }
+                                if (nRev > 0 || nErr > 0) {
+                                  return (
+                                    <div style={{ fontSize: '12px', color: '#94a3b8', marginTop: '2px' }}>
+                                      {nRev}/{nComp} segments révisés{nErr > 0 && <span style={{ color: '#f87171' }}> · {nErr} en erreur</span>}
+                                    </div>
+                                  )
+                                }
+                                return null
+                              })()}
                             </div>
-                            <div style={{ display: 'flex', gap: '6px' }}>
-                              <button
-                                style={{ ...S.btn('neutral'), padding: '6px 12px', fontSize: '12px' }}
-                                disabled={!isDone}
-                                onClick={() => setViewingFolder(folder)}
-                                title={isDone ? 'Lire le texte de la journée' : 'En attente de génération'}
-                              >
-                                <Icon name="visibility" /> Voir
-                              </button>
-                              <button
-                                style={{ ...S.btn('primary'), padding: '6px 12px', fontSize: '12px' }}
-                                disabled={!isDone}
-                                onClick={() => handleDownloadDocx(folder.folder_id)}
-                                title={isDone ? 'Télécharger le programme officiel (Word)' : 'En attente de génération'}
-                              >
-                                <Icon name="description" /> Word
-                              </button>
+                            {/* ─── 3 sous-zones du flux d'une journée ──────────
+                                 1. Texte généré (lecture / téléchargements / rapport)
+                                 2. Sécurité volume (enrichissement si <90k mots)
+                                 3. Révision conformité (audit règles #1-#27)
+                                 Séparées par des FlowArrowDown pour matérialiser
+                                 l'ordre du flux : génération → volume → révision. */}
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                              {/* ── Zone 1 : Texte généré ──────────────────── */}
+                              <div style={{
+                                padding: '8px 10px',
+                                borderRadius: '8px',
+                                background: 'rgba(167, 139, 250, 0.06)',
+                                borderLeft: '3px solid rgba(167, 139, 250, 0.5)',
+                              }}>
+                                <div style={{
+                                  fontSize: '10px',
+                                  fontWeight: 700,
+                                  color: '#a78bfa',
+                                  textTransform: 'uppercase',
+                                  letterSpacing: '0.08em',
+                                  marginBottom: '6px',
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  gap: '5px',
+                                }}>
+                                  <Icon name="description" style={{ fontSize: '12px' }} /> Texte généré
+                                </div>
+                                <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                                  <button
+                                    style={{ ...S.btn('neutral'), padding: '6px 12px', fontSize: '12px' }}
+                                    disabled={!isDone}
+                                    onClick={() => setViewingFolder(folder)}
+                                    title={isDone ? 'Lire le texte de la journée' : 'En attente de génération'}
+                                  >
+                                    <Icon name="visibility" /> Voir
+                                  </button>
+                                  {/* Word original = snapshot pris au finalize content,
+                                      AVANT que la révision conformité ne touche au texte.
+                                      Permet la comparaison avant/après. */}
+                                  <button
+                                    style={{ ...S.btn('primary'), padding: '6px 12px', fontSize: '12px' }}
+                                    disabled={!isDone}
+                                    onClick={() => handleDownloadDocx(folder.folder_id, 'pre_review')}
+                                    title={isDone
+                                      ? 'Télécharger le Word AVANT révision conformité (texte tel que généré)'
+                                      : 'En attente de génération'}
+                                  >
+                                    <Icon name="description" /> Word
+                                  </button>
+                                  {/* Word 2 = texte ACTUEL en DB (= post-révision si appliquée). */}
+                                  {(folder.segments_reviewed || 0) > 0 && (
+                                    <button
+                                      style={{
+                                        ...S.btn('primary'),
+                                        padding: '6px 12px',
+                                        fontSize: '12px',
+                                        background: 'linear-gradient(135deg, #34d399, #10b981)',
+                                      }}
+                                      disabled={!isDone}
+                                      onClick={() => handleDownloadDocx(folder.folder_id, 'current')}
+                                      title="Télécharger le Word APRÈS révision conformité (texte révisé, utilisé pour le TTS)"
+                                    >
+                                      <Icon name="description" /> Word 2
+                                    </button>
+                                  )}
+                                  {/* Bouton "Rapport" — stats détaillées de la dernière révision. */}
+                                  {(folder.segments_reviewed || 0) > 0 && (
+                                    <button
+                                      style={{
+                                        ...S.btn('ghost'),
+                                        padding: '6px 12px',
+                                        fontSize: '12px',
+                                        borderColor: 'rgba(52, 211, 153, 0.4)',
+                                        color: '#34d399',
+                                      }}
+                                      onClick={() => setReportFolder(folder)}
+                                      title="Voir le rapport détaillé de la révision conformité"
+                                    >
+                                      <Icon name="assessment" /> Rapport
+                                    </button>
+                                  )}
+                                </div>
+                              </div>
+
+                              <FlowArrowDown height={18} />
+
+                              {/* ── Zone 2 : Sécurité volume ───────────────── */}
+                              <div style={{
+                                padding: '8px 10px',
+                                borderRadius: '8px',
+                                background: 'rgba(245, 158, 11, 0.05)',
+                                borderLeft: '3px solid rgba(245, 158, 11, 0.5)',
+                              }}>
+                                <div style={{
+                                  fontSize: '10px',
+                                  fontWeight: 700,
+                                  color: '#fbbf24',
+                                  textTransform: 'uppercase',
+                                  letterSpacing: '0.08em',
+                                  marginBottom: '6px',
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  gap: '5px',
+                                }}>
+                                  <Icon name="auto_fix_high" style={{ fontSize: '12px' }} /> Sécurité volume <span style={{ fontWeight: 400, opacity: 0.7, textTransform: 'none', letterSpacing: 'normal' }}>· cible 90k mots</span>
+                                </div>
+                                {(() => {
+                                  const folderAudit = (volumeAudit?.folders || []).find(f => f.folder_id === folder.folder_id)
+                                  const deficit = folderAudit?.deficit || 0
+                                  const running = !!safetyRunning[folder.folder_id]
+                                  const atTarget = isDone && deficit === 0 && folderAudit
+                                  const disabled = !isDone || running || atTarget
+                                  return (
+                                    <button
+                                      style={{ ...S.btn('ghost'), padding: '6px 12px', fontSize: '12px' }}
+                                      disabled={disabled}
+                                      onClick={() => handleLaunchVolumeSafety(folder.folder_id, 'api')}
+                                      title={
+                                        !isDone
+                                          ? 'En attente de génération'
+                                          : running
+                                            ? 'Enrichissement en cours'
+                                            : atTarget
+                                              ? `Volume OK (${folderAudit.total_words.toLocaleString('fr-FR')} mots ≥ 90k)`
+                                              : `Compléter via API jusqu'à 90k (déficit ${deficit.toLocaleString('fr-FR')} mots)`
+                                      }
+                                    >
+                                      <Icon name={running ? 'hourglass_empty' : (atTarget ? 'check_circle' : 'auto_fix_high')} />{' '}
+                                      {running
+                                        ? 'Enrichissement…'
+                                        : atTarget
+                                          ? 'Volume OK'
+                                          : 'Compléter le volume via API'}
+                                    </button>
+                                  )
+                                })()}
+                              </div>
+
+                              <FlowArrowDown height={18} />
+
+                              {/* ── Zone 3 : Révision conformité ───────────── */}
+                              <div style={{
+                                padding: '8px 10px',
+                                borderRadius: '8px',
+                                background: 'rgba(52, 211, 153, 0.05)',
+                                borderLeft: '3px solid rgba(52, 211, 153, 0.5)',
+                              }}>
+                                <div style={{
+                                  fontSize: '10px',
+                                  fontWeight: 700,
+                                  color: '#34d399',
+                                  textTransform: 'uppercase',
+                                  letterSpacing: '0.08em',
+                                  marginBottom: '6px',
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  gap: '5px',
+                                }}>
+                                  <Icon name="rule" style={{ fontSize: '12px' }} /> Révision conformité <span style={{ fontWeight: 400, opacity: 0.7, textTransform: 'none', letterSpacing: 'normal' }}>· règles #1-#27</span>
+                                </div>
+                                {(() => {
+                                  const reviewing = !!reviewingFolders[folder.folder_id]
+                                  const nRev = folder.segments_reviewed || 0
+                                  const nErr = folder.segments_review_errors || 0
+                                  const nComp = folder.segments_completed || 0
+                                  const allClean = isDone && nComp > 0 && nRev >= nComp && nErr === 0 && !reviewing
+                                  const hasRetryable = nErr > 0
+                                  const disabled = !isDone || reviewing || allClean
+                                  return (
+                                    <button
+                                      style={{ ...S.btn('ghost'), padding: '6px 12px', fontSize: '12px' }}
+                                      disabled={disabled}
+                                      onClick={() => handleReviewFolder(folder.folder_id)}
+                                      title={
+                                        !isDone
+                                          ? 'En attente de génération'
+                                          : reviewing
+                                            ? 'Révision en cours'
+                                            : allClean
+                                              ? 'Tous les segments ont déjà été révisés avec succès'
+                                              : hasRetryable
+                                                ? `Relancer la révision — ${nErr} segment(s) en erreur à re-tester`
+                                                : 'Lancer la révision conformité via API Claude (Sonnet)'
+                                      }
+                                    >
+                                      <Icon name={reviewing ? 'hourglass_empty' : (hasRetryable ? 'refresh' : 'rule')} />{' '}
+                                      {reviewing
+                                        ? 'Révision…'
+                                        : hasRetryable
+                                          ? `Retenter (${nErr} en erreur)`
+                                          : 'Réviser la conformité via API'}
+                                    </button>
+                                  )
+                                })()}
+                              </div>
                             </div>
                           </div>
                         </div>
                       )
                     })}
+                    {reviewError && (
+                      <div style={{ fontSize: '13px', color: '#f87171', marginTop: '4px' }}>
+                        Révision : {reviewError}
+                      </div>
+                    )}
                     {contentFolders.length === 0 && (
                       <div style={{ fontSize: '13px', color: '#64748b' }}>Chargement de l'état des journées…</div>
                     )}
@@ -1377,6 +2824,162 @@ export default function FormationPipeline() {
               )}
             </StepBlock>
 
+            {/* Pendant Claude Code — étape 6 (Génération cours texte) + étape 6bis (Révision) */}
+            {DUAL_COLUMN_ENABLED && (
+              <StepBlockCC stepIndex={5} currentStep={currentStep} status={job.status} title="Génération cours + Révision (local)" icon="edit_note">
+                <ClaudeCodeStepActions
+                  stepKey="content"
+                  stepLabel="Génération des cours (texte)"
+                  jobId={selectedJobId}
+                  disabled={currentStep < 5 || !job.daily_programs_validated}
+                  disabledReason="En attente des programmes journée validés"
+                  onExport={handleExportMission}
+                  onExecute={handleExecuteMission}
+                  onImport={handleImportMission}
+                  pendingMission={pendingMissions.content}
+                  generatedVia={null}
+                />
+
+                {/* ── Étape intermédiaire : Sécurité volume (90 000 mots/journée) ──
+                    Entre la génération texte et la révision conformité. Audite
+                    le total_words par folder ; si <90k, propose un enrichissement
+                    Claude Code (append-only, règles #1-#27). */}
+                {volumeAudit && volumeAudit.folders && volumeAudit.folders.length > 0 && (
+                  <FlowArrowDown height={20} />
+                )}
+                {volumeAudit && volumeAudit.folders && volumeAudit.folders.length > 0 && (
+                  <div
+                    style={{
+                      padding: '14px',
+                      border: '1px dashed rgba(245, 158, 11, 0.3)',
+                      borderRadius: '10px',
+                      background: 'rgba(245, 158, 11, 0.04)',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '10px',
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                      <span style={{ fontSize: '13px', color: '#fbbf24', fontWeight: 600, flex: 1, minWidth: 0 }}>
+                        Sécurité volume — {volumeAudit.target.toLocaleString('fr-FR')} mots / journée
+                      </span>
+                      <select
+                        value={safetyModel}
+                        onChange={e => setSafetyModel(e.target.value)}
+                        style={{
+                          background: 'rgba(15,23,42,0.8)',
+                          color: '#e2e8f0',
+                          border: '1px solid rgba(245,158,11,0.3)',
+                          borderRadius: '6px',
+                          padding: '4px 8px',
+                          fontSize: '12px',
+                        }}
+                      >
+                        <option value="sonnet">Sonnet</option>
+                        <option value="haiku">Haiku</option>
+                      </select>
+                    </div>
+
+                    <div style={{ fontSize: '11px', color: '#94a3b8' }}>
+                      Audit après génération · si une journée fait moins de 90 000 mots, un agent
+                      Claude Code enrichit (append-only) les segments les plus courts en respectant
+                      les règles #1-#27.
+                    </div>
+
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                      {volumeAudit.folders.map(fa => {
+                        const total = fa.total_words || 0
+                        const target = volumeAudit.target
+                        const pct = Math.min(100, Math.round((total / target) * 100))
+                        const isOk = total >= target
+                        const isLow = total < 80000
+                        const color = isOk ? '#34d399' : isLow ? '#f87171' : '#fbbf24'
+                        const running = !!safetyRunning[fa.folder_id]
+                        return (
+                          <div key={fa.folder_id} style={{
+                            background: 'rgba(15,23,42,0.4)',
+                            borderRadius: '8px',
+                            padding: '8px 10px',
+                          }}>
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', flexWrap: 'wrap' }}>
+                              <div style={{ minWidth: 0, flex: 1 }}>
+                                <div style={{ fontSize: '12px', color: '#e2e8f0' }}>
+                                  Jour {fa.day_number} —{' '}
+                                  <strong style={{ color }}>{total.toLocaleString('fr-FR')}</strong>
+                                  <span style={{ color: '#64748b' }}> / {target.toLocaleString('fr-FR')}</span>
+                                </div>
+                                <div style={{
+                                  marginTop: '4px',
+                                  height: '4px',
+                                  borderRadius: '2px',
+                                  background: 'rgba(30,41,59,0.8)',
+                                  overflow: 'hidden',
+                                }}>
+                                  <div style={{
+                                    width: `${pct}%`,
+                                    height: '100%',
+                                    background: color,
+                                    transition: 'width 0.3s',
+                                  }} />
+                                </div>
+                              </div>
+                              {isOk ? (
+                                <span style={{ fontSize: '11px', color: '#34d399', fontWeight: 600 }}>
+                                  <Icon name="check_circle" style={{ fontSize: '13px' }} /> OK
+                                </span>
+                              ) : (
+                                <button
+                                  style={{
+                                    ...S.btn('primary'),
+                                    background: 'linear-gradient(135deg, #f59e0b, #fbbf24)',
+                                    boxShadow: '0 4px 15px rgba(251,191,36,0.25)',
+                                    padding: '5px 10px',
+                                    fontSize: '11px',
+                                  }}
+                                  disabled={running}
+                                  onClick={() => handleLaunchVolumeSafety(fa.folder_id)}
+                                  title={`Enrichit les ${Math.min(5, fa.shortest_segments?.length || 0)} segments les plus courts (déficit ${fa.deficit.toLocaleString('fr-FR')} mots)`}
+                                >
+                                  <Icon name={running ? 'hourglass_empty' : 'auto_fix_high'} style={{ fontSize: '13px' }} />{' '}
+                                  {running ? 'Enrichissement…' : 'Compléter'}
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        )
+                      })}
+                    </div>
+                    {safetyError && (
+                      <div style={{ fontSize: '12px', color: '#f87171' }}>
+                        {safetyError}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                <FlowArrowDown height={20} />
+                <div>
+                  <ClaudeCodeStepActions
+                    stepKey="review"
+                    stepLabel="Révision conformité (étape 6bis)"
+                    jobId={selectedJobId}
+                    disabled={!['tts_launched', 'audio_launched', 'audio_error'].includes(job.status)}
+                    disabledReason="En attente de la génération texte"
+                    onExport={handleExportMission}
+                    onExecute={handleExecuteMission}
+                    onImport={handleImportMission}
+                    pendingMission={pendingMissions.review}
+                    generatedVia={null}
+                  />
+                </div>
+              </StepBlockCC>
+            )}
+
+            </div>{/* fin du grid dual API / Claude Code */}
+
+            {/* ─── Connecteur fin-pipeline : merge des 2 colonnes vers TTS ── */}
+            {DUAL_COLUMN_ENABLED ? <FlowMerge /> : <FlowArrowDown />}
+
             {/* ── Étape 7 : Synthèse TTS Fish Audio ── */}
             <StepBlock stepIndex={6} currentStep={currentStep} status={job.status} title="Synthèse TTS Fish Audio" icon="record_voice_over">
               {job.status === 'audio_launched' ? (
@@ -1412,27 +3015,44 @@ export default function FormationPipeline() {
                         <div style={{ fontSize: '15px', color: '#e2e8f0', fontWeight: 600 }}>
                           {linkedModule.tp_name} — RNCP {linkedModule.rncp_code || '?'} — <span style={{ color: '#a78bfa' }}>{linkedModule.version}</span>
                         </div>
+                        {linkedModule.voice_type && (
+                          <div style={{ fontSize: '12px', marginTop: '4px' }}>
+                            <Icon name="record_voice_over" style={{ fontSize: '13px', color: voiceColor(linkedModule.voice_type) }} />{' '}
+                            <span style={{ color: '#94a3b8' }}>Voix actuelle des MP3 :</span>{' '}
+                            <strong style={{ color: voiceColor(linkedModule.voice_type) }}>{voiceLabel(linkedModule.voice_type)}</strong>
+                          </div>
+                        )}
                         <div style={{ fontSize: '12px', color: '#94a3b8', marginTop: '2px' }}>
                           Ce module peut désormais être sélectionné dans "Nouvelle plateforme" pour créer autant de promos que nécessaire sans relancer la pipeline.
+                          {linkedModule.voice_type && ' Relancer le TTS avec une voix différente met à jour les MP3 et la voix du module en place.'}
                         </div>
                       </div>
                     </div>
                   )}
 
                   {/* Bouton relancer : utile quand le précédent run a échoué (ex: force_all bug)
-                      ou si on veut re-générer les MP3 suite à une édition de texte. */}
+                      ou si on veut re-générer les MP3 suite à une édition de texte.
+                      3 voies : silence (0€), gTTS (0€, vraie voix basique), Fish Audio (payant). */}
                   <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
                     <button
                       style={{ ...S.btn('neutral'), border: '1px dashed #64748b' }}
-                      onClick={() => handleLaunchAudio(true)}
+                      onClick={() => handleLaunchAudio(true, false)}
                       disabled={launchingAudio || !allContentCompleted}
-                      title="Re-génère les 7 MP3 cours en mode mock (silence 1s). Utile si le précédent run n'a pas produit les blobs Azure (bug force_all résolu)."
+                      title="Re-génère les 7 MP3 cours en mode mock (silence 1s). 0€."
                     >
                       <Icon name="refresh" /> {launchingAudio ? '…' : 'Relancer TTS test (gratuit)'}
                     </button>
                     <button
+                      style={{ ...S.btn('ghost'), borderColor: 'rgba(251,146,60,0.35)', color: '#fb923c' }}
+                      onClick={() => handleLaunchAudio(false, true)}
+                      disabled={launchingAudio || !allContentCompleted}
+                      title="Re-synthèse via gTTS (Google Text-to-Speech, gratuit, voix basique). Permet d'écouter le texte sans payer Fish Audio."
+                    >
+                      <Icon name="graphic_eq" /> {launchingAudio ? '…' : 'Relancer TTS voix basique (gratuit)'}
+                    </button>
+                    <button
                       style={S.btn('success')}
-                      onClick={() => handleLaunchAudio(false)}
+                      onClick={() => handleLaunchAudio(false, false)}
                       disabled={launchingAudio || !allContentCompleted}
                       title="Re-synthèse payante Fish Audio S2-Pro (~9$/journée)."
                     >
@@ -1454,18 +3074,26 @@ export default function FormationPipeline() {
                   <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
                     <button
                       style={S.btn('success')}
-                      onClick={() => handleLaunchAudio(false)}
+                      onClick={() => handleLaunchAudio(false, false)}
                       disabled={launchingAudio || !allContentCompleted}
                     >
                       <Icon name="record_voice_over" /> {launchingAudio ? 'Lancement…' : `Lancer le TTS (${contentFolders.length || job.nb_days} journées)`}
                     </button>
                     <button
+                      style={{ ...S.btn('ghost'), borderColor: 'rgba(251,146,60,0.35)', color: '#fb923c' }}
+                      onClick={() => handleLaunchAudio(false, true)}
+                      disabled={launchingAudio || !allContentCompleted}
+                      title="Synthèse via gTTS (Google Text-to-Speech, gratuit, voix basique). Utile pour écouter le rendu sans payer Fish Audio."
+                    >
+                      <Icon name="graphic_eq" /> {launchingAudio ? '…' : 'TTS voix basique (gratuit)'}
+                    </button>
+                    <button
                       style={{ ...S.btn('neutral'), border: '1px dashed #64748b' }}
-                      onClick={() => handleLaunchAudio(true)}
+                      onClick={() => handleLaunchAudio(true, false)}
                       disabled={launchingAudio || !allContentCompleted}
                       title="Mode test : génère des MP3 de silence 1s au lieu d'appeler Fish Audio. 0 € de coût, permet de tester le flux jusqu'à la diffusion sans consommer ton budget TTS."
                     >
-                      <Icon name="science" /> {launchingAudio ? '…' : 'TTS test (gratuit)'}
+                      <Icon name="science" /> {launchingAudio ? '…' : 'TTS test silence (gratuit)'}
                     </button>
                   </div>
                   {!allContentCompleted && (
@@ -1490,11 +3118,435 @@ export default function FormationPipeline() {
           onClose={() => setViewingFolder(null)}
         />
       )}
+
+      {reportFolder && (
+        <ReviewReportModal
+          jobId={selectedJobId}
+          folder={reportFolder}
+          onClose={() => setReportFolder(null)}
+        />
+      )}
+
+      {missionModal && (
+        <ClaudeCodeMissionModal
+          stepKey={missionModal.stepKey}
+          mission={missionModal.mission}
+          onClose={() => setMissionModal(null)}
+          onImport={() => handleImportMission({ stepKey: missionModal.stepKey })}
+        />
+      )}
+    </div>
+  )
+}
+
+// ─── Modal d'instructions mission Claude Code (Phase 3) ───────────────────────
+// Modale logs subprocess `claude` — poll automatique tant que `autoPoll=true`.
+function ClaudeCodeLogsModal({ jobId, stepKey, onClose, autoPoll }) {
+  const [logs, setLogs] = useState('')
+  const [source, setSource] = useState(null)
+  const [loading, setLoading] = useState(true)
+  const logsRef = useRef(null)
+
+  const fetchLogs = useCallback(async () => {
+    try {
+      const resp = await fetch(
+        apiUrl(`/api/formation/${jobId}/missions/${stepKey}/logs?tail=300`),
+        { credentials: 'include' }
+      )
+      const data = await resp.json()
+      if (resp.ok) {
+        setLogs(data.logs || '')
+        setSource(data.source)
+      }
+    } catch (e) {
+      // silencieux
+    } finally {
+      setLoading(false)
+    }
+  }, [jobId, stepKey])
+
+  useEffect(() => {
+    fetchLogs()
+  }, [fetchLogs])
+
+  // Poll toutes les 3s tant que l'exécution tourne
+  useEffect(() => {
+    if (!autoPoll) return
+    const interval = setInterval(fetchLogs, 3000)
+    return () => clearInterval(interval)
+  }, [autoPoll, fetchLogs])
+
+  // Auto-scroll vers le bas à chaque update
+  useEffect(() => {
+    if (logsRef.current) logsRef.current.scrollTop = logsRef.current.scrollHeight
+  }, [logs])
+
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        zIndex: 1000, padding: '24px',
+      }}
+    >
+      <div
+        onClick={e => e.stopPropagation()}
+        style={{
+          background: '#0f172a', borderRadius: '12px', padding: '20px',
+          width: '90vw', maxWidth: '1000px', height: '80vh',
+          display: 'flex', flexDirection: 'column',
+          border: '1px solid rgba(245,158,11,0.3)', color: '#e2e8f0',
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '10px' }}>
+          <Icon name="terminal" style={{ color: '#fbbf24' }} />
+          <h3 style={{ margin: 0, fontSize: '16px', flex: 1 }}>
+            Logs Claude Code — {stepKey}
+            {autoPoll && <span style={{ fontSize: '11px', color: '#fbbf24', marginLeft: '8px' }}>● live (poll 3s)</span>}
+            {source === 'archived' && <span style={{ fontSize: '11px', color: '#94a3b8', marginLeft: '8px' }}>(archivé)</span>}
+          </h3>
+          <button onClick={fetchLogs} style={{ ...S.btn('ghost'), padding: '4px 10px', fontSize: '12px' }}>
+            <Icon name="refresh" /> Refresh
+          </button>
+          <button onClick={onClose} style={{ ...S.btn('ghost'), padding: '4px 10px', fontSize: '12px' }}>
+            <Icon name="close" /> Fermer
+          </button>
+        </div>
+        <pre
+          ref={logsRef}
+          style={{
+            flex: 1,
+            margin: 0,
+            padding: '12px',
+            background: '#020617',
+            borderRadius: '8px',
+            fontSize: '11px',
+            fontFamily: "'Fira Code', 'Menlo', monospace",
+            color: '#cbd5e1',
+            overflow: 'auto',
+            whiteSpace: 'pre-wrap',
+            wordBreak: 'break-word',
+            border: '1px solid rgba(30,41,59,0.8)',
+          }}
+        >
+          {loading ? 'Chargement…' : logs || '(pas encore de logs — execution.log non créé)'}
+        </pre>
+      </div>
+    </div>
+  )
+}
+
+
+function ClaudeCodeMissionModal({ stepKey, mission, onClose, onImport }) {
+  const [copied, setCopied] = useState(false)
+  const command = mission?.command || `claude --model ${mission?.model || 'haiku'}`
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(command)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1500)
+    } catch (e) {
+      // ignore
+    }
+  }
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        zIndex: 1000, padding: '24px',
+      }}
+    >
+      <div
+        onClick={e => e.stopPropagation()}
+        style={{
+          background: '#1e293b', borderRadius: '14px', padding: '24px',
+          maxWidth: '640px', width: '100%', color: '#e2e8f0',
+          border: '1px solid rgba(245,158,11,0.3)',
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '16px' }}>
+          <Icon name="terminal" style={{ color: '#fbbf24' }} />
+          <h3 style={{ margin: 0, fontSize: '18px' }}>Mission Claude Code exportée</h3>
+        </div>
+
+        <div style={{ fontSize: '13px', color: '#94a3b8', marginBottom: '6px' }}>Étape</div>
+        <div style={{ fontSize: '14px', color: '#e2e8f0', marginBottom: '14px', fontWeight: 600 }}>
+          {mission.step_label || stepKey}
+        </div>
+
+        <div style={{ fontSize: '13px', color: '#94a3b8', marginBottom: '6px' }}>Fichiers écrits</div>
+        <code
+          style={{
+            display: 'block',
+            padding: '10px 12px', background: 'rgba(15,23,42,0.8)', borderRadius: '8px',
+            fontSize: '12px', color: '#cbd5e1', marginBottom: '14px', wordBreak: 'break-all',
+          }}
+        >
+          {mission.path}
+        </code>
+
+        <div style={{ fontSize: '13px', color: '#94a3b8', marginBottom: '6px' }}>Dans ton terminal</div>
+        <div
+          style={{
+            display: 'flex', alignItems: 'center', gap: '8px',
+            padding: '10px 12px', background: 'rgba(15,23,42,0.8)', borderRadius: '8px',
+            marginBottom: '6px',
+          }}
+        >
+          <code style={{ flex: 1, fontSize: '13px', color: '#a78bfa' }}>$ {command}</code>
+          <button
+            onClick={handleCopy}
+            style={{ ...S.btn('ghost'), padding: '4px 10px', fontSize: '12px' }}
+          >
+            <Icon name={copied ? 'check' : 'content_copy'} /> {copied ? 'Copié' : 'Copier'}
+          </button>
+        </div>
+        <div style={{ fontSize: '12px', color: '#64748b', marginBottom: '14px' }}>
+          Puis dans la session Claude Code :
+          <div style={{ marginTop: '4px', color: '#cbd5e1' }}>
+            &gt; Exécute la mission décrite dans <code style={{ color: '#a78bfa' }}>{mission.path}/task.md</code>
+          </div>
+        </div>
+
+        <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end' }}>
+          <button onClick={onClose} style={S.btn('ghost')}>Plus tard</button>
+          <button onClick={onImport} style={S.btn('primary')}>
+            <Icon name="file_upload" /> Importer le résultat
+          </button>
+        </div>
+      </div>
     </div>
   )
 }
 
 // ─── Modal de lecture du texte d'une journée ──────────────────────────────────
+function ReviewReportModal({ jobId, folder, onClose }) {
+  const [report, setReport] = useState(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  const [expandedSegments, setExpandedSegments] = useState({})
+
+  useEffect(() => {
+    let cancelled = false
+    async function load() {
+      try {
+        const resp = await fetch(
+          apiUrl(`/api/formation/${jobId}/content/${folder.folder_id}/review-report`),
+          { credentials: 'include' },
+        )
+        const data = await resp.json()
+        if (cancelled) return
+        if (resp.ok && data.report) setReport(data.report)
+        else setError(data.error || 'Aucun rapport disponible')
+      } catch (e) {
+        if (!cancelled) setError('Erreur réseau')
+      } finally {
+        if (!cancelled) setLoading(false)
+      }
+    }
+    load()
+    return () => { cancelled = true }
+  }, [jobId, folder.folder_id])
+
+  const ruleLabels = {
+    '#18': 'Anti-hallucination (chiffres / études non sourcés)',
+    '#21': 'Fusion syntaxique hypothétiques',
+    '#22': 'Guillemets de discours direct (TTS muet)',
+    '#23': 'Posture dialogale',
+    '#24': 'Punchlines à isoler',
+    '#25': 'Format cours à distance (visuel/interactif)',
+    '#26': 'Énumérations mécaniques',
+    '#27': 'Registre oral, pas écrit',
+  }
+
+  return (
+    <div onClick={onClose} style={{
+      position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)',
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+      zIndex: 1000, padding: '20px',
+    }}>
+      <div onClick={e => e.stopPropagation()} style={{
+        background: '#1e293b', borderRadius: '12px', maxWidth: '900px',
+        width: '100%', maxHeight: '90vh', overflow: 'auto',
+        border: '1px solid rgba(52, 211, 153, 0.3)',
+      }}>
+        {/* Header */}
+        <div style={{
+          padding: '20px 24px', borderBottom: '1px solid rgba(148,163,184,0.15)',
+          display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '12px',
+        }}>
+          <div>
+            <div style={{ fontSize: '13px', color: '#34d399', fontWeight: 600, marginBottom: '4px' }}>
+              <Icon name="assessment" style={{ fontSize: '14px' }} /> Rapport de révision conformité
+            </div>
+            <div style={{ fontSize: '15px', color: '#e2e8f0', fontWeight: 600 }}>
+              {folder.folder_name || `Dossier ${folder.folder_id}`}
+            </div>
+            {report?.imported_at && (
+              <div style={{ fontSize: '11px', color: '#94a3b8', marginTop: '4px' }}>
+                Importé le {new Date(report.imported_at).toLocaleString('fr-FR')}
+                {report.generated_via && ` · ${report.generated_via}`}
+                {report.via_positional_fallback && ' · résolution positionnelle (ids segment obsolètes)'}
+              </div>
+            )}
+            {report?.is_reconstructed && (
+              <div style={{
+                fontSize: '11px', color: '#fbbf24', marginTop: '6px',
+                padding: '6px 10px', background: 'rgba(251, 191, 36, 0.08)',
+                borderLeft: '3px solid #fbbf24', borderRadius: '4px',
+                lineHeight: 1.4,
+              }}>
+                <Icon name="info" style={{ fontSize: '12px' }} /> <strong>Rapport reconstitué</strong>
+                {' — '}{report.reconstruction_note}
+              </div>
+            )}
+          </div>
+          <button onClick={onClose} style={{ ...S.btn('ghost'), padding: '4px 10px', fontSize: '13px' }}>
+            <Icon name="close" />
+          </button>
+        </div>
+
+        {/* Content */}
+        <div style={{ padding: '24px' }}>
+          {loading && <div style={{ color: '#94a3b8' }}>Chargement…</div>}
+          {error && (
+            <div style={{ color: '#f87171', fontSize: '13px' }}>
+              <Icon name="error" /> {error}
+            </div>
+          )}
+          {report && (
+            <>
+              {/* Summary cards */}
+              <div style={{
+                display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))',
+                gap: '12px', marginBottom: '24px',
+              }}>
+                {[
+                  { label: 'Segments audités', value: report.summary.segments_reviewed, color: '#a78bfa' },
+                  { label: 'Patches proposés', value: report.summary.patches_proposed, color: '#94a3b8' },
+                  { label: 'Patches appliqués', value: report.summary.patches_applied, color: '#34d399' },
+                  { label: 'Patches rejetés', value: report.summary.patches_rejected, color: '#fb923c' },
+                  { label: 'Segments échoués', value: report.summary.segments_failed, color: '#f87171' },
+                ].map(card => (
+                  <div key={card.label} style={{
+                    padding: '12px', background: 'rgba(15,23,42,0.5)', borderRadius: '8px',
+                    border: '1px solid rgba(148,163,184,0.15)',
+                  }}>
+                    <div style={{ fontSize: '11px', color: '#94a3b8', marginBottom: '4px' }}>
+                      {card.label}
+                    </div>
+                    <div style={{ fontSize: '24px', color: card.color, fontWeight: 700 }}>
+                      {card.value}
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {/* By rule */}
+              <div style={{ marginBottom: '24px' }}>
+                <div style={{ fontSize: '13px', color: '#cbd5e1', fontWeight: 600, marginBottom: '10px' }}>
+                  Patches par règle violée
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  {Object.entries(report.by_rule || {})
+                    .sort((a, b) => b[1].proposed - a[1].proposed)
+                    .map(([rule, stats]) => (
+                      <div key={rule} style={{
+                        display: 'grid',
+                        gridTemplateColumns: '60px 1fr auto auto auto',
+                        gap: '12px', alignItems: 'center',
+                        padding: '8px 12px', background: 'rgba(15,23,42,0.4)',
+                        borderRadius: '6px', fontSize: '12px',
+                      }}>
+                        <div style={{ color: '#a78bfa', fontWeight: 600 }}>{rule}</div>
+                        <div style={{ color: '#cbd5e1' }}>{ruleLabels[rule] || '—'}</div>
+                        <div style={{ color: '#94a3b8' }}>{stats.proposed} proposés</div>
+                        <div style={{ color: '#34d399' }}>{stats.applied} appliqués</div>
+                        <div style={{ color: '#fb923c' }}>{stats.rejected} rejetés</div>
+                      </div>
+                    ))}
+                </div>
+              </div>
+
+              {/* By segment (expandable) */}
+              <div>
+                <div style={{ fontSize: '13px', color: '#cbd5e1', fontWeight: 600, marginBottom: '10px' }}>
+                  Détail par segment ({(report.by_segment || []).length})
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                  {(report.by_segment || []).map((seg, i) => {
+                    const key = `${seg.sub_idx}_${seg.passe}`
+                    const expanded = !!expandedSegments[key]
+                    return (
+                      <div key={key} style={{
+                        background: 'rgba(15,23,42,0.4)', borderRadius: '6px',
+                        border: '1px solid rgba(148,163,184,0.1)',
+                      }}>
+                        <div
+                          onClick={() => setExpandedSegments({ ...expandedSegments, [key]: !expanded })}
+                          style={{
+                            padding: '10px 12px', cursor: 'pointer',
+                            display: 'grid',
+                            gridTemplateColumns: 'auto 1fr auto auto',
+                            gap: '12px', alignItems: 'center', fontSize: '12px',
+                          }}
+                        >
+                          <Icon name={expanded ? 'expand_more' : 'chevron_right'} style={{ color: '#94a3b8' }} />
+                          <div style={{ color: '#cbd5e1' }}>
+                            Sous-partie {seg.sub_idx + 1} · Passe {seg.passe}
+                          </div>
+                          <div style={{ color: '#34d399' }}>{seg.patches_applied} appliqués</div>
+                          <div style={{ color: seg.patches_rejected > 0 ? '#fb923c' : '#475569' }}>
+                            {seg.patches_rejected} rejetés
+                          </div>
+                        </div>
+                        {expanded && (
+                          <div style={{ padding: '0 12px 12px 32px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                            {(seg.patches_detail || []).map((p, j) => (
+                              <div key={j} style={{
+                                padding: '8px 10px', background: 'rgba(0,0,0,0.2)',
+                                borderLeft: `3px solid ${p.status === 'applied' ? '#34d399' : '#fb923c'}`,
+                                borderRadius: '4px', fontSize: '11px',
+                              }}>
+                                <div style={{ display: 'flex', gap: '8px', marginBottom: '4px', alignItems: 'center' }}>
+                                  <span style={{ color: '#a78bfa', fontWeight: 600 }}>{p.rule}</span>
+                                  <span style={{
+                                    color: p.status === 'applied' ? '#34d399' : '#fb923c',
+                                    fontSize: '10px', textTransform: 'uppercase',
+                                  }}>
+                                    {p.status === 'applied' ? '✓ appliqué' : `✗ ${p.reject_reason || 'rejeté'}`}
+                                  </span>
+                                  {p.reason && (
+                                    <span style={{ color: '#94a3b8', fontStyle: 'italic' }}>{p.reason}</span>
+                                  )}
+                                </div>
+                                <div style={{ color: '#f87171', marginBottom: '2px' }}>
+                                  <span style={{ color: '#64748b' }}>−</span> {p.original}
+                                </div>
+                                <div style={{ color: '#34d399' }}>
+                                  <span style={{ color: '#64748b' }}>+</span> {p.replacement}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+
 function FolderTextModal({ jobId, folder, onClose }) {
   const [text, setText] = useState(null)
   const [loading, setLoading] = useState(true)

@@ -47,7 +47,7 @@ export default function Recorder() {
     'cours_16h00_17h00.mp3',
     'qa_17h00_17h15.mp3',
     'pause_17h15_17h25.mp3',
-    'cours_17h25_18h00.mp3',
+    'cours_17h25_18h15.mp3',
     'qa_18h15_18h30.mp3',
   ]
 
@@ -121,8 +121,8 @@ export default function Recorder() {
   }, [stopPolling, handleStatusUpdate])
 
   useEffect(() => {
-    document.documentElement.style.backgroundColor = '#f8fafc'
-    document.body.style.backgroundColor = '#f8fafc'
+    document.documentElement.style.backgroundColor = '#F8F7F5'
+    document.body.style.backgroundColor = '#F8F7F5'
     return () => {
       document.documentElement.style.backgroundColor = ''
       document.body.style.backgroundColor = ''
@@ -336,7 +336,7 @@ export default function Recorder() {
   const qaAudios = mergedAudios.filter(a => a.name.startsWith('qa_'))
 
   return (
-    <div className="min-h-screen overflow-x-hidden flex flex-col" style={{ backgroundColor: '#f8fafc', fontFamily: 'Inter, sans-serif' }}>
+    <div className="min-h-screen overflow-x-hidden flex flex-col" style={{ backgroundColor: '#F8F7F5', fontFamily: 'Inter, sans-serif' }}>
       {/* Main Content */}
       <main className="flex-1 w-full max-w-[1400px] mx-auto p-6 lg:p-10 flex flex-col gap-8">
 
@@ -512,7 +512,7 @@ export default function Recorder() {
                 const processing = isFileProcessing(audio.name)
                 const activeUpload = isFileActive(audio.name)
                 return (
-                  <div key={index} className={`rounded-lg p-3 transition-all duration-300 ${audio.uploaded ? 'hover:bg-gray-50' : processing ? 'opacity-70' : 'opacity-40'}`}>
+                  <div key={index} className={`rounded-lg p-3 transition-all duration-300 ${audio.uploaded ? 'hover:bg-[#F8F7F5]' : processing ? 'opacity-70' : 'opacity-40'}`}>
                     <div className="flex items-center gap-2">
                       {audio.uploaded ? (
                         <button
@@ -525,7 +525,7 @@ export default function Recorder() {
                       ) : activeUpload ? (
                         <div className="flex-shrink-0 size-7 rounded-full animate-spin" style={{ border: '2.5px solid #9ca3af', borderTopColor: 'transparent' }} />
                       ) : processing ? (
-                        <div className="flex-shrink-0 flex items-center justify-center size-7 rounded-full" style={{ border: '2px solid #d1d5db', backgroundColor: '#f9fafb' }}>
+                        <div className="flex-shrink-0 flex items-center justify-center size-7 rounded-full" style={{ border: '2px solid #d1d5db', backgroundColor: '#F8F7F5' }}>
                           <div className="size-2 rounded-full" style={{ backgroundColor: '#9ca3af' }} />
                         </div>
                       ) : (
@@ -580,7 +580,7 @@ export default function Recorder() {
                 const processing = isFileProcessing(audio.name)
                 const activeUpload = isFileActive(audio.name)
                 return (
-                  <div key={index} className={`rounded-lg p-3 transition-all duration-300 ${audio.uploaded ? 'hover:bg-gray-50' : processing ? 'opacity-70' : 'opacity-40'}`}>
+                  <div key={index} className={`rounded-lg p-3 transition-all duration-300 ${audio.uploaded ? 'hover:bg-[#F8F7F5]' : processing ? 'opacity-70' : 'opacity-40'}`}>
                     <div className="flex items-center gap-2">
                       {audio.uploaded ? (
                         <button
@@ -593,7 +593,7 @@ export default function Recorder() {
                       ) : activeUpload ? (
                         <div className="flex-shrink-0 size-7 rounded-full animate-spin" style={{ border: '2.5px solid #9ca3af', borderTopColor: 'transparent' }} />
                       ) : processing ? (
-                        <div className="flex-shrink-0 flex items-center justify-center size-7 rounded-full" style={{ border: '2px solid #d1d5db', backgroundColor: '#f9fafb' }}>
+                        <div className="flex-shrink-0 flex items-center justify-center size-7 rounded-full" style={{ border: '2px solid #d1d5db', backgroundColor: '#F8F7F5' }}>
                           <div className="size-2 rounded-full" style={{ backgroundColor: '#9ca3af' }} />
                         </div>
                       ) : (
@@ -648,7 +648,7 @@ export default function Recorder() {
                 const processing = isFileProcessing(audio.name)
                 const activeUpload = isFileActive(audio.name)
                 return (
-                  <div key={index} className={`rounded-lg p-3 transition-all duration-300 ${audio.uploaded ? 'hover:bg-gray-50' : processing ? 'opacity-70' : 'opacity-40'}`}>
+                  <div key={index} className={`rounded-lg p-3 transition-all duration-300 ${audio.uploaded ? 'hover:bg-[#F8F7F5]' : processing ? 'opacity-70' : 'opacity-40'}`}>
                     <div className="flex items-center gap-2">
                       {audio.uploaded ? (
                         <button
@@ -661,7 +661,7 @@ export default function Recorder() {
                       ) : activeUpload ? (
                         <div className="flex-shrink-0 size-7 rounded-full animate-spin" style={{ border: '2.5px solid #9ca3af', borderTopColor: 'transparent' }} />
                       ) : processing ? (
-                        <div className="flex-shrink-0 flex items-center justify-center size-7 rounded-full" style={{ border: '2px solid #d1d5db', backgroundColor: '#f9fafb' }}>
+                        <div className="flex-shrink-0 flex items-center justify-center size-7 rounded-full" style={{ border: '2px solid #d1d5db', backgroundColor: '#F8F7F5' }}>
                           <div className="size-2 rounded-full" style={{ backgroundColor: '#9ca3af' }} />
                         </div>
                       ) : (

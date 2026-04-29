@@ -21,15 +21,19 @@ from urllib.parse import quote
 import requests as _http
 
 from database.db import get_db_connection
-from utils.anthropic_client import AnthropicRateLimitError, post_message as _anthropic_post
+from utils.anthropic_client import (
+    AnthropicRateLimitError,
+    default_model,
+    post_message as _anthropic_post,
+)
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
 # Modèle utilisé pour la génération du pipeline formation.
-# Pour les tests : "claude-haiku-4-5-20251001" (~5x moins cher)
-# Pour la prod   : "claude-sonnet-4-20250514" (meilleure qualité)
-CLAUDE_MODEL = os.environ.get("FORMATION_CLAUDE_MODEL", "claude-sonnet-4-20250514")
+# Configure `FORMATION_LLM_MODEL=deepseek-v4-flash` ou `deepseek-v4-pro`
+# pour passer par DeepSeek. `FORMATION_CLAUDE_MODEL` reste supporté.
+CLAUDE_MODEL = default_model()
 HOURS_PER_DAY = 7
 
 # ─── Prompts Claude ───────────────────────────────────────────────────────────
@@ -497,7 +501,12 @@ def _generate_global_program_thread(job_id: int, model: str = None):
                     max_tokens=16000,
                     model=used_model,
                 )
-                update_job(job_id, status="global_ready", global_program=program)
+                update_job(
+                    job_id,
+                    status="global_ready",
+                    global_program=program,
+                    global_program_generated_via="api",
+                )
                 logger.info(f"✅ Job {job_id} : programme global généré ({len(program)} chars)")
                 return
             except AnthropicRateLimitError as e:
@@ -670,7 +679,8 @@ def _split_daily_programs_thread(job_id: int, model: str = None):
 
         logger.info(f"✅ Job {job_id} : {len(all_days)} journées générées au total")
         update_job(job_id, status="daily_ready",
-                   daily_programs=json.dumps(all_days, ensure_ascii=False))
+                   daily_programs=json.dumps(all_days, ensure_ascii=False),
+                   daily_programs_generated_via="api")
 
     except Exception as e:
         logger.error(f"❌ Job {job_id} découpage journées échoué : {e}")
@@ -868,6 +878,8 @@ def update_job(job_id: int, **kwargs):
         "global_program", "global_program_validated",
         "daily_programs", "daily_programs_validated",
         "error_message",
+        # Origine de chaque artefact (audit fix #5) — 'api' / 'claude_code_haiku' / 'claude_code_sonnet'
+        "kb_generated_via", "global_program_generated_via", "daily_programs_generated_via",
     }
     fields = {k: v for k, v in kwargs.items() if k in allowed}
     # Effacer automatiquement error_message quand on passe à un statut non-erreur
@@ -898,6 +910,7 @@ def get_job(job_id: int) -> dict | None:
                j.reac_text, j.rc_text, j.rome_text, j.global_program, j.global_program_validated,
                j.daily_programs, j.daily_programs_validated, j.status, j.error_message,
                j.created_at, j.updated_at,
+               j.kb_generated_via, j.global_program_generated_via, j.daily_programs_generated_via,
                p.name AS platform_name
         FROM formation_pipeline_jobs j
         LEFT JOIN platform_config p ON p.id = j.platform_id
@@ -916,7 +929,11 @@ def get_job(job_id: int) -> dict | None:
         "daily_programs": row[11], "daily_programs_validated": bool(row[12]),
         "status": row[13], "error_message": row[14],
         "created_at": row[15], "updated_at": row[16],
-        "platform_name": row[17],
+        # Origine API / Claude Code par étape (audit fix #5)
+        "kb_generated_via": row[17],
+        "global_program_generated_via": row[18],
+        "daily_programs_generated_via": row[19],
+        "platform_name": row[20],
     }
 
 

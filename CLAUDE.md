@@ -1,323 +1,129 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
-
-## Project Overview
-
-**Le Socrate** is an interactive web application for synchronized audio course delivery with real-time Q&A features. It consists of:
-- **Frontend**: React + Vite (port 5173)
-- **Backend**: Flask + SocketIO (port 5000)
-- **Database**: SQLite
-- **Real-time**: WebSocket communication via Socket.IO
-
-## Development Commands
-
-### Frontend (React + Vite)
-```bash
-cd frontend
-npm install          # Install dependencies
-npm run dev          # Start dev server on port 5173
-npm run build        # Build for production
-npm run lint         # Run ESLint
-npm run preview      # Preview production build
-```
-
-### Backend (Flask + SocketIO)
-```bash
-cd backend
-pip install -r requirements.txt    # Install dependencies
-python run.py                       # Start server on port 5000
-```
-
-The backend uses **eventlet** for async WebSocket handling. Always start with `python run.py` (not `flask run`) to properly initialize SocketIO with eventlet.
-
-## Architecture
-
-### Frontend Structure
-
-```
-frontend/src/
-├── pages/              # Route pages (Index, Video, Admin, TestSlides, etc.)
-├── components/
-│   ├── slides/
-│   │   ├── templates/  # Slide template components (6 different types)
-│   │   └── styles/     # CSS files for each template
-│   └── ...            # Other components (ProtectedAdminRoute, etc.)
-└── App.jsx            # Main router configuration
-```
-
-### Backend Structure
-
-```
-backend/
-├── run.py                    # Application entry point (uses eventlet)
-├── main_app.py              # Flask app initialization & blueprint registration
-├── routes/                  # API route blueprints
-│   ├── auth_routes.py       # Authentication endpoints
-│   ├── video_routes.py      # Course/video status endpoints
-│   ├── admin_routes.py      # Admin panel endpoints
-│   └── debug_routes.py      # Debug endpoints
-├── socketio_handlers/       # SocketIO event handlers
-├── services/                # Business logic
-├── database/                # SQLite database management
-└── utils/                   # Logging and utilities
-```
-
-### API Communication
-
-Frontend communicates with backend via:
-1. **REST API**: All routes under `/api/*` (proxied by Vite)
-2. **WebSocket**: Socket.IO for real-time features (chat, participants)
-
-**Proxy Configuration** (vite.config.js):
-- `/api` → `http://localhost:5000`
-- `/socket.io` → `http://localhost:5000` (WebSocket)
-
-**CORS**: Backend allows `http://localhost:5173` and `http://localhost:3000` with credentials.
-
-## Slide Templates System
-
-The application has a **presentation slide generation system** with 6 template types:
-
-### Template Types
-1. **PlayfulTemplate** - 3 cards with images + decorative doodles (CSS)
-2. **ReflectionTemplate** - Yellow clipboard panel with text (CSS)
-3. **CaseStudyTemplate** - 3 colored cards with numbered badges (CSS)
-4. **FacilitatorTemplate** - 4-step process with icons and arrows (CSS)
-5. **ChartTemplate** - Text column + SVG area chart (CSS)
-6. **StatsTemplate** - Statistics banner + 3 text columns (Tailwind CSS)
-
-### Template Architecture
+Guide Claude Code pour **Le Socrate** — plateforme de formation en ligne (playlist MP3 horodatée + Q&A IA), multi-tenant (P1–P4), hébergée sur Azure.
 
-**Location**: `frontend/src/components/slides/templates/*.jsx`
+> Les détails techniques vivent dans le vault Obsidian (pointeurs ci-dessous). Ce fichier garde l'identité + les règles critiques.
 
-Each template:
-- Is a React component that accepts props for dynamic content
-- Has its own CSS file in `frontend/src/components/slides/styles/*.css` (except StatsTemplate which uses Tailwind)
-- Exports a single default component
-- Accepts common props: `badge`, `brandName` (for header)
+---
 
-**Example Usage**:
-```jsx
-<PlayfulTemplate
-  title="Slide Title"
-  cards={[...]}
-  badge="TP-CRCD"
-  brandName="Sales Hacking"
-/>
-```
+## Second Brain — vault couplé
 
-**Testing Page**: `/test-slides` route displays all templates with navigation controls.
+Ce projet est couplé au Second Brain **`/Users/amelle/Downloads/kit-deuxieme-cerveau/`** (architecture Karpathy LLM Wiki : `raw/` humain + `wiki/` LLM + schema). Le vault contient la mémoire long-terme du projet : décisions, pièges, architecture, leçons de sessions passées.
 
-### Template Renderer Pattern
-
-Templates are mapped by type in `TestSlides.jsx`:
-```jsx
-switch (slide.type) {
-  case 'playful': return <PlayfulTemplate {...slide.data} />;
-  case 'reflection': return <ReflectionTemplate {...slide.data} />;
-  // ... etc
-}
-```
-
-When adding new templates:
-1. Create component in `templates/` directory
-2. Create CSS in `styles/` directory (or use Tailwind)
-3. Import in `TestSlides.jsx`
-4. Add case to `renderSlide()` switch statement
-5. Add sample data to `slides` array
-
-## Key Conventions
-
-### Authentication & Sessions
-
-- Backend uses Flask sessions (cookie-based)
-- Credentials must be included in fetch requests: `credentials: 'include'`
-- Two session types: User sessions (`/api/auth/login`) and Admin sessions (`/api/admin/login`)
-- Protected routes check session state server-side
-
-### Admin Access
-
-- Username: `admin`
-- Password: `secret123`
-- Admin routes require admin session and are protected by `ProtectedAdminRoute` component
-
-### Course Audio System
-
-The backend manages a **playlist of audio files** (`COURS_PLAYLIST` in config) with:
-- Scheduled start time
-- Automatic playback progression based on current time
-- Support for course blocks and breaks
-- Time simulation for debugging
-
-Key endpoint: `GET /api/video/status` returns current audio, offset, and course status.
-
-### SocketIO Events
-
-**Client → Server**:
-- `user_connected` - Register user
-- `get_participants` - Request participant list
-- `send_question` - Send question to RAG system
-
-**Server → Client**:
-- `participants_update` - Participant count changed
-- `new_message` - New chat message (question or answer)
-- `force_logout` - Admin triggered disconnect
-
-### Timezone Handling
-
-All dates/times use **Europe/Paris timezone**. Format: `YYYY-MM-DD HH:MM:SS`.
-
-## Styling Approaches
-
-- **Tailwind CSS v4**: Available globally (configured in vite.config.js)
-- **CSS Modules**: Traditional CSS files for slide templates
-- **Mixed**: StatsTemplate uses Tailwind, others use CSS files
-- **Font Loading**: Google Fonts (Fredoka, Poppins) via `@import` in CSS
-
-When creating new slides, you can choose either approach based on preference.
-
-## Database
-
-SQLite database stores:
-- User connection logs (arrival, departure, duration)
-- Course configuration (start time)
-- Session data
-
-Location: `backend/database/` directory
-
-## Automatic Slide Generation System (v3)
-
-The application includes an **AI-powered slide generation system** that creates presentation slides from audio courses.
-
-### Architecture: Hierarchical Multi-Pass Pipeline
-
-```
-Audio (Azure CDN)
-       ↓
-┌──────────────────────────────────┐
-│  1. TRANSCRIPTION (Whisper)      │
-│  Split into 10-min chunks        │
-└──────────────────────────────────┘
-       ↓
-┌──────────────────────────────────┐
-│  2. EVENT MAPPING (GPT-4)        │
-│  Identify pedagogical events     │
-│  per chunk with timecodes        │
-└──────────────────────────────────┘
-       ↓
-┌──────────────────────────────────┐
-│  3. INTER-BLOCK FUSION           │
-│  Merge events cut at boundaries  │
-│  Restore semantic continuity     │
-└──────────────────────────────────┘
-       ↓
-┌──────────────────────────────────┐
-│  4. SLIDESHOW PLANNING (GPT-4)   │
-│  Decide which events need slides │
-│  Choose templates                │
-└──────────────────────────────────┘
-       ↓
-┌──────────────────────────────────┐
-│  5. MINIMAL CONTENT GENERATION   │
-│  Title: 5 words MAX              │
-│  Content: 1-2 sentences MAX      │
-└──────────────────────────────────┘
-```
-
-### Event Types
-
-| Type | Description | Generates Slide? |
-|------|-------------|------------------|
-| `story` | Anecdote, history | Yes |
-| `definition` | Term explanation | Yes |
-| `concept` | Abstract idea | Yes |
-| `example` | Concrete illustration | Yes |
-| `process` | Steps, method | Yes |
-| `comparison` | Parallel analysis | Yes |
-| `data` | Statistics, numbers | Yes |
-| `recap` | Summary | Sometimes |
-| `transition` | Topic change | No |
-| `filler` | Hesitation, digression | No |
-
-### Backend Services
-
-**Location**: `backend/services/`
-
-| File | Purpose |
-|------|---------|
-| `event_mapper.py` | Analyzes chunks, identifies events with timecodes |
-| `timeline_fusion.py` | Merges events across chunk boundaries |
-| `slideshow_planner.py` | Decides slides, generates minimal content |
-| `slide_generation_service.py` | Orchestrates the full pipeline |
-
-### API Endpoints
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/slides/generate-v3` | POST | Run v3 pipeline (hierarchical) |
-| `/api/slides/generate` | POST | Legacy v1 pipeline |
-| `/api/slides/data` | GET | Get generated slides + timeline + stats |
-| `/api/slides/status` | GET | Service status |
-| `/api/slides/clear` | POST | Clear generated slides |
-
-**Request body for generate-v3:**
-```json
-{
-  "audio_id": 1,
-  "max_duration": 300
-}
-```
-
-**Response:**
-```json
-{
-  "status": "success",
-  "slides_count": 2,
-  "slides": [...],
-  "stats": {
-    "audio_duration": 300,
-    "chunks_processed": 1,
-    "events_detected": 5,
-    "events_after_fusion": 4,
-    "slides_generated": 2
-  },
-  "timeline": [...]
-}
-```
-
-### Frontend Page
-
-**Route**: `/generated-slides`
-**Component**: `frontend/src/pages/GeneratedSlides.jsx`
-
-Features:
-- Generate slides with v3 pipeline
-- View statistics (duration, events, slides)
-- Browse timeline of detected events
-- Navigate through generated slides
-- View source transcription
-
-### Dependencies
-
-- **OpenAI API**: Whisper (transcription) + GPT-4 (analysis)
-- **pydub**: Audio segmentation
-- **requests**: Direct API calls (avoids eventlet/trio conflict)
-
-### Environment Variables
+### Workflow recommandé (depuis ce projet)
+
+- **Début de session** : lance `/prime` pour charger `CLAUDE.md` du vault + l'index + la dernière daily note. Contexte chargé en ~3 lectures, pas besoin de re-scanner le wiki.
+- **Pendant la session** : si tu as besoin d'une info précise (archi, décision passée, piège documenté), lance `/query "ma question"` — il va lire l'index puis les notes pertinentes.
+- **Fin de session** : lance `/save` pour créer la daily note dans `vault/wiki/Daily/YYYY-MM-DD.md` (actions + décisions + prochaine étape). C'est ce que `/prime` relira au prochain démarrage.
+- **Occasionnellement** : `/ingest` pour compiler des nouvelles sources raw/ (clippings, insights de session) en notes wiki structurées ; `/lint` 1×/semaine pour la santé du vault.
+
+### Règles importantes (héritées du vault)
+
+Les skills globaux `/prime`, `/save`, `/ingest`, `/query`, `/lint`, `/notebooklm` **ciblent toujours le chemin absolu** du vault, pas le CWD. Tu peux donc les lancer depuis ici sans souci. **Ne jamais résoudre `wiki/` ou `raw/` relativement à ce projet** — ces dossiers n'existent pas ici, ils vivent dans le vault.
+
+Règles absolues du vault qui s'appliquent quand tu y écris :
+1. **`raw/` est immutable** — espace humain, jamais modifier, renommer, déplacer un fichier dedans.
+2. **`wiki/` est LLM** — tu peux y écrire, mais uniquement via un skill (`/ingest`, `/save`, `/notebooklm`).
+3. **Pas de note orpheline** — chaque note wiki a au moins un `[[wiki link]]` entrant ou sortant.
+4. **Pas d'information inventée** — si la donnée manque, le signaler plutôt que combler.
+
+Détail complet : `/Users/amelle/Downloads/kit-deuxieme-cerveau/CLAUDE.md`.
+
+---
+
+## Principe architectural fondamental : 1 RNCP = 1 module durable
+
+La pipeline formation (`/formation-pipeline`) est exécutée **une seule fois par RNCP**. Le résultat est un module audio complet et durable, **réutilisé tel quel pour toutes les promos** du même titre professionnel.
+
+Implications :
+
+- `nb_days` est intrinsèque au RNCP (dicté par le REAC), pas un paramètre par promo.
+- Ne PAS concevoir d'optimisations "scaling par promo" ou "cache par RNCP" : la réutilisation est native.
+- Coût Claude + TTS amorti sur toutes les promos — faire "une fois pour toutes, proprement" > "faire moins cher par promo".
+- Promos = sessions utilisateurs distinctes (table `logs`), pas de modifications du module après génération.
+
+Détails : `memoire/01-architecture/un-rncp-un-module-durable.md` et `/Users/amelle/Downloads/kit-deuxieme-cerveau/wiki/Intelligence/un-rncp-un-module-durable.md`.
+
+---
+
+## Stack
+
+React 19 + Vite 7 (port 5173) · Flask + SocketIO + eventlet (port 5001) · SQLite · Fish Audio S2-Pro · Claude Sonnet 4 (génération contenu) · Azure OpenAI GPT-4 (chat/RAG) · OpenAI Whisper (transcription) · Azure (App Service, Static Web Apps, Blob, FrontDoor, AI Search).
+
+Détails : `/Users/amelle/Downloads/kit-deuxieme-cerveau/wiki/Context/stack-technique.md`.
+
+---
+
+## Commandes dev
 
 ```bash
-# backend/.env
-OPENAI_API_KEY=sk-proj-...
+# Frontend
+cd frontend && npm install && npm run dev   # 5173
+
+# Backend (toujours run.py — eventlet requis ; jamais flask run)
+cd backend && pip install -r requirements.txt
+python run.py                               # 5001
+
+# Backend avec auto-reload sur changement .py (watchdog)
+# Installation : ./venv/bin/pip install watchdog
+cd backend && watchmedo auto-restart -d . -p '*.py' -R -- python run.py
 ```
 
-## API Reference
+Proxy Vite : `/api` et `/socket.io` → `http://localhost:5001`.
 
-Full API documentation is in `API_ROUTES.md` at the root of the repository. Key routes:
-- Authentication: `/api/auth/*`
-- Course status: `/api/video/status`, `/api/cours-status`
-- Admin panel: `/api/admin/*`
-- Debug tools: `/api/debug/*`
-- Slide generation: `/api/slides/*`
+---
 
-Refer to `API_ROUTES.md` for complete request/response schemas.
+## Pointeurs vault (pour les détails)
+
+Avant de refactorer/étendre un service ou de prendre une décision d'archi, consulter :
+
+- **Vue d'ensemble projet** → `wiki/Context/projet-le-socrate.md`
+- **Multi-tenant (P1–P4)** → `wiki/Context/architecture-multi-tenant.md`
+- **Pipeline TTS 19 MP3** (flux complet, tags Fish Audio, calibration 192 mots/min, playlist blocs) → `wiki/Intelligence/pipeline-tts-19-mp3.md`
+- **Infra Azure 3 comptes Blob** (piège des connection strings) → `wiki/Intelligence/infra-azure-3-comptes-blob.md`
+- **Décisions persistance SQLite** → `wiki/Intelligence/decisions-persistance-sqlite.md`
+- **Conventions repo** → `wiki/Resources/conventions-repo.md`
+
+Chemins absolus : préfixer par `/Users/amelle/Downloads/kit-deuxieme-cerveau/`.
+
+---
+
+## Règles critiques (ne jamais enfreindre)
+
+1. **Backend** : `python run.py`, jamais `flask run`. Port **5001** en dev.
+2. **3 comptes Azure Storage** distincts — ne jamais mélanger les connection strings :
+   - `formationdocuments` → PDFs (`AZURE_STORAGE_CONNECTION_STRING`)
+   - `formationaudios` → MP3 cours (`AZURE_AUDIO_STORAGE_CONNECTION_STRING`)
+   - `documentstts` → MP3 TTS Fish Audio (`AZURE_TTS_STORAGE_CONNECTION_STRING`)
+3. **Container audios TTS = `audiostts`** dans `documentstts` (pas `audiotts`, pas `formationaudios`).
+4. **SAS URLs audios** via `AZURE_TTS_STORAGE_CONNECTION_STRING` dans `hr_routes.py`.
+5. **Pas de SDK OpenAI/Fish Audio** (conflits eventlet) → `requests` HTTP direct.
+6. **Timezone** Europe/Paris · format `YYYY-MM-DD HH:MM:SS`.
+7. **Auth** : sessions Flask + fallback `X-Auth-Token` (localStorage) + header `X-Platform-Id`.
+8. **CHANGELOG.md** : une entrée à chaque modification ou décision (cf. règle détaillée dans `.claude/CLAUDE.md`).
+
+---
+
+## Multi-tenant (rappel)
+
+4 plateformes (P1 = référence/staging, P2/P3/P4 = prod). `platform_id` dans toutes les tables et appels API. Rooms SocketIO : `platform_{platform_id}`. HR Dashboard (P1) pilote P2/P3 via `PLATFORM_{id}_BACKEND_URL`.
+
+Playlist mode (configurable `/schedule-config` par plateforme) :
+
+- `hiver` : Pause midi → Cours bloc 4 → Q&A
+- `ete` : Cours bloc 4 → Q&A → Pause midi
+
+---
+
+## CI/CD
+
+Push sur `staging` → 10 workflows GitHub Actions parallèles (3 backends App Service, 3 frontends Static Web Apps, + P4 et Function App). Login OIDC (pas de secrets exposés), `azure/webapps-deploy@v3`.
+Branche prod : `main` · staging/dev : `staging`.
+
+---
+
+## Styling (règles UI)
+
+Tailwind v4 (global via Vite) · CSS par fichier pour templates slides · Material Icons self-hostés (fonts locales dans `frontend/public/`) · Poppins/Fredoka/Fira Code · dark theme `#0f172a` / `#1e293b` + accent violet `#8B5CF6`.
+
+Pour les aesthetics frontend (éviter le "AI slop") et le workflow MCP Gemini Design obligatoire, voir `.claude/CLAUDE.md`.

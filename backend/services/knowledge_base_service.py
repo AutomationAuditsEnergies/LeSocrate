@@ -27,12 +27,17 @@ import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from database.db import get_db_connection
-from utils.anthropic_client import AnthropicRateLimitError, post_message as _anthropic_post
+from utils.anthropic_client import (
+    AnthropicAPIError,
+    AnthropicRateLimitError,
+    default_model,
+    post_message as _anthropic_post,
+)
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-CLAUDE_MODEL = os.environ.get("FORMATION_CLAUDE_MODEL", "claude-sonnet-4-20250514")
+CLAUDE_MODEL = default_model()
 
 # Concurrence enrichissement : 1 par défaut pour rester sous la limite
 # output-tokens/min d'Anthropic (ex. Haiku : 10 000 tokens/min — un seul appel
@@ -540,6 +545,21 @@ def enrich_competence(competence: dict, tp_name: str, rncp_code: str, model: str
                 time.sleep(e.wait_seconds)
             else:
                 raise
+        except AnthropicAPIError as e:
+            # Fail-fast sur les erreurs déterministes (400, 401, 403, 404, 422) :
+            # retry n'aidera pas (credit balance vide, mauvaise clé, modèle
+            # invalide…). Propager le message lisible plutôt que de spammer.
+            if e.is_deterministic:
+                logger.error(
+                    f"⛔ Enrichissement '{competence['competence_title']}' — "
+                    f"erreur déterministe {e.status_code} ({e.error_type}), no retry : {e.message}"
+                )
+                raise
+            if attempt < 4:
+                logger.warning(f"⚠️ Retry {attempt+1}/5 enrichissement '{competence['competence_title']}' : {e}")
+                time.sleep(10)
+            else:
+                raise
         except Exception as e:
             if attempt < 4:
                 logger.warning(f"⚠️ Retry {attempt+1}/5 enrichissement '{competence['competence_title']}' : {e}")
@@ -677,7 +697,7 @@ def _build_kb_thread(job_id: int, model: str = None):
         if completed_final == 0:
             raise Exception(f"Toutes les compétences ({errors}) ont échoué à l'enrichissement")
 
-        update_job(job_id, status="kb_ready")
+        update_job(job_id, status="kb_ready", kb_generated_via="api")
         logger.info(
             f"✅ Job {job_id} : KB prête — {completed_final}/{len(competences)} compétences "
             f"(dont {skipped} réutilisées de la précédente exécution), "

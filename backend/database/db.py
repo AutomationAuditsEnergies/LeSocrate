@@ -308,6 +308,30 @@ def init_database():
         except Exception:
             pass  # Colonne déjà présente
 
+        # Migration : colonne reviewed (reviewer conformité, cf. memoire/03-decisions/pipeline-dual-api-et-claude-code.md)
+        try:
+            cursor.execute("ALTER TABLE content_generation_segments ADD COLUMN reviewed INTEGER DEFAULT 0")
+            logger.info("✅ Colonne reviewed ajoutée à content_generation_segments")
+        except Exception:
+            pass
+        # Migration : colonne generated_via (trace d'origine API / Claude Code, valeurs :
+        # 'api' | 'claude_code_haiku' | 'claude_code_sonnet'). NULL tant que rien n'a tranché.
+        try:
+            cursor.execute("ALTER TABLE content_generation_segments ADD COLUMN generated_via TEXT")
+            logger.info("✅ Colonne generated_via ajoutée à content_generation_segments")
+        except Exception:
+            pass
+        # Migration : colonne review_error — message d'erreur quand l'appel
+        # reviewer Claude a échoué. NULL si jamais audité ou audit OK.
+        # Le polling frontend considère un segment comme "traité" si
+        # reviewed=1 OU review_error IS NOT NULL (les deux comptent pour
+        # arrêter la barre de progression sans mentir sur la conformité).
+        try:
+            cursor.execute("ALTER TABLE content_generation_segments ADD COLUMN review_error TEXT")
+            logger.info("✅ Colonne review_error ajoutée à content_generation_segments")
+        except Exception:
+            pass
+
         # Migration : ajouter colonnes from_scratch + module_contents (pipeline formation)
         cursor.execute("PRAGMA table_info(content_generation_jobs)")
         cg_columns = [col[1] for col in cursor.fetchall()]
@@ -349,6 +373,14 @@ def init_database():
         if "rome_text" not in fpj_cols:
             cursor.execute("ALTER TABLE formation_pipeline_jobs ADD COLUMN rome_text TEXT")
             logger.info("✅ Colonne rome_text ajoutée à formation_pipeline_jobs")
+
+        # Migrations pour tracer l'origine API / Claude Code de chaque artefact
+        # (Phase 2 de memoire/03-decisions/pipeline-dual-api-et-claude-code.md).
+        # Valeurs attendues : 'api' | 'claude_code_haiku' | 'claude_code_sonnet'.
+        for col in ("kb_generated_via", "global_program_generated_via", "daily_programs_generated_via"):
+            if col not in fpj_cols:
+                cursor.execute(f"ALTER TABLE formation_pipeline_jobs ADD COLUMN {col} TEXT")
+                logger.info(f"✅ Colonne {col} ajoutée à formation_pipeline_jobs")
 
         # ─── Couche 1 : Knowledge Base enrichie depuis REAC ──────────────────
         # Chaque compétence du REAC est enrichie par Claude avec définition
@@ -406,6 +438,18 @@ def init_database():
         )
         """)
         logger.info("✅ Table formation_modules créée/vérifiée")
+
+        # Colonne voice_type : trace la voix TTS utilisée pour les MP3 du module.
+        # Mise à jour à chaque relance de l'étape 7 (Fish Audio / gTTS / mock).
+        # Permet de savoir d'un coup d'œil quelle voix porte les audios du module.
+        cursor.execute("PRAGMA table_info(formation_modules)")
+        fm_cols = [col[1] for col in cursor.fetchall()]
+        if "voice_type" not in fm_cols:
+            cursor.execute("ALTER TABLE formation_modules ADD COLUMN voice_type TEXT")
+            logger.info("✅ Colonne voice_type ajoutée à formation_modules")
+        if "voice_updated_at" not in fm_cols:
+            cursor.execute("ALTER TABLE formation_modules ADD COLUMN voice_updated_at TIMESTAMP")
+            logger.info("✅ Colonne voice_updated_at ajoutée à formation_modules")
 
         # Colonne source_module_id sur platform_config (nullable, FK vers le module)
         cursor.execute("PRAGMA table_info(platform_config)")

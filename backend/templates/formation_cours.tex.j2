@@ -1,0 +1,102 @@
+% Template XeLaTeX d'une journée de formation Le Socrate.
+% Délimiteurs Jinja2 customisés (cf. formation_pdf_service.py).
+
+\documentclass[11pt, a4paper, twoside]{article}
+
+\usepackage{polyglossia}
+\setmainlanguage{french}
+
+\usepackage{fontspec}
+\setmainfont{Palatino}
+\setsansfont{Helvetica Neue}
+\setmonofont{Menlo}
+
+\usepackage[a4paper, margin=2.2cm, headheight=14pt]{geometry}
+\usepackage{xcolor}
+\definecolor{accentpurple}{RGB}{139,92,246}
+\definecolor{mutedgray}{RGB}{100,100,100}
+
+% Redéfinition light des \section pour avoir l'accent violet sans titlesec
+\makeatletter
+\renewcommand\section{\@startsection{section}{1}{\z@}%
+  {-3.5ex \@plus -1ex \@minus -.2ex}%
+  {2.3ex \@plus.2ex}%
+  {\normalfont\Large\bfseries\color{accentpurple}}}
+\makeatother
+
+\usepackage{fancyhdr}
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[LE,RO]{\small\color{mutedgray}((( tp_name | latex_escape )))}
+\fancyhead[LO,RE]{\small\color{mutedgray}Journée ((( day_number ))) — ((( day_title | latex_escape )))}
+\fancyfoot[C]{\small\color{mutedgray}\thepage}
+\renewcommand{\headrulewidth}{0.2pt}
+
+\usepackage{parskip}
+\setlength{\parskip}{0.6em}
+\setlength{\parindent}{0pt}
+
+\usepackage[hidelinks, pdftitle={Programme de formation — ((( tp_name | latex_escape_meta )))}, pdfauthor={Le Socrate}]{hyperref}
+
+\begin{document}
+
+% ─────────── Cover ───────────
+\begin{titlepage}
+  \centering
+  \vspace*{3cm}
+  {\fontsize{10pt}{12pt}\selectfont\color{mutedgray}\textsc{Programme de formation}\par}
+  \vspace{0.4cm}
+  {\fontsize{26pt}{30pt}\selectfont\bfseries ((( tp_name | latex_escape )))\par}
+  \vspace{1.2cm}
+  {\color{accentpurple}\rule{6cm}{0.8pt}\par}
+  \vspace{1.2cm}
+  {\Large Journée ((( day_number ))) sur ((( nb_days )))\par}
+  \vspace{0.4cm}
+  {\large\itshape ((( day_title | latex_escape )))\par}
+  \vfill
+  \begin{tabular}{rl}
+    \textsc{RNCP}                & ((( rncp_code | latex_escape )))       \\
+    \textsc{Durée journée}       & 7 heures                                \\
+    \textsc{Durée totale}        & ((( total_hours ))) heures              \\
+    \textsc{Mots du script}      & ((( total_words )))                     \\
+    \textsc{Date de génération}  & ((( generated_at | latex_escape )))     \\
+  \end{tabular}
+  \vspace{2cm}
+\end{titlepage}
+
+% ─────────── Récap pédagogique ───────────
+((* if day_recap *))
+\section*{Rappel de la séance précédente}
+\small\color{mutedgray}
+((( day_recap | latex_escape )))
+\normalsize\color{black}
+\vspace{0.6cm}
+((* endif *))
+
+% ─────────── TOC ───────────
+\tableofcontents
+\newpage
+
+% ─────────── Sections (6 sous-parties) ───────────
+((* for part in sub_parts *))
+\section{((( part.name | latex_escape )))}
+
+((* if part.module_content *))
+\textit{\small ((( part.module_content | latex_escape )))}
+\vspace{0.8em}
+((* endif *))
+
+((( part.body | latex_escape_paragraphs )))
+
+\newpage
+((* endfor *))
+
+% ─────────── Transition finale ───────────
+((* if day_transition *))
+\section*{Transition vers la prochaine séance}
+\small\color{mutedgray}
+((( day_transition | latex_escape )))
+\normalsize\color{black}
+((* endif *))
+
+\end{document}

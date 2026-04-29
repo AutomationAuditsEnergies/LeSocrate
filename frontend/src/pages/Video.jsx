@@ -27,8 +27,12 @@ export default function Video() {
 
   useEffect(() => {
     document.body.style.overflow = 'hidden'
+    document.documentElement.style.backgroundColor = '#F8F7F5'
+    document.body.style.backgroundColor = '#F8F7F5'
     return () => {
       document.body.style.overflow = ''
+      document.documentElement.style.backgroundColor = ''
+      document.body.style.backgroundColor = ''
     }
   }, [])
 
@@ -204,17 +208,17 @@ export default function Video() {
     <>
       <div
         className="h-screen w-full flex"
-        style={{ backgroundColor: '#f8fafc' }}
+        style={{ backgroundColor: '#F8F7F5' }}
         onClick={handlePageClick}
       >
         {/* Carte principale */}
         <div
           className="flex-1 flex flex-col overflow-hidden"
-          style={{ backgroundColor: '#f8fafc' }}
+          style={{ backgroundColor: '#F8F7F5' }}
         >
 
       {/* Header */}
-      <div className="bg-white border-b border-gray-200 px-8 flex items-center justify-between flex-shrink-0" style={{ height: '64px' }}>
+      <div className="border-b border-gray-200 px-8 flex items-center justify-between flex-shrink-0" style={{ height: '64px', backgroundColor: '#FFFFFF' }}>
         <div>
           <h1 className="text-xl font-semibold text-gray-800">{getPlatformName()}</h1>
           <p className="text-sm text-gray-500">{new Date().toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' })}</p>
@@ -226,8 +230,8 @@ export default function Video() {
         <div className="w-full max-w-4xl">
           <div
             id="video-zone"
-            className="relative aspect-video w-full rounded-3xl overflow-hidden flex items-center justify-center shadow-2xl border-4 border-pink-200 bg-gradient-to-br from-gray-700 to-gray-900"
-            style={{ transform: 'translateY(-20px)' }}
+            className="relative aspect-video w-full rounded-3xl overflow-hidden flex items-center justify-center shadow-2xl border-4 bg-gradient-to-br from-gray-700 to-gray-900"
+            style={{ transform: 'translateY(-20px)', borderColor: '#E4E4E4' }}
           >
             <div className="flex flex-col items-center justify-center">
               <div className="w-40 h-40 rounded-full bg-white flex items-center justify-center">
@@ -275,8 +279,8 @@ export default function Video() {
             {/* Bouton micro/son */}
             <button
               onClick={handleToggleMute}
-              className="w-14 h-14 rounded-xl bg-white hover:shadow-lg flex items-center justify-center transition-all duration-200 border-2 border-gray-300 hover:border-gray-400 ring-2 ring-purple-100"
-              style={{ boxShadow: '0 2px 8px rgba(0,0,0,0.08), 0 0 0 4px rgba(0,0,0,0.02)' }}
+              className="w-14 h-14 rounded-xl bg-white hover:shadow-lg flex items-center justify-center transition-all duration-200 border-2 hover:border-gray-400"
+              style={{ borderColor: '#E4E4E4', boxShadow: '0 2px 8px rgba(0,0,0,0.08), 0 0 0 4px #E4E4E4' }}
               title={muted ? "Activer le son" : "Couper le son"}
             >
               {muted ? (
@@ -300,8 +304,8 @@ export default function Video() {
             {/* Bouton raccrocher */}
             <button
               onClick={handleHangup}
-              className="w-16 h-16 rounded-xl bg-purple-600 hover:bg-purple-700 flex items-center justify-center transition-all duration-200 ring-2 ring-purple-200"
-              style={{ boxShadow: '0 4px 12px rgba(147, 51, 234, 0.3), 0 0 0 4px rgba(147, 51, 234, 0.1)' }}
+              className="w-16 h-16 rounded-xl bg-purple-600 hover:bg-purple-700 flex items-center justify-center transition-all duration-200"
+              style={{ boxShadow: '0 4px 12px rgba(147, 51, 234, 0.3), 0 0 0 4px #E4E4E4' }}
               title="Quitter le cours"
             >
               <svg xmlns="http://www.w3.org/2000/svg" className="w-7 h-7 text-white" viewBox="0 0 24 24" fill="currentColor">
@@ -312,8 +316,8 @@ export default function Video() {
             {/* Bouton chat */}
             <button
               onClick={handleToggleChat}
-              className="w-14 h-14 rounded-xl flex items-center justify-center transition-all duration-200 border-2 bg-white border-gray-300 hover:shadow-lg hover:border-gray-400 ring-2 ring-purple-100"
-              style={{ boxShadow: '0 2px 8px rgba(0,0,0,0.08), 0 0 0 4px rgba(0,0,0,0.02)' }}
+              className="w-14 h-14 rounded-xl flex items-center justify-center transition-all duration-200 border-2 bg-white hover:shadow-lg hover:border-gray-400"
+              style={{ borderColor: '#E4E4E4', boxShadow: '0 2px 8px rgba(0,0,0,0.08), 0 0 0 4px #E4E4E4' }}
               title={chatOpen ? "Fermer le chat" : "Ouvrir le chat"}
             >
               <svg xmlns="http://www.w3.org/2000/svg" className={`w-5 h-5 ${chatOpen ? 'text-purple-600' : 'text-gray-700'}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">

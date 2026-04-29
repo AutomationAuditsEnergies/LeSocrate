@@ -131,7 +131,8 @@ export default function ChatPanel({ open, onClose }) {
       {/* Messages */}
       <div
         id="messages"
-        className="flex-1 overflow-y-auto px-6 py-4 space-y-4 scrollbar-thin scrollbar-thumb-gray-300 scrollbar-track-transparent min-h-0 bg-gray-50"
+        className="flex-1 overflow-y-auto px-6 py-4 space-y-4 scrollbar-thin scrollbar-thumb-gray-300 scrollbar-track-transparent min-h-0"
+        style={{ backgroundColor: '#F8F7F5' }}
       >
         {messages.length === 0 && (
           <div className="flex flex-col items-center justify-center h-full text-center text-gray-400 gap-2">

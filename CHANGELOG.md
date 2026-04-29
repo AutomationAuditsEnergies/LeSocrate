@@ -1,5 +1,1478 @@
 # Changelog
 
+## 2026-04-29
+
+### feat: card "Jour X" du step 6 redécoupée en 3 sous-zones avec flèches
+
+Refonte visuelle de chaque folder card de l'étape 6 (Génération des cours, côté API) pour matérialiser le sous-flux interne d'une journée :
+
+- **Zone 1 — Texte généré** (accent violet `rgba(167, 139, 250, ...)`) : Voir · Word · Word 2 · Rapport
+- ↓ `<FlowArrowDown height={18} />`
+- **Zone 2 — Sécurité volume · cible 90k mots** (accent ambre `rgba(245, 158, 11, ...)`) : Compléter le volume via API / Volume OK
+- ↓ `<FlowArrowDown height={18} />`
+- **Zone 3 — Révision conformité · règles #1-#27** (accent vert `rgba(52, 211, 153, ...)`) : Réviser la conformité via API
+
+Chaque zone : padding `8px 10px`, `borderRadius: 8px`, fond teinté à 5-6%, `borderLeft: 3px solid` à 50% d'opacité, label uppercase 10px en couleur d'accent.
+
+Avant : tous les boutons (6) étaient dans un seul `<div display: flex flex-wrap>` qui produisait 2-3 lignes de boutons indistinctes. Après : ordre du flux visuellement explicite, l'utilisateur comprend qu'il doit valider zone par zone du haut vers le bas.
+
+Petit ajustement parent : `alignItems: 'center' → 'flex-start'` et `flex: 1 → '1 1 220px'` sur le bloc titre pour que la colonne de zones (plus haute) ne désaxe pas le titre.
+
+Fichier : `frontend/src/pages/FormationPipeline.jsx` (~ligne 2585-2790).
+
+### feat: connecteurs visuels (flèches/Y-fork/Y-merge) entre étapes du pipeline
+
+Ajout de connecteurs visuels dans `FormationPipeline.jsx` pour matérialiser le flux de données entre les cards d'étapes :
+
+- **`FlowArrowDown`** : flèche verticale ↓ entre 2 cards consécutives.
+- **`FlowSplit`** : Y-fork qui descend du tronc commun (REAC) et bifurque vers les centres des 2 colonnes (API / Claude Code local).
+- **`FlowMerge`** : Y-merge inverse — les 2 colonnes remontent vers une barre horizontale puis redescendent en tronc unique vers Synthèse TTS.
+
+Placement :
+1. RNCP → REAC : `<FlowArrowDown />`
+2. REAC → split : `<FlowSplit />` en mode dual, `<FlowArrowDown />` en mono.
+3. Dans le grid dual, entre chaque paire (KB → Global, Global → Journées, Journées → Génération) : 2 `<FlowArrowDown />` (1 par colonne, le second conditionné par `DUAL_COLUMN_ENABLED`).
+4. Fin du grid → TTS : `<FlowMerge />` en dual, `<FlowArrowDown />` en mono.
+5. Dans le `StepBlockCC` du step 6 : 2 mini-flèches entre les sous-blocs Génération cours → Sécurité volume → Révision conformité.
+
+Implémentation pure CSS (divs absolus avec `calc(25% - 10px)` pour cibler les centres de colonnes du grid `1fr 1fr` gap `40px`). Couleur `rgba(167, 139, 250, 0.35)` (violet sobre, accent du projet). Aucune dépendance ajoutée, aucun SVG.
+
+### feat: choix API Anthropic / API DeepSeek dans la création de plateforme
+
+Le dropdown "Mode d'exécution des étapes IA" de la modale "Nouvelle plateforme" (HR Dashboard) propose maintenant **4 options** au lieu de 3 :
+
+- `api` — API Anthropic (Sonnet, ~5–7$/7h)
+- `api_deepseek` — **NOUVEAU** : API DeepSeek (deepseek-v4-flash) ; consomme `DEEPSEEK_API_KEY`
+- `claude_code` — Claude Code local (forfait Pro/Max via OAuth)
+- `test` — Mode test (DOCX/TXT pré-rédigés, ~5 min)
+
+Implémentation : pure UI, aucune modif backend nécessaire. Lorsque l'utilisateur sélectionne `api_deepseek`, le payload `POST /api/formation/<id>/run-auto` reçoit `model: 'flash'` qui est déjà mappé côté backend (`formation_routes.py:1980-1985`) vers `api_model = "deepseek-v4-flash"`. Le client Anthropic-compatible (`anthropic_client.py:_resolve_provider`) détecte le préfixe `deepseek-` et route automatiquement vers `https://api.deepseek.com/anthropic/v1/messages` avec `DEEPSEEK_API_KEY` — même si `ANTHROPIC_API_KEY` est aussi présente dans le `.env`.
+
+Permet à l'utilisateur de garder les deux clés (Anthropic + DeepSeek) dans son `.env` et de choisir le provider plateforme par plateforme.
+
+Fichier modifié : `frontend/src/pages/HRDashboard.jsx` (option dropdown + helper text + body du fetch run-auto).
+
+### feat: bouton "Compléter le volume via API" dans la card de gauche
+
+Suite à l'uniformisation backend (auto-pilot fait volume safety dans les 2 modes), ajout du bouton manuel correspondant dans l'UI :
+
+**Backend** (`formation_routes.py`) : `POST /api/formation/<id>/content/<folder>/volume-safety` accepte maintenant `{"mode": "api"|"cc"}`. Mode "api" → `run_volume_safety_api`, mode "cc" → `run_volume_safety` (legacy, requiert LOCAL_DEV+claude). Mode "cc" est le défaut pour rétrocompatibilité avec le bouton existant à droite.
+
+**Frontend** (`FormationPipeline.jsx`) : nouveau bouton **"Compléter le volume via API"** sur chaque journée de la card gauche, juste avant "Réviser la conformité via API". Comportement :
+- Désactivé si génération pas terminée
+- Actif (orange) si déficit > 0 — appelle `volume-safety` avec `mode='api'`
+- Vert "Volume OK" si total ≥ 90 000 mots
+- "Enrichissement…" pendant l'opération
+
+`handleLaunchVolumeSafety(folderId, mode='cc')` accepte un nouveau param `mode`. Le bouton CC à droite continue d'appeler `'cc'` par défaut (inchangé).
+
+L'utilisateur a maintenant la séquence complète **dans les 2 colonnes** :
+- Gauche (API) : Voir · Word · Word 2 · Rapport · **Compléter le volume via API** · Réviser la conformité via API
+- Droite (CC local) : Compléter (subprocess Claude) · Réviser conformité (4 chunks)
+
+### feat: pipeline auto-pilot uniformisée — volume safety dans les deux modes (API + Claude Code)
+
+Avant : volume safety était gardé dans un `if use_claude_code:` qui le réservait au mode CC. Le mode API sautait totalement cette étape, donc une formation lancée en API n'avait aucune garantie d'atteindre 90k mots/journée. Demande utilisateur : harmoniser pour que les 2 modes suivent la même séquence d'étapes.
+
+Implémentation :
+1. Nouvelle fonction `run_volume_safety_api(job_id, folder_id, model)` dans `claude_code_mission_service.py`. Même invariant (90k mots/jour), même algo multi-passes (max 3) que `run_volume_safety`, mais via `_anthropic_post` au lieu de subprocess `claude`. Helper `_build_volume_safety_prompt_api` qui combine task + texte segment + règles dans un seul prompt (le mode API n'a pas de filesystem partagé entre Claude et le backend).
+2. `_run_auto_pilot` (`formation_routes.py`) : dispatch dynamique selon `use_claude_code` :
+   - `True` → `run_volume_safety(...)` (CC, gratuit)
+   - `False` → `run_volume_safety_api(...)` (API, payant)
+3. Logs différenciés (`[CC]` vs `[API]`) pour debug.
+
+Conséquence : la séquence d'auto-pilot est maintenant identique pour les 2 branches :
+1. RNCP + REAC + KB + Global + Daily + Content (texte cours)
+2. **Volume safety** (CC ou API selon le mode)
+3. **Révision conformité** (CC ou API selon le mode)
+4. Audio TTS (Fish Audio / gTTS / mock selon le choix utilisateur)
+5. Health-check final
+
+Note coût mode API : volume safety en API consomme ~5-10$ supplémentaires sur le forfait Anthropic (Sonnet, ~5 segments × 8k tokens output × 1-3 passes par folder × N folders). C'est le prix de l'invariant 90k mots — l'utilisateur l'assume en choisissant le mode API.
+
+Le mode TEST garde son skip_volume_safety=True pour itérer rapidement sur la review.
+
+### feat: mode TEST skip volume safety pour itérer plus vite sur la review
+
+Une fois validé que volume safety multi-passes fonctionne (job 14 : 94k mots atteints), le besoin a basculé sur **itérer rapidement sur la qualité de la révision conformité** (qui était catastrophique en Haiku, à valider en Sonnet).
+
+Volume safety prend ~30-45 min en multi-passes. La review seule prend ~10-15 min. Donc en skippant volume safety en mode TEST, on divise le temps par 3 pour chaque itération sur la review.
+
+Implémentation :
+- Nouveau paramètre `skip_volume_safety: bool = False` sur `_run_auto_pilot`
+- Le bloc "Sécurité volume" devient `if skip_volume_safety: log skip elif use_claude_code: ...`
+- Hardcodé `True` dans `init_test_pipeline` pour le mode TEST (qui appelle `_run_auto_pilot(..., skip_volume_safety=True)`)
+- Note frontend mise à jour : "Seule la révision conformité tourne (~15 min)"
+
+Conséquence : la review tourne sur les segments du DOCX original (~60k mots, sans enrichissement). Si la qualité review est mauvaise, c'est un bug review pur — pas une interaction avec volume safety.
+
+Pour re-tester volume safety, il faut soit :
+1. Désactiver le skip dans `init_test_pipeline` (1 ligne à changer)
+2. Ajouter une checkbox frontend "Aussi enrichir le volume" (~15 min de code)
+
+### fix: mode TEST passe de Haiku à Sonnet pour volume_safety + review
+
+Découverte sur le job 14 : avec Haiku, la review produisait des patches catastrophiques :
+- **Règle #21 (fusion de phrases avec "que")** : Haiku tape `"qu"` + mot collé sans espace ni "e" — `"quimaginez"`, `"quvous"`, `"qusupposez"`, `"qune"` au lieu de `"que vous imaginez"`, etc. Mots fusionnés inintelligibles.
+- **Règle #22 (discours direct → indirect)** : appliquée mécaniquement à TOUS les guillemets, génère du blabla répétitif `"on vous dit, en substance, que..."` 6 fois dans le même segment.
+
+Sonnet a le jugement linguistique pour fusionner proprement les phrases ("Prenons un cas fictif pour illustrer une situation où vous travaillez pour une PME...") et varier les transformations de discours rapporté. Le mode TEST tourne sur le forfait CC donc Sonnet est gratuit côté API — pas de raison économique de garder Haiku.
+
+Hardcodé `"sonnet"` dans `eventlet.spawn(_run_auto_pilot, ...)` du mode test (`formation_routes.py:init_test_pipeline`). Pour les modes API et Claude Code "normal", le modèle reste choisi par l'utilisateur via le frontend.
+
+À noter : ce qui semblait être des troncatures à l'écran (`"vou"`, `"person"`, `"troi"`) est purement cosmétique — l'UI tronque l'affichage des replacements pour la lisibilité, mais le contenu réel en DB est complet.
+
+### feat: volume safety multi-passes — boucle jusqu'à atteindre 90k mots (max 3 passes)
+
+Avant : `run_volume_safety` faisait 1 passe sur les 5 segments les plus courts → gain max ~15k mots. Si déficit initial > 15k (ex. job 13 du mode test : déficit -30k), volume safety **ne pouvait pas** combler le gap, ce qui contredisait l'invariant "chaque journée doit atteindre 90k mots avant la révision".
+
+Maintenant : boucle interne `for pass_idx in range(_VOLUME_SAFETY_MAX_PASSES=3)`. À chaque passe :
+1. Re-audit du folder (le déficit a été réduit par la passe précédente)
+2. Si `deficit == 0` → break early
+3. Identifie les nouveaux TOP 5 segments les plus courts
+4. Subprocess Claude Code pour chacun + append + UPDATE DB
+
+Capacité max : 3 passes × 5 segments × ~3000 mots = **~45k mots** par folder, suffisant pour les déficits réalistes.
+
+Re-assemble + upload Azure une seule fois à la fin (pas à chaque passe → économise les appels Azure).
+
+Le résultat retourne `passes_run` et `target_reached` pour audit. Si `target_reached=False` après 3 passes, c'est un signal qu'il faudrait soit augmenter `_VOLUME_SAFETY_MAX_PASSES`, soit que les segments restants atteignent leur limite intrinsèque.
+
+Pour les chunk dirs : nouvelle convention `pass_<n>_segment_<id>/` au lieu de `segment_<id>/` pour ne pas écraser les outputs entre passes (debuggable).
+
+### fix: bug critique volume safety — colonne `updated_at` inexistante faisait échouer 100% des enrichissements silencieusement
+
+Détecté lors du premier test du mode TEST (job 13, plateforme 16). `run_volume_safety` a bien tourné les subprocess Claude Code pour les 5 segments les plus courts, généré ~15 KB de contenu enrichi par segment dans leurs `output.md` respectifs, MAIS le `cursor.execute("UPDATE content_generation_segments SET ... updated_at = CURRENT_TIMESTAMP WHERE id = ?")` levait `OperationalError: no such column: updated_at` (la colonne n'existe pas dans le schéma — c'est un copier-coller depuis `content_generation_jobs` qui a cette colonne).
+
+L'exception était capturée par le `except Exception` autour du subprocess → segment ajouté à `failed`, append en DB jamais fait. Conséquence : tous les enrichissements volume safety étaient invisibles côté DB depuis l'introduction de cette feature, alors que le code « semblait » tourner (subprocess Claude Code, output.md créé, log info "📏 Segment X enrichi").
+
+Fix : retiré `updated_at = CURRENT_TIMESTAMP` du UPDATE. Pas besoin d'ajouter la colonne pour l'instant (aucun autre code la lit/écrit sur cette table).
+
+Pour les jobs déjà cassés par ce bug : les `output.md` existent dans `review_queue/job_<id>/step_volume_safety/folder_<id>/segment_<id>/`. Un script de remédiation peut les rattraper en append à `text_content` + UPDATE word_count/dirty/reviewed. Pour le job 13, la review en cours travaille sur la version non-enrichie — pas de blocage, juste 60k mots au lieu de 90k cible.
+
+### feat: mode TEST — injecte des DOCX/TXT au lieu de générer (validation pipeline en 5 min)
+
+3ème option dans le select "Mode d'exécution des étapes IA" : **"TEST — injecte des DOCX/TXT pré-rédigés"**. Permet de valider toute la pipeline en aval (finalize + review + audio + health-check) sans payer/attendre la génération content (30-60 min, 90k mots × N journées).
+
+**Frontend (HRDashboard)** :
+- Quand `autoPilotMode === 'test'` : le select TTS est désactivé (forcé `mock`) et une zone d'upload apparaît (drag & drop + multiple files, accept `.docx,.txt`).
+- Le user fournit `Math.ceil(hours/7)` fichiers (1 par journée). Validation côté front : refuse si compte ≠ attendu.
+- Liste les fichiers uploadés avec taille pour confirmation visuelle.
+
+**Backend** : nouvelle route `POST /api/formation/init-test` (multipart/form-data) qui :
+1. Crée la plateforme dédiée (idem `/init`)
+2. Crée le job pipeline avec **stubs** (REAC mock, global_program mock, daily_programs mock 6 sub × N jours, status='daily_validated')
+3. Pour chaque doc : parse via `_read_doc_text` (`.txt` direct, `.docx` via `python-docx`), découpe en 18 chunks équilibrés en paragraphes via `_split_into_18_chunks`
+4. Crée 1 cours_folder + 1 cg_job + 18 segments par journée (`status='completed', dirty=1, reviewed=0`)
+5. Lance l'auto-pilot (eventlet.spawn) avec `tts_mode='mock'`
+6. Auto-pilot skippe naturellement KB/global/daily/content (les `if not j.get(...)` détectent que tout est déjà fait, et `_list_content_chunks` retourne 0 chunk vu que tous les segments sont déjà completed)
+7. Tourne uniquement : finalize content (assemble + DOCX + snapshot pre-review) → review (4 chunks par jour) → audio mock → health-check
+
+**Test pratique** : avec `courstxt/formation_jour1.txt` (92k mots), le découpage produit 18 chunks de ~5000 mots chacun (taille production réelle). La review a donc du vrai contenu à patcher.
+
+**Durée totale en mode test** : ~5-10 min (vs 30-60 min en mode normal). Cible : valider en pratique les fixes (Bug 1 finalize, Bug 2 snapshot, Bug 3 visibilité review) + les nouveaux services (pre-flight, health-check).
+
+**Important — coût du mode test** : volume safety (enrichit les segments courts) et révision conformité (4 agents multi-rules par jour) consomment de l'IA. Pour rester gratuit côté Anthropic API, l'auto-pilot est lancé avec `use_claude_code=True` (subprocess local, forfait Pro/Max). Pré-requis backend : `LOCAL_DEV=true` + binary `claude` dans le PATH (validé par le pre-flight). Sans ça, le mode test échouera proprement au pre-flight avec un message clair plutôt que de partir sur l'API payante par surprise.
+
+### feat: choix API Anthropic vs Claude Code dans le formulaire de création de plateforme
+
+Le formulaire `Nouvelle plateforme` (HRDashboard) propose maintenant un select **"Mode d'exécution des étapes IA"** sous la voix TTS, avec deux options :
+
+- **API Anthropic** (défaut) — appels directs via `ANTHROPIC_API_KEY`. Aucune dépendance locale, ~5–7$ pour une formation 7h Sonnet.
+- **Claude Code local** — subprocess `claude` via le forfait Pro/Max (OAuth). Gratuit côté API mais nécessite `LOCAL_DEV=true` + binary `claude` dans le PATH du backend (vérifié par le pre-flight).
+
+Le choix est envoyé via `use_claude_code` au `POST /api/formation/<id>/run-auto`. Avant ce commit, le frontend ne passait jamais la flag → le backend défaultait toujours à `False` (= API), ce qui empêchait d'utiliser le forfait Claude Code en pratique.
+
+Une note explicative s'affiche sous le select selon l'option choisie pour rappeler le pré-requis backend.
+
+### tooling: `tools/pipeline_audit.py` — audit ligne de commande de toutes les pipelines
+
+CLI tool qui appelle `compute_health` sur tous les `formation_pipeline_jobs` en DB et donne un verdict en 1 commande :
+
+```
+python tools/pipeline_audit.py            # vue compacte tous les jobs
+python tools/pipeline_audit.py --job 10   # vue détaillée d'un job (tous les checks)
+python tools/pipeline_audit.py --broken   # uniquement les jobs cassés
+```
+
+Distingue 3 états :
+- 🟢 OK (statut `audio_launched`/`done` ET tous les checks verts)
+- 🟡 warning (incohérence mineure : snapshot pre-review manquant)
+- 🔴 cassé (incohérence bloquante : segments incomplets, audio dirty=1, etc.)
+- ⏳ en cours (statut intermédiaire : init/kb_ready/daily_validated/error — pas auditable comme final)
+
+Code de sortie 1 si au moins 1 job cassé → scriptable en CI/cron pour alerter sur des régressions silencieuses.
+
+### feat: pre-flight check + health-check de la pipeline formation
+
+Pour aller vers le "vrai one-shot" et détecter les régressions sans devoir lancer une pipeline complète (1-2h), ajout d'un service `formation_health_service.py` exposé via deux routes :
+
+**Pre-flight** (`POST /api/formation/<id>/preflight`) — audit AVANT lancement, valide :
+- `ANTHROPIC_API_KEY` présente et au format `sk-ant-`
+- `LOCAL_DEV=true` + binary `claude` dans le PATH (si `use_claude_code=True`)
+- `AZURE_TTS_STORAGE_CONNECTION_STRING` + `AZURE_AUDIO_STORAGE_CONNECTION_STRING` connectables (`list_containers` 1 page)
+- `FISH_AUDIO_API_KEY` présente (si `tts_mode=fish_audio`)
+- France Compétences accessible (sauf si REAC déjà téléchargé)
+- Job existant + état cohérent
+
+Hook auto au début de `_run_auto_pilot` : si bloquant, lève `RuntimeError("Pre-flight bloqué — checks fatals : X, Y. detail")` avant de toucher quoi que ce soit. Évite 80% des plantages "config foireuse" qui actuellement laissent des pipelines à mi-chemin.
+
+**Health-check** (`GET /api/formation/<id>/health`) — audit APRÈS lancement, vérifie 7 invariants :
+1. `segments_completed` : N×6×3 segments en `status='completed'`
+2. `cg_jobs_completed` : tous les `content_generation_jobs.status='completed'`
+3. `docx_buildable` : pour chaque folder, segments + sub_parts cohérents → DOCX construisible à la volée
+4. `pre_review_snapshotted` : `text_content_pre_review IS NOT NULL` partout (warning si manquant)
+5. `review_consistent` : pas de segments avec `reviewed=0 AND review_error IS NULL` (preuve que la révision n'a pas été tentée)
+6. `audio_tts_files` : `dirty=0` partout (audio régénéré)
+7. `module_persistant` : ligne dans `formation_modules` créée
+
+Hook auto en fin d'`_run_auto_pilot` : résultat stocké dans `_AUTO_PILOT_STATE[job_id]["health"]` pour que l'UI affiche un bandeau "santé OK" ou "N incohérences détectées" + bouton de remédiation par check (à venir côté frontend).
+
+Tests sur jobs existants confirment :
+- Job 8 (premier run CC OK) : tout vert sauf `pre_review_snapshotted` (warning normal — bug 2 du commit précédent : ce job tournait avant le fix snapshot).
+- Job 11 : pre-flight tout vert, validé que la pipeline pourrait re-tourner one-shot.
+
+### fix: pipeline auto-pilot — 3 bugs corrigés sur le flow content/review
+
+Trois bugs identifiés en analysant les jobs 10 (TP CRCD test-7h, segments reviewed=0) et 11 (TP CRCD test-14h, cg_jobs status=idle, DOCX absents) qui étaient tous deux à `audio_launched` mais avec un état incohérent.
+
+**Bug 1 — `_finalize_content_step` skippé si erreurs résiduelles** (`claude_code_mission_service.py:_execute_chunked`). La condition `if step_key == "content" and not progress["errors"]:` empêchait l'assemblage DOCX + snapshot pre-review + transition cg_jobs en `completed` dès qu'un seul chunk échouait sur N. Cas réel : job 11 avait 1 chunk en erreur sur 36 (rate limit 429) → aucun DOCX produit, UI bloquée à "0/2 journées terminées" malgré 35 segments OK.
+Fix : finalize **toujours** appelé. Le finalize gère déjà ses propres erreurs en interne (`all_finalize_ok` flag) et ne déplace `step_content/` vers `_done/` que si 100% des assemble_and_upload réussissent.
+
+**Bug 2 — Snapshot pre-review perdu si la review tourne avant le finalize** (`claude_code_mission_service.py:_execute_chunked`). Si la review patche les segments avant que `_finalize_content_step` ait pu snapshotter `text_content → text_content_pre_review`, la version originale est définitivement perdue. Le bouton "Word original" devient inutile.
+Fix : snapshot dupliqué en début de `_execute_chunked("review")`. Idempotent (ne réécrit jamais), best-effort (un échec snapshot ne bloque pas la review).
+
+**Bug 3 — Auto-pilot avale silencieusement les erreurs review** (`formation_routes.py:_run_auto_pilot`). Le `try/except Exception` autour de `execute_mission_locally("review")` était volontairement best-effort pour ne pas bloquer l'audio, mais sans tracker l'erreur dans `_AUTO_PILOT_STATE`, l'utilisateur voit `audio_launched` sans savoir que la conformité a sauté. Cas réel : job 10 — `review_queue/job_10/` resté vide, segments avec `reviewed=0` ET `review_error=null` (preuve que ni CC ni API n'a été appelé).
+Fix : capture de l'erreur dans `_AUTO_PILOT_STATE[job_id]["review_error"]` + `review_status="failed"` (CC et API). L'UI peut maintenant afficher un bandeau "révision non faite — relancer manuellement".
+
+Reste à faire : remédiation des deux jobs cassés (10 et 11) — relancer review pour job 10, finalize pour job 11. Bug indépendant sur le snapshot pre-review déjà perdu pour job 11 (review a tourné avant le snapshot fix).
+
+## 2026-04-28
+
+### PRODUCT.md créé via `/impeccable teach` — direction stratégique design
+
+Première écriture de `PRODUCT.md` à la racine du projet (~7.3 Ko). Document strategique requis par le skill `impeccable` pour ancrer les futures décisions design.
+
+Principales décisions captées via 2 rounds d'interview structurée :
+
+- **Register** : `product` (le design SERT le produit, pas l'inverse — confirmé par App.jsx 100% applicatif).
+- **Persona prioritaire** : **admins/formateurs** quand un choix design oppose admin et apprenant. L'opérateur prime sur l'utilisateur final (inversion par rapport au réflexe "user-first" SaaS).
+- **Posture émotionnelle apprenant** : sérieux institutionnel (cadre RNCP officiel), pas chaleureux ni motivationnel.
+- **Posture émotionnelle admin** : calme professionnel (Linear/Stripe-like), pas cockpit mission-control ni power-user sec.
+- **Personnalité 3 mots** : rigoureuse · institutionnelle · sobre.
+- **Références positives** : Coursera / edX / MIT OCW (institutionnel légitime).
+- **Anti-référence principale** : Edtech "playful" (Duolingo, Memrise, Brilliant). Aucune gamification, pas de mascots, pas de confettis, pas de "streaks". Le sérieux est un produit, pas un défaut à compenser.
+- **Anti-références implicites** : AI slop (carré violet + abstract icon), hero-metric SaaS, identical card grids, gradient text, glassmorphism décoratif.
+- **Accessibilité** : pas d'audit WCAG complet en priorité immédiate. Sens commun (contraste ≥ 4.5:1, focus visible, sémantique HTML). À revisiter si exigence Qualiopi/RGAA tombe.
+
+5 design principles dérivés (reproduits intégralement dans `PRODUCT.md`) :
+
+1. L'institution avant l'expérience.
+2. L'opérateur avant l'apprenant en cas de conflit.
+3. Calme sans froideur académique (mariage Coursera + Linear).
+4. Un RNCP, un module durable, un design durable (cohérence avec `un-rncp-un-module-durable`).
+5. Anti-Duolingo strict.
+
+DESIGN.md non encore généré — proposition à l'utilisateur de lancer `/impeccable document` pour capturer le système visuel actuel (Tailwind v4, palette violette `#8B5CF6` + slate dark `#0f172a` + light `#f8fafc`, Poppins/Fredoka/Fira Code, framer-motion, Material Icons self-hostés) afin que les futures variantes restent on-brand.
+
+### DESIGN.md + DESIGN.json créés via `/impeccable document` — système visuel HR Dashboard
+
+Génération du système visuel **scopé strict au HR Dashboard** (et par extension au reste du côté admin : `/admin`, `/formation-pipeline`, `/schedule-config`, `/debug`). L'apprenant-side est explicitement **hors scope** dans `DESIGN.md` — un futur agent qui veut designer `/video` ou `/recorder` ne doit pas appliquer ce système.
+
+**`DESIGN.md`** (~22 Ko) — format Stitch officiel : YAML frontmatter (tokens machine-readable) + 6 sections markdown imposées (Overview / Colors / Typography / Elevation / Components / Do's and Don'ts). Captures :
+
+- **Creative North Star** : "The Examiner's Desk" (le bureau de l'examinateur RNCP — civic minimalism + product calm).
+- **Palette** : 1 primaire (Examiner's Violet `#8B5CF6`) + neutres slate-tinted (canvas / surface / recessed / text / border en duo dark/light) + 3 status (locked green, error red, warning amber). Aucun bleu — le `#137fec` legacy des modals AudiosModal/PDFModal est documenté comme **dette à rembourser**, pas comme rôle.
+- **Typographie** : **Inter exclusive** sur la surface admin (divergence volontaire de Poppins global qui sert l'apprenant). 5 niveaux : display 24px / title 18px / body 14px / label 12px / eyebrow 10px tracked uppercase.
+- **Élévation** : flat by default + tonal layering. Aucune shadow en dark, shadow très subtil sur les cartes en light. Drag-lift uniquement sur slide-to-confirm.
+- **Composants signature** : Slide-to-Confirm (la seule exception au "no bounce", easing `cubic-bezier(0.34, 1.56, 0.64, 1)` autorisé), platform card, status pills, primary button, audio item, modal, pagination.
+- **7 Named Rules** : The One Voice Rule, The No-Stitch-Blue Rule, The Slate-Drift Rule, The Inter-Only Rule, The Tracked-Eyebrow Rule, The Flat-by-Default Rule, The Lift-on-Grab-Only Rule.
+- **Do's** (9) et **Don'ts** (13) qui citent verbatim les anti-références de PRODUCT.md (anti-Duolingo, anti-AI-slop, anti-hero-metric, anti-identical-card-grids) plus l'incident logo violet+hub d'avril 2026 documenté comme cas d'école.
+
+**`DESIGN.json`** (~17 Ko) — sidecar Stitch v2 (extensions hors-frontmatter) :
+
+- `colorMeta` : OKLCH canonique pour chaque couleur + tonal ramps 8 steps pour Examiner's Violet et le slate stack.
+- `typographyMeta` : purpose pédagogique de chaque rôle.
+- `shadows` (4) : card-lift-light, drag-lift, thumb-rest, modal-cast — chacun avec son rôle explicite.
+- `motion` (5) : ease-default + ease-slide-confirm (la seule exception bounce) + 3 durées.
+- `breakpoints` Tailwind v4 standard.
+- `components` (6) : Primary Button, Status Pill — Locked, Platform Card, Slide to Confirm, Audio Item, Pagination Control. Chacun avec HTML self-contained + CSS expand-vanilla (Tailwind utilities expandées en propriétés literal pour rendu shadow-DOM dans le panel `impeccable live`).
+- `narrative` : tiré verbatim de DESIGN.md (north star, overview, key characteristics, rules, dos, donts).
+
+**Décisions stratégiques captées via interview structurée** (4 questions qualitatives) :
+
+1. North Star = **The Examiner's Desk** (vs Standards Office, Operator's Console, Quiet Atelier).
+2. Bleu legacy `#137fec` → **à phaser out** (documenté comme dette, pas comme rôle "info").
+3. Élévation = **flat + tonal layering** (état actuel devient doctrine).
+4. Composants = **outil-first sans cérémonie** (Linear / Raycast register).
+
+**Loader vérifié** : `hasProduct: true`, `hasDesign: true`, `productPath: PRODUCT.md`, `designPath: DESIGN.md`. Les futures commandes `impeccable` chargeront ce contexte automatiquement. Tout futur travail sur le côté admin doit citer ces Named Rules avant de proposer une variation visuelle.
+
+### `/hr-dashboard` — pagination simplifiée
+
+Seul élément retenu de la tentative de refonte annulée : la pagination des cartes plateformes passe de "Précédent + cercles numérotés `w-8 h-8 rounded-full` + Suivant" à "Page X / Y + 2 chevrons icône-seule (rounded-xl 40×40)". Plus sobre pour 2-5 pages, l'utilisateur a validé visuellement.
+
+### Refonte design `/hr-dashboard` — tentative annulée à la demande de l'utilisateur
+
+Première passe de redesign HR Dashboard tentée (audit + chrome page + PlatformCard refactor en groupes hiérarchisés + empty state + pagination simplifiée + helper `CardActionTile`). **Annulée intégralement par l'utilisateur** ("reviens au design avant que tu modifies tout") — le design existant convenait. `HRDashboard.jsx` restauré à l'état pré-session (les changements logiques auto-pilot + modules modal de pré-session sont préservés).
+
+Leçon pour une future tentative : ne pas refondre globalement sans validation incrémentale. Présenter chaque changement un par un (top nav d'abord, attendre validation, puis cartes, etc.) plutôt qu'un bloc "audit + 8 modifications simultanées". La friction venait du volume de changements appliqués d'un coup, pas nécessairement de la qualité de chacun.
+
+### Subprocess Claude Code force désormais le FORFAIT (et non l'API à la carte)
+
+Diagnostic en mode "watcher" sur l'étape KB en mode CC : Claude Code a renvoyé `billing_error` "Credit balance is too low" alors que le forfait Pro/Max est censé être actif. Cause trouvée dans `review_queue/job_X/step_kb/execution.log` : `"apiKeySource":"ANTHROPIC_API_KEY"`. La CLI Claude Code héritait de la variable d'env `ANTHROPIC_API_KEY` du shell parent et tapait sur le compte API à la carte (épuisé) au lieu du forfait local.
+
+Fix dans `claude_code_mission_service.py:_run_subprocess` :
+- `env = os.environ.copy()` puis suppression de `ANTHROPIC_API_KEY` et `ANTHROPIC_AUTH_TOKEN` avant le `subprocess.Popen(... env=child_env)`.
+- Sans ces variables, Claude Code retombe sur le login OAuth stocké localement (`~/.claude/`) — c'est-à-dire **le forfait**.
+- Logger le strip pour traçabilité : `"forfait local (env strip: ANTHROPIC_API_KEY)"`.
+
+**Pré-requis** : il faut avoir fait `claude` interactif au moins une fois pour générer le token OAuth du forfait. Si l'utilisateur voit une erreur "not authenticated" après ce fix, c'est qu'il n'est pas loggué côté CLI — un simple `claude` dans un terminal puis `/login` règle ça.
+
+Tous les subprocess CLI (KB, global, daily, content chunks, review chunks, volume safety) bénéficient automatiquement du fix puisqu'ils passent tous par `_run_subprocess`.
+
+### Badge "Généré via API" masqué sur la colonne Claude Code
+
+Petit fix UX : `ClaudeCodeStepActions` affichait le badge `generatedVia` même quand la valeur était `'api'`, ce qui faisait apparaître "Généré via API" sur la colonne droite "Claude Code Local". L'utilisateur se demande à juste titre pourquoi sa colonne CC parle d'API. Le badge est maintenant **uniquement** affiché si la dernière génération vient effectivement de Claude Code (`claude_code_haiku` ou `claude_code_sonnet`). Pour `'api'`, on s'efface — la colonne API à gauche a déjà ses propres indicateurs.
+
+### Réactivation Claude Code pour étape KB + tolérance troncature JSON
+
+L'étape KB avait été désactivée en mode Claude Code car le prompt visait "120-150k mots" en 1 appel — bien au-delà de la limite Sonnet 64K output, donc le JSON ressortait tronqué et l'import plantait. Réactivée maintenant que le compte Anthropic peut être économisé en utilisant Claude Code local.
+
+**Backend** (`claude_code_mission_service.py`) :
+- `_build_kb_mission` : prompt **borné à 1500-2500 mots par compétence** (× ~10 compétences ≈ 25K mots ≈ 38K tokens output, largement sous 64K). Volume "non négociable" explicite + listes au cap fixe (3 cas, 3 pièges, 8-12 termes vocab) pour éviter que Claude dépasse. Format JSON brut sans fence demandé.
+- `_import_kb` : parsing **tolérant à la troncature**. Si `json.loads(output)` échoue, fallback sur `_repair_truncated_json` (du knowledge_base_service) qui referme proprement les structures `{`/`[` ouvertes et garde toutes les compétences complètes.
+
+**Frontend** (`FormationPipeline.jsx`) :
+- `CC_AUTO_EXEC_ENABLED.kb = true` (était `false`).
+- `StepBlockCC stepIndex={2}` réintroduit avec `<ClaudeCodeStepActions stepKey="kb">` à la place du placeholder "API only" qui avait été ajouté en Phase A.
+- Modèle par défaut Haiku (cohérent avec global/daily — KB ne nécessite pas Sonnet).
+
+**Effet** : l'utilisateur peut désormais cliquer "Exécuter avec Claude Code" sur l'étape KB pour épargner ses crédits API Anthropic. Le subprocess local fait le job, output.md est parsé tolérant à la troncature, KB en DB.
+
+### Fix auto-pilot — mapping raccourcis modèle + reprise après échec
+
+Suite à un test utilisateur de l'auto-pilot, deux fixes :
+
+**1. 404 sur `api.anthropic.com/v1/messages`** : l'auto-pilot passait `"sonnet"`/`"haiku"` (raccourcis CLI Claude Code) directement aux services API (`launch_kb_building`, `launch_global_program_generation`, etc.), qui les transmettaient au paramètre `model` de l'API Anthropic. L'API rejetait avec 404 car ces noms ne sont pas des IDs de modèles valides.
+- Fix : mapping `_run_auto_pilot` → `api_model` :
+  - `"haiku"` → `"claude-haiku-4-5-20251001"` (cohérent avec `HAIKU` du frontend)
+  - `"sonnet"` → `None` (laisse les services utiliser leur `CLAUDE_MODEL` par défaut, soit `claude-sonnet-4-20250514`)
+- Tous les `model=model` dans l'auto-pilot remplacés par `model=api_model`.
+
+**2. Reprise auto-pilot après échec** : si l'auto-pilot plantait (ex. 404 ci-dessus), le job restait coincé en `status='error'` et il fallait recréer un nouveau job. Désormais :
+- `_run_auto_pilot` détecte au démarrage si le statut est `error`/`audio_error` et **reset à un statut valide** déduit des champs concrets du job (`daily_programs_validated` → `daily_validated`, sinon `global_program_validated` → `global_validated`, etc., jusqu'à `init`). Nettoie aussi `error_message`.
+- L'auto-pilot revérifie chaque étape via `if not j.get(...)` et skip celles déjà faites — donc reprise automatique à l'étape qui a planté.
+- Frontend : nouveau bouton "Reprendre auto-pilot" (gradient bleu, icône autorenew) dans le bandeau rouge "Auto-pilot interrompu". Réutilise les `tts_mode` / `model` du run précédent.
+
+### Trois entrées de pipeline + auto-pilot end-to-end
+
+Restructuration des entrées de création de pipeline pour préparer l'expérience utilisateur finale, avec un mode auto-pilot qui enchaîne automatiquement toutes les étapes.
+
+**Phase A — Étape KB forcée API only** (`FormationPipeline.jsx:1961`) :
+- Suppression du `StepBlockCC stepIndex={2}` (Enrichissement KB en mode Claude Code).
+- Remplacé par un placeholder informatif "Étape API only" (gris dashed) dans la colonne Claude Code, pour ne pas casser visuellement la grille 2-col.
+- Justification : le KB s'exécute en parallèle 3 workers via API, ~5 min. Pas de plus-value à passer en CC. La séparation API/CC commence à partir de l'étape Programme global.
+
+**Phase B — Bouton "Créer un nouveau module" + auto-pilot dans la modale Nouvelle plateforme** (`HRDashboard.jsx`) :
+- Modale Catalogue Modules : bouton CTA en tête "+ Créer un nouveau module" qui ouvre la modale Nouvelle plateforme avec `formationMode='new'` pré-sélectionné. Permet de partir des Modules pour créer une formation, en miroir de l'autre flux.
+- Modale Nouvelle plateforme : ajout d'une checkbox "Lancer en mode auto-pilot" + (si activé) sélecteur de voix TTS (gTTS par défaut, Mock, Fish Audio). Visibilité conditionnelle au mode "Nouvelle formation".
+- `handleCreatePlatform` : si `autoPilot` activé après création du job, appel auto à `POST /api/formation/<id>/run-auto`. Ouverture de l'onglet `/formation-pipeline?job=<id>` dans tous les cas pour suivi.
+
+**Phase C — Auto-pilot pipeline (backend + frontend)** :
+- **Backend** (`formation_routes.py`) :
+  - `_run_auto_pilot(job_id, tts_mode, model)` : greenlet eventlet qui orchestre REAC → KB → global (auto-validate) → daily (auto-validate) → content → audio. Stop-on-error : sur exception, le job conserve son statut error et l'auto-pilot s'arrête (l'utilisateur peut reprendre manuellement). Création/MAJ du module persistant à la fin (`voice_type` ajusté selon `tts_mode`).
+  - Mécanisme : pour chaque étape async (KB, global, daily, content), `_wait_for(target_statuses, max_wait)` poll le `job.status` toutes les 3s avec timeout de sécurité (30 min KB/content, 10 min global/daily, 4h content total). Sur erreur ou status `error`/`audio_error`, lève une exception captée par le try englobant.
+  - Étape REAC : reproduit en interne la logique de `_fetch_thread` (`download_reac_text` + RC + ROME en best-effort).
+  - Étape audio : itère séquentiellement sur les `cours_folders` et appelle `generate_audio_from_script(force_all=True, mock=..., basic_tts=...)` selon le `tts_mode` choisi.
+  - Routes : `POST /api/formation/<id>/run-auto` (lance, retourne 202), `GET /api/formation/<id>/run-auto/status` (état pour polling UI).
+  - État partagé : `_AUTO_PILOT_STATE = {[job_id]: {step, status, started_at, ...}}` mémoire process. Idempotent : refuse 409 si auto-pilot déjà en cours pour ce job.
+- **Frontend** (`FormationPipeline.jsx`) :
+  - Hook `fetchAutoPilotStatus` + polling 5s sur `/run-auto/status` quand un job est sélectionné.
+  - Bandeau bleu "Auto-pilot en cours — étape : <label>" en tête de la vue détail (icône autorenew, gradient bleu/violet, sous-titre avec tts_mode + model). Labels FR pour chaque étape (`reac`, `kb`, `global`, `daily`, `content`, `audio`).
+  - Bandeau rouge "Auto-pilot interrompu" si `status === 'error'` avec étape qui a planté + message d'erreur.
+
+## 2026-04-27
+
+### Voix TTS persistée sur le module + badge "En cours…" supprimé en `audio_launched`
+
+Deux fixes liés au comportement post-clôture de la pipeline :
+
+**1. Badge "En cours…" indélogeable sur l'étape 7** :
+- Avant : la step "Synthèse TTS Fish Audio" affichait en permanence un badge ambre "En cours…" même quand `job.status === 'audio_launched'` (la pipeline était pourtant terminée et le module créé). Cause : `audio_launched` était dans `POLLING_STATUSES` (légitime, on continue de poller pour récupérer la progression `audios_generated/19` par folder), mais ça déclenchait aussi l'affichage du badge.
+- Fix : `FormationPipeline.jsx:879` exclut explicitement `audio_launched` du badge tout en le gardant dans le polling. Le contenu de la card affiche déjà "Synthèse audio lancée avec succès" + bandeau Module créé, le badge ambre était redondant.
+
+**2. Persistance de la voix TTS sur le module formation** :
+- Avant : si on relançait l'étape 7 avec une voix différente (ex. Fish Audio → gTTS), les MP3 dans Azure étaient écrasés (clé `platform-X/folder-Y/file.mp3`), donc le module pointait automatiquement vers les nouveaux audios — mais aucune trace en DB de la voix actuelle. Impossible de savoir d'un coup d'œil si le module avait des audios Fish Audio ou gTTS.
+- Migration DB : 2 colonnes nullables sur `formation_modules` — `voice_type` (`'fish_audio' | 'gtts' | 'mock'`) et `voice_updated_at` (TIMESTAMP). Migration idempotente via `PRAGMA table_info` + `ALTER TABLE ADD COLUMN` dans `init_db`.
+- `launch_audio` (formation_routes.py) : à la création initiale du module, `voice_type` est inscrit. À chaque relance (module déjà existant via UNIQUE constraint sur `source_pipeline_job_id`), un `UPDATE` met à jour `voice_type` + `voice_updated_at` pour refléter la voix qui porte les MP3 actuels.
+- Endpoint `/api/hr/formation-modules` : retourne désormais `voice_type` et `voice_updated_at`.
+- Frontend : nouveau helper `voiceLabel`/`voiceColor` (Fish Audio = vert, gTTS = orange, mock = gris). Affiché dans le bandeau "Module créé" de l'étape 7 et dans la bannière "Pipeline terminée" en tête (avec mention "voix actuelle"). `handleLaunchAudio` re-fetch le module après chaque relance pour synchroniser le UI.
+
+### Bandeau "Pipeline terminée — Clôturée" en tête de la vue détail
+
+Quand `job.status === 'audio_launched'`, ajout d'un bandeau vert proéminent (gradient + glow) en tête de la vue détail du job (juste après l'en-tête, avant le Stepper). Il marque visuellement la clôture de la pipeline et regroupe :
+- Titre "Pipeline terminée — formation prête"
+- Nom du TP, nombre de journées générées, total MP3 (nb_days × 19), plateforme cible
+- Rappel du module persistant créé (matérialise "1 RNCP = 1 module durable")
+- Badge "CLÔTURÉE" pour confirmation rapide
+
+Tag de statut dans l'en-tête : `audio_launched` est désormais affiché "Clôturée" au lieu du brut `audio launched`.
+
+### Étape 6.5 — Sécurité volume (filet supplémentaire 90 000 mots/journée)
+
+Ajout d'une étape intermédiaire entre la génération texte (étape 6) et la révision conformité (étape 6bis). **Sécurité supplémentaire** au floor par-segment de `_continue_content_until_volume` (qui s'exécute pendant la génération avec un seuil de 4000 mots/segment) — l'étape 6.5 audite par-journée et garantit qu'aucun folder n'est sous le seuil de 90 000 mots au total.
+
+**Backend** (`claude_code_mission_service.py`) :
+- `compute_volume_audit(job_id)` : calcule par folder le `total_words`, le déficit, et les N (5) segments les plus courts (par `word_count` ASC). Pure lecture, pas d'effet de bord.
+- `run_volume_safety(job_id, folder_id, model)` : pour chaque segment court, lance 1 subprocess `claude` qui produit ≥1500 mots de contenu additionnel respectant les règles #1-#27. **Append-only** — le texte original n'est jamais réécrit, on concatène. Marque `dirty=1` et `reviewed=0` pour que le segment repasse en révision et regénère son audio TTS. Re-assemble + re-upload Azure pour que le Word soit à jour.
+- `_build_volume_safety_chunk` : prompt qui (a) reprend le texte actuel via `input.md`, (b) reprend les règles via `rules.md`, (c) interdit explicitement de réécrire / répéter / inclure le texte de `input.md` dans `output.md`, (d) impose 200+ mots minimum mais cible 1500.
+
+**Routes** (`formation_routes.py`) :
+- `GET /api/formation/<job>/volume-audit` : retourne l'audit par folder.
+- `POST /api/formation/<job>/content/<folder>/volume-safety` : spawn greenlet eventlet, retourne 202.
+- `GET /api/formation/<job>/content/<folder>/volume-safety/status` : pour le polling.
+
+**Frontend** (`FormationPipeline.jsx`) :
+- Bloc "Sécurité volume — 90 000 mots/journée" inséré **dans la colonne Claude Code locale** (`StepBlockCC stepIndex={5}`), entre les deux sous-sections existantes "Génération des cours (texte)" et "Révision conformité (étape 6bis)". Cohérence de placement : la sécurité volume s'exécute via Claude Code subprocess, donc elle vit dans la colonne CC, pas en bloc autonome séparé.
+- Style ambre dashed identique aux autres `ClaudeCodeStepActions` pour s'intégrer visuellement.
+- Affichage par folder (compact) : Jour N — total / 90 000 (vert ≥90k, ambre 80-90k, rouge <80k) + mini barre de progression. Bouton "Compléter" (gradient ambre) conditionnel sur déficit > 0, badge "OK" sinon.
+- Sélecteur de modèle (Sonnet par défaut, Haiku option).
+- États dédiés : `volumeAudit`, `safetyRunning`, `safetyError`, `safetyModel`.
+- useEffect : fetch audit dès qu'au moins une journée est completed ; polling 4s pendant exécution.
+
+**Pourquoi append-only** : préserve le snapshot `text_content_pre_review` pris au finalize de l'étape 6 (= texte pur avant révision). Le bouton "Word" continue de pointer sur cette version originale, "Word 2" reflète le texte enrichi + révisé.
+
+### Fix UI : étape 6 disparaissait après `audio_error` (textes pourtant intacts)
+
+Symptôme reporté par l'utilisateur : capture d'écran avec badge "Terminé" sur l'étape 6 mais aucun bouton Voir/Word/Rapport — uniquement les boutons "Générer" du mode pending. Données pourtant intactes en DB (segments completed) et dans Azure (.txt blobs).
+
+Root cause : la condition d'affichage du bloc "complété" de l'étape 6 ne couvrait que `tts_launched`, `audio_launched`, ou `ttsResult` en mémoire de session. Quand le TTS plantait (429 Google → status régressé en `audio_error`), le UI repartait sur la branche pending.
+
+Corrections (`frontend/src/pages/FormationPipeline.jsx`) :
+- Condition d'affichage étape 6 (ligne ~2031) : ajout `audio_error` + fallback robuste `contentFolders.some(f => f.content_status === 'completed')`. Tant qu'au moins une journée est marquée completed, on montre les contrôles, indépendamment du `job.status`.
+- useEffect fetch contentFolders (ligne ~1098) : ajout `audio_error` à la liste des statuts qui déclenchent le chargement (sinon le fallback ci-dessus n'a pas de données à inspecter).
+- Bouton "Réviser conformité (étape 6bis)" via Claude Code (ligne ~2284) : `disabled` étendu pour autoriser un lancement de révision même quand la pipeline est en `audio_error`.
+
+Principe : "si l'étape est validée, elle est validée" — un échec d'étape ultérieure ne doit jamais masquer le résultat des étapes précédentes.
+
+### Audit pipeline + Word 2 (post-révision) + auto-clean bandeau "en attente"
+
+Audit complet de la pipeline bout-en-bout suite à demande utilisateur. 4 améliorations cohérentes :
+
+**1. Bandeau "mission en attente d'import" intelligent** — `list_pending_missions` filtre maintenant les missions chunked dont `progress.status` est `done` ou `done_with_errors` sans erreurs. Le bandeau orange disparaît automatiquement quand le subprocess auto a fini son boulot (avant, il restait jusqu'à archivage explicite).
+
+**2. Auto-archive `step_review/` à la fin du multi-agents** — `_finalize_review_step` appelle maintenant `_archive_mission(job_id, "review")` après le marquage `reviewed=1`. Le dossier passe dans `_done/<timestamp>-job<id>-review/` avec ses 4 sous-chunks (review_report.json conservés, lus par la modale via fallback `_done/`).
+
+**3. Bouton "Word 2" — version post-révision** :
+- Migration DB : nouvelle colonne `text_content_pre_review` dans `content_generation_segments` (ajoutée idempotemment via ALTER TABLE au premier `_finalize_content_step`).
+- `_snapshot_pre_review(folder_ids)` : copie `text_content → text_content_pre_review` pour chaque segment completed (idempotent — n'écrase pas un snapshot existant).
+- `_finalize_content_step` appelle ce snapshot juste après l'assemble_and_upload — capture l'état AVANT que la révision ne touche aux textes.
+- `build_course_docx(job_id, folder_id, version="current"|"pre_review")` lit la bonne colonne. Filename suffixé `-pre-review.docx` ou `current`.
+- Route `/api/formation/<job>/content/<folder>/docx?version=pre_review|current`.
+- Frontend : bouton "Word" (violet) télécharge `pre_review` (= snapshot original). Nouveau bouton "Word 2" (vert) apparaît dès qu'une révision a été appliquée (`segments_reviewed > 0`) → télécharge `current` (= post-révision).
+- TTS reste branché sur la DB actuelle (`text_content`) → utilise automatiquement le texte révisé.
+
+**4. Audit pipeline complète (rappel pour l'utilisateur)** :
+- Étape 3 KB : API only (Claude Code chunked KB désactivé via `CC_AUTO_EXEC_ENABLED.kb=false`)
+- Étape 4 Programme global, étape 5 Programmes journée : API ou Claude Code single-chunk
+- Étape 6 Génération cours : Claude Code chunked + continuation loop (cap 4000 mots/segment) + finalize (assemble + upload Azure + DOCX dispo + snapshot pre_review)
+- Étape 6bis Révision conformité : Claude Code multi-agents 4 chunks (Éthique 1/2 + Éthique 2/2 + Anti-hallucination + Style oral), throttle 75s entre agents (configurable via `CC_CHUNK_DELAY_SEC`), import robuste avec fallback positionnel + résolution `(folder_id, sub_idx, passe)` au lieu de segment_id fragile, finalize (`reviewed=1` + archive)
+- Étape 7 TTS : 3 modes (Fish Audio payant / gTTS gratuit / mock silence), tous lisent la DB actuelle = texte post-révision si appliquée
+
+### Multi-agents review : 4 agents Claude Code spécialisés par groupe de règles
+
+Demande utilisateur : éviter qu'un agent unique ne se concentre sur les violations qu'il voit le plus (#22 guillemets, #26 énumérations) et oublie #1-#17. Solution = N agents en parallèle, chacun avec son scope assigné.
+
+**Backend — `claude_code_mission_service.py`** :
+- Nouvelle constante `_REVIEW_RULE_GROUPS` : 4 groupes de règles
+  1. **Éthique 1/2** : #1, #2, #3, #6, #7, #8 (spirituel, alcool, fêtes, flirt, chance, célébrités)
+  2. **Éthique 2/2** : #4, #5, #11, #12, #13, #15, #16 (manipulation, discrimination, RGPD, médical)
+  3. **Anti-hallucination** : #17, #18, #19, #20 (fictifs, chiffres, pédagogie)
+  4. **Style oral** : #21, #22, #23, #24, #25, #26, #27
+- `_list_review_chunks` retourne maintenant **4 chunks par journée** (1 par groupe) au lieu d'1.
+- `_build_review_chunk` injecte le scope dans `task.md` : *"Tu vérifies UNIQUEMENT les règles {liste}. Ignore les violations hors de ton scope, un autre agent s'en occupe."*. **Pas de regex / pas de matching dans le code** — le prompt brief Claude, qui décide sémantiquement.
+- `_import_review_chunk` : ne marque PLUS `reviewed=1` segment par segment (sinon le 2e agent skipperait les segments déjà touchés). Juste `dirty=1` si patch appliqué.
+- Nouvelle fonction `_finalize_review_step(job_id)` appelée après la boucle complète des chunks → marque `reviewed=1` sur tous les segments.
+- Le cap par segment est calculé dynamiquement selon le nombre de règles du groupe : ~5-15 patches/segment par agent. Total cumulé = jusqu'à ~40 patches/segment, bien au-delà du cap initial de 5.
+
+**Backend — `formation_routes.py`** :
+- Route `GET /api/formation/<job>/content/<folder>/review-report` agrège maintenant les **N rapports JSON des chunks multi-agents** en un rapport unique. Stats `summary` / `by_rule` / `by_segment` fusionnées. Ajout d'un champ `agent_group` sur chaque patch_detail pour tracer quel agent a proposé quoi. Ajout des champs `n_agents` et `agents_used` au rapport.
+
+**Conséquence sur le temps** :
+- 4 agents × 1 journée = 4 chunks séquentiels avec throttle 75s = ~5-6 min/journée pour la révision (vs ~1 min en single-agent).
+- 4× le bootstrap CLI Claude Code = 4× la consommation tokens d'input par journée. Reste dans le quota tier max grâce au throttle anti-rate-limit existant.
+
+**Avantage qualité** : chaque agent fait sa propre passe complète sur le texte avec son scope dédié. Pas de favoritisme. Les règles éthiques #1-#17 sont auditées avec la même profondeur que les stylistiques.
+
+**Pour l'utilisateur actuel (job_8)** : les segments sont déjà `reviewed=1` du run précédent. Pour relancer la révision multi-agents, il faut soit reset les flags via SQLite, soit attendre la prochaine pipeline.
+
+### Modale "Rapport de révision conformité" + endpoint dédié
+
+Bouton "Rapport" sur chaque carte de dossier cours (à côté de "Voir" / "Word"), visible si au moins 1 segment a été audité. Ouvre une modale qui affiche :
+
+- **Cartes summary** : segments audités / patches proposés / appliqués / rejetés / segments échoués
+- **Tableau "Patches par règle violée"** : `#22 (guillemets) — 30 proposés, 22 appliqués, 8 rejetés` avec libellés humains des règles #18 / #21 / #22 / #24 / #25 / #26 / #27
+- **Liste expandable par segment** : pour chaque (sous-partie, passe), détail de chaque patch avec original / replacement en diff +/− coloré, raison, statut (appliqué/rejeté + raison du rejet : "introuvable verbatim" ou "ambiguë N occurrences")
+- Métadonnées : date d'import, modèle utilisé, indicateur si fallback positionnel a été déclenché
+
+**Backend — `claude_code_mission_service.py`** :
+- `_import_review_chunk` enrichi : collecte `by_rule` et `by_segment` dans la boucle d'application des patches.
+- Écriture d'un `review_report.json` dans le `chunk_dir` à la fin de l'import — survit à l'archivage `_done/`.
+
+**Backend — `formation_routes.py`** :
+- Nouvelle route `GET /api/formation/<job>/content/<folder>/review-report` qui résout `folder_id → position → chunk_id` puis lit le `review_report.json` (cherche d'abord dans `review_queue/job_X/step_review/...`, fallback sur `_done/`).
+
+**Frontend — `FormationPipeline.jsx`** :
+- État `reportFolder` + bouton "Rapport" + composant `ReviewReportModal` (~180 lignes, dark theme cohérent).
+
+### Fix solide review : résolution robuste segment_id obsolète + fallback positionnel
+
+Bug observé : la révision a tourné, output.md valide (90 patches sur 18 segments), import "réussi" côté UI… mais en DB tous les segments sont `reviewed=0, dirty=0`. Aucun patch appliqué en réalité.
+
+**Cause racine** : `_save_segment_db` utilise `INSERT OR REPLACE INTO content_generation_segments` → SQLite fait un DELETE+INSERT, donc le segment prend un nouvel id auto-incrémenté à chaque relance. Si l'utilisateur relance `content` entre la production de la review (par Claude Code) et son import (qui peut être différé via réutilisation `output.md`), les `segment_id` du JSON output deviennent **obsolètes** : ils référencent des segments qui n'existent plus en DB. L'`_import_review` legacy matchait par segment_id brut → tous les patches ignorés silencieusement (juste log warning).
+
+**Cas réel job_8** : segment_ids du output.md = 89-106. Segment_ids actuels en DB après plusieurs relances content = 37-52. Aucune correspondance → 0 patch appliqué malgré 90 proposés.
+
+**Fix — nouveau `_import_review_chunk` autonome** (ne délègue plus à `_import_review`) :
+1. Construit un mapping `chunk_segment_id → index` depuis `chunk['segments']` au moment de l'import.
+2. Pour chaque review : résout l'index dans le chunk via mapping, **fallback positionnel** si tous les ids du output sont absents du chunk (= content relancé entre temps) — la i-ème review correspond au i-ème segment, ordre stable `sub_idx ASC, passe ASC`.
+3. Résout `(folder_id, sub_idx, passe)` → segment ACTUEL en DB via `JOIN content_generation_jobs cj ORDER BY cj.id DESC LIMIT 1` — gère le cas où plusieurs cg_jobs existent pour un même folder (situation anormale observée en DB), prend le plus récent.
+4. Applique les patches avec `count == 1` strict (idem legacy).
+5. Logue explicitement le mode `via_positional_fallback` dans le retour.
+
+**Garde-fou de scope** : vérifie que `folder_id` du chunk appartient bien à la `platform_id` du job pipeline (rejette tout output.md malveillant ou mal scopé).
+
+**Récupération du job_8 actuel** : re-cliquer "Exécuter avec Claude Code" sur la révision → réutilisation gratuite de `output.md` existant → `_import_review_chunk` détecte ids obsolètes → fallback positionnel → applique les 90 patches sur les segments actuels.
+
+### Fix volume content chunked : prompt scratch complet + continuation loop
+
+Bug observé : 1ère génération chunked complète rendait **58 731 mots** (3263/segment) au lieu des **90 000 ciblés** (5000/segment), soit 65% de la cible. Même problème qu'avait connu le mode API en avril (38k vs 90k) et qui avait été résolu côté API par 2 fixes que je n'avais pas répliqués sur le mode chunked.
+
+**Cause #1** : `_build_content_chunk` envoyait un task.md ultra-léger (~30 lignes : "vise 4500-5500 mots"). Le mode API utilise `prompt-generation-tts-scratch.md` (2892 lignes par template) avec un bloc encadré **"VOLUME EXIGÉ — NON NÉGOCIABLE / MINIMUM 5000 mots"** répété 5 fois. Sans cette pression rhétorique, Claude Code traite la cible comme une suggestion et s'arrête à 3000 mots.
+
+**Cause #2** : pas de continuation loop. Le mode API (`_generate_segment_text` ligne 277) refait 1-2 appels supplémentaires "tu as écrit X mots, continue, atteins 5000+" si la 1ère génération est sous le seuil. Mon mode chunked s'arrêtait au 1er rendu.
+
+**Fix #1 — `_build_content_chunk`** : charge maintenant le vrai template via `_get_passe_prompts(from_scratch=True)` (le même que le mode API), fait les remplacements `{NOM_DU_TITRE_PROFESSIONNEL}` / `{NOM_DE_LA_SOUS_PARTIE}` / `{CONTENU_DU_MODULE}`. Pour passe 2/3, ajoute la consigne de continuité avec passes précédentes. task.md devient ~800 lignes (ce qu'envoyait déjà le mode API à Anthropic).
+
+**Fix #2 — `_continue_content_until_volume`** : nouvelle fonction qui, après chaque chunk, vérifie le word_count. Si <4000 mots, crée un sous-dossier `_cont_N/` avec un task.md de continuation (input.md = 6000 derniers caractères du texte précédent), lance un subprocess `claude` dédié, concatène le résultat. Max 2 continuations. Sur 429 ou erreur : on garde l'état courant (no fail-fast, aligné mode API).
+
+Conséquence sur le temps : si tous les chunks atteignent 5000+ au 1er coup, pas de surcoût. Si plusieurs chunks nécessitent 1 continuation : ~+30s/chunk affecté. Pire cas (2 continuations × 18 chunks) : ~+18 min/journée.
+
+**Pour récupérer le job actuel** : les segments existants à 3263 mots/passe restent en DB. Pour les régénérer avec le nouveau prompt + continuation, il faut soit supprimer ces segments en DB et relancer, soit accepter le déficit et continuer. À discuter selon priorité.
+
+### Fix finalize manquant en fin de mode chunked content
+
+Bug observé après un premier run réussi : 18/18 segments en DB, mais l'UI affichait "Génération : 0/1 journées terminées", bouton "Reprendre" actif, bouton "Word" cliquable mais ne téléchargeait rien, et bandeau "1 mission(s) en attente d'import · content".
+
+**Cause** : le mode chunked se terminait après avoir sauvegardé les 18 segments via `_save_segment_db`, mais il ne reproduisait pas les 3 dernières étapes que fait `run_content_generation` à la fin en mode API :
+1. `_assemble_and_upload(folder_id, platform_id, cg_job_id)` — concatène les 18 segments en 1 texte, l'uploade sur Azure (= DOCX téléchargeable via le bouton Word).
+2. `_update_job_db(cg_job_id, status="completed", total_words=N)` — marque le content_generation_job complet.
+3. Archive du dossier `review_queue/job_X/step_content/` vers `_done/` (libère le bandeau d'alerte).
+
+**Fix** : nouvelle fonction `_finalize_content_step(job_id, model)` qui fait ces 3 étapes pour chaque journée, idempotente (skip les cg_jobs déjà completed), n'archive que si tous les assemble_and_upload ont réussi.
+
+**Récupération d'un job déjà chunked sans finalize** : cliquer "Exécuter avec Claude Code" → comme tous les segments sont déjà completed en DB, `_list_content_chunks` retourne 0 chunks, le code passe direct dans la branche `total == 0` qui appelle `_finalize_content_step` → finalize propre sans nouveau coût Anthropic.
+
+### Throttle anti-rate-limit + retry 429 sur le mode chunked Claude Code
+
+Premier test du mode chunked en local : 429 Anthropic dès le 2e chunk. Cause : le bootstrap Claude Code consomme à lui seul ~47k tokens d'input par invocation (chargement tools/MCP/skills), et le cache prompt n'est **pas réutilisé** entre subprocess séparés (chaque `claude -p` démarre une nouvelle `session_id`). Total ~92k input/chunk sur Haiku → dépasse le quota 50k/min dès la 2e exécution consécutive.
+
+**Backend — `claude_code_mission_service.py`** :
+- Nouvelle exception `_RateLimitError` levée par `_run_subprocess` quand le log contient `"api_error_status":429` ou équivalent.
+- Boucle de retry dans `_execute_chunked` : tentative initiale + 2 retries avec backoff exponentiel (90s, 180s).
+- Sleep configurable entre chunks via env `CC_CHUNK_DELAY_SEC` (défaut **75s**) — laisse le quota Anthropic se réinitialiser entre 2 invocations CLI.
+- `progress.json` enrichi : `status` peut valoir `running` / `throttling` / `rate_limited` / `done` / `done_with_errors`, plus `sleep_until` (timestamp ISO) pour indiquer la fin de la pause.
+- Sous eventlet+monkey_patch, `time.sleep` yield aux autres greenlets — pas de blocage du backend pendant les pauses.
+
+**Frontend — `FormationPipeline.jsx`** :
+- Affichage sous la barre de progression : "⏸ Pause anti-rate-limit (75s)…" pendant le sleep entre chunks, "⏳ Rate limit atteint — attente avant retry…" si 429 détecté.
+
+**Conséquence sur le temps de génération** :
+- content 1 journée = 18 chunks × (~80s exécution + 75s pause) ≈ **45 min/journée** (vs ~24 min sans throttle, mais avec 429 garantis).
+- review 1 journée = 1 chunk = ~10s, pas de pause significative.
+
+**Override possible** : `export CC_CHUNK_DELAY_SEC=0` pour désactiver le throttle (utile si upgrade tier Anthropic), `CC_MAX_429_RETRIES=N` pour ajuster le nombre de retries.
+
+### Subprocess Claude Code chunked pour "Génération cours" + "Révision conformité"
+
+Extension du mode subprocess CLI aux étapes 6 (content) et 6bis (review). Ces deux étapes ne tiennent pas en 1 seul appel CLI :
+- **content** : ~90 000 mots de sortie par journée, dépasse la limite de 64k tokens output Sonnet.
+- **review** : input volumineux (~117k tokens pour 1 journée), saturation sur plusieurs journées.
+
+Solution : **boucle séquentielle de N appels `claude -p`**, 1 par chunk, avec orchestration côté backend.
+
+**Backend — `backend/services/claude_code_mission_service.py`** :
+- `execute_mission_locally()` devient un dispatcher : `_execute_single` pour global/daily/kb (legacy 1 mission), `_execute_chunked` pour content/review.
+- `_run_subprocess(mission_dir, model, log_path, log_mode)` : helper extrait du flow legacy, lance `claude -p` sur 1 task.md, vérifie output.md.
+- `_list_content_chunks(job)` : 18 chunks par journée (6 sous-parties × 3 passes), skippe ceux déjà `completed` en DB → idempotent / reprise après crash.
+- `_list_review_chunks(job)` : 1 chunk par journée, skippe les journées dont tous les segments sont déjà `reviewed=1`.
+- `_build_content_chunk` / `_build_review_chunk` : produisent task.md + input.md + rules.md par chunk. Pour content, injection des passes précédentes pour continuité narrative.
+- `_import_content_chunk` : output.md = texte brut → `_save_segment_db` (réutilise le code existant). `_import_review_chunk` délègue à `_import_review` legacy.
+- `_ensure_content_pipeline_structure(job)` : crée folders + `content_generation_jobs` en `idle` si absents (idempotent), pour ne pas dépendre d'un lancement préalable du mode API.
+- `progress.json` écrit pendant la boucle (`{current, total, status, errors, current_chunk}`) → exposé via `list_pending_missions` pour l'UI.
+- Pas de fail-fast : si un chunk échoue, on log et on continue les autres. Relancer "Exécuter" reprend les chunks ratés (skip par DB pour content, par `reviewed=1` pour review).
+
+**Frontend — `frontend/src/pages/FormationPipeline.jsx`** :
+- Flags : `CC_AUTO_EXEC_ENABLED = { global: true, daily: true, content: true, review: true, kb: false }`.
+- `ClaudeCodeStepActions` affiche une **barre de progression chunked** sous le bouton (lit `pendingMission.progress`) : `"5/18 · day_1_sub_0_passe_2"` + indicateur d'erreurs si chunks échoués.
+- Polling existant via `fetchPendingMissions` toutes les 4s — la mécanique de `_EXECUTION_STATE` (running/done/error) ne change pas, c'est `progress.json` qui informe l'UI du détail intra-greenlet.
+
+**Estimations temps** :
+- content 1 journée = 18 chunks × ~80 sec = ~24 min (équivalent au mode API).
+- review 1 journée = ~10 sec. 4 journées = ~40 sec.
+
+**Reste désactivé** : `kb` (~120-150k mots de sortie, nécessitera un chunking par compétence le jour où on l'active).
+
+### Subprocess Claude Code activé pour étape "Programme journée"
+
+Après validation en prod du subprocess sur "Programme global", extension à l'étape "Programmes journée". Tout l'outillage backend était déjà en place (`_build_daily_mission` + `_import_daily` dans `claude_code_mission_service.py`), seul le flag frontend `CC_AUTO_EXEC_ENABLED.daily` bloquait l'activation côté UI.
+
+**Frontend** :
+- `frontend/src/pages/FormationPipeline.jsx:460` : `daily: false → true`
+- Le bouton "Exécuter avec Claude Code" du bloc "Programmes journée (local)" devient cliquable (modèle Haiku par défaut, Sonnet sélectionnable).
+- `kb`, `content`, `review` restent désactivés — chunking dédié à concevoir avant activation (volume input/output trop grand pour un seul appel CLI).
+
+**Comment tester** : valider un Programme global, descendre au bloc "Programmes journée (local)", cliquer "Exécuter avec Claude Code" → subprocess `claude -p ... --model haiku` → écriture `daily_programs` + statut `daily_ready` dans `formation_pipeline_jobs`.
+
+## 2026-04-24
+
+### Bouton "Exécuter avec Claude Code" — subprocess auto + import KB/content implémentés
+
+Après validation utilisateur, implémentation du workflow "un clic et Claude Code travaille tout seul". Le workflow manuel export/import reste dispo en bouton secondaire pour les cas où on veut intervenir.
+
+**Backend** :
+
+- Nouvelle fonction `execute_mission_locally(job_id, step_key, model)` dans `claude_code_mission_service.py` :
+  1. Export la mission (ou réutilise si déjà exportée)
+  2. Lance `subprocess.run(['claude', '-p', prompt, '--model', <haiku|sonnet>, '--dangerously-skip-permissions'])` avec timeout 1h, `cwd=racine_projet`.
+  3. Vérifie que `output.md` a été créé, sinon erreur claire.
+  4. Appelle `import_mission_result` automatiquement pour finaliser dans la DB.
+- Route `POST /api/formation/<job>/missions/<step_key>/execute` — spawn un greenlet eventlet, retourne **202** immédiatement. État stocké dans `_EXECUTION_STATE[(job_id, step_key)]` : `{status: 'running'|'done'|'error', model, error, result}`. Conflit 409 si une exécution est déjà en cours pour cette étape.
+- `list_pending_missions` enrichi : remonte `execution_status` et `execution_error` en overlay sur chaque step_key (même si pas de fichiers `review_queue/` encore).
+- Garde-fou `shutil.which('claude')` au démarrage de l'exécution : erreur claire si le binaire n'est pas trouvé ("Installe Claude Code CLI…").
+
+**Imports `kb` et `content` désormais implémentés** :
+
+- `_import_kb` : parse output.md (JSON array de compétences), DELETE l'ancienne KB du job, INSERT batch dans `formation_knowledge_base` avec tous les champs (`definition_pedagogique`, `contexte_terrain`, `etudes_de_cas`, `pieges_frequents`, `vocabulaire_metier`, `liens_connexes`), status `'completed'`, total_words calculé. Job passe en `status='kb_ready'` avec `kb_generated_via='claude_code_<model>'`.
+- `_import_content` : parse output.md (`{days: [{day_number, segments: [{sub_part_index, passe, text}]}]}`), matche les journées aux `cours_folders` par position, upserte chaque segment via `_save_segment_db` (qui pose `dirty=1, reviewed=0, review_error=NULL`).
+- Plus de `_import_not_implemented_v1`, plus de 501. Les 5 étapes (kb, global, daily, content, review) sont maintenant toutes importables bout-en-bout.
+
+**Frontend** :
+
+- Nouveau handler `handleExecuteMission({stepKey, model})` — POST sur `/missions/<step_key>/execute`, puis `fetchPendingMissions` pour refresh.
+- Effet de polling continu toutes les 4s tant qu'au moins une mission a `execution_status='running'` — le polling s'arrête automatiquement quand tout est `done`/`error`/`idle`.
+- `ClaudeCodeStepActions` refondu :
+  - **Bouton principal** (gradient ambre) : *"Exécuter avec Claude Code"* / *"Claude Code travaille…"* pendant l'exécution.
+  - **Messages d'état inline** : 🟡 en cours (avec estimation "quelques min à ~30 min") · 🟢 terminé et importé · 🔴 erreur avec message.
+  - **Bouton secondaire** (petit, gris) : *"Exporter manuellement"* pour les cas où l'utilisateur veut intervenir avant que Claude Code touche quoi que ce soit.
+  - Import manuel gardé dans un panneau qui n'apparaît que si `has_output` et pas en cours d'exécution.
+
+**Sécurité / gating** :
+
+- Route 403 si `LOCAL_DEV != 'true'` côté backend.
+- `--dangerously-skip-permissions` passé à `claude` — documenté comme acceptable en contexte solo local, explicitement non utilisé en prod.
+- Timeout 1h par exécution pour éviter des greenlets zombies en cas de freeze.
+
+**Pour activer chez toi** :
+
+1. `LOCAL_DEV=true` dans `backend/.env` (si pas déjà fait).
+2. Redémarre le backend.
+3. Vérifie que `which claude` retourne bien un chemin (OK sur ta machine : `/Users/amelle/.local/bin/claude`).
+4. Sur `/formation-pipeline`, colonne droite, clique le gros bouton ambre **"Exécuter avec Claude Code"** de l'étape que tu veux. Attends 5-30 min selon l'étape et le modèle. L'UI passera automatiquement en vert "Terminé et importé" et l'étape côté API se mettra à jour avec le badge "Généré via Claude Code <model>".
+
+### Fixes audit — 6 bugs corrigés avant que la feature soit considérée utilisable
+
+Audit externe a identifié 6 bugs dans la chaîne review API + missions Claude Code ajoutées plus tôt dans la journée. Tous corrigés.
+
+**Fix #1 — L'UI ne ment plus sur la conformité**
+
+`_parse_patches_response` retourne désormais `(patches, parse_error)` au lieu d'un simple `patches=[]`. `run_content_review` distingue maintenant 3 cas :
+- **JSON invalide** (parse_error) → écrit dans `review_error`, **pas** `reviewed=1`. UI affiche "Révision partielle — N en erreur reviewer" au lieu d'un faux vert.
+- **Patches proposés mais tous rejetés** (ancres introuvables ou ambigus) → Claude a identifié des violations qu'il n'a pas su pointer → `review_error` (pas conforme). L'UI reste en état "à retenter".
+- **Vraie conformité** (0 patch proposé) OU **audit partiel réussi** (≥1 patch appliqué) → `reviewed=1`, `review_error=NULL`. Seul ce cas affiche 🟢 "Conformité révisée".
+
+**Fix #2 — L'import kb/content ne fait plus croire qu'il a marché**
+
+- `_import_not_implemented_v1` lève maintenant `NotImplementedError` au lieu de `return {ok: false}`.
+- Route `/missions/<step_key>/import` retourne **HTTP 501** avec `{error, not_implemented: true}` pour ces étapes.
+- Frontend : `handleImportMission` vérifie `!resp.ok` ET affiche l'erreur (préfixe "Import non implémenté :") ; **ne supprime pas** la mission de `pendingMissions`, **ne ferme pas** la modale. L'utilisateur voit bien que rien n'a été importé.
+- Archivage : déplacé après l'appel de l'importer → si `NotImplementedError` remontée, la mission reste en `review_queue/job_X/step_Y/` (pas déplacée vers `_done/`).
+
+**Fix #3 — Plus de `dirty=1` abusif qui forcerait du TTS payant inutile**
+
+Dans `_import_review` (import de résultat reviewer Claude Code) : `dirty=1` **uniquement** si au moins un patch a été appliqué sur ce segment. Les segments sans patches appliqués reçoivent juste `reviewed=1, review_error=NULL`. Économie de re-synthèses Fish Audio identiques.
+
+**Fix #4 — La review Claude Code ne peut plus modifier des segments d'autres formations**
+
+Garde-fou SQL à l'import : chaque `segment_id` renvoyé par Claude Code doit appartenir à un `content_generation_job` dont le folder est dans la **plateforme du job pipeline** en cours. Join explicite `content_generation_segments → content_generation_jobs → cours_folders → platform_id`. Segments hors scope → loggés (`⚠️ segment_id=X ignoré (inexistant ou hors plateforme Y)`) et **pas** touchés. Cohérent avec le scope plateforme du reste du code (launch_audio, etc.) mais sans fuite cross-job possible.
+
+**Fix #5 — `generated_via` vraiment bout-en-bout**
+
+- `get_job()` (`formation_pipeline_service.py:892`) SELECT maintenant `kb_generated_via`, `global_program_generated_via`, `daily_programs_generated_via` + les retourne dans le dict.
+- `update_job(**kwargs)` a ces 3 colonnes dans son allowlist.
+- **Tagging automatique côté flux API** :
+  - `knowledge_base_service.py:680` → `update_job(status='kb_ready', kb_generated_via='api')`
+  - `formation_pipeline_service.py:500` → programme global tagué `'api'`
+  - `formation_pipeline_service.py:678` → programmes journée tagués `'api'`
+
+Les badges "Généré via API" / "Claude Code Haiku" / "Claude Code Sonnet" dans `ClaudeCodeStepActions` s'afficheront maintenant correctement — auparavant toujours vides.
+
+**Fix #6 — Cascade d'aval sur réimport global**
+
+`_import_global` invalide maintenant les étapes aval : si on réimporte un programme global alors que les journées étaient validées, le réimport :
+- Reset `global_program_validated = 0` (l'utilisateur doit relire et revalider)
+- Efface `daily_programs = '[]'` et `daily_programs_generated_via = NULL`
+- Reset `daily_programs_validated = 0`
+
+La réponse d'import inclut `cascade_invalidated: [...]` pour indiquer ce qui a été effacé. L'utilisateur doit refaire l'étape 5 avant de pouvoir continuer.
+
+`_import_daily` reset aussi `daily_programs_validated = 0` (plus léger — les segments de l'étape 6 restent tels quels, pas de reset automatique massif).
+
+**Vérifications** : Python syntax OK sur 5 fichiers modifiés, JSX parse OK, backend rechargé (pid 84638). Route review répond 403 sans auth (attendue).
+
+### 3ᵉ voie audio : gTTS (voix basique gratuite) dans l'étape 7
+
+Ajout d'une **3ᵉ option de synthèse audio** dans l'étape 7 (pied commun, visible peu importe la colonne où le texte a été généré) : gTTS (Google Text-to-Speech, API web gratuite). Complète les 2 options existantes :
+
+| Bouton | Coût | Qualité | Usage |
+|---|---|---|---|
+| **TTS test silence (gratuit)** | 0€ | MP3 silence 1s | Tester le flux sans rien écouter |
+| **TTS voix basique (gratuit)** | 0€ | Voix gTTS naturelle | **NOUVEAU** — écouter le rendu réel sans payer Fish |
+| **TTS payant** (Fish Audio) | ~9$/journée | Studio S2-Pro | Production finale |
+
+**Backend** :
+
+- `backend/requirements.txt` : `gTTS>=2.5.0`. Installé dans le venv local (confirmation : MP3 de 39 KB produit en ~2s pour une phrase test, header `fff3` = MPEG-1 Layer 3 valide).
+- Nouveau service `backend/services/basic_tts_service.py` — fonction `convert_to_speech_basic(text, lang='fr')`. Découpe le texte en chunks de 4000 caractères (limite gTTS ~5000), appelle gTTS par chunk, concatène les MP3 en bytes (concat naïve fonctionne car gTTS produit des MP3 avec headers cohérents — même principe que le silence_1s embarqué en mode mock).
+- `generate_audio_from_script(folder_id, ..., mock=False, basic_tts=False)` — nouveau paramètre `basic_tts`. Priorité : `mock` > `basic_tts` > Fish Audio par défaut. Pas de padding à la durée cible en mode gTTS (durée plus courte que les créneaux cours, acceptable en test). Fallback sur estimation de durée si pydub/ffmpeg échoue en mesure.
+- `POST /api/formation/<job>/launch-audio` accepte désormais `basic_tts: true` en plus de `mock: true`. Les 2 sont mutuellement exclusifs (400 si les deux sont envoyés).
+- Réponse enrichie : `basic_tts` dans le JSON de retour, suffix `(gTTS — voix basique gratuite)` dans le message.
+
+**Frontend** :
+
+- `handleLaunchAudio(mock, basicTts)` prend maintenant 2 booléens indépendants et envoie `{mock, basic_tts: basicTts}` au backend.
+- **3 boutons** dans l'étape 7, disponibles sur les 2 états (pré-lancement et relance) :
+  - 🟢 *Lancer le TTS (Fish Audio)* — vert success
+  - 🟠 *TTS voix basique (gratuit)* — ghost ambre/orange, icône `graphic_eq`
+  - ⚪ *TTS test silence (gratuit)* — neutral dashed
+- Tooltips clairs sur chaque bouton : coût, qualité, cas d'usage.
+
+**Pour tester** : depuis un job avec textes générés, cliquer "TTS voix basique (gratuit)". Le greenlet produit 7 MP3 via gTTS uploadés sur Azure. Écoute possible via la playlist habituelle.
+
+### Refonte UI : vraie **2 colonnes parallèles alignées** (remplace le compromis "panneaux empilés")
+
+Suppression du compromis précédent (panneau Claude Code ajouté sous chaque étape API) au profit d'un layout 2 colonnes alignées ligne par ligne, comme dans le wireframe initial du mémo.
+
+**Technique** :
+
+- Nouveau composant **`StepBlockCC`** — variant light de `StepBlock` avec styling ambre distinct (pour la colonne Claude Code). Même API props que `StepBlock` mais rendu plus compact (pas de badges "Terminé" dupliqués côté CC, label plus court).
+- **Wrapper CSS grid** autour des étapes 3-6 (stepIndex 2-5) :
+  - `gridTemplateColumns: DUAL_COLUMN_ENABLED ? '1fr 1fr' : '1fr'` — bascule automatique selon env.
+  - `grid-auto-flow: row` (défaut) : chaque paire `<StepBlock>/<StepBlockCC>` se place automatiquement sur la même ligne.
+  - **Séparateur vertical central** en `position: absolute`, trait sobre `rgba(255,255,255,0.12)` 1px (pas de gradient violet ni de halo — choix confirmé par l'utilisateur).
+- **Labels de colonnes** au-dessus du grid : "⚙️ API Cloud · Anthropic" (bleu) et "💻 Claude Code local · forfait" (ambre).
+- Les étapes 1-2 (Recherche RNCP, Téléchargement REAC) restent en **en-tête commun** au-dessus du split. L'étape 7 (TTS Fish Audio) reste en **pied commun** en-dessous. Cohérent avec le mémo.
+
+**En dev (`DUAL_COLUMN_ENABLED = import.meta.env.DEV`)** : les 4 `<StepBlockCC>` conditionnels apparaissent en colonne droite, avec dropdown Haiku/Sonnet + bouton "Exporter la mission" + sous-panneau "Mission en attente" + bouton "Importer le résultat".
+
+**En prod build** (`DUAL_COLUMN_ENABLED = false`) : `gridTemplateColumns: '1fr'` = stack vertical normal comme avant la refonte. Les `<StepBlockCC>` conditionnels ne sont jamais rendus. Zéro régression visible pour la prod.
+
+**Alignement ligne par ligne** : si l'étape 3 API fait 400px de haut, son pendant Claude Code occupe la cell correspondante et reste collé en haut (`align-items: start` par défaut du grid). Les étapes 4 API et 4 CC commencent donc à la même grid-row, même si leurs contenus ont des hauteurs différentes.
+
+### Phase 2 + 3 : UI Claude Code local + endpoints export/import missions
+
+Refonte UI de `/formation-pipeline` pour matérialiser la dichotomie API / Claude Code local (Phase 2), et ajout des endpoints backend d'export/import de missions (Phase 3). Gating strict côté dev uniquement.
+
+**Compromis UI retenu** : pas de 2 colonnes parfaitement parallèles côte à côte (qui aurait impliqué une refonte JSX massive avec risque élevé de casse). À la place, chaque étape coûteuse (Enrichissement KB, Programme global, Programmes journée, Génération cours, Révision 6bis) reçoit un **panneau Claude Code clairement distinct** en-dessous du contenu API existant, séparé par un trait ambre pointillé. Même intention visuelle que le wireframe, avec une structure plus robuste.
+
+**Frontend** (`frontend/src/pages/FormationPipeline.jsx`) :
+
+- Composant `StepDualLayout` (non utilisé en V1 mais en place pour une future refonte stricte 2 colonnes).
+- Composant `ClaudeCodeStepActions` réutilisable : dropdown **Haiku/Sonnet** par étape (défauts Haiku pour KB/global/daily, Sonnet pour content/review), bouton "Exporter la mission", badge `Généré via <origine>`, sous-panneau "Mission en attente" avec bouton "Importer le résultat".
+- Gating `DUAL_COLUMN_ENABLED = import.meta.env.DEV` — la colonne Claude Code n'apparaît qu'en mode Vite dev (`npm run dev`), invisible en build production.
+- Nouveau composant `ClaudeCodeMissionModal` — affiche après clic "Exporter la mission" : chemin des fichiers, commande `claude --model <haiku|sonnet>` à copier, instruction à donner en session Claude Code, bouton "Importer le résultat" / "Plus tard".
+- **Bandeau "N missions Claude Code en attente d'import"** en haut de la page quand des missions ont été exportées mais pas encore réimportées. Évite qu'une mission soit oubliée.
+- State `pendingMissions` synchronisé via `GET /api/formation/<job>/missions/pending` au chargement et après chaque export/import.
+- Handlers `handleExportMission({stepKey, model})` et `handleImportMission({stepKey})`.
+
+**Backend** :
+
+- Nouveau service `backend/services/claude_code_mission_service.py` — 350+ lignes. 5 builders d'export (un par stepKey : kb, global, daily, content, review) qui écrivent `task.md` + `input.md` + (optionnel) `rules.md` + `meta.json` dans `review_queue/job_<id>/step_<key>/`. 5 importers correspondants, avec stratégies variables :
+  - `global` : output = markdown brut → stocké dans `formation_pipeline_jobs.global_program`, statut passe à `global_ready`, `global_program_generated_via='claude_code_<model>'`.
+  - `daily` : output = JSON array → stocké dans `formation_pipeline_jobs.daily_programs`, statut `daily_ready`.
+  - `review` : output = JSON `{reviews: [{segment_id, patches}]}` — applique les patches par match textuel unique (même logique que Phase 1), `reviewed=1` à la fin.
+  - `kb` et `content` : **not implemented V1** — export fonctionne, import renvoie un message clair demandant de finaliser manuellement (parsers lourds à venir en V2).
+- Archivage auto de chaque mission importée dans `review_queue/_done/<timestamp>-job<id>-<step>/` pour traçabilité.
+- Nouvelles routes (toutes gardées par `_require_admin` + gating `LOCAL_DEV=true` sur env var backend) :
+  - `POST /api/formation/<job>/missions/<step_key>/export` → 201 + JSON mission
+  - `POST /api/formation/<job>/missions/<step_key>/import` → 200 + JSON résultat
+  - `GET /api/formation/<job>/missions/pending` → 200 + dict missions en attente
+- **Migration DB** (`backend/database/db.py`) : 3 colonnes `kb_generated_via`, `global_program_generated_via`, `daily_programs_generated_via` sur `formation_pipeline_jobs` (pattern idempotent ALTER TABLE). Valeurs : `'api'` / `'claude_code_haiku'` / `'claude_code_sonnet'`.
+- **`.gitignore`** : `review_queue/` ajouté (missions éphémères, jamais commit).
+
+**Gating production** :
+
+- Backend : routes renvoient 403 si `LOCAL_DEV != 'true'` dans `os.getenv`. Pas défini par défaut → prod Azure désactivée automatiquement.
+- Frontend : `DUAL_COLUMN_ENABLED = import.meta.env.DEV` — false en build production (Vite). Même sur une prod où LOCAL_DEV serait à true par erreur, le frontend build ne rendrait pas les panneaux.
+
+**Pour activer en local** : ajouter `LOCAL_DEV=true` dans `backend/.env`, redémarrer le backend (watchmedo s'en charge), recharger la page dans le navigateur (Vite dev).
+
+Reste **non implémenté (V2+)** : parsers complets pour KB et content (aujourd'hui import = marquer `generated_via` + laisser l'utilisateur finir manuellement), subprocess `claude` auto depuis backend (Phase 4 explicitement repoussée), refactor strict 2 colonnes parallèles alignées.
+
+### Fix : distinguer échec reviewer ≠ conformité révisée (colonne `review_error`)
+
+Bug de conception dans la V1 initiale : si l'appel Claude reviewer plantait sur un segment, je marquais `reviewed=1` quand même pour éviter que le polling frontend tourne à l'infini. Mais l'UI affichait alors *"Conformité révisée"* alors que le segment n'avait PAS été audité — mensonge critique.
+
+**Fix appliqué** :
+
+- **DB** : nouvelle colonne `review_error TEXT` sur `content_generation_segments`. Sémantique : NULL = pas d'erreur (jamais audité ou audité OK). Non-NULL = message d'erreur de la dernière tentative reviewer. Un segment en erreur reviewer reste `reviewed=0` — il n'est PAS marqué comme conforme.
+- **`run_content_review`** : en cas d'exception Claude, écrit l'erreur dans `review_error` et laisse `reviewed=0`. En cas de succès (patches ou pas), met `reviewed=1 ET review_error=NULL` (le succès invalide toute ancienne erreur). Relancer la route sélectionne naturellement les segments `reviewed=0` → inclut les retry des erreurs.
+- **`mark_segment_modified` et `_save_segment_db` et route d'édition UI** : reset `review_error=NULL` en plus de `reviewed=0 ET dirty=1` (un texte modifié invalide toute erreur reviewer précédente).
+- **Route listing** : renvoie `segments_review_errors` en plus de `segments_reviewed`.
+- **Frontend** : condition de fin de polling = `(reviewed + review_errors) >= completed`. **Trois états d'affichage distincts** :
+  - 🟢 *"Conformité révisée (N segments)"* — tout audité, zéro erreur
+  - 🟠 *"Révision partielle — X audités, **N en erreur reviewer** (relancer pour retry)"* — avec badge d'erreur bien visible
+  - ⚪ Progression partielle ou en cours
+- **Bouton** : texte/icône change en *"Retenter (N en erreur)"* quand des segments ont une `review_error`, permet retry sans passer par un autre endpoint.
+
+La V1 ne ment plus sur la conformité : un segment non audité reste clairement signalé comme tel, et l'utilisateur peut retry.
+
+### Phase 1 implémentée : reviewer conformité via API Claude sur étape 6
+
+Scope strict Phase 1 tel que cadré : bouton "Réviser la conformité via API" sous chaque carte dossier-cours dans `/formation-pipeline` (étape 6). Pas de refonte double colonne, pas de workflow Claude Code, pas de subprocess, pas de pipeline auto.
+
+**Backend** :
+
+- **Migration DB** (`backend/database/db.py`) — colonnes `reviewed INTEGER DEFAULT 0` et `generated_via TEXT` ajoutées sur `content_generation_segments` (pattern idempotent try/except ALTER TABLE, cohérent avec les migrations existantes).
+- **Helper central** `mark_segment_modified(job_id, sub_idx, passe)` dans `content_generation_service.py` qui remet `dirty=1 AND reviewed=0`. Règle critique : tout changement de `text_content` doit passer par là (ou inclure `dirty=1, reviewed=0` dans l'UPDATE, comme fait dans `_save_segment_db` via l'INSERT OR REPLACE et dans la route d'édition segment UI `hr_routes.py:2265`).
+- **Fonction `run_content_review(folder_id, model=None)`** — boucle sur segments `status='completed' AND reviewed=0`, pour chacun : appel reviewer Claude Sonnet, parse JSON tolérant (extrait le premier `{...}`), application des patches par **match textuel unique** (`text.count(original) == 1` seulement), log des rejets (introuvable / ambigu). Max 5 patches par appel. Marque `reviewed=1` à la fin de chaque segment quel que soit le résultat — **y compris en cas d'échec d'appel Claude** — pour éviter que le polling frontend tourne à l'infini. Best-effort V1 : un segment en erreur garde son texte inchangé, à re-réviser il faut le modifier.
+- **Extraction des règles** — `_load_review_rules()` lit `prompt-generation-tts-scratch.md`, extrait le bloc "CONTENU — RÈGLES ABSOLUES" → "décroche, les apprentissages ne passent pas" (les règles sont identiques dans les 3 passes, une seule extraction suffit). Mise en cache par mtime.
+- **Route** `POST /api/formation/<job>/content/<folder>/review` — spawn un greenlet eventlet, retourne 202. Cohérent avec `launch-audio` et `resume-content`.
+- **Route listing enrichie** `GET /api/formation/<job>/content` — ajoute `segments_reviewed` pour chaque folder, permet le polling de progression côté front.
+
+**Frontend** (`frontend/src/pages/FormationPipeline.jsx`) :
+
+- State `reviewingFolders: {[folderId]: true}` + `reviewError`.
+- Handler `handleReviewFolder(folderId)` — POST sur la route, ajoute le folder au set. Polling dédié (3s) tant que le set n'est pas vide. Folder retiré automatiquement du set quand `segments_reviewed >= segments_completed` pour ce folder (effect déclenché à chaque refresh `contentFolders`).
+- Bouton **"Réviser la conformité via API"** dans chaque carte folder de l'étape 6, à côté de "Voir" et "Word". Style `ghost` (violet discret). Désactivé si pas encore généré, pendant la révision, ou si tous les segments sont déjà révisés.
+- **Affichage statut révision** sous le compteur de mots : *"Révision en cours — X/Y segments audités"* (ambre) → *"Conformité révisée (N segments)"* (vert) → *"X/Y segments déjà révisés"* (gris, partiel).
+
+**Prompt reviewer** — consigne stricte : TU NE RÉÉCRIS PAS LE TEXTE, renvoie uniquement un JSON `{"patches": [...]}` avec `{original, replacement, rule_violated, reason}`. `original` trouvable verbatim, 3-40 mots. Si conforme → `{"patches": []}`. Contraintes "max N patches", "correction minimale", "pas de préférence stylistique personnelle".
+
+Tests effectués : backend reload via watchmedo OK, route disponible (403 sans auth = attendu), JSX parse esbuild OK. Test complet sur un dossier réel à faire par l'utilisateur depuis l'UI (pas push, formation en cours).
+
+### Décision architecture : pipeline formation **double colonne** (API cloud + Claude Code local)
+
+Élargissement de la décision précédente (initialement "3 boutons pour l'étape 6 uniquement") vers une architecture UI unifiée : `/formation-pipeline` devient une **page à deux colonnes** séparées par une ligne stylée, avec les mêmes étapes dupliquées à gauche (API cloud) et à droite (Claude Code local).
+
+**Choix actés** après cadrage croisé :
+
+- **Un seul job partagé**, pas deux — artefacts communs, trace d'origine via colonne `generated_via` (`'api'`, `'claude_code_haiku'`, `'claude_code_sonnet'`) sur chaque table d'artefact.
+- **Étapes 1-2 en en-tête commun** (recherche RNCP + téléchargement REAC — sans appel Claude), **étape 7 en pied commun** (TTS Fish Audio — pas dans la dichotomie API/Claude Code).
+- **Mixage libre par étape** — ex : KB en Haiku local, programme global en API, cours en Sonnet local. Badge d'origine affiché dans les deux colonnes pour auditer.
+- **Dropdown Haiku/Sonnet par étape** côté Claude Code (pas global). Défauts : Haiku pour KB/programme/journée, Sonnet pour génération cours et révision.
+- **V1 export/import manuel** — pas de subprocess `claude` auto depuis le backend (trop fragile : permissions, logs interactifs, reprise après crash). Workflow : clic "Exporter mission" → `review_queue/<job>/<step>/{task.md, input.md, rules.md}` → commande `claude --model haiku` dans terminal → import résultat via second bouton.
+- **Restriction prod** : colonne droite affichée uniquement si `LOCAL_DEV=true` est défini côté backend. Azure App Service garde l'UI en mono-colonne automatiquement. Pas de check `shutil.which('claude')` en V1 — le workflow export/import est indépendant de la présence locale du binaire (il le deviendra seulement si on implémente un jour le subprocess auto).
+- **Format reviewer maintenu** : patches `{original, replacement, rule_violated, reason}` par match textuel unique, max 5 par appel.
+- **Règle critique** : toute modification d'un segment (régénération, patch reviewer, édition manuelle) remet `reviewed=0` ET `dirty=1` via un helper DB centralisé `mark_segment_modified(segment_id)`.
+
+**Phases d'implémentation** : (1) étape 6 + 6bis API/Claude Code, (2) refonte UI 2 colonnes, (3) étapes 3/4/5 côté Claude Code, (4) pipeline auto optionnelle.
+
+Mémo renommé et élargi : `pipeline-review-3-boutons.md` → `pipeline-dual-api-et-claude-code.md`. Prochaine étape : wireframe détaillé à valider avant toute écriture de code.
+
+### ~~Décision architecture : pipeline de révision conformité en 3 boutons~~ — **REMPLACÉE par la décision "double colonne" ci-dessus**
+
+> ⚠️ Cette décision antérieure (même journée, 2026-04-24) a été élargie quelques heures plus tard après cadrage croisé UX : au lieu d'ajouter 3 boutons séquentiels à l'étape 6 uniquement, la bonne forme est **2 pipelines côte à côte** (API à gauche, Claude Code local à droite) couvrant toutes les étapes coûteuses. Le principe de révision conformité reste, mais il est intégré dans la colonne droite (étape 6bis) plutôt que matérialisé par un 3ᵉ bouton à part.
+>
+> **Ce qui est conservé de cette décision** : format reviewer `{original, replacement, rule_violated, reason}` par match textuel unique, max 5 patches par appel, flag DB `reviewed=1` pour idempotence, règle `mark_segment_modified` qui remet `reviewed=0` ET `dirty=1`, workflow export/import manuel (pas de subprocess).
+>
+> **Ce qui change** : le périmètre (étape 6 uniquement → toutes les étapes coûteuses), l'UX (3 boutons séquentiels → 2 colonnes parallèles), le nom du mémo (`pipeline-review-3-boutons.md` supprimé → `pipeline-dual-api-et-claude-code.md`).
+
+### Prompt TTS scratch — nouvelle RÈGLE #27 "REGISTRE ORAL, PAS ÉCRIT"
+
+Création d'une 7ᵉ règle de style oral (famille #21-#27) qui rappelle à Claude que le texte généré sera lu par Fish Audio S2-Pro, donc écouté et non lu. Pas de style soutenu/littéraire/ampoulé, mais registre **professionnel oral** — un formateur qui parle à sa classe, pas un rapport qu'on récite.
+
+Contenu de la règle (structuré en sections) :
+
+- **Niveau de langue** : courant + vocabulaire métier précis. Pas de synonymes précieux.
+- **Syntaxe oralisée** : phrases courtes à moyennes, pas d'imbrications sur 3 niveaux, pas d'inversions stylistiques, pas de périphrases savantes.
+- **Temps verbaux** : présent de narration + passé composé par défaut. **AUCUN passé simple**. Subjonctifs courants OK, subjonctifs rares ("qu'il eût été") proscrits.
+- **Tournures à éviter** : "il convient de", "il sied de", "il y a lieu de", "force est de constater", "nonobstant", "d'aucuns diraient", "eu égard à", "aux fins de", "au titre de", "susmentionné".
+- **Connecteurs naturels à utiliser** : "donc", "alors", "du coup", "c'est-à-dire", "en fait", "concrètement", "l'idée c'est que", "et puis", "par contre", "en gros".
+- **Redondance contrôlée autorisée** : l'auditeur ne peut pas revenir en arrière → reformuler ou rappeler un concept-clé quelques paragraphes plus loin est une ressource, pas une faute.
+- **Réserves — le registre reste professionnel** : pas de "ouais/truc/machin", argot, verlan, familiarité excessive ("les gars"), "quoi" en fin de phrase, "genre", "style", "bah/ben/euh".
+- **Test mental** : *"Si je la dis à haute voix à un apprenant, est-ce que ça sonne naturel sans être relâché ?"* Rapport lu → reformuler en oral. Conversation de bistrot → resserrer en professionnel.
+
+Ajout dupliqué dans les 3 passes (sandwich). Mise à jour cohérente des deux références "6 règles (#21-#26)" → "7 règles (#21-#27)" (titre de section + récap final).
+
+### Prompt TTS scratch — interdits étoffés : "catastrophe naturelle", jurements par autre qu'Allah, superstitions
+
+Trois ajouts dans les 3 passes (sandwich, `replace_all`) :
+
+1. **RÈGLE #1, tiret "personnifient/divinisent"** — ajout de *"catastrophe naturelle"* avec justification inline (*attribue l'événement à la nature comme agent*). Liste complète maintenant : Mère nature, la roue tourne, à tes souhaits, dame chance, la providence, le sort en est jeté, c'est écrit, karma, les astres s'alignent, main du destin, catastrophe naturelle.
+2. **RÈGLE #2, tiret "jurer par autre qu'Allah"** — étoffé avec liste de formules proscrites ("je te jure sur ma mère", "la vie de ma mère", "la tête de oim", "sur la tombe de", "par La Mecque", "croix de bois croix de fer", "je te jure", "je jure que", "juré craché", "parole d'honneur") + remplacements sans jurement ("je t'assure", "vraiment", "je peux te le confirmer", "c'est un fait avéré", "sincèrement").
+3. **RÈGLE #2, tiret "expressions superstitieuses"** — étoffé avec 3 sous-listes à puce : porte-malheur prétendus (vendredi 13, chat noir, passer sous une échelle, miroir brisé, sel renversé, parapluie ouvert à l'intérieur), porte-bonheur prétendus (trèfle à 4 feuilles, toucher du bois, patte de lapin, fer à cheval, souffler les bougies pour que le vœu se réalise, étoile filante), formulations implicites (ça porte malheur/bonheur, je croise les doigts, conjurer le sort, ça nous portera chance).
+
+### Prompt TTS scratch — RÈGLE #1 étendue aux expressions qui personnifient une force abstraite
+
+Ajout dans la RÈGLE #1 (section "CONTENU 100% PROFESSIONNEL" — la partie où `shirk` est nommé) d'un nouveau tiret interdisant explicitement les expressions qui personnifient ou divinisent une force abstraite : **"Mère nature"**, **"la roue tourne"**, **"à tes souhaits" / "à vos souhaits"**, "dame chance", "la providence", "le sort en est jeté", "c'est écrit", "karma", "les astres s'alignent", "main du destin". Remplacements factuels fournis ("la nature", "les circonstances", "statistiquement", "dans ce cas de figure"). Cas spécifique de l'éternuement : ne rien dire plutôt que "à tes souhaits".
+
+Appliqué dans les 3 passes (sandwich) via `replace_all`. Complète la RÈGLE #7 qui couvrait déjà "chance/destin/univers/énergie/karma" au niveau lexical, ici on cible les **tournures idiomatiques** qui personnifient.
+
+### Prompt TTS scratch — retrait des repères "pause" des exemples de repères horaires autorisés
+
+Décision éditoriale : le cours oral ne doit pas utiliser de repère horaire qui dépend de **la pause** ("après la pause", "avant la pause de midi"). Raison : le formateur parle naturellement en termes plus génériques ("plus tôt dans la journée", "tout à l'heure"). Les repères "ce matin", "cet après-midi", "tout à l'heure", "dans le bloc précédent" / "dans le prochain bloc" sont conservés (pas liés à la pause).
+
+9 remplacements appliqués (3 zones × 3 passes) — stratégie sandwich oblige : le bloc "Tu peux donc / Ce qui est autorisé" apparaît en début, milieu et fin de chaque passe, et le fichier contient 3 passes. `"après la pause" / "avant la pause de midi"` → remplacés par `"plus tôt dans la journée"` partout.
+
+### Épuration en-tête `prompt-generation-tts-scratch.md` — retrait des références au mode legacy
+
+L'en-tête documentaire du prompt (lignes 1-13) référençait à plusieurs reprises `prompt-generation-tts-direct.md` (mode expansion legacy HR Dashboard) : *"Contrairement aux passes d'expansion…"*, *"IDENTIQUES à prompt-generation-tts-direct.md…"*. Remplacé par une description autonome qui dit uniquement **ce que le fichier fait**, sans comparaison avec l'autre mode.
+
+Rappel : cet en-tête n'est **pas** envoyé à Claude — `_parse_passe_prompts_from_file` (`content_generation_service.py:78`) découpe le fichier sur `## PASSE N —` et n'envoie que le corps de chaque passe. Ce ménage est donc uniquement cosmétique (lisibilité humaine du fichier). Aucun changement de comportement côté génération.
+
+### Fix : alignement mock — `content_generation_service.py:790` protégé comme `playlist_tts_service.py:700`
+
+**Contexte** : le fix du 23 avril avait protégé `_measure_duration_ms` en mode mock uniquement dans `playlist_tts_service.generate_playlist_for_folder` (ligne 700). Mais la fonction **réellement** appelée par l'étape 7 de `/formation-pipeline` (`/launch-audio?mock=true`) est `content_generation_service.generate_audio_from_script` — qui conservait la ligne `final_duration = _measure_duration_ms(final_bytes) / 1000` sans garde mock (`content_generation_service.py:790`).
+
+**Conséquence latente** (local OK grâce à ffmpeg Homebrew, Azure KO) : sur Azure App Service, le greenlet serait planté après l'upload du 1er bloc MP3 silence, laissant le job en `audio_error`. Plateforme + module tout de même créés (les updates sont synchrones dans `launch_audio` hors greenlet).
+
+**Fix appliqué** (3 lignes, pas de push) :
+
+```python
+if mock:
+    final_duration = 1.0
+else:
+    final_duration = _measure_duration_ms(final_bytes) / 1000
+```
+
+Le chemin mock complet (`launch-audio → generate_audio_from_script → _generate_silence_mp3 → upload → logger`) est maintenant **intégralement ffmpeg-free**, en accord avec le fix sur `generate_playlist_for_folder`.
+
+### Note : analyse croisée avec Codex — validation du plan de fix TTS mock
+
+L'utilisateur a soumis le bug TTS silencieux à Codex en parallèle pour cross-check. Codex a confirmé les 2 causes principales (`/launch-audio` qui répond 200 avant exécution du greenlet ; `_measure_duration_ms` qui appelle pydub/ffmpeg en mode mock). Codex a ajouté une suggestion de skip `_pad_audio_to_duration` en mock, mais vérification faite dans le code : **ce chemin n'est déjà pas emprunté en mock** (le mock saute directement à `_generate_silence_mp3(1)` sans padding). Le vrai bug résiduel est uniquement `_measure_duration_ms` ligne 700 après l'upload. Plan final validé et appliqué — voir entrée "Fix : TTS mock" ci-dessous.
+
+**Leçon transverse** : un catch `except Exception` dans une boucle sans `sys.stdout.flush()` sur Azure App Service = debug quasi impossible (logs pas toujours flushés avant recyclage worker). Pattern à systématiser : flush explicite + `traceback.format_exc()` + status métier distinct de la réponse HTTP sur les flows async.
+
+## 2026-04-23
+
+### Fix : TTS mock — retrait de la dépendance pydub/ffmpeg résiduelle + debug greenlet
+
+**Diagnostic** (après analyse croisée avec Codex) : le TTS mock ne produit aucun MP3 sur Azure malgré le fix `silence_1s.mp3` embarqué. Deux causes confirmées dans le code :
+
+1. **`_measure_duration_ms` appelé même en mock** (`playlist_tts_service.py:700`) : après l'upload du blob, le code appelle `AudioSegment.from_mp3(final_bytes)` via `_measure_duration_ms()` — qui requiert ffmpeg, absent d'Azure App Service. Le greenlet plante donc au 1er fichier cours, après l'upload mais avant `generated_files.append(...)`. Résultat : les blobs apparaissent parfois à moitié, jamais complets.
+2. **Route `/launch-audio` répond 200 avant exécution du greenlet** : `eventlet.spawn(...) → update_job("audio_launched") → return 200` est synchrone. DevTools voit 200, l'UI affiche "Synthèse lancée avec succès", mais le worker async peut planter après sans que le frontend le sache.
+
+**Fixes appliqués** :
+
+- `playlist_tts_service.py:700` : en `mock=True`, on hardcode `final_duration = 1.0` au lieu d'appeler `_measure_duration_ms`. Zéro dépendance pydub/ffmpeg dans tout le chemin mock maintenant (`_pad_audio_to_duration` était déjà skippé car le mock saute directement à `final_bytes = _generate_silence_mp3(1)`).
+- `formation_routes.py:_run_audio` : premier `logger.info("🚀 SPAWN greenlet ...")` AVANT le `try`, avec `sys.stdout.flush()` explicite, pour prouver que le greenlet démarre vraiment. Plus `traceback.format_exc()` dans le catch pour voir la stack complète dans Log Stream Azure si une exception persiste.
+- `formation_routes.py:_run_audio` : en cas d'exception, `update_job(job_id, status="audio_error", error_message=f"folder {folder_id}: {e}")`. L'UI peut désormais détecter l'échec au lieu de rester bloquée sur "audio_launched".
+
+**Ce qui reste à faire (V2)** : transition explicite `audio_launched` → `audio_ready` quand TOUS les greenlets ont fini avec succès (nécessite coordination multi-greenlets). Pour V1, on garde `audio_launched` comme état "spawné" et on bascule seulement en `audio_error` si un greenlet plante — le succès se déduit de la présence des blobs.
+
+### Feat : module formation persistant V1 — matérialisation de "1 RNCP = 1 module durable"
+
+**Décision architecturale** : séparation explicite des 3 couches Factory (pipeline_jobs, process jetable) / Catalog (formation_modules, produit persistant) / Consumer (platform_config, instance de promo). Nouvelle table `formation_modules` (id, rncp_code, tp_name, version `{year}-v{n}`, status, source_pipeline_job_id UNIQUE, source_platform_id) créée dans `backend/database/db.py` avec migration rétroactive pour les jobs `audio_launched` / `completed` existants.
+
+**Auto-création au `audio_launched`** : `INSERT OR IGNORE` dès que `launch_audio` passe le job en `audio_launched`, status `validated` par défaut. L'UNIQUE sur `source_pipeline_job_id` garantit l'idempotence des relances TTS.
+
+**Modale "Nouvelle plateforme"** : le select liste désormais les modules validés (via `GET /api/hr/formation-modules`) plutôt que les formations pipeline internes. Création `{name, module_id}` → clone Azure serveur-side des blobs de la `source_platform_id`. Mode legacy `{name, formation_id}` conservé pour compat.
+
+**UI** : bannière "Module créé et disponible" sur `/formation-pipeline` quand le job est `audio_launched`, bouton "Modules" dans le header HR Dashboard ouvrant la modale catalog, badge source_module_id sur les cartes plateforme.
+
+**Point d'observation** : en fin de session, le TTS (mock ET payant) ne produit pas de MP3 sur Azure malgré `force_all=True` et le fix ffmpeg (`silence_1s.mp3` embarqué dans `backend/assets/`). Les requêtes `POST /api/formation/jobs/{id}/launch-audio` renvoient bien 200 mais le greenlet async échoue silencieusement. À diagnostiquer à la reprise (logs Azure App Service filtrés sur la fenêtre juste après le click).
+
+**Références** : `memoire/04-solutions/module-formation-persistant-v1.md`.
+
+### Fix : admin par plateforme — scoping complet des routes admin locales + `/api/internal/set-lock`
+
+**Décision produit** : le HR Dashboard reste le cockpit central sur P1, mais chaque plateforme a désormais sa propre page admin accessible depuis un bouton « Admin » sur la carte plateforme du HR Dashboard. L'admin clique → nouvel onglet sur `{frontend_url}/login-admin?p={id}` → login → `/admin?p={id}` → session admin créée localement sur le backend de la bonne plateforme (isolation naturelle par App Service).
+
+**Helper backend** `_get_platform_id()` dans `admin_routes.py` avec priorité explicite : header `X-Platform-Id` → query `?platform_id` ou `?p` → session → fallback 1 avec warning log. Ce helper remplace les `session.get("platform_id", 1)` cachés partout et surtout les appels `get_heure_debut_cours()` / `set_heure_debut_cours()` sans argument qui retombaient silencieusement sur `platform_id=1`.
+
+**8 routes admin fixées** (scoping par `platform_id`) :
+- `GET /api/admin/logs` — `WHERE platform_id=?` + `get_heure_debut_cours(platform_id)`
+- `GET /api/admin/course-time` — `get_heure_debut_cours(platform_id)`
+- `POST /api/admin/config_cours` — `set_heure_debut_cours(..., platform_id)`
+- `GET /api/admin/export_excel` — `WHERE platform_id=?`
+- `POST /api/admin/simulate-current-time` — écrit dans `state.simulated_time_offsets[platform_id]` (dict multi-tenant déjà en place dans `time_service.py:17`)
+- `POST /api/admin/reset-simulation` — `state.simulated_time_offsets.pop(platform_id, None)`
+- `POST /api/admin/force-logout-finished-users` — **critique** : `WHERE platform_id=? AND (depart IS NULL OR depart='')` + `socketio.emit(..., room=f"platform_{pid}")` (avant : broadcast global qui déconnectait TOUTES les plateformes)
+- `POST /api/internal/set-lock` — refuse 400 si `platform_id` absent du body, `UPDATE platform_config ... WHERE id=?` (avant : hardcodé `WHERE id=1` → bug B2 du rapport d'audit)
+
+**2 appelants de `set-lock` mis à jour** dans `hr_routes.py` (`toggle_lock` et `backup-and-unlock`) pour passer `platform_id` dans le body JSON, cohérent avec la nouvelle contrainte du endpoint.
+
+**Frontend `LoginAdmin.jsx`** : lit `?p=` au mount et `setPlatformId(pParam)` avant toute requête (sinon sur un domaine Azure distinct le localStorage est vide → retour silencieux sur '1'). Passe le login à `apiFetch` pour que `X-Platform-Id` soit injecté automatiquement. Redirige vers `/admin?p={pid}` pour que l'URL survive un refresh en navigation privée.
+
+**Frontend `Admin.jsx`** : lecture `?p=` au mount (même pattern que `Index.jsx`). Migration des 4 fetchs admin-critiques (`/api/admin/logs`, `/api/admin/export_excel`, `/api/admin/config_cours`, `/api/admin/force-logout-finished-users`) vers `apiFetch`. Les fetchs `/api/admin/upload-pdf` et `/api/admin/indexer-status` restent en fetch direct — ces routes utilisent des env vars globales et sont isolées par déploiement.
+
+**Frontend `HRDashboard.jsx`** : bouton « Admin » (outline, icône `admin_panel_settings`) sur chaque carte plateforme active → `target="_blank"` vers `{frontend_url}/login-admin?p={id}`. Zero bouton admin visible côté élève (UX propre).
+
+**Référence audit** : `AUDIT_MULTI_TENANT.md` (bugs B1, B2 du rapport) et `memoire/04-solutions/admin-par-plateforme.md`.
+
+## 2026-04-22
+
+### Discussion : accès admin par carte depuis le HR Dashboard
+
+Clarification d'UX multi-tenant : privilégier un bouton **Admin** sur chaque carte plateforme du HR Dashboard P1 plutôt qu'un bouton admin visible sur l'interface apprenant. Le HR Dashboard reste le cockpit central admin-only ; chaque bouton ouvrirait l'admin local de la plateforme cible (`frontend_url/login-admin`) dans un nouvel onglet.
+
+### Feat : prompts TTS refondus (règles #21-#26) + `/schedule-config` pointe sur scratch.md
+
+Audit méthodique des dérives éditoriales observées dans les cours générés
+par Claude (anecdotes fabriquées, métaphores musicales, "je vois que vous
+êtes installés", "Imaginez un exemple. X.", énumérations mécaniques,
+guillemets de discours direct inaudibles en TTS). Ajout de **6 règles
+de style oral #21-#26** dans `prompt-generation-tts-direct.md` + stratégie
+**sandwich** (rappel critique en tête / bloc détaillé au milieu / vérif
+finale en fin) pour garantir que Claude n'oublie pas les interdictions
+en cours de génération.
+
+**Nouvelles règles** (appliquées aux 3 passes) :
+- **#21** Fusion syntaxique : `"Imaginez qu'une personne…"` (pas
+  `"Imaginez un exemple. Une personne…"`)
+- **#22** Zéro guillemet de discours direct rapporté — TTS ne les
+  prononce pas, discours indirect obligatoire
+- **#23** Posture dialogale — 4 outils (questions rhétoriques,
+  vérifications compréhension, invitations réflexion, métadiscours),
+  1 interpellation tous les 150-250 mots
+- **#24** Chutes isolées — zéro connecteur ouvreur (`"Et voilà…"`) ni
+  méta-commentaire (`"Comme vous pouvez le voir…"`) sur les punchlines
+- **#25** Format cours à distance — pas de visuel (`"je vois"`), pas
+  de physique (`"notez"`), pas d'interaction retour (`"vous m'entendez ?"`).
+  **Autorisés** : `"bonjour à tous"`, `"ce matin"`, `"après la pause"`.
+- **#26** Pas d'énumérations mécaniques — tissage narratif avec 10
+  patterns de transition + 5 commentaires de relief
+
+**Paradigme clarifié** : ni présentiel physique, ni asynchrone, ni radio
+journalistique. **Cours à distance / classe virtuelle en ligne** diffusé
+à heure fixe sur la playlist horodatée (simulation de direct audio).
+
+**Unification `/schedule-config` ↔ pipeline formation** : `hr_routes.py` +
+`knowledge_base_service.py` pointent désormais sur
+`prompt-generation-tts-scratch.md` (au lieu de `prompt-generation-tts-direct.md`)
+pour que l'édition dans l'UI impacte directement la pipeline `from_scratch`.
+
+**Synchronisation scratch.md ← direct.md** : script Python one-shot qui
+réécrit scratch.md en copiant exactement les règles #1-#26 + tous les blocs
+éditoriaux de direct.md, ne gardant de spécifique que les consignes de passe
+(Fondation/Pratique/Maîtrise vs Expansion/Enrichissement). Taille scratch.md :
+115 k chars, ~38 k par passe.
+
+**Pas encore fait** : regénération des segments texte déjà en DB avec le
+nouveau prompt (décision "option B : tout effacer + regénérer" prise en
+début d'audit mais non exécutée pendant qu'on auditait).
+
+### Meta : vault Obsidian complété après audit global
+
+Ajout de deux notes wiki dans `/Users/amelle/Downloads/kit-deuxieme-cerveau/wiki/Intelligence/` : `audit-global-fiabilite-projet.md` (synthèse opérationnelle de l'audit global) et `risques-rate-limit-generation-tts.md` (risque Anthropic sur génération texte longue). Mise à jour de `parallelisme-enrichissement-kb.md` pour corriger l'ancien récit "3 workers par défaut" après l'incident 429 output-tokens, ajout d'un lien post-audit dans `pipeline-tts-19-mp3.md`, puis mise à jour de `wiki/index.md` et `wiki/log.md`.
+
+### Meta : clarification méthode Karpathy appliquée au vault Obsidian
+
+Clarification demandée sur la méthode Karpathy utilisée par la mémoire Obsidian : pattern **LLM Wiki / Second Brain** avec séparation `raw/` immuable, `wiki/` distillé et `CLAUDE.md` comme mode d'emploi, plus opérations `ingest`, `query`, `lint` et `save`.
+
+### Audit : analyse globale du projet Le Socrate
+
+**Livrables** : `AUDIT_PROJET_GLOBAL.md` + `memoire/02-problemes/audit-global-fiabilite-projet.md`.
+
+Audit statique complet du repo après lecture du vault Obsidian : architecture backend/frontend, pipeline formation/TTS, SQLite, workflows Azure, tests, sécurité admin, hygiène de workspace. Vérifications locales : `python -m compileall backend` OK ; `npm run lint` KO (59 erreurs, 12 warnings) ; `npm run build` KO (Node 20.11.1 trop ancien pour Vite 7 + dépendance optionnelle Rollup manquante).
+
+**Priorités identifiées** : fixer les bugs multi-tenant déjà documentés, remplacer l'admin hardcodé `admin/secret123`, brancher `content_generation_service.py` sur le client Anthropic anti-429 avec limite globale de concurrence, rendre la pipeline formation idempotente sur relance, nettoyer `.gitignore`/artefacts locaux, et séparer les tests Playwright local vs staging.
+
+### Meta : consignes de session Codex alignées sur `.claude/claude.md`
+
+Lecture confirmée de `.claude/claude.md` et auto-load de `wiki/index.md` du vault Obsidian. Les règles de transparence des lectures, de simplicité/changements chirurgicaux, de vérification pilotée par le but et de journalisation `CHANGELOG.md` sont prises comme contexte de travail pour la session Codex, dans la limite des outils disponibles ici.
+
+### Audit : architecture multi-tenant (4 bugs + 5 incohérences + 6 optimisations)
+
+**Livrable** : `AUDIT_MULTI_TENANT.md` à la racine.
+
+**Scope** : backend (`db.py`, `main_app.py`, routes admin/hr/video/formation, `time_service`, sockets) + frontend (`api.js`), après lecture du vault (`wiki/Context/architecture-multi-tenant.md`, `memoire/02-problemes/hr-dashboard-heure-cours-figee-p2-p3.md`).
+
+**Findings principaux** :
+- **4 bugs confirmés** : admin local ignore `platform_id` (lit/écrit toujours P1), `/api/internal/set-lock` hardcodé `WHERE id=1`, `approve_deletion` ne supprime le blob Azure que pour P1, SocketIO `participants_update` leak cross-tenant sur `connect` (`broadcast=True`).
+- **~6 risques latents** : defaults `platform_id=1` dans `time_service`, `auth_routes`, `main_app`, `video_routes`, `formation_routes`, `socketio_handlers` — écriture silencieuse sur P1 en cas d'oubli.
+- **5 incohérences** : 3 chemins distincts d'extraction `platform_id`, 2 fonctions de création de plateforme (dont une seule crée les containers Azure), 84 appels `fetch` frontend qui contournent `apiFetch`, prompt TTS global partagé, `UPDATE platform_config SET playlist_mode = NULL` sans WHERE.
+- **6 optimisations** : paralléliser `get_platforms` (8 appels Azure séquentiels), paralléliser `auto_schedule`, ajouter index DB sur `platform_id`, cacher `platform_config`, factoriser SAS URLs, middleware `@require_platform` pour tuer la famille de bugs defaults=1.
+
+**Pas de code modifié** — diagnostic pur, prêt à traiter en 3 paquets (bug-fix / middleware / perf).
+
+### Fix : principe cardinal "ne pas mentir" dans le prompt scratch + cache mtime
+
+**Symptôme** : le contenu généré par la pipeline formation (`from_scratch=True`) contenait des **anecdotes personnelles fabriquées** au prétérit ("Il y a quelques années j'ai reçu un appel...", "J'ai entendu une voix..."), des noms d'entreprises inventés, des statistiques précises non sourcées, etc. Cours malhonnête + pollution du RAG.
+
+**Root cause** : `prompt-generation-tts-scratch.md` ne contenait **pas** les règles anti-hallucination déjà présentes dans `prompt-generation-tts-direct.md` (#17 à #20). Pire, la passe 1 disait explicitement "L'accroche : une anecdote" — incitation active à inventer.
+
+**Fix dans `prompt-generation-tts-scratch.md`** — ajouté aux 3 passes :
+1. **Principe cardinal** en tête : "ne jamais mentir, sur aucun sujet". Test mental : "si un élève me demandait ma source, qu'est-ce que je répondrais ?". Si la réponse honnête est "je l'ai inventé" → reformuler en hypothétique ou supprimer.
+2. **7 applications concrètes** (R1-R7) avec exemples ❌/✅ :
+   - R1 : interdit de raconter un vécu au prétérit ("j'ai reçu/entendu/vu")
+   - R2 : tournures hypothétiques obligatoires ("imaginez", "supposons", "prenons un cas fictif")
+   - R3 : pas de noms d'entreprises/personnes fictifs qui sonnent vrai
+   - R4 : pas de chiffres précis non sourcés (flouter ou supprimer)
+   - R5 : pas d'études fictives (Harvard, Mehrabian, Ipsos)
+   - R6 : pas de règles juridiques/fiscales/médicales présentées comme vérité — rediriger vers un professionnel
+   - R7 : posture pédagogique assumée à l'oral ("l'important c'est la logique, pas le cas")
+3. Ligne "L'accroche : une anecdote" remplacée par "une situation hypothétique annoncée comme telle, ou une question".
+
+**Fix dans `content_generation_service.py`** — cache mtime :
+- `_get_passe_prompts` vérifie maintenant `os.path.getmtime()` du fichier source avant de renvoyer le cache. Si le `.md` a été modifié depuis la dernière lecture, recharge automatiquement.
+- Avant : il fallait redémarrer le backend pour que les modifs de prompt prennent effet (watchmedo ne watch que `*.py`). Maintenant : édition `.md` → prochain appel recharge automatiquement.
+
+**Limite connue** : les segments déjà générés en DB avant ce fix contiennent du texte produit avec l'ancien prompt — potentiellement pollués par des mensonges inventés. À régénérer si utilisés pour le RAG ou le programme officiel.
+
+### Feat : pipeline formation séparée en "génération cours" + "synthèse TTS" + PDF LaTeX
+
+**Contexte** : l'étape 5 de `/formation-pipeline` ("Génération TTS") faisait en réalité uniquement la phase texte (18 appels Claude par journée). Le vrai TTS Fish Audio nécessitait d'aller cliquer manuellement dans le HR Dashboard par dossier. Confusant, et pas de validation du texte avant de déclencher la coûteuse synthèse Fish Audio.
+
+**Changement UX** : 5 étapes → **7 étapes** dans le stepper :
+- Étape 5 (renommée) : **"Génération des cours (texte)"** — identique techniquement à avant, juste labels corrigés.
+- Étape 6 (nouvelle) : intégrée dans la 5, liste chaque journée générée avec boutons **"Voir"** (modal de relecture scrollable) et **"Télécharger PDF"** (programme officiel).
+- Étape 7 (nouvelle) : **"Synthèse TTS Fish Audio"** — bouton qui lance `generate_audio_from_script` sur tous les dossiers en parallèle (un greenlet eventlet par journée).
+
+**PDF LaTeX** — template XeLaTeX mutualisable :
+- `backend/templates/formation_cours.tex.j2` : cover (TP, RNCP, journée), TOC auto, 6 sections par sous-partie, headers/footers, accent violet `#8B5CF6`, polyglossia français (césures correctes), police Palatino système macOS (pas de dep tlmgr).
+- `backend/services/formation_pdf_service.py` : `build_course_pdf(job_id, folder_id) -> (bytes, filename)`. Assemble les segments DB, strip les tags Fish Audio (`[pause]`, `[warm]`) destinés au TTS, échappe caractères LaTeX spéciaux, compile en 2 passes XeLaTeX dans un tempdir.
+- Délimiteurs Jinja2 customisés (`((*...*))`, `((( ... )))`) pour ne pas entrer en conflit avec la syntaxe LaTeX (`%`, `{`, `}`).
+
+**Backend** — 3 nouvelles routes dans `backend/routes/formation_routes.py` :
+- `GET /api/formation/<job>/content` — liste les dossiers cours avec progression texte (segments completed, mots, statut).
+- `GET /api/formation/<job>/content/<folder>/pdf` — télécharge le PDF (Content-Disposition attachment).
+- `GET /api/formation/<job>/content/<folder>/text` — texte brut assemblé pour la modal de relecture.
+- `POST /api/formation/<job>/launch-audio` — vérifie que tous les textes sont `completed` puis spawn les greenlets Fish Audio. Passe le job en statut `audio_launched`.
+
+**Nouveau statut** `audio_launched` (après `tts_launched` qui reste "textes lancés", pour compat jobs existants).
+
+**Scope** : local uniquement pour l'instant (xelatex installé localement). Pour le prod Azure, il faudra ajouter LaTeX au startup App Service quand on en aura besoin — à reconsidérer plus tard. Les PDF servent à deux usages : programme officiel de formation (imprimable, présentable) et alimentation du RAG (texte extractible, structure claire pour le chunking).
+
+### Refacto : client Anthropic partagé + protection 429 étendue au pipeline complet
+
+**Contexte** : après le fix rate-limit pour la KB (ci-dessous), les autres étapes de la pipeline (programme global, découpage journée, refine) restaient vulnérables au même problème — le découpage est parallélisé en batches de 5 jours, donc sur un TP de 35 jours, **7 threads × 8000 tokens output simultanés** saturent le bucket 10 k/min de Haiku.
+
+**Fix** — mutualisation dans un util partagé `backend/utils/anthropic_client.py` :
+- Expose `AnthropicRateLimitError(wait_seconds)`, `parse_retry_after(resp)`, `post_message(messages, max_tokens, model)`.
+- Lève `AnthropicRateLimitError` sur 429 avec délai parsé depuis `retry-after` HTTP puis les `anthropic-ratelimit-*-reset` ISO 8601, fallback 60 s.
+- Cap auto `max_tokens=8000` pour Haiku (limite modèle).
+- Logs unifiés (warning ⏳ pour 429, error ❌ pour autres HTTP).
+
+**Branchements** :
+- `services/knowledge_base_service.py` : `_claude_post` local réduit à un wrapper qui injecte le modèle. La logique dupliquée (`AnthropicRateLimitError`, `_parse_retry_after`) est supprimée (source unique dans l'util).
+- `services/formation_pipeline_service.py` : idem pour `_claude_post`. Les 3 call-sites (`_generate_global_program_thread`, `_split_batch`, `refine_content`) passent de 3 retries aveugles (`sleep(10/15)`) à **5 retries avec sleep exact** sur 429 (et fallback inchangé pour les autres erreurs).
+
+**Impact** : le découpage journée sur gros TP (≥ 10 jours) devient aussi fiable que l'enrichissement KB. Le programme global aussi.
+
+### Fix : enrichissement KB échoue — rate-limit Anthropic 429 en cascade
+
+**Symptôme** : `/formation-pipeline` → clic "Enrichissement KB" → job marqué `kb_ready` mais UI affiche "0 compétences enrichies / 0 mots". Logs backend : `429 rate_limit_error: 10,000 output tokens per minute` sur Haiku.
+
+**Cause** : `KB_ENRICH_CONCURRENCY=3` × `max_tokens=8000` = 24 000 tokens output réservés simultanément, vs. limite 10 000/min du bucket output-tokens Haiku. Les retries utilisaient un `sleep(10)` aveugle qui ne laissait pas le bucket se remplir (les autres workers continuaient à tirer dessus). 3 retries épuisés → compétence marquée `error`.
+
+**Fix** dans `backend/services/knowledge_base_service.py` :
+1. `KB_ENRICH_CONCURRENCY` par défaut **1** (au lieu de 3) — un seul appel réserve déjà 80 % du bucket Haiku, toute parallélisation est contre-productive sur ce tier. Toujours configurable via env var pour les tiers plus hauts.
+2. Nouvelle exception `AnthropicRateLimitError(wait_seconds)` — `_claude_post` lit `retry-after` HTTP puis les `anthropic-ratelimit-*-reset` ISO 8601, fallback 60s.
+3. Retries passés de 3 à 5, avec sleep **exact** = `wait_seconds` sur 429 (au lieu de 10s aveugle). Les autres erreurs gardent le sleep 10s linéaire.
+
+**Impact** : latence enrichissement ↑ (sérialisé), mais taux de succès ~100 % au lieu de ~30-60 %. Principe "1 RNCP = 1 module durable" : amorti sur toutes les promos, on privilégie la fiabilité sur la vitesse.
+
+## 2026-04-21
+
+### Meta : Karpathy behavioral guidelines inlinées dans `.claude/CLAUDE.md`
+
+Les 4 règles comportementales Karpathy (`.claude/skills/Karpathy_skill.md`) étaient techniquement un "skill" invoqué à la demande — donc pas toujours actives. Inlinées dans `.claude/CLAUDE.md` pour qu'elles s'appliquent à **chaque** session, sans dépendre d'un match de description.
+
+**4 règles** :
+1. Réfléchir avant de coder (énoncer hypothèses, présenter interprétations multiples, pousser si simple existe).
+2. Simplicité d'abord (minimum de code, pas de features non demandées, pas d'abstractions pour usage unique).
+3. Changements chirurgicaux (chaque ligne modifiée trace à la demande, ne pas "améliorer" le code adjacent, matcher le style existant).
+4. Exécution pilotée par le but (critères de succès vérifiables, plan bref pour tâches multi-étapes).
+
+**Alternative rejetée** : hook SessionStart qui aurait lu le fichier skill externe — plus complexe (touche `settings.json`) pour un gain marginal vs. inline.
+
+Le fichier skill original reste en place à `.claude/skills/Karpathy_skill.md` (pas supprimé) — au cas où on voudrait l'invoquer explicitement ailleurs.
+
+### Fix : téléchargement REAC cassé — `PyPDF2` manquant dans le venv
+
+**Symptôme** : bouton "Télécharger les sources" de `/formation-pipeline` en état `error`. `error_message` en DB = `REAC: No module named 'PyPDF2'`.
+
+**Cause** : `PyPDF2==3.0.1` est bien déclaré dans `backend/requirements.txt` ligne 12, mais pas installé dans le venv actif à `./venv/` (racine projet). Probablement un `pip install -r` qui a sauté cette ligne, ou un venv recréé sans réinstaller toutes les deps.
+
+**Fix** : `./venv/bin/pip install PyPDF2==3.0.1`. L'import `import PyPDF2` vit dans le corps de la fonction `download_reac_text()` (pas au top du module), donc un clic suffit pour retenter — pas besoin de redémarrer le backend.
+
+**Note venv** : le venv est à la racine du projet (`./venv/`), pas dans `./backend/venv/` — à surveiller si jamais on ajoute un script de bootstrap.
+
+### Meta : règle de transparence sur les `Read` (vault + fichiers non-évidents)
+
+Ajout d'une règle dans `.claude/CLAUDE.md` : à chaque `Read` dans le vault Obsidian (toujours) ou d'un fichier du repo non mentionné par l'utilisateur (non-évident), Claude annonce en une ligne avant le tool call *où* il va et *pourquoi*.
+
+**Format** : `→ je lis `wiki/Intelligence/<note>.md` (raison courte)`.
+
+**Motivation** : l'utilisateur avait remarqué que les `Read` du vault se faisaient "en silence" — il ne se rendait pas compte des connaissances que Claude mobilisait pendant une réponse. Cette règle rétablit la visibilité sans alourdir la réponse (une ligne max, pas de paragraphe).
+
+**Périmètre** :
+- Toujours annoncer pour les Reads du vault `/Users/amelle/Downloads/kit-deuxieme-cerveau/...`
+- Annoncer pour les Reads de fichiers repo non mentionnés par l'utilisateur
+- Pas besoin d'annoncer si le fichier est explicitement dans la demande en cours (ex. "modifie `hr_routes.py`")
+
+### Meta : capture zéro friction vers `raw/daily/` — fermeture du gap LeSocrate → vault
+
+Jusqu'ici, la connaissance produite en session Claude Code (LeSocrate) n'arrivait dans le vault Obsidian que si l'utilisateur le demandait explicitement ou lançait une session vault pour `/save`. Ajout d'une règle dans `.claude/CLAUDE.md` qui matérialise la **capture zéro friction** du pattern Karpathy : sur signal de fin de session, Claude dépose automatiquement **deux fichiers** dans `raw/daily/` :
+
+1. **Dump brut fidèle** — copie du transcript JSONL natif (`~/.claude/projects/.../*.jsonl`) vers `raw/daily/YYYY-MM-DD-<session-uuid>-session.jsonl`. Archive byte-à-byte immuable.
+2. **Résumé insights lisible** — `raw/daily/YYYY-MM-DD-<session-uuid>-insights.md` avec frontmatter YAML (date, tags, type: daily, status: active, source: session-uuid) et 10-15 points clés max.
+
+Au fil de l'eau, les triggers de proactivité déposent **en plus** un fichier ciblé `raw/daily/YYYY-MM-DD-<slug>.md` pour que `/ingest` retrouve le contexte même sans clôture formelle.
+
+**Tranchage entre deux options discutées** :
+- Option A (filtrer, ne mettre que l'important) — rejetée car biais de jugement à chaud + recrée la friction que `raw/` élimine.
+- **Option B retenue** (tout + résumé) — `raw/` est immuable et pas cher, la distillation est le rôle de `/ingest`. Matche la philo Karpathy *"rien n'est trop brut pour raw/"*. Les deux fichiers donnent : archive complète (assurance) + résumé (accélérateur).
+
+**Limite technique levée** : découverte du transcript JSONL natif de Claude Code dans `~/.claude/projects/-Users-amelle-Desktop-SocrateReprise-LeSocrate/<uuid>.jsonl` — copie byte-à-byte possible, pas besoin de reconstituer la conv de mémoire.
+
+**Dossier `raw/daily/` créé** dans le vault (n'existait pas). Le tri `raw/ → wiki/` reste strictement réservé à `/ingest` lancé depuis une session Claude Code dans le dossier du vault — on ne rompt pas cette règle.
+
+### Meta : audit archi Claude Code + auto-load vault + triggers naturels + dégraissage CLAUDE.md
+
+Audit de la config Claude Code vs. l'archi cible **CLAUDE.md (identity) + Obsidian (how I think) + NotebookLM (research)** — variante sans Pinecone. Trois écarts identifiés et corrigés :
+
+**1. Auto-load du vault au démarrage** — ajout d'une règle en tête de `.claude/CLAUDE.md` : "À chaque début de session, lire `/Users/amelle/Downloads/kit-deuxieme-cerveau/wiki/index.md` sans attendre de demande". Matérialise la flèche `identity · on start` du diagramme qui n'était que partielle (CLAUDE.md auto-loaded, mais pas le vault).
+
+**2. Triggers langage naturel → skills vault** — tableau de mapping ajouté dans `.claude/CLAUDE.md`. L'utilisateur peut écrire "charge le contexte", "ingère", "save", "lint", "query X", "notebooklm" en langage naturel (sans slash) et Claude déclenche la skill correspondante via l'outil `Skill`. Annonce en une ligne avant invocation. Si ambigu (ex. "save" = sauver un fichier ?), demande avant.
+
+**3. Dégraissage CLAUDE.md racine : 407 → 100 lignes** — respecte enfin le principe `rules · voice · < 200 lines` du diagramme. Stratégie : tout ce qui était déjà distillé dans le vault Obsidian a été remplacé par un pointeur vers la page wiki correspondante (pipeline TTS 19 MP3, infra Azure 3 comptes Blob, multi-tenant, stack, conventions). Gardés : principe RNCP = 1 module durable, commandes dev essentielles, 8 règles critiques ne jamais enfreindre, rappel multi-tenant, CI/CD, styling.
+
+**Rationale** : un CLAUDE.md trop long noie l'essentiel (identity/voice/règles comportementales) sous les détails techniques qui vivent mieux dans le vault. L'archi 3 nodes repose sur une séparation claire : identity auto-loaded vs. reasoning/knowledge on-demand. Les 407 lignes précédentes dupliquaient ~80% du wiki Context+Intelligence.
+
+**Non-traité (conscient)** :
+- Route `NotebookLM → agent` inverse du skill `/notebooklm` (qui est export vault → NotebookLM). Le flow d'entrée (insights NotebookLM → Claude Code) passe en pratique par `raw/` du vault + `/ingest`, pas directement.
+- Double système de mémoire `~/.claude/projects/…/memory/` + vault Obsidian : cohabitation assumée pour l'instant (auto-memory Claude Code = court terme cross-session, vault = durable thématique). Règle implicite mais pas encore arbitrée.
+
+### Meta : mise en place du pattern LLM Wiki de Karpathy dans le vault Obsidian
+
+Création d'une structure documentaire externe au repo pour capter la connaissance opérationnelle du projet, complémentaire au dossier `memoire/` (qui reste cible du mémoire académique).
+
+**Emplacement** : `/Users/amelle/Documents/Obsidian Vault/`
+
+**Structure créée** :
+- `CLAUDE.md` à la racine du vault — schéma du pattern : 3 couches (raw immuable / wiki distillé / CLAUDE.md), opérations canoniques **Ingest / Query / Lint**, règles d'or pour le LLM.
+- `raw/` — sources immuables (le LLM y lit, n'y écrit jamais).
+- `wiki/index.md` — catalogue content-oriented avec catégories canoniques : **Sources / Entities / Concepts / Meta**.
+- `wiki/log.md` — append-only, préfixe grep-able `## [YYYY-MM-DD] <type> | <titre>`.
+
+**Itération** : première version posée avec catégorisation par thème projet et log sans préfixe structuré, puis patchée après relecture contre la spec Karpathy (ajout explicite Ingest/Query/Lint, préfixe log grep-able, catégories canoniques sources/entities/concepts, immutabilité de `raw/`).
+
+**Pivot** : découverte du **Kit Deuxième Cerveau** (L'Atelier de l'Automatisation) qui fournit le même pattern mieux outillé — 6 slash commands prêts (`/prime`, `/ingest`, `/save`, `/query`, `/lint`, `/notebooklm`), frontmatter YAML obligatoire, structure wiki/Context-Intelligence-Resources-Daily. Migration vers ce kit (`~/Downloads/kit-deuxieme-cerveau/`) avec ancien vault `~/Documents/Obsidian Vault/` laissé dormant.
+
+**Installation** :
+- 6 skills copiés dans `~/.claude/commands/` (dossier créé à l'occasion).
+- Bootstrap ingest du projet Le Socrate dans le wiki : 12 pages créées (3 Context + 7 Intelligence + 2 Resources), `wiki/index.md` et `wiki/log.md` mis à jour. Stratégie non-duplication — les 13 fichiers `memoire/` du repo restent la source canonique, le wiki synthétise + cross-référence.
+
+**Pont vault ↔ repo** : `.claude/CLAUDE.md` du repo patché pour pointer Claude Code (sessions lancées dans LeSocrate) vers `/Users/amelle/Downloads/kit-deuxieme-cerveau/` comme source de contexte distillé. Instructions : lire `wiki/index.md` d'abord (panneau de direction), puis les pages `Context/` / `Intelligence/` / `Resources/` pertinentes avant refactor d'un service, touche d'infra Azure, ou arbitrage d'architecture. Ancienne section "Mon Projet / Profil Dev" (jamais implémentée en pratique) remplacée. Règle : maintenance du vault (`/ingest`, `/save`, `/lint`) reste réservée aux sessions Claude Code lancées dans le dossier du vault.
+
+**Proactivité + détection fin de session** : `.claude/CLAUDE.md` étendu avec deux règles :
+- **Proactivité** — dès qu'une décision d'archi, un problème diagnostiqué, une solution substantielle, un pattern durable, ou un insight non-trivial émerge en conversation, Claude écrit immédiatement (dans la foulée) vers `memoire/`, CHANGELOG, ou vault wiki. Règle du seuil "encore utile dans 3 mois ?" pour éviter le bruit. Vérification systématique d'un doublon existant avant création. Annonce transparente de chaque écriture.
+- **Détection fin de session** — pas de trigger automatique, Claude surveille les signaux de clôture (explicite : "save" ; remerciement final : "merci" ; désengagement : "à demain" ; projection : "on reprendra sur X"). Signal explicite → exécute le save. Signal implicite → propose une synthèse + demande validation avant d'écrire.
+
+Effet attendu : le vault et `memoire/` grandissent organiquement pendant les sessions sans attendre un "save" final, et le save final devient majoritairement une synthèse.
+
+**Rationale** : séparer la capture brute (zéro friction) de la distillation (savoir réutilisable) pour accélérer la reprise de contexte en session et capitaliser les réponses aux queries comme nouvelles pages wiki.
+
+## 2026-04-18
+
+### Feature : parallélisme enrichissement KB (3 workers, speedup ×3)
+
+Couche 1 d'enrichissement accélérée via `concurrent.futures.ThreadPoolExecutor` : **~12 min → ~4 min** pour 10 compétences Haiku.
+
+**Backend** (`backend/services/knowledge_base_service.py`) :
+- Import `concurrent.futures.ThreadPoolExecutor, as_completed`
+- Constante `KB_ENRICH_CONCURRENCY` (env var, défaut `3`) — sweet spot entre gain de temps et rate-limits Anthropic Tier 1 (~50 000 tokens input/min)
+- Lock global `_DB_WRITE_LOCK` protège `save_enriched_competence` et `mark_competence_error` contre les accès SQLite concurrents
+- `_build_kb_thread` refactoré : boucle for séquentielle → pool de workers avec `as_completed`
+- Fonction interne `_enrich_one(c)` encapsule appel Claude + save DB + error handling
+
+**Checkpointing préservé** : chaque worker écrit indépendamment en DB, la logique résumable (skip des `completed`) fonctionne inchangée en cas de crash/restart.
+
+**Documentation** : `memoire/04-solutions/parallelisme-enrichissement-kb.md` (audit complet : options, trade-offs, rate-limits, impact UX).
+
+## 2026-04-17
+
+### Fix : HR Dashboard — heure du cours P2/P3 figée après reload
+
+**Symptôme rapporté** : dans le HR Dashboard, la modification de l'heure du cours pour P2 (Formation 2 TPCE) ou P3 (Formation 3 TPCE) affichait bien un message "enregistré", mais au refresh l'heure repassait à l'ancienne valeur (bloquée au 13 avril 2026).
+
+**Cause** : asymétrie entre l'endpoint service-to-service POST et GET sur les backends distants :
+- `POST /api/internal/config-cours` (`admin_routes.py:243-244`) lit `platform_id` depuis le body → écrit correctement la ligne `cours_config WHERE platform_id=2` sur la BDD locale de P2.
+- `GET /api/internal/course-time` (`admin_routes.py:266`) appelait `get_heure_debut_cours()` **sans argument** → défaut `platform_id=1` → relisait une ligne stale dans la BDD locale de P2 (celle créée à l'init, jamais mise à jour depuis le Dashboard RH).
+
+Résultat : l'écriture ciblait `platform_id=2` (OK), mais la lecture ramenait `platform_id=1` (ancienne valeur) → illusion que rien n'a été sauvegardé.
+
+**Fix** :
+- `backend/routes/hr_routes.py:1088` : l'appel proxy GET passe désormais `?platform_id={pid}` en query string.
+- `backend/routes/admin_routes.py:259-277` : `internal_get_course_time()` lit `platform_id` depuis `request.args` et le passe à `get_heure_debut_cours(platform_id)`.
+
+Symétrique à la correction POST déjà faite précédemment (cf. entrée du 293 du CHANGELOG).
+
+### Clarification architecturale : 1 RNCP = 1 module durable
+
+Principe fondamental du projet explicité et documenté :
+- La pipeline formation est exécutée **une seule fois par RNCP**
+- Elle crée **1 plateforme = 1 module audio durable** réutilisé pour toutes les promos du même TP
+- `nb_days` est **intrinsèque au RNCP** (défini par le REAC officiel), pas un paramètre variable par promo
+- Les promos = sessions utilisateurs distinctes dans `logs`, pas de régénération audio
+
+**Conséquences sur les prochaines couches** :
+- Optimisations "cache par RNCP" ou "scaling par promo" rejetées : réutilisation native, pas besoin d'ajouter de cache
+- Couche 2 (alerte densité) : ratio calculé une fois à la création du pipeline, fixe par RNCP
+- Couche 3 (squelette pédagogique) : construit selon `nb_days` intrinsèque, pas paramétrable par job
+- Couche 4 (RAG Obsidian) : corpus par RNCP amorti sur toutes les promos, d'autant plus pertinent
+
+**Fichiers modifiés** :
+- `CLAUDE.md` : nouvelle section "Principe architectural fondamental" en tête de fichier
+- `memoire/01-architecture/un-rncp-un-module-durable.md` (nouveau) : documentation complète du principe
+- `memoire/README.md` : entrée ajoutée au méga-menu
+
+### Fix : Couche 1 tolère les réponses JSON tronquées (max_tokens atteint)
+
+Problème identifié lors du premier test réel (job 5, 10 compétences Haiku) :
+- 2 compétences sur 10 ("Adopter un comportement orienté vers l'autre" et "Résolution de problème") marquées en erreur après 3 retries
+- Logs : `Unterminated string starting at: line 96 column 23 (char 25096)`
+- Cause : Haiku 4.5 plafonné à `max_tokens=8000` (~24000 caractères). Pour les compétences très riches pédagogiquement, Claude produit un JSON plus long que cette limite et la réponse est coupée mid-string → JSON invalide → parsing échoue → retry produit la même coupure → 3 échecs → status `error`.
+
+**Fix** (`backend/services/knowledge_base_service.py`) :
+- Nouvelle fonction `_repair_truncated_json()` qui :
+  1. Parcourt le JSON char par char en suivant les strings/structures
+  2. Trouve la dernière position "sûre" (après `,`, `}` ou `]` hors string)
+  3. Tronque à cette position
+  4. Ferme les `{` et `[` restés ouverts
+- `_parse_json_response()` appelle la réparation en fallback si parsing normal échoue
+- Résultat : une compétence tronquée devient **partiellement sauvée** (ex: 4 études de cas au lieu de 6 si la 5ème coupe au milieu) plutôt que complètement perdue
+
+**Impact** : les 2 compétences en erreur peuvent être relancées via "Relancer" (logique résumable) et sortiront désormais avec du contenu valide même si tronqué.
+
+### Fix : Couche 1 respecte les règles éditoriales TTS
+
+Après identification d'un oubli : les règles éditoriales (religion, alcool, fêtes, paris, manipulation, hallucination, règles anti-inventions — 20 règles non négociables) qui encadrent la génération TTS doivent aussi s'appliquer à la Couche 1 d'enrichissement puisque son contenu devient la source primaire du cours audio.
+
+- `backend/services/knowledge_base_service.py` : nouvelle fonction `_load_editorial_rules()` qui charge dynamiquement la section "CONTENU — RÈGLES ABSOLUES" + "HALLUCINATION" du fichier `prompt-generation-tts-direct.md` (cache invalidé par mtime).
+- Les 2 prompts d'enrichissement (`_EXTRACT_COMPETENCES_PROMPT`, `_ENRICH_COMPETENCE_PROMPT`) incluent désormais un placeholder `{EDITORIAL_RULES}` injecté à chaque appel.
+- Points d'attention ajoutés explicitement : études de cas fictives doivent être annoncées comme telles, vocabulaire métier strictement factuel, pièges décrits pour être évités (pas maîtrisés), contexte terrain 100% professionnel.
+
+**Une seule source de vérité** : éditer les règles dans `/schedule-config` (via `POST /api/hr/tts-prompt`) propage automatiquement à la Couche 1.
+
+### Feature : Couche 1 — Enrichissement REAC → Knowledge Base
+
+Implémentation de la première couche de l'architecture qualité programme (cf. `memoire/01-architecture/architecture-4-couches-qualite-programme.md`).
+
+**Objectif** : faire passer la matière source exploitable par Claude de ~15k mots (REAC brut) à ~120-150k mots enrichis, pour réduire drastiquement le ratio de dilution sur les formations longues (14 jours → ratio 43:1 → 4.3:1).
+
+**Backend** :
+- `backend/database/db.py` : nouvelle table `formation_knowledge_base` (migration idempotente) — 1 ligne par compétence avec définition pédagogique, études de cas, pièges, vocabulaire métier, contexte terrain, liens connexes. Flag `dirty` + `UNIQUE(job_id, competence_index)` pour checkpointing.
+- `backend/services/knowledge_base_service.py` (nouveau) : orchestration complète. 2 étapes Claude — `extract_competences` (1 appel, extraction structurée depuis REAC) puis `enrich_competence` (1 appel par compétence, enrichissement dense). Séquentiel pour éviter rate-limit Anthropic. Retries 3× par appel. Fonction `build_kb_context` assemble un contexte structuré pour injection dans le prompt programme global.
+- `backend/routes/formation_routes.py` : 2 nouvelles routes admin — `POST /api/formation/<id>/enrich-reac` (lance l'enrichissement, accepte `model` body pour Sonnet/Haiku) et `GET /api/formation/<id>/kb` (retourne entrées + stats).
+- `backend/services/formation_pipeline_service.py` : `_generate_global_program_thread` injecte désormais la KB enrichie **en source primaire** quand elle existe (REAC brut en secondaire). Fallback REAC brut si KB absente (rétro-compatibilité).
+
+**Frontend** :
+- `frontend/src/pages/FormationPipeline.jsx` : nouveau `StepBlock` "Enrichissement Knowledge Base" inséré à stepIndex=2 (décalage des suivants : Programme global 2→3, Journées 3→4, TTS 4→5). Barre de progression live pendant `kb_building`, stats détaillées en `kb_ready`, expandable listant chaque compétence avec statut individuel. Boutons Relancer Sonnet/Haiku. `statusToStep` mis à jour pour `kb_building` / `kb_ready`. Polling étendu aux statuts KB.
+
+**Nouveaux statuts job** : `kb_building`, `kb_ready`.
+
+**Coût estimé** : ~$0.50-1 supplémentaire par formation (Claude Sonnet 4), négligeable vs coût TTS Fish Audio (~$5-15).
+
+**Documentation** : `memoire/04-solutions/couche-1-enrichissement-reac.md` (structure type avec impact attendu sur ratio dilution).
+
+### Feature : dossier `memoire/` pour consolidation des réflexions (mémoire académique)
+
+Création du dossier `memoire/` à la racine du projet, destiné à consolider les réflexions, décisions techniques et diagnostics pour la rédaction du mémoire académique de fin d'année.
+
+**Structure** :
+- `memoire/README.md` — méga-menu navigable
+- `memoire/01-architecture/` — décisions structurantes
+- `memoire/02-problemes/` — problèmes rencontrés et diagnostics
+- `memoire/03-decisions/` — arbitrages techniques
+- `memoire/04-solutions/` — solutions techniques documentées (à venir)
+
+**Fichiers initiaux créés** (consolidation des réflexions des sessions précédentes) :
+- `01-architecture/pipeline-formation-vue-ensemble.md`
+- `01-architecture/multi-tenant-plateforme-par-pipeline.md`
+- `01-architecture/architecture-4-couches-qualite-programme.md`
+- `02-problemes/rc-rome-indisponibles.md`
+- `02-problemes/ratio-dilution-reac.md`
+- `03-decisions/audit-rag-sur-reac.md`
+
+**Instruction permanente ajoutée** dans `.claude/CLAUDE.md` : à chaque réflexion/décision/audit non-trivial, un fichier est ajouté à `memoire/` en suivant la structure type (Contexte → Problème → Options → Décision → Rationale → Références code → Leçons).
+
+**Distinction CHANGELOG vs memoire/** : le CHANGELOG est chronologique et factuel ("quoi a changé"), le dossier `memoire/` est thématique et analytique ("pourquoi, comment, qu'a-t-on appris").
+
+### Décision : Couche 1 (enrichissement REAC → knowledge base) prochaine étape
+
+Architecture qualité programme formation définie en 4 couches (cf. `memoire/01-architecture/architecture-4-couches-qualite-programme.md`) :
+- Couche 1 — Enrichissement structuré du REAC (priorité, à implémenter)
+- Couche 2 — Alerte densité UI
+- Couche 3 — Squelette pédagogique imposé (Bloom)
+- Couche 4 — RAG externe Obsidian (optionnel, si insuffisant)
+
+Justification : le ratio de dilution atteint 43:1 sur une formation 14 jours (15k mots REAC → 644k mots générés). Enrichir la source à 120-150k mots avant génération fait chuter le ratio effectif dans la zone sûre.
+
+### Fix : bouton "Re-télécharger" REAC débloqué depuis le statut `reac_ready`
+
+- `backend/routes/formation_routes.py` : route `POST /api/formation/<id>/fetch-reac` accepte maintenant les statuts `init`, `error` **et `reac_ready`** (avant : 400 BAD REQUEST quand on cliquait re-télécharger).
+- Raison : le bouton "Re-télécharger" n'avait aucun effet utile — seul `init`/`error` étaient autorisés, alors que le cas courant (tenter à nouveau après succès partiel REAC-only, RC/ROME vides) est `reac_ready`.
+
+### Clarification : RC et ROME sont optionnels par design
+
+Le pipeline télécharge REAC + RC + ROME en parallèle via 3 threads. Seul REAC est obligatoire :
+- RC (`download_rc_text`) : regex sur page France Compétences, retourne `""` silencieusement si aucun pattern URL ne matche (RC public inconsistant selon RNCP)
+- ROME (`fetch_rome_data`) : nécessite `FRANCE_TRAVAIL_CLIENT_ID` + `FRANCE_TRAVAIL_CLIENT_SECRET` pour API officielle, fallback scraping candidat.francetravail.fr souvent bloqué
+- Job passe quand même en `reac_ready` si seul REAC réussit → RC/ROME restent gris dans l'UI
+
+### Décision : RC et ROME retirés de l'UI Pipeline Formation
+
+Après investigation sur RNCP 35304 (TP CRCD) :
+- RC inexistant publiquement sur France Compétences pour ce titre
+- ROME D1408 / M1401 : ancienne URL `/metierform/accueil?codeRome=...` retourne 404, nouvelle URL `metierscope/fiche-metier/{code}` est une SPA JS non scrapable en HTTP brut
+
+**Décision** : le REAC (95k caractères, toutes compétences + savoirs associés détaillés) est suffisant pour que Claude génère le programme de formation. RC/ROME n'apporteraient qu'un gain marginal (critères d'évaluation / contexte métier) insuffisant pour justifier le coût maintenance.
+
+**Changements UI** (`frontend/src/pages/FormationPipeline.jsx`) :
+- Badges RC et ROME supprimés de l'étape "Téléchargement REAC"
+- Seul le badge REAC reste affiché
+- Texte descriptif mis à jour ("Télécharge le REAC depuis France Compétences" au lieu de "REAC + RC + ROME")
+- Backend inchangé : `fetch_rome_data` et `download_rc_text` continuent de s'exécuter en silence au cas où certains RNCP futurs les exposeraient proprement (no-op si vides)
+
+**Objectif long terme** : automatisation complète du pipeline (aucune intervention humaine). L'upload manuel RC/ROME a été envisagé puis rejeté car incompatible avec cet objectif.
+
+## 2026-04-16
+
+### Feature : Pipeline formation automatisé (RNCP → TTS)
+
+Pipeline end-to-end permettant de créer une formation complète depuis un code RNCP.
+
+**Backend :**
+- `backend/services/formation_pipeline_service.py` (nouveau) :
+  - `search_rncp(query)` : recherche des titres RNCP sur France Compétences par scraping HTML
+  - `download_reac_text(rncp_code)` : télécharge le PDF REAC depuis France Compétences et en extrait le texte (PyPDF2)
+  - `launch_global_program_generation(job_id)` : génère un programme de formation structuré (blocs, modules, contenu théorique) depuis le REAC via Claude Sonnet 4
+  - `launch_daily_split(job_id)` : découpe le programme global en N journées (÷7h/jour) avec exactement 6 sous-parties chacune, JSON avec `module_content` par sous-partie
+  - `launch_tts_for_all_days(job_id, platform_id)` : crée les dossiers cours et lance la génération TTS from-scratch pour chaque journée
+  - CRUD DB : `create_job`, `update_job`, `get_job`, `list_jobs` pour la table `formation_pipeline_jobs`
+- `backend/routes/formation_routes.py` (nouveau) : 10 routes admin-protégées (`search-rncp`, `init`, `fetch-reac`, `generate-global`, `validate-global`, `split-daily`, `validate-daily`, `launch-tts`, statut, liste)
+- `backend/database/db.py` : table `formation_pipeline_jobs` + migration colonnes `from_scratch` et `module_contents` dans `content_generation_jobs`
+- `backend/main_app.py` : enregistrement du blueprint `formation_bp`
+- `backend/services/content_generation_service.py` : support mode `from_scratch` avec `sub_parts_override` et `module_contents` — 3 passes indépendantes (Fondation / Pratique / Maîtrise) sur le même `{CONTENU_DU_MODULE}`
+- `prompt-generation-tts-scratch.md` (nouveau à la racine) : prompts des 3 passes from-scratch avec règles Fish Audio S2-Pro intégrées
+
+**Frontend :**
+- `frontend/src/pages/FormationPipeline.jsx` (nouveau) : page stepper 5 étapes
+  - Étape 1 : recherche RNCP + sélection dans les résultats + saisie durée (affiche le nb de journées calculé)
+  - Étape 2 : téléchargement REAC avec polling statut
+  - Étape 3 : programme global éditable (textarea toggle preview/édition)
+  - Étape 4 : programmes journée éditables par jour (JSON editor per-day)
+  - Étape 5 : lancement TTS avec confirmation du nombre de dossiers à créer
+  - Polling 3s sur les statuts en cours (`reac_fetching`, `global_generating`, `daily_splitting`)
+- `frontend/src/App.jsx` : route `/formation-pipeline` protégée par `ProtectedAdminRoute`
+
+**Statuts pipeline :** `init → reac_fetching → reac_ready → global_generating → global_ready → global_validated → daily_splitting → daily_ready → daily_validated → tts_launched`
+
 ## 2026-04-14
 
 ### Fix : Chargement instantané de la forme d'onde dans l'éditeur audio

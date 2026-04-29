@@ -16,14 +16,13 @@ import json
 import time
 import uuid as uuid_mod
 
-import requests as _http
-
 from database.db import get_db_connection
+from utils.anthropic_client import default_model, post_message as _llm_post
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-CLAUDE_MODEL = "claude-sonnet-4-20250514"
+CLAUDE_MODEL = default_model()
 NUM_SUB_PARTS = 6
 
 # ─── Texte mock pour les tests ───────────────────────────────────────────────
@@ -137,23 +136,13 @@ PROGRAMME :
 
 
 def _anthropic_post(messages, max_tokens, model=None):
-    """Appel direct à l'API Anthropic via requests (évite le conflit trio/eventlet)."""
-    resp = _http.post(
-        "https://api.anthropic.com/v1/messages",
-        headers={
-            "x-api-key": os.getenv("ANTHROPIC_API_KEY"),
-            "anthropic-version": "2023-06-01",
-            "content-type": "application/json",
-        },
-        json={
-            "model": model or CLAUDE_MODEL,
-            "max_tokens": max_tokens,
-            "messages": messages,
-        },
+    """Appel LLM compatible Anthropic (Anthropic ou DeepSeek selon config)."""
+    return _llm_post(
+        messages=messages,
+        max_tokens=max_tokens,
+        model=model or CLAUDE_MODEL,
         timeout=600,
     )
-    resp.raise_for_status()
-    return resp.json()["content"][0]["text"]
 
 
 def extract_sub_parts(program_text):
@@ -451,14 +440,41 @@ def _save_segment_db(job_id, sub_idx, sub_part_name, passe, text):
     word_count = len(text.split())
     conn = get_db_connection()
     cursor = conn.cursor()
+    # Un texte nouveau/réécrit doit être repris par le TTS (dirty=1), re-passé
+    # par la révision conformité (reviewed=0) et invalider toute ancienne
+    # erreur reviewer (review_error=NULL). Règle centrale héritée de
+    # memoire/03-decisions/pipeline-dual-api-et-claude-code.md.
     cursor.execute("""
         INSERT OR REPLACE INTO content_generation_segments
-            (job_id, sub_part_index, sub_part_name, passe, status, text_content, word_count)
-        VALUES (?, ?, ?, ?, 'completed', ?, ?)
+            (job_id, sub_part_index, sub_part_name, passe, status,
+             text_content, word_count, dirty, reviewed, review_error)
+        VALUES (?, ?, ?, ?, 'completed', ?, ?, 1, 0, NULL)
     """, (job_id, sub_idx, sub_part_name, passe, text, word_count))
     conn.commit()
     conn.close()
     logger.info(f"  💾 Checkpoint : sous-partie {sub_idx+1}, passe {passe} ({word_count} mots)")
+
+
+def mark_segment_modified(job_id: int, sub_idx: int, passe: int) -> None:
+    """
+    Marque un segment comme modifié : doit être re-synthétisé par le TTS
+    (dirty=1), re-passé par la révision conformité (reviewed=0), et ses
+    anciennes erreurs reviewer invalidées (review_error=NULL).
+
+    À appeler depuis TOUS les endroits où `text_content` change :
+    - _save_segment_db (génération/régénération) — déjà couvert via l'INSERT
+    - route d'édition UI d'un segment — à appeler explicitement
+    - apply_review_patch ci-dessous — à appeler explicitement
+    """
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        UPDATE content_generation_segments
+        SET dirty = 1, reviewed = 0, review_error = NULL
+        WHERE job_id = ? AND sub_part_index = ? AND passe = ?
+    """, (job_id, sub_idx, passe))
+    conn.commit()
+    conn.close()
 
 
 def _get_segment_text(job_id, sub_idx, passe):
@@ -643,9 +659,14 @@ def run_content_generation(folder_id, on_progress=None, mode="normal", model=Non
         raise
 
 
-def generate_audio_from_script(folder_id, on_progress=None, force_all=False, mock=False):
+def generate_audio_from_script(folder_id, on_progress=None, force_all=False, mock=False, basic_tts=False):
     """
     Génère (ou régénère) les 7 fichiers MP3 cours à partir du script TTS stocké en DB.
+
+    3 modes possibles (priorité décroissante) :
+    - mock=True        → MP3 silence 1s, test gratuit (pas d'audio réel)
+    - basic_tts=True   → gTTS (Google TTS gratuit), voix naturelle basique
+    - (défaut)         → Fish Audio S2-Pro, voix studio payante
 
     Logique de régénération sélective :
     - Assemble les segments en ordre (sub_part × passe)
@@ -777,6 +798,15 @@ def generate_audio_from_script(folder_id, on_progress=None, force_all=False, moc
             logger.info(f"   🧪 [MOCK] Bloc {bloc['bloc_number']} ({filename}) — silence 1s")
             from services.playlist_tts_service import _generate_silence_mp3
             final_bytes = _generate_silence_mp3(1)
+        elif basic_tts:
+            _progress(step, 7, f"[BASIC] Bloc {bloc['bloc_number']}/7 — gTTS ({len(bloc['text'].split())} mots)...")
+            logger.info(f"   🔊 [BASIC gTTS] Bloc {bloc['bloc_number']} ({filename}) — génération via gTTS…")
+            from services.basic_tts_service import convert_to_speech_basic
+            # Pas de padding : la durée gTTS ne matche pas les créneaux cours,
+            # mais acceptable pour des tests. L'audio est plus court que la
+            # playlist cible (ex: 33 min de gTTS vs 45 min de bloc cours) —
+            # le reste sera du silence côté playlist horodatée.
+            final_bytes = convert_to_speech_basic(bloc["text"])
         else:
             _progress(step, 7, f"Bloc {bloc['bloc_number']}/7 — génération TTS ({len(bloc['text'].split())} mots)...")
             logger.info(f"   🎙️ Bloc {bloc['bloc_number']} ({filename}) — TTS en cours...")
@@ -787,7 +817,18 @@ def generate_audio_from_script(folder_id, on_progress=None, force_all=False, moc
         blob_path = f"{azure_prefix}{filename}"
         upload_blob(CONTAINER_AUDIOS, blob_path, final_bytes)
 
-        final_duration = _measure_duration_ms(final_bytes) / 1000
+        if mock:
+            final_duration = 1.0
+        elif basic_tts:
+            # gTTS produit un MP3 valide ; mesure possible via pydub si ffmpeg
+            # dispo, sinon on renvoie une estimation basée sur le volume bytes.
+            try:
+                final_duration = _measure_duration_ms(final_bytes) / 1000
+            except Exception:
+                # Estimation fallback : ~1 KB/s pour un MP3 mono 32 kbps
+                final_duration = len(final_bytes) / 4000
+        else:
+            final_duration = _measure_duration_ms(final_bytes) / 1000
         logger.info(f"   ✅ {filename} : {final_duration:.1f}s uploadé")
         generated.append(filename)
 
@@ -874,3 +915,360 @@ def _generate_segment_mini(sub_part_name, program_title, program_text):
         messages=[{"role": "user", "content": prompt}],
         max_tokens=300,
     ).strip()
+
+
+# ─── Révision conformité (Phase 1 — API Claude) ──────────────────────────────
+# Spec : memoire/03-decisions/pipeline-dual-api-et-claude-code.md
+# Format patches : {original, replacement, rule_violated, reason} avec match
+# textuel unique. Max 5 patches par appel. Idempotent via reviewed=1.
+
+import json as _json
+import re as _re
+
+_REVIEW_MAX_PATCHES = 5
+_REVIEW_MAX_TOKENS = 2000
+
+_RULES_CACHE = {"mtime": 0, "text": ""}
+
+
+def _load_review_rules() -> str:
+    """Extrait le bloc 'RÈGLES ABSOLUES #1 à #27' de la passe 1 du prompt
+    (les règles sont identiques dans les 3 passes, une seule extraction
+    suffit). Mise en cache par mtime du fichier."""
+    path = os.path.join(
+        os.path.dirname(__file__), "..", "prompts", "prompt-generation-tts-scratch.md"
+    )
+    mtime = os.path.getmtime(path)
+    if _RULES_CACHE["mtime"] == mtime and _RULES_CACHE["text"]:
+        return _RULES_CACHE["text"]
+    with open(path, "r", encoding="utf-8") as f:
+        content = f.read()
+    m = _re.search(
+        r"CONTENU — RÈGLES ABSOLUES\s*\n═+\n(.*?)décroche, les apprentissages ne passent pas\.",
+        content,
+        _re.DOTALL,
+    )
+    rules_text = m.group(0) if m else content[:20000]
+    _RULES_CACHE["mtime"] = mtime
+    _RULES_CACHE["text"] = rules_text
+    return rules_text
+
+
+def _build_review_prompt(segment_text: str, rules_text: str) -> str:
+    return f"""Tu es un reviewer éditorial. Tu reçois un extrait de cours oral \
+généré par un autre Claude, et les règles #1 à #27 que ce cours doit \
+respecter. Ton unique rôle : identifier les passages qui VIOLENT une règle, \
+et proposer une correction minimale.
+
+TU NE RÉÉCRIS PAS LE TEXTE. Tu renvoies un JSON contenant uniquement les \
+passages non conformes. Si le texte est conforme, renvoie {{"patches": []}}.
+
+Format de sortie strict (JSON valide, rien d'autre avant ou après) :
+
+{{
+  "patches": [
+    {{
+      "original": "phrase EXACTE à remplacer (copie verbatim, 3 à 40 mots)",
+      "replacement": "phrase corrigée, même esprit, même registre oral",
+      "rule_violated": "#27",
+      "reason": "explication brève (1 phrase)"
+    }}
+  ]
+}}
+
+Contraintes impératives :
+- Maximum {_REVIEW_MAX_PATCHES} patches. Si tu vois plus de violations, garde les {_REVIEW_MAX_PATCHES} pires.
+- `original` doit être trouvable TEL QUEL dans le texte (copie mot pour mot, \
+ponctuation comprise). Évite les phrases trop courantes qui apparaîtraient \
+plusieurs fois.
+- `replacement` corrige la violation sans reformuler le sens, sans ajouter \
+de contenu, sans raccourcir ni allonger au-delà du strict nécessaire.
+- Ne corrige QUE les vraies violations des règles ci-dessous. Pas de \
+préférence stylistique personnelle.
+- `rule_violated` = numéro de règle (ex: "#1", "#7", "#21", "#27").
+
+─── RÈGLES À FAIRE RESPECTER ───
+{rules_text}
+
+─── TEXTE À AUDITER ───
+{segment_text}
+
+─── TON JSON ───
+"""
+
+
+def _parse_patches_response(raw: str):
+    """Parse la réponse reviewer. Tolère du texte autour du JSON.
+
+    Retour : (patches, parse_error)
+    - Succès : (list_de_patches, None) — list peut être vide (vraie conformité)
+    - Échec  : ([], 'raison') — JSON illisible ou structure invalide
+    """
+    raw = (raw or "").strip()
+    start = raw.find("{")
+    end = raw.rfind("}")
+    if start == -1 or end == -1 or end <= start:
+        return [], "aucun objet JSON détecté dans la réponse reviewer"
+    try:
+        obj = _json.loads(raw[start : end + 1])
+    except Exception as e:
+        return [], f"JSON invalide : {str(e)[:200]}"
+    if not isinstance(obj, dict) or "patches" not in obj:
+        return [], "la réponse n'a pas de clé 'patches'"
+    patches = obj.get("patches", [])
+    if not isinstance(patches, list):
+        return [], "'patches' n'est pas une liste"
+    clean = []
+    for p in patches[:_REVIEW_MAX_PATCHES]:
+        if not isinstance(p, dict):
+            continue
+        if "original" not in p or "replacement" not in p:
+            continue
+        if not isinstance(p["original"], str) or not isinstance(p["replacement"], str):
+            continue
+        clean.append(
+            {
+                "original": p["original"],
+                "replacement": p["replacement"],
+                "rule_violated": str(p.get("rule_violated", ""))[:20],
+                "reason": str(p.get("reason", ""))[:300],
+            }
+        )
+    return clean, None
+
+
+def _apply_patches(text: str, patches: list) -> tuple:
+    """Applique les patches par match textuel UNIQUE. Renvoie (nouveau_texte,
+    applied, rejected) où applied/rejected sont des listes enrichies du
+    résultat (status + reason pour les rejected)."""
+    applied = []
+    rejected = []
+    for p in patches:
+        original = p["original"]
+        replacement = p["replacement"]
+        count = text.count(original)
+        if count == 1:
+            text = text.replace(original, replacement, 1)
+            applied.append(p)
+        elif count == 0:
+            rejected.append({**p, "reject_reason": "original not found"})
+        else:
+            rejected.append({**p, "reject_reason": f"ambiguous ({count} occurrences)"})
+    return text, applied, rejected
+
+
+def run_content_review(folder_id, on_progress=None, model=None):
+    """
+    Révise la conformité des segments completed non encore reviewed pour un
+    dossier cours. Boucle : pour chaque segment, appel reviewer Claude,
+    application des patches uniques, log. Marque reviewed=1 à la fin quel
+    que soit le résultat (idempotent).
+
+    Règles :
+    - Skip les segments déjà reviewed=1 (idempotence).
+    - Si patches appliqués : segment.text_content mis à jour, dirty=1 pour
+      que le TTS régénère, reviewed=1.
+    - Si aucun patch ou tout rejeté : juste reviewed=1, dirty inchangé.
+
+    Renvoie un dict résumé : {segments_reviewed, patches_applied, patches_rejected, details}.
+    """
+    def _progress(step, total, msg):
+        if on_progress:
+            on_progress(step, total, msg)
+
+    job = get_job_from_db(folder_id)
+    if not job:
+        raise ValueError(f"Aucun content_generation_job pour folder {folder_id}")
+
+    job_id = job["id"]
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    # Sont éligibles à la révision : les segments completed dont reviewed=0.
+    # Ça inclut naturellement les segments qui avaient échoué précédemment
+    # (review_error != NULL ET reviewed=0) — relancer la route = retry.
+    cursor.execute(
+        """
+        SELECT id, sub_part_index, sub_part_name, passe, text_content
+        FROM content_generation_segments
+        WHERE job_id = ? AND status = 'completed' AND COALESCE(reviewed, 0) = 0
+        ORDER BY sub_part_index ASC, passe ASC
+        """,
+        (job_id,),
+    )
+    rows = cursor.fetchall()
+    conn.close()
+
+    total = len(rows)
+    if total == 0:
+        _progress(0, 0, "Tous les segments déjà révisés — rien à faire.")
+        logger.info(f"📋 Review folder {folder_id} : aucun segment à réviser (tous reviewed=1)")
+        return {
+            "segments_reviewed": 0,
+            "segments_failed": 0,
+            "patches_applied": 0,
+            "patches_rejected": 0,
+            "details": [],
+        }
+
+    logger.info(f"📋 Review folder {folder_id} : {total} segment(s) à auditer")
+    rules_text = _load_review_rules()
+
+    total_applied = 0
+    total_rejected = 0
+    total_failed = 0
+    details = []
+
+    for step, row in enumerate(rows, start=1):
+        seg_id, sub_idx, sub_part_name, passe, text_content = row
+        label = f"sous-partie {sub_idx + 1} / passe {passe}"
+        _progress(step, total, f"Audit {label}…")
+        logger.info(f"  🔎 Review segment {seg_id} ({label})")
+
+        prompt = _build_review_prompt(text_content, rules_text)
+        try:
+            raw = _anthropic_post(
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=_REVIEW_MAX_TOKENS,
+                model=model,
+            )
+        except Exception as e:
+            err_msg = str(e)[:500]
+            logger.error(f"  ❌ Appel reviewer échoué pour segment {seg_id} : {err_msg}")
+            # Ne PAS marquer reviewed=1 — l'UI ne doit pas dire "conformité
+            # révisée" pour un segment non audité. On écrit l'erreur dans
+            # review_error ; le polling frontend considère le segment comme
+            # "traité" (reviewed OU review_error != NULL) pour arrêter sa
+            # progression sans mentir. Relancer la route = retry naturel.
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                "UPDATE content_generation_segments SET review_error = ? WHERE id = ?",
+                (err_msg, seg_id),
+            )
+            conn.commit()
+            conn.close()
+            total_failed += 1
+            details.append(
+                {
+                    "segment_id": seg_id,
+                    "sub_idx": sub_idx,
+                    "passe": passe,
+                    "error": err_msg,
+                }
+            )
+            continue
+
+        patches, parse_error = _parse_patches_response(raw)
+
+        # Cas 1 : réponse illisible → review_error, PAS reviewed=1. L'UI ne
+        # doit pas dire "conforme" pour un segment qu'on n'a pas pu auditer.
+        if parse_error:
+            logger.warning(f"    ⚠️ Segment {seg_id} : parse reviewer échoué — {parse_error}")
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                "UPDATE content_generation_segments SET review_error = ? WHERE id = ?",
+                (f"parse: {parse_error}", seg_id),
+            )
+            conn.commit()
+            conn.close()
+            total_failed += 1
+            details.append(
+                {
+                    "segment_id": seg_id, "sub_idx": sub_idx, "passe": passe,
+                    "parse_error": parse_error,
+                }
+            )
+            continue
+
+        new_text, applied, rejected = _apply_patches(text_content, patches)
+
+        # Cas 2 : Claude a identifié des violations (patches non vides) mais
+        # AUCUN n'a pu être appliqué (tous les `original` sont introuvables ou
+        # ambigus). L'audit n'a pas pu corriger les violations détectées.
+        # → review_error, PAS reviewed=1 : on ne peut pas dire "conforme"
+        # alors que Claude a signalé des violations non corrigées.
+        if len(patches) > 0 and len(applied) == 0:
+            logger.warning(
+                f"    ⚠️ Segment {seg_id} : {len(patches)} patch(es) proposés mais aucun appliquable "
+                f"({len(rejected)} rejeté(s)). Ancres introuvables ou ambigus."
+            )
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                "UPDATE content_generation_segments SET review_error = ? WHERE id = ?",
+                (
+                    f"patches_all_rejected: {len(patches)} proposés, 0 appliquable "
+                    f"({'; '.join(r.get('reject_reason', '?') for r in rejected[:3])})",
+                    seg_id,
+                ),
+            )
+            conn.commit()
+            conn.close()
+            total_rejected += len(rejected)
+            total_failed += 1
+            details.append(
+                {
+                    "segment_id": seg_id, "sub_idx": sub_idx, "passe": passe,
+                    "applied": [], "rejected": rejected,
+                    "status": "all_patches_rejected",
+                }
+            )
+            continue
+
+        # Cas 3 : audit réussi (patches vide = vrai conforme, OU au moins 1
+        # patch appliqué = correction partielle). review_error remis à NULL.
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        if applied:
+            new_word_count = len(new_text.split())
+            cursor.execute(
+                """
+                UPDATE content_generation_segments
+                SET text_content = ?, word_count = ?, dirty = 1,
+                    reviewed = 1, review_error = NULL
+                WHERE id = ?
+                """,
+                (new_text, new_word_count, seg_id),
+            )
+            logger.info(
+                f"    ✏️  Segment {seg_id} : {len(applied)} patch(es) appliqué(s), {len(rejected)} rejeté(s)"
+            )
+        else:
+            cursor.execute(
+                "UPDATE content_generation_segments SET reviewed = 1, review_error = NULL WHERE id = ?",
+                (seg_id,),
+            )
+            logger.info(f"    ✅ Segment {seg_id} : conforme (0 patch proposé, 0 appliqué)")
+        conn.commit()
+        conn.close()
+
+        total_applied += len(applied)
+        total_rejected += len(rejected)
+        details.append(
+            {
+                "segment_id": seg_id,
+                "sub_idx": sub_idx,
+                "passe": passe,
+                "applied": applied,
+                "rejected": rejected,
+            }
+        )
+
+    _progress(
+        total,
+        total,
+        f"Terminé : {total_applied} appliqués, {total_rejected} rejetés, {total_failed} en erreur",
+    )
+    logger.info(
+        f"✅ Review folder {folder_id} : {total - total_failed}/{total} audités, "
+        f"{total_applied} patch(es) appliqué(s), {total_rejected} rejeté(s), "
+        f"{total_failed} segment(s) en erreur reviewer"
+    )
+    return {
+        "segments_reviewed": total - total_failed,
+        "segments_failed": total_failed,
+        "patches_applied": total_applied,
+        "patches_rejected": total_rejected,
+        "details": details,
+    }

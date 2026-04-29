@@ -13,9 +13,9 @@ Pipeline TTS complète : PDFs d'un dossier → 19 fichiers MP3 conformes à la p
 import os
 import io
 import re
-import requests as _http
 from pydub import AudioSegment
 from utils.logger import get_logger
+from utils.anthropic_client import default_model, post_message as _llm_post
 from services.tts_service import convert_to_speech, extract_text_from_pdf, extract_text_from_file
 from services.azure_blob_service import (
     upload_blob, download_blob, CONTAINER_DOCUMENTS, CONTAINER_AUDIOS,
@@ -23,6 +23,7 @@ from services.azure_blob_service import (
 )
 
 logger = get_logger(__name__)
+LLM_MODEL = default_model()
 
 # ─── Constantes ──────────────────────────────────────────────────────────────
 
@@ -170,13 +171,6 @@ def _call_claude_reformulate(course_text, progress_callback=None):
     - Si le contenu s'épuise avant le bloc 7, les blocs restants sont vides
     - Si du contenu reste après le bloc 7, on le signale dans le résultat
     """
-    _anthropic_api_key = os.getenv("ANTHROPIC_API_KEY")
-    _anthropic_headers = {
-        "x-api-key": _anthropic_api_key,
-        "anthropic-version": "2023-06-01",
-        "content-type": "application/json",
-    }
-
     word_targets = {i: _target_word_count(d) for i, d in COURS_DURATIONS_MIN.items()}
 
     source_words = course_text.split()
@@ -267,18 +261,12 @@ CONTENU SOURCE POUR CE BLOC :
 {chunk[:30000]}"""
 
         try:
-            _resp = _http.post(
-                "https://api.anthropic.com/v1/messages",
-                headers=_anthropic_headers,
-                json={
-                    "model": "claude-sonnet-4-20250514",
-                    "max_tokens": 32000,
-                    "messages": [{"role": "user", "content": bloc_prompt}],
-                },
+            content = _llm_post(
+                messages=[{"role": "user", "content": bloc_prompt}],
+                max_tokens=32000,
+                model=LLM_MODEL,
                 timeout=300,
-            )
-            _resp.raise_for_status()
-            content = _resp.json()["content"][0]["text"].strip()
+            ).strip()
             actual_words = _count_words_excluding_tags(content)
 
             blocs.append({
@@ -697,7 +685,10 @@ def generate_playlist_for_folder(platform_id, folder_id, progress_callback=None,
             blob_path = f"{azure_prefix}{filename}"
             upload_blob(CONTAINER_AUDIOS, blob_path, final_bytes)
 
-            final_duration = _measure_duration_ms(final_bytes) / 1000
+            if mock:
+                final_duration = 1.0
+            else:
+                final_duration = _measure_duration_ms(final_bytes) / 1000
             generated_files.append({
                 "filename": filename,
                 "type": file_type,

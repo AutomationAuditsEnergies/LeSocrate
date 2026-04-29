@@ -7,6 +7,8 @@ const Icon = ({ name, className = '' }) => (
   <span className={`material-icons ${className}`}>{name}</span>
 )
 
+const hasCrCdTitle = (title = '') => /\bCRCD\b/i.test(title)
+
 const COURS_DURATIONS_MAP = { 1: 45, 2: 45, 3: 55, 4: 45, 5: 60, 6: 60, 7: 50 }
 
 // ─── Component ───────────────────────────────────────────────────────────────
@@ -50,8 +52,11 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
   const [savingEdit, setSavingEdit] = useState(false)
   const [dirtyBlocs, setDirtyBlocs] = useState(null) // {dirty_blocs, total_blocs, has_script}
   const [audioEditorFile, setAudioEditorFile] = useState(null) // filename ouvert dans l'éditeur
+  const [mockUploading, setMockUploading] = useState(false)
+  const [mockUploadQueue, setMockUploadQueue] = useState([]) // [{name, status, error}]
   const contentPollingRef = useRef(null)
   const fileInputRef = useRef(null)
+  const mockAudioInputRef = useRef(null)
   const createFolderInputRef = useRef(null)
   const pollingRef = useRef(null)
 
@@ -65,7 +70,7 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
     border: '#334155',
     hoverBg: '#1e293b',
   } : {
-    bg: '#f8fafc',
+    bg: '#F8F7F5',
     cardBg: '#ffffff',
     innerBg: '#f1f5f9',
     text: '#0f172a',
@@ -711,6 +716,63 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
     }
   }
 
+  // ─── Mock upload (dev only) : copie les MP3 locaux depuis output_jour1 ──
+  const handleMockAudioUpload = async () => {
+    if (!selectedFolder || mockUploading) return
+
+    // Garde-fou : si des audios existent déjà dans le dossier, demander confirmation
+    const existingCours = generatedAudios.filter(a => a.filename?.startsWith('cours_'))
+    if (existingCours.length > 0) {
+      const confirmed = window.confirm(
+        `⚠️ Attention\n\n` +
+        `Ce dossier contient déjà ${existingCours.length} audio(s) de cours.\n` +
+        `Si tu as fait des modifications (coupes, remplacements) sur ces audios, ` +
+        `elles seront ÉCRASÉES par les fichiers originaux de output_jour1/.\n\n` +
+        `Cette action est irréversible. Continuer ?`
+      )
+      if (!confirmed) return
+    }
+
+    setMockUploading(true)
+    setMockUploadQueue([{ name: 'Lecture de output_jour1/...', status: 'uploading' }])
+
+    try {
+      const resp = await fetch(
+        apiUrl(`/api/hr/cours-folders/${selectedFolder.id}/mock-upload-local`),
+        {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ source_dir: 'output_jour1' }),
+        }
+      )
+      const data = await resp.json()
+
+      if (data.success) {
+        const uploaded = (data.uploaded || []).map(u => ({
+          name: `${u.filename} (${u.size_mb} Mo)`,
+          status: 'done',
+        }))
+        const failed = (data.failed || []).map(f => ({
+          name: f.filename,
+          status: 'error',
+          error: f.error,
+        }))
+        setMockUploadQueue([...uploaded, ...failed])
+      } else {
+        setMockUploadQueue([{ name: 'Erreur', status: 'error', error: data.error || 'Inconnue' }])
+      }
+    } catch (err) {
+      setMockUploadQueue([{ name: 'Erreur réseau', status: 'error', error: err.message }])
+    }
+
+    await fetchGeneratedAudios(selectedFolder.id)
+    setMockUploading(false)
+
+    // Nettoyer la file après 6s
+    setTimeout(() => setMockUploadQueue([]), 6000)
+  }
+
   const handleAnalyse = async () => {
     if (!selectedFolder) return
     setAnalysing(true)
@@ -935,6 +997,24 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
                           }
                         }}
                       >
+                        {hasCrCdTitle(folder.name) && (
+                          <div
+                            className="mb-4 overflow-hidden rounded-xl"
+                            style={{
+                              aspectRatio: '16 / 7.2',
+                              border: `1px solid ${darkMode ? '#334155' : '#E4E4E4'}`,
+                              backgroundColor: darkMode ? '#0f172a' : '#F8F7F5',
+                            }}
+                          >
+                            <img
+                              src="/tp-crcd-thumbnail.svg"
+                              alt="TP CRCD"
+                              className="h-full w-full object-cover"
+                              draggable={false}
+                            />
+                          </div>
+                        )}
+
                         {/* Badge Jour X */}
                         <div
                           className="absolute top-2 right-2 text-xs font-bold px-2 py-0.5 rounded-full"
@@ -1181,6 +1261,85 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
                         )
                       })
                     })()}
+                  </div>
+
+                  {/* ── Mock upload (dev only) ── */}
+                  <div
+                    className="px-3 py-3 border-t"
+                    style={{
+                      borderColor: colors.border,
+                      backgroundColor: darkMode ? '#0b1020' : '#fafafa',
+                    }}
+                  >
+                    <div className="flex items-center gap-2 mb-2">
+                      <Icon name="science" style={{ color: '#f59e0b', fontSize: '14px' }} />
+                      <span className="text-xs font-semibold uppercase tracking-wider" style={{ color: '#f59e0b' }}>
+                        Mock test
+                      </span>
+                      <span className="text-xs" style={{ color: colors.textMuted }}>
+                        · dev only
+                      </span>
+                    </div>
+                    <p className="text-xs mb-2" style={{ color: colors.textMuted, lineHeight: 1.4 }}>
+                      Copie automatiquement les 7 MP3 depuis <code style={{ fontSize: '10px' }}>output_jour1/</code> vers Azure.
+                      Les fichiers locaux ne sont pas modifiés.
+                    </p>
+                    <button
+                      onClick={handleMockAudioUpload}
+                      disabled={mockUploading}
+                      className="w-full flex items-center justify-center gap-2 rounded-lg px-3 py-2 text-xs font-medium transition-colors"
+                      style={{
+                        backgroundColor: mockUploading ? colors.innerBg : (darkMode ? '#78350f33' : '#fef3c7'),
+                        color: '#f59e0b',
+                        border: `1px dashed #f59e0b`,
+                        cursor: mockUploading ? 'wait' : 'pointer',
+                      }}
+                    >
+                      {mockUploading ? (
+                        <>
+                          <div className="h-3 w-3 animate-spin rounded-full border-2 border-amber-300 border-t-amber-600" />
+                          Upload en cours...
+                        </>
+                      ) : (
+                        <>
+                          <Icon name="cloud_upload" style={{ fontSize: '14px' }} />
+                          Uploader output_jour1
+                        </>
+                      )}
+                    </button>
+
+                    {mockUploadQueue.length > 0 && (
+                      <div className="mt-2 space-y-1">
+                        {mockUploadQueue.map((q, i) => (
+                          <div
+                            key={i}
+                            className="flex items-center gap-2 px-2 py-1 rounded text-xs"
+                            style={{
+                              backgroundColor:
+                                q.status === 'done' ? (darkMode ? '#14532d33' : '#dcfce7') :
+                                q.status === 'error' ? (darkMode ? '#7f1d1d33' : '#fee2e2') :
+                                colors.innerBg,
+                              color:
+                                q.status === 'done' ? '#16a34a' :
+                                q.status === 'error' ? '#dc2626' :
+                                colors.textMuted,
+                            }}
+                          >
+                            <Icon
+                              name={
+                                q.status === 'done' ? 'check_circle' :
+                                q.status === 'error' ? 'error' :
+                                q.status === 'uploading' ? 'hourglass_empty' :
+                                'schedule'
+                              }
+                              style={{ fontSize: '12px' }}
+                            />
+                            <span className="flex-1 truncate">{q.name}</span>
+                            {q.error && <span className="text-xs opacity-70 truncate">{q.error}</span>}
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 </div>
               </div>
@@ -1724,7 +1883,7 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
                 <div key={bloc.bloc_number} className="rounded-2xl overflow-hidden" style={{ border: `1px solid ${colors.border}` }}>
                   <div
                     className="flex items-center justify-between px-4 py-3"
-                    style={{ backgroundColor: bloc.skipped ? (darkMode ? '#7f1d1d' : '#fee2e2') : (darkMode ? '#1e293b' : '#f8fafc') }}
+                    style={{ backgroundColor: bloc.skipped ? (darkMode ? '#7f1d1d' : '#fee2e2') : (darkMode ? '#1e293b' : '#F8F7F5') }}
                   >
                     <div className="flex items-center gap-2">
                       <span className="text-sm font-bold" style={{ color: bloc.skipped ? '#ef4444' : '#8B5CF6' }}>

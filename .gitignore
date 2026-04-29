@@ -15,3 +15,6 @@ azure-function/local.settings.json
 
 # Claude Code
 .claude/
+
+# Missions Claude Code exportées / importées (dev local)
+review_queue/

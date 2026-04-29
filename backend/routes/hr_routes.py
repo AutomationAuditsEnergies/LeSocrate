@@ -158,7 +158,8 @@ def create_hr_blueprint(socketio):
                 SELECT m.id, m.rncp_code, m.tp_name, m.version, m.status,
                        m.source_pipeline_job_id, m.source_platform_id, m.created_at,
                        (SELECT COUNT(*) FROM cours_folders WHERE platform_id = m.source_platform_id) AS nb_folders,
-                       pc.name AS source_platform_name
+                       pc.name AS source_platform_name,
+                       m.voice_type, m.voice_updated_at
                 FROM formation_modules m
                 LEFT JOIN platform_config pc ON pc.id = m.source_platform_id
                 WHERE m.status != 'archived'
@@ -177,6 +178,8 @@ def create_hr_blueprint(socketio):
                 "created_at": r[7],
                 "nb_folders": r[8],
                 "source_platform_name": r[9],
+                "voice_type": r[10],
+                "voice_updated_at": r[11],
                 "reusable": r[4] == "validated" and r[8] > 0,
             } for r in rows]
             return jsonify({"success": True, "modules": modules}), 200
@@ -255,7 +258,24 @@ def create_hr_blueprint(socketio):
                 conn.commit()
                 logger.info(f"🔧 Auto-repair : {cursor.rowcount} plateforme(s) stuck pending → ready")
 
-            cursor.execute("SELECT id, name, upload_locked, pdf_filename, pdf_uploaded_at, updated_at, status, source_formation_id FROM platform_config ORDER BY id")
+            cursor.execute("""
+                SELECT
+                    pc.id,
+                    pc.name,
+                    pc.upload_locked,
+                    pc.pdf_filename,
+                    pc.pdf_uploaded_at,
+                    pc.updated_at,
+                    pc.status,
+                    pc.source_formation_id,
+                    pc.source_module_id,
+                    COALESCE(fm.rncp_code, fpj.rncp_code) AS source_rncp_code,
+                    COALESCE(fm.tp_name, fpj.tp_name) AS source_tp_name
+                FROM platform_config pc
+                LEFT JOIN formation_modules fm ON fm.id = pc.source_module_id
+                LEFT JOIN formation_pipeline_jobs fpj ON fpj.id = pc.source_formation_id
+                ORDER BY pc.id
+            """)
             rows = cursor.fetchall()
 
             # Compter demandes en attente par plateforme
@@ -282,7 +302,19 @@ def create_hr_blueprint(socketio):
 
             platforms = []
             for row in rows:
-                pid, name, upload_locked, pdf_filename, pdf_uploaded_at, updated_at, p_status, p_source_formation_id = row
+                (
+                    pid,
+                    name,
+                    upload_locked,
+                    pdf_filename,
+                    pdf_uploaded_at,
+                    updated_at,
+                    p_status,
+                    p_source_formation_id,
+                    p_source_module_id,
+                    p_source_rncp_code,
+                    p_source_tp_name,
+                ) = row
                 pinfo = _get_platform_info(pid)
                 # En multi-tenant, toute plateforme en BDD est active
                 active = pid == 1 or bool(pinfo.get("backend_url")) or pid >= 4
@@ -365,6 +397,9 @@ def create_hr_blueprint(socketio):
                     "frontend_url": pinfo.get("frontend_url"),
                     "status": p_status or "ready",
                     "source_formation_id": p_source_formation_id,
+                    "source_module_id": p_source_module_id,
+                    "source_rncp_code": p_source_rncp_code or "",
+                    "source_tp_name": p_source_tp_name or "",
                 })
 
             return jsonify({"success": True, "platforms": platforms}), 200
@@ -2259,10 +2294,13 @@ def create_hr_blueprint(socketio):
         conn = get_db_connection()
         cursor = conn.cursor()
 
-        # Mettre à jour le segment et le marquer comme modifié (dirty)
+        # Mettre à jour le segment et le marquer comme modifié : dirty=1
+        # (TTS doit ré-synthétiser), reviewed=0 (révision conformité doit
+        # ré-auditer le texte modifié), review_error=NULL (toute ancienne
+        # erreur reviewer devient obsolète sur un texte modifié).
         cursor.execute("""
             UPDATE content_generation_segments
-            SET text_content = ?, word_count = ?, dirty = 1
+            SET text_content = ?, word_count = ?, dirty = 1, reviewed = 0, review_error = NULL
             WHERE job_id = ? AND sub_part_index = ? AND passe = ?
         """, (new_text, new_word_count, job["id"], sub_part_index, passe))
 

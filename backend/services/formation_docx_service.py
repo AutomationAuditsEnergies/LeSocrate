@@ -95,7 +95,16 @@ def _folder_position_in_platform(folder_id: int, platform_id: int) -> int:
     raise ValueError(f"Dossier {folder_id} introuvable pour plateforme {platform_id}")
 
 
-def _get_segments_for_folder(folder_id: int) -> list:
+def _get_segments_for_folder(folder_id: int, version: str = "current") -> list:
+    """Charge les segments completed du folder.
+
+    `version` :
+    - "current" (défaut) : lit `text_content` (= état actuel, post-révision si appliquée)
+    - "pre_review" : lit `text_content_pre_review` (= snapshot pris au moment
+      de `_finalize_content_step`, avant que la révision ne touche au texte).
+      Si la colonne est NULL pour un segment (segment plus ancien que la
+      migration), fallback sur `text_content`.
+    """
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute(
@@ -112,8 +121,15 @@ def _get_segments_for_folder(folder_id: int) -> list:
     cg_job_id, sub_parts_json = row
     sub_parts_names = json.loads(sub_parts_json or "[]")
 
+    if version == "pre_review":
+        # COALESCE : si la colonne pre_review est NULL (segment antérieur à
+        # la migration), fallback sur text_content pour ne pas planter.
+        text_col = "COALESCE(text_content_pre_review, text_content)"
+    else:
+        text_col = "text_content"
+
     cursor.execute(
-        """SELECT sub_part_index, passe, text_content
+        f"""SELECT sub_part_index, passe, {text_col}
            FROM content_generation_segments
            WHERE job_id = ? AND status = 'completed'
            ORDER BY sub_part_index ASC, passe ASC""",
@@ -218,9 +234,14 @@ def _horizontal_rule(doc: Document) -> None:
 
 # ─── API publique ─────────────────────────────────────────────────────────────
 
-def build_course_docx(job_id: int, folder_id: int) -> Tuple[bytes, str]:
+def build_course_docx(job_id: int, folder_id: int, version: str = "current") -> Tuple[bytes, str]:
     """
     Produit un document Word .docx d'une journée de formation.
+
+    `version` :
+    - "current" (défaut) : texte actuel en DB (= post-révision si appliquée)
+    - "pre_review" : snapshot pris au finalize content (= avant révision)
+
     Retourne (docx_bytes, suggested_filename).
     """
     job = _get_formation_job(job_id)
@@ -236,7 +257,7 @@ def build_course_docx(job_id: int, folder_id: int) -> Tuple[bytes, str]:
     day_number = day_data.get("day_number", position + 1)
     day_title = day_data.get("title", f"Journée {day_number}")
 
-    segments = _get_segments_for_folder(folder_id)
+    segments = _get_segments_for_folder(folder_id, version=version)
     module_by_name = {
         sp.get("name"): sp.get("module_content", "")
         for sp in day_data.get("sub_parts", [])
@@ -304,6 +325,7 @@ def build_course_docx(job_id: int, folder_id: int) -> Tuple[bytes, str]:
     docx_bytes = buf.getvalue()
 
     slug = re.sub(r"[^a-zA-Z0-9]+", "-", job["tp_name"].lower()).strip("-")[:40]
-    filename = f"programme-{slug}-jour{day_number}.docx"
-    logger.info(f"✅ DOCX généré : {filename} ({len(docx_bytes):,} bytes, {total_words} mots)")
+    suffix = "" if version == "current" else f"-{version.replace('_', '-')}"
+    filename = f"programme-{slug}-jour{day_number}{suffix}.docx"
+    logger.info(f"✅ DOCX généré : {filename} ({len(docx_bytes):,} bytes, {total_words} mots, version={version})")
     return docx_bytes, filename

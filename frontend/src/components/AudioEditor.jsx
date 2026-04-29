@@ -46,6 +46,9 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState(null)
   const [status, setStatus] = useState(null)
+  const [analyzing, setAnalyzing] = useState(false)
+  const [bugRegions, setBugRegions] = useState([])    // [{start, end, severity}] en secondes
+  const bugRegionRefsRef = useRef([])                 // instances WaveSurfer Region pour cleanup
 
   const sasUrlRef = useRef(null)   // SAS URL courante (mise à jour après cut/replace)
 
@@ -78,9 +81,43 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
       barRadius: 2,
       height: 80,
       normalize: true,
+      minPxPerSec: 0, // auto-fit au chargement
+      autoScroll: true,
+      fillParent: true,
       plugins: [regions],
     })
     wsRef.current = ws
+
+    // Zoom trackpad / molette
+    const ZOOM_MIN = 0          // 0 = fit-container
+    const ZOOM_MAX = 800        // ~800 px/s = zoom très fin
+    const ZOOM_STEP = 1.15
+    let currentZoom = 0
+    const handleWheel = (e) => {
+      if (!wsRef.current || !duration) {
+        // fallback si duration pas encore dispo : utiliser getDuration
+      }
+      e.preventDefault()
+      const dur = wsRef.current?.getDuration() || 0
+      if (!dur) return
+      // pxPerSec actuel si jamais 0 → calculer d'après la largeur du container
+      if (!currentZoom) {
+        currentZoom = (waveRef.current?.clientWidth || 800) / dur
+      }
+      const delta = e.deltaY
+      if (delta < 0) {
+        currentZoom = Math.min(currentZoom * ZOOM_STEP, ZOOM_MAX)
+      } else {
+        currentZoom = Math.max(currentZoom / ZOOM_STEP, (waveRef.current?.clientWidth || 800) / dur)
+      }
+      try {
+        wsRef.current.zoom(currentZoom)
+      } catch (err) {
+        // zoom peut échouer si pas prêt
+      }
+    }
+    const waveEl = waveRef.current
+    waveEl?.addEventListener('wheel', handleWheel, { passive: false })
 
     // Charger via SAS URL (stream direct Azure, pas de proxy)
     fetchSasUrl()
@@ -100,8 +137,10 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
     regions.enableDragSelection({ color: 'rgba(124, 58, 237, 0.25)' })
 
     regions.on('region-created', (r) => {
-      // Supprimer les anciennes régions
-      regions.getRegions().forEach(old => { if (old.id !== r.id) old.remove() })
+      // Supprimer seulement la région utilisateur précédente (pas les régions bugs)
+      if (activeRegionRef.current) {
+        activeRegionRef.current.remove()
+      }
       activeRegionRef.current = r
       setRegion({ start: r.start * 1000, end: r.end * 1000 })
       setPreviewId(null)
@@ -115,8 +154,10 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
     })
 
     return () => {
+      waveEl?.removeEventListener('wheel', handleWheel)
       ws.destroy()
       stopStitchedPlayback()
+      bugRegionRefsRef.current = []
     }
   }, [darkMode, fetchSasUrl])
 
@@ -134,11 +175,69 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
   }
 
   const clearRegion = () => {
-    regionsRef.current?.getRegions().forEach(r => r.remove())
-    activeRegionRef.current = null
+    // Ne supprimer que la région utilisateur, pas les régions bugs
+    if (activeRegionRef.current) {
+      activeRegionRef.current.remove()
+      activeRegionRef.current = null
+    }
     setRegion(null)
     setPreviewId(null)
     setPreviewAudio(null)
+  }
+
+  const clearBugRegions = () => {
+    bugRegionRefsRef.current.forEach(r => { try { r.remove() } catch (e) {} })
+    bugRegionRefsRef.current = []
+    setBugRegions([])
+  }
+
+  const handleDetectBugs = async () => {
+    setAnalyzing(true)
+    setError(null)
+    clearBugRegions()
+    try {
+      const resp = await fetch(
+        apiUrl(`/api/hr/cours-folders/${folderId}/audio/${filename}/detect-bugs`),
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ seuil: 3.0, duree_min: 0.3 }),
+          credentials: 'include',
+        }
+      )
+      const data = await resp.json()
+      if (!data.success) {
+        setError(data.error || 'Erreur lors de l\'analyse')
+        return
+      }
+      setBugRegions(data.bugs)
+      // Ajouter les régions colorées sur la waveform
+      const refs = []
+      data.bugs.forEach(bug => {
+        const color = bug.severity >= 3
+          ? 'rgba(239, 68, 68, 0.30)'    // rouge vif → bug sévère
+          : bug.severity === 2
+          ? 'rgba(251, 146, 60, 0.30)'   // orange → bug modéré
+          : 'rgba(250, 204, 21, 0.25)'   // jaune → anomalie légère
+        const r = regionsRef.current?.addRegion({
+          start: bug.start,
+          end: bug.end,
+          color,
+          drag: false,
+          resize: false,
+        })
+        if (r) refs.push(r)
+      })
+      bugRegionRefsRef.current = refs
+      if (data.bugs.length === 0) {
+        setStatus('✅ Aucune anomalie détectée dans cet audio.')
+        setTimeout(() => setStatus(null), 4000)
+      }
+    } catch (e) {
+      setError('Erreur réseau lors de l\'analyse')
+    } finally {
+      setAnalyzing(false)
+    }
   }
 
   // ── Écoute splicée côté client (Web Audio API) ──
@@ -430,6 +529,38 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
               <p className="text-xs" style={{ color: textMuted }}>
                 Faites glisser sur la forme d'onde pour sélectionner une région
               </p>
+            )}
+          </div>
+
+          {/* Détection bugs */}
+          <div className="flex items-center gap-3 flex-wrap">
+            <button
+              onClick={handleDetectBugs}
+              disabled={loading || analyzing}
+              className="flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-semibold disabled:opacity-50 transition-all"
+              style={{ backgroundColor: analyzing ? '#78350f' : '#92400e', color: '#fef3c7', border: '1px solid #d97706' }}
+            >
+              <Icon name={analyzing ? 'hourglass_empty' : 'troubleshoot'} style={{ fontSize: '16px' }} />
+              {analyzing ? 'Analyse en cours...' : 'Détecter les bugs vocaux'}
+            </button>
+
+            {bugRegions.length > 0 && (
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-medium px-3 py-1.5 rounded-lg" style={{ backgroundColor: 'rgba(239,68,68,0.15)', color: '#f87171' }}>
+                  {bugRegions.length} anomalie{bugRegions.length > 1 ? 's' : ''} détectée{bugRegions.length > 1 ? 's' : ''}
+                  {' '}·{' '}
+                  <span style={{ color: '#ef4444' }}>■</span> sévère{' '}
+                  <span style={{ color: '#fb923c' }}>■</span> modéré{' '}
+                  <span style={{ color: '#facc15' }}>■</span> léger
+                </span>
+                <button
+                  onClick={clearBugRegions}
+                  className="text-xs px-2 py-1 rounded-lg hover:opacity-70"
+                  style={{ color: textMuted }}
+                >
+                  <Icon name="close" style={{ fontSize: '13px' }} /> Effacer
+                </button>
+              </div>
             )}
           </div>
 
