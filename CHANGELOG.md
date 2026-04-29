@@ -37,6 +37,12 @@ Placement :
 
 Implémentation pure CSS (divs absolus avec `calc(25% - 10px)` pour cibler les centres de colonnes du grid `1fr 1fr` gap `40px`). Couleur `rgba(167, 139, 250, 0.35)` (violet sobre, accent du projet). Aucune dépendance ajoutée, aucun SVG.
 
+### tweak: API DeepSeek utilise deepseek-v4-pro (au lieu de -flash)
+
+Sur demande utilisateur, l'option `api_deepseek` du dropdown de création de plateforme envoie désormais `model: 'pro'` (mappé vers `deepseek-v4-pro`) plutôt que `flash`. Pro = top modèle DeepSeek, qualité supérieure pour la génération de cours 90k mots / journée. Coût plus élevé mais reste largement inférieur à Anthropic Sonnet.
+
+Fichier : `frontend/src/pages/HRDashboard.jsx` (1 ligne payload + libellé dropdown).
+
 ### feat: choix API Anthropic / API DeepSeek dans la création de plateforme
 
 Le dropdown "Mode d'exécution des étapes IA" de la modale "Nouvelle plateforme" (HR Dashboard) propose maintenant **4 options** au lieu de 3 :

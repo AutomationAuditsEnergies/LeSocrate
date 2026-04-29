@@ -451,7 +451,7 @@ export default function HRDashboard() {
                 body: JSON.stringify({
                   tts_mode: autoPilotTts,
                   use_claude_code: autoPilotMode === 'claude_code',
-                  model: autoPilotMode === 'api_deepseek' ? 'flash' : 'sonnet',
+                  model: autoPilotMode === 'api_deepseek' ? 'pro' : 'sonnet',
                 }),
               },
             )
@@ -1301,7 +1301,7 @@ function CreatePlatformView({
                       style={{ backgroundColor: darkMode ? '#1e293b' : '#ffffff', color: darkMode ? '#f1f5f9' : '#1e293b', border: `1px solid ${darkMode ? '#334155' : '#e2e8f0'}` }}
                     >
                       <option value="api">API Anthropic — paie ta clé ANTHROPIC_API_KEY (~5–7$ pour 7h Sonnet)</option>
-                      <option value="api_deepseek">API DeepSeek — paie ta clé DEEPSEEK_API_KEY (deepseek-v4-flash)</option>
+                      <option value="api_deepseek">API DeepSeek — paie ta clé DEEPSEEK_API_KEY (deepseek-v4-pro, top modèle)</option>
                       <option value="claude_code">Claude Code local — forfait Pro/Max via OAuth (gratuit côté API)</option>
                       <option value="test">TEST — injecte des DOCX/TXT pré-rédigés (skip génération, ~5 min)</option>
                     </select>
