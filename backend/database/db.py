@@ -243,6 +243,20 @@ def init_database():
             """)
         except Exception:
             pass  # Colonne déjà présente
+
+        # Note : le carryover bloc 7 → folder suivant est porté par
+        # `content_generation_jobs.carryover_in_text/out_text` (cf. migration plus
+        # bas). Pas de colonne carryover sur `cours_folders`.
+
+        # Migration : formation_job_id — lie un folder au pipeline qui l'a créé.
+        # Évite que _determine_next_ap_step compte les segments de pipelines
+        # différents sur la même plateforme (bug multi-run).
+        try:
+            cursor.execute("ALTER TABLE cours_folders ADD COLUMN formation_job_id INTEGER")
+            logger.info("✅ Colonne formation_job_id ajoutée à cours_folders")
+        except Exception:
+            pass  # Colonne déjà présente
+
         logger.info("✅ Table cours_folders créée/vérifiée")
 
         # Table des documents de cours (PDFs + audios générés)
@@ -341,6 +355,16 @@ def init_database():
         if "module_contents" not in cg_columns:
             cursor.execute("ALTER TABLE content_generation_jobs ADD COLUMN module_contents TEXT DEFAULT '{}'")
             logger.info("✅ Colonne module_contents ajoutée à content_generation_jobs")
+        _carryover_cols = {
+            "carryover_in_text": "TEXT DEFAULT ''",
+            "carryover_in_source_folder_id": "INTEGER",
+            "carryover_out_text": "TEXT DEFAULT ''",
+            "carryover_out_target_folder_id": "INTEGER",
+        }
+        for col, col_type in _carryover_cols.items():
+            if col not in cg_columns:
+                cursor.execute(f"ALTER TABLE content_generation_jobs ADD COLUMN {col} {col_type}")
+                logger.info(f"✅ Colonne {col} ajoutée à content_generation_jobs")
 
         # Table des jobs pipeline formation automatisé
         cursor.execute("""
@@ -380,6 +404,25 @@ def init_database():
         for col in ("kb_generated_via", "global_program_generated_via", "daily_programs_generated_via"):
             if col not in fpj_cols:
                 cursor.execute(f"ALTER TABLE formation_pipeline_jobs ADD COLUMN {col} TEXT")
+                logger.info(f"✅ Colonne {col} ajoutée à formation_pipeline_jobs")
+
+        # State machine auto-pilot persistée (résiste aux restarts Azure App Service)
+        _ap_cols = {
+            "auto_pilot_enabled": "INTEGER DEFAULT 0",
+            "auto_pilot_step":    "TEXT",
+            "auto_pilot_model":   "TEXT",
+            "auto_pilot_tts_mode": "TEXT",
+            "auto_pilot_use_cc":  "INTEGER DEFAULT 0",
+            "auto_pilot_skip_vs": "INTEGER DEFAULT 0",
+            "auto_pilot_volume_done": "INTEGER DEFAULT 0",
+            "auto_pilot_post_review_docs_done": "INTEGER DEFAULT 0",
+            "auto_pilot_error":   "TEXT",
+            "auto_pilot_locked_at": "TIMESTAMP",
+            "auto_pilot_lock_owner": "TEXT",
+        }
+        for col, col_type in _ap_cols.items():
+            if col not in fpj_cols:
+                cursor.execute(f"ALTER TABLE formation_pipeline_jobs ADD COLUMN {col} {col_type}")
                 logger.info(f"✅ Colonne {col} ajoutée à formation_pipeline_jobs")
 
         # ─── Couche 1 : Knowledge Base enrichie depuis REAC ──────────────────

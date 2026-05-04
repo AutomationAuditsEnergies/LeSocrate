@@ -43,6 +43,10 @@ export default function HRDashboard() {
   const [courseTimePlatformId, setCourseTimePlatformId] = useState(1)
   const [deleteConfirm, setDeleteConfirm] = useState(null)
   const [deletingItem, setDeletingItem] = useState(false)
+  // Type-to-confirm pour le delete plateforme : l'admin doit retaper le nom
+  // exact pour activer le bouton destructif (registre GitHub/Stripe — friction
+  // proportionnelle à l'irréversibilité de l'action).
+  const [deleteConfirmTypedName, setDeleteConfirmTypedName] = useState('')
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [newPlatformName, setNewPlatformName] = useState('')
   const [creating, setCreating] = useState(false)
@@ -219,12 +223,69 @@ export default function HRDashboard() {
           fetchPlatforms(deleteConfirm.platformId)
           setDeleteConfirm(null)
         }
+      } else if (deleteConfirm.type === 'module') {
+        if (deleteConfirmTypedName !== deleteConfirm.confirmKey) return
+        const resp = await fetch(apiUrl(`/api/hr/formation-modules/${deleteConfirm.moduleId}`), {
+          method: 'DELETE', credentials: 'include',
+        })
+        const data = await resp.json()
+        if (data.success) {
+          fetchModules()
+          setDeleteConfirm(null)
+          setDeleteConfirmTypedName('')
+        } else {
+          alert(data.error || 'Erreur lors de la suppression du module')
+        }
+      } else if (deleteConfirm.type === 'platform') {
+        if (deleteConfirmTypedName !== deleteConfirm.platformName) return
+        const resp = await fetch(apiUrl(`/api/hr/platforms/${deleteConfirm.platformId}`), {
+          method: 'DELETE', credentials: 'include',
+        })
+        const data = await resp.json()
+        if (data.success) {
+          fetchPlatforms()
+          fetchModules()  // les modules "fait main" associés ont aussi été supprimés
+          setDeleteConfirm(null)
+          setDeleteConfirmTypedName('')
+          if (selectedPlatform?.id === deleteConfirm.platformId) setSelectedPlatform(null)
+          if (expandedPlatform === deleteConfirm.platformId) setExpandedPlatform(null)
+        } else {
+          alert(data.error || 'Erreur lors de la suppression de la plateforme')
+        }
       }
     } catch (e) {
       console.error('Erreur suppression:', e)
     } finally {
       setDeletingItem(false)
     }
+  }
+
+  const handleDeleteModule = (moduleId) => {
+    const mod = modules.find((m) => m.id === moduleId)
+    if (!mod) return
+    // Clé de confirmation = "TP CRCD · 2026-v5" — assez précise pour
+    // forcer une lecture attentive sans rendre la saisie pénible.
+    const confirmKey = `${mod.tp_name} · ${mod.version}`
+    setDeleteConfirmTypedName('')
+    setDeleteConfirm({
+      type: 'module',
+      moduleId,
+      tpName: mod.tp_name,
+      version: mod.version,
+      rncpCode: mod.rncp_code,
+      confirmKey,
+    })
+  }
+
+  const handleDeletePlatform = (platformId) => {
+    const platform = platforms.find((p) => p.id === platformId)
+    if (!platform) return
+    setDeleteConfirmTypedName('')
+    setDeleteConfirm({
+      type: 'platform',
+      platformId,
+      platformName: platform.name,
+    })
   }
 
   const handlePlayAudio = (audio) => {
@@ -614,6 +675,7 @@ export default function HRDashboard() {
                 setFormationMode('existing')
                 setSelectedModuleId(String(moduleId))
               }}
+              onDeleteModule={handleDeleteModule}
             />
           ) : showCreateModal ? (
             <CreatePlatformView
@@ -678,6 +740,7 @@ export default function HRDashboard() {
               onPlayAudio={handlePlayAudio}
               onPdfUpload={handlePdfUpload}
               onDeletePdf={handleDeletePdf}
+              onDeletePlatform={handleDeletePlatform}
             />
           )}
         </div>
@@ -734,8 +797,11 @@ export default function HRDashboard() {
         />
       )}
 
-      {/* Modal confirmation suppression */}
-      {deleteConfirm && (
+      {/* Modal confirmation suppression — branche par type :
+          - audio/pdf : confirmation simple (atomique, peu d'impact)
+          - platform : confirmation enrichie + type-to-confirm (cascade,
+            irréversibilité, registre Examiner's Desk per DESIGN.md). */}
+      {deleteConfirm && deleteConfirm.type !== 'platform' && (
         <div
           className="fixed inset-0 z-[60] flex items-center justify-center p-4"
           style={{ backgroundColor: 'rgba(0, 0, 0, 0.6)' }}
@@ -788,6 +854,346 @@ export default function HRDashboard() {
         </div>
       )}
 
+      {/* ── Modal de suppression plateforme — registre Examiner's Desk ─────
+          Cascade : tout le contenu pédagogique (cours, segments, KB, jobs
+          pipeline) + les modules "fait main" liés (la plateforme = le module).
+          Les modules pipeline qui pointaient vers cette plateforme restent au
+          catalogue (source_platform_id devient NULL côté backend). */}
+      {deleteConfirm && deleteConfirm.type === 'platform' && (() => {
+        const matched = deleteConfirmTypedName === deleteConfirm.platformName
+        return (
+          <div
+            className="fixed inset-0 z-[60] flex items-center justify-center p-4"
+            style={{ backgroundColor: 'rgba(0, 0, 0, 0.6)' }}
+            onClick={() => {
+              if (!deletingItem) {
+                setDeleteConfirm(null)
+                setDeleteConfirmTypedName('')
+              }
+            }}
+          >
+            <div
+              className="bg-white rounded-2xl shadow-2xl overflow-hidden"
+              style={{ width: '100%', maxWidth: '480px' }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div
+                className="flex items-start gap-3 px-6 py-5"
+                style={{ borderBottom: '1px solid #e2e8f0' }}
+              >
+                <div
+                  className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-lg"
+                  style={{ backgroundColor: '#fee2e2' }}
+                >
+                  <Icon name="delete_forever" style={{ color: '#dc2626', fontSize: '20px' }} />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <h3 className="text-base font-semibold leading-snug tracking-tight" style={{ color: '#0f172a' }}>
+                    Supprimer la plateforme
+                  </h3>
+                  <p className="mt-0.5 text-xs" style={{ color: '#64748b' }}>
+                    Action définitive · ne peut pas être annulée
+                  </p>
+                </div>
+              </div>
+
+              <div className="px-6 py-5 space-y-4">
+                <p className="text-sm leading-relaxed" style={{ color: '#334155' }}>
+                  Vous allez supprimer définitivement la plateforme{' '}
+                  <strong style={{ color: '#0f172a' }}>{deleteConfirm.platformName}</strong>{' '}
+                  et son contenu pédagogique en base.
+                </p>
+
+                <div
+                  className="rounded-lg px-4 py-3"
+                  style={{ backgroundColor: '#fef2f2', border: '1px solid #fee2e2' }}
+                >
+                  <p
+                    className="text-[10px] font-semibold uppercase mb-2"
+                    style={{ color: '#b91c1c', letterSpacing: '0.18em' }}
+                  >
+                    Sera supprimé
+                  </p>
+                  <ul className="space-y-1 text-xs leading-relaxed" style={{ color: '#7f1d1d' }}>
+                    <li>· Cours générés (textes, segments, passes IA)</li>
+                    <li>· Knowledge base et programmes journées</li>
+                    <li>· Dossiers cours, configuration horaire</li>
+                    <li>· Jobs de pipeline liés à cette promo</li>
+                    <li>· Module "fait main" associé (si la plateforme en a un)</li>
+                  </ul>
+                </div>
+
+                <div
+                  className="rounded-lg px-4 py-3"
+                  style={{ backgroundColor: '#f8fafc', border: '1px solid #e2e8f0' }}
+                >
+                  <p
+                    className="text-[10px] font-semibold uppercase mb-2"
+                    style={{ color: '#64748b', letterSpacing: '0.18em' }}
+                  >
+                    Préservé
+                  </p>
+                  <ul className="space-y-1 text-xs leading-relaxed" style={{ color: '#475569' }}>
+                    <li>· Modules pipeline réutilisables (restent au catalogue)</li>
+                    <li>· Logs et historique des visites (audit trail)</li>
+                    <li>· Blobs Azure (PDFs, audios) — à nettoyer manuellement si besoin</li>
+                  </ul>
+                </div>
+
+                <div className="space-y-1.5">
+                  <label
+                    htmlFor="delete-platform-confirm-input"
+                    className="block text-xs font-medium"
+                    style={{ color: '#334155' }}
+                  >
+                    Pour confirmer, tapez le nom exact de la plateforme :{' '}
+                    <span
+                      className="font-mono text-xs px-1.5 py-0.5 rounded"
+                      style={{ backgroundColor: '#f1f5f9', color: '#0f172a' }}
+                    >
+                      {deleteConfirm.platformName}
+                    </span>
+                  </label>
+                  <input
+                    id="delete-platform-confirm-input"
+                    type="text"
+                    autoFocus
+                    autoComplete="off"
+                    value={deleteConfirmTypedName}
+                    onChange={(e) => setDeleteConfirmTypedName(e.target.value)}
+                    disabled={deletingItem}
+                    placeholder={deleteConfirm.platformName}
+                    className="w-full rounded-lg px-3 py-2 text-sm outline-none transition-colors focus:ring-2"
+                    style={{
+                      backgroundColor: '#ffffff',
+                      color: '#0f172a',
+                      border: `1px solid ${matched ? '#86efac' : '#e2e8f0'}`,
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && matched && !deletingItem) confirmDelete()
+                      if (e.key === 'Escape' && !deletingItem) {
+                        setDeleteConfirm(null)
+                        setDeleteConfirmTypedName('')
+                      }
+                    }}
+                  />
+                </div>
+              </div>
+
+              <div
+                className="flex gap-3 px-6 py-4"
+                style={{ borderTop: '1px solid #e2e8f0', backgroundColor: '#fafafa' }}
+              >
+                <button
+                  onClick={() => {
+                    setDeleteConfirm(null)
+                    setDeleteConfirmTypedName('')
+                  }}
+                  disabled={deletingItem}
+                  className="flex-1 rounded-lg px-4 py-2.5 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-60"
+                  style={{ backgroundColor: 'transparent', color: '#334155', border: '1px solid #e2e8f0' }}
+                >
+                  Annuler
+                </button>
+                <button
+                  onClick={confirmDelete}
+                  disabled={deletingItem || !matched}
+                  className="flex-1 rounded-lg px-4 py-2.5 text-sm font-semibold text-white transition-colors disabled:cursor-not-allowed"
+                  style={{
+                    backgroundColor: matched ? '#dc2626' : '#fca5a5',
+                    opacity: deletingItem ? 0.6 : 1,
+                  }}
+                  onMouseEnter={(e) => { if (matched && !deletingItem) e.currentTarget.style.backgroundColor = '#b91c1c' }}
+                  onMouseLeave={(e) => { if (matched && !deletingItem) e.currentTarget.style.backgroundColor = '#dc2626' }}
+                >
+                  {deletingItem ? 'Suppression…' : 'Supprimer définitivement'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )
+      })()}
+
+      {/* ── Modal de suppression module catalogue — registre Examiner's Desk ─
+          Le module est un produit durable (1 RNCP = 1 module) — supprimer
+          le retire du catalogue mais préserve la pipeline source et la
+          plateforme source. Bloqué côté backend si une plateforme l'utilise
+          encore (réponse 409 explicite). Type-to-confirm sur "<TP> · <vN>"
+          pour forcer une lecture attentive du module à supprimer. */}
+      {deleteConfirm && deleteConfirm.type === 'module' && (() => {
+        const matched = deleteConfirmTypedName === deleteConfirm.confirmKey
+        return (
+          <div
+            className="fixed inset-0 z-[60] flex items-center justify-center p-4"
+            style={{ backgroundColor: 'rgba(0, 0, 0, 0.6)' }}
+            onClick={() => {
+              if (!deletingItem) {
+                setDeleteConfirm(null)
+                setDeleteConfirmTypedName('')
+              }
+            }}
+          >
+            <div
+              className="bg-white rounded-2xl shadow-2xl overflow-hidden"
+              style={{ width: '100%', maxWidth: '480px' }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              {/* Header */}
+              <div
+                className="flex items-start gap-3 px-6 py-5"
+                style={{ borderBottom: '1px solid #e2e8f0' }}
+              >
+                <div
+                  className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-lg"
+                  style={{ backgroundColor: '#fee2e2' }}
+                >
+                  <Icon name="delete_forever" style={{ color: '#dc2626', fontSize: '20px' }} />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <h3 className="text-base font-semibold leading-snug tracking-tight" style={{ color: '#0f172a' }}>
+                    Retirer ce module du catalogue
+                  </h3>
+                  <p className="mt-0.5 text-xs" style={{ color: '#64748b' }}>
+                    Le module disparaît de la liste · pipeline source préservée
+                  </p>
+                </div>
+              </div>
+
+              {/* Body */}
+              <div className="px-6 py-5 space-y-4">
+                <div
+                  className="rounded-lg px-4 py-3"
+                  style={{ backgroundColor: '#f8fafc', border: '1px solid #e2e8f0' }}
+                >
+                  <p
+                    className="text-[10px] font-semibold uppercase mb-1.5"
+                    style={{ color: '#64748b', letterSpacing: '0.18em' }}
+                  >
+                    Module concerné
+                  </p>
+                  <p className="text-sm font-semibold" style={{ color: '#0f172a' }}>
+                    {deleteConfirm.tpName}
+                  </p>
+                  <p
+                    className="mt-0.5 text-xs"
+                    style={{ color: '#64748b', fontVariantNumeric: 'tabular-nums' }}
+                  >
+                    RNCP {deleteConfirm.rncpCode || '—'} · version{' '}
+                    <span style={{ fontFamily: '"Fira Code", monospace', color: '#334155' }}>
+                      {deleteConfirm.version}
+                    </span>
+                  </p>
+                </div>
+
+                <div
+                  className="rounded-lg px-4 py-3"
+                  style={{ backgroundColor: '#fef2f2', border: '1px solid #fee2e2' }}
+                >
+                  <p
+                    className="text-[10px] font-semibold uppercase mb-2"
+                    style={{ color: '#b91c1c', letterSpacing: '0.18em' }}
+                  >
+                    Sera retiré
+                  </p>
+                  <ul className="space-y-1 text-xs leading-relaxed" style={{ color: '#7f1d1d' }}>
+                    <li>· L'entrée du module dans le catalogue</li>
+                    <li>· La possibilité de l'utiliser pour créer de nouvelles promos</li>
+                  </ul>
+                </div>
+
+                <div
+                  className="rounded-lg px-4 py-3"
+                  style={{ backgroundColor: '#f8fafc', border: '1px solid #e2e8f0' }}
+                >
+                  <p
+                    className="text-[10px] font-semibold uppercase mb-2"
+                    style={{ color: '#64748b', letterSpacing: '0.18em' }}
+                  >
+                    Préservé
+                  </p>
+                  <ul className="space-y-1 text-xs leading-relaxed" style={{ color: '#475569' }}>
+                    <li>· La pipeline source (jobs, KB, programmes journées)</li>
+                    <li>· La plateforme source et ses cours générés</li>
+                    <li>· Les blobs Azure (PDFs, audios) du module</li>
+                    <li>· Les promos déjà créées qui utilisent ce module continuent de fonctionner</li>
+                  </ul>
+                </div>
+
+                <div className="space-y-1.5">
+                  <label
+                    htmlFor="delete-module-confirm-input"
+                    className="block text-xs font-medium"
+                    style={{ color: '#334155' }}
+                  >
+                    Pour confirmer, tapez :{' '}
+                    <span
+                      className="font-mono text-xs px-1.5 py-0.5 rounded"
+                      style={{ backgroundColor: '#f1f5f9', color: '#0f172a' }}
+                    >
+                      {deleteConfirm.confirmKey}
+                    </span>
+                  </label>
+                  <input
+                    id="delete-module-confirm-input"
+                    type="text"
+                    autoFocus
+                    autoComplete="off"
+                    value={deleteConfirmTypedName}
+                    onChange={(e) => setDeleteConfirmTypedName(e.target.value)}
+                    disabled={deletingItem}
+                    placeholder={deleteConfirm.confirmKey}
+                    className="w-full rounded-lg px-3 py-2 text-sm outline-none transition-colors focus:ring-2"
+                    style={{
+                      backgroundColor: '#ffffff',
+                      color: '#0f172a',
+                      border: `1px solid ${matched ? '#86efac' : '#e2e8f0'}`,
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && matched && !deletingItem) confirmDelete()
+                      if (e.key === 'Escape' && !deletingItem) {
+                        setDeleteConfirm(null)
+                        setDeleteConfirmTypedName('')
+                      }
+                    }}
+                  />
+                </div>
+              </div>
+
+              {/* Footer */}
+              <div
+                className="flex gap-3 px-6 py-4"
+                style={{ borderTop: '1px solid #e2e8f0', backgroundColor: '#fafafa' }}
+              >
+                <button
+                  onClick={() => {
+                    setDeleteConfirm(null)
+                    setDeleteConfirmTypedName('')
+                  }}
+                  disabled={deletingItem}
+                  className="flex-1 rounded-lg px-4 py-2.5 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-60"
+                  style={{ backgroundColor: 'transparent', color: '#334155', border: '1px solid #e2e8f0' }}
+                >
+                  Annuler
+                </button>
+                <button
+                  onClick={confirmDelete}
+                  disabled={deletingItem || !matched}
+                  className="flex-1 rounded-lg px-4 py-2.5 text-sm font-semibold text-white transition-colors disabled:cursor-not-allowed"
+                  style={{
+                    backgroundColor: matched ? '#dc2626' : '#fca5a5',
+                    opacity: deletingItem ? 0.6 : 1,
+                  }}
+                  onMouseEnter={(e) => { if (matched && !deletingItem) e.currentTarget.style.backgroundColor = '#b91c1c' }}
+                  onMouseLeave={(e) => { if (matched && !deletingItem) e.currentTarget.style.backgroundColor = '#dc2626' }}
+                >
+                  {deletingItem ? 'Suppression…' : 'Retirer du catalogue'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )
+      })()}
+
     </div>
   )
 }
@@ -832,6 +1238,7 @@ function PlatformCardsView({
   onPlayAudio,
   onPdfUpload,
   onDeletePdf,
+  onDeletePlatform,
 }) {
   const totalPages = Math.ceil(platforms.length / cardsPerPage)
 
@@ -884,10 +1291,36 @@ function PlatformCardsView({
             onPlayAudio={onPlayAudio}
             onPdfUpload={(file) => onPdfUpload(p.id, file)}
             onDeletePdf={() => onDeletePdf(p.id)}
+            onDeletePlatform={() => onDeletePlatform(p.id)}
           />
         ))}
       </div>
     </>
+  )
+}
+
+// Bouton icône-seule pour supprimer un module du catalogue.
+// Slate au repos pour ne pas crier "danger" en permanence ; vire rose au
+// hover (cf. DESIGN.md §Audio Item delete : muted at rest → rose on hover).
+function ModuleDeleteButton({ onClick, colors, label }) {
+  const [hover, setHover] = useState(false)
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      title={label}
+      onClick={onClick}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      className="flex h-8 w-8 items-center justify-center rounded-lg transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-400/40"
+      style={{
+        backgroundColor: hover ? 'rgba(220, 38, 38, 0.08)' : 'transparent',
+        color: hover ? '#dc2626' : colors.textMuted,
+        border: `1px solid ${hover ? 'rgba(220, 38, 38, 0.25)' : colors.border}`,
+      }}
+    >
+      <Icon name="delete_outline" className="text-base" />
+    </button>
   )
 }
 
@@ -899,6 +1332,7 @@ function ModulesCatalogueView({
   onBack,
   onCreateModule,
   onUseModule,
+  onDeleteModule,
 }) {
   return (
     <section
@@ -1046,6 +1480,22 @@ function ModulesCatalogueView({
                         Brouillon
                       </span>
                     )}
+                    {/* Badge "Fait main" — modules sans pipeline source
+                        (plateformes vides où l'admin uploade le contenu lui-même).
+                        Slate neutre, lecture rapide, ne consomme pas l'accent violet. */}
+                    {!m.source_pipeline_job_id && (
+                      <span
+                        className="flex-shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium uppercase"
+                        style={{
+                          backgroundColor: colors.innerBg,
+                          color: colors.textMuted,
+                          border: `1px solid ${colors.border}`,
+                          letterSpacing: '0.15em',
+                        }}
+                      >
+                        Fait main
+                      </span>
+                    )}
                   </div>
                   <p
                     className="mt-1 truncate text-xs"
@@ -1063,7 +1513,7 @@ function ModulesCatalogueView({
                   </p>
                 </div>
 
-                <div className="flex-shrink-0">
+                <div className="flex flex-shrink-0 items-center gap-2">
                   {m.reusable ? (
                     <button
                       onClick={() => onUseModule(m.id)}
@@ -1078,6 +1528,16 @@ function ModulesCatalogueView({
                     <span className="text-xs" style={{ color: colors.textMuted }}>
                       {m.nb_folders === 0 ? 'Cours non générés' : 'Non réutilisable'}
                     </span>
+                  )}
+                  {/* Bouton supprimer module — icône seule, slate au repos,
+                      tinte rose au hover. La confirmation passe par la modale
+                      type-to-confirm (registre Examiner's Desk). */}
+                  {onDeleteModule && (
+                    <ModuleDeleteButton
+                      onClick={() => onDeleteModule(m.id)}
+                      colors={colors}
+                      label={`Retirer ${m.tp_name} ${m.version} du catalogue`}
+                    />
                   )}
                 </div>
               </li>
@@ -1881,10 +2341,11 @@ function AudioCard({ title, icon, bgColor, audios, iconColor, buttonColor }) {
 // déménagés dans CoursFoldersModal (la vue où l'admin voit les audios).
 function PlatformCard({
   platform: p, expanded, audios, audiosLoading, playingAudio, pdfUploading,
-  audioRef, colors, darkMode, onExpand, onOpenPdfModal, onOpenCourseTimeModal, onDeleteAudio, onPlayAudio, onPdfUpload, onDeletePdf, onOpenCoursFolders,
+  audioRef, colors, darkMode, onExpand, onOpenPdfModal, onOpenCourseTimeModal, onDeleteAudio, onPlayAudio, onPdfUpload, onDeletePdf, onOpenCoursFolders, onDeletePlatform,
 }) {
   const pdfInputId = `pdf-input-${p.id}`
   const platformThumbnail = getPlatformThumbnail(p)
+  const [deleteHover, setDeleteHover] = useState(false)
 
   return (
     <div
@@ -1895,6 +2356,32 @@ function PlatformCard({
         boxShadow: darkMode ? 'none' : '0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px -1px rgba(0, 0, 0, 0.1)'
       }}
     >
+      {/* Bouton supprimer plateforme — z-30 pour rester au-dessus des
+          overlays inactif/pending/error (z-20). Slate muted au repos avec
+          backdrop-blur (visible par-dessus le thumbnail), tinte rose au hover. */}
+      {onDeletePlatform && (
+        <button
+          type="button"
+          aria-label={`Supprimer la plateforme ${p.name}`}
+          title="Supprimer la plateforme"
+          onClick={(e) => {
+            e.stopPropagation()
+            onDeletePlatform()
+          }}
+          onMouseEnter={() => setDeleteHover(true)}
+          onMouseLeave={() => setDeleteHover(false)}
+          className="absolute right-3 top-3 z-30 flex h-8 w-8 items-center justify-center rounded-lg transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-400/40"
+          style={{
+            backgroundColor: deleteHover ? (darkMode ? 'rgba(220, 38, 38, 0.18)' : '#fee2e2') : (darkMode ? 'rgba(15, 23, 42, 0.55)' : 'rgba(255, 255, 255, 0.85)'),
+            color: deleteHover ? '#dc2626' : colors.textMuted,
+            border: `1px solid ${deleteHover ? 'rgba(220, 38, 38, 0.3)' : (darkMode ? 'rgba(255,255,255,0.08)' : 'rgba(15, 23, 42, 0.06)')}`,
+            backdropFilter: 'blur(4px)',
+          }}
+        >
+          <Icon name="delete_outline" className="text-base" />
+        </button>
+      )}
+
       {/* Inactive overlay */}
       {!p.active && (
         <div

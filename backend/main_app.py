@@ -20,7 +20,7 @@ from routes.debug_routes import debug_bp
 from routes.slides_routes import slides_bp
 from routes.chat_routes import chat_bp
 from routes.hr_routes import create_hr_blueprint
-from routes.formation_routes import formation_bp
+from routes.formation_routes import formation_bp, start_auto_pilot_watchdog
 
 # SocketIO handlers
 from socketio_handlers.handlers import register_socketio_handlers
@@ -134,9 +134,12 @@ def platform_info():
 register_socketio_handlers(socketio)
 logger.info("✅ Gestionnaires SocketIO enregistrés")
 
-# Initialisation de la base de données
+# Initialisation de la base de données (migrations incluses — doit précéder boot recovery)
 init_database()
 logger.info("✅ Base de données initialisée")
+
+# Watchdog après init DB : reprend les auto-pilots interrompus ou locks zombies
+start_auto_pilot_watchdog()
 
 
 if __name__ == "__main__":

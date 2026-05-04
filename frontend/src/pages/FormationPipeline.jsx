@@ -241,6 +241,13 @@ function voiceColor(t) {
   if (t === 'mock') return '#94a3b8'
   return '#94a3b8'
 }
+function pipelineModelLabel(model) {
+  if (model === 'pro' || model === 'deepseek-v4-pro') return 'DeepSeek Pro'
+  if (model === 'flash' || model === 'deepseek-v4-flash') return 'DeepSeek Flash'
+  if (model === 'haiku' || String(model || '').includes('haiku')) return 'Claude Haiku'
+  if (model === 'sonnet' || String(model || '').includes('sonnet')) return 'Claude Sonnet'
+  return model || 'modèle par défaut'
+}
 
 // ─── Styles communs ───────────────────────────────────────────────────────────
 const S = {
@@ -442,6 +449,7 @@ function NewJobForm({ onCreated }) {
   const [tpName, setTpName] = useState('')
   const [rncpCode, setRncpCode] = useState('')
   const [hours, setHours] = useState('')
+  const [model, setModel] = useState('pro')
   const [creating, setCreating] = useState(false)
   const [error, setError] = useState('')
 
@@ -462,6 +470,7 @@ function NewJobForm({ onCreated }) {
           tp_name: tpName.trim(),
           rncp_code: rncpCode.trim().replace(/^RNCP/i, ''),
           total_hours: parseInt(hours),
+          model,
         }),
       })
       const data = await resp.json()
@@ -533,6 +542,23 @@ function NewJobForm({ onCreated }) {
             → <strong style={{ color: '#a78bfa' }}>{nbDays} journée{nbDays > 1 ? 's' : ''}</strong> de cours de 7h
           </div>
         )}
+      </div>
+
+      <div style={{ marginBottom: '16px' }}>
+        <label style={S.label}>Modèle IA pour toute la pipeline</label>
+        <select
+          style={S.input}
+          value={model}
+          onChange={e => setModel(e.target.value)}
+        >
+          <option value="pro">DeepSeek Pro</option>
+          <option value="flash">DeepSeek Flash</option>
+          <option value="sonnet">Claude Sonnet</option>
+          <option value="haiku">Claude Haiku</option>
+        </select>
+        <div style={{ fontSize: '11px', color: '#475569', marginTop: '4px' }}>
+          Ce choix sera repris par la génération, la sécurité volume, la révision conformité et les relances.
+        </div>
       </div>
 
       {error && <div style={{ color: '#f87171', fontSize: '13px', marginBottom: '12px' }}>{error}</div>}
@@ -1406,6 +1432,9 @@ export default function FormationPipeline() {
   const [safetyRunning, setSafetyRunning] = useState({})            // { [folderId]: true }
   const [safetyError, setSafetyError] = useState('')
   const [safetyModel, setSafetyModel] = useState('sonnet')
+  useEffect(() => {
+    if (job?.auto_pilot_model) setSafetyModel(job.auto_pilot_model)
+  }, [job?.auto_pilot_model])
 
   const fetchVolumeAudit = useCallback(async (jobId) => {
     if (!jobId) return
@@ -1453,7 +1482,7 @@ export default function FormationPipeline() {
     return () => clearInterval(interval)
   }, [safetyRunning, selectedJobId, fetchVolumeAudit, fetchContentFolders])
 
-  const handleLaunchVolumeSafety = async (folderId, mode = 'cc') => {
+  const handleLaunchVolumeSafety = async (folderId, mode = null) => {
     setSafetyError('')
     setSafetyRunning(prev => ({ ...prev, [folderId]: true }))
     try {
@@ -1463,7 +1492,7 @@ export default function FormationPipeline() {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           credentials: 'include',
-          body: JSON.stringify({ model: safetyModel, mode }),
+          body: JSON.stringify(mode ? { model: safetyModel, mode } : { model: safetyModel }),
         },
       )
       const data = await resp.json()
@@ -1607,7 +1636,7 @@ export default function FormationPipeline() {
   // - basicTts=true   → gTTS (Google, voix basique gratuite) — vraie voix, utile
   //                      pour vérifier le flux et écouter le texte sans payer Fish
   // - (par défaut)    → Fish Audio S2-Pro (voix studio payante)
-  const handleLaunchAudio = async (mock = false, basicTts = false) => {
+  const handleLaunchAudio = async (mock = false, basicTts = false, syncSlides = false, autoGenerateSlides = false) => {
     setLaunchingAudio(true)
     setAudioError('')
     try {
@@ -1615,7 +1644,12 @@ export default function FormationPipeline() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
-        body: JSON.stringify({ mock, basic_tts: basicTts }),
+        body: JSON.stringify({
+          mock,
+          basic_tts: basicTts,
+          sync_slides: syncSlides,
+          auto_generate_slides: autoGenerateSlides,
+        }),
       })
       const data = await resp.json()
       if (data.error) setAudioError(data.error)
@@ -1676,6 +1710,7 @@ export default function FormationPipeline() {
   if (job?.status === 'tts_launched' && allContentCompleted) {
     currentStep = 6
   }
+  const selectedPipelineModel = pipelineModelLabel(job?.auto_pilot_model)
 
   // ─── Render ───────────────────────────────────────────────────────────────
   return (
@@ -1777,6 +1812,9 @@ export default function FormationPipeline() {
                         start: 'démarrage', reac: 'téléchargement REAC',
                         kb: 'enrichissement Knowledge Base', global: 'programme global',
                         daily: 'programmes journée', content: 'génération texte (long)',
+                        volume_safety: 'sécurité volume',
+                        review: 'révision conformité',
+                        post_review_docs: 'document final',
                         audio: 'synthèse audio', done: 'terminé', '?': '—',
                       }
                       return labels[autoPilotState.step] || autoPilotState.step
@@ -1784,7 +1822,7 @@ export default function FormationPipeline() {
                   </div>
                   <div style={{ fontSize: '12px', color: '#94a3b8', marginTop: '2px' }}>
                     Toutes les étapes s'enchaînent automatiquement — TTS : <strong>{autoPilotState.tts_mode || 'gtts'}</strong>
-                    {' · '}modèle : <strong>{autoPilotState.model || 'sonnet'}</strong>
+                    {' · '}modèle : <strong>{pipelineModelLabel(autoPilotState.model)}</strong>
                     {' · '}stop-on-error
                   </div>
                 </div>
@@ -2319,11 +2357,11 @@ export default function FormationPipeline() {
               ) : (
                 <div>
                   <p style={{ fontSize: '14px', color: '#94a3b8', marginBottom: '16px' }}>
-                    Claude va générer un programme de formation complet ({job.nb_days} journées) à partir du REAC.
+                    {selectedPipelineModel} va générer un programme de formation complet ({job.nb_days} journées) à partir du REAC.
                   </p>
                   <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
                     <button style={S.btn('primary')} onClick={() => handleGenerateGlobal()} disabled={actionLoading}>
-                      <Icon name="auto_stories" /> Générer (Sonnet)
+                      <Icon name="auto_stories" /> Générer ({selectedPipelineModel})
                     </button>
                     <button style={S.btn('neutral')} onClick={() => handleGenerateGlobal(HAIKU)} disabled={actionLoading} title="~5x moins cher, qualité légèrement inférieure">
                       <Icon name="bolt" /> Générer (Haiku)
@@ -2437,7 +2475,7 @@ export default function FormationPipeline() {
                         <Icon name="check_circle" /> {dailyValidating ? 'Validation…' : 'Valider les journées'}
                       </button>
                       <button style={S.btn('ghost')} onClick={() => handleSplitDaily()} disabled={actionLoading}>
-                        <Icon name="refresh" /> Regénérer (Sonnet)
+                        <Icon name="refresh" /> Regénérer ({selectedPipelineModel})
                       </button>
                       <button style={S.btn('ghost')} onClick={() => handleSplitDaily(HAIKU)} disabled={actionLoading}>
                         <Icon name="bolt" /> Regénérer (Haiku)
@@ -2451,11 +2489,11 @@ export default function FormationPipeline() {
               ) : (
                 <div>
                   <p style={{ fontSize: '14px', color: '#94a3b8', marginBottom: '16px' }}>
-                    Claude va découper le programme global en <strong style={{ color: '#a78bfa' }}>{job.nb_days} journées</strong> de 7h, chacune avec 6 modules.
+                    {selectedPipelineModel} va découper le programme global en <strong style={{ color: '#a78bfa' }}>{job.nb_days} journées</strong> de 7h, chacune avec 6 modules.
                   </p>
                   <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
                     <button style={S.btn('primary')} onClick={() => handleSplitDaily()} disabled={actionLoading || !job.global_program_validated}>
-                      <Icon name="calendar_view_week" /> Découper (Sonnet)
+                      <Icon name="calendar_view_week" /> Découper ({selectedPipelineModel})
                     </button>
                     <button style={S.btn('neutral')} onClick={() => handleSplitDaily(HAIKU)} disabled={actionLoading || !job.global_program_validated} title="~5x moins cher">
                       <Icon name="bolt" /> Découper (Haiku)
@@ -2618,6 +2656,14 @@ export default function FormationPipeline() {
                                   >
                                     <Icon name="visibility" /> Voir
                                   </button>
+                                  <button
+                                    style={{ ...S.btn('neutral'), padding: '6px 12px', fontSize: '12px' }}
+                                    disabled={!isDone}
+                                    onClick={() => window.open(`/generated-slides?job_id=${selectedJobId}&folder_id=${folder.folder_id}`, '_blank')}
+                                    title={isDone ? 'Prévisualiser les slides générées depuis le texte' : 'En attente de génération'}
+                                  >
+                                    <Icon name="slideshow" /> Slides
+                                  </button>
                                   {/* Word original = snapshot pris au finalize content,
                                       AVANT que la révision conformité ne touche au texte.
                                       Permet la comparaison avant/après. */}
@@ -2764,7 +2810,7 @@ export default function FormationPipeline() {
                                               ? 'Tous les segments ont déjà été révisés avec succès'
                                               : hasRetryable
                                                 ? `Relancer la révision — ${nErr} segment(s) en erreur à re-tester`
-                                                : 'Lancer la révision conformité via API Claude (Sonnet)'
+                                                : `Lancer la révision conformité via API ${selectedPipelineModel}`
                                       }
                                     >
                                       <Icon name={reviewing ? 'hourglass_empty' : (hasRetryable ? 'refresh' : 'rule')} />{' '}
@@ -2795,7 +2841,7 @@ export default function FormationPipeline() {
               ) : (
                 <div>
                   <p style={{ fontSize: '14px', color: '#94a3b8', marginBottom: '8px' }}>
-                    Crée <strong style={{ color: '#a78bfa' }}>{job.nb_days} dossiers cours</strong> et génère le texte complet de chaque journée (6 modules × 3 passes Claude).
+                    Crée <strong style={{ color: '#a78bfa' }}>{job.nb_days} dossiers cours</strong> et génère le texte complet de chaque journée (6 modules × 3 passes avec {selectedPipelineModel}).
                   </p>
                   <p style={{ fontSize: '13px', color: '#475569', marginBottom: '16px' }}>
                     ~90 000 mots par journée. Cette étape ne fait pas encore la synthèse audio — vous pourrez relire les textes et les télécharger en PDF avant de lancer le TTS.
@@ -2806,7 +2852,7 @@ export default function FormationPipeline() {
                       onClick={() => handleLaunchTTS()}
                       disabled={launchingTTS || actionLoading || !job.daily_programs_validated}
                     >
-                      <Icon name="edit_note" /> {launchingTTS ? 'Lancement…' : `Générer — Sonnet (${job.nb_days} journées)`}
+                      <Icon name="edit_note" /> {launchingTTS ? 'Lancement…' : `Générer — ${selectedPipelineModel} (${job.nb_days} journées)`}
                     </button>
                     <button
                       style={S.btn('neutral')}
@@ -2875,8 +2921,10 @@ export default function FormationPipeline() {
                           fontSize: '12px',
                         }}
                       >
-                        <option value="sonnet">Sonnet</option>
-                        <option value="haiku">Haiku</option>
+                        <option value="pro">DeepSeek Pro</option>
+                        <option value="flash">DeepSeek Flash</option>
+                        <option value="sonnet">Claude Sonnet</option>
+                        <option value="haiku">Claude Haiku</option>
                       </select>
                     </div>
 
@@ -3051,12 +3099,28 @@ export default function FormationPipeline() {
                       <Icon name="graphic_eq" /> {launchingAudio ? '…' : 'Relancer TTS voix basique (gratuit)'}
                     </button>
                     <button
+                      style={{ ...S.btn('ghost'), borderColor: 'rgba(56,189,248,0.45)', color: '#38bdf8' }}
+                      onClick={() => handleLaunchAudio(false, true, true, true)}
+                      disabled={launchingAudio || !allContentCompleted}
+                      title="Re-synthèse gratuite via gTTS, découpée par slides, avec stockage des timings slide ↔ audio."
+                    >
+                      <Icon name="slideshow" /> {launchingAudio ? '…' : 'Relancer TTS slides + voix basique'}
+                    </button>
+                    <button
                       style={S.btn('success')}
                       onClick={() => handleLaunchAudio(false, false)}
                       disabled={launchingAudio || !allContentCompleted}
                       title="Re-synthèse payante Fish Audio S2-Pro (~9$/journée)."
                     >
                       <Icon name="refresh" /> {launchingAudio ? 'Lancement…' : 'Relancer TTS payant'}
+                    </button>
+                    <button
+                      style={S.btn('success')}
+                      onClick={() => handleLaunchAudio(false, false, true, true)}
+                      disabled={launchingAudio || !allContentCompleted}
+                      title="Re-synthèse payante Fish Audio S2-Pro avec découpage par slides et timings synchronisés."
+                    >
+                      <Icon name="slideshow" /> {launchingAudio ? 'Lancement…' : 'Relancer TTS slides payant'}
                     </button>
                   </div>
                   {audioError && (
@@ -3088,12 +3152,28 @@ export default function FormationPipeline() {
                       <Icon name="graphic_eq" /> {launchingAudio ? '…' : 'TTS voix basique (gratuit)'}
                     </button>
                     <button
+                      style={{ ...S.btn('ghost'), borderColor: 'rgba(56,189,248,0.45)', color: '#38bdf8' }}
+                      onClick={() => handleLaunchAudio(false, true, true, true)}
+                      disabled={launchingAudio || !allContentCompleted}
+                      title="Test complet sans Fish Audio : génère les slides si besoin, synthétise en gTTS, concatène par slide et stocke les timings."
+                    >
+                      <Icon name="slideshow" /> {launchingAudio ? '…' : 'TTS slides + voix basique'}
+                    </button>
+                    <button
                       style={{ ...S.btn('neutral'), border: '1px dashed #64748b' }}
                       onClick={() => handleLaunchAudio(true, false)}
                       disabled={launchingAudio || !allContentCompleted}
                       title="Mode test : génère des MP3 de silence 1s au lieu d'appeler Fish Audio. 0 € de coût, permet de tester le flux jusqu'à la diffusion sans consommer ton budget TTS."
                     >
                       <Icon name="science" /> {launchingAudio ? '…' : 'TTS test silence (gratuit)'}
+                    </button>
+                    <button
+                      style={S.btn('success')}
+                      onClick={() => handleLaunchAudio(false, false, true, true)}
+                      disabled={launchingAudio || !allContentCompleted}
+                      title="Synthèse payante Fish Audio avec génération des slides si besoin, découpage par slides et stockage des timings."
+                    >
+                      <Icon name="slideshow" /> {launchingAudio ? 'Lancement…' : 'TTS slides payant'}
                     </button>
                   </div>
                   {!allContentCompleted && (

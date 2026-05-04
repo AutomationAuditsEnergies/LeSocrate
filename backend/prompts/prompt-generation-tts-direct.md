@@ -116,7 +116,7 @@ Je suis un centre de formation. Mes élèves préparent le titre professionnel
 suivant : {NOM_DU_TITRE_PROFESSIONNEL}.
 
 CONSIGNE :
-Génère un cours ORAL de minimum 5 000 mots sur la sous-partie suivante :
+Génère un cours ORAL d'environ 5 000 mots utiles sur la sous-partie suivante :
 "{NOM_DE_LA_SOUS_PARTIE}"
 
 Le cours oral doit couvrir ces aspects (dans l'ordre que tu juges naturel) :
@@ -914,7 +914,7 @@ dans le cadre de la préparation au titre professionnel
 {NOM_DU_TITRE_PROFESSIONNEL}.
 
 CONSIGNE :
-Génère 5 000 mots SUPPLÉMENTAIRES de cours oral qui viennent compléter
+Génère environ 5 000 mots SUPPLÉMENTAIRES de cours oral qui viennent compléter
 et enrichir ce cours. Le texte produit sera envoyé DIRECTEMENT à un
 système TTS (Fish Audio S2-Pro). Il doit être prêt à être lu tel quel.
 
@@ -1002,7 +1002,7 @@ le cadre de la préparation au titre professionnel
 {NOM_DU_TITRE_PROFESSIONNEL}.
 
 CONSIGNE :
-Génère 5 000 mots SUPPLÉMENTAIRES de cours oral avec du contenu INÉDIT.
+Génère environ 5 000 mots SUPPLÉMENTAIRES de cours oral avec du contenu INÉDIT.
 Le texte produit sera envoyé DIRECTEMENT à un système TTS (Fish Audio
 S2-Pro). Il doit être prêt à être lu tel quel.
 

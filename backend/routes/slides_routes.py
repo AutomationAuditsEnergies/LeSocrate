@@ -1,9 +1,13 @@
 # slides_routes.py - Routes API pour la génération de slides
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, jsonify, request, session
 from services.slide_generation_service import (
     generate_slides,
     generate_slides_v3,
     get_generation_status
+)
+from services.script_slide_generation_service import (
+    generate_slides_from_script,
+    get_latest_script_slide_deck,
 )
 from utils.logger import get_logger
 
@@ -18,6 +22,7 @@ _generation_stats = None
 _generation_timeline = None
 _transcription_full = None
 _pipeline_debug = None  # Données intermédiaires du pipeline
+_generation_mode = None
 
 
 @slides_bp.route("/generate", methods=["POST"])
@@ -33,7 +38,8 @@ def generate():
         ou
         {"status": "error", "message": "..."}
     """
-    global _generated_slides, _generation_error
+    global _generated_slides, _generation_error, _generation_stats, _generation_timeline
+    global _transcription_full, _pipeline_debug, _generation_mode
 
     try:
         # Récupérer l'ID de l'audio (défaut: 1 = premier audio)
@@ -47,6 +53,11 @@ def generate():
 
         # Stocker le résultat
         _generated_slides = slides
+        _generation_stats = None
+        _generation_timeline = None
+        _transcription_full = None
+        _pipeline_debug = None
+        _generation_mode = "audio_legacy"
         _generation_error = None
 
         logger.info(f"Génération réussie: {len(slides)} slides")
@@ -94,7 +105,8 @@ def generate_v3():
             "timeline": [...]
         }
     """
-    global _generated_slides, _generation_error, _generation_stats, _generation_timeline, _transcription_full, _pipeline_debug
+    global _generated_slides, _generation_error, _generation_stats, _generation_timeline
+    global _transcription_full, _pipeline_debug, _generation_mode
 
     try:
         data = request.get_json() or {}
@@ -112,12 +124,14 @@ def generate_v3():
         _generation_timeline = result["timeline"]
         _transcription_full = result.get("transcription_full", "")
         _pipeline_debug = result.get("pipeline_debug", {})
+        _generation_mode = "audio_v3"
         _generation_error = None
 
         logger.info(f"Génération v3 réussie: {len(_generated_slides)} slides")
 
         return jsonify({
             "status": "success",
+            "generation_mode": _generation_mode,
             "slides_count": len(_generated_slides),
             "slides": _generated_slides,
             "stats": _generation_stats,
@@ -144,6 +158,90 @@ def generate_v3():
         }), 500
 
 
+@slides_bp.route("/generate-from-script", methods=["POST"])
+def generate_from_script():
+    """
+    Génère des slides depuis le texte final stocké en DB.
+
+    Body:
+        {
+            "folder_id": 123,          # requis
+            "job_id": 7,               # optionnel, vérifie la cohérence plateforme
+            "max_slides": 60,          # cap de densité V1
+            "pace": "normal",          # dense|normal|synthesis
+            "model": "sonnet"          # optionnel
+        }
+    """
+    global _generated_slides, _generation_error, _generation_stats, _generation_timeline
+    global _transcription_full, _pipeline_debug, _generation_mode
+
+    try:
+        if not session.get("is_admin", False):
+            return jsonify({"status": "error", "message": "Non autorisé"}), 403
+
+        data = request.get_json() or {}
+        folder_id = data.get("folder_id")
+        job_id = data.get("job_id")
+        max_slides = data.get("max_slides", 60)
+        pace = data.get("pace", "normal")
+        model = data.get("model")
+        platform_id = session.get("platform_id")
+
+        logger.info(
+            "Demande génération slides depuis script folder=%s job=%s max_slides=%s",
+            folder_id,
+            job_id,
+            max_slides,
+        )
+
+        result = generate_slides_from_script(
+            folder_id=folder_id,
+            job_id=job_id,
+            platform_id=platform_id,
+            max_slides=max_slides,
+            pace=pace,
+            model=model,
+        )
+
+        _generated_slides = result["slides"]
+        _generation_stats = result["stats"]
+        _generation_timeline = result["timeline"]
+        _pipeline_debug = result.get("pipeline_debug", {})
+        _transcription_full = None
+        _generation_mode = "script"
+        _generation_error = None
+
+        logger.info(f"Génération script réussie: {len(_generated_slides)} slides")
+
+        return jsonify({
+            "status": "success",
+            "generation_mode": _generation_mode,
+            "slides_count": len(_generated_slides),
+            "slides": _generated_slides,
+            "stats": _generation_stats,
+            "timeline": _generation_timeline,
+            "pipeline_debug": _pipeline_debug
+        })
+
+    except ValueError as e:
+        logger.error(f"Erreur de validation génération script: {e}")
+        _generation_error = str(e)
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 400
+
+    except Exception as e:
+        logger.error(f"Erreur lors de la génération depuis script: {e}")
+        import traceback
+        traceback.print_exc()
+        _generation_error = str(e)
+        return jsonify({
+            "status": "error",
+            "message": f"Erreur lors de la génération depuis script: {str(e)}"
+        }), 500
+
+
 @slides_bp.route("/data", methods=["GET"])
 def get_slides():
     """
@@ -154,7 +252,26 @@ def get_slides():
         ou
         {"status": "no_data", "message": "Aucune slide générée"}
     """
-    global _generated_slides, _generation_error, _generation_stats, _generation_timeline, _transcription_full, _pipeline_debug
+    global _generated_slides, _generation_error, _generation_stats, _generation_timeline, _transcription_full, _pipeline_debug, _generation_mode
+
+    folder_id = request.args.get("folder_id")
+    if folder_id:
+        if not session.get("is_admin", False):
+            return jsonify({"status": "error", "message": "Non autorisé"}), 403
+        try:
+            deck = get_latest_script_slide_deck(int(folder_id))
+        except (TypeError, ValueError):
+            deck = None
+        if deck:
+            return jsonify({
+                "status": "success",
+                "generation_mode": "script",
+                "slides": deck["slides"],
+                "slides_count": len(deck["slides"]),
+                "stats": deck["stats"],
+                "timeline": deck["timeline"],
+                "pipeline_debug": deck["pipeline_debug"],
+            })
 
     if _generation_error:
         return jsonify({
@@ -162,16 +279,20 @@ def get_slides():
             "message": _generation_error
         }), 500
 
+    if _generation_mode == "script" and not session.get("is_admin", False):
+        return jsonify({"status": "error", "message": "Non autorisé"}), 403
+
     if _generated_slides is None:
         return jsonify({
             "status": "no_data",
-            "message": "Aucune slide générée. Utilisez POST /api/slides/generate-v3 d'abord."
+            "message": "Aucune slide générée. Utilisez POST /api/slides/generate-from-script d'abord."
         })
 
     response = {
         "status": "success",
         "slides": _generated_slides,
-        "slides_count": len(_generated_slides)
+        "slides_count": len(_generated_slides),
+        "generation_mode": _generation_mode
     }
 
     # Ajouter les données v3 si disponibles
@@ -214,7 +335,7 @@ def clear():
     Returns:
         {"status": "cleared"}
     """
-    global _generated_slides, _generation_error, _generation_stats, _generation_timeline, _transcription_full, _pipeline_debug
+    global _generated_slides, _generation_error, _generation_stats, _generation_timeline, _transcription_full, _pipeline_debug, _generation_mode
 
     _generated_slides = None
     _generation_error = None
@@ -222,6 +343,7 @@ def clear():
     _generation_timeline = None
     _transcription_full = None
     _pipeline_debug = None
+    _generation_mode = None
 
     logger.info("Slides effacées")
 

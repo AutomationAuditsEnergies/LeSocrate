@@ -92,12 +92,12 @@ def _measure_duration_ms(audio_bytes):
     return len(audio)
 
 
-def _pad_audio_to_duration(audio_bytes, target_duration_seconds):
+def _pad_audio_to_duration(audio_bytes, target_duration_seconds, truncate_overflow=True):
     """
     Ajuste un audio à la durée cible exacte :
     - 17s de silence au début (consigne des cours)
     - Si trop court → padding silence à la fin
-    - Si trop long → truncate (le TTS a dépassé)
+    - Si trop long → truncate si autorisé, sinon erreur explicite
     """
     audio = AudioSegment.from_mp3(io.BytesIO(audio_bytes))
     target_ms = target_duration_seconds * 1000
@@ -112,7 +112,12 @@ def _pad_audio_to_duration(audio_bytes, target_duration_seconds):
         end_silence = AudioSegment.silent(duration=target_ms - current_ms)
         audio = audio + end_silence
     elif current_ms > target_ms:
-        # Trop long → tronquer (le fichier ne doit JAMAIS dépasser la durée)
+        if not truncate_overflow:
+            raise ValueError(
+                f"Audio trop long ({current_ms/1000:.1f}s > {target_duration_seconds}s) "
+                "et troncature interdite"
+            )
+        # Trop long → tronquer (ancien comportement conservé pour les appels legacy)
         logger.warning(f"   ⚠️ Audio trop long ({current_ms/1000:.1f}s > {target_duration_seconds}s), troncature")
         audio = audio[:target_ms]
 
@@ -122,13 +127,14 @@ def _pad_audio_to_duration(audio_bytes, target_duration_seconds):
     return output.getvalue()
 
 
-def _build_pause_audio(intro_text, outro_text, target_duration_seconds):
+def _build_pause_audio(intro_text, outro_text, target_duration_seconds, convert_func=None):
     """
     Construit un audio de pause/Q&A :
     intro TTS + silence + outro TTS, le tout padded à la durée cible.
     """
-    intro_bytes = convert_to_speech(intro_text)
-    outro_bytes = convert_to_speech(outro_text)
+    tts = convert_func or convert_to_speech
+    intro_bytes = tts(intro_text)
+    outro_bytes = tts(outro_text)
 
     intro_audio = AudioSegment.from_mp3(io.BytesIO(intro_bytes))
     outro_audio = AudioSegment.from_mp3(io.BytesIO(outro_bytes))
@@ -398,6 +404,54 @@ def _get_recycled_qa_pause(filename):
     return blob_client.download_blob().readall()
 
 
+def _playlist_items_for_platform(platform_id):
+    """Retourne la playlist effective de la plateforme au format PLAYLIST_SPEC."""
+    bloc_by_filename = {spec[0]: spec[3] for spec in PLAYLIST_SPEC}
+
+    try:
+        from services.audio_service import get_playlist
+        playlist = get_playlist(platform_id)
+    except Exception as e:
+        logger.warning(f"⚠️ Playlist plateforme indisponible, fallback PLAYLIST_SPEC : {e}")
+        return list(PLAYLIST_SPEC)
+
+    items = []
+    for item in playlist:
+        filename = os.path.basename((item.get("filename") or "").split("?", 1)[0])
+        file_type = item.get("type")
+        duration = int(item.get("duration") or 0)
+        bloc_num = bloc_by_filename.get(filename, 1)
+        items.append((filename, duration, file_type, bloc_num))
+    return items or list(PLAYLIST_SPEC)
+
+
+def _build_contextual_break_audio(
+    filename,
+    duration_sec,
+    file_type,
+    bloc_num,
+    item_idx,
+    playlist_items,
+    blocs_by_number,
+):
+    from services.break_transition_service import build_break_transition_texts
+
+    intro, outro = build_break_transition_texts(
+        filename=filename,
+        duration_sec=duration_sec,
+        break_type=file_type,
+        bloc_num=bloc_num,
+        item_idx=item_idx,
+        playlist_items=playlist_items,
+        get_bloc_text=lambda n: blocs_by_number.get(n, ""),
+    )
+    try:
+        return _build_pause_audio(intro, outro, duration_sec)
+    except Exception as e:
+        logger.warning(f"⚠️ Q&A/Pause contextuel échoué pour {filename}: {e}; fallback audioqapause")
+        return _get_recycled_qa_pause(filename)
+
+
 def count_words_in_folder(platform_id, folder_id):
     """
     Compte les mots de tous les PDFs d'un dossier.
@@ -632,7 +686,8 @@ def generate_playlist_for_folder(platform_id, folder_id, progress_callback=None,
     generated_files = []
     errors = []
 
-    for i, (filename, duration_sec, file_type, bloc_num) in enumerate(PLAYLIST_SPEC):
+    playlist_items = _playlist_items_for_platform(platform_id)
+    for i, (filename, duration_sec, file_type, bloc_num) in enumerate(playlist_items):
         step = 6 + i
         progress(step, total_steps, f"Génération {filename} ({file_type}, bloc {bloc_num})...")
 
@@ -663,20 +718,32 @@ def generate_playlist_for_folder(platform_id, folder_id, progress_callback=None,
                 if bloc_num not in blocs_by_number:
                     logger.info(f"   ⏭️ {filename}: bloc {bloc_num} vide, skip Q&A")
                     continue
-                final_bytes = _get_recycled_qa_pause(filename)
-                logger.info(f"   ♻️ {filename}: recyclé depuis audioqapause")
+                final_bytes = _build_contextual_break_audio(
+                    filename, duration_sec, file_type, bloc_num, i,
+                    playlist_items, blocs_by_number,
+                )
+                logger.info(f"   🧩 {filename}: Q&A contextuel généré")
 
             elif file_type == "pause":
-                next_bloc = bloc_num + 1
-                if bloc_num not in blocs_by_number and next_bloc not in blocs_by_number:
+                from services.break_transition_service import nearest_course_bloc
+
+                prev_course = nearest_course_bloc(playlist_items, i, -1) or bloc_num
+                next_course = nearest_course_bloc(playlist_items, i, 1)
+                if prev_course not in blocs_by_number and next_course not in blocs_by_number:
                     logger.info(f"   ⏭️ {filename}: blocs voisins vides, skip pause")
                     continue
-                final_bytes = _get_recycled_qa_pause(filename)
-                logger.info(f"   ♻️ {filename}: recyclé depuis audioqapause")
+                final_bytes = _build_contextual_break_audio(
+                    filename, duration_sec, file_type, bloc_num, i,
+                    playlist_items, blocs_by_number,
+                )
+                logger.info(f"   🧩 {filename}: pause contextuelle générée")
 
             elif file_type == "pause_midi":
-                final_bytes = _get_recycled_qa_pause(filename)
-                logger.info(f"   ♻️ {filename}: recyclé depuis audioqapause")
+                final_bytes = _build_contextual_break_audio(
+                    filename, duration_sec, file_type, bloc_num, i,
+                    playlist_items, blocs_by_number,
+                )
+                logger.info(f"   🧩 {filename}: pause midi contextuelle générée")
 
             else:
                 raise ValueError(f"Type inconnu: {file_type}")

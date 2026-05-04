@@ -3,13 +3,14 @@ Service de génération de contenu TTS-direct.
 
 Pipeline par dossier (= 1 journée de formation) :
   1. Extraction automatique de 6 sous-parties depuis le programme (1 appel Claude)
-  2. Pour chaque sous-partie : Passe 1 → Passe 2 → Passe 3 (~5 100 mots chacune)
-  3. Total ~92 000 mots TTS-ready → sauvegardé comme document .txt dans le dossier
+  2. Pour chaque sous-partie : Passe 1 → Passe 2 → Passe 3 (~5 000 mots chacune)
+  3. Total ~90 000 mots TTS-ready → sauvegardé comme document .txt dans le dossier
 
 Checkpointing : chaque segment complété est sauvegardé en DB immédiatement.
 En cas d'interruption, la génération reprend au segment suivant non complété.
 """
 
+import io
 import os
 import re
 import json
@@ -17,13 +18,31 @@ import time
 import uuid as uuid_mod
 
 from database.db import get_db_connection
-from utils.anthropic_client import default_model, post_message as _llm_post
+from utils.anthropic_client import (
+    AnthropicAPIError,
+    AnthropicRateLimitError,
+    default_model,
+    post_message as _llm_post,
+)
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
 CLAUDE_MODEL = default_model()
 NUM_SUB_PARTS = 6
+_COURSE_START_SILENCE_SECONDS = 17
+_TTS_REFERENCE_WPM_AT_095 = 192
+_DEFAULT_TTS_SPEED = 0.90
+_DEFAULT_TTS_LOCAL_MAX_SPEEDUP = 1.0
+_DEFAULT_TTS_PREFLIGHT_SAFETY = 0.96
+_SENTENCE_END_RE = re.compile(r"[.!?…][\"'»”’)\]]*$")
+_CARRYOVER_INTRO = (
+    "Avant d'entrer dans la suite de ce cours, on reprend le point que nous "
+    "n'avons pas terminé au cours dernier. On le pose proprement, puis on "
+    "enchaînera naturellement avec le programme prévu."
+)
+_CARRYOVER_COLUMNS_READY = False
+_FISHAUDIO_TAG_RE = re.compile(r"\[[^\[\]\n]{1,50}\]")
 
 # ─── Texte mock pour les tests ───────────────────────────────────────────────
 
@@ -56,6 +75,1078 @@ def _generate_mock_text(passe, sub_part_name, sub_idx):
         f"Nous avons couvert l'essentiel de la {label}. Passons à la suite.",
     ]
     return "\n".join(lines)
+
+
+def _env_float(name, default, min_value=None, max_value=None):
+    try:
+        value = float(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        logger.warning(f"⚠️ {name} invalide, fallback {default}")
+        return default
+    if min_value is not None:
+        value = max(min_value, value)
+    if max_value is not None:
+        value = min(max_value, value)
+    return value
+
+
+def _course_tts_speed():
+    return _env_float("FORMATION_TTS_SPEED", _DEFAULT_TTS_SPEED, min_value=0.5, max_value=2.0)
+
+
+def _course_local_max_speedup():
+    return _env_float(
+        "FORMATION_TTS_LOCAL_MAX_SPEEDUP",
+        _DEFAULT_TTS_LOCAL_MAX_SPEEDUP,
+        min_value=1.0,
+        max_value=1.5,
+    )
+
+
+def _course_preflight_safety():
+    return _env_float(
+        "FORMATION_TTS_PREFLIGHT_SAFETY",
+        _DEFAULT_TTS_PREFLIGHT_SAFETY,
+        min_value=0.80,
+        max_value=1.05,
+    )
+
+
+def _estimated_words_budget_for_course(target_sec, api_speed):
+    voice_minutes = max(0, target_sec - _COURSE_START_SILENCE_SECONDS) / 60
+    estimated_wpm = _TTS_REFERENCE_WPM_AT_095 * (api_speed / 0.95)
+    return int(voice_minutes * estimated_wpm * _course_preflight_safety())
+
+
+def _estimated_audio_seconds_for_words(word_count, api_speed):
+    """Durée audio estimée pour un nombre de mots à une vitesse Fish Audio donnée.
+
+    Inclut le silence de début (`_COURSE_START_SILENCE_SECONDS`) qui est ajouté en
+    aval par le pipeline TTS. Approximation linéaire — calibration à valider en prod
+    (cf. `memoire/02-problemes/pipeline-52-jours-risques-residuels.md`, R1).
+    """
+    if word_count <= 0:
+        return _COURSE_START_SILENCE_SECONDS
+    estimated_wpm = _TTS_REFERENCE_WPM_AT_095 * (api_speed / 0.95)
+    voice_seconds = (word_count / estimated_wpm) * 60
+    return voice_seconds + _COURSE_START_SILENCE_SECONDS
+
+
+def _strip_tts_tags_for_sync(text: str) -> str:
+    """Use clean text for slide-synced word coordinates in V1."""
+    cleaned = _FISHAUDIO_TAG_RE.sub("", text or "")
+    cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
+    cleaned = re.sub(r"\n[ \t]+", "\n", cleaned)
+    return cleaned.strip()
+
+
+def _word_slice(text: str, start: int, end: int) -> str:
+    words = (text or "").split()
+    start = max(0, min(len(words), start))
+    end = max(start, min(len(words), end))
+    return " ".join(words[start:end]).strip()
+
+
+def _slides_for_bloc(slides: list, bloc: dict) -> list:
+    bloc_start = int(bloc.get("start_w") or 0)
+    bloc_end = int(bloc.get("end_w") or bloc_start)
+    raw_relevant = []
+    seen = set()
+
+    for slide_idx, slide in enumerate(slides or []):
+        source_ref = slide.get("source_ref") or {}
+        try:
+            start = int(source_ref.get("word_start"))
+            end = int(source_ref.get("word_end"))
+        except (TypeError, ValueError):
+            continue
+        if end <= bloc_start or start >= bloc_end:
+            continue
+        slide_id = slide.get("slide_id")
+        if not slide_id or slide_id in seen:
+            continue
+        seen.add(slide_id)
+        raw_relevant.append({
+            "slide_id": slide_id,
+            "slide_index": slide_idx,
+            "source_word_start": start,
+            "source_word_end": end,
+            "word_start": max(bloc_start, start),
+            "word_end": min(bloc_end, end),
+        })
+
+    raw_relevant.sort(key=lambda item: (item["source_word_start"], item["slide_index"]))
+    relevant = []
+    idx = 0
+    while idx < len(raw_relevant):
+        item = raw_relevant[idx]
+        group = [item]
+        idx += 1
+        while (
+            idx < len(raw_relevant)
+            and raw_relevant[idx]["source_word_start"] == item["source_word_start"]
+            and raw_relevant[idx]["source_word_end"] == item["source_word_end"]
+        ):
+            group.append(raw_relevant[idx])
+            idx += 1
+
+        if len(group) == 1:
+            relevant.append(group[0])
+            continue
+
+        interval_start = max(bloc_start, item["source_word_start"])
+        interval_end = min(bloc_end, item["source_word_end"])
+        span = max(1, interval_end - interval_start)
+        for group_idx, grouped in enumerate(group):
+            start = interval_start + round(group_idx * span / len(group))
+            end = interval_start + round((group_idx + 1) * span / len(group))
+            if end <= start:
+                continue
+            clone = dict(grouped)
+            clone["word_start"] = start
+            clone["word_end"] = end
+            relevant.append(clone)
+
+    relevant.sort(key=lambda item: item["word_start"])
+    if relevant and relevant[0]["word_start"] > bloc_start:
+        relevant[0]["word_start"] = bloc_start
+    elif relevant and relevant[0]["word_start"] < bloc_start:
+        relevant[0]["word_start"] = bloc_start
+    return relevant
+
+
+def _build_slide_audio_chunks(bloc: dict, slides: list) -> list:
+    """Partition a course bloc into text chunks driven by slide start markers."""
+    bloc_start = int(bloc.get("start_w") or 0)
+    bloc_end = int(bloc.get("end_w") or bloc_start)
+    bloc_text = bloc.get("text") or ""
+    bloc_words = bloc_text.split()
+    if not bloc_words:
+        return []
+
+    relevant = _slides_for_bloc(slides, bloc)
+    if not relevant:
+        return [{
+            "slide_id": None,
+            "word_start": bloc_start,
+            "word_end": bloc_end,
+            "text": bloc_text,
+        }]
+
+    chunks = []
+    for idx, item in enumerate(relevant):
+        start_w = item["word_start"]
+        next_start = relevant[idx + 1]["word_start"] if idx + 1 < len(relevant) else bloc_end
+        end_w = max(start_w, min(bloc_end, next_start))
+        if end_w <= start_w:
+            continue
+        local_start = start_w - bloc_start
+        local_end = end_w - bloc_start
+        text = _word_slice(bloc_text, local_start, local_end)
+        if text:
+            chunks.append({
+                "slide_id": item["slide_id"],
+                "word_start": start_w,
+                "word_end": end_w,
+                "text": text,
+            })
+    return chunks
+
+
+def _merge_adjacent_slide_timings(timings: list) -> list:
+    merged = []
+    for item in timings:
+        if not item.get("slide_id"):
+            continue
+        if (
+            merged
+            and merged[-1].get("slide_id") == item.get("slide_id")
+            and merged[-1].get("audio_filename") == item.get("audio_filename")
+            and abs(float(merged[-1].get("end_time") or 0) - float(item.get("start_time") or 0)) < 0.05
+        ):
+            merged[-1]["end_time"] = item.get("end_time")
+            merged[-1]["word_end"] = item.get("word_end")
+            merged[-1]["duration"] = round(
+                float(merged[-1]["end_time"]) - float(merged[-1]["start_time"]),
+                3,
+            )
+            continue
+        merged.append(item)
+    return merged
+
+
+def _synthesize_course_audio_synced_to_slides(
+    bloc: dict,
+    slides: list,
+    filename: str,
+    *,
+    mock: bool,
+    basic_tts: bool,
+):
+    """Generate one course MP3 by slide-sized chunks and return slide timings."""
+    from pydub import AudioSegment
+    from services.tts_service import convert_to_speech
+
+    target_sec = int(bloc["target_sec"])
+    api_speed = _course_tts_speed()
+    word_count = bloc.get("word_count") or len((bloc.get("text") or "").split())
+    word_budget = _estimated_words_budget_for_course(target_sec, api_speed)
+
+    if not mock and not basic_tts and word_budget > 0 and word_count > word_budget:
+        raise ValueError(
+            f"Bloc {bloc['bloc_number']} trop long avant TTS sync "
+            f"({word_count} mots > budget prudent {word_budget} mots à speed={api_speed})."
+        )
+
+    if basic_tts:
+        from services.basic_tts_service import convert_to_speech_basic
+
+    chunks = _build_slide_audio_chunks(bloc, slides)
+    if not chunks:
+        raise ValueError(f"Bloc {bloc['bloc_number']} vide pour sync slides")
+
+    full_audio = AudioSegment.silent(duration=_COURSE_START_SILENCE_SECONDS * 1000)
+    cursor_sec = float(_COURSE_START_SILENCE_SECONDS)
+    timings = []
+    attempts = []
+
+    for idx, chunk in enumerate(chunks, start=1):
+        text = chunk["text"].strip()
+        if not text:
+            continue
+        if mock:
+            segment = AudioSegment.silent(duration=1000)
+            mode = "mock"
+        elif basic_tts:
+            audio_bytes = convert_to_speech_basic(text)
+            segment = AudioSegment.from_mp3(io.BytesIO(audio_bytes))
+            mode = "gtts"
+        else:
+            audio_bytes = convert_to_speech(text, speed=api_speed)
+            segment = AudioSegment.from_mp3(io.BytesIO(audio_bytes))
+            mode = f"fish_audio_speed={api_speed}"
+
+        duration_sec = len(segment) / 1000
+        start_sec = cursor_sec
+        end_sec = start_sec + duration_sec
+        full_audio += segment
+        cursor_sec = end_sec
+        attempts.append({"kind": mode, "chunk": idx, "duration": duration_sec})
+
+        timings.append({
+            "slide_id": chunk.get("slide_id"),
+            "audio_filename": filename,
+            "start_time": round(start_sec, 3),
+            "end_time": round(end_sec, 3),
+            "duration": round(duration_sec, 3),
+            "word_start": chunk.get("word_start"),
+            "word_end": chunk.get("word_end"),
+        })
+
+    final_duration = len(full_audio) / 1000
+    if final_duration < target_sec:
+        full_audio += AudioSegment.silent(duration=int((target_sec - final_duration) * 1000))
+    elif final_duration > target_sec and not (mock or basic_tts):
+        raise ValueError(
+            f"Bloc {bloc['bloc_number']} sync trop long "
+            f"({final_duration:.1f}s > cible {target_sec}s)."
+        )
+
+    output = io.BytesIO()
+    full_audio.export(output, format="mp3", bitrate="128k")
+    fit_method = "slide_sync_mock" if mock else "slide_sync_gtts" if basic_tts else f"slide_sync_fish_speed={api_speed}"
+    return output.getvalue(), cursor_sec - _COURSE_START_SILENCE_SECONDS, fit_method, attempts, _merge_adjacent_slide_timings(timings)
+
+
+def _format_carryover_for_next_course(text: str) -> str:
+    """Prépare le texte reporté pour ouvrir le cours suivant sans dire "hier"."""
+    clean = (text or "").strip()
+    if not clean:
+        return ""
+    return f"{_CARRYOVER_INTRO}\n\n{clean}"
+
+
+def _ensure_carryover_columns() -> None:
+    """Migration lazy pour les champs de report inter-journées."""
+    global _CARRYOVER_COLUMNS_READY
+    if _CARRYOVER_COLUMNS_READY:
+        return
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("PRAGMA table_info(content_generation_jobs)")
+    cols = {row[1] for row in cursor.fetchall()}
+    wanted = {
+        "carryover_in_text": "TEXT DEFAULT ''",
+        "carryover_in_source_folder_id": "INTEGER",
+        "carryover_out_text": "TEXT DEFAULT ''",
+        "carryover_out_target_folder_id": "INTEGER",
+    }
+    for col, col_type in wanted.items():
+        if col not in cols:
+            cursor.execute(f"ALTER TABLE content_generation_jobs ADD COLUMN {col} {col_type}")
+    conn.commit()
+    conn.close()
+    _CARRYOVER_COLUMNS_READY = True
+
+
+def _find_next_folder_id(platform_id: int, folder_id: int) -> int | None:
+    """Retourne le dossier suivant de la même plateforme, selon position/id."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT position, id FROM cours_folders WHERE id = ? AND platform_id = ?",
+        (folder_id, platform_id),
+    )
+    row = cursor.fetchone()
+    if not row:
+        conn.close()
+        return None
+    position, current_id = row
+    cursor.execute(
+        """
+        SELECT id FROM cours_folders
+        WHERE platform_id = ?
+          AND (position > ? OR (position = ? AND id > ?))
+        ORDER BY position ASC, id ASC
+        LIMIT 1
+        """,
+        (platform_id, position, position, current_id),
+    )
+    next_row = cursor.fetchone()
+    conn.close()
+    return next_row[0] if next_row else None
+
+
+def _store_cross_day_carryover(source_folder_id: int, target_folder_id: int, text: str) -> None:
+    """Persiste le report J→J+1 de manière idempotente."""
+    _ensure_carryover_columns()
+    clean = (text or "").strip()
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        UPDATE content_generation_jobs
+        SET carryover_out_text = ?, carryover_out_target_folder_id = ?,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE folder_id = ?
+        """,
+        (clean, target_folder_id if clean else None, source_folder_id),
+    )
+    cursor.execute(
+        """
+        UPDATE content_generation_jobs
+        SET carryover_in_text = ?, carryover_in_source_folder_id = ?,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE folder_id = ?
+        """,
+        (_format_carryover_for_next_course(clean) if clean else "", source_folder_id if clean else None, target_folder_id),
+    )
+    cursor.execute(
+        """
+        UPDATE content_generation_segments
+        SET dirty = 1
+        WHERE job_id = (SELECT id FROM content_generation_jobs WHERE folder_id = ?)
+          AND sub_part_index = 0 AND passe = 1
+        """,
+        (target_folder_id,),
+    )
+    conn.commit()
+    conn.close()
+
+
+def _clear_cross_day_carryover_from_source(source_folder_id: int, target_folder_id: int | None = None) -> None:
+    """Nettoie un ancien report si le nouveau découpage n'en produit plus."""
+    _ensure_carryover_columns()
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        UPDATE content_generation_jobs
+        SET carryover_out_text = '', carryover_out_target_folder_id = NULL,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE folder_id = ?
+        """,
+        (source_folder_id,),
+    )
+    if target_folder_id:
+        cursor.execute(
+            """
+            UPDATE content_generation_jobs
+            SET carryover_in_text = '', carryover_in_source_folder_id = NULL,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE folder_id = ? AND carryover_in_source_folder_id = ?
+            """,
+            (target_folder_id, source_folder_id),
+        )
+        cursor.execute(
+            """
+            UPDATE content_generation_segments
+            SET dirty = 1
+            WHERE job_id = (SELECT id FROM content_generation_jobs WHERE folder_id = ?)
+              AND sub_part_index = 0 AND passe = 1
+            """,
+            (target_folder_id,),
+        )
+    else:
+        cursor.execute(
+            """
+            SELECT folder_id FROM content_generation_jobs
+            WHERE carryover_in_source_folder_id = ?
+            """,
+            (source_folder_id,),
+        )
+        target_rows = cursor.fetchall()
+        cursor.execute(
+            """
+            UPDATE content_generation_jobs
+            SET carryover_in_text = '', carryover_in_source_folder_id = NULL,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE carryover_in_source_folder_id = ?
+            """,
+            (source_folder_id,),
+        )
+        for (target_id,) in target_rows:
+            cursor.execute(
+                """
+                UPDATE content_generation_segments
+                SET dirty = 1
+                WHERE job_id = (SELECT id FROM content_generation_jobs WHERE folder_id = ?)
+                  AND sub_part_index = 0 AND passe = 1
+                """,
+                (target_id,),
+            )
+    conn.commit()
+    conn.close()
+
+
+def _get_existing_carryover_out(source_folder_id: int, target_folder_id: int | None) -> str:
+    _ensure_carryover_columns()
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        SELECT carryover_out_text, carryover_out_target_folder_id
+        FROM content_generation_jobs
+        WHERE folder_id = ?
+        """,
+        (source_folder_id,),
+    )
+    row = cursor.fetchone()
+    conn.close()
+    if not row:
+        return ""
+    text, stored_target = row
+    if target_folder_id is not None and stored_target != target_folder_id:
+        return ""
+    return (text or "").strip()
+
+
+def _reduce_last_bloc_to_budget(bloc: dict, model=None) -> str:
+    """Réduit le dernier bloc avant TTS si aucun jour suivant ne peut absorber le surplus."""
+    budget = int(bloc.get("word_budget") or 0)
+    if budget <= 0:
+        raise ValueError("Budget TTS indisponible pour réduction du dernier bloc")
+
+    # On vise plus bas que le cap prudent pour absorber l'écart de calibration Fish.
+    target_words = max(800, int(budget * 0.90))
+    prompt = f"""Tu es un formateur expert. Tu dois REMANIER le dernier bloc d'un cours audio
+pour qu'il tienne dans son créneau TTS, sans jouer sur la vitesse de la voix.
+
+OBJECTIF :
+- Réduis le texte à environ {target_words} mots.
+- Ne supprime pas l'idée générale : condense, fusionne les exemples redondants,
+  garde les notions utiles.
+- N'ajoute AUCUNE nouvelle idée.
+- Ne dis jamais "hier". Si tu fais référence à la séance précédente, dis
+  "au cours dernier".
+- Termine par une vraie conclusion de cours.
+- Texte oral fluide, naturel, prêt pour TTS.
+
+TEXTE À REMANIER :
+---
+{bloc.get("text", "")}
+---
+
+Réponds uniquement avec le texte remanié, sans commentaire."""
+
+    reduced = _llm_post(
+        messages=[{"role": "user", "content": prompt}],
+        max_tokens=min(12000, int(target_words * 2.2) + 500),
+        model=model or default_model(),
+    )
+    reduced = (reduced or "").replace("```", "").strip()
+    if not reduced:
+        raise ValueError("Réduction dernier bloc vide")
+    if len(reduced.split()) > budget:
+        raise ValueError(
+            f"Réduction dernier bloc encore trop longue ({len(reduced.split())} mots > budget {budget})"
+        )
+    return reduced
+
+
+def _sentence_boundary_positions(words):
+    """Retourne les positions de mots situées juste après une fin de phrase."""
+    positions = []
+    for i, word in enumerate(words):
+        if _SENTENCE_END_RE.search(word.strip()):
+            positions.append(i + 1)
+    return positions
+
+
+def _closest_boundary(candidates, target_w):
+    return min(candidates, key=lambda b: (abs(b - target_w), b < target_w))
+
+
+def _choose_natural_boundary(
+    cursor_w,
+    target_w,
+    total_words,
+    remaining_blocks,
+    paragraph_boundaries,
+    sentence_boundaries,
+    word_budget_max=None,
+):
+    """
+    Choisit une coupure naturelle proche de la cible, en respectant le budget TTS.
+
+    1. fin de paragraphe SOUS le cap budget, car c'est l'unité pédagogique la plus fiable ;
+    2. fin de phrase SOUS le cap budget, si aucun paragraphe convenable n'existe ;
+    3. split brut au cap seulement en dernier recours.
+
+    `word_budget_max` est le hard cap : le bloc ne dépasse JAMAIS ce nombre de mots.
+    Les paragraphes en surplus tombent automatiquement dans le bloc suivant — pas besoin
+    de raccourcir au LLM ni de tronquer l'audio.
+    """
+    if target_w >= total_words:
+        return total_words
+
+    # Évite de donner tout le texte au bloc courant si les blocs suivants doivent
+    # encore recevoir du contenu. En prod les blocs sont énormes ; ce plancher ne
+    # sert qu'à éviter les cas dégénérés sur des tests courts.
+    min_words_per_remaining_block = 50 if total_words >= 700 else 1
+    max_end = max(cursor_w + 1, total_words - remaining_blocks * min_words_per_remaining_block)
+
+    # Hard cap : on plafonne au budget TTS pour garantir que `_synthesize_course_audio_to_fit`
+    # ne refusera jamais ce bloc à cause d'un sur-volume. Le surplus cascade au bloc suivant.
+    if word_budget_max and word_budget_max > 0:
+        cap_w = min(max_end, cursor_w + word_budget_max)
+        cap_w = max(cap_w, cursor_w + 1)
+    else:
+        cap_w = max_end
+
+    target_w = min(max(target_w, cursor_w + 1), cap_w)
+
+    span = max(1, target_w - cursor_w)
+    paragraph_window = max(160, min(700, int(span * 0.15)))
+    sentence_window = max(80, min(250, int(span * 0.08)))
+
+    paragraph_candidates = [
+        b for b in paragraph_boundaries
+        if max(cursor_w + 1, target_w - paragraph_window) <= b <= min(cap_w, target_w + paragraph_window)
+    ]
+    if paragraph_candidates:
+        return _closest_boundary(paragraph_candidates, target_w)
+
+    sentence_candidates = [
+        b for b in sentence_boundaries
+        if max(cursor_w + 1, target_w - sentence_window) <= b <= min(cap_w, target_w + sentence_window)
+    ]
+    if sentence_candidates:
+        chosen = _closest_boundary(sentence_candidates, target_w)
+        logger.warning(
+            f"   ⚠️ Pas de fin de paragraphe proche: cible mot {target_w}, "
+            f"fin de phrase retenue {chosen}"
+        )
+        return chosen
+
+    paragraph_fallback = [b for b in paragraph_boundaries if cursor_w < b <= cap_w]
+    if paragraph_fallback:
+        chosen = _closest_boundary(paragraph_fallback, target_w)
+        logger.warning(
+            f"   ⚠️ Fin de paragraphe éloignée: cible mot {target_w}, "
+            f"frontière retenue {chosen} (cap budget {cap_w})"
+        )
+        return chosen
+
+    sentence_fallback = [b for b in sentence_boundaries if cursor_w < b <= cap_w]
+    if sentence_fallback:
+        chosen = _closest_boundary(sentence_fallback, target_w)
+        logger.warning(
+            f"   ⚠️ Fin de phrase éloignée: cible mot {target_w}, "
+            f"frontière retenue {chosen} (cap budget {cap_w})"
+        )
+        return chosen
+
+    logger.warning(
+        f"   ⚠️ Aucune frontière naturelle sous cap {cap_w}; split brut au cap"
+    )
+    return cap_w
+
+
+def _build_course_text_units(segments):
+    """Construit les paragraphes TTS avec mapping mots → segment."""
+    full_words = []
+    word_to_seg_idx = []
+    units = []
+
+    for seg_idx, seg in enumerate(segments):
+        raw_paragraphs = [p.strip() for p in re.split(r"\n\s*\n+", seg["text"] or "") if p.strip()]
+        paragraphs = raw_paragraphs or [(seg["text"] or "").strip()]
+
+        for paragraph in paragraphs:
+            words = paragraph.split()
+            if not words:
+                continue
+            start = len(full_words)
+            end = start + len(words)
+            units.append({"start": start, "end": end, "text": paragraph, "seg_idx": seg_idx})
+            full_words.extend(words)
+            word_to_seg_idx.extend([seg_idx] * len(words))
+
+    return full_words, word_to_seg_idx, units
+
+
+def _render_course_slice(full_words, units, start_w, end_w):
+    """Reconstruit un bloc en conservant les paragraphes complets quand possible."""
+    parts = []
+    for unit in units:
+        if unit["end"] <= start_w:
+            continue
+        if unit["start"] >= end_w:
+            break
+
+        overlap_start = max(start_w, unit["start"])
+        overlap_end = min(end_w, unit["end"])
+        if overlap_start >= overlap_end:
+            continue
+
+        if overlap_start == unit["start"] and overlap_end == unit["end"]:
+            parts.append(unit["text"])
+        else:
+            parts.append(" ".join(full_words[overlap_start:overlap_end]))
+
+    return "\n\n".join(p.strip() for p in parts if p.strip())
+
+
+def _build_course_blocs_from_segments(
+    segments,
+    cours_durations_min,
+    playlist_spec,
+    force_all=False,
+    source_folder_id=None,
+    next_folder_id=None,
+    is_last_folder=False,
+    model=None,
+):
+    """Découpe le script en 7 blocs en respectant les fins d'idées ET le budget TTS.
+
+    Chaque bloc reçoit un cap mots calé sur le budget TTS (`_estimated_words_budget_for_course`).
+    Tout paragraphe en surplus cascade automatiquement vers le bloc suivant — déterministe,
+    gratuit, sans appel LLM réactif. Si le bloc 7 finit malgré tout au-dessus de son cap,
+    c'est que le total mots/jour dépasse le budget TTS → ressort de l'ajustement audio en aval.
+    """
+    full_words, word_to_seg_idx, units = _build_course_text_units(segments)
+
+    total_words = len(full_words)
+    total_duration = sum(cours_durations_min.values())
+    sentence_boundaries = _sentence_boundary_positions(full_words)
+    paragraph_boundaries = [u["end"] for u in units if u["end"] < total_words]
+    api_speed = _course_tts_speed()
+    blocs = []
+    cursor_w = 0
+    cumulative_duration = 0
+
+    for bloc_num in range(1, 8):
+        duration = cours_durations_min[bloc_num]
+        cumulative_duration += duration
+        target_sec = next(
+            (spec[1] for spec in playlist_spec if spec[3] == bloc_num and spec[2] == "cours"),
+            duration * 60
+        )
+        word_budget = _estimated_words_budget_for_course(target_sec, api_speed)
+
+        if bloc_num == 7:
+            # Bloc 7 absorbe le reste : si ça dépasse son budget, c'est volume_safety qui doit alerter
+            end_w = total_words
+        else:
+            target_w = round(total_words * cumulative_duration / total_duration)
+            end_w = _choose_natural_boundary(
+                cursor_w=cursor_w,
+                target_w=target_w,
+                total_words=total_words,
+                remaining_blocks=7 - bloc_num,
+                paragraph_boundaries=paragraph_boundaries,
+                sentence_boundaries=sentence_boundaries,
+                word_budget_max=word_budget,
+            )
+
+        if end_w <= cursor_w and cursor_w < total_words:
+            end_w = min(cursor_w + 1, total_words)
+
+        contributing_seg_indices = set(word_to_seg_idx[cursor_w:end_w])
+        is_dirty = force_all or any(segments[i]["dirty"] for i in contributing_seg_indices)
+
+        blocs.append({
+            "bloc_number": bloc_num,
+            "text": _render_course_slice(full_words, units, cursor_w, end_w),
+            "start_w": cursor_w,
+            "end_w": end_w,
+            "word_count": end_w - cursor_w,
+            "contributing_seg_indices": contributing_seg_indices,
+            "dirty": is_dirty,
+            "target_sec": target_sec,
+            "word_budget": word_budget,
+            "filename": next(
+                (spec[0] for spec in playlist_spec if spec[3] == bloc_num and spec[2] == "cours"),
+                f"cours_bloc{bloc_num}.mp3"
+            ),
+        })
+        block_words = end_w - cursor_w
+        budget_str = f"budget {word_budget}" if word_budget > 0 else "budget n/a"
+        if word_budget > 0 and block_words > word_budget and bloc_num != 7:
+            logger.warning(
+                f"   ⚠️ Bloc {bloc_num}: {block_words} mots > {budget_str} (cascade attendue)"
+            )
+        else:
+            logger.info(
+                f"   ✂️ Bloc {bloc_num}: mots {cursor_w}-{end_w} "
+                f"({block_words} mots / {budget_str})"
+            )
+        cursor_w = end_w
+
+    # ── Passe 2 : redistribution backward des paragraphes complets pour combler les undershoots ──
+    _redistribute_undershoot_backward(
+        blocs, paragraph_boundaries, full_words, units, word_to_seg_idx, segments,
+        api_speed, force_all,
+    )
+
+    carryover_out = _handle_last_bloc_overflow(
+        blocs=blocs,
+        full_words=full_words,
+        units=units,
+        word_to_seg_idx=word_to_seg_idx,
+        segments=segments,
+        paragraph_boundaries=paragraph_boundaries,
+        sentence_boundaries=sentence_boundaries,
+        api_speed=api_speed,
+        source_folder_id=source_folder_id,
+        next_folder_id=next_folder_id,
+        is_last_folder=is_last_folder,
+        model=model,
+    )
+
+    return blocs, total_words, carryover_out
+
+
+_BACKWARD_UNDERSHOOT_THRESHOLD_SEC = 30  # gap > 30s déclenche la redistribution
+
+
+def _redistribute_undershoot_backward(
+    blocs, paragraph_boundaries, full_words, units, word_to_seg_idx, segments,
+    api_speed, force_all,
+):
+    """Tire des paragraphes complets de bloc N+1 vers bloc N pour combler les undershoots.
+
+    Préserve les unités d'idée pédagogiques (paragraphes entiers, jamais split).
+    Boucle tant que :
+      - le bloc N a un gap > seuil
+      - ET le premier paragraphe de bloc N+1 rentre dans le budget restant de bloc N
+      - ET bloc N+1 garde au moins 1 paragraphe pour lui-même
+
+    Marque les blocs touchés comme `dirty` (texte modifié → audio à régénérer).
+    """
+    para_set = set(paragraph_boundaries)
+
+    for i in range(len(blocs) - 1):  # tous sauf le dernier (bloc 7 absorbe le résidu, pas de cible où tirer)
+        bloc = blocs[i]
+        next_bloc = blocs[i + 1]
+
+        moved = False
+        while True:
+            gap_sec = bloc["target_sec"] - _estimated_audio_seconds_for_words(
+                bloc["word_count"], api_speed
+            )
+            if gap_sec <= _BACKWARD_UNDERSHOOT_THRESHOLD_SEC:
+                break
+
+            # Trouver la première fin de paragraphe à l'intérieur de next_bloc
+            next_start = next_bloc["start_w"]
+            next_end = next_bloc["end_w"]
+            first_para_end = next(
+                (b for b in paragraph_boundaries if next_start < b < next_end),
+                None,
+            )
+            if first_para_end is None:
+                break  # next_bloc n'a qu'un seul paragraphe : on ne le vide pas entièrement
+
+            additional_words = first_para_end - next_start
+            if additional_words <= 0:
+                break
+
+            # Le paragraphe rentre-t-il dans le budget de bloc ?
+            new_word_count = bloc["word_count"] + additional_words
+            if bloc["word_budget"] > 0 and new_word_count > bloc["word_budget"]:
+                break  # paragraphe trop gros pour le budget restant
+
+            # Déplacer
+            bloc["end_w"] = first_para_end
+            bloc["word_count"] = new_word_count
+            next_bloc["start_w"] = first_para_end
+            next_bloc["word_count"] = next_bloc["end_w"] - next_bloc["start_w"]
+            moved = True
+
+            logger.info(
+                f"   ↩️ Bloc {bloc['bloc_number']}: tire un paragraphe ({additional_words} mots) "
+                f"de bloc {next_bloc['bloc_number']} (gap était {gap_sec:.0f}s)"
+            )
+
+        if moved:
+            # Re-render texts + recompute contributing segs / dirty pour les deux blocs
+            for b in (bloc, next_bloc):
+                b["text"] = _render_course_slice(full_words, units, b["start_w"], b["end_w"])
+                b["contributing_seg_indices"] = set(word_to_seg_idx[b["start_w"]:b["end_w"]])
+                b["dirty"] = True if not force_all else b["dirty"]
+                # force_all=True implique déjà dirty ; sinon redistribution = nouvelle audio
+                if not force_all:
+                    b["dirty"] = True
+
+
+def _handle_last_bloc_overflow(
+    blocs,
+    full_words,
+    units,
+    word_to_seg_idx,
+    segments,
+    paragraph_boundaries,
+    sentence_boundaries,
+    api_speed,
+    source_folder_id=None,
+    next_folder_id=None,
+    is_last_folder=False,
+    model=None,
+):
+    """Si le bloc 7 dépasse, reporte vers le cours suivant ou réduit le dernier jour."""
+    if not blocs:
+        return ""
+
+    last = blocs[-1]
+    budget = int(last.get("word_budget") or 0)
+    if budget <= 0 or last["word_count"] <= budget:
+        if source_folder_id:
+            _clear_cross_day_carryover_from_source(source_folder_id, next_folder_id)
+        return ""
+
+    if next_folder_id and not is_last_folder:
+        old_end = last["end_w"]
+        target_w = last["start_w"] + budget
+        cut_w = _choose_natural_boundary(
+            cursor_w=last["start_w"],
+            target_w=target_w,
+            total_words=old_end,
+            remaining_blocks=0,
+            paragraph_boundaries=paragraph_boundaries,
+            sentence_boundaries=sentence_boundaries,
+            word_budget_max=budget,
+        )
+        cut_w = max(last["start_w"] + 1, min(cut_w, old_end))
+        carryover_text = _render_course_slice(full_words, units, cut_w, old_end).strip()
+        existing_carryover = (
+            _get_existing_carryover_out(source_folder_id, next_folder_id)
+            if source_folder_id else ""
+        )
+        same_clean_carryover = (
+            bool(existing_carryover)
+            and existing_carryover == carryover_text
+            and not last.get("dirty")
+        )
+
+        last["end_w"] = cut_w
+        last["word_count"] = cut_w - last["start_w"]
+        last["text"] = _render_course_slice(full_words, units, last["start_w"], cut_w)
+        last["contributing_seg_indices"] = set(word_to_seg_idx[last["start_w"]:cut_w])
+        if not same_clean_carryover:
+            last["dirty"] = True
+
+        if source_folder_id and not same_clean_carryover:
+            _store_cross_day_carryover(source_folder_id, next_folder_id, carryover_text)
+        logger.warning(
+            f"   🔁 Bloc 7 trop chargé : {len(carryover_text.split())} mots reportés "
+            f"vers folder {next_folder_id}"
+        )
+        return carryover_text
+
+    # Dernier jour : pas de J+1, on remanie ce bloc par API avant TTS.
+    reduced_text = _reduce_last_bloc_to_budget(last, model=model)
+    last["text"] = reduced_text
+    last["word_count"] = len(reduced_text.split())
+    last["dirty"] = True
+    last["closing_added"] = True
+    last["closing_words"] = 0
+    if source_folder_id:
+        _clear_cross_day_carryover_from_source(source_folder_id, next_folder_id)
+    logger.warning(
+        f"   ✂️ Dernier bloc remanié par API : {last['word_count']} mots / budget {budget}"
+    )
+    return ""
+
+
+def _apply_closing_transitions(blocs, api_speed, model=None):
+    """Concatène à chaque bloc dirty un closing calibré sur le gap résiduel.
+
+    Le closing comble (partiellement) le silence qui aurait été laissé en fin de bloc.
+    Distinct des pauses dynamiques : on enrichit le fichier cours, pas la pause.
+
+    Cf. `backend/services/closing_transition_service.py` pour la logique de génération.
+    """
+    from services.closing_transition_service import (
+        generate_closing,
+        GAP_NEGLIGIBLE_SEC,
+    )
+
+    last_bloc_num = max(b["bloc_number"] for b in blocs) if blocs else 7
+    estimated_wpm = _TTS_REFERENCE_WPM_AT_095 * (api_speed / 0.95)
+
+    for idx, bloc in enumerate(blocs):
+        if not bloc.get("dirty"):
+            continue  # bloc clean : on ne touche pas à l'existant
+        if not (bloc.get("text") or "").strip():
+            continue  # bloc vide : rien à clore
+
+        raw_gap_sec = bloc["target_sec"] - _estimated_audio_seconds_for_words(
+            bloc["word_count"], api_speed
+        )
+        remaining_budget_words = max(0, int(bloc.get("word_budget") or 0) - int(bloc["word_count"]))
+        budget_gap_sec = (remaining_budget_words / estimated_wpm) * 60 if estimated_wpm > 0 else 0
+        gap_sec = min(raw_gap_sec, budget_gap_sec)
+
+        if gap_sec < GAP_NEGLIGIBLE_SEC or remaining_budget_words < 20:
+            continue  # gap imperceptible : silence padding suffit
+
+        # Excerpts pour le contexte LLM
+        words_in_bloc = bloc["text"].split()
+        prev_excerpt = " ".join(words_in_bloc[-200:]) if words_in_bloc else ""
+        next_excerpt = ""
+        if idx + 1 < len(blocs):
+            next_words = (blocs[idx + 1].get("text") or "").split()
+            next_excerpt = " ".join(next_words[:200])
+
+        is_last = bloc["bloc_number"] == last_bloc_num
+
+        closing = generate_closing(
+            bloc_num=bloc["bloc_number"],
+            prev_excerpt=prev_excerpt,
+            next_excerpt=next_excerpt,
+            gap_sec=gap_sec,
+            is_last_bloc=is_last,
+            model=model,
+            max_words=remaining_budget_words,
+        )
+        if closing:
+            closing_words = len(closing.split())
+            if closing_words > remaining_budget_words:
+                logger.warning(
+                    f"   ⚠️ Closing bloc {bloc['bloc_number']} ignoré : "
+                    f"{closing_words} mots > budget restant {remaining_budget_words}"
+                )
+                continue
+            bloc["text"] = bloc["text"].rstrip() + "\n\n" + closing.strip()
+            bloc["closing_added"] = True
+            bloc["closing_words"] = closing_words
+            new_word_count = len(bloc["text"].split())
+            bloc["word_count"] = new_word_count
+
+
+def _synthesize_course_audio_to_fit(bloc, convert_to_speech, measure_duration_ms, pad_audio_to_duration):
+    """
+    Génère un bloc cours sans troncature brutale.
+    Par défaut, on n'accélère pas la voix : si le texte est manifestement trop
+    long, on échoue avant l'appel Fish Audio pour éviter de payer un TTS inutilisable.
+    Un speedup local reste possible seulement si FORMATION_TTS_LOCAL_MAX_SPEEDUP > 1.
+    """
+    target_sec = bloc["target_sec"]
+    max_voice_sec = target_sec - _COURSE_START_SILENCE_SECONDS
+    api_speed = _course_tts_speed()
+    attempts = []
+    word_count = bloc.get("word_count") or len(bloc["text"].split())
+    word_budget = _estimated_words_budget_for_course(target_sec, api_speed)
+
+    if word_budget > 0 and word_count > word_budget:
+        raise ValueError(
+            f"Bloc {bloc['bloc_number']} trop long avant TTS "
+            f"({word_count} mots > budget prudent {word_budget} mots à speed={api_speed}). "
+            "Aucun appel Fish Audio lancé. Il faut générer moins de mots en amont "
+            "ou réduire ce bloc avant synthèse."
+        )
+
+    audio_bytes = convert_to_speech(bloc["text"], speed=api_speed)
+    raw_duration = measure_duration_ms(audio_bytes) / 1000
+    attempts.append({"kind": "api", "speed": api_speed, "duration": raw_duration})
+
+    if raw_duration <= max_voice_sec:
+        final_bytes = pad_audio_to_duration(
+            audio_bytes,
+            target_sec,
+            truncate_overflow=False,
+        )
+        return final_bytes, raw_duration, f"api_speed={api_speed}", attempts
+
+    required_speedup = raw_duration / max_voice_sec
+    max_speedup = _course_local_max_speedup()
+    if max_speedup <= 1.0:
+        raise ValueError(
+            f"Bloc {bloc['bloc_number']} trop long pour {target_sec}s "
+            f"(voix {raw_duration:.1f}s > max {max_voice_sec:.1f}s à speed={api_speed}). "
+            "Speedup local désactivé par défaut pour préserver la voix. "
+            "Audio non uploadé pour éviter une coupure en pleine phrase."
+        )
+
+    if required_speedup > max_speedup:
+        raise ValueError(
+            f"Bloc {bloc['bloc_number']} trop long pour {target_sec}s "
+            f"(voix {raw_duration:.1f}s > max {max_voice_sec:.1f}s, "
+            f"speedup requis x{required_speedup:.3f} > limite x{max_speedup:.3f}). "
+            "Audio non uploadé pour éviter une coupure en pleine phrase."
+        )
+
+    import io
+    from pydub import AudioSegment, effects
+
+    source_audio = AudioSegment.from_mp3(io.BytesIO(audio_bytes))
+    # Petite marge parce que pydub.effects.speedup est approximatif.
+    factors = [min(max_speedup, required_speedup * 1.005)]
+    if factors[0] < max_speedup:
+        factors.append(min(max_speedup, required_speedup * 1.02))
+
+    for factor in factors:
+        sped_audio = effects.speedup(
+            source_audio,
+            playback_speed=factor,
+            chunk_size=150,
+            crossfade=25,
+        )
+        out = io.BytesIO()
+        sped_audio.export(out, format="mp3", bitrate="128k")
+        sped_bytes = out.getvalue()
+        sped_duration = measure_duration_ms(sped_bytes) / 1000
+        attempts.append({"kind": "local_speedup", "factor": factor, "duration": sped_duration})
+
+        if sped_duration <= max_voice_sec:
+            final_bytes = pad_audio_to_duration(
+                sped_bytes,
+                target_sec,
+                truncate_overflow=False,
+            )
+            return final_bytes, sped_duration, f"api_speed={api_speed}, local_x{factor:.3f}", attempts
+
+    attempts_str = ", ".join(
+        f"{a['kind']}={a.get('speed', a.get('factor'))}: {a['duration']:.1f}s"
+        for a in attempts
+    )
+    raise ValueError(
+        f"Bloc {bloc['bloc_number']} trop long pour {target_sec}s "
+        f"(max voix {max_voice_sec:.1f}s). Tentatives locales: {attempts_str}. "
+        "Audio non uploadé pour éviter une coupure en pleine phrase."
+    )
 
 # Chemins vers les fichiers de prompts (dans backend/prompts/ pour qu'ils soient
 # embarqués dans l'artifact de déploiement backend — le workflow ne package que
@@ -127,7 +1218,7 @@ Réponds UNIQUEMENT en JSON valide, sans aucun texte avant ou après :
 
 Règles :
 - Exactement 6 sous-parties (ni plus ni moins)
-- Chaque nom doit être suffisamment précis pour orienter la génération de 15 000 mots de cours oral
+- Chaque nom doit être suffisamment précis pour orienter la génération d'environ 15 000 mots de cours oral
 - Couvrir l'essentiel du programme sans répétition entre sous-parties
 - Si le programme couvre 2 journées, prendre uniquement les sous-parties de la première moitié
 
@@ -252,10 +1343,10 @@ def _generate_segment_text(passe, sub_part_name, program_title, program_text, pr
                 raise
 
     # Couche 2 — Boucle de continuation si volume insuffisant
-    # La cible par passe est ~5 000 mots. Si Claude rend moins de 4 000,
+    # La cible par passe est ~5 000 mots. Si Claude rend moins de 4 500,
     # on relance une continuation pour compléter. Max 2 continuations pour
     # éviter une boucle infinie + coût maîtrisé.
-    MIN_WORDS = 4000
+    MIN_WORDS = 4500
     TARGET_WORDS = 5000
     MAX_CONTINUATIONS = 2
 
@@ -275,7 +1366,7 @@ def _generate_segment_text(passe, sub_part_name, program_title, program_text, pr
             f"Continue le cours là où tu t'es arrêté, avec le même ton oral, "
             f"les mêmes règles TTS (tags Fish Audio, pas de musique/alcool/fêtes, "
             f"discours indirect, pas de visuel), et la même voix narrative.\n\n"
-            f"CONSIGNE DE DÉVELOPPEMENT (minimum 2 500 mots supplémentaires) :\n"
+            f"CONSIGNE DE DÉVELOPPEMENT (minimum 1 800 mots supplémentaires) :\n"
             f"- 2 à 4 exemples fictifs supplémentaires dans des contextes variés\n"
             f"- 1 cas contraste explicite : ce qu'il ne FAUT PAS faire + pourquoi\n"
             f"- Nuances selon le profil client (novice vs expert, pressé vs exploratoire)\n"
@@ -368,12 +1459,15 @@ def start_generation_job(folder_id: int, platform_id: int, program_text: str,
 
 def get_job_from_db(folder_id):
     """Retourne le job DB pour un dossier, ou None."""
+    _ensure_carryover_columns()
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("""
         SELECT id, platform_id, program_text, program_title, sub_parts, status,
                current_sub_part, current_passe, total_words, error_message,
-               from_scratch, module_contents
+               from_scratch, module_contents,
+               carryover_in_text, carryover_in_source_folder_id,
+               carryover_out_text, carryover_out_target_folder_id
         FROM content_generation_jobs WHERE folder_id = ?
     """, (folder_id,))
     row = cursor.fetchone()
@@ -387,6 +1481,10 @@ def get_job_from_db(folder_id):
         "total_words": row[8], "error_message": row[9],
         "from_scratch": bool(row[10]),
         "module_contents": json.loads(row[11] or "{}"),
+        "carryover_in_text": row[12] or "",
+        "carryover_in_source_folder_id": row[13],
+        "carryover_out_text": row[14] or "",
+        "carryover_out_target_folder_id": row[15],
     }
 
 
@@ -554,7 +1652,7 @@ def run_content_generation(folder_id, on_progress=None, mode="normal", model=Non
     on_progress(sub_idx, total_sub_parts, passe, total_words, message) — callback optionnel.
 
     mode :
-      "normal" — génération complète via Claude (~92 000 mots)
+      "normal" — génération complète via Claude (~90 000 mots)
       "mock"   — texte factice instantané, 0 appel Claude (pour tests)
       "mini"   — 1 seule sous-partie × 1 seule passe, max_tokens 300 (~0.02€)
     """
@@ -659,9 +1757,94 @@ def run_content_generation(folder_id, on_progress=None, mode="normal", model=Non
         raise
 
 
-def generate_audio_from_script(folder_id, on_progress=None, force_all=False, mock=False, basic_tts=False):
+def _playlist_items_for_platform(platform_id: int) -> list:
+    """Retourne la playlist effective de la plateforme au format PLAYLIST_SPEC."""
+    from services.playlist_tts_service import PLAYLIST_SPEC
+    bloc_by_filename = {spec[0]: spec[3] for spec in PLAYLIST_SPEC}
+
+    try:
+        from services.audio_service import get_playlist
+        playlist = get_playlist(platform_id)
+    except Exception as e:
+        logger.warning(f"⚠️ Playlist plateforme indisponible, fallback PLAYLIST_SPEC : {e}")
+        return list(PLAYLIST_SPEC)
+
+    items = []
+    for item in playlist:
+        filename = os.path.basename((item.get("filename") or "").split("?", 1)[0])
+        file_type = item.get("type")
+        duration = int(item.get("duration") or 0)
+        bloc_num = bloc_by_filename.get(filename)
+        if bloc_num is None:
+            # Fallback : extraire depuis le nom des fichiers cours_N impossible ici,
+            # donc garder 1 pour éviter None dans les prompts.
+            bloc_num = 1
+        items.append((filename, duration, file_type, bloc_num))
+    return items or list(PLAYLIST_SPEC)
+
+
+def _build_contextual_break_audio(
+    filename: str,
+    duration_sec: int,
+    file_type: str,
+    bloc_num: int,
+    item_idx: int,
+    playlist_items: list,
+    blocs_by_number: dict,
+    mock: bool = False,
+    basic_tts: bool = False,
+):
+    """Génère un Q&A/pause contextuel, fallback vers audioqapause si nécessaire."""
+    from services.playlist_tts_service import (
+        _build_pause_audio,
+        _generate_silence_mp3,
+        _get_recycled_qa_pause,
+    )
+
+    if mock:
+        return _generate_silence_mp3(1), "mock"
+
+    try:
+        from services.break_transition_service import build_break_transition_texts
+
+        intro, outro = build_break_transition_texts(
+            filename=filename,
+            duration_sec=duration_sec,
+            break_type=file_type,
+            bloc_num=bloc_num,
+            item_idx=item_idx,
+            playlist_items=playlist_items,
+            get_bloc_text=lambda n: blocs_by_number.get(n, {}).get("text", ""),
+        )
+        if basic_tts:
+            from services.basic_tts_service import convert_to_speech_basic
+            return _build_pause_audio(
+                intro, outro, duration_sec,
+                convert_func=convert_to_speech_basic,
+            ), "contextual_gtts"
+        return _build_pause_audio(intro, outro, duration_sec), "contextual_fish"
+    except Exception as e:
+        logger.warning(f"⚠️ Break contextuel {filename} échoué : {e}; fallback audioqapause")
+        return _get_recycled_qa_pause(filename), "audioqapause_fallback"
+
+
+def generate_audio_from_script(
+    folder_id,
+    on_progress=None,
+    force_all=False,
+    mock=False,
+    basic_tts=False,
+    next_folder_id=None,
+    is_last_folder=None,
+    sync_slides=False,
+    auto_generate_slides=False,
+    slide_max_slides=60,
+    slide_pace="normal",
+    slide_model=None,
+):
     """
-    Génère (ou régénère) les 7 fichiers MP3 cours à partir du script TTS stocké en DB.
+    Génère (ou régénère) la playlist MP3 depuis le script TTS stocké en DB :
+    7 blocs cours + Q&A/pauses contextuels quand le mode n'est pas mock.
 
     3 modes possibles (priorité décroissante) :
     - mock=True        → MP3 silence 1s, test gratuit (pas d'audio réel)
@@ -670,9 +1853,11 @@ def generate_audio_from_script(folder_id, on_progress=None, force_all=False, moc
 
     Logique de régénération sélective :
     - Assemble les segments en ordre (sub_part × passe)
-    - Découpe le texte total en 7 blocs proportionnels aux durées de la playlist
+    - Découpe le texte total en 7 blocs proportionnels, sur fins de paragraphes/phrases
     - Pour chaque bloc, vérifie si au moins un segment contributeur est dirty=1
     - Si dirty (ou force_all=True) → génère le TTS + upload Azure
+    - sync_slides=True découpe les blocs cours selon le dernier deck de slides
+      persistant, puis stocke les timings slide → audio.
     - Si propre → conserve l'ancien MP3
 
     Après génération réussie d'un bloc : marque ses segments dirty=0.
@@ -693,6 +1878,39 @@ def generate_audio_from_script(folder_id, on_progress=None, force_all=False, moc
 
     platform_id = job["platform_id"]
     job_id = job["id"]
+    if next_folder_id is None:
+        next_folder_id = _find_next_folder_id(platform_id, folder_id)
+    if is_last_folder is None:
+        is_last_folder = next_folder_id is None
+
+    slide_deck = None
+    if sync_slides:
+        from services.script_slide_generation_service import (
+            generate_slides_from_script,
+            get_latest_script_slide_deck,
+        )
+        slide_deck = get_latest_script_slide_deck(folder_id, content_job_id=job_id)
+        if not slide_deck and auto_generate_slides:
+            logger.info(
+                f"🖼️ Folder {folder_id}: aucun deck slides, génération automatique avant TTS sync"
+            )
+            generate_slides_from_script(
+                folder_id=folder_id,
+                platform_id=platform_id,
+                max_slides=slide_max_slides,
+                pace=slide_pace,
+                model=slide_model,
+            )
+            slide_deck = get_latest_script_slide_deck(folder_id, content_job_id=job_id)
+        if not slide_deck:
+            raise ValueError(
+                f"Aucun deck de slides persistant pour le dossier {folder_id}. "
+                "Générez les slides d'abord ou relancez avec auto_generate_slides=true."
+            )
+        logger.info(
+            f"🖼️ Folder {folder_id}: TTS sync slides activé "
+            f"(deck={slide_deck['deck_id']}, slides={len(slide_deck.get('slides') or [])})"
+        )
 
     # ── 1. Charger tous les segments complétés dans l'ordre ──
     conn = get_db_connection()
@@ -710,81 +1928,132 @@ def generate_audio_from_script(folder_id, on_progress=None, force_all=False, moc
         raise ValueError("Aucun segment généré — lancez d'abord la génération du script")
 
     # Construire la liste ordonnée des segments avec leur index global
-    segments = [
-        {"sub_idx": r[0], "passe": r[1], "text": r[2], "word_count": r[3], "dirty": bool(r[4])}
-        for r in rows
-    ]
+    segments = []
+    for r in rows:
+        text = r[2] or ""
+        if sync_slides:
+            text = _strip_tts_tags_for_sync(text)
+        segments.append({
+            "sub_idx": r[0],
+            "passe": r[1],
+            "text": text,
+            "word_count": len(text.split()) if sync_slides else r[3],
+            "dirty": bool(r[4]),
+        })
 
-    # ── 2. Assembler le texte complet et mapper chaque mot → segment index ──
-    full_words = []
-    word_to_seg_idx = []  # pour chaque position mot, l'index du segment
-
-    for seg_idx, seg in enumerate(segments):
-        words = seg["text"].split()
-        full_words.extend(words)
-        word_to_seg_idx.extend([seg_idx] * len(words))
-
-    total_words = len(full_words)
-    logger.info(f"📝 Script total : {total_words} mots, {len(segments)} segments")
-
-    # ── 3. Découper en 7 blocs proportionnels aux durées ──
-    total_duration = sum(COURS_DURATIONS_MIN.values())
-    blocs = []
-    cursor_w = 0
-
-    for bloc_num in range(1, 8):
-        duration = COURS_DURATIONS_MIN[bloc_num]
-        proportion = duration / total_duration
-        bloc_words_count = round(total_words * proportion)
-        end_w = min(cursor_w + bloc_words_count, total_words)
-
-        # Texte de ce bloc
-        bloc_text = " ".join(full_words[cursor_w:end_w])
-
-        # Segments qui contribuent à ce bloc
-        contributing_seg_indices = set(word_to_seg_idx[cursor_w:end_w])
-
-        # Ce bloc est dirty si au moins un de ses segments a été modifié
-        is_dirty = force_all or any(segments[i]["dirty"] for i in contributing_seg_indices)
-
-        # Durée cible en secondes (depuis PLAYLIST_SPEC)
-        target_sec = next(
-            (spec[1] for spec in PLAYLIST_SPEC if spec[3] == bloc_num and spec[2] == "cours"),
-            duration * 60
+    carryover_in = (job.get("carryover_in_text") or "").strip()
+    if carryover_in and segments:
+        sync_carryover_words = len(_strip_tts_tags_for_sync(carryover_in).split()) if sync_slides else 0
+        segments[0]["text"] = carryover_in + "\n\n" + (segments[0]["text"] or "")
+        segments[0]["word_count"] = len(segments[0]["text"].split())
+        segments[0]["dirty"] = True
+        if sync_slides and sync_carryover_words and slide_deck:
+            adjusted_slides = []
+            for slide in slide_deck.get("slides", []):
+                clone = json.loads(json.dumps(slide, ensure_ascii=False))
+                source_ref = clone.get("source_ref") or {}
+                if source_ref.get("word_start") is not None:
+                    source_ref["word_start"] = int(source_ref["word_start"]) + sync_carryover_words
+                if source_ref.get("word_end") is not None:
+                    source_ref["word_end"] = int(source_ref["word_end"]) + sync_carryover_words
+                clone["source_ref"] = source_ref
+                adjusted_slides.append(clone)
+            slide_deck["slides"] = adjusted_slides
+        logger.info(
+            f"🔁 Folder {folder_id} : carryover entrant depuis folder "
+            f"{job.get('carryover_in_source_folder_id')} ({len(carryover_in.split())} mots)"
         )
 
-        blocs.append({
-            "bloc_number": bloc_num,
-            "text": bloc_text,
-            "contributing_seg_indices": contributing_seg_indices,
-            "dirty": is_dirty,
-            "target_sec": target_sec,
-            "filename": next(
-                (spec[0] for spec in PLAYLIST_SPEC if spec[3] == bloc_num and spec[2] == "cours"),
-                f"cours_bloc{bloc_num}.mp3"
-            ),
-        })
-        cursor_w = end_w
+    total_words = sum(len(seg["text"].split()) for seg in segments)
+    logger.info(f"📝 Script total : {total_words} mots, {len(segments)} segments")
 
+    # ── 3. Découper en 7 blocs proportionnels, sur fins d'idées + redistribution ──
+    # Passe 1 (forward cascade) + Passe 2 (backward redistribution) sont dans la fonction.
+    blocs, _, carryover_out = _build_course_blocs_from_segments(
+        segments,
+        COURS_DURATIONS_MIN,
+        PLAYLIST_SPEC,
+        force_all=force_all,
+        source_folder_id=folder_id,
+        next_folder_id=next_folder_id,
+        is_last_folder=is_last_folder,
+    )
+    if carryover_out:
+        logger.info(
+            f"🔁 Folder {folder_id} : {len(carryover_out.split())} mots reportés "
+            f"vers folder {next_folder_id}"
+        )
+
+    # ── 3.5. Closings contextuels — texte de fin de bloc adaptatif au gap résiduel.
+    # Désactivé en mock/basic_tts et en sync slides: les bornes slides doivent
+    # rester alignées sur le texte qui a servi au deck.
+    if not mock and not basic_tts and not sync_slides:
+        try:
+            _apply_closing_transitions(blocs, _course_tts_speed())
+        except Exception as e:
+            logger.warning(f"⚠️ Closings contextuels — erreur globale, on continue sans : {e}")
+
+    blocs_by_number = {b["bloc_number"]: b for b in blocs}
+    playlist_items = _playlist_items_for_platform(platform_id)
     dirty_count = sum(1 for b in blocs if b["dirty"])
     clean_count = 7 - dirty_count
     logger.info(f"🎯 {dirty_count}/7 blocs à régénérer, {clean_count}/7 conservés")
 
-    _progress(0, 7, f"{dirty_count}/7 blocs à régénérer ({clean_count} conservés)...")
+    _progress(0, len(playlist_items), f"{dirty_count}/7 blocs cours à régénérer ({clean_count} conservés)...")
 
-    # ── 4. Générer le TTS uniquement pour les blocs dirty ──
+    # ── 4. Générer la playlist : cours dirty + Q&A/pauses contextuels ──
     azure_prefix = f"platform-{platform_id}/folder-{folder_id}/playlist/"
     generated = []
     skipped = []
+    slide_audio_timings = []
+    slide_sync_files = []
 
-    for i, bloc in enumerate(blocs):
-        step = i + 1
-        filename = bloc["filename"]
+    for item_idx, (filename, duration_sec, file_type, bloc_num) in enumerate(playlist_items):
+        step = item_idx + 1
+        bloc = blocs_by_number.get(bloc_num)
+
+        if file_type != "cours":
+            if mock:
+                logger.info(f"   🧪 [MOCK] {filename}: skip Q&A/pause contextuel")
+                skipped.append(filename)
+                continue
+            if not force_all and dirty_count == 0:
+                logger.info(f"   ⏭️ {filename}: break conservé (aucun bloc cours dirty)")
+                _progress(step, len(playlist_items), f"{filename} — conservé")
+                skipped.append(filename)
+                continue
+
+            _progress(step, len(playlist_items), f"{filename} — génération {file_type} contextuel...")
+            final_bytes, break_mode = _build_contextual_break_audio(
+                filename=filename,
+                duration_sec=duration_sec,
+                file_type=file_type,
+                bloc_num=bloc_num,
+                item_idx=item_idx,
+                playlist_items=playlist_items,
+                blocs_by_number=blocs_by_number,
+                mock=mock,
+                basic_tts=basic_tts,
+            )
+            upload_blob(CONTAINER_AUDIOS, f"{azure_prefix}{filename}", final_bytes)
+            try:
+                final_duration = _measure_duration_ms(final_bytes) / 1000
+            except Exception:
+                final_duration = duration_sec if break_mode == "audioqapause_fallback" else len(final_bytes) / 4000
+            logger.info(f"   ✅ {filename} : {final_duration:.1f}s uploadé ({break_mode})")
+            generated.append(filename)
+            continue
+
+        if not bloc:
+            logger.info(f"   ⏭️ {filename}: bloc {bloc_num} introuvable, skip")
+            skipped.append(filename)
+            continue
+
         target_sec = bloc["target_sec"]
 
         if not bloc["dirty"]:
             logger.info(f"   ⏭️ Bloc {bloc['bloc_number']} ({filename}) : non modifié, conservé")
-            _progress(step, 7, f"Bloc {bloc['bloc_number']}/7 — conservé (non modifié)")
+            _progress(step, len(playlist_items), f"Bloc {bloc['bloc_number']}/7 — conservé (non modifié)")
             skipped.append(filename)
             continue
 
@@ -793,13 +2062,34 @@ def generate_audio_from_script(folder_id, on_progress=None, force_all=False, moc
             skipped.append(filename)
             continue
 
-        if mock:
-            _progress(step, 7, f"[MOCK] Bloc {bloc['bloc_number']}/7 — silence 1s...")
+        if sync_slides:
+            mode_label = "MOCK" if mock else "BASIC gTTS" if basic_tts else "Fish Audio"
+            _progress(
+                step,
+                len(playlist_items),
+                f"[SYNC SLIDES] Bloc {bloc['bloc_number']}/7 — {mode_label} ({len(bloc['text'].split())} mots)...",
+            )
+            logger.info(f"   🖼️ Bloc {bloc['bloc_number']} ({filename}) — TTS synchronisé slides")
+            final_bytes, voice_duration, fit_method, attempts, bloc_timings = _synthesize_course_audio_synced_to_slides(
+                bloc,
+                slide_deck.get("slides", []) if slide_deck else [],
+                filename,
+                mock=mock,
+                basic_tts=basic_tts,
+            )
+            slide_audio_timings.extend(bloc_timings)
+            slide_sync_files.append(filename)
+            logger.info(
+                f"   TTS sync voix : {voice_duration:.1f}s "
+                f"({fit_method}, chunks={len(attempts)}, cible : {target_sec}s)"
+            )
+        elif mock:
+            _progress(step, len(playlist_items), f"[MOCK] Bloc {bloc['bloc_number']}/7 — silence 1s...")
             logger.info(f"   🧪 [MOCK] Bloc {bloc['bloc_number']} ({filename}) — silence 1s")
             from services.playlist_tts_service import _generate_silence_mp3
             final_bytes = _generate_silence_mp3(1)
         elif basic_tts:
-            _progress(step, 7, f"[BASIC] Bloc {bloc['bloc_number']}/7 — gTTS ({len(bloc['text'].split())} mots)...")
+            _progress(step, len(playlist_items), f"[BASIC] Bloc {bloc['bloc_number']}/7 — gTTS ({len(bloc['text'].split())} mots)...")
             logger.info(f"   🔊 [BASIC gTTS] Bloc {bloc['bloc_number']} ({filename}) — génération via gTTS…")
             from services.basic_tts_service import convert_to_speech_basic
             # Pas de padding : la durée gTTS ne matche pas les créneaux cours,
@@ -808,16 +2098,26 @@ def generate_audio_from_script(folder_id, on_progress=None, force_all=False, moc
             # le reste sera du silence côté playlist horodatée.
             final_bytes = convert_to_speech_basic(bloc["text"])
         else:
-            _progress(step, 7, f"Bloc {bloc['bloc_number']}/7 — génération TTS ({len(bloc['text'].split())} mots)...")
+            _progress(step, len(playlist_items), f"Bloc {bloc['bloc_number']}/7 — génération TTS ({len(bloc['text'].split())} mots)...")
             logger.info(f"   🎙️ Bloc {bloc['bloc_number']} ({filename}) — TTS en cours...")
-            audio_bytes = convert_to_speech(bloc["text"])
-            raw_duration = _measure_duration_ms(audio_bytes) / 1000
-            logger.info(f"   TTS brut : {raw_duration:.1f}s (cible : {target_sec}s)")
-            final_bytes = _pad_audio_to_duration(audio_bytes, target_sec)
+            final_bytes, voice_duration, fit_method, attempts = _synthesize_course_audio_to_fit(
+                bloc,
+                convert_to_speech,
+                _measure_duration_ms,
+                _pad_audio_to_duration,
+            )
+            if len(attempts) > 1:
+                logger.info(f"   🔁 Bloc {bloc['bloc_number']} ajusté localement ({fit_method})")
+            logger.info(f"   TTS voix : {voice_duration:.1f}s ({fit_method}, cible : {target_sec}s)")
         blob_path = f"{azure_prefix}{filename}"
         upload_blob(CONTAINER_AUDIOS, blob_path, final_bytes)
 
-        if mock:
+        if sync_slides:
+            try:
+                final_duration = _measure_duration_ms(final_bytes) / 1000
+            except Exception:
+                final_duration = target_sec
+        elif mock:
             final_duration = 1.0
         elif basic_tts:
             # gTTS produit un MP3 valide ; mesure possible via pydub si ffmpeg
@@ -850,10 +2150,34 @@ def generate_audio_from_script(folder_id, on_progress=None, force_all=False, moc
             conn.commit()
             conn.close()
 
-    _progress(7, 7, f"✅ Terminé — {len(generated)} régénérés, {len(skipped)} conservés")
+    if sync_slides and slide_deck:
+        from services.script_slide_generation_service import update_script_slide_deck_audio_sync
+        audio_mode = "mock" if mock else "gtts" if basic_tts else "fish_audio"
+        update_script_slide_deck_audio_sync(
+            slide_deck["deck_id"],
+            {
+                "enabled": True,
+                "mode": audio_mode,
+                "folder_id": folder_id,
+                "content_job_id": job_id,
+                "generated_files": slide_sync_files,
+                "timings": slide_audio_timings,
+            },
+        )
+
+    _progress(len(playlist_items), len(playlist_items), f"✅ Terminé — {len(generated)} générés, {len(skipped)} conservés")
     logger.info(f"✅ generate_audio_from_script : {len(generated)} régénérés, {len(skipped)} conservés")
 
-    return {"generated": len(generated), "skipped": len(skipped), "files": generated}
+    return {
+        "generated": len(generated),
+        "skipped": len(skipped),
+        "files": generated,
+        "slide_sync_enabled": bool(sync_slides),
+        "slide_deck_id": slide_deck["deck_id"] if slide_deck else None,
+        "slide_timings": len(slide_audio_timings),
+        "carryover_out_words": len(carryover_out.split()) if carryover_out else 0,
+        "carryover_target_folder_id": next_folder_id if carryover_out else None,
+    }
 
 
 def get_script_dirty_blocs(folder_id):
@@ -928,6 +2252,52 @@ import re as _re
 _REVIEW_MAX_PATCHES = 5
 _REVIEW_MAX_TOKENS = 2000
 
+
+def _env_int(name: str, default: int, min_value: int = 1) -> int:
+    try:
+        return max(min_value, int(os.getenv(name, str(default))))
+    except (TypeError, ValueError):
+        logger.warning(f"⚠️ {name} invalide, fallback {default}")
+        return default
+
+
+_REVIEW_CHUNK_WORDS = _env_int("FORMATION_REVIEW_CHUNK_WORDS", 1500, min_value=300)
+_REVIEW_CHUNK_CONCURRENCY = _env_int("FORMATION_REVIEW_CHUNK_CONCURRENCY", 2, min_value=1)
+_REVIEW_MAX_ATTEMPTS = 3
+
+_REVIEW_RULE_GROUPS = [
+    {
+        "id": "ethique_culturelle",
+        "label": "Éthique culturelle",
+        "rules": [1, 2, 3, 9, 14],
+        "description": "Spirituel/religieux, alcool/musique/banques, fêtes, humour, respect des tiers",
+    },
+    {
+        "id": "ethique_commerciale",
+        "label": "Éthique commerciale",
+        "rules": [4, 5, 6, 7, 8],
+        "description": "Manipulation, closing manipulatoire, flirt/séduction, chance/destin, célébrités",
+    },
+    {
+        "id": "legal_integrite",
+        "label": "Légal et intégrité",
+        "rules": [10, 11, 12, 13, 15, 16],
+        "description": "Cohérence interne, discrimination, RGPD, promesses irréalistes, détresse, conseils médicaux/juridiques",
+    },
+    {
+        "id": "anti_hallucination",
+        "label": "Anti-hallucination",
+        "rules": [17, 18, 19, 20],
+        "description": "Exemples fictifs, chiffres non sourcés, expressions de prudence, posture pédagogique",
+    },
+    {
+        "id": "style_oral_tts",
+        "label": "Style oral TTS",
+        "rules": [21, 22, 23, 24, 25, 26, 27],
+        "description": "Fusion syntaxique, guillemets, posture dialogale, punchlines, cours à distance, énumérations, registre oral",
+    },
+]
+
 _RULES_CACHE = {"mtime": 0, "text": ""}
 
 
@@ -952,6 +2322,210 @@ def _load_review_rules() -> str:
     _RULES_CACHE["mtime"] = mtime
     _RULES_CACHE["text"] = rules_text
     return rules_text
+
+
+def _extract_rules_for_group(full_rules_text: str, rule_numbers: list) -> str:
+    """Extrait uniquement les règles demandées du bloc RÈGLES complet (split sur RÈGLE #N)."""
+    parts = _re.split(r"(?=RÈGLE #\d+)", full_rules_text)
+    extracted = []
+    for part in parts:
+        m = _re.match(r"RÈGLE #(\d+)", part)
+        if m and int(m.group(1)) in rule_numbers:
+            extracted.append(part.strip())
+    return "\n\n".join(extracted)
+
+
+def _build_review_prompt_focused(
+    segment_text: str, rules_text: str, group_label: str, group_desc: str, rule_numbers: list,
+    chunk_index: int = 1, chunk_total: int = 1,
+) -> str:
+    rules_list = ", ".join(f"#{n}" for n in rule_numbers)
+    return f"""Tu es un reviewer éditorial SPÉCIALISÉ. Tu reçois un extrait de cours oral et un sous-ensemble de règles à vérifier.
+
+🎯 TON SCOPE EXCLUSIF : {group_label} — {group_desc}
+Tu vérifies UNIQUEMENT les règles {rules_list}. Ignore toutes les autres règles.
+
+Tu audites le CHUNK {chunk_index}/{chunk_total} d'un segment plus long. Ne juge que le texte fourni ci-dessous.
+
+TU NE RÉÉCRIS PAS LE TEXTE. Tu renvoies un JSON avec uniquement les passages qui violent une règle de ton scope.
+Si le texte est conforme pour ces règles, renvoie {{"patches": []}}.
+
+Format de sortie strict (JSON valide, rien d'autre avant ou après) :
+
+{{
+  "patches": [
+    {{
+      "original": "phrase EXACTE à remplacer (copie verbatim, 3 à 40 mots)",
+      "replacement": "phrase corrigée, même esprit, même registre oral",
+      "rule_violated": "#1",
+      "reason": "explication brève (1 phrase)"
+    }}
+  ]
+}}
+
+Contraintes impératives :
+- Maximum {_REVIEW_MAX_PATCHES} patches. Si tu vois plus de violations, garde les {_REVIEW_MAX_PATCHES} pires.
+- `original` doit être trouvable TEL QUEL dans le texte (copie mot pour mot, ponctuation comprise).
+- `replacement` corrige la violation sans reformuler le sens, sans ajouter de contenu.
+- Ne corrige QUE les vraies violations de {rules_list}. Pas d'autres règles, pas de préférence stylistique.
+- `rule_violated` = numéro parmi {rules_list} (ex: "#1", "#9").
+
+─── RÈGLES DE TON SCOPE ({group_label}) ───
+{rules_text}
+
+─── TEXTE À AUDITER ───
+{segment_text}
+
+─── TON JSON ───
+"""
+
+
+def _cooperative_sleep(seconds: float) -> None:
+    """Sleep compatible eventlet si disponible, sinon sleep standard."""
+    try:
+        import eventlet
+        eventlet.sleep(seconds)
+    except Exception:
+        time.sleep(seconds)
+
+
+def _chunk_text(text: str, max_words: int = _REVIEW_CHUNK_WORDS) -> list:
+    """Découpe un segment en chunks paragraph-aware d'environ max_words mots."""
+    words = text.split()
+    if len(words) <= max_words:
+        return [{"index": 1, "total": 1, "text": text, "words": len(words)}]
+
+    parts = _re.split(r"(\n\s*\n+)", text)
+    units = []
+    for i in range(0, len(parts), 2):
+        unit = parts[i]
+        if i + 1 < len(parts):
+            unit += parts[i + 1]
+        if unit.strip():
+            units.append(unit)
+
+    chunks = []
+    buf = []
+    buf_words = 0
+
+    def _flush():
+        nonlocal buf, buf_words
+        if buf:
+            chunk_text = "".join(buf).strip()
+            chunks.append({"text": chunk_text, "words": len(chunk_text.split())})
+            buf = []
+            buf_words = 0
+
+    for unit in units:
+        unit_words = len(unit.split())
+        if buf and buf_words + unit_words > max_words:
+            _flush()
+        buf.append(unit)
+        buf_words += unit_words
+        if buf_words >= max_words:
+            _flush()
+    _flush()
+
+    total = len(chunks) or 1
+    if not chunks:
+        chunks = [{"text": text, "words": len(words)}]
+        total = 1
+    for i, chunk in enumerate(chunks, start=1):
+        chunk["index"] = i
+        chunk["total"] = total
+    return chunks
+
+
+def _review_chunk_with_retries(prompt: str, group_label: str, chunk_index: int, model=None) -> dict:
+    """Appelle le reviewer API avec retries sur erreurs transitoires et parse JSON."""
+    last_error = None
+    for attempt in range(_REVIEW_MAX_ATTEMPTS):
+        try:
+            raw = _anthropic_post(
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=_REVIEW_MAX_TOKENS,
+                model=model,
+            )
+            patches, parse_error = _parse_patches_response(raw)
+            if not parse_error:
+                return {"ok": True, "patches": patches}
+            last_error = f"[{group_label} chunk {chunk_index}] parse: {parse_error}"
+            wait = 15 * (attempt + 1)
+        except AnthropicRateLimitError as e:
+            last_error = f"[{group_label} chunk {chunk_index}] rate_limit: {str(e)[:200]}"
+            wait = max(float(getattr(e, "wait_seconds", 0) or 0), 15 * (attempt + 1))
+        except AnthropicAPIError as e:
+            last_error = f"[{group_label} chunk {chunk_index}] API {e.status_code}: {str(e)[:200]}"
+            if getattr(e, "is_deterministic", False):
+                return {"ok": False, "error": last_error}
+            wait = 15 * (attempt + 1)
+        except Exception as e:
+            last_error = f"[{group_label} chunk {chunk_index}] API error: {str(e)[:200]}"
+            wait = 15 * (attempt + 1)
+
+        if attempt < _REVIEW_MAX_ATTEMPTS - 1:
+            logger.warning(
+                f"    ⚠️ Salve '{group_label}' chunk {chunk_index} tentative "
+                f"{attempt + 1}/{_REVIEW_MAX_ATTEMPTS} : {last_error} — retry dans {wait:.0f}s"
+            )
+            _cooperative_sleep(wait)
+
+    return {"ok": False, "error": last_error or f"[{group_label} chunk {chunk_index}] échec inconnu"}
+
+
+def _review_group_chunks(current_text: str, rules_text: str, group: dict, model=None) -> tuple:
+    """Audite tous les chunks d'un segment pour un groupe de règles."""
+    group_label = group["label"]
+    group_rules = group["rules"]
+    group_desc = group["description"]
+    group_rules_text = _extract_rules_for_group(rules_text, group_rules)
+    chunks = _chunk_text(current_text)
+
+    logger.info(
+        f"    🔬 Salve '{group_label}' : {len(chunks)} chunk(s), "
+        f"concurrency={_REVIEW_CHUNK_CONCURRENCY}"
+    )
+
+    def _run_chunk(chunk):
+        prompt = _build_review_prompt_focused(
+            chunk["text"], group_rules_text, group_label, group_desc, group_rules,
+            chunk_index=chunk["index"], chunk_total=chunk["total"],
+        )
+        result = _review_chunk_with_retries(prompt, group_label, chunk["index"], model=model)
+        result["chunk"] = chunk
+        return result
+
+    if len(chunks) == 1 or _REVIEW_CHUNK_CONCURRENCY <= 1:
+        results = [_run_chunk(chunk) for chunk in chunks]
+    else:
+        import eventlet
+        pool = eventlet.GreenPool(size=_REVIEW_CHUNK_CONCURRENCY)
+        pile = eventlet.GreenPile(pool)
+        for chunk in chunks:
+            pile.spawn(_run_chunk, chunk)
+        results = list(pile)
+        results.sort(key=lambda r: r["chunk"]["index"])
+
+    updated_text = current_text
+    group_applied = []
+    group_rejected = []
+
+    for result in results:
+        chunk = result["chunk"]
+        if not result.get("ok"):
+            return updated_text, group_applied, group_rejected, result.get("error")
+
+        patches = [
+            {**p, "review_group": group["id"], "chunk_index": chunk["index"]}
+            for p in (result.get("patches") or [])
+        ]
+        new_text, applied, rejected = _apply_patches(updated_text, patches)
+
+        updated_text = new_text
+        group_applied.extend(applied)
+        group_rejected.extend(rejected)
+
+    return updated_text, group_applied, group_rejected, None
 
 
 def _build_review_prompt(segment_text: str, rules_text: str) -> str:
@@ -1121,107 +2695,58 @@ def run_content_review(folder_id, on_progress=None, model=None):
     for step, row in enumerate(rows, start=1):
         seg_id, sub_idx, sub_part_name, passe, text_content = row
         label = f"sous-partie {sub_idx + 1} / passe {passe}"
-        _progress(step, total, f"Audit {label}…")
-        logger.info(f"  🔎 Review segment {seg_id} ({label})")
+        _progress(step, total, f"Audit {label} (5 salves)…")
+        logger.info(f"  🔎 Review segment {seg_id} ({label}) — 5 salves")
 
-        prompt = _build_review_prompt(text_content, rules_text)
-        try:
-            raw = _anthropic_post(
-                messages=[{"role": "user", "content": prompt}],
-                max_tokens=_REVIEW_MAX_TOKENS,
-                model=model,
-            )
-        except Exception as e:
-            err_msg = str(e)[:500]
-            logger.error(f"  ❌ Appel reviewer échoué pour segment {seg_id} : {err_msg}")
-            # Ne PAS marquer reviewed=1 — l'UI ne doit pas dire "conformité
-            # révisée" pour un segment non audité. On écrit l'erreur dans
-            # review_error ; le polling frontend considère le segment comme
-            # "traité" (reviewed OU review_error != NULL) pour arrêter sa
-            # progression sans mentir. Relancer la route = retry naturel.
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            cursor.execute(
-                "UPDATE content_generation_segments SET review_error = ? WHERE id = ?",
-                (err_msg, seg_id),
-            )
-            conn.commit()
-            conn.close()
-            total_failed += 1
-            details.append(
-                {
-                    "segment_id": seg_id,
-                    "sub_idx": sub_idx,
-                    "passe": passe,
-                    "error": err_msg,
-                }
-            )
-            continue
+        current_text = text_content
+        all_applied = []
+        all_rejected = []
+        segment_error = None  # None = toutes les salves ont réussi jusqu'ici
 
-        patches, parse_error = _parse_patches_response(raw)
+        for group in _REVIEW_RULE_GROUPS:
+            group_label = group["label"]
+            new_text, applied, rejected, group_error = _review_group_chunks(
+                current_text, rules_text, group, model=model
+            )
+            if group_error:
+                segment_error = group_error
+                logger.warning(f"    ⚠️ Segment {seg_id} salve '{group_label}' : {group_error}")
+                break
 
-        # Cas 1 : réponse illisible → review_error, PAS reviewed=1. L'UI ne
-        # doit pas dire "conforme" pour un segment qu'on n'a pas pu auditer.
-        if parse_error:
-            logger.warning(f"    ⚠️ Segment {seg_id} : parse reviewer échoué — {parse_error}")
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            cursor.execute(
-                "UPDATE content_generation_segments SET review_error = ? WHERE id = ?",
-                (f"parse: {parse_error}", seg_id),
-            )
-            conn.commit()
-            conn.close()
-            total_failed += 1
-            details.append(
-                {
-                    "segment_id": seg_id, "sub_idx": sub_idx, "passe": passe,
-                    "parse_error": parse_error,
-                }
-            )
-            continue
+            current_text = new_text
+            all_applied.extend(applied)
+            all_rejected.extend(rejected)
 
-        new_text, applied, rejected = _apply_patches(text_content, patches)
+            if applied:
+                logger.info(
+                    f"    ✏️  Salve '{group_label}' : {len(applied)} patch(es) appliqué(s), {len(rejected)} rejeté(s)"
+                )
+            elif rejected:
+                logger.info(
+                    f"    ⚠️ Salve '{group_label}' : {len(rejected)} patch(es) rejeté(s), segment laissé en l'état"
+                )
+            else:
+                logger.info(f"    ✅ Salve '{group_label}' : conforme (0 violation)")
 
-        # Cas 2 : Claude a identifié des violations (patches non vides) mais
-        # AUCUN n'a pu être appliqué (tous les `original` sont introuvables ou
-        # ambigus). L'audit n'a pas pu corriger les violations détectées.
-        # → review_error, PAS reviewed=1 : on ne peut pas dire "conforme"
-        # alors que Claude a signalé des violations non corrigées.
-        if len(patches) > 0 and len(applied) == 0:
-            logger.warning(
-                f"    ⚠️ Segment {seg_id} : {len(patches)} patch(es) proposés mais aucun appliquable "
-                f"({len(rejected)} rejeté(s)). Ancres introuvables ou ambigus."
-            )
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            cursor.execute(
-                "UPDATE content_generation_segments SET review_error = ? WHERE id = ?",
-                (
-                    f"patches_all_rejected: {len(patches)} proposés, 0 appliquable "
-                    f"({'; '.join(r.get('reject_reason', '?') for r in rejected[:3])})",
-                    seg_id,
-                ),
-            )
-            conn.commit()
-            conn.close()
-            total_rejected += len(rejected)
-            total_failed += 1
-            details.append(
-                {
-                    "segment_id": seg_id, "sub_idx": sub_idx, "passe": passe,
-                    "applied": [], "rejected": rejected,
-                    "status": "all_patches_rejected",
-                }
-            )
-            continue
-
-        # Cas 3 : audit réussi (patches vide = vrai conforme, OU au moins 1
-        # patch appliqué = correction partielle). review_error remis à NULL.
+        # Écriture finale en DB (une seule transaction par segment)
         conn = get_db_connection()
         cursor = conn.cursor()
-        if applied:
-            new_word_count = len(new_text.split())
+
+        if segment_error:
+            # Une salve a échoué : review_error, PAS reviewed=1
+            cursor.execute(
+                "UPDATE content_generation_segments SET review_error = ? WHERE id = ?",
+                (segment_error[:500], seg_id),
+            )
+            conn.commit()
+            conn.close()
+            total_failed += 1
+            details.append({"segment_id": seg_id, "sub_idx": sub_idx, "passe": passe, "error": segment_error})
+            continue
+
+        # Toutes les 5 salves ont réussi
+        if all_applied:
+            new_word_count = len(current_text.split())
             cursor.execute(
                 """
                 UPDATE content_generation_segments
@@ -1229,30 +2754,24 @@ def run_content_review(folder_id, on_progress=None, model=None):
                     reviewed = 1, review_error = NULL
                 WHERE id = ?
                 """,
-                (new_text, new_word_count, seg_id),
+                (current_text, new_word_count, seg_id),
             )
             logger.info(
-                f"    ✏️  Segment {seg_id} : {len(applied)} patch(es) appliqué(s), {len(rejected)} rejeté(s)"
+                f"    ✏️  Segment {seg_id} : {len(all_applied)} patch(es) total sur 5 salves, {len(all_rejected)} rejeté(s)"
             )
         else:
             cursor.execute(
                 "UPDATE content_generation_segments SET reviewed = 1, review_error = NULL WHERE id = ?",
                 (seg_id,),
             )
-            logger.info(f"    ✅ Segment {seg_id} : conforme (0 patch proposé, 0 appliqué)")
+            logger.info(f"    ✅ Segment {seg_id} : conforme sur les 5 salves")
         conn.commit()
         conn.close()
 
-        total_applied += len(applied)
-        total_rejected += len(rejected)
+        total_applied += len(all_applied)
+        total_rejected += len(all_rejected)
         details.append(
-            {
-                "segment_id": seg_id,
-                "sub_idx": sub_idx,
-                "passe": passe,
-                "applied": applied,
-                "rejected": rejected,
-            }
+            {"segment_id": seg_id, "sub_idx": sub_idx, "passe": passe, "applied": all_applied, "rejected": all_rejected}
         )
 
     _progress(

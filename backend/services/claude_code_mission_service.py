@@ -54,6 +54,7 @@ STEP_LABELS = {
     "daily": "Programmes journée",
     "content": "Génération des cours (texte)",
     "review": "Révision conformité (étape 6bis)",
+    "post_review_docs": "Documents post-révision",
 }
 
 # Étapes dont l'output total dépasse la limite de 1 appel Claude (64k tokens
@@ -353,7 +354,7 @@ Sortie attendue dans `output.md` : un **JSON** de la forme :
 }}
 ```
 
-Volume total ≈ {job['nb_days']} × 90 000 mots. Ne raccourcis pas artificiellement.
+Volume total ≈ {job['nb_days']} × 90 000 mots. Reste dense, mais ne gonfle pas artificiellement.
 """,
     )
     _write(target, "input.md", job.get("daily_programs") or "(daily_programs absents)")
@@ -361,15 +362,7 @@ Volume total ≈ {job['nb_days']} × 90 000 mots. Ne raccourcis pas artificielle
 
 
 def _build_review_mission(target, job, model):
-    """Dump les segments completed non-reviewed de la plateforme de ce job.
-
-    Note scope : le projet n'a pas de FK entre `content_generation_jobs` et
-    `formation_pipeline_jobs`, donc on filtre par `platform_id` comme le fait
-    le reste du code (launch_audio, etc.). Pour éviter les fuites de données
-    entre formations sur la même plateforme, la garde réelle est à l'import
-    (cf. _import_review qui revérifie que chaque segment_id appartient bien
-    à la plateforme du job).
-    """
+    """Dump les segments completed non-reviewed du job pipeline."""
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute(
@@ -378,11 +371,11 @@ def _build_review_mission(target, job, model):
         FROM content_generation_segments s
         JOIN content_generation_jobs cj ON cj.id = s.job_id
         JOIN cours_folders cf ON cf.id = cj.folder_id
-        WHERE cf.platform_id = ?
+        WHERE cf.formation_job_id = ?
         AND s.status = 'completed' AND COALESCE(s.reviewed, 0) = 0
         ORDER BY cf.position ASC, s.sub_part_index ASC, s.passe ASC
         """,
-        (job["platform_id"],),
+        (job["id"],),
     )
     rows = cursor.fetchall()
     conn.close()
@@ -630,16 +623,14 @@ def _import_review(job_id, output, generated_via):
     conn = get_db_connection()
     cursor = conn.cursor()
 
-    # Fix #4 audit : restreindre strictement aux segments des dossiers cours
-    # de la plateforme de ce job pipeline. Empêche qu'un segment_id d'une
-    # autre plateforme soit modifié par erreur via un output.md malveillant
-    # ou mal scopé.
-    cursor.execute("SELECT platform_id FROM formation_pipeline_jobs WHERE id = ?", (job_id,))
+    # Restreindre strictement aux segments des dossiers cours de ce job
+    # pipeline. Empêche qu'un segment_id d'une autre génération sur la même
+    # plateforme soit modifié par erreur via un output.md mal scopé.
+    cursor.execute("SELECT id FROM formation_pipeline_jobs WHERE id = ?", (job_id,))
     row = cursor.fetchone()
     if not row:
         conn.close()
         raise ValueError(f"Job pipeline {job_id} introuvable")
-    target_platform_id = row[0]
 
     for rev in reviews:
         seg_id = rev.get("segment_id")
@@ -647,23 +638,23 @@ def _import_review(job_id, output, generated_via):
         if seg_id is None:
             continue
         # Vérif de scope : le segment doit appartenir à un content_generation_job
-        # dont le folder_id est dans cours_folders de la même plateforme.
+        # dont le folder_id est rattaché à ce job formation.
         cursor.execute(
             """
             SELECT s.text_content
             FROM content_generation_segments s
             JOIN content_generation_jobs cj ON cj.id = s.job_id
             JOIN cours_folders cf ON cf.id = cj.folder_id
-            WHERE s.id = ? AND cf.platform_id = ?
+            WHERE s.id = ? AND cf.formation_job_id = ?
             """,
-            (seg_id, target_platform_id),
+            (seg_id, job_id),
         )
         row = cursor.fetchone()
         if not row:
             # Segment inexistant OU hors scope plateforme : on log mais on
             # ne touche à rien d'autre.
             logger.warning(
-                f"⚠️ Review import : segment_id={seg_id} ignoré (inexistant ou hors plateforme {target_platform_id})"
+                f"⚠️ Review import : segment_id={seg_id} ignoré (inexistant ou hors job {job_id})"
             )
             failed_total += 1
             continue
@@ -813,7 +804,7 @@ def _import_content(job_id, output, generated_via):
 
     conn = get_db_connection()
     cursor = conn.cursor()
-    # Récupérer les cours_folders de la plateforme du job pipeline + leurs
+    # Récupérer les cours_folders du job pipeline + leurs
     # content_generation_jobs associés, dans l'ordre (day_number).
     job = _get_job_row(job_id)
     if not job:
@@ -822,8 +813,8 @@ def _import_content(job_id, output, generated_via):
     cursor.execute(
         """SELECT f.id, cj.id FROM cours_folders f
            LEFT JOIN content_generation_jobs cj ON cj.folder_id = f.id
-           WHERE f.platform_id = ? ORDER BY f.position ASC""",
-        (job["platform_id"],),
+           WHERE f.formation_job_id = ? ORDER BY f.position ASC""",
+        (job_id,),
     )
     folders = cursor.fetchall()  # [(folder_id, cg_job_id), ...]
     conn.close()
@@ -954,7 +945,7 @@ def list_pending_missions(job_id: int) -> dict:
 
 # ─── Mode chunked (content + review) ─────────────────────────────────────────
 #
-# `content` et `review` ne tiennent pas en 1 seul appel CLI : 90 000 mots de
+# `content` et `review` ne tiennent pas en 1 seul appel CLI : ~90 000 mots de
 # sortie pour content, jusqu'à 117k tokens d'input pour review × N journées.
 # Stratégie = boucle de N subprocess `claude` séquentiels, 1 par chunk.
 # Chaque chunk a son propre dossier review_queue/job_X/step_Y/<chunk_id>/
@@ -1151,8 +1142,8 @@ def _ensure_content_pipeline_structure(job: dict) -> list:
             }
 
             cursor.execute(
-                "SELECT id FROM cours_folders WHERE platform_id = ? AND name = ?",
-                (platform_id, folder_name),
+                "SELECT id FROM cours_folders WHERE formation_job_id = ? AND name = ?",
+                (job["id"], folder_name),
             )
             row = cursor.fetchone()
             if row:
@@ -1164,8 +1155,8 @@ def _ensure_content_pipeline_structure(job: dict) -> list:
                 )
                 position = cursor.fetchone()[0]
                 cursor.execute(
-                    "INSERT INTO cours_folders (platform_id, name, position) VALUES (?, ?, ?)",
-                    (platform_id, folder_name, position),
+                    "INSERT INTO cours_folders (platform_id, name, position, formation_job_id) VALUES (?, ?, ?, ?)",
+                    (platform_id, folder_name, position, job["id"]),
                 )
                 folder_id = cursor.lastrowid
                 logger.info(f"📁 Folder créé : '{folder_name}' (id={folder_id})")
@@ -1268,15 +1259,14 @@ def _list_review_chunks(job: dict) -> list:
     Si une journée a été partiellement reviewed (certains chunks OK, d'autres
     pas), on relance tous les chunks restants.
     """
-    platform_id = job["platform_id"]
     conn = get_db_connection()
     cursor = conn.cursor()
     chunks = []
     try:
         cursor.execute(
             "SELECT id, name, position FROM cours_folders "
-            "WHERE platform_id = ? ORDER BY position ASC",
-            (platform_id,),
+            "WHERE formation_job_id = ? ORDER BY position ASC",
+            (job["id"],),
         )
         folders = cursor.fetchall()
         for fid, fname, position in folders:
@@ -1330,29 +1320,36 @@ _PASSE_DESCRIPTIONS = {
 # au lieu d'un agent unique qui se concentre sur ce qu'il voit le plus.
 _REVIEW_RULE_GROUPS = [
     {
-        "id": "ethique_a",
-        "label": "Éthique 1/2",
-        "rules": [1, 2, 3, 6, 7, 8],
+        "id": "ethique_culturelle",
+        "label": "Éthique culturelle",
+        "rules": [1, 2, 3, 9, 14],
         "description": "Spirituel/religieux, alcool/musique/banques, fêtes émotionnelles, "
+                       "humour, respect des tiers",
+    },
+    {
+        "id": "ethique_commerciale",
+        "label": "Éthique commerciale",
+        "rules": [4, 5, 6, 7, 8],
+        "description": "Manipulation/tromperie en vente, persuasion agressive/closing manipulatoire, "
                        "flirt/séduction, chance/destin, célébrités/divertissement",
     },
     {
-        "id": "ethique_b",
-        "label": "Éthique 2/2",
-        "rules": [4, 5, 11, 12, 13, 15, 16],
-        "description": "Manipulation/tromperie en vente, persuasion agressive/closing manipulatoire, "
-                       "discrimination, RGPD, promesses irréalistes, personnes en détresse, "
+        "id": "legal_integrite",
+        "label": "Légal et intégrité",
+        "rules": [10, 11, 12, 13, 15, 16],
+        "description": "Cohérence interne, discrimination, RGPD/données personnelles, "
+                       "promesses irréalistes, personnes en détresse, "
                        "conseils médicaux/juridiques précis",
     },
     {
-        "id": "hallucination",
+        "id": "anti_hallucination",
         "label": "Anti-hallucination",
         "rules": [17, 18, 19, 20],
         "description": "Annonce explicite des exemples fictifs, chiffres/études non sourcés, "
                        "expressions de prudence, posture pédagogique",
     },
     {
-        "id": "style_oral",
+        "id": "style_oral_tts",
         "label": "Style oral TTS",
         "rules": [21, 22, 23, 24, 25, 26, 27],
         "description": "Fusion syntaxique hypothétiques, guillemets de discours direct, "
@@ -1362,7 +1359,7 @@ _REVIEW_RULE_GROUPS = [
 ]
 
 # Seuils continuation loop content (alignés sur _generate_segment_text mode API)
-_CONTENT_MIN_WORDS = 4000
+_CONTENT_MIN_WORDS = 4500
 _CONTENT_TARGET_WORDS = 5000
 _CONTENT_MAX_CONTINUATIONS = 2
 
@@ -1371,7 +1368,7 @@ def _continue_content_until_volume(
     chunk_dir: str, job: dict, chunk: dict, model: str,
     log_path: str, current_text: str,
 ) -> str:
-    """Si le segment fait <4000 mots, lance 1-2 continuations CLI pour atteindre
+    """Si le segment fait <4500 mots, lance 1-2 continuations CLI pour atteindre
     la cible 5000+. Aligné sur la continuation loop du mode API
     (`_generate_segment_text`, content_generation_service.py:277).
 
@@ -1404,12 +1401,12 @@ def _continue_content_until_volume(
 
         task = f"""# Mission : CONTINUATION du segment de cours
 
-Tu as écrit **{words} mots** sur un minimum exigé de **{_CONTENT_TARGET_WORDS} mots**. Tu dois continuer le cours là où tu t'es arrêté, avec :
+Tu as écrit **{words} mots** sur une cible de **{_CONTENT_TARGET_WORDS} mots**. Tu dois continuer le cours là où tu t'es arrêté, avec :
 - Le même ton oral et la même voix narrative
 - Les mêmes règles TTS (cf. `rules.md` — règles #1 à #27)
 - **Sans RÉPÉTER ce qui a déjà été dit**
 
-**Volume cible pour cette continuation : minimum 2500 mots supplémentaires.**
+**Volume cible pour cette continuation : environ 1800 mots supplémentaires.**
 
 CONSIGNE DE DÉVELOPPEMENT :
 - 2 à 4 exemples fictifs supplémentaires dans des contextes variés
@@ -1501,8 +1498,8 @@ def _build_content_chunk(chunk_dir: str, job: dict, chunk: dict, model: str) -> 
     except Exception as e:
         logger.error(f"Impossible de charger les prompts par passe : {e} — fallback minimal")
         template = (
-            "Génère un cours oral TTS-ready de **5000 mots minimum (non "
-            "négociable)** sur la sous-partie {NOM_DE_LA_SOUS_PARTIE} du TP "
+            "Génère un cours oral TTS-ready d'environ **5000 mots utiles** "
+            "sur la sous-partie {NOM_DE_LA_SOUS_PARTIE} du TP "
             "{NOM_DU_TITRE_PROFESSIONNEL}. Module à couvrir :\n\n"
             "{CONTENU_DU_MODULE}"
         )
@@ -1546,7 +1543,7 @@ angle…"). Ne répète pas les exemples ou définitions déjà donnés.
     # ne réponde dans la conversation au lieu d'écrire le fichier.
     prompt += (
         "\n\n═══ CONSIGNE TECHNIQUE FINALE ═══\n"
-        "Écris ta réponse complète (texte oral TTS-ready, 5000 mots minimum) "
+        "Écris ta réponse complète (texte oral TTS-ready, environ 5000 mots utiles) "
         "dans `output.md`. **Aucun autre fichier**, aucun autre format, "
         "aucune réponse dans le chat — uniquement le texte du cours dans "
         "`output.md`."
@@ -1655,7 +1652,7 @@ def _import_content_chunk(job_id: int, chunk: dict, output: str, generated_via: 
     if word_count < 1000:
         logger.warning(
             f"⚠️ Chunk content {chunk['id']} : seulement {word_count} mots "
-            f"(cible ~5000). Enregistré quand même mais qualité douteuse."
+                f"(cible ~5000). Enregistré quand même mais qualité douteuse."
         )
 
     from services.content_generation_service import _save_segment_db
@@ -1973,8 +1970,8 @@ def _execute_chunked(job_id: int, step_key: str, model: str) -> dict:
             conn_pre = get_db_connection()
             cur_pre = conn_pre.cursor()
             cur_pre.execute(
-                "SELECT id FROM cours_folders WHERE platform_id = ?",
-                (job["platform_id"],),
+                "SELECT id FROM cours_folders WHERE formation_job_id = ?",
+                (job_id,),
             )
             folder_ids_pre = [r[0] for r in cur_pre.fetchall()]
             conn_pre.close()
@@ -2067,7 +2064,7 @@ def _execute_chunked(job_id: int, step_key: str, model: str) -> dict:
                 _run_subprocess(chunk_dir, model, log_path=log_path, log_mode="a")
                 with open(os.path.join(chunk_dir, "output.md"), "r", encoding="utf-8") as f:
                     output = f.read()
-                # Continuation loop pour content : si <4000 mots, lance 1-2
+                # Continuation loop pour content : si <4500 mots, lance 1-2
                 # appels CLI supplémentaires pour atteindre la cible 5000+
                 # (aligné sur _generate_segment_text mode API).
                 if step_key == "content":
@@ -2170,9 +2167,6 @@ def _finalize_review_step(job_id: int) -> None:
     Archive ensuite le dossier `step_review/` vers `_done/` pour que le
     bandeau "mission en attente d'import" disparaisse de l'UI.
     """
-    job = _get_job_row(job_id)
-    if not job:
-        return
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute(
@@ -2183,11 +2177,11 @@ def _finalize_review_step(job_id: int) -> None:
             SELECT s.id FROM content_generation_segments s
             JOIN content_generation_jobs cj ON cj.id = s.job_id
             JOIN cours_folders f ON f.id = cj.folder_id
-            WHERE f.platform_id = ? AND s.status = 'completed'
+            WHERE f.formation_job_id = ? AND s.status = 'completed'
             AND COALESCE(s.reviewed, 0) = 0
         )
         """,
-        (job["platform_id"],),
+        (job_id,),
     )
     n = cursor.rowcount
     conn.commit()
@@ -2283,8 +2277,8 @@ def _finalize_content_step(job_id: int, model: str) -> None:
     cursor.execute(
         """SELECT f.id, cj.id, cj.status FROM cours_folders f
            JOIN content_generation_jobs cj ON cj.folder_id = f.id
-           WHERE f.platform_id = ? ORDER BY f.position ASC""",
-        (platform_id,),
+           WHERE f.formation_job_id = ? ORDER BY f.position ASC""",
+        (job_id,),
     )
     rows = cursor.fetchall()
     conn.close()
@@ -2338,7 +2332,7 @@ def _finalize_content_step(job_id: int, model: str) -> None:
 # Audit par-journée du total_words puis enrichissement à la demande des segments
 # les plus courts. Sécurité supplémentaire au floor par-segment de
 # `_continue_content_until_volume` (qui s'exécute pendant la génération à
-# l'étape 6 avec un seuil de 4000 mots/segment) :
+# l'étape 6 avec un seuil de 4500 mots/segment) :
 #   - L'étape 6 garantit qu'aucun segment n'est sous-développé.
 #   - L'étape 6.5 garantit qu'aucune journée n'est sous le seuil de 90 000 mots
 #     au total — un déficit qui peut survenir si plusieurs segments sont
@@ -2364,13 +2358,12 @@ def compute_volume_audit(job_id: int) -> dict:
     if not job:
         return {"target": _TARGET_WORDS_PER_DAY, "folders": []}
 
-    platform_id = job["platform_id"]
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute(
         """SELECT id, name, position FROM cours_folders
-           WHERE platform_id = ? ORDER BY position ASC""",
-        (platform_id,),
+           WHERE formation_job_id = ? ORDER BY position ASC""",
+        (job_id,),
     )
     folders = cursor.fetchall()
 
@@ -2480,7 +2473,7 @@ mots, maximum 4000 mots.
     _write(chunk_dir, "rules.md", _load_rules_text())
 
 
-_VOLUME_SAFETY_MAX_PASSES = 3  # Boucle anti-déficit : 3 tentatives max
+_VOLUME_SAFETY_MAX_PASSES = 5  # Boucle anti-déficit : assez pour combler un écart 60k → 90k
 
 
 def _build_volume_safety_prompt_api(job: dict, segment: dict) -> str:
@@ -2679,7 +2672,8 @@ def run_volume_safety_api(job_id: int, folder_id: int, model: str = None) -> dic
                 cursor = conn.cursor()
                 cursor.execute(
                     """UPDATE content_generation_segments
-                       SET text_content = ?, word_count = ?, dirty = 1, reviewed = 0
+                       SET text_content = ?, word_count = ?, dirty = 1,
+                           reviewed = 0, review_error = NULL
                        WHERE id = ?""",
                     (new_text, new_words, seg["segment_id"]),
                 )
@@ -2910,7 +2904,8 @@ def run_volume_safety(job_id: int, folder_id: int, model: str = "sonnet") -> dic
                 cursor = conn.cursor()
                 cursor.execute(
                     """UPDATE content_generation_segments
-                       SET text_content = ?, word_count = ?, dirty = 1, reviewed = 0
+                       SET text_content = ?, word_count = ?, dirty = 1,
+                           reviewed = 0, review_error = NULL
                        WHERE id = ?""",
                     (new_text, new_words, seg["segment_id"]),
                 )

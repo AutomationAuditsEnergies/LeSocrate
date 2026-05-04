@@ -87,7 +87,14 @@ export default function App() {
         />
         <Route path="/intro" element={<Intro />} />
         <Route path="/test-slides" element={<TestSlides />} />
-        <Route path="/generated-slides" element={<GeneratedSlides />} />
+        <Route
+          path="/generated-slides"
+          element={
+            <ProtectedAdminRoute>
+              <GeneratedSlides />
+            </ProtectedAdminRoute>
+          }
+        />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </BrowserRouter>

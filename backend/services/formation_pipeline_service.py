@@ -880,6 +880,11 @@ def update_job(job_id: int, **kwargs):
         "error_message",
         # Origine de chaque artefact (audit fix #5) — 'api' / 'claude_code_haiku' / 'claude_code_sonnet'
         "kb_generated_via", "global_program_generated_via", "daily_programs_generated_via",
+        # State machine auto-pilot persistée (résiste aux restarts Azure)
+        "auto_pilot_enabled", "auto_pilot_step", "auto_pilot_model",
+        "auto_pilot_tts_mode", "auto_pilot_use_cc", "auto_pilot_skip_vs",
+        "auto_pilot_volume_done", "auto_pilot_post_review_docs_done", "auto_pilot_error",
+        "auto_pilot_locked_at", "auto_pilot_lock_owner",
     }
     fields = {k: v for k, v in kwargs.items() if k in allowed}
     # Effacer automatiquement error_message quand on passe à un statut non-erreur
@@ -911,7 +916,12 @@ def get_job(job_id: int) -> dict | None:
                j.daily_programs, j.daily_programs_validated, j.status, j.error_message,
                j.created_at, j.updated_at,
                j.kb_generated_via, j.global_program_generated_via, j.daily_programs_generated_via,
-               p.name AS platform_name
+               p.name AS platform_name,
+               j.auto_pilot_enabled, j.auto_pilot_step, j.auto_pilot_model,
+               j.auto_pilot_tts_mode, j.auto_pilot_use_cc, j.auto_pilot_skip_vs,
+               j.auto_pilot_volume_done, j.auto_pilot_post_review_docs_done,
+               j.auto_pilot_error,
+               j.auto_pilot_locked_at, j.auto_pilot_lock_owner
         FROM formation_pipeline_jobs j
         LEFT JOIN platform_config p ON p.id = j.platform_id
         WHERE j.id = ?
@@ -929,12 +939,42 @@ def get_job(job_id: int) -> dict | None:
         "daily_programs": row[11], "daily_programs_validated": bool(row[12]),
         "status": row[13], "error_message": row[14],
         "created_at": row[15], "updated_at": row[16],
-        # Origine API / Claude Code par étape (audit fix #5)
         "kb_generated_via": row[17],
         "global_program_generated_via": row[18],
         "daily_programs_generated_via": row[19],
         "platform_name": row[20],
+        # State machine auto-pilot persistée
+        "auto_pilot_enabled": bool(row[21]),
+        "auto_pilot_step": row[22],
+        "auto_pilot_model": row[23],
+        "auto_pilot_tts_mode": row[24],
+        "auto_pilot_use_cc": bool(row[25]),
+        "auto_pilot_skip_vs": bool(row[26]),
+        "auto_pilot_volume_done": bool(row[27]),
+        "auto_pilot_post_review_docs_done": bool(row[28]),
+        "auto_pilot_error": row[29],
+        "auto_pilot_locked_at": row[30],
+        "auto_pilot_lock_owner": row[31],
     }
+
+
+def get_auto_pilot_jobs_to_resume() -> list:
+    """Retourne les job_ids auto-pilot interrompus : activés, pas terminés, lock absent ou périmé."""
+    import time as _time
+    stale_cutoff = int(_time.time()) - 300  # lock > 5 min = périmé
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT id FROM formation_pipeline_jobs
+        WHERE auto_pilot_enabled = 1
+          AND (auto_pilot_step IS NULL OR auto_pilot_step != 'done')
+          AND auto_pilot_error IS NULL
+          AND (auto_pilot_locked_at IS NULL
+               OR CAST(strftime('%s', auto_pilot_locked_at) AS INTEGER) < ?)
+    """, (stale_cutoff,))
+    rows = cursor.fetchall()
+    conn.close()
+    return [r[0] for r in rows]
 
 
 def list_jobs(platform_id: int = None) -> list:

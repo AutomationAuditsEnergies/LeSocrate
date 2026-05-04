@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { apiUrl } from '../api';
+import { apiFetch } from '../api';
 import PlayfulTemplate from '../components/slides/templates/PlayfulTemplate';
 import ReflectionTemplate from '../components/slides/templates/ReflectionTemplate';
 import CaseStudyTemplate from '../components/slides/templates/CaseStudyTemplate';
@@ -15,6 +15,7 @@ import OpinionTemplate from '../components/slides/templates/OpinionTemplate';
 import TransitionTemplate from '../components/slides/templates/TransitionTemplate';
 
 export default function GeneratedSlides() {
+  const initialParams = new URLSearchParams(window.location.search);
   const [slides, setSlides] = useState([]);
   const [timeline, setTimeline] = useState([]);
   const [stats, setStats] = useState(null);
@@ -23,6 +24,11 @@ export default function GeneratedSlides() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [status, setStatus] = useState('idle');
+  const [generationMode, setGenerationMode] = useState('script');
+  const [folderId, setFolderId] = useState(initialParams.get('folder_id') || '');
+  const [jobId, setJobId] = useState(initialParams.get('job_id') || '');
+  const [maxSlides, setMaxSlides] = useState(initialParams.get('max_slides') || '60');
+  const [slidePace, setSlidePace] = useState(initialParams.get('pace') || 'normal');
   const [showTimeline, setShowTimeline] = useState(false);
   const [pipelineDebug, setPipelineDebug] = useState(null);
   const [showPipeline, setShowPipeline] = useState(false);
@@ -33,9 +39,8 @@ export default function GeneratedSlides() {
 
   const fetchExistingSlides = async () => {
     try {
-      const response = await fetch(apiUrl('/api/slides/data'), {
-        credentials: 'include'
-      });
+      const query = folderId ? `?folder_id=${encodeURIComponent(folderId)}` : '';
+      const response = await apiFetch(`/api/slides/data${query}`);
       const data = await response.json();
 
       if (data.status === 'success' && data.slides) {
@@ -44,6 +49,7 @@ export default function GeneratedSlides() {
         setTimeline(data.timeline || []);
         setTranscription(data.transcription || '');
         setPipelineDebug(data.pipeline_debug || null);
+        setGenerationMode(data.generation_mode || data.stats?.generation_mode || 'script');
         setStatus('success');
       }
     } catch (err) {
@@ -51,22 +57,23 @@ export default function GeneratedSlides() {
     }
   };
 
-  const generateSlides = async () => {
+  const generateSlidesFromScript = async () => {
     setLoading(true);
     setError(null);
     setStatus('generating');
+    setGenerationMode('script');
 
     try {
-      // Utilise le nouveau endpoint v3
-      const response = await fetch(apiUrl('/api/slides/generate-v3'), {
+      const response = await apiFetch('/api/slides/generate-from-script', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'
         },
-        credentials: 'include',
         body: JSON.stringify({
-          audio_id: 1,
-          max_duration: 300  // 5 minutes pour le test
+          folder_id: folderId ? Number(folderId) : null,
+          job_id: jobId ? Number(jobId) : null,
+          max_slides: Number(maxSlides) || 60,
+          pace: slidePace
         })
       });
 
@@ -77,10 +84,51 @@ export default function GeneratedSlides() {
         setStats(data.stats || null);
         setTimeline(data.timeline || []);
         setPipelineDebug(data.pipeline_debug || null);
+        setGenerationMode(data.generation_mode || data.stats?.generation_mode || 'script');
         setCurrentSlide(0);
         setStatus('success');
       } else {
-        setError(data.message || 'Erreur lors de la generation');
+        setError(data.message || 'Erreur lors de la generation depuis le texte');
+        setStatus('error');
+      }
+    } catch (err) {
+      setError(`Erreur de connexion: ${err.message}`);
+      setStatus('error');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const generateSlidesFromAudio = async () => {
+    setLoading(true);
+    setError(null);
+    setStatus('generating');
+    setGenerationMode('audio_v3');
+
+    try {
+      const response = await apiFetch('/api/slides/generate-v3', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          audio_id: 1,
+          max_duration: 300
+        })
+      });
+
+      const data = await response.json();
+
+      if (data.status === 'success') {
+        setSlides(data.slides);
+        setStats(data.stats || null);
+        setTimeline(data.timeline || []);
+        setPipelineDebug(data.pipeline_debug || null);
+        setGenerationMode(data.generation_mode || 'audio_v3');
+        setCurrentSlide(0);
+        setStatus('success');
+      } else {
+        setError(data.message || 'Erreur lors de la generation audio');
         setStatus('error');
       }
     } catch (err) {
@@ -93,15 +141,13 @@ export default function GeneratedSlides() {
 
   const clearSlides = async () => {
     try {
-      await fetch(apiUrl('/api/slides/clear'), {
-        method: 'POST',
-        credentials: 'include'
-      });
+      await apiFetch('/api/slides/clear', { method: 'POST' });
       setSlides([]);
       setTimeline([]);
       setStats(null);
       setTranscription('');
       setPipelineDebug(null);
+      setGenerationMode('script');
       setCurrentSlide(0);
       setStatus('idle');
       setError(null);
@@ -190,6 +236,30 @@ export default function GeneratedSlides() {
     return colors[type] || '#6B7280';
   };
 
+  const isScriptMode = generationMode === 'script' || stats?.generation_mode === 'script';
+  const statsItems = stats
+    ? (isScriptMode
+      ? [
+          { label: 'Source', value: 'Texte DB' },
+          { label: 'Mots', value: stats.source_words || 0 },
+          { label: 'Sources', value: stats.source_blocks || 0 },
+          { label: 'Rythme', value: stats.pace || slidePace },
+          { label: 'Slides max/jour', value: stats.max_slides || maxSlides },
+          { label: 'Slides', value: stats.slides_generated || slides.length },
+          ...(stats.audio_sync?.enabled ? [{ label: 'Sync audio', value: stats.audio_sync.mode || 'active' }] : [])
+        ]
+      : [
+          { label: 'Duree audio', value: formatTime(stats.audio_duration) },
+          { label: 'Chunks', value: stats.chunks_processed },
+          { label: 'Evenements', value: stats.events_detected },
+          { label: 'Apres fusion', value: stats.events_after_fusion },
+          { label: 'Slides', value: stats.slides_generated }
+        ])
+    : [];
+  const sourceDebugItems = isScriptMode
+    ? (pipelineDebug?.source_blocks || [])
+    : (pipelineDebug?.raw_events || []);
+
   return (
     <div style={{
       margin: 0,
@@ -213,14 +283,14 @@ export default function GeneratedSlides() {
           color: '#fff',
           marginBottom: '0.5rem'
         }}>
-          Slides Auto-Generees v3
+          Slides depuis texte
         </h1>
         <p style={{
           fontFamily: 'Poppins, sans-serif',
           color: '#aaa',
           fontSize: '1rem'
         }}>
-          Architecture hierarchique multi-pass avec event mapping et fusion
+          Pipeline texte final DB vers thèmes, points clés et templates React
         </p>
       </div>
 
@@ -233,13 +303,7 @@ export default function GeneratedSlides() {
           flexWrap: 'wrap',
           justifyContent: 'center'
         }}>
-          {[
-            { label: 'Duree audio', value: formatTime(stats.audio_duration) },
-            { label: 'Chunks', value: stats.chunks_processed },
-            { label: 'Evenements', value: stats.events_detected },
-            { label: 'Apres fusion', value: stats.events_after_fusion },
-            { label: 'Slides', value: stats.slides_generated }
-          ].map((stat, i) => (
+          {statsItems.map((stat, i) => (
             <div key={i} style={{
               backgroundColor: '#374151',
               borderRadius: '8px',
@@ -265,16 +329,89 @@ export default function GeneratedSlides() {
         flexWrap: 'wrap',
         justifyContent: 'center'
       }}>
+        <div style={{
+          display: 'flex',
+          gap: '0.75rem',
+          alignItems: 'center',
+          flexWrap: 'wrap',
+          justifyContent: 'center',
+          width: '100%',
+          maxWidth: '980px'
+        }}>
+          {[
+            { label: 'Job ID', value: jobId, setter: setJobId, placeholder: 'optionnel' },
+            { label: 'Folder ID', value: folderId, setter: setFolderId, placeholder: 'requis' },
+            { label: 'Slides max/jour', value: maxSlides, setter: setMaxSlides, placeholder: '60' }
+          ].map((field) => (
+            <label key={field.label} style={{
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '0.3rem',
+              fontFamily: 'Poppins, sans-serif',
+              color: '#CBD5E1',
+              fontSize: '0.75rem',
+              textAlign: 'left'
+            }}>
+              {field.label}
+              <input
+                value={field.value}
+                onChange={(event) => field.setter(event.target.value)}
+                placeholder={field.placeholder}
+                inputMode="numeric"
+                style={{
+                  width: '130px',
+                  padding: '0.65rem 0.75rem',
+                  borderRadius: '8px',
+                  border: '1px solid #475569',
+                  backgroundColor: '#0F172A',
+                  color: '#F8FAFC',
+                  fontFamily: 'Poppins, sans-serif',
+                  fontSize: '0.9rem'
+                }}
+              />
+            </label>
+          ))}
+          <label style={{
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '0.3rem',
+            fontFamily: 'Poppins, sans-serif',
+            color: '#CBD5E1',
+            fontSize: '0.75rem',
+            textAlign: 'left'
+          }}>
+            Rythme
+            <select
+              value={slidePace}
+              onChange={(event) => setSlidePace(event.target.value)}
+              style={{
+                width: '150px',
+                padding: '0.65rem 0.75rem',
+                borderRadius: '8px',
+                border: '1px solid #475569',
+                backgroundColor: '#0F172A',
+                color: '#F8FAFC',
+                fontFamily: 'Poppins, sans-serif',
+                fontSize: '0.9rem'
+              }}
+            >
+              <option value="dense">Soutenu</option>
+              <option value="normal">Normal</option>
+              <option value="synthesis">Synthèse</option>
+            </select>
+          </label>
+        </div>
+
         <button
-          onClick={generateSlides}
-          disabled={loading}
+          onClick={generateSlidesFromScript}
+          disabled={loading || !folderId}
           style={{
             padding: '1rem 2rem',
-            backgroundColor: loading ? '#666' : '#DC2626',
+            backgroundColor: loading || !folderId ? '#666' : '#DC2626',
             color: 'white',
             border: 'none',
             borderRadius: '8px',
-            cursor: loading ? 'not-allowed' : 'pointer',
+            cursor: loading || !folderId ? 'not-allowed' : 'pointer',
             fontFamily: 'Poppins, sans-serif',
             fontWeight: 600,
             fontSize: '1rem',
@@ -294,11 +431,29 @@ export default function GeneratedSlides() {
                 borderRadius: '50%',
                 animation: 'spin 1s linear infinite'
               }} />
-              Generation v3 en cours...
+              Generation en cours...
             </>
           ) : (
-            'Generer les slides (v3)'
+            'Generer depuis le texte'
           )}
+        </button>
+
+        <button
+          onClick={generateSlidesFromAudio}
+          disabled={loading}
+          style={{
+            padding: '1rem 1.5rem',
+            backgroundColor: '#374151',
+            color: 'white',
+            border: 'none',
+            borderRadius: '8px',
+            cursor: loading ? 'not-allowed' : 'pointer',
+            fontFamily: 'Poppins, sans-serif',
+            fontWeight: 600,
+            fontSize: '1rem'
+          }}
+        >
+          Legacy audio v3
         </button>
 
         {timeline.length > 0 && (
@@ -392,9 +547,13 @@ export default function GeneratedSlides() {
                   fontFamily: 'monospace',
                   color: '#81D4FA',
                   fontSize: '0.85rem',
-                  minWidth: '100px'
+                  minWidth: isScriptMode && event.audio_filename ? '180px' : '100px'
                 }}>
-                  {formatTime(event.start_time)} - {formatTime(event.end_time)}
+                  {isScriptMode && event.start_time !== null && event.start_time !== undefined
+                    ? `${event.audio_filename || 'audio'} ${formatTime(event.start_time)} - ${formatTime(event.end_time)}`
+                    : isScriptMode
+                      ? `mots ${event.word_start ?? '--'}-${event.word_end ?? '--'}`
+                      : `${formatTime(event.start_time)} - ${formatTime(event.end_time)}`}
                 </span>
                 <span style={{
                   backgroundColor: getEventTypeColor(event.type),
@@ -442,7 +601,7 @@ export default function GeneratedSlides() {
           maxWidth: '1100px',
           marginBottom: '2rem'
         }}>
-          {/* Phase 1: Event Mapping */}
+          {/* Phase 1: Source blocks */}
           <div style={{
             backgroundColor: '#1E3A5F',
             borderRadius: '12px',
@@ -470,9 +629,9 @@ export default function GeneratedSlides() {
                 fontSize: '0.9rem',
                 fontWeight: 700
               }}>1</span>
-              Event Mapping (GPT-4)
+              {isScriptMode ? 'Sources contexte' : 'Event Mapping (GPT-4)'}
               <span style={{ color: '#6B7280', fontSize: '0.9rem', fontWeight: 400 }}>
-                - {pipelineDebug.raw_events?.length || 0} evenements detectes
+                - {sourceDebugItems.length || 0} {isScriptMode ? 'fenetres' : 'evenements detectes'}
               </span>
             </h3>
             <p style={{
@@ -481,7 +640,9 @@ export default function GeneratedSlides() {
               fontSize: '0.85rem',
               marginBottom: '1rem'
             }}>
-              Analyse de la transcription pour identifier les evenements pedagogiques (story, definition, concept, example, etc.)
+              {isScriptMode
+                ? 'Fenêtres de contexte construites depuis le texte final. Le LLM sélectionne ensuite les thèmes et idées fortes.'
+                : 'Analyse de la transcription pour identifier les evenements pedagogiques (story, definition, concept, example, etc.)'}
             </p>
             <div style={{
               display: 'flex',
@@ -490,7 +651,7 @@ export default function GeneratedSlides() {
               maxHeight: '300px',
               overflowY: 'auto'
             }}>
-              {pipelineDebug.raw_events?.map((event, i) => (
+              {sourceDebugItems.map((event, i) => (
                 <div key={i} style={{
                   display: 'flex',
                   alignItems: 'flex-start',
@@ -498,18 +659,20 @@ export default function GeneratedSlides() {
                   padding: '0.5rem',
                   backgroundColor: '#0F172A',
                   borderRadius: '6px',
-                  borderLeft: `3px solid ${getEventTypeColor(event.type)}`
+                  borderLeft: `3px solid ${getEventTypeColor(isScriptMode ? 'concept' : event.type)}`
                 }}>
                   <span style={{
                     fontFamily: 'monospace',
                     color: '#60A5FA',
                     fontSize: '0.75rem',
-                    minWidth: '90px'
+                    minWidth: isScriptMode ? '130px' : '90px'
                   }}>
-                    {formatTime(event.start_time)}-{formatTime(event.end_time)}
+                    {isScriptMode
+                      ? `mots ${event.word_start}-${event.word_end}`
+                      : `${formatTime(event.start_time)}-${formatTime(event.end_time)}`}
                   </span>
                   <span style={{
-                    backgroundColor: getEventTypeColor(event.type),
+                    backgroundColor: getEventTypeColor(isScriptMode ? 'concept' : event.type),
                     color: '#fff',
                     padding: '0.15rem 0.4rem',
                     borderRadius: '4px',
@@ -518,7 +681,7 @@ export default function GeneratedSlides() {
                     minWidth: '70px',
                     textAlign: 'center'
                   }}>
-                    {event.type}
+                    {isScriptMode ? `source ${event.source_block_id + 1}` : event.type}
                   </span>
                   <span style={{
                     fontFamily: 'Poppins, sans-serif',
@@ -526,7 +689,7 @@ export default function GeneratedSlides() {
                     fontSize: '0.8rem',
                     flex: 1
                   }}>
-                    {event.summary}
+                    {isScriptMode ? event.excerpt : event.summary}
                   </span>
                   {event.continues_next && (
                     <span style={{
@@ -609,7 +772,7 @@ export default function GeneratedSlides() {
                     color: '#60A5FA',
                     fontSize: '0.8rem'
                   }}>
-                    @{formatTime(plan.trigger_time)}
+                    {isScriptMode ? `source ${plan.source_block_id + 1}` : `@${formatTime(plan.trigger_time)}`}
                   </span>
                   <span style={{
                     backgroundColor: '#8B5CF6',
@@ -778,19 +941,15 @@ export default function GeneratedSlides() {
             fontSize: '1.2rem',
             marginBottom: '1rem'
           }}>
-            Pipeline v3 pret !
+            Pipeline texte pret.
           </p>
           <p style={{
             fontFamily: 'Poppins, sans-serif',
             color: '#aaa',
             fontSize: '0.9rem'
           }}>
-            Architecture hierarchique multi-pass:
-            <br />1. Transcription par chunks
-            <br />2. Event mapping local
-            <br />3. Fusion inter-blocs
-            <br />4. Construction du plan
-            <br />5. Generation minimale
+            Renseigne le folder_id de la journee generee, puis lance la generation depuis le texte final.
+            <br />Le mode audio v3 reste disponible uniquement pour comparaison legacy.
           </p>
         </div>
       )}
@@ -819,19 +978,31 @@ export default function GeneratedSlides() {
             fontSize: '1.1rem',
             marginBottom: '0.5rem'
           }}>
-            Pipeline v3 en cours...
+            {isScriptMode ? 'Generation depuis texte en cours...' : 'Pipeline audio v3 en cours...'}
           </p>
           <p style={{
             fontFamily: 'Poppins, sans-serif',
             color: '#aaa',
             fontSize: '0.85rem'
           }}>
-            1. Telechargement audio
-            <br />2. Transcription Whisper
-            <br />3. Event mapping GPT-4
-            <br />4. Fusion timeline
-            <br />5. Plan + generation slides
-            <br /><br />Cela peut prendre 1-2 minutes.
+            {isScriptMode ? (
+              <>
+                1. Lecture des segments DB
+                <br />2. Préparation des fenêtres de contexte
+                <br />3. Sélection des thèmes par batch
+                <br />4. Rendu templates React
+                <br /><br />Cela peut prendre quelques minutes selon le nombre de slides.
+              </>
+            ) : (
+              <>
+                1. Telechargement audio
+                <br />2. Transcription Whisper
+                <br />3. Event mapping GPT-4
+                <br />4. Fusion timeline
+                <br />5. Plan + generation slides
+                <br /><br />Cela peut prendre 1-2 minutes.
+              </>
+            )}
           </p>
         </div>
       )}
@@ -862,7 +1033,9 @@ export default function GeneratedSlides() {
               color: '#aaa',
               fontSize: '0.85rem'
             }}>
-              Trigger: {formatTime(slides[currentSlide].trigger_time)}
+              {isScriptMode
+                ? `Mots: ${slides[currentSlide].source_ref?.word_start ?? '--'}-${slides[currentSlide].source_ref?.word_end ?? '--'}`
+                : `Trigger: ${formatTime(slides[currentSlide].trigger_time)}`}
             </span>
             <span style={{
               backgroundColor: getEventTypeColor(slides[currentSlide].event_type),
@@ -953,7 +1126,7 @@ export default function GeneratedSlides() {
               cursor: 'pointer',
               padding: '0.5rem'
             }}>
-              Voir le texte source (transcription de l'evenement)
+              {isScriptMode ? 'Voir le bloc source du cours' : "Voir le texte source (transcription de l'evenement)"}
             </summary>
             <div style={{
               backgroundColor: '#2d2d44',

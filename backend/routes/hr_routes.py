@@ -187,6 +187,65 @@ def create_hr_blueprint(socketio):
             logger.error(f"❌ Erreur list formation-modules: {e}")
             return jsonify({"success": False, "error": str(e)}), 500
 
+    # ─── DELETE /api/hr/formation-modules/<id> ────────────────────────────
+    # Suppression d'un module catalogue. Refuse si une plateforme l'utilise
+    # encore (platform_config.source_module_id), pour éviter les promos
+    # orphelines. La pipeline source (formation_pipeline_jobs) et la
+    # plateforme source (platform_config) sont préservées — un module est
+    # juste l'enveloppe "produit fini" autour d'une pipeline. Sa suppression
+    # n'efface ni les cours, ni les blobs, ni l'historique.
+    @hr_bp.route("/api/hr/formation-modules/<int:module_id>", methods=["DELETE"])
+    def delete_formation_module(module_id):
+        """Supprimer un module du catalogue. Bloqué si des plateformes l'utilisent."""
+        denied = _require_admin()
+        if denied:
+            return denied
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+
+            cursor.execute(
+                "SELECT id, tp_name, version FROM formation_modules WHERE id = ?",
+                (module_id,),
+            )
+            row = cursor.fetchone()
+            if not row:
+                conn.close()
+                return jsonify({"success": False, "error": "Module introuvable"}), 404
+            mod_tp, mod_version = row[1], row[2]
+
+            # Vérifie qu'aucune plateforme n'utilise ce module comme source.
+            cursor.execute(
+                "SELECT id, name FROM platform_config WHERE source_module_id = ?",
+                (module_id,),
+            )
+            using = cursor.fetchall()
+            if using:
+                conn.close()
+                names = ", ".join(p[1] for p in using)
+                return jsonify({
+                    "success": False,
+                    "error": (
+                        f"{len(using)} plateforme(s) utilisent encore ce module : {names}. "
+                        f"Supprime-les (ou bascule-les sur un autre module) avant de retirer le module."
+                    ),
+                    "blocking_platforms": [{"id": p[0], "name": p[1]} for p in using],
+                }), 409
+
+            cursor.execute("DELETE FROM formation_modules WHERE id = ?", (module_id,))
+            conn.commit()
+            conn.close()
+            logger.info(f"🗑️  Module {module_id} ({mod_tp} {mod_version}) supprimé du catalogue")
+            return jsonify({
+                "success": True,
+                "module_id": module_id,
+                "tp_name": mod_tp,
+                "version": mod_version,
+            }), 200
+        except Exception as e:
+            logger.error(f"❌ Erreur delete formation-module {module_id}: {e}")
+            return jsonify({"success": False, "error": str(e)}), 500
+
     # ─── GET /api/hr/formations ──────────────────────────────────────────
     # Legacy : liste des jobs pipeline (kept pour compat backward si autre code
     # l'appelle encore). La modale "Nouvelle plateforme" utilise désormais
@@ -625,6 +684,27 @@ def create_hr_blueprint(socketio):
                 (new_id, default_heure, new_id),
             )
 
+            # ─── Plateforme "fait main" — module catalogue auto ──────────────
+            # Quand l'admin crée une plateforme VIDE (sans pipeline ni clone),
+            # il va y uploader manuellement audios + cours. Ces plateformes
+            # sont des "modules faits mains" — on les inscrit dans le catalogue
+            # formation_modules pour qu'elles apparaissent dans l'onglet Modules
+            # et soient supprimables via le bouton catalogue. Pas de
+            # source_pipeline_job_id (NULL — distinguable des modules pipeline).
+            if not has_content:
+                cursor.execute(
+                    "SELECT COUNT(*) FROM formation_modules WHERE source_pipeline_job_id IS NULL"
+                )
+                n_manual = cursor.fetchone()[0] + 1
+                manual_version = f"manuel-v{n_manual}"
+                cursor.execute(
+                    """INSERT INTO formation_modules
+                       (rncp_code, tp_name, version, status, source_pipeline_job_id, source_platform_id, validated_at)
+                       VALUES (?, ?, ?, 'validated', NULL, ?, ?)""",
+                    (None, name, manual_version, new_id, now_str),
+                )
+                logger.info(f"✏️  Module 'fait main' inscrit au catalogue : {name} ({manual_version}) → P{new_id}")
+
             conn.commit()
             conn.close()
 
@@ -741,6 +821,103 @@ def create_hr_blueprint(socketio):
 
         except Exception as e:
             logger.error(f"❌ Erreur toggle lock: {e}")
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    # ─── DELETE /api/hr/platforms/<id> ────────────────────────────────────
+    # Suppression définitive d'une plateforme. Cascade DB :
+    #   - content_generation_segments → content_generation_jobs (FK)
+    #   - formation_knowledge_base → formation_pipeline_jobs (FK)
+    #   - cours_documents → cours_folders → cours_config
+    #   - formation_modules :
+    #     · modules "fait main" (source_pipeline_job_id IS NULL) → DELETE
+    #       (la plateforme EST le module, ils représentent la même chose)
+    #     · modules pipeline (source_pipeline_job_id NOT NULL) → SET source_platform_id = NULL
+    #       (le module reste dans le catalogue, réutilisable indépendamment)
+    #   - logs et video_visits préservés (audit trail historique)
+    # Côté Azure : blobs PDF/audios/archives non supprimés en V1 — nettoyage manuel.
+    @hr_bp.route("/api/hr/platforms/<int:platform_id>", methods=["DELETE"])
+    def delete_platform(platform_id):
+        """Supprimer définitivement une plateforme et son contenu pédagogique."""
+        denied = _require_admin()
+        if denied:
+            return denied
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+
+            cursor.execute("SELECT id, name FROM platform_config WHERE id = ?", (platform_id,))
+            row = cursor.fetchone()
+            if not row:
+                conn.close()
+                return jsonify({"success": False, "error": "Plateforme introuvable"}), 404
+            platform_name = row[1]
+
+            # 1. Pipeline content : segments → jobs
+            cursor.execute(
+                "DELETE FROM content_generation_segments WHERE job_id IN ("
+                "SELECT id FROM content_generation_jobs WHERE platform_id = ?)",
+                (platform_id,),
+            )
+            cursor.execute(
+                "DELETE FROM content_generation_jobs WHERE platform_id = ?",
+                (platform_id,),
+            )
+
+            # 2. Pipeline formation : KB → jobs
+            cursor.execute(
+                "DELETE FROM formation_knowledge_base WHERE job_id IN ("
+                "SELECT id FROM formation_pipeline_jobs WHERE platform_id = ?)",
+                (platform_id,),
+            )
+            cursor.execute(
+                "DELETE FROM formation_pipeline_jobs WHERE platform_id = ?",
+                (platform_id,),
+            )
+
+            # 3. Contenu pédagogique : documents → folders + config
+            cursor.execute(
+                "DELETE FROM cours_documents WHERE folder_id IN ("
+                "SELECT id FROM cours_folders WHERE platform_id = ?)",
+                (platform_id,),
+            )
+            cursor.execute("DELETE FROM cours_folders WHERE platform_id = ?", (platform_id,))
+            cursor.execute("DELETE FROM cours_config WHERE platform_id = ?", (platform_id,))
+
+            # 4a. Modules "fait main" liés (la plateforme EST le module) → DELETE
+            cursor.execute(
+                "DELETE FROM formation_modules "
+                "WHERE source_platform_id = ? AND source_pipeline_job_id IS NULL",
+                (platform_id,),
+            )
+            n_manual_deleted = cursor.rowcount
+
+            # 4b. Modules pipeline qui pointaient vers cette plateforme : préservés
+            #     (produit durable réutilisable indépendamment de la promo source)
+            cursor.execute(
+                "UPDATE formation_modules SET source_platform_id = NULL "
+                "WHERE source_platform_id = ? AND source_pipeline_job_id IS NOT NULL",
+                (platform_id,),
+            )
+
+            # 5. La plateforme elle-même
+            cursor.execute("DELETE FROM platform_config WHERE id = ?", (platform_id,))
+
+            conn.commit()
+            conn.close()
+
+            logger.info(
+                f"🗑️  Plateforme {platform_id} ({platform_name}) supprimée — "
+                f"cascade DB ok (modules fait main supprimés : {n_manual_deleted})"
+            )
+            return jsonify({
+                "success": True,
+                "platform_id": platform_id,
+                "platform_name": platform_name,
+                "manual_modules_deleted": n_manual_deleted,
+                "warning": "Blobs Azure (PDF/audios/archives) non supprimés — nettoyage manuel.",
+            }), 200
+        except Exception as e:
+            logger.error(f"❌ Erreur delete platform {platform_id}: {e}")
             return jsonify({"success": False, "error": str(e)}), 500
 
     # ─── GET /api/hr/platforms/<id>/audios ────────────────────────────────
@@ -2366,6 +2543,8 @@ def create_hr_blueprint(socketio):
             playlist_mock = req_body.get("mock", False)   # mock mode classique (sans script)
             script_mock = req_body.get("script_mock", False)  # mock mode script (silence au lieu TTS)
             force_all = req_body.get("force_all", False)
+            sync_slides = bool(req_body.get("sync_slides", False))
+            auto_generate_slides = bool(req_body.get("auto_generate_slides", False))
 
             # Vérifier si un script TTS existe pour ce dossier
             from services.content_generation_service import get_job_from_db as _get_cjob
@@ -2386,6 +2565,8 @@ def create_hr_blueprint(socketio):
                         result_audio = generate_audio_from_script(
                             folder_id, on_progress=on_progress, force_all=force_all,
                             mock=script_mock,
+                            sync_slides=sync_slides,
+                            auto_generate_slides=auto_generate_slides,
                         )
                         result = {
                             "status": "completed",
@@ -2982,8 +3163,8 @@ def create_hr_blueprint(socketio):
     def fill_from_folder(platform_id):
         """
         Copie les 19 fichiers MP3 d'un dossier de cours vers le container audio de la plateforme.
-        - 7 cours : depuis audiostts/platform-X/folder-Y/playlist/
-        - 12 Q&A + pauses : depuis audioqapause (fichiers permanents recyclés)
+        - priorité : fichiers générés du dossier depuis audiostts/platform-X/folder-Y/playlist/
+        - fallback : Q&A + pauses statiques depuis audioqapause si manquants
         """
         denied = _require_admin()
         if denied:
@@ -3024,40 +3205,50 @@ def create_hr_blueprint(socketio):
 
             playlist_prefix = f"platform-{platform_id}/folder-{folder_id}/playlist/"
 
-            # Lister uniquement les fichiers cours (cours_*.mp3) du dossier
-            # Les Q&A et pauses viennent toujours d'audioqapause, pas d'ici
-            cours_blobs = [
+            # Lister tous les MP3 générés dans le dossier. Les pipelines récentes
+            # produisent aussi les Q&A/pauses contextuels dans ce préfixe.
+            playlist_blobs = [
                 b for b in playlist_cc.list_blobs(name_starts_with=playlist_prefix)
-                if b.name.split("/")[-1].startswith("cours_") and b.name.endswith(".mp3")
+                if b.name.endswith(".mp3")
             ]
+            cours_blobs = [b for b in playlist_blobs if b.name.split("/")[-1].startswith("cours_")]
 
             if not cours_blobs:
                 return jsonify({"success": False, "error": "Aucun fichier cours généré dans ce dossier. Lancez d'abord la pipeline."}), 404
 
             copied_files = []
             errors = []
+            copied_names = set()
 
-            # Copier les fichiers cours (depuis audiostts)
-            for blob in cours_blobs:
+            # Copier les fichiers générés du dossier (cours + Q&A/pauses contextuels)
+            for blob in playlist_blobs:
                 filename = blob.name.split("/")[-1]
                 try:
                     audio_bytes = playlist_cc.get_blob_client(blob.name).download_blob().readall()
                     dest_cc.get_blob_client(filename).upload_blob(audio_bytes, overwrite=True)
                     copied_files.append(filename)
-                    logger.info(f"   ✅ Cours copié : {filename}")
+                    copied_names.add(filename)
+                    logger.info(f"   ✅ Playlist générée copiée : {filename}")
                 except Exception as e:
-                    logger.error(f"   ❌ Échec copie cours {filename}: {e}")
+                    logger.error(f"   ❌ Échec copie playlist {filename}: {e}")
                     errors.append({"filename": filename, "error": str(e)})
 
-            # Copier les Q&A et Pauses (depuis audioqapause)
-            qa_pause_blobs = [b for b in qa_pause_cc.list_blobs() if b.name.endswith(".mp3")]
+            # Fallback Q&A/pauses depuis audioqapause pour les fichiers non générés
+            from services.audio_service import get_playlist
+            expected_qa_pause = [
+                os.path.basename((item["filename"] or "").split("?", 1)[0])
+                for item in get_playlist(platform_id)
+                if item.get("type") in ("qa", "pause", "pause_midi")
+            ]
 
-            for blob in qa_pause_blobs:
-                filename = blob.name
+            for filename in expected_qa_pause:
+                if filename in copied_names:
+                    continue
                 try:
                     audio_bytes = qa_pause_cc.get_blob_client(filename).download_blob().readall()
                     dest_cc.get_blob_client(filename).upload_blob(audio_bytes, overwrite=True)
                     copied_files.append(filename)
+                    copied_names.add(filename)
                     logger.info(f"   ♻️ Q&A/Pause copié : {filename}")
                 except Exception as e:
                     logger.error(f"   ❌ Échec copie Q&A/Pause {filename}: {e}")

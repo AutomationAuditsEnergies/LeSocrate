@@ -49,6 +49,36 @@ logger = get_logger(__name__)
 
 formation_bp = Blueprint("formation", __name__)
 
+_PIPELINE_MODEL_ALIASES = {
+    "sonnet": "claude-sonnet-4-20250514",
+    "haiku": "claude-haiku-4-5-20251001",
+    "flash": "deepseek-v4-flash",
+    "pro": "deepseek-v4-pro",
+}
+_PIPELINE_MODEL_CHOICES = set(_PIPELINE_MODEL_ALIASES)
+
+
+def _normalize_pipeline_model_choice(raw, default=None):
+    """Normalise le choix UI persistant de l'auto-pilot."""
+    value = (raw or default or "").strip().lower()
+    if value in _PIPELINE_MODEL_CHOICES:
+        return value
+    return default
+
+
+def _resolve_pipeline_api_model(job: dict | None, requested_model=None):
+    """Résout le modèle API à utiliser pour une action du job.
+
+    Priorité : modèle explicite de la requête, puis modèle choisi au lancement
+    de la pipeline (`auto_pilot_model`). Ça évite les retours silencieux vers
+    le modèle par défaut global quand l'utilisateur a choisi DeepSeek.
+    """
+    model = requested_model or (job or {}).get("auto_pilot_model")
+    if not model:
+        return None
+    model = str(model).strip()
+    return _PIPELINE_MODEL_ALIASES.get(model.lower(), model)
+
 
 def _get_platform_id():
     """Retourne platform_id depuis session ou header."""
@@ -158,6 +188,7 @@ def init_formation():
     tp_name = (data.get("tp_name") or "").strip()
     rncp_code = (data.get("rncp_code") or "").strip()
     total_hours = data.get("total_hours")
+    model_choice = _normalize_pipeline_model_choice(data.get("model"))
 
     if not platform_name:
         return jsonify({"error": "Le champ 'platform_name' est requis"}), 400
@@ -214,6 +245,8 @@ def init_formation():
             total_hours=total_hours,
             nb_days=nb_days,
         )
+        if model_choice:
+            update_job(job_id, auto_pilot_model=model_choice)
         logger.info(f"✅ Job formation créé : {job_id} ({tp_name}, {total_hours}h, {nb_days} jours, plateforme {new_platform_id})")
         return jsonify({
             "job_id": job_id,
@@ -223,6 +256,7 @@ def init_formation():
             "rncp_code": rncp_code,
             "total_hours": total_hours,
             "nb_days": nb_days,
+            "model": model_choice,
             "status": "init",
         }), 201
 
@@ -412,7 +446,7 @@ def init_test_pipeline():
         # 4. Si auto_pilot demandé, lancer l'auto-pilot en mode Claude Code.
         # Important : même si KB/global/daily/content sont skippés (segments déjà
         # en DB), les étapes en aval CONSOMMENT de l'IA et donc du crédit :
-        #   - Volume safety : enrichit les segments < 5000 mots (Claude)
+        #   - Volume safety : enrichit les journées < 90 000 mots (Claude)
         #   - Review conformité : audit règles #1-#27 par 4 agents multi-rules (Claude)
         # Sans use_claude_code=True, ces appels passent par l'API LLM configurée
         # (DeepSeek ou Anthropic). Avec True, ils utilisent le forfait Pro/Max
@@ -425,20 +459,19 @@ def init_test_pipeline():
         # "que vous imaginez"). Le coût est sur le forfait CC, donc gratuit côté API.
         if auto_pilot:
             import eventlet
-            # skip_volume_safety=True : on a validé que volume safety multi-passes
-            # marche (job 14 a atteint 94k mots). Pour itérer rapidement sur la
-            # qualité de la review, on saute volume safety. Chaque test = ~15 min
-            # au lieu de 45-60. Si on veut re-tester volume safety, il faudra
-            # ajouter un toggle frontend ou faire un job sans skip_volume_safety.
-            eventlet.spawn(
-                _run_auto_pilot, job_id, tts_mode, "sonnet", True,
-                True,  # skip_volume_safety
-            )
+            update_job(job_id,
+                       auto_pilot_enabled=1,
+                       auto_pilot_model="sonnet",
+                       auto_pilot_tts_mode=tts_mode,
+                       auto_pilot_use_cc=1,
+                       auto_pilot_skip_vs=1,   # volume safety skippée en mode TEST
+                       auto_pilot_volume_done=0,
+                       auto_pilot_post_review_docs_done=0,
+                       auto_pilot_error=None)
+            eventlet.spawn(_tick_auto_pilot, job_id)
             logger.info(
-                f"🧪 [TEST] Auto-pilot spawné pour job {job_id} "
-                f"(tts={tts_mode}, mode=Claude Code Sonnet, "
-                f"content+KB/global/daily skippés, volume_safety SKIPPÉ, "
-                f"seul review + audio mock + health-check tournent)"
+                f"🧪 [TEST] Auto-pilot (DB state machine) spawné pour job {job_id} "
+                f"(tts={tts_mode}, CC Sonnet, volume_safety skippée)"
             )
 
         return jsonify({
@@ -582,9 +615,9 @@ def enrich_reac(job_id):
         return jsonify({"error": f"Statut '{job['status']}' invalide pour cette action"}), 400
 
     data = request.get_json() or {}
-    model = data.get("model") or None
+    model = _resolve_pipeline_api_model(job, data.get("model"))
     launch_kb_building(job_id, model=model)
-    return jsonify({"message": "Construction knowledge base lancée", "status": "kb_building"})
+    return jsonify({"message": "Construction knowledge base lancée", "status": "kb_building", "model": model})
 
 
 @formation_bp.route("/api/formation/<int:job_id>/kb", methods=["GET"])
@@ -621,9 +654,9 @@ def generate_global(job_id):
         return jsonify({"error": f"Statut '{job['status']}' invalide pour cette action"}), 400
 
     data = request.get_json() or {}
-    model = data.get("model") or None
+    model = _resolve_pipeline_api_model(job, data.get("model"))
     launch_global_program_generation(job_id, model=model)
-    return jsonify({"message": "Génération programme global lancée", "status": "global_generating"})
+    return jsonify({"message": "Génération programme global lancée", "status": "global_generating", "model": model})
 
 
 # ─── Validation programme global ──────────────────────────────────────────────
@@ -675,9 +708,9 @@ def split_daily(job_id):
         return jsonify({"error": f"Statut '{job['status']}' invalide pour cette action"}), 400
 
     data = request.get_json() or {}
-    model = data.get("model") or None
+    model = _resolve_pipeline_api_model(job, data.get("model"))
     launch_daily_split(job_id, model=model)
-    return jsonify({"message": "Découpage journées lancé", "status": "daily_splitting"})
+    return jsonify({"message": "Découpage journées lancé", "status": "daily_splitting", "model": model})
 
 
 # ─── Validation programmes journée ───────────────────────────────────────────
@@ -734,13 +767,14 @@ def launch_tts(job_id):
 
     platform_id = job["platform_id"]
     data = request.get_json() or {}
-    model = data.get("model") or None
+    model = _resolve_pipeline_api_model(job, data.get("model"))
 
     try:
         folder_ids = launch_tts_for_all_days(job_id, platform_id, model=model)
         return jsonify({
             "message": f"Génération TTS lancée pour {len(folder_ids)} journées",
             "folder_ids": folder_ids,
+            "model": model,
             "status": "tts_launched",
         })
     except Exception as e:
@@ -769,7 +803,7 @@ def refine(job_id):
     content_type = data.get("content_type", "global")
     instruction = (data.get("instruction") or "").strip()
     current_content = (data.get("current_content") or "").strip()
-    model = data.get("model") or None
+    model = _resolve_pipeline_api_model(job, data.get("model"))
 
     if not instruction:
         return jsonify({"error": "Le champ 'instruction' est requis"}), 400
@@ -814,8 +848,8 @@ def list_content(job_id):
     cursor = conn.cursor()
     cursor.execute(
         """SELECT id, name, position FROM cours_folders
-           WHERE platform_id = ? ORDER BY position ASC, id ASC""",
-        (job["platform_id"],),
+           WHERE formation_job_id = ? ORDER BY position ASC, id ASC""",
+        (job_id,),
     )
     folders = cursor.fetchall()
 
@@ -1312,7 +1346,9 @@ def launch_volume_safety(job_id, folder_id):
         return jsonify({"error": "Job introuvable"}), 404
 
     payload = request.get_json(silent=True) or {}
-    mode = (payload.get("mode") or "cc").lower()
+    job_model_choice = _normalize_pipeline_model_choice(job.get("auto_pilot_model"))
+    default_mode = "api" if job_model_choice in ("flash", "pro") else "cc"
+    mode = (payload.get("mode") or default_mode).lower()
     if mode not in ("api", "cc"):
         return jsonify({"error": f"mode invalide (autorisés : api, cc)"}), 400
 
@@ -1321,22 +1357,16 @@ def launch_volume_safety(job_id, folder_id):
         return jsonify({"error": "LOCAL_DEV requis pour le mode CC. Utilise mode='api'."}), 403
 
     if mode == "cc":
+        if job_model_choice in ("flash", "pro") and not payload.get("model"):
+            return jsonify({
+                "error": "mode='cc' incompatible avec une pipeline DeepSeek. Utilise mode='api'."
+            }), 400
         model = (payload.get("model") or "sonnet").lower()
         if model not in ALLOWED_MODELS:
             return jsonify({"error": f"model invalide (autorisés : {sorted(ALLOWED_MODELS)})"}), 400
     else:
         # Mode API : on accepte le model ID complet ou un raccourci
-        raw = (payload.get("model") or "sonnet").lower()
-        if raw == "haiku":
-            model = "claude-haiku-4-5-20251001"
-        elif raw == "sonnet":
-            model = None  # défaut FORMATION_LLM_MODEL côté service
-        elif raw == "flash":
-            model = "deepseek-v4-flash"
-        elif raw == "pro":
-            model = "deepseek-v4-pro"
-        else:
-            model = payload.get("model")  # ID complet passé tel quel
+        model = _resolve_pipeline_api_model(job, payload.get("model"))
 
     state_key = (job_id, f"volume_safety_{folder_id}")
     if _EXECUTION_STATE.get(state_key, {}).get("status") == "running":
@@ -1418,8 +1448,8 @@ def resume_content(job_id):
         """SELECT f.id, cg.status
            FROM cours_folders f
            LEFT JOIN content_generation_jobs cg ON cg.folder_id = f.id
-           WHERE f.platform_id = ? ORDER BY f.position ASC, f.id ASC""",
-        (job["platform_id"],),
+           WHERE f.formation_job_id = ? ORDER BY f.position ASC, f.id ASC""",
+        (job_id,),
     )
     rows = cursor.fetchall()
     conn.close()
@@ -1429,7 +1459,7 @@ def resume_content(job_id):
         return jsonify({"message": "Tous les dossiers sont déjà complets", "resumed": []})
 
     data = request.get_json(silent=True) or {}
-    model = data.get("model") or None
+    model = _resolve_pipeline_api_model(job, data.get("model"))
 
     import eventlet
     from services.content_generation_service import run_content_generation
@@ -1488,7 +1518,7 @@ def review_content(job_id, folder_id):
         return jsonify({"error": "Folder inexistant ou hors plateforme"}), 404
 
     data = request.get_json(silent=True) or {}
-    model = data.get("model") or None  # None → CLAUDE_MODEL par défaut (Sonnet)
+    model = _resolve_pipeline_api_model(job, data.get("model"))
 
     import eventlet
     from services.content_generation_service import run_content_review
@@ -1516,7 +1546,7 @@ def review_content(job_id, folder_id):
     return jsonify({
         "message": "Révision conformité lancée en arrière-plan",
         "folder_id": folder_id,
-        "model": model or "default (Sonnet)",
+        "model": model,
     }), 202
 
 
@@ -1760,8 +1790,8 @@ def launch_audio(job_id):
     cursor = conn.cursor()
     cursor.execute(
         """SELECT f.id FROM cours_folders f
-           WHERE f.platform_id = ? ORDER BY f.position ASC, f.id ASC""",
-        (job["platform_id"],),
+           WHERE f.formation_job_id = ? ORDER BY f.position ASC, f.id ASC""",
+        (job_id,),
     )
     folder_ids = [r[0] for r in cursor.fetchall()]
 
@@ -1797,13 +1827,15 @@ def launch_audio(job_id):
     # - (défaut)       → Fish Audio S2-Pro (voix studio payante)
     mock = bool(data.get("mock", False))
     basic_tts = bool(data.get("basic_tts", False))
+    sync_slides = bool(data.get("sync_slides", False))
+    auto_generate_slides = bool(data.get("auto_generate_slides", False))
     if mock and basic_tts:
         return jsonify({"error": "mock et basic_tts sont mutuellement exclusifs"}), 400
 
     import eventlet
     from services.content_generation_service import generate_audio_from_script
 
-    def _run_audio(folder_id):
+    def _run_audio(folder_id, next_folder_id=None, is_last_folder=False):
         import sys, traceback
         mode_label = "[MOCK]" if mock else "[gTTS]" if basic_tts else ""
         logger.info(f"🚀 SPAWN greenlet job={job_id} folder={folder_id} mock={mock} basic_tts={basic_tts} force_all={force_all}")
@@ -1811,7 +1843,16 @@ def launch_audio(job_id):
         try:
             logger.info(f"🎙️ {mode_label} Job {job_id} folder {folder_id} : synthèse audio démarrée")
             sys.stdout.flush()
-            generate_audio_from_script(folder_id, force_all=force_all, mock=mock, basic_tts=basic_tts)
+            generate_audio_from_script(
+                folder_id,
+                force_all=force_all,
+                mock=mock,
+                basic_tts=basic_tts,
+                next_folder_id=next_folder_id,
+                is_last_folder=is_last_folder,
+                sync_slides=sync_slides,
+                auto_generate_slides=auto_generate_slides,
+            )
             logger.info(f"✅ {mode_label} Job {job_id} folder {folder_id} : synthèse audio terminée")
             sys.stdout.flush()
         except Exception as e:
@@ -1828,8 +1869,9 @@ def launch_audio(job_id):
     # multiplie les requêtes simultanées vers l'API tierce → rate limit (429)
     # immédiat. On séquentialise via 1 seul greenlet qui itère.
     def _run_all_audios_sequential():
-        for fid in folder_ids:
-            _run_audio(fid)
+        for idx, fid in enumerate(folder_ids):
+            next_fid = folder_ids[idx + 1] if idx + 1 < len(folder_ids) else None
+            _run_audio(fid, next_folder_id=next_fid, is_last_folder=next_fid is None)
             # Petit cooldown entre folders pour aérer le rate limit côté
             # API tierce. Configurable, surtout utile pour gTTS.
             import time as _t
@@ -1918,6 +1960,8 @@ def launch_audio(job_id):
         mode_suffix = " (gTTS — voix basique gratuite)"
     else:
         mode_suffix = ""
+    if sync_slides:
+        mode_suffix += " + slides synchronisées"
     logger.info(f"🚀 Job {job_id} : synthèse audio lancée pour {len(folder_ids)} dossiers{mode_suffix}")
     return jsonify({
         "message": f"Synthèse audio lancée pour {len(folder_ids)} journées{mode_suffix}",
@@ -1925,6 +1969,8 @@ def launch_audio(job_id):
         "status": "audio_launched",
         "mock": mock,
         "basic_tts": basic_tts,
+        "sync_slides": sync_slides,
+        "auto_generate_slides": auto_generate_slides,
     })
 
 
@@ -1940,423 +1986,682 @@ def list_formations():
     return jsonify({"jobs": jobs})
 
 
-# ─── Auto-pilot pipeline (Phase C) ────────────────────────────────────────────
+# ─── Auto-pilot pipeline — state machine persistée en DB ─────────────────────
 #
-# Enchaîne automatiquement les étapes du pipeline pour simuler l'expérience
-# finale de l'utilisateur (qui ne valide pas chaque étape à la main).
-# Stop-on-error : si une étape plante, le job conserve son statut error et
-# l'auto-pilot s'arrête. L'utilisateur peut reprendre manuellement dans
-# l'onglet Formation Pipeline.
+# Architecture : chaque tick exécute UNE seule étape, écrit l'état en DB,
+# puis se respawn pour la suivante. Résiste aux restarts Azure App Service.
 #
-# État partagé pour le polling UI : _AUTO_PILOT_STATE[(job_id)] = {step, status,
-# error?, started_at, ...}.
+# DB columns : auto_pilot_enabled, auto_pilot_step, auto_pilot_model,
+#              auto_pilot_tts_mode, auto_pilot_use_cc, auto_pilot_skip_vs,
+#              auto_pilot_volume_done, auto_pilot_post_review_docs_done,
+#              auto_pilot_error,
+#              auto_pilot_locked_at, auto_pilot_lock_owner
+#
+# Lock TTL = 5 min. Au boot, _resume_interrupted_auto_pilots() reprend les
+# jobs dont le lock est absent ou périmé.
 
-_AUTO_PILOT_STATE = {}
+_AP_LOCK_TTL = 300  # secondes — lock périmé si > 5 min sans mise à jour
+_AP_WATCHDOG_INTERVAL = int(os.getenv("AUTO_PILOT_WATCHDOG_INTERVAL_SEC", "60"))
+_AP_WATCHDOG_STARTED = False
 
 
-def _run_auto_pilot(job_id: int, tts_mode: str, model: str,
-                    use_claude_code: bool = False,
-                    skip_volume_safety: bool = False) -> None:
-    """Greenlet qui orchestre tout le pipeline. Stop-on-error.
-
-    Si `use_claude_code=True`, les étapes API (KB, global, daily, content) sont
-    exécutées via subprocess Claude Code local (forfait Pro/Max) au lieu des
-    appels API Anthropic à la carte. Économise les crédits API quand le
-    compte est bas. L'étape audio TTS reste hors-CC (mock/gtts/fish_audio).
-    """
-    import eventlet
-    from services.content_generation_service import (
-        run_content_generation, generate_audio_from_script,
-    )
+def _acquire_ap_lock(job_id: int) -> bool:
+    """Pose un lock optimiste sur l'auto-pilot. Retourne True si acquis."""
     from database.db import get_db_connection
+    owner = str(os.getpid())
+    stale_cutoff = int(time.time()) - _AP_LOCK_TTL
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        UPDATE formation_pipeline_jobs
+        SET auto_pilot_locked_at = CURRENT_TIMESTAMP,
+            auto_pilot_lock_owner = ?
+        WHERE id = ?
+          AND auto_pilot_enabled = 1
+          AND (auto_pilot_locked_at IS NULL
+               OR CAST(strftime('%s', auto_pilot_locked_at) AS INTEGER) < ?)
+    """, (owner, job_id, stale_cutoff))
+    acquired = cursor.rowcount == 1
+    conn.commit()
+    conn.close()
+    return acquired
 
-    # Mapping modèle :
-    # - api_model : ID complet pour les services API
-    #   (claude-haiku-4-5-20251001 ou None=défaut FORMATION_LLM_MODEL)
-    # - cc_model : raccourci CLI Claude Code ("haiku"/"sonnet")
-    if model == "haiku":
-        api_model = "claude-haiku-4-5-20251001"
-        cc_model = "haiku"
-    elif model == "flash":
-        api_model = "deepseek-v4-flash"
-        cc_model = "sonnet"
-    elif model == "pro":
-        api_model = "deepseek-v4-pro"
-        cc_model = "sonnet"
-    else:
-        api_model = None  # défaut via FORMATION_LLM_MODEL / FORMATION_CLAUDE_MODEL
-        cc_model = "sonnet"
 
-    poll_interval = 3
-    # Cap large pour KB et content (les plus longs). Le polling lit le statut
-    # — il ne tourne pas dans le vide, c'est juste un timeout de sécurité.
-    max_wait_kb = 3600
-    max_wait_global = 600
-    max_wait_daily = 600
-    max_wait_content = 14400  # 4h max pour content (90k mots × N journées)
+def _release_ap_lock(job_id: int) -> None:
+    from database.db import get_db_connection
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        UPDATE formation_pipeline_jobs
+        SET auto_pilot_locked_at = NULL, auto_pilot_lock_owner = NULL
+        WHERE id = ?
+    """, (job_id,))
+    conn.commit()
+    conn.close()
 
-    def _set_step(step, **kw):
-        st = _AUTO_PILOT_STATE.setdefault(job_id, {})
-        st["step"] = step
-        st["updated_at"] = time.time()
-        for k, v in kw.items():
-            st[k] = v
 
-    def _wait_for(target_statuses, max_wait):
+def _refresh_ap_lock(job_id: int) -> None:
+    """Rafraîchit le timestamp du lock pour éviter l'expiration pendant une étape longue."""
+    from database.db import get_db_connection
+    owner = str(os.getpid())
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        UPDATE formation_pipeline_jobs
+        SET auto_pilot_locked_at = CURRENT_TIMESTAMP
+        WHERE id = ? AND auto_pilot_lock_owner = ?
+    """, (job_id, owner))
+    conn.commit()
+    conn.close()
+
+
+def _determine_next_ap_step(job_id: int) -> str | None:
+    """Détermine la prochaine étape à exécuter (checks idempotents). None = terminé."""
+    from database.db import get_db_connection
+    j = get_job(job_id)
+    if not j:
+        return None
+
+    # Reset du statut erreur avant de relancer (même logique que l'ancien auto-pilot)
+    if j["status"] in ("error", "audio_error"):
+        if j.get("daily_programs_validated"):
+            fallback = "daily_validated"
+        elif j.get("global_program_validated"):
+            fallback = "global_validated"
+        elif j.get("global_program"):
+            fallback = "global_ready"
+        elif j.get("reac_text"):
+            fallback = "reac_ready"
+        else:
+            fallback = "init"
+        update_job(job_id, status=fallback, error_message=None)
+
+    # 1. REAC
+    if not j.get("reac_text"):
+        return "reac"
+
+    # 2. KB
+    kb_done = j.get("status") in (
+        "global_ready", "global_validated", "daily_ready",
+        "daily_validated", "tts_launched", "audio_launched",
+    )
+    if not kb_done:
+        try:
+            from services.knowledge_base_service import kb_stats as _kb_stats
+            kb_done = _kb_stats(job_id).get("completed", 0) > 0
+        except Exception:
+            pass
+    if not kb_done:
+        return "kb"
+
+    # 3. Programme global
+    if not j.get("global_program"):
+        return "global"
+
+    # 4. Programmes journée
+    daily = j.get("daily_programs") or "[]"
+    if not daily or daily in ("[]", '"[]"'):
+        return "daily"
+
+    # 5. Génération contenu — comparer au nombre ATTENDU, pas aux segments existants.
+    # Un restart en cours de création peut laisser total < attendu ; sans ce check,
+    # le tick croirait à tort que le contenu est terminé (ex. 900 ok sur 936 attendus).
+    # Invariant : 6 sous-parties × 3 passes = 18 segments/jour.
+    # Filtre par formation_job_id (pas platform_id) pour éviter de compter les
+    # segments d'un pipeline précédent sur la même plateforme.
+    expected_segs = (j.get("nb_days") or 0) * 18
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT COALESCE(SUM(CASE WHEN cgs.status = 'completed' THEN 1 ELSE 0 END), 0)
+        FROM content_generation_segments cgs
+        JOIN content_generation_jobs cgj ON cgj.id = cgs.job_id
+        JOIN cours_folders cf ON cf.id = cgj.folder_id
+        WHERE cf.formation_job_id = ?
+    """, (job_id,))
+    completed_segs = cursor.fetchone()[0]
+    conn.close()
+    if expected_segs == 0 or completed_segs < expected_segs:
+        return "content"
+
+    # 5.5. Volume safety : l'audit réel est prioritaire sur le flag DB.
+    # Un job ancien peut avoir auto_pilot_volume_done=1 avec l'ancienne cible
+    # 60k ; si l'audit 90k voit encore un déficit, on repasse obligatoirement
+    # par l'étape volume avant toute révision conformité.
+    if not j.get("auto_pilot_skip_vs"):
+        from services.claude_code_mission_service import compute_volume_audit
+        audit = compute_volume_audit(job_id)
+        deficit_folders = [f for f in audit.get("folders", []) if f.get("deficit", 0) > 0]
+        if deficit_folders:
+            if j.get("auto_pilot_volume_done"):
+                update_job(
+                    job_id,
+                    auto_pilot_volume_done=0,
+                    auto_pilot_post_review_docs_done=0,
+                )
+            return "volume_safety"
+        if not j.get("auto_pilot_volume_done"):
+            return "volume_safety"
+
+    # 6. Révision conformité
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT COUNT(*) FROM content_generation_segments cgs
+        JOIN content_generation_jobs cgj ON cgj.id = cgs.job_id
+        JOIN cours_folders cf ON cf.id = cgj.folder_id
+        WHERE cf.formation_job_id = ? AND cgs.status = 'completed'
+          AND COALESCE(cgs.reviewed, 0) = 0
+    """, (job_id,))
+    not_reviewed = cursor.fetchone()[0]
+    conn.close()
+    if not_reviewed > 0:
+        return "review"
+
+    # 6.5. Document post-révision : ré-assemble le texte courant après volume
+    # et conformité, avant d'autoriser la synthèse audio.
+    if not j.get("auto_pilot_post_review_docs_done"):
+        return "post_review_docs"
+
+    # 7. Audio TTS — on vérifie via dirty=0 sur tous les segments (pas le status qui
+    # est positionné au début du loop audio, donc non fiable en cas de restart)
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT COUNT(*) FROM content_generation_segments cgs
+        JOIN content_generation_jobs cgj ON cgj.id = cgs.job_id
+        JOIN cours_folders cf ON cf.id = cgj.folder_id
+        WHERE cf.formation_job_id = ? AND COALESCE(cgs.dirty, 1) = 1
+    """, (job_id,))
+    dirty_count = cursor.fetchone()[0]
+    conn.close()
+    if dirty_count > 0 or j.get("status") != "audio_launched":
+        return "audio"
+
+    return None  # tout est fait
+
+
+
+def _execute_ap_step(job_id: int, step: str, job: dict) -> None:
+    """Exécute UNE étape de l'auto-pilot (synchrone — bloque le tick courant)."""
+    import eventlet
+    from database.db import get_db_connection
+    from services.claude_code_mission_service import execute_mission_locally
+
+    model = _normalize_pipeline_model_choice(job.get("auto_pilot_model"), default="sonnet")
+    tts_mode = job.get("auto_pilot_tts_mode") or "gtts"
+    use_cc = bool(job.get("auto_pilot_use_cc"))
+    platform_id = job["platform_id"]
+
+    api_model = _PIPELINE_MODEL_ALIASES[model]
+    cc_model = "haiku" if model == "haiku" else "sonnet"
+
+    def _wait_status(targets, max_wait=3600):
         elapsed = 0
         while elapsed < max_wait:
             j = get_job(job_id)
             if not j:
                 raise RuntimeError("Job introuvable")
             s = j["status"]
-            if s in target_statuses:
+            if s in targets:
                 return j
             if s in ("error", "audio_error"):
-                raise RuntimeError(f"Pipeline en erreur : {j.get('error_message') or s}")
-            eventlet.sleep(poll_interval)
-            elapsed += poll_interval
-        raise TimeoutError(f"Timeout après {max_wait}s en attendant {target_statuses}")
+                raise RuntimeError(f"Pipeline erreur : {j.get('error_message') or s}")
+            eventlet.sleep(3)
+            elapsed += 3
+        raise TimeoutError(f"Timeout {max_wait}s en attendant {targets}")
 
-    try:
-        _set_step("start", status="running", started_at=time.time(),
-                  tts_mode=tts_mode, model=model,
-                  use_claude_code=use_claude_code, error=None)
-        logger.info(
-            f"🤖 Auto-pilot start job={job_id} tts={tts_mode} model={model} "
-            f"use_claude_code={use_claude_code}"
-        )
-
-        # Pre-flight : valide la config et la connectivité externe AVANT de
-        # toucher quoi que ce soit. Si bloquant, on s'arrête net avec un
-        # message clair plutôt que de planter à mi-chemin avec un état partiel.
+    if step == "reac":
         from services.formation_health_service import compute_preflight
-        preflight = compute_preflight(job_id, use_claude_code=use_claude_code, tts_mode=tts_mode)
-        _set_step("start", preflight=preflight)
+        preflight = compute_preflight(job_id, use_claude_code=use_cc, tts_mode=tts_mode)
         if not preflight["ok"]:
-            blocking_str = ", ".join(preflight["blocking"])
-            details = "; ".join(
-                f"{k}={preflight['checks'].get(k, {}).get('detail', '?')}"
-                for k in preflight["blocking"]
-            )
-            raise RuntimeError(
-                f"Pre-flight bloqué — checks fatals : {blocking_str}. {details}"
-            )
-        logger.info(f"🛂 Pre-flight OK pour job {job_id} (warnings={preflight['warnings']})")
-
-        # Reset du statut si reprise après échec : l'auto-pilot va revérifier
-        # quelle étape n'est pas faite et reprendre. On nettoie aussi
-        # error_message pour ne pas garder une trace stale.
-        j0 = get_job(job_id)
-        if j0 and j0["status"] in ("error", "audio_error"):
-            # Déduire un statut "propre" depuis les champs concrets du job.
-            if (j0.get("daily_programs_validated") or 0):
-                fallback = "daily_validated"
-            elif j0.get("global_program_validated"):
-                fallback = "global_validated"
-            elif j0.get("global_program"):
-                fallback = "global_ready"
-            elif (j0.get("kb_total") or 0) > 0:
-                fallback = "kb_ready"
-            elif j0.get("reac_text"):
-                fallback = "reac_ready"
-            else:
-                fallback = "init"
-            update_job(job_id, status=fallback, error_message=None)
-            logger.info(f"🤖 Reset statut error → {fallback} pour reprise job {job_id}")
-
-        # ─── 1. REAC ─────────────────────────────────────────────────────────
-        j = get_job(job_id)
-        if not j.get("reac_text"):
-            _set_step("reac")
-            update_job(job_id, status="reac_fetching")
-            try:
-                reac = download_reac_text(j["rncp_code"])
-            except Exception as e:
-                update_job(job_id, status="error", error_message=f"REAC : {e}")
-                raise
-            rc_text = None
-            rome_text = None
-            try:
-                rc_text = download_rc_text(j["rncp_code"]) or None
-            except Exception:
-                pass
-            try:
-                rome_text = fetch_rome_data(j["rncp_code"]) or None
-            except Exception:
-                pass
-            update_job(job_id, status="reac_ready", reac_text=reac,
-                       rc_text=rc_text, rome_text=rome_text)
-            logger.info(f"🤖 ✓ REAC téléchargé pour job {job_id}")
-
-        # Helper : lance l'étape via Claude Code subprocess (synchrone) si
-        # use_claude_code=True, sinon via les services API Anthropic.
-        from services.claude_code_mission_service import execute_mission_locally
-
-        # ─── 2. KB ───────────────────────────────────────────────────────────
-        # Skip KB si déjà construite (kb_stats.completed > 0 ou statut > kb_ready)
-        j = get_job(job_id)
-        kb_already_done = False
+            raise RuntimeError(f"Pre-flight bloqué : {', '.join(preflight['blocking'])}")
+        logger.info(f"🛂 Pre-flight OK job {job_id}")
+        update_job(job_id, status="reac_fetching")
+        reac = download_reac_text(job["rncp_code"])
+        rc_text, rome_text = None, None
         try:
-            from services.knowledge_base_service import kb_stats as _kb_stats
-            stats = _kb_stats(job_id)
-            kb_already_done = (stats.get("completed", 0) > 0)
+            rc_text = download_rc_text(job["rncp_code"]) or None
         except Exception:
             pass
-        # Bonus : si statut déjà au-delà de kb_ready, on est sûr que KB est faite
-        if j.get("status") in ("global_ready", "global_validated", "daily_ready",
-                               "daily_validated", "tts_launched", "audio_launched"):
-            kb_already_done = True
+        try:
+            rome_text = fetch_rome_data(job["rncp_code"]) or None
+        except Exception:
+            pass
+        update_job(job_id, status="reac_ready", reac_text=reac,
+                   rc_text=rc_text, rome_text=rome_text)
+        logger.info(f"🤖 ✓ REAC téléchargé job {job_id}")
 
-        if not kb_already_done:
-            _set_step("kb")
-            if use_claude_code:
-                execute_mission_locally(job_id, "kb", cc_model)
-                # _import_kb passe le job en kb_ready directement
-            else:
-                launch_kb_building(job_id, model=api_model)
-                _wait_for({"kb_ready"}, max_wait_kb)
-            logger.info(f"🤖 ✓ KB construite pour job {job_id}")
+    elif step == "kb":
+        if use_cc:
+            execute_mission_locally(job_id, "kb", cc_model)
         else:
-            logger.info(f"🤖 ⏭ KB déjà construite pour job {job_id}, skip")
+            launch_kb_building(job_id, model=api_model)
+            _wait_status({"kb_ready"}, max_wait=3600)
+        logger.info(f"🤖 ✓ KB construite job {job_id}")
 
-        # ─── 3. Programme global ─────────────────────────────────────────────
-        j = get_job(job_id)
-        if not j.get("global_program"):
-            _set_step("global")
-            if use_claude_code:
-                execute_mission_locally(job_id, "global", cc_model)
-                # _import_global passe le job en global_ready
-            else:
-                launch_global_program_generation(job_id, model=api_model)
-                _wait_for({"global_ready"}, max_wait_global)
+    elif step == "global":
+        if use_cc:
+            execute_mission_locally(job_id, "global", cc_model)
+        else:
+            launch_global_program_generation(job_id, model=api_model)
+            _wait_status({"global_ready"}, max_wait=600)
         update_job(job_id, global_program_validated=1, status="global_validated")
-        logger.info(f"🤖 ✓ Programme global validé auto pour job {job_id}")
+        logger.info(f"🤖 ✓ Programme global validé job {job_id}")
 
-        # ─── 4. Découpage journées ───────────────────────────────────────────
-        j = get_job(job_id)
-        daily = j.get("daily_programs") or "[]"
-        if not daily or daily in ("[]", '"[]"'):
-            _set_step("daily")
-            if use_claude_code:
-                execute_mission_locally(job_id, "daily", cc_model)
-            else:
-                launch_daily_split(job_id, model=api_model)
-                _wait_for({"daily_ready"}, max_wait_daily)
+    elif step == "daily":
+        if use_cc:
+            execute_mission_locally(job_id, "daily", cc_model)
+        else:
+            launch_daily_split(job_id, model=api_model)
+            _wait_status({"daily_ready"}, max_wait=600)
         update_job(job_id, daily_programs_validated=1, status="daily_validated")
-        logger.info(f"🤖 ✓ Programmes journée validés auto pour job {job_id}")
+        logger.info(f"🤖 ✓ Programmes journée validés job {job_id}")
 
-        # ─── 5. Génération texte (~90k mots × N journées) ────────────────────
-        j = get_job(job_id)
-        _set_step("content")
-        if use_claude_code:
-            # _execute_chunked content : N segments × 1 subprocess Claude Code,
-            # finalize par _finalize_content_step qui passe le job en tts_launched.
+    elif step == "content":
+        if use_cc:
             execute_mission_locally(job_id, "content", cc_model)
         else:
-            launch_tts_for_all_days(job_id, j["platform_id"], model=api_model)
-            _wait_for({"tts_launched"}, max_wait_content)
-        logger.info(f"🤖 ✓ Contenu généré pour job {job_id}")
+            # Mode API : génération synchrone folder par folder (1 à la fois).
+            # Pas de thread background : run_content_generation est appelé directement
+            # dans le greenlet auto-pilot — résiste aux restarts Azure car :
+            #   - folder existant mais job running/idle → run reprend les segments manquants
+            #   - folder existant + job completed → skip via done_set
+            #   - aucun thread mort possible (pas de thread du tout)
+            import json as _json
+            from services.content_generation_service import run_content_generation, get_job_from_db
+            from services.formation_pipeline_service import _format_day_program_text
 
-        # ─── 5.5. Sécurité volume (toutes branches, best-effort) ─────────────
-        # Pour chaque folder, si total_words < 90 000, enrichit les segments
-        # les plus courts. CC mode → subprocess `claude` (forfait, gratuit).
-        # API mode → appel Anthropic direct (consomme la clé). Multi-passes
-        # jusqu'à 3 dans les deux cas pour atteindre le seuil 90k.
-        # `skip_volume_safety=True` : utilisé par le mode TEST pour itérer plus
-        # vite sur la review (volume safety prend ~30-45 min, review seule ~10-15).
-        if skip_volume_safety:
-            logger.info(f"⏭ Volume safety SKIPPÉ pour job {job_id} (skip_volume_safety=True)")
-        else:
-            from services.claude_code_mission_service import (
-                compute_volume_audit, run_volume_safety, run_volume_safety_api,
-            )
-            j = get_job(job_id)
-            try:
-                audit = compute_volume_audit(job_id)
-                deficit_folders = [f for f in audit.get("folders", []) if f["deficit"] > 0]
-                if deficit_folders:
-                    _set_step("volume_safety")
-                    logger.info(
-                        f"🤖 Sécurité volume ({'CC' if use_claude_code else 'API'}) : "
-                        f"{len(deficit_folders)} folder(s) en déficit "
-                        f"sur {len(audit.get('folders', []))} (job {job_id})"
-                    )
-                    for fa in deficit_folders:
-                        try:
-                            if use_claude_code:
-                                r = run_volume_safety(job_id, fa["folder_id"], model=cc_model)
-                            else:
-                                r = run_volume_safety_api(job_id, fa["folder_id"], model=api_model)
-                            logger.info(
-                                f"🤖   ✓ Volume safety folder {fa['folder_id']} : "
-                                f"{len(r.get('enriched', []))} segments enrichis "
-                                f"(target_reached={r.get('target_reached', False)})"
-                            )
-                        except Exception as e:
-                            logger.warning(
-                                f"⚠️ Volume safety folder {fa['folder_id']} échoué : {e} "
-                                f"— on continue malgré tout"
-                            )
-                else:
-                    logger.info(f"🤖 ✓ Volume OK (≥90k mots/journée) pour job {job_id}")
-            except Exception as e:
-                logger.warning(f"⚠️ Audit volume échoué : {e} — skip volume safety")
+            daily_programs = _json.loads(job.get("daily_programs") or "[]")
+            for day_data in daily_programs:
+                day_num = day_data.get("day_number", 0)
+                day_title = day_data.get("title", f"Jour {day_num}")
+                folder_name = f"Jour {day_num} — {day_title}"
 
-        # ─── 5.6. Révision conformité (étape 6bis) ───────────────────────────
-        # En CC : multi-agents par groupe de règles (4 chunks × N journées).
-        # Marque chaque segment reviewed=1 + applique les patches éligibles.
-        # Idempotent : skip les journées dont tous les segments sont reviewed=1.
-        _set_step("review")
-        if use_claude_code:
-            try:
-                execute_mission_locally(job_id, "review", cc_model)
-                logger.info(f"🤖 ✓ Révision conformité (CC) appliquée pour job {job_id}")
-            except Exception as e:
-                # Best-effort : on note l'erreur mais on ne bloque pas l'audio.
-                # On marque l'erreur dans _AUTO_PILOT_STATE pour que l'UI puisse
-                # afficher un bandeau "révision non faite — relancer manuellement".
-                # Sans ce tracking, l'utilisateur voit "audio_launched" sans savoir
-                # que la conformité a été zappée (cas réel : LOCAL_DEV non set ou
-                # claude binary disparu du PATH entre content et review).
-                err_msg = str(e)[:300]
-                logger.error(
-                    f"❌ Révision conformité (CC) échouée pour job {job_id} : {err_msg} — "
-                    f"on enchaîne quand même sur l'audio (best-effort)"
-                )
-                _set_step("review", review_error=err_msg, review_status="failed")
-        else:
-            # Mode API : la route /content/<folder>/review fait déjà tout via API.
-            # On l'invoque pour chaque folder (best-effort).
-            failed_folders = []
-            try:
-                from database.db import get_db_connection
+                # 1. Créer le folder s'il n'existe pas
                 conn = get_db_connection()
                 cursor = conn.cursor()
                 cursor.execute(
-                    "SELECT id FROM cours_folders WHERE platform_id = ? ORDER BY position ASC",
-                    (j["platform_id"],),
+                    "SELECT id FROM cours_folders WHERE formation_job_id = ? AND name = ?",
+                    (job_id, folder_name),
                 )
-                folder_ids = [r[0] for r in cursor.fetchall()]
+                row = cursor.fetchone()
                 conn.close()
-                from services.content_generation_service import run_content_review
-                for fid in folder_ids:
-                    try:
-                        run_content_review(fid, model=api_model)
-                    except Exception as e:
-                        logger.warning(f"⚠️ Review API folder {fid} échoué : {e}")
-                        failed_folders.append(f"{fid}:{str(e)[:80]}")
-                if failed_folders:
-                    _set_step("review",
-                              review_error=f"folders échoués : {'; '.join(failed_folders)}",
-                              review_status="failed")
-                else:
-                    logger.info(f"🤖 ✓ Révision conformité (API) pour job {job_id}")
-            except Exception as e:
-                err_msg = str(e)[:300]
-                logger.warning(f"⚠️ Révision API échouée : {err_msg} — skip")
-                _set_step("review", review_error=err_msg, review_status="failed")
 
-        # ─── 6. Audio TTS séquentiel par folder ──────────────────────────────
-        # On exécute generate_audio_from_script directement (pas la route
-        # launch_audio) pour rester dans le greenlet et avoir un point d'arrêt
-        # propre. Le module persistant est créé/MAJ à la fin (idempotent).
-        _set_step("audio")
-        j = get_job(job_id)
-        platform_id = j["platform_id"]
+                if row:
+                    folder_id = row[0]
+                else:
+                    conn = get_db_connection()
+                    cursor = conn.cursor()
+                    cursor.execute(
+                        "SELECT COALESCE(MAX(position), -1) + 1 FROM cours_folders WHERE platform_id = ?",
+                        (platform_id,),
+                    )
+                    position = cursor.fetchone()[0]
+                    cursor.execute(
+                        "INSERT INTO cours_folders (platform_id, name, position, formation_job_id) VALUES (?, ?, ?, ?)",
+                        (platform_id, folder_name, position, job_id),
+                    )
+                    folder_id = cursor.lastrowid
+                    conn.commit()
+                    conn.close()
+
+                # 2. Créer le content_generation_job s'il n'existe pas (sans thread)
+                cg_job = get_job_from_db(folder_id)
+                if cg_job and cg_job.get("status") == "completed":
+                    logger.info(f"🤖   ⏭ Jour {day_num} déjà complété (folder {folder_id}), skip")
+                    continue
+
+                if not cg_job:
+                    sub_parts = [sp["name"] for sp in day_data.get("sub_parts", [])]
+                    module_contents = {
+                        sp["name"]: sp.get("module_content", "")
+                        for sp in day_data.get("sub_parts", [])
+                    }
+                    conn = get_db_connection()
+                    cursor = conn.cursor()
+                    cursor.execute("""
+                        INSERT INTO content_generation_jobs
+                            (folder_id, platform_id, program_text, program_title,
+                             sub_parts, from_scratch, module_contents,
+                             status, current_sub_part, current_passe, total_words, error_message)
+                        VALUES (?, ?, ?, ?, ?, 1, ?, 'idle', 0, 1, 0, NULL)
+                    """, (
+                        folder_id, platform_id,
+                        _format_day_program_text(day_data, job["tp_name"]),
+                        job["tp_name"],
+                        _json.dumps(sub_parts, ensure_ascii=False),
+                        _json.dumps(module_contents, ensure_ascii=False),
+                    ))
+                    conn.commit()
+                    conn.close()
+
+                # 3. Générer synchronement dans ce greenlet (run_content_generation
+                #    lit les segments déjà complétés → idempotent, reprend où ça s'est arrêté)
+                logger.info(f"🤖   Génération Jour {day_num} (folder {folder_id})…")
+                run_content_generation(folder_id, model=api_model)
+                logger.info(f"🤖   ✓ Jour {day_num} terminé (folder {folder_id})")
+
+            update_job(
+                job_id,
+                status="tts_launched",
+                auto_pilot_volume_done=0,
+                auto_pilot_post_review_docs_done=0,
+            )
+        logger.info(f"🤖 ✓ Contenu généré job {job_id}")
+
+    elif step == "volume_safety":
+        from services.claude_code_mission_service import (
+            compute_volume_audit, run_volume_safety, run_volume_safety_api,
+        )
+        audit = compute_volume_audit(job_id)
+        deficit_folders = [f for f in audit.get("folders", []) if f.get("deficit", 0) > 0]
+        failures = []
+        for fa in deficit_folders:
+            try:
+                if use_cc:
+                    result = run_volume_safety(job_id, fa["folder_id"], model=cc_model)
+                else:
+                    result = run_volume_safety_api(job_id, fa["folder_id"], model=api_model)
+                after = (result.get("audit_after") or result.get("audit") or {})
+                if after.get("deficit", 0) > 0:
+                    failures.append(
+                        f"{fa['folder_id']}({after.get('total_words', '?')}/"
+                        f"{audit.get('target', '?')} mots)"
+                    )
+            except Exception as e:
+                logger.warning(f"⚠️ Volume safety folder {fa['folder_id']} : {e}")
+                failures.append(f"{fa['folder_id']}({str(e)[:120]})")
+
+        final_audit = compute_volume_audit(job_id)
+        remaining = [f for f in final_audit.get("folders", []) if f.get("deficit", 0) > 0]
+        if failures or remaining:
+            update_job(job_id, auto_pilot_volume_done=0, auto_pilot_post_review_docs_done=0)
+            remaining_msg = ", ".join(
+                f"{f['folder_id']}({f['total_words']}/{final_audit.get('target')} mots, "
+                f"manque {f['deficit']})"
+                for f in remaining
+            )
+            failure_msg = ", ".join(failures)
+            raise RuntimeError(
+                "Volume safety incomplète : "
+                + "; ".join(m for m in (failure_msg, remaining_msg) if m)
+            )
+
         conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute(
-            "SELECT id FROM cours_folders WHERE platform_id = ? ORDER BY position ASC",
-            (platform_id,),
+            """
+            UPDATE content_generation_segments
+            SET review_error = NULL
+            WHERE id IN (
+                SELECT cgs.id
+                FROM content_generation_segments cgs
+                JOIN content_generation_jobs cgj ON cgj.id = cgs.job_id
+                JOIN cours_folders cf ON cf.id = cgj.folder_id
+                WHERE cf.formation_job_id = ?
+                  AND cgs.status = 'completed'
+                  AND COALESCE(cgs.reviewed, 0) = 0
+            )
+            """,
+            (job_id,),
+        )
+        conn.commit()
+        conn.close()
+
+        update_job(job_id, auto_pilot_volume_done=1, auto_pilot_post_review_docs_done=0)
+        logger.info(f"🤖 ✓ Volume safety terminée job {job_id}")
+
+    elif step == "review":
+        if use_cc:
+            execute_mission_locally(job_id, "review", cc_model)
+        else:
+            from services.content_generation_service import run_content_review
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT id FROM cours_folders WHERE formation_job_id = ? ORDER BY position ASC",
+                (job_id,),
+            )
+            folder_ids = [r[0] for r in cursor.fetchall()]
+            conn.close()
+            failed = []
+            for fid in folder_ids:
+                try:
+                    result = run_content_review(fid, model=api_model)
+                    if result.get("segments_failed", 0) > 0:
+                        failed.append(f"{fid}({result['segments_failed']} segments échoués)")
+                except Exception as e:
+                    logger.warning(f"⚠️ Review folder {fid} : {e}")
+                    failed.append(str(fid))
+            if failed:
+                raise RuntimeError(f"Review échouée sur folders : {', '.join(failed)}")
+        update_job(job_id, auto_pilot_post_review_docs_done=0)
+        logger.info(f"🤖 ✓ Révision conformité terminée job {job_id}")
+
+    elif step == "post_review_docs":
+        from services.content_generation_service import _assemble_and_upload, _update_job_db
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT cf.id, cgj.id
+            FROM cours_folders cf
+            JOIN content_generation_jobs cgj ON cgj.folder_id = cf.id
+            WHERE cf.formation_job_id = ? AND cgj.status = 'completed'
+            ORDER BY cf.position ASC
+            """,
+            (job_id,),
+        )
+        rows = cursor.fetchall()
+        conn.close()
+        if not rows:
+            raise RuntimeError("Aucun texte complété à assembler après révision")
+
+        for fid, cg_job_id in rows:
+            final_words, filename = _assemble_and_upload(fid, platform_id, cg_job_id)
+            _update_job_db(cg_job_id, total_words=final_words)
+            logger.info(
+                f"🤖   ✓ Document post-révision folder {fid} : "
+                f"{final_words} mots, {filename}"
+            )
+        update_job(job_id, status="tts_launched", auto_pilot_post_review_docs_done=1)
+        logger.info(f"🤖 ✓ Documents post-révision générés job {job_id}")
+
+    elif step == "audio":
+        from services.content_generation_service import generate_audio_from_script
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT id FROM cours_folders WHERE formation_job_id = ? ORDER BY position ASC",
+            (job_id,),
         )
         folder_ids = [r[0] for r in cursor.fetchall()]
         conn.close()
         if not folder_ids:
             raise RuntimeError("Aucun cours_folder trouvé pour la plateforme")
 
-        update_job(job_id, status="audio_launched")
         mock = (tts_mode == "mock")
         basic_tts = (tts_mode == "gtts")
-
-        for fid in folder_ids:
-            try:
-                generate_audio_from_script(
-                    fid, force_all=True, mock=mock, basic_tts=basic_tts,
-                )
-            except Exception as e:
-                update_job(job_id, status="audio_error", error_message=f"folder {fid} : {str(e)[:300]}")
-                raise
+        for idx, fid in enumerate(folder_ids):
+            next_fid = folder_ids[idx + 1] if idx + 1 < len(folder_ids) else None
+            generate_audio_from_script(
+                fid,
+                force_all=False,
+                mock=mock,
+                basic_tts=basic_tts,
+                next_folder_id=next_fid,
+                is_last_folder=next_fid is None,
+            )
             eventlet.sleep(5)
+        # Status posé APRÈS le loop — si Azure redémarre en cours de route,
+        # dirty=1 sur les folders non traités permettra à _determine_next_ap_step
+        # de détecter que l'audio est incomplet et de relancer l'étape.
+        update_job(job_id, status="audio_launched")
 
-        # Création/MAJ du module persistant (équivalent du bloc dans launch_audio,
-        # dupliqué ici car on bypass la route).
+        # Module persistant
         try:
             from datetime import datetime as _dt
             from config import FRANCE_TZ as _tz
+            j2 = get_job(job_id)
             voice_type = "mock" if mock else ("gtts" if basic_tts else "fish_audio")
             conn = get_db_connection()
             cur = conn.cursor()
-            year = _dt.now(_tz).year
-            rncp = j.get("rncp_code") or ""
+            rncp = j2.get("rncp_code") or ""
             cur.execute("SELECT COUNT(*) FROM formation_modules WHERE rncp_code = ?", (rncp,))
             n = cur.fetchone()[0] + 1
-            version = f"{year}-v{n}"
+            version = f"{_dt.now(_tz).year}-v{n}"
             cur.execute("""
                 INSERT OR IGNORE INTO formation_modules
                 (rncp_code, tp_name, version, status, source_pipeline_job_id,
                  source_platform_id, voice_type, voice_updated_at, validated_at)
                 VALUES (?, ?, ?, 'validated', ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-            """, (rncp, j["tp_name"], version, job_id, platform_id, voice_type))
+            """, (rncp, j2["tp_name"], version, job_id, platform_id, voice_type))
             if cur.rowcount == 0:
                 cur.execute(
-                    """UPDATE formation_modules
-                       SET voice_type = ?, voice_updated_at = CURRENT_TIMESTAMP
-                       WHERE source_pipeline_job_id = ?""",
+                    "UPDATE formation_modules SET voice_type=?, voice_updated_at=CURRENT_TIMESTAMP "
+                    "WHERE source_pipeline_job_id=?",
                     (voice_type, job_id),
                 )
             conn.commit()
             conn.close()
         except Exception as e:
-            logger.warning(f"⚠️ Auto-pilot module create/update : {e}")
+            logger.warning(f"⚠️ Module persistant : {e}")
 
-        # Health-check final : audite que tous les artefacts sont cohérents
-        # (segments, DOCX buildables, snapshots pre-review, audio dirty=0,
-        # module persistant). Stocké dans _AUTO_PILOT_STATE pour que l'UI
-        # puisse afficher un bandeau "santé OK" ou "N incohérences détectées".
-        try:
-            from services.formation_health_service import compute_health
-            health = compute_health(job_id)
-            _set_step("done", health=health)
-            if health["ok"]:
-                logger.info(f"💚 Health-check OK pour job {job_id}")
-            else:
-                logger.warning(
-                    f"💛 Health-check : pipeline terminée avec {len(health['blocking'])} "
-                    f"incohérence(s) bloquante(s) : {health['blocking']}"
-                )
-        except Exception as e:
-            logger.warning(f"⚠️ Health-check final job {job_id} échoué : {e}")
+        # Health-check final — bloque sur les incohérences bloquantes.
+        # Un warning silencieux permettrait à l'auto-pilot de finir avec une
+        # formation incomplète (segments manquants, audios dirty, etc.).
+        from services.formation_health_service import compute_health
+        health = compute_health(job_id)
+        if health["ok"]:
+            logger.info(f"💚 Health-check OK job {job_id}")
+        else:
+            blocking = health.get("blocking", [])
+            raise RuntimeError(
+                f"Health-check : {len(blocking)} incohérence(s) bloquante(s) : {blocking}"
+            )
+        logger.info(f"🤖 ✓ Audio TTS terminé job {job_id}")
 
-        _set_step("done", status="done", finished_at=time.time())
-        logger.info(f"🤖 ✅ Auto-pilot TERMINÉ pour job {job_id}")
+
+def _tick_auto_pilot(job_id: int) -> None:
+    """Runner auto-pilot : 1 tick = 1 étape. Se respawn pour la suivante.
+
+    Persisté en DB — résiste aux restarts Azure App Service.
+    Lock optimiste + heartbeat toutes les 60 s pour les étapes longues (content/audio).
+    """
+    import eventlet
+
+    if not _acquire_ap_lock(job_id):
+        logger.info(f"🤖 Auto-pilot job {job_id} : lock tenu par un autre worker, skip")
+        return
+
+    # Heartbeat : rafraîchit le lock toutes les 60 s pour les étapes qui durent
+    # plus que le TTL (content = 2-4h, audio = 30-60 min).
+    _hb_stop = [False]
+    def _heartbeat():
+        while not _hb_stop[0]:
+            eventlet.sleep(60)
+            if not _hb_stop[0]:
+                _refresh_ap_lock(job_id)
+    hb = eventlet.spawn(_heartbeat)
+
+    should_respawn = False
+    current_step = "?"
+    try:
+        j = get_job(job_id)
+        if not j or not j.get("auto_pilot_enabled"):
+            return
+
+        step = _determine_next_ap_step(job_id)
+        if step is None:
+            update_job(job_id, auto_pilot_step="done", auto_pilot_error=None)
+            logger.info(f"🤖 ✅ Auto-pilot TERMINÉ job {job_id}")
+            return
+
+        current_step = step
+        update_job(job_id, auto_pilot_step=step, auto_pilot_error=None)
+        logger.info(f"🤖 Auto-pilot job {job_id} → step={step}")
+
+        _execute_ap_step(job_id, step, j)
+        should_respawn = True
 
     except Exception as e:
-        logger.error(f"❌ Auto-pilot job {job_id} : {e}")
-        _set_step(_AUTO_PILOT_STATE.get(job_id, {}).get("step", "?"),
-                  status="error", error=str(e)[:500],
-                  finished_at=time.time())
+        err = str(e)[:500]
+        logger.error(f"❌ Auto-pilot job {job_id} step={current_step} : {err}")
+        update_job(job_id, auto_pilot_error=err)
+
+    finally:
+        _hb_stop[0] = True
+        hb.kill()
+        _release_ap_lock(job_id)
+
+    if should_respawn:
+        eventlet.spawn(_tick_auto_pilot, job_id)
+
+
+def resume_interrupted_auto_pilots() -> None:
+    """Appelé au boot : reprend les auto-pilots interrompus par un restart Azure."""
+    import eventlet
+    from services.formation_pipeline_service import get_auto_pilot_jobs_to_resume
+    eventlet.sleep(5)  # laisse le temps à l'app de démarrer
+    try:
+        job_ids = get_auto_pilot_jobs_to_resume()
+        if job_ids:
+            logger.info(f"🤖 Boot recovery : {len(job_ids)} auto-pilot(s) à reprendre : {job_ids}")
+            for jid in job_ids:
+                eventlet.spawn(_tick_auto_pilot, jid)
+        else:
+            logger.info("🤖 Boot recovery : aucun auto-pilot interrompu")
+    except Exception as e:
+        logger.warning(f"⚠️ Boot recovery auto-pilot : {e}")
+
+
+def _auto_pilot_watchdog_loop(interval_sec: int) -> None:
+    """Surveille périodiquement les locks auto-pilot absents ou périmés."""
+    import eventlet
+    from services.formation_pipeline_service import get_auto_pilot_jobs_to_resume
+
+    eventlet.sleep(5)  # laisse le temps à l'app de démarrer
+    while True:
+        try:
+            job_ids = get_auto_pilot_jobs_to_resume()
+            if job_ids:
+                logger.warning(
+                    f"🤖 Watchdog auto-pilot : reprise de {len(job_ids)} job(s) : {job_ids}"
+                )
+                for jid in job_ids:
+                    eventlet.spawn(_tick_auto_pilot, jid)
+            else:
+                logger.debug("🤖 Watchdog auto-pilot : aucun job à reprendre")
+        except Exception as e:
+            logger.warning(f"⚠️ Watchdog auto-pilot : {e}")
+        eventlet.sleep(interval_sec)
+
+
+def start_auto_pilot_watchdog() -> None:
+    """Démarre un watchdog par process pour reprendre les locks zombies."""
+    global _AP_WATCHDOG_STARTED
+    if _AP_WATCHDOG_STARTED:
+        return
+    _AP_WATCHDOG_STARTED = True
+
+    import eventlet
+    logger.info(
+        f"🤖 Watchdog auto-pilot démarré (intervalle {_AP_WATCHDOG_INTERVAL}s)"
+    )
+    eventlet.spawn(_auto_pilot_watchdog_loop, _AP_WATCHDOG_INTERVAL)
 
 
 @formation_bp.route("/api/formation/<int:job_id>/run-auto", methods=["POST"])
 def run_auto_pilot(job_id):
-    """Lance l'auto-pilot : enchaîne fetch REAC → KB → global → daily → content → audio.
+    """Lance l'auto-pilot : REAC → KB → global → daily → content → volume → review → docs → audio.
 
     Body (optionnel) :
       - tts_mode : 'fish_audio' | 'gtts' | 'mock' (défaut 'gtts')
       - model : 'sonnet' | 'haiku' (défaut 'sonnet')
+      - use_claude_code : bool (défaut false)
 
-    Retourne 202 immédiatement. Le client peut suivre la progression via
-    GET /api/formation/<job>/run-auto/status.
+    Retourne 202 immédiatement. Suivre via GET /run-auto/status.
     """
     if not _require_admin():
         return jsonify({"error": "Non autorisé"}), 403
@@ -2369,29 +2674,69 @@ def run_auto_pilot(job_id):
     tts_mode = (payload.get("tts_mode") or "gtts").lower()
     if tts_mode not in ("fish_audio", "gtts", "mock"):
         return jsonify({"error": "tts_mode invalide (fish_audio | gtts | mock)"}), 400
-    model = (payload.get("model") or "sonnet").lower()
-    if model not in ("sonnet", "haiku", "flash", "pro"):
+    model = _normalize_pipeline_model_choice(payload.get("model"), default=job.get("auto_pilot_model") or "sonnet")
+    if model not in _PIPELINE_MODEL_CHOICES:
         return jsonify({"error": "model invalide (sonnet | haiku | flash | pro)"}), 400
-    use_claude_code = bool(payload.get("use_claude_code", False))
+    use_cc = bool(payload.get("use_claude_code", False))
+    if use_cc and model in ("flash", "pro"):
+        return jsonify({
+            "error": "use_claude_code=true est incompatible avec DeepSeek. Lance l'auto-pilot en mode API."
+        }), 400
 
-    if _AUTO_PILOT_STATE.get(job_id, {}).get("status") == "running":
-        return jsonify({"error": "Auto-pilot déjà en cours pour ce job"}), 409
+    # Vérifie qu'un tick n'est pas déjà en cours (lock actif non-périmé)
+    if job.get("auto_pilot_step") and job.get("auto_pilot_step") != "done":
+        locked_at = job.get("auto_pilot_locked_at")
+        if locked_at:
+            try:
+                import datetime, pytz
+                from config import FRANCE_TZ
+                if isinstance(locked_at, str):
+                    dt = datetime.datetime.fromisoformat(locked_at)
+                    if dt.tzinfo is None:
+                        dt = dt.replace(tzinfo=pytz.utc)
+                    age = (datetime.datetime.now(pytz.utc) - dt).total_seconds()
+                    if age < _AP_LOCK_TTL:
+                        return jsonify({"error": "Auto-pilot déjà en cours pour ce job"}), 409
+            except Exception:
+                pass
+
+    update_job(job_id,
+               auto_pilot_enabled=1,
+               auto_pilot_model=model,
+               auto_pilot_tts_mode=tts_mode,
+               auto_pilot_use_cc=int(use_cc),
+               auto_pilot_skip_vs=0,
+               auto_pilot_volume_done=0,
+               auto_pilot_post_review_docs_done=0,
+               auto_pilot_error=None)
 
     import eventlet
-    eventlet.spawn(_run_auto_pilot, job_id, tts_mode, model, use_claude_code)
+    eventlet.spawn(_tick_auto_pilot, job_id)
     return jsonify({
         "ok": True, "status": "auto_pilot_started",
         "tts_mode": tts_mode, "model": model,
-        "use_claude_code": use_claude_code,
+        "use_claude_code": use_cc,
     }), 202
 
 
 @formation_bp.route("/api/formation/<int:job_id>/run-auto/status", methods=["GET"])
 def auto_pilot_status(job_id):
-    """État de l'auto-pilot (running | done | error | idle)."""
+    """État de l'auto-pilot lu depuis la DB (résiste aux restarts)."""
     if not _require_admin():
         return jsonify({"error": "Non autorisé"}), 403
-    state = _AUTO_PILOT_STATE.get(job_id)
-    if not state:
+    job = get_job(job_id)
+    if not job:
+        return jsonify({"error": "Job introuvable"}), 404
+    if not job.get("auto_pilot_enabled"):
         return jsonify({"status": "idle"}), 200
-    return jsonify(state), 200
+    step = job.get("auto_pilot_step")
+    error = job.get("auto_pilot_error")
+    model = job.get("auto_pilot_model")
+    tts_mode = job.get("auto_pilot_tts_mode")
+    if step == "done":
+        return jsonify({"status": "done", "step": "done", "model": model, "tts_mode": tts_mode}), 200
+    if error:
+        return jsonify({"status": "error", "step": step, "error": error, "model": model, "tts_mode": tts_mode}), 200
+    if step:
+        return jsonify({"status": "running", "step": step, "model": model, "tts_mode": tts_mode}), 200
+    return jsonify({"status": "starting", "model": model, "tts_mode": tts_mode}), 200

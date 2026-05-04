@@ -1,5 +1,254 @@
 # Changelog
 
+## 2026-05-04
+
+### feat: slides PPT générées depuis le script (sans audio) + protection admin
+
+Nouveau pipeline de génération de slides qui part directement du **texte final
+stocké en DB** (résultat de la pipeline formation), sans avoir besoin d'un MP3
+préexistant ni de transcription Whisper.
+
+**Backend** :
+- Nouveau service `script_slide_generation_service.py` : produit un deck de
+  slides à partir du `final_text` d'un folder, avec contrôle de densité
+  (`max_slides`, `pace=dense|normal|synthesis`) et stats/timeline cohérentes
+  avec le format attendu par le front.
+- Nouvelle route `POST /api/slides/generate-from-script` (admin only via
+  `session["is_admin"]`) — body `{folder_id, job_id?, max_slides, pace, model?}`.
+- `GET /api/slides/data?folder_id=…` peut désormais récupérer le dernier deck
+  généré pour un folder donné (admin only).
+- Le mode de génération courant (`audio_legacy` / `audio_v3` / `script`) est
+  exposé via `generation_mode` dans la réponse JSON.
+
+**Frontend** :
+- `frontend/src/App.jsx` : `/generated-slides` est désormais une route protégée
+  admin (`ProtectedAdminRoute`).
+- `GeneratedSlides.jsx` et `TestSlides.jsx` retravaillés pour consommer le
+  nouveau endpoint, afficher le mode de génération et permettre de lancer la
+  génération depuis le script.
+
+Fichiers : `backend/routes/slides_routes.py`,
+`backend/services/script_slide_generation_service.py`,
+`frontend/src/App.jsx`, `frontend/src/pages/GeneratedSlides.jsx`,
+`frontend/src/pages/TestSlides.jsx`.
+
+### fix: auto-pilot watchdog pour locks zombies
+
+L'auto-pilot ne dépend plus seulement du boot recovery ponctuel. Un watchdog
+périodique démarre avec le backend et vérifie toutes les 60 secondes les jobs
+auto-pilot activés, non terminés, sans erreur enregistrée, avec lock absent ou
+périmé.
+
+**Impact** :
+- Si un worker meurt pendant une étape longue (KB, content, audio), le lock devient
+  périmé après le TTL existant de 5 minutes.
+- Le watchdog relance alors `_tick_auto_pilot(job_id)` sans attendre un redémarrage
+  complet du backend.
+- Les jobs avec `auto_pilot_error` restent volontairement exclus pour éviter une
+  boucle infinie de retries sur une vraie erreur applicative.
+
+Fichiers : `backend/routes/formation_routes.py`,
+`backend/services/formation_pipeline_service.py`, `backend/main_app.py`.
+
+### feat: transitions Q&A/pauses contextuelles par dossier
+
+Les fichiers Q&A et pauses ne sont plus forcément de simples MP3 statiques
+recyclés : la pipeline peut générer une intro/outro contextuelle à partir du
+bloc cours précédent et du prochain bloc cours.
+
+**Mécanique** :
+- Nouveau service `break_transition_service.py` : génération JSON `{intro, outro}`
+  pour `qa`, `pause` et `pause_midi`, avec fallback statique si le LLM échoue.
+- Les Q&A annoncent le temps de questions dans le chat, puis l'outro raccorde vers
+  la suite du programme.
+- Les pauses courtes annoncent uniquement la pause en intro ; l'outro dit que la
+  pause est terminée et réouvre vers le prochain cours.
+- La pause déjeuner reste sobre : son intro ne reçoit pas le contexte du matin et
+  ne résume pas le bloc précédent.
+- Les fichiers sensibles au changement d'ordre été/hiver restent neutres en outro :
+  `pause_12h10_12h20.mp3`, `qa_13h05_13h15.mp3` et
+  `pause_midi_13h15_14h45.mp3` n'annoncent pas l'élément suivant.
+- Les durées sont transmises au service ; seules les durées fiables sont dites à
+  l'oral (`cinq minutes`, `dix minutes`, `quinze minutes`, etc.). Pour une durée
+  atypique non reconnue, le prompt interdit de mentionner une durée précise.
+
+**Câblage** :
+- Chemin actif `/formation-pipeline` : `generate_audio_from_script()` génère la
+  playlist complète dans `audiostts/platform-{platform_id}/folder-{folder_id}/playlist/`,
+  en respectant la playlist effective de la plateforme (`hiver`/`ete`).
+- Chemin legacy `generate_playlist_for_folder()` : même génération contextuelle,
+  avec fallback `audioqapause` en cas d'échec.
+- Le wiring des transitions est factorisé dans `break_transition_service.py` via
+  `build_break_transition_texts()` : les deux chemins audio injectent seulement
+  leur façon de lire le texte d'un bloc.
+- `fill_from_folder` copie d'abord les MP3 contextualisés du dossier, puis retombe
+  sur `audioqapause` uniquement pour les fichiers manquants.
+- `closing_transition_service.py` clôt maintenant les blocs cours sans annoncer
+  directement `questions`, `pause` ou `chat`, pour laisser cette fonction au
+  fichier Q&A/pause suivant. Les ouvertures pédagogiques ne supposent pas que le
+  prochain fichier lu est forcément le prochain cours.
+
+Détails : `memoire/04-solutions/break-transitions-contextuelles.md`.
+
+## 2026-04-30
+
+### feat: carryover bloc 7 → folder suivant (+ rebalancing LLM du dernier jour)
+
+Quand un bloc 7 dépasse son budget TTS malgré le cap, on ne le tronque pas et on
+ne fait pas planter la pipeline : **on reporte les paragraphes en débord vers le
+folder suivant**.
+
+**Mécanique** :
+- Stockage dans `content_generation_jobs.carryover_out_text` (source) +
+  `carryover_in_text` (cible). Migration de colonnes ajoutée à `db.py`.
+- `_handle_last_bloc_overflow` détecte le débord et choisit la fin de paragraphe
+  (ou phrase fallback) la plus tardive sous le cap pour tronquer proprement.
+- `_format_carryover_for_next_course()` préfixe une intro fixe au prochain cours :
+  *"Avant d'entrer dans la suite de ce cours, on reprend le point que nous
+  n'avons pas terminé **au cours dernier**…"*
+- Jamais le mot "hier" — l'intro reste valable même si la formation tient sur
+  des jours non-consécutifs.
+
+**Cas du dernier folder (pas de J+1)** : `_reduce_last_bloc_to_budget(bloc, model)`
+appelle un LLM pour **remanier** le texte du dernier bloc à ~90 % du budget :
+condense, fusionne les exemples redondants, garde toutes les notions, **n'ajoute
+aucune nouvelle idée**, termine par une vraie conclusion de cours. Refus avec
+ValueError si le résultat dépasse encore.
+
+**Hiérarchie de fallback finalisée** :
+1. Cap budget cascade (forward) — bloc 1..6 ne déborde pas.
+2. Backward redistribution — bloc 1..6 sous-rempli aspire des paragraphes du suivant.
+3. **Carryover bloc 7 vers J+1** — déterministe, paragraphes verbatim.
+4. **Rebalancing LLM dernier jour** — si pas de J+1.
+5. Closing contextuel — fill du gap résiduel sur tous les blocs dirty.
+
+Détails : `memoire/04-solutions/carryover-jour-a-jour-bloc-7.md`.
+
+### feat: blocs cours — redistribution backward + closing contextuel adaptatif
+
+Suite logique du cap budget : quand un bloc finit avec un gap audio important, on
+agit en deux temps avant le TTS plutôt que de laisser du silence ou tronquer.
+
+**Passe 2 — Redistribution backward (déterministe, gratuite).**
+`_redistribute_undershoot_backward` dans `content_generation_service.py` : si un bloc
+N a un gap > 30 s, on tire des **paragraphes complets** du bloc N+1 vers le bloc N
+tant que ça rentre dans son budget mots. Préserve l'intégrité des unités d'idée
+(jamais de paragraphe coupé), zéro appel LLM. Marque les blocs touchés `dirty=1`
+(audio à régénérer).
+
+**Passe 3 — Closing contextuel (LLM ou template selon gap).**
+Nouveau service `closing_transition_service.py`. Pour le gap résiduel après passe 2 :
+
+| Gap résiduel    | Registre                  | Cible mots | Source       |
+|-----------------|---------------------------|------------|--------------|
+| < 15 s          | Aucun (silence padding)   | 0          | —            |
+| 15–45 s         | Phrase de clôture courte  | 30–100     | Template     |
+| 45–120 s        | Transition pédagogique    | 130–360    | LLM Sonnet   |
+| 120–300 s       | Recap + respiration       | 360–700    | LLM Sonnet   |
+| Bloc 7 (final)  | Conclusion de journée     | selon gap  | LLM Sonnet   |
+
+Cap absolu : `MAX_CLOSING_WORDS = 700` (≈ 4 min audio). Au-delà, le résidu reste
+silence — un gap > 5 min signale un volume_safety insuffisant, pas un closing à
+rallonge.
+
+Le closing est concaténé au texte du bloc avant le seul appel Fish Audio. Distinct
+des pauses dynamiques (qui auraient enrichi le fichier de pause) : ici on enrichit le
+fichier cours, donc 1 TTS par bloc, pas de cache cross-fichier.
+
+Garde prod ajoutée : le closing est plafonné au **budget mots restant** du bloc.
+Si le bloc est déjà au budget prudent TTS, aucun closing n'est ajouté, ce qui évite
+un échec du pré-check juste avant Fish Audio.
+
+Désactivé en mock et en `basic_tts` (gTTS a une calibration différente). Si le LLM
+échoue, fallback statique par taille de gap.
+
+Détails : `memoire/04-solutions/closing-bloc-cours-contextuel.md`.
+
+### fix: découpage TTS — cap budget par bloc, cascade des paragraphes en surplus
+
+**Problème** : `_choose_natural_boundary` cherchait la fin de paragraphe la plus proche de la cible mots, fenêtre symétrique (cible ± 700 mots). Si la fin de paragraphe la plus proche tombait à `cible + 700`, le bloc finissait au-dessus du budget TTS et le pré-check `_synthesize_course_audio_to_fit` le rejetait — pipeline auto-pilot stoppée.
+
+**Solution déterministe (zéro appel LLM réactif)** : chaque bloc reçoit un hard cap mots calé sur `_estimated_words_budget_for_course(target_sec, api_speed)`. `_choose_natural_boundary` filtre désormais les candidats à `b ≤ cap_w` — jamais au-dessus. Les paragraphes en surplus tombent automatiquement dans le bloc suivant, qui refait le calcul avec son propre budget. Effet cascade naturel : bloc 1 sous-rempli → bloc 2 hérite → … → bloc 7 absorbe le reste.
+
+**Pourquoi pas un raccourcissement LLM ?** — Cette approche aurait coûté un appel API par bloc en débord, risqué de couper une notion clé jugée à tort secondaire, et introduit de la non-reproductibilité. Le décalage paragraphe est gratuit, déterministe, et préserve verbatim les unités d'idée pédagogiques.
+
+**Bloc 7** : seul à ne pas avoir de cap (il absorbe le reste). S'il dépasse son budget, c'est que `total_words > total_budget` ; ressort de `volume_safety` en amont, pas du découpage.
+
+Fichiers : `backend/services/content_generation_service.py` — `_choose_natural_boundary` (paramètre `word_budget_max`), `_build_course_blocs_from_segments` (calcul du budget par bloc, log enrichi).
+
+### fix: TTS auto-pilot — plus de coupure brute en pleine phrase
+
+- Le découpage des 7 fichiers cours privilégie désormais une fin de paragraphe proche de la cible de durée (unité d'idée), puis seulement une fin de phrase en fallback. Les doubles sauts de ligne sont conservés dans le texte envoyé au TTS.
+- Le TTS Fish Audio n'est appelé qu'une seule fois par bloc (`FORMATION_TTS_SPEED`, défaut `0.90`) ; le speedup local est désactivé par défaut (`FORMATION_TTS_LOCAL_MAX_SPEEDUP=1.0`) pour éviter une voix trop rapide/aiguë.
+- Pré-check avant appel Fish Audio : si le bloc dépasse le budget de mots prudent du créneau (`FORMATION_TTS_PREFLIGHT_SAFETY`, défaut `0.96`), aucun appel payant n'est lancé et l'étape échoue proprement.
+- Les prompts from-scratch passent de ~5 000 à ~3 300 mots par passe (~60k mots/jour) pour générer plus court en amont, avec une voix plus posée.
+
+### feat: révision conformité en 5 salves ciblées (anti-dilution attention)
+
+**Problème** : envoyer les 27 règles en 1 seul appel API provoque de la dilution d'attention — le LLM (Claude ou DeepSeek) en oublie systématiquement. Les règles #9, #10, #14 notamment n'étaient jamais vérifiées.
+
+**Solution** : `run_content_review` dans `content_generation_service.py` fait désormais **5 appels API séquentiels par segment** (1 par groupe thématique) au lieu d'1 :
+
+| Groupe | Règles | Thème |
+|---|---|---|
+| Éthique culturelle | #1, #2, #3, #9, #14 | Spirituel, alcool/musique, humour, respect des tiers |
+| Éthique commerciale | #4, #5, #6, #7, #8 | Manipulation, closing, flirt, chance, célébrités |
+| Légal et intégrité | #10, #11, #12, #13, #15, #16 | Cohérence, discrimination, RGPD, promesses irréalistes |
+| Anti-hallucination | #17, #18, #19, #20 | Exemples fictifs, chiffres non sourcés, prudence |
+| Style oral TTS | #21–#27 | Fusion syntaxique, guillemets, posture, oral |
+
+- `_REVIEW_RULE_GROUPS` : constante partagée (même 5 groupes dans `claude_code_mission_service.py`)
+- `_extract_rules_for_group(full_rules_text, rule_numbers)` : extrait les règles demandées par split regex
+- `_build_review_prompt_focused(...)` : prompt focalisé avec scope exclusif annoncé clairement
+- Les patches s'accumulent sur `current_text` (chaque salve patch le résultat de la précédente)
+- `reviewed=1` uniquement si les 5 salves réussissent — une salve en erreur = `review_error`, PAS de `reviewed=1`
+
+### feat: review API stricte — chunking texte + concurrence bornée
+
+- Chaque salve découpe désormais le segment en chunks paragraph-aware (`FORMATION_REVIEW_CHUNK_WORDS`, défaut 1500 mots) pour éviter la dilution d'attention sur les segments de ~5000 mots.
+- Les chunks d'une même salve sont traités en parallèle avec concurrence bornée (`FORMATION_REVIEW_CHUNK_CONCURRENCY`, défaut 2), pas en rafale complète — compatible avec la limite de concurrence dynamique DeepSeek.
+- Les salves restent séquentielles : les patches de la salve N sont appliqués avant la salve N+1.
+- Les retries par chunk respectent `wait_seconds` sur rate limit 429 et ne retentent pas les erreurs déterministes 400/401/403.
+
+
+### fix: auto-pilot — content API : NameError j→job + génération synchrone sans thread
+
+- **NameError corrigé** : `_execute_ap_step` utilisait `j` (inexistant) au lieu du paramètre `job` dans la boucle content API.
+- **Génération synchrone** : remplace `start_generation_job` (thread background) + `_wait_folder_content_completed` (attend un thread potentiellement mort) par `run_content_generation(folder_id)` direct dans le greenlet auto-pilot. Résistant aux restarts : `run_content_generation` lit le `done_set` des segments complétés et reprend exactement où ça s'est arrêté.
+- `_wait_folder_content_completed` supprimée (obsolète).
+
+### fix: auto-pilot — prod 52 journées : 3 bugs critiques corrigés (segments attendus, content séquentiel, health-check bloquant)
+
+- **Segments attendus** : `_determine_next_ap_step` compare désormais `completed_segs` à `nb_days × 18` (invariant 6 sous-parties × 3 passes) et non aux segments existants — évite le faux positif si des segments manquent suite à un restart partiel.
+- **Content API séquentiel** : remplace `launch_tts_for_all_days` (N threads simultanés) par une boucle folder-par-folder avec `_wait_folder_content_completed` — 1 journée à la fois, idempotente, compatible 52 jours sans exploser les rate limits.
+- **Health-check bloquant** : `compute_health()` avec `ok=False` lève maintenant une `RuntimeError` au lieu d'un simple warning — l'auto-pilot reste en erreur si la formation est incomplète.
+
+### fix: auto-pilot — 3 bugs supplémentaires corrigés post-review Codex
+
+- **content API idempotent** : `launch_tts_for_all_days` n'est plus appelée si des `cours_folders` existent déjà (évite les doublons sur restart). Attente remplacée par `_wait_segments_completed()` qui surveille les segments réels plutôt que `tts_launched` (posé dès la création des folders).
+- **review segments_failed propagé** : `run_content_review()` retourne `segments_failed` — l'auto-pilot lève maintenant une erreur si > 0, au lieu d'ignorer silencieusement les échecs partiels.
+- **audio force_all=False** : cohérent avec le tracking `dirty` — seuls les folders non encore générés sont traités au lieu de tout regénérer depuis zéro.
+
+### refactor: auto-pilot formation — state machine persistée en DB (résistante aux restarts Azure)
+
+**Problème** : l'auto-pilot était un greenlet unique vivant en RAM pendant 2-4h. Un déploiement Azure (push staging → 10 workflows CI/CD → restart App Service) le tuait silencieusement. Résultat : la review de conformité n'était jamais lancée, `segments_reviewed=0`, pas de Word 2.
+
+**Architecture avant** : `_run_auto_pilot()` — chef d'orchestre unique, état in-memory `_AUTO_PILOT_STATE{}`, paramètres non persistés.
+
+**Architecture après** : state machine persistée en DB + runner court par étape.
+
+Nouveaux champs `formation_pipeline_jobs` :
+- `auto_pilot_enabled` / `auto_pilot_step` / `auto_pilot_model` / `auto_pilot_tts_mode`
+- `auto_pilot_use_cc` / `auto_pilot_skip_vs` / `auto_pilot_volume_done`
+- `auto_pilot_error` / `auto_pilot_locked_at` / `auto_pilot_lock_owner`
+
+Nouveaux mécanismes :
+- `_tick_auto_pilot(job_id)` : exécute 1 étape, écrit l'état en DB, se respawn pour la suivante
+- `_determine_next_ap_step()` : checks idempotents (skip si déjà fait)
+- `_acquire_ap_lock()` / `_release_ap_lock()` : lock optimiste TTL 5 min (prévient les doublons multi-workers)
+- `resume_interrupted_auto_pilots()` : appelé au boot, reprend les jobs interrompus
+- Boot hook dans `main_app.py` : `eventlet.spawn(resume_interrupted_auto_pilots)`
+
 ## 2026-04-29
 
 ### feat: card "Jour X" du step 6 redécoupée en 3 sous-zones avec flèches
@@ -36,6 +285,90 @@ Placement :
 5. Dans le `StepBlockCC` du step 6 : 2 mini-flèches entre les sous-blocs Génération cours → Sécurité volume → Révision conformité.
 
 Implémentation pure CSS (divs absolus avec `calc(25% - 10px)` pour cibler les centres de colonnes du grid `1fr 1fr` gap `40px`). Couleur `rgba(167, 139, 250, 0.35)` (violet sobre, accent du projet). Aucune dépendance ajoutée, aucun SVG.
+
+### feat: suppression de plateforme depuis l'onglet Plateformes (en plus de Modules)
+
+L'admin peut désormais supprimer une plateforme directement depuis sa carte (onglet Plateformes), en complément du delete module dans l'onglet Modules. Les deux entrées coexistent et sont cohérentes.
+
+**Backend** (`backend/routes/hr_routes.py`) — `DELETE /api/hr/platforms/<id>` avec cascade :
+
+1. `content_generation_segments` → `content_generation_jobs`
+2. `formation_knowledge_base` → `formation_pipeline_jobs`
+3. `cours_documents` → `cours_folders` → `cours_config`
+4. **`formation_modules`** : traitement différencié selon le type de module
+   - **Modules "fait main"** (`source_pipeline_job_id IS NULL`) → **DELETE** : la plateforme EST le module, ils représentent la même chose
+   - **Modules pipeline** (`source_pipeline_job_id NOT NULL`) → `UPDATE source_platform_id = NULL` : produit durable réutilisable indépendamment, reste au catalogue
+5. `platform_config` (la ligne elle-même)
+
+Réponse 200 inclut `manual_modules_deleted: N` pour le feedback admin. Logs et `video_visits` préservés (audit trail). Blobs Azure non supprimés (V1 conservatrice — nettoyage manuel via portail si besoin).
+
+**Frontend** (`frontend/src/pages/HRDashboard.jsx`) :
+
+- **Bouton delete sur chaque PlatformCard** : icône `delete_outline` 32×32 en haut à droite, z-30 pour rester au-dessus des overlays inactif/pending/error. Backdrop-blur 4px, slate muted au repos, tinte rose `#fee2e2`/`#dc2626` au hover.
+- **Modale `type === 'platform'`** distincte de la modale `type === 'module'` : deux blocs cascade (sera supprimé / préservé) qui mentionnent explicitement les modules fait main associés et la conservation des modules pipeline. Type-to-confirm sur le nom exact de la plateforme. Au succès, `fetchPlatforms()` + `fetchModules()` rafraîchissent les deux vues (les modules fait main supprimés disparaissent du catalogue).
+- **Garde-fous UX** : ⏎ valide si match, ⎋ ferme, click outside ferme (sauf pendant suppression), focus auto sur l'input.
+
+**Conformité DESIGN.md** :
+- ✓ Pattern modal pour destructive irréversible
+- ✓ Pas de side-stripe borders
+- ✓ Eyebrow uppercase tracked 0.18em
+- ✓ Slate-tinted neutrals + accent rouge ciblé uniquement sur la zone destructive
+- ✓ Examiner's Violet absent (zone destructive ≠ identité brand)
+
+Fichiers modifiés : `backend/routes/hr_routes.py`, `frontend/src/pages/HRDashboard.jsx`.
+
+### feat: plateformes vides ("fait main") inscrites au catalogue Modules
+
+Demande utilisateur : quand on crée une plateforme via l'option **"Plateforme vide (sans cours)"** dans la modale Nouvelle plateforme (= contenu uploadé manuellement plus tard, sans pipeline auto), elle doit aussi apparaître dans l'onglet Modules pour pouvoir être supprimée comme les modules pipeline.
+
+**Backend** (`backend/routes/hr_routes.py:create_platform`) :
+
+- Quand `has_content == False` (ni `module_id`, ni `formation_id`, ni `new_formation` dans le payload), on inscrit automatiquement une entrée `formation_modules` avec :
+  - `tp_name` = nom de la plateforme (l'admin n'a fourni que ça)
+  - `rncp_code` = `NULL`
+  - `version` = `manuel-v{N}` où N = compte des modules manuels existants + 1
+  - `source_pipeline_job_id` = `NULL` (clé de distinction avec les modules pipeline)
+  - `source_platform_id` = la plateforme nouvellement créée
+  - `status` = `validated`
+- Les plateformes **déjà existantes** ne sont PAS rétroactivement inscrites (pas de migration auto) — éviter de polluer le catalogue avec P1-P4 et autres plateformes système. Si besoin, migration manuelle ciblée à faire.
+
+**Frontend** (`frontend/src/pages/HRDashboard.jsx`) :
+
+- Badge **"Fait main"** ajouté dans `ModulesCatalogueView` à côté des badges Validé/Brouillon, affiché quand `m.source_pipeline_job_id == null`. Slate neutre (`colors.innerBg` + `colors.textMuted` + border), eyebrow uppercase tracked 0.15em — cohérent avec le pattern badge existant, ne consomme pas l'accent Examiner's Violet (One Voice Rule preservée).
+- Le delete déjà en place fonctionne tel quel sur ces modules : il les retire du catalogue. La plateforme source elle-même reste intacte (visible dans l'onglet Plateformes) — comportement cohérent avec le delete des modules pipeline.
+
+Fichiers modifiés : `backend/routes/hr_routes.py`, `frontend/src/pages/HRDashboard.jsx`.
+
+### feat: suppression d'un module depuis l'onglet Modules (skill impeccable)
+
+Demande utilisateur clarifiée : la suppression doit s'exercer sur les **modules du catalogue** (onglet Modules), pas sur les cartes plateforme. La précédente itération (icône poubelle sur chaque PlatformCard) a été **revertée** au profit du bon emplacement.
+
+**Backend** (`backend/routes/hr_routes.py`) — nouvel endpoint `DELETE /api/hr/formation-modules/<id>` :
+
+- **Vérification préalable** : si `platform_config.source_module_id = ?` retourne ≥ 1 ligne, on refuse avec **HTTP 409** + message explicite listant les plateformes bloquantes (`{"blocking_platforms": [{id, name}, ...]}`).
+- **Sinon** : `DELETE FROM formation_modules WHERE id = ?` — opération minimale, le module n'est qu'une enveloppe métadonnées (les vraies données vivent dans `formation_pipeline_jobs` + `cours_folders` rattachés à la plateforme source).
+- Pipeline source, plateforme source, blobs Azure : **tous préservés**. Les promos déjà créées qui utilisent ce module continuent de fonctionner (elles ont déjà cloné le contenu).
+
+**Frontend** (`frontend/src/pages/HRDashboard.jsx`) :
+
+- **Composant `ModuleDeleteButton`** : icône `delete_outline` 32×32, slate au repos, fond `rgba(220, 38, 38, 0.08)` + texte `#dc2626` + border `rgba(220, 38, 38, 0.25)` au hover. Cohérent avec le pattern Audio Item delete documenté dans `DESIGN.md`.
+- **Placement** : dans la rangée de chaque module de `ModulesCatalogueView`, juste à droite du bouton "Utiliser" (qui devient un container `flex gap-2` au lieu de `flex-shrink-0` simple).
+- **Modale de confirmation enrichie** (max-width 480px, registre Examiner's Desk) :
+  - Header : icône `delete_forever` dans tuile rose + titre "Retirer ce module du catalogue" + helper "Le module disparaît de la liste · pipeline source préservée"
+  - Body : carte d'identification du module (TP + RNCP + version), bloc rouge "sera retiré" (2 items), bloc slate "préservé" (4 items dont l'info importante : les promos existantes continuent de fonctionner)
+  - **Type-to-confirm** sur la clé `<TP> · <version>` (ex. `TP CRCD · 2026-v5`) — assez précis pour forcer une lecture attentive sans rendre la saisie pénible
+  - Footer : "Annuler" outlined + "Retirer du catalogue" rouge (désactivé en `#fca5a5` tant que pas matché)
+- **State réutilisé** : `deleteConfirmTypedName` (le state existait déjà pour la branche platform — repris pour module sans renommer pour minimiser le diff).
+- **Raccourcis** : ⏎ valide si match, ⎋ annule, click-outside ferme.
+
+**Conformité DESIGN.md** :
+- ✓ Pattern modal pour destructive irréversible
+- ✓ Pas de side-stripe borders (interdit par §Absolute bans)
+- ✓ Eyebrow labels uppercase tracked 0.18em
+- ✓ Examiner's Violet absent du destructive
+- ✓ Slate-tinted neutrals + accent rose ciblé uniquement sur la zone destructive
+
+Fichiers modifiés : `backend/routes/hr_routes.py`, `frontend/src/pages/HRDashboard.jsx`.
 
 ### tweak: API DeepSeek utilise deepseek-v4-pro (au lieu de -flash)
 
