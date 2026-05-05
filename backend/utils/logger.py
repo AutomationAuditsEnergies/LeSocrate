@@ -45,6 +45,21 @@ def configure_logging():
     for name in _NOISY_LOGGERS:
         logging.getLogger(name).setLevel(logging.WARNING)
 
+    # Marqueur de démarrage : permet de vérifier dans les logs Azure que
+    # cette version de configure_logging() tourne bien. Si ce marqueur
+    # n'apparaît pas après redéploiement, le worker tourne encore sur
+    # l'ancien code (cache .pyc, restart partiel).
+    boot_logger = logging.getLogger("socrate.boot")
+    effective_levels = {
+        n: logging.getLevelName(logging.getLogger(n).getEffectiveLevel())
+        for n in _NOISY_LOGGERS
+    }
+    boot_logger.warning(
+        "LOGGING_BOOT v2 — root=%s, noisy_muted=%s",
+        level_name,
+        effective_levels,
+    )
+
 
 def get_logger(name):
     """Retourne un logger configuré pour le module donné"""

@@ -2,6 +2,13 @@
 
 ## 2026-05-05
 
+### chore: marqueur `LOGGING_BOOT v2` dans `configure_logging()`
+
+Ajout d'un log `WARNING` au démarrage qui imprime le niveau root effectif
++ le niveau effectif de chaque logger SDK museli. Permet de vérifier
+visuellement dans les logs Azure App Service que la version corrigée
+de `configure_logging()` est bien chargée par le worker.
+
 ### fix: logs Azure noyés par le SDK — root logger DEBUG → INFO + SDK museli
 
 `utils/logger.py` configurait `logging.basicConfig(level=DEBUG)`, ce qui
