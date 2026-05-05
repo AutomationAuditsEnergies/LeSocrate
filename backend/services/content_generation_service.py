@@ -1793,6 +1793,7 @@ def _build_contextual_break_audio(
     blocs_by_number: dict,
     mock: bool = False,
     basic_tts: bool = False,
+    llm_model: str | None = None,
 ):
     """Génère un Q&A/pause contextuel, fallback vers audioqapause si nécessaire."""
     from services.playlist_tts_service import (
@@ -1815,6 +1816,7 @@ def _build_contextual_break_audio(
             item_idx=item_idx,
             playlist_items=playlist_items,
             get_bloc_text=lambda n: blocs_by_number.get(n, {}).get("text", ""),
+            model=llm_model,
         )
         if basic_tts:
             from services.basic_tts_service import convert_to_speech_basic
@@ -1841,6 +1843,7 @@ def generate_audio_from_script(
     slide_max_slides=60,
     slide_pace="normal",
     slide_model=None,
+    llm_model=None,
 ):
     """
     Génère (ou régénère) la playlist MP3 depuis le script TTS stocké en DB :
@@ -1989,7 +1992,7 @@ def generate_audio_from_script(
     # rester alignées sur le texte qui a servi au deck.
     if not mock and not basic_tts and not sync_slides:
         try:
-            _apply_closing_transitions(blocs, _course_tts_speed())
+            _apply_closing_transitions(blocs, _course_tts_speed(), model=llm_model)
         except Exception as e:
             logger.warning(f"⚠️ Closings contextuels — erreur globale, on continue sans : {e}")
 
@@ -2034,6 +2037,7 @@ def generate_audio_from_script(
                 blocs_by_number=blocs_by_number,
                 mock=mock,
                 basic_tts=basic_tts,
+                llm_model=llm_model,
             )
             upload_blob(CONTAINER_AUDIOS, f"{azure_prefix}{filename}", final_bytes)
             try:

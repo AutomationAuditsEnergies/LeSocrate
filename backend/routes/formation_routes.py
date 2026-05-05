@@ -2249,6 +2249,7 @@ def launch_audio(job_id):
                 is_last_folder=is_last_folder,
                 sync_slides=sync_slides,
                 auto_generate_slides=auto_generate_slides,
+                llm_model=_resolve_pipeline_api_model(job),
             )
             duration_ms = int((time.time() - started_at) * 1000)
             try:
@@ -2710,6 +2711,7 @@ def continue_after_text(job_id, folder_id):
                 slide_max_slides=max_slides,
                 slide_pace=pace,
                 slide_model=model,
+                llm_model=model,
             )
             update_job(job_id, status="audio_completed", error_message=None)
             log_pipeline_event(
@@ -3307,6 +3309,7 @@ def _execute_ap_step(job_id: int, step: str, job: dict) -> None:
                     basic_tts=basic_tts,
                     next_folder_id=next_fid,
                     is_last_folder=next_fid is None,
+                    llm_model=_resolve_pipeline_api_model(job),
                 )
             except Exception as e:
                 try:

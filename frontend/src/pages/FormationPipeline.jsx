@@ -422,7 +422,11 @@ function PipelineDiagnosticPanel({ diagnostic, loading, error, onRefresh }) {
   const health = diagnostic?.health
   const folders = diagnostic?.folders || []
   const events = diagnostic?.events || []
-  const recentEvents = events.slice(-8).reverse()
+  // events[] arrive déjà du plus ancien au plus récent depuis le backend
+  // (list_pipeline_events fait `for row in reversed(rows)`). On garde cet
+  // ordre et on prend les 8 derniers : du plus ancien (haut) au plus récent (bas).
+  const recentEvents = events.slice(-8)
+  const [selectedEvent, setSelectedEvent] = useState(null)
   const totals = folders.reduce((acc, folder) => ({
     words: acc.words + (folder.total_words || 0),
     segments: acc.segments + (folder.segments_completed || 0),
@@ -506,14 +510,25 @@ function PipelineDiagnosticPanel({ diagnostic, loading, error, onRefresh }) {
           const tone = eventTone(event.status)
           const duration = formatDuration(event.duration_ms)
           return (
-            <div key={event.id} style={{
-              display: 'grid',
-              gridTemplateColumns: '54px minmax(0, 1fr) auto',
-              gap: '8px',
-              alignItems: 'center',
-              fontSize: '12px',
-              color: '#cbd5e1',
-            }}>
+            <div
+              key={event.id}
+              onClick={() => setSelectedEvent(event)}
+              style={{
+                display: 'grid',
+                gridTemplateColumns: '54px minmax(0, 1fr) auto',
+                gap: '8px',
+                alignItems: 'center',
+                fontSize: '12px',
+                color: '#cbd5e1',
+                cursor: 'pointer',
+                padding: '4px 6px',
+                borderRadius: '6px',
+                transition: 'background 0.15s',
+              }}
+              onMouseEnter={e => { e.currentTarget.style.background = 'rgba(139,92,246,0.08)' }}
+              onMouseLeave={e => { e.currentTarget.style.background = 'transparent' }}
+              title="Cliquer pour voir le détail"
+            >
               <span style={{ color: '#64748b' }}>{formatEventTime(event.created_at)}</span>
               <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                 <Icon name={tone.icon} style={{ color: tone.color, fontSize: '13px' }} />{' '}
@@ -526,6 +541,109 @@ function PipelineDiagnosticPanel({ diagnostic, loading, error, onRefresh }) {
             </div>
           )
         })}
+      </div>
+      {selectedEvent && (
+        <EventDetailModal event={selectedEvent} onClose={() => setSelectedEvent(null)} />
+      )}
+    </div>
+  )
+}
+
+function EventDetailModal({ event, onClose }) {
+  const tone = eventTone(event.status)
+  let dataPreview = null
+  try {
+    const parsed = typeof event.data_json === 'string' && event.data_json
+      ? JSON.parse(event.data_json)
+      : event.data_json
+    if (parsed && Object.keys(parsed).length > 0) {
+      dataPreview = JSON.stringify(parsed, null, 2)
+    }
+  } catch {
+    dataPreview = String(event.data_json || '')
+  }
+
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: 'fixed', inset: 0, zIndex: 1000,
+        background: 'rgba(15,23,42,0.75)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        padding: '24px',
+      }}
+    >
+      <div
+        onClick={e => e.stopPropagation()}
+        style={{
+          background: '#0f172a',
+          border: '1px solid rgba(139,92,246,0.35)',
+          borderRadius: '14px',
+          padding: '24px 28px',
+          width: 'min(720px, 100%)',
+          maxHeight: '85vh',
+          overflowY: 'auto',
+          boxShadow: '0 25px 60px rgba(0,0,0,0.5)',
+          color: '#cbd5e1',
+        }}
+      >
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '16px', gap: '12px' }}>
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '6px' }}>
+              <Icon name={tone.icon} style={{ color: tone.color, fontSize: '20px' }} />
+              <strong style={{ color: tone.color, fontSize: '16px' }}>{eventLabel(event.event_type)}</strong>
+            </div>
+            <div style={{ fontSize: '12px', color: '#64748b' }}>
+              {formatEventTime(event.created_at)} · status <strong style={{ color: tone.color }}>{event.status || 'info'}</strong>
+            </div>
+          </div>
+          <button
+            onClick={onClose}
+            style={{
+              background: 'transparent', border: '1px solid rgba(148,163,184,0.3)',
+              color: '#94a3b8', borderRadius: '8px', padding: '4px 10px', cursor: 'pointer',
+            }}
+            title="Fermer"
+          >
+            <Icon name="close" />
+          </button>
+        </div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: '120px 1fr', gap: '8px 14px', fontSize: '13px', marginBottom: '16px' }}>
+          {event.step && (<><span style={{ color: '#64748b' }}>Étape</span><span style={{ color: '#cbd5e1' }}>{event.step}</span></>)}
+          {event.folder_id && (<><span style={{ color: '#64748b' }}>Dossier</span><span style={{ color: '#cbd5e1' }}>#{event.folder_id}</span></>)}
+          {event.model && (<><span style={{ color: '#64748b' }}>Modèle LLM</span><span style={{ color: '#a78bfa', fontFamily: 'monospace' }}>{event.model}</span></>)}
+          {event.duration_ms != null && (<><span style={{ color: '#64748b' }}>Durée</span><span style={{ color: '#cbd5e1' }}>{formatDuration(event.duration_ms) || `${event.duration_ms} ms`}</span></>)}
+          <span style={{ color: '#64748b' }}>Type</span><span style={{ color: '#cbd5e1', fontFamily: 'monospace' }}>{event.event_type}</span>
+          <span style={{ color: '#64748b' }}>ID</span><span style={{ color: '#cbd5e1', fontFamily: 'monospace' }}>{event.id}</span>
+        </div>
+
+        {event.message && (
+          <div style={{ marginBottom: '14px' }}>
+            <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.06em', color: '#64748b', marginBottom: '4px' }}>Message</div>
+            <div style={{ fontSize: '13px', color: '#cbd5e1', lineHeight: 1.5, padding: '10px 12px', background: 'rgba(167,139,250,0.06)', borderLeft: '3px solid rgba(167,139,250,0.4)', borderRadius: '6px' }}>
+              {event.message}
+            </div>
+          </div>
+        )}
+
+        {event.error && (
+          <div style={{ marginBottom: '14px' }}>
+            <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.06em', color: '#f87171', marginBottom: '4px' }}>Erreur</div>
+            <div style={{ fontSize: '13px', color: '#fecaca', lineHeight: 1.5, padding: '10px 12px', background: 'rgba(239,68,68,0.08)', borderLeft: '3px solid #f87171', borderRadius: '6px', fontFamily: 'monospace', wordBreak: 'break-word' }}>
+              {event.error}
+            </div>
+          </div>
+        )}
+
+        {dataPreview && (
+          <div>
+            <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.06em', color: '#64748b', marginBottom: '4px' }}>Données</div>
+            <pre style={{ fontSize: '11.5px', color: '#cbd5e1', background: 'rgba(15,23,42,0.6)', border: '1px solid rgba(99,102,241,0.15)', borderRadius: '6px', padding: '10px 12px', overflowX: 'auto', margin: 0, fontFamily: 'monospace', lineHeight: 1.4 }}>
+              {dataPreview}
+            </pre>
+          </div>
+        )}
       </div>
     </div>
   )

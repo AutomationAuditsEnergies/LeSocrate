@@ -2,6 +2,52 @@
 
 ## 2026-05-05
 
+### fix: cohérence provider LLM — transitions/closings respectent le modèle du job
+
+Quand la pipeline était lancée avec DeepSeek (`auto_pilot_model="deepseek-v4-pro"`),
+les services de transition (`break_transition_service`, `closing_transition_service`)
+et de closing de bloc cours appelaient quand même `default_model()` au runtime,
+qui retombait sur Claude/Anthropic dès qu'`ANTHROPIC_API_KEY` était définie.
+Résultat : la phase audio plantait sur `invalid_request_error: credit balance
+too low` côté Anthropic alors que le job tournait sur DeepSeek.
+
+Désormais :
+- `generate_audio_from_script(folder_id, …, llm_model=...)` accepte un paramètre
+  explicite (`backend/services/content_generation_service.py`).
+- `_apply_closing_transitions(blocs, api_speed, model=...)` et
+  `_build_contextual_break_audio(..., llm_model=...)` propagent ce modèle aux
+  services de transition.
+- Les 3 call sites de `generate_audio_from_script` dans `formation_routes.py`
+  (`launch_audio`, `continue_after_text`, étape audio auto-pilot) passent
+  désormais `llm_model=_resolve_pipeline_api_model(job)` qui lit
+  `auto_pilot_model` de la DB.
+
+Conséquence : un job lancé en DeepSeek reste 100 % DeepSeek pour toutes les
+étapes (texte, review, transitions, closings). Idem Anthropic pour un job
+Anthropic.
+
+### feat: modale détails par événement dans le diagnostic pipeline
+
+Click sur n'importe quelle ligne du panneau **Diagnostic pipeline** (zone
+*derniers événements*) → ouvre une modale qui affiche tous les champs
+structurés : étape, dossier, modèle LLM utilisé, durée, type d'événement, ID,
+message complet, erreur (avec stacktrace si présente), données JSON
+(`data_json`) formatées.
+
+Utile pour comprendre précisément un échec (ex. erreur API providers, segments
+en revue partielle) sans avoir à fouiller la DB ou les logs Azure.
+
+Fichier : `frontend/src/pages/FormationPipeline.jsx` (composants
+`PipelineDiagnosticPanel` + nouveau `EventDetailModal`).
+
+### fix: ordre chronologique des événements dans le diagnostic
+
+`recentEvents = events.slice(-8).reverse()` retournait les 8 plus *anciens*
+événements (le backend les renvoie déjà en ordre ASC), puis les inversait,
+donnant un affichage non-chronologique. Désormais `events.slice(-8)` simplement
+— les 8 plus récents en ordre ASC (du plus ancien en haut au plus récent en
+bas), avec tie-breaker sur `id ASC` pour les événements à timestamp identique.
+
 ### feat: observabilité durable de la pipeline (rapports + événements)
 
 Les rapports de conformité ne pouvaient plus être lus en prod Azure (filesystem
