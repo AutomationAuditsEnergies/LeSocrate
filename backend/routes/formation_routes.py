@@ -1248,6 +1248,108 @@ def _write_api_review_report(job_id: int, folder_id: int, result: dict, model: s
     return report
 
 
+def _review_chunk_ids_for_position(position: int) -> list[str]:
+    from services.claude_code_mission_service import _REVIEW_RULE_GROUPS
+
+    day = int(position or 0) + 1
+    return (
+        [f"day_{day}_review_{g['id']}" for g in _REVIEW_RULE_GROUPS]
+        + [f"day_{day}_review_api", f"day_{day}_review"]
+    )
+
+
+def _delete_active_review_artifacts(job_id: int, position: int) -> int:
+    """Supprime les rapports actifs de cette journée avant une relance aval.
+
+    Les archives `_done` sont conservées, mais la route de lecture les filtre
+    ensuite par date de relance pour ne pas afficher un rapport ancien.
+    """
+    import os
+    import shutil
+    from services.claude_code_mission_service import mission_dir
+
+    deleted = 0
+    base_dir = mission_dir(job_id, "review")
+    for chunk_id in _review_chunk_ids_for_position(position):
+        path = os.path.join(base_dir, chunk_id)
+        if os.path.isdir(path):
+            shutil.rmtree(path)
+            deleted += 1
+    return deleted
+
+
+def _parse_report_timestamp(value):
+    if not value:
+        return None
+    from datetime import datetime, timezone
+
+    raw = str(value).strip()
+    if not raw:
+        return None
+    iso = raw.replace(" ", "T")
+    if iso.endswith("Z"):
+        iso = iso[:-1] + "+00:00"
+    try:
+        dt = datetime.fromisoformat(iso)
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.timestamp()
+
+
+def _latest_continue_after_text_started_at(job_id: int, folder_id: int) -> str | None:
+    from database.db import get_db_connection
+
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT created_at
+            FROM formation_pipeline_events
+            WHERE job_id = ? AND folder_id = ?
+              AND event_type = 'continue_after_text_started'
+            ORDER BY created_at DESC, id DESC
+            LIMIT 1
+            """,
+            (job_id, folder_id),
+        )
+        row = cursor.fetchone()
+        conn.close()
+        return row[0] if row else None
+    except Exception:
+        return None
+
+
+def _report_is_after_cutoff(report: dict | None, cutoff: str | None) -> bool:
+    if not cutoff:
+        return True
+    if not report:
+        return False
+    report_ts = (
+        report.get("persisted_at")
+        or report.get("imported_at")
+        or report.get("created_at")
+    )
+    report_time = _parse_report_timestamp(report_ts)
+    cutoff_time = _parse_report_timestamp(cutoff)
+    if report_time is None or cutoff_time is None:
+        return False
+    return report_time >= cutoff_time
+
+
+def _db_review_report_is_complete(report: dict | None) -> bool:
+    if not report:
+        return False
+    segments = report.get("by_segment") or []
+    if not segments:
+        return False
+    summary = report.get("summary") or {}
+    processed = int(summary.get("segments_reviewed") or 0) + int(summary.get("segments_failed") or 0)
+    return processed >= len(segments)
+
+
 @formation_bp.route(
     "/api/formation/<int:job_id>/content/<int:folder_id>/review-report",
     methods=["GET"],
@@ -1294,27 +1396,25 @@ def get_review_report(job_id, folder_id):
     if not row:
         return jsonify({"error": "Folder introuvable ou hors pipeline"}), 404
     position = row[0]
+    retry_cutoff = _latest_continue_after_text_started_at(job_id, folder_id)
+    stale_report_ignored = False
 
     try:
         from services.formation_observability_service import get_latest_review_report
         persisted_report = get_latest_review_report(job_id, folder_id)
-        if persisted_report:
+        if persisted_report and _report_is_after_cutoff(persisted_report, retry_cutoff):
             return jsonify({"report": persisted_report, "source": "db"}), 200
+        if persisted_report:
+            stale_report_ignored = True
     except Exception as e:
         logger.warning(
             f"⚠️ Lecture rapport conformité DB impossible job={job_id} "
             f"folder={folder_id} : {e}"
         )
 
-    # Multi-agents : 1 chunk_dir par groupe de règles. On cherche
-    # day_N_review_<group_id> pour chacun, et on agrège les review_report.json.
-    # Fallback : day_N_review (legacy single-agent) si trouvé.
-    from services.claude_code_mission_service import _REVIEW_RULE_GROUPS
-    chunk_id_candidates = (
-        [f"day_{position + 1}_review_{g['id']}" for g in _REVIEW_RULE_GROUPS]
-        + [f"day_{position + 1}_review_api"]
-        + [f"day_{position + 1}_review"]  # legacy
-    )
+    # Multi-agents : 1 chunk_dir par groupe de règles. On cherche le rapport
+    # courant, mais après une relance aval on ignore tout rapport plus ancien.
+    chunk_id_candidates = _review_chunk_ids_for_position(position)
 
     if os.path.isdir(_DONE_ROOT):
         archived = sorted(
@@ -1334,7 +1434,11 @@ def get_review_report(job_id, folder_id):
             if os.path.exists(p):
                 try:
                     with open(p, "r", encoding="utf-8") as f:
-                        sub_reports.append((cid, _json.load(f)))
+                        loaded_report = _json.load(f)
+                    if _report_is_after_cutoff(loaded_report, retry_cutoff):
+                        sub_reports.append((cid, loaded_report))
+                    else:
+                        stale_report_ignored = True
                     break  # 1 seul par chunk_id (le plus récent)
                 except Exception:
                     pass
@@ -1430,15 +1534,23 @@ def get_review_report(job_id, folder_id):
             )
 
     chunk_dir_with_output = None
-    for p in output_md_paths:
-        if os.path.exists(p):
-            chunk_dir_with_output = os.path.dirname(p)
-            break
+    if not retry_cutoff:
+        for p in output_md_paths:
+            if os.path.exists(p):
+                chunk_dir_with_output = os.path.dirname(p)
+                break
 
     if not chunk_dir_with_output:
         report = _build_db_review_report(job_id, folder_id)
-        if report:
+        if report and (not retry_cutoff or _db_review_report_is_complete(report)):
             return jsonify({"report": report, "source": "db_fallback"}), 200
+        if retry_cutoff:
+            return jsonify({
+                "error": "Nouveau rapport de révision pas encore disponible pour cette relance",
+                "report": None,
+                "retry_started_at": retry_cutoff,
+                "stale_report_ignored": stale_report_ignored,
+            }), 404
         return jsonify({
             "error": "Aucun rapport de révision trouvé pour ce dossier",
             "report": None,
@@ -1688,10 +1800,25 @@ def launch_volume_safety(job_id, folder_id):
         return jsonify({"error": "Une opération volume safety est déjà en cours pour ce dossier"}), 409
 
     _EXECUTION_STATE[state_key] = {"status": "running", "model": str(model), "mode": mode}
+    try:
+        from services.formation_observability_service import log_pipeline_event
+        log_pipeline_event(
+            job_id,
+            "volume_safety_started",
+            step="volume_safety",
+            status="running",
+            folder_id=folder_id,
+            model=str(model),
+            message=f"Sécurité volume démarrée ({mode})",
+            data={"mode": mode},
+        )
+    except Exception:
+        pass
 
     import eventlet
 
     def _run():
+        started_at = time.time()
         try:
             if mode == "api":
                 result = run_volume_safety_api(job_id, folder_id, model=model)
@@ -1707,6 +1834,28 @@ def launch_volume_safety(job_id, folder_id):
                 f"📏 Volume safety [{mode}] terminé pour job {job_id}/folder {folder_id} : "
                 f"{len(result.get('enriched', []))} segments enrichis"
             )
+            try:
+                from services.formation_observability_service import log_pipeline_event
+                audit_after = result.get("audit_after") or result.get("audit") or {}
+                log_pipeline_event(
+                    job_id,
+                    "volume_safety_completed",
+                    step="volume_safety",
+                    status="completed",
+                    folder_id=folder_id,
+                    model=str(model),
+                    duration_ms=int((time.time() - started_at) * 1000),
+                    message=f"Sécurité volume terminée ({mode})",
+                    data={
+                        "mode": mode,
+                        "enriched": len(result.get("enriched") or []),
+                        "failed": len(result.get("failed") or []),
+                        "total_words_after": audit_after.get("total_words"),
+                        "deficit_after": audit_after.get("deficit"),
+                    },
+                )
+            except Exception:
+                pass
         except Exception as e:
             logger.error(f"❌ Volume safety [{mode}] job {job_id}/folder {folder_id} : {e}")
             _EXECUTION_STATE[state_key] = {
@@ -1715,6 +1864,22 @@ def launch_volume_safety(job_id, folder_id):
                 "mode": mode,
                 "error": str(e)[:500],
             }
+            try:
+                from services.formation_observability_service import log_pipeline_event
+                log_pipeline_event(
+                    job_id,
+                    "volume_safety_failed",
+                    step="volume_safety",
+                    status="error",
+                    folder_id=folder_id,
+                    model=str(model),
+                    duration_ms=int((time.time() - started_at) * 1000),
+                    message=f"Sécurité volume échouée ({mode})",
+                    data={"mode": mode},
+                    error=str(e)[:500],
+                )
+            except Exception:
+                pass
 
     eventlet.spawn(_run)
     return jsonify({"ok": True, "status": "running", "model": str(model), "mode": mode}), 202
@@ -2551,6 +2716,7 @@ def _reset_folder_downstream_to_generated_text(job_id: int, folder_id: int) -> d
             "DELETE FROM content_review_reports WHERE job_id = ? AND folder_id = ?",
             (job_id, folder_id),
         )
+    deleted_review_artifacts = _delete_active_review_artifacts(job_id, position)
     cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='script_slide_decks'")
     if cursor.fetchone():
         cursor.execute(
@@ -2580,6 +2746,7 @@ def _reset_folder_downstream_to_generated_text(job_id: int, folder_id: int) -> d
         "segments": len(segments),
         "segments_restored": restored,
         "total_words": total_words,
+        "deleted_review_artifacts": deleted_review_artifacts,
         "deleted_slide_decks": deleted_decks,
     }
 
@@ -3447,6 +3614,11 @@ def _tick_auto_pilot(job_id: int) -> None:
             eventlet.sleep(60)
             if not _hb_stop[0]:
                 _refresh_ap_lock(job_id)
+                logger.info(
+                    "PIPELINE_AUTOPILOT_HEARTBEAT job=%s step=%s lock_refreshed=1",
+                    job_id,
+                    current_step,
+                )
     hb = eventlet.spawn(_heartbeat)
 
     should_respawn = False

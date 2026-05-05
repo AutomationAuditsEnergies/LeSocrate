@@ -2,6 +2,49 @@
 
 ## 2026-05-05
 
+### feat: observabilité Azure + retries gTTS bornés + relances review propres
+
+Trois axes pour rendre la pipeline débloquable et diagnostiquable depuis les
+logs Azure App Service.
+
+**Observabilité (`formation_observability_service.py`,
+`content_generation_service.py`)**
+
+- Helpers `_compact_for_log` + `_emit_pipeline_event_log` : chaque
+  `log_pipeline_event` est désormais aussi écrit en JSON compact dans
+  stdout (préfixe `PIPELINE_EVENT`), niveau ajusté (`error`/`warning`/`info`)
+  selon le statut. Les rapports persistés sortent un `PIPELINE_REVIEW_REPORT`.
+- Logs structurés ajoutés autour des étapes de génération de texte :
+  `PIPELINE_CONTENT_SUBPART_START`, `PIPELINE_CONTENT_SEGMENT_START/DONE/SKIP`,
+  `PIPELINE_REVIEW_SEGMENT_START`. Permet de retrouver un blocage dans
+  `az webapp log tail` sans avoir à lire la DB.
+
+**Retries gTTS bornés (`content_generation_service.py`,
+`script_slide_generation_service.py`)**
+
+- Helper `_basic_tts_pipeline_retry_kwargs()` qui force pour la pipeline :
+  `BASIC_TTS_PIPELINE_MAX_429_RETRIES=1` et
+  `BASIC_TTS_PIPELINE_429_BASE_WAIT_SEC=20`. Pire cas : 20 s d'attente sur
+  un 429 Google au lieu des ~31 min précédents (60+120+240+480+960 s).
+- `progress_callback` propagé jusqu'à `convert_to_speech_basic` dans tous
+  les chemins (slides synchronisées + bloc cours + pauses), pour que le
+  diagnostic affiche les sub-events ("gTTS chunk 3/5 — 429 Google,
+  attente 20s") au lieu de rester figé sur "génération pause contextuel".
+- En mode test gTTS, les pauses/Q&A passent en `_fallback("mode test gTTS")`
+  → audio recyclé/silence au lieu d'un appel LLM + TTS coûteux.
+
+**Relances review propres (`formation_routes.py`,
+`claude_code_mission_service.py`)**
+
+- `_delete_active_review_artifacts(job_id, position)` purge les rapports
+  actifs d'une journée avant relance aval (les archives `_done` sont
+  conservées mais filtrées par cutoff côté lecture).
+- Helpers `_parse_report_timestamp` / `_report_is_after_cutoff` /
+  `_db_review_report_is_complete` /
+  `_latest_continue_after_text_started_at` : la route de lecture filtre
+  les rapports antérieurs au dernier `continue_after_text_started`,
+  évitant d'afficher un rapport périmé après une relance.
+
 ### feat: refonte du panneau diagnostic pipeline (FormationPipeline.jsx)
 
 `PipelineDiagnosticPanel` enrichi pour rendre le suivi de la synthèse audio plus

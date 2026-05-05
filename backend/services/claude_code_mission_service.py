@@ -2562,6 +2562,14 @@ def run_volume_safety_api(job_id: int, folder_id: int, model: str = None) -> dic
 
     if model is None:
         model = default_model()
+    started_at = time.time()
+    logger.info(
+        "PIPELINE_VOLUME_API_START job=%s folder=%s model=%s max_passes=%s",
+        job_id,
+        folder_id,
+        model,
+        _VOLUME_SAFETY_MAX_PASSES,
+    )
 
     job = _get_job_row(job_id)
     if not job:
@@ -2576,8 +2584,12 @@ def run_volume_safety_api(job_id: int, folder_id: int, model: str = None) -> dic
 
     if initial_folder_audit["deficit"] == 0:
         logger.info(
-            f"📏 [API] Volume safety job {job_id}/folder {folder_id} : "
-            f"déjà au seuil ({initial_folder_audit['total_words']} mots) — skip"
+            "PIPELINE_VOLUME_API_SKIP job=%s folder=%s total_words=%s target=%s duration_ms=%s reason=no_deficit",
+            job_id,
+            folder_id,
+            initial_folder_audit["total_words"],
+            initial_audit.get("target"),
+            int((time.time() - started_at) * 1000),
         )
         return {"ok": True, "skipped": True, "reason": "no_deficit",
                 "audit": initial_folder_audit}
@@ -2594,9 +2606,12 @@ def run_volume_safety_api(job_id: int, folder_id: int, model: str = None) -> dic
         )
         if not folder_audit or folder_audit["deficit"] == 0:
             logger.info(
-                f"📏 [API] Volume cible atteinte (folder {folder_id}, "
-                f"{folder_audit['total_words'] if folder_audit else '?'} mots) "
-                f"après {pass_idx} passe(s)"
+                "PIPELINE_VOLUME_API_TARGET_REACHED job=%s folder=%s pass=%s total_words=%s duration_ms=%s",
+                job_id,
+                folder_id,
+                pass_idx,
+                folder_audit["total_words"] if folder_audit else "?",
+                int((time.time() - started_at) * 1000),
             )
             break
 
@@ -2609,9 +2624,14 @@ def run_volume_safety_api(job_id: int, folder_id: int, model: str = None) -> dic
 
         passes_run += 1
         logger.info(
-            f"📏 [API] Volume safety folder {folder_id} — passe {pass_idx + 1}/"
-            f"{_VOLUME_SAFETY_MAX_PASSES} (déficit {folder_audit['deficit']} mots, "
-            f"top {len(short_ids)} segments à enrichir)"
+            "PIPELINE_VOLUME_API_PASS_START job=%s folder=%s pass=%s/%s total_words=%s deficit=%s candidates=%s",
+            job_id,
+            folder_id,
+            pass_idx + 1,
+            _VOLUME_SAFETY_MAX_PASSES,
+            folder_audit.get("total_words"),
+            folder_audit.get("deficit"),
+            len(short_ids),
         )
 
         placeholders = ",".join("?" * len(short_ids))
@@ -2638,7 +2658,16 @@ def run_volume_safety_api(job_id: int, folder_id: int, model: str = None) -> dic
         conn.close()
 
         for seg in segments:
+            segment_started_at = time.time()
             try:
+                logger.info(
+                    "PIPELINE_VOLUME_API_SEGMENT_START job=%s folder=%s segment_id=%s pass=%s words_before=%s",
+                    job_id,
+                    folder_id,
+                    seg["segment_id"],
+                    pass_idx + 1,
+                    seg["word_count"],
+                )
                 prompt = _build_volume_safety_prompt_api(job, seg)
                 addition = _anthropic_post(
                     messages=[{"role": "user", "content": prompt}],
@@ -2689,13 +2718,26 @@ def run_volume_safety_api(job_id: int, folder_id: int, model: str = None) -> dic
                     "words_after": new_words,
                 })
                 logger.info(
-                    f"📏 [API Pass {pass_idx + 1}] Segment {seg['segment_id']} enrichi : "
-                    f"+{new_words - seg['word_count']} mots ({seg['word_count']} → {new_words})"
+                    "PIPELINE_VOLUME_API_SEGMENT_DONE job=%s folder=%s segment_id=%s pass=%s words_before=%s "
+                    "words_added=%s words_after=%s duration_ms=%s",
+                    job_id,
+                    folder_id,
+                    seg["segment_id"],
+                    pass_idx + 1,
+                    seg["word_count"],
+                    new_words - seg["word_count"],
+                    new_words,
+                    int((time.time() - segment_started_at) * 1000),
                 )
             except AnthropicRateLimitError as e:
                 logger.warning(
-                    f"⏳ [API] Volume safety segment {seg['segment_id']} : rate limit "
-                    f"({getattr(e, 'wait_seconds', 'N/A')}s) — abort"
+                    "PIPELINE_VOLUME_API_SEGMENT_RATE_LIMIT job=%s folder=%s segment_id=%s pass=%s wait_seconds=%s duration_ms=%s",
+                    job_id,
+                    folder_id,
+                    seg["segment_id"],
+                    pass_idx + 1,
+                    getattr(e, "wait_seconds", "N/A"),
+                    int((time.time() - segment_started_at) * 1000),
                 )
                 all_failed.append({
                     "segment_id": seg["segment_id"],
@@ -2705,8 +2747,14 @@ def run_volume_safety_api(job_id: int, folder_id: int, model: str = None) -> dic
                 aborted_rate_limit = True
                 break
             except Exception as e:
-                logger.error(
-                    f"❌ [API] Volume safety segment {seg['segment_id']} (pass {pass_idx + 1}) : {e}"
+                logger.exception(
+                    "PIPELINE_VOLUME_API_SEGMENT_ERROR job=%s folder=%s segment_id=%s pass=%s duration_ms=%s error=%s",
+                    job_id,
+                    folder_id,
+                    seg["segment_id"],
+                    pass_idx + 1,
+                    int((time.time() - segment_started_at) * 1000),
+                    e,
                 )
                 all_failed.append({
                     "segment_id": seg["segment_id"],
@@ -2737,16 +2785,40 @@ def run_volume_safety_api(job_id: int, folder_id: int, model: str = None) -> dic
                 )
                 _update_job_db(cg_job_id, total_words=final_words)
                 logger.info(
-                    f"✅ [API] Re-assemble post volume safety folder {folder_id} : "
-                    f"{final_words} mots assemblés, {filename}"
+                    "PIPELINE_VOLUME_API_REASSEMBLE_DONE job=%s folder=%s content_job=%s final_words=%s filename=%s",
+                    job_id,
+                    folder_id,
+                    cg_job_id,
+                    final_words,
+                    filename,
                 )
         except Exception as e:
-            logger.warning(f"⚠️ [API] Re-assemble post volume safety échoué : {e}")
+            logger.warning(
+                "PIPELINE_VOLUME_API_REASSEMBLE_ERROR job=%s folder=%s error=%s",
+                job_id,
+                folder_id,
+                e,
+            )
 
     final_audit = compute_volume_audit(job_id)
     final_folder_audit = next(
         (f for f in final_audit["folders"] if f["folder_id"] == folder_id),
         initial_folder_audit,
+    )
+    logger.info(
+        "PIPELINE_VOLUME_API_DONE job=%s folder=%s passes=%s enriched=%s failed=%s "
+        "total_before=%s total_after=%s deficit_before=%s deficit_after=%s target_reached=%s duration_ms=%s",
+        job_id,
+        folder_id,
+        passes_run,
+        len(all_enriched),
+        len(all_failed),
+        initial_folder_audit.get("total_words"),
+        final_folder_audit.get("total_words"),
+        initial_folder_audit.get("deficit"),
+        final_folder_audit.get("deficit"),
+        final_folder_audit["deficit"] == 0,
+        int((time.time() - started_at) * 1000),
     )
 
     return {

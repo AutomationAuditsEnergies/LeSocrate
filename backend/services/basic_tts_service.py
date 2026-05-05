@@ -79,7 +79,14 @@ def _speedup_mp3(audio_bytes: bytes, speed: float) -> bytes:
         return audio_bytes
 
 
-def convert_to_speech_basic(text: str, lang: str = "fr", speed: float | None = None) -> bytes:
+def convert_to_speech_basic(
+    text: str,
+    lang: str = "fr",
+    speed: float | None = None,
+    progress_callback=None,
+    max_429_retries: int | None = None,
+    retry_base_wait_sec: float | None = None,
+) -> bytes:
     """
     Génère un MP3 à partir d'un texte via gTTS.
 
@@ -91,8 +98,8 @@ def convert_to_speech_basic(text: str, lang: str = "fr", speed: float | None = N
     anti-abuse. Sur du gros volume, Google jette des 429 (Too Many Requests).
     On gère ça avec :
     - Sleep entre chaque chunk (`BASIC_TTS_CHUNK_DELAY_SEC`, défaut 1.5s)
-    - Retry exponentiel sur 429 (`BASIC_TTS_MAX_429_RETRIES`, défaut 3)
-      avec wait 30s, 60s, 120s.
+    - Retry exponentiel sur 429 (`BASIC_TTS_MAX_429_RETRIES`, défaut 2)
+      avec wait configuré par `BASIC_TTS_429_BASE_WAIT_SEC` (défaut 20s).
 
     Args:
         text: texte à synthétiser.
@@ -113,11 +120,13 @@ def convert_to_speech_basic(text: str, lang: str = "fr", speed: float | None = N
     from gtts.tts import gTTSError
 
     chunks = _split_for_gtts(text)
-    # Defaults relevés après observation 429 répétés malgré retry court :
-    # Google bloque ~10 min sur abuse. Sleep 3s entre chunks + retry jusqu'à
-    # 5× avec backoff 60/120/240/480/960s = wait max ~30 min sur le pire cas.
+    # Google peut bloquer longtemps sur abuse. Les pipelines passent des
+    # retries plus courts pour échouer lisiblement plutôt que rester invisibles.
     inter_chunk_delay = float(os.getenv("BASIC_TTS_CHUNK_DELAY_SEC", "3.0"))
-    max_429_retries = int(os.getenv("BASIC_TTS_MAX_429_RETRIES", "5"))
+    if max_429_retries is None:
+        max_429_retries = int(os.getenv("BASIC_TTS_MAX_429_RETRIES", "2"))
+    if retry_base_wait_sec is None:
+        retry_base_wait_sec = float(os.getenv("BASIC_TTS_429_BASE_WAIT_SEC", "20"))
     speed = float(speed if speed is not None else os.getenv("BASIC_TTS_SPEED", "1.28"))
 
     logger.info(
@@ -129,6 +138,8 @@ def convert_to_speech_basic(text: str, lang: str = "fr", speed: float | None = N
     for i, chunk in enumerate(chunks, start=1):
         if not chunk.strip():
             continue
+        if progress_callback:
+            progress_callback(f"gTTS chunk {i}/{len(chunks)} — synthèse")
 
         # Retry loop sur 429
         chunk_bytes = None
@@ -146,11 +157,16 @@ def convert_to_speech_basic(text: str, lang: str = "fr", speed: float | None = N
                 is_429 = "429" in err_str or "Too Many Requests" in err_str
                 if not is_429 or attempt >= max_429_retries:
                     raise
-                wait = 60 * (2 ** attempt)  # 60s, 120s, 240s, 480s, 960s
+                wait = retry_base_wait_sec * (2 ** attempt)
                 logger.warning(
                     f"⏳ gTTS chunk {i}/{len(chunks)} : 429 Google. "
                     f"Attente {wait}s avant retry {attempt + 1}/{max_429_retries}"
                 )
+                if progress_callback:
+                    progress_callback(
+                        f"gTTS chunk {i}/{len(chunks)} — 429 Google, "
+                        f"attente {int(wait)}s avant retry {attempt + 1}/{max_429_retries}"
+                    )
                 time.sleep(wait)
 
         if chunk_bytes is None:
@@ -158,6 +174,8 @@ def convert_to_speech_basic(text: str, lang: str = "fr", speed: float | None = N
 
         parts.append(chunk_bytes)
         logger.debug(f"   chunk {i}/{len(chunks)} ({len(chunk)} chars) → {len(chunk_bytes)} bytes MP3")
+        if progress_callback:
+            progress_callback(f"gTTS chunk {i}/{len(chunks)} — OK")
 
         # Sleep entre chunks (sauf après le dernier) pour ne pas saturer Google.
         # Sous eventlet+monkey_patch, time.sleep yield au scheduler.

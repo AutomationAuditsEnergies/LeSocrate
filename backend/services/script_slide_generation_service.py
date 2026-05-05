@@ -10,6 +10,7 @@ slide. No timing is estimated in V1.
 import json
 import math
 import re
+import time
 from typing import Iterable
 
 from database.db import get_db_connection
@@ -923,6 +924,7 @@ def generate_slides_from_script(
     batch_size: int = DEFAULT_BATCH_SIZE,
     model: str | None = None,
 ) -> dict:
+    started_at = time.time()
     folder_id = _safe_int(folder_id, 0, 1, 10**9)
     if folder_id <= 0:
         raise ValueError("folder_id est requis")
@@ -952,13 +954,18 @@ def generate_slides_from_script(
         raise ValueError("Aucun bloc source exploitable")
 
     logger.info(
-        "Slides depuis script: folder=%s words=%s context_windows=%s max_slides=%s pace=%s context_words=%s model=%s",
+        "PIPELINE_SLIDES_START folder=%s content_job=%s platform=%s words=%s source_segments=%s "
+        "context_windows=%s max_slides=%s pace=%s context_words=%s batch_size=%s model=%s",
         folder_id,
+        source.get("content_job_id"),
+        source.get("platform_id"),
         total_words,
+        len(source["segments"]),
         len(source_blocks),
         max_slides,
         pace_config["label"],
         effective_words_per_slide,
+        batch_size,
         model,
     )
 
@@ -966,6 +973,7 @@ def generate_slides_from_script(
     batches_debug = []
     for start in range(0, len(source_blocks), batch_size):
         batch = source_blocks[start : start + batch_size]
+        batch_started_at = time.time()
         max_batch_slides = max(
             1,
             min(
@@ -973,13 +981,32 @@ def generate_slides_from_script(
                 math.ceil(max_slides * (len(batch) / max(1, len(source_blocks)))) + 1,
             ),
         )
+        logger.info(
+            "PIPELINE_SLIDES_BATCH_START folder=%s content_job=%s batch=%s-%s blocks=%s max_batch_slides=%s",
+            folder_id,
+            source.get("content_job_id"),
+            start,
+            start + len(batch) - 1,
+            len(batch),
+            max_batch_slides,
+        )
         try:
             batch_slides = _generate_batch(batch, source["program_title"], model, pace_config, max_batch_slides)
             status = "llm"
         except Exception as exc:
-            logger.error("Génération batch slides échouée (%s-%s): %s", start, start + len(batch) - 1, exc)
+            logger.exception("PIPELINE_SLIDES_BATCH_ERROR folder=%s batch=%s-%s error=%s", folder_id, start, start + len(batch) - 1, exc)
             batch_slides = [_fallback_slide(block, "batch_error") for block in batch]
             status = "fallback"
+        logger.info(
+            "PIPELINE_SLIDES_BATCH_DONE folder=%s content_job=%s batch=%s-%s status=%s slides=%s duration_ms=%s",
+            folder_id,
+            source.get("content_job_id"),
+            start,
+            start + len(batch) - 1,
+            status,
+            len(batch_slides),
+            int((time.time() - batch_started_at) * 1000),
+        )
         planned.extend(batch_slides)
         batches_debug.append(
             {
@@ -1075,4 +1102,13 @@ def generate_slides_from_script(
     )
     result["stats"]["deck_id"] = deck_id
     result["pipeline_debug"]["deck_id"] = deck_id
+    logger.info(
+        "PIPELINE_SLIDES_DONE folder=%s content_job=%s deck_id=%s slides=%s dropped_by_cap=%s duration_ms=%s",
+        folder_id,
+        source.get("content_job_id"),
+        deck_id,
+        len(final_slides),
+        dropped_by_cap,
+        int((time.time() - started_at) * 1000),
+    )
     return result

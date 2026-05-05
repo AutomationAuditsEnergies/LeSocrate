@@ -44,6 +44,23 @@ _CARRYOVER_INTRO = (
 _CARRYOVER_COLUMNS_READY = False
 _FISHAUDIO_TAG_RE = re.compile(r"\[[^\[\]\n]{1,50}\]")
 
+
+def _basic_tts_pipeline_retry_kwargs() -> dict:
+    """Retry gTTS court pour les pipelines de test, afin d'éviter les blocages longs."""
+    try:
+        max_retries = int(os.getenv("BASIC_TTS_PIPELINE_MAX_429_RETRIES", "1"))
+    except ValueError:
+        max_retries = 1
+    try:
+        base_wait = float(os.getenv("BASIC_TTS_PIPELINE_429_BASE_WAIT_SEC", "20"))
+    except ValueError:
+        base_wait = 20.0
+    return {
+        "max_429_retries": max(0, max_retries),
+        "retry_base_wait_sec": max(1.0, base_wait),
+    }
+
+
 # ─── Texte mock pour les tests ───────────────────────────────────────────────
 
 _MOCK_PASSE_LABELS = ["fondation", "expansion", "enrichissement"]
@@ -282,6 +299,7 @@ def _synthesize_course_audio_synced_to_slides(
     *,
     mock: bool,
     basic_tts: bool,
+    progress_callback=None,
 ):
     """Generate one course MP3 by slide-sized chunks and return slide timings."""
     from pydub import AudioSegment
@@ -305,6 +323,10 @@ def _synthesize_course_audio_synced_to_slides(
     if not chunks:
         raise ValueError(f"Bloc {bloc['bloc_number']} vide pour sync slides")
 
+    def _emit(message: str):
+        if progress_callback:
+            progress_callback(message)
+
     full_audio = AudioSegment.silent(duration=_COURSE_START_SILENCE_SECONDS * 1000)
     cursor_sec = float(_COURSE_START_SILENCE_SECONDS)
     timings = []
@@ -314,11 +336,21 @@ def _synthesize_course_audio_synced_to_slides(
         text = chunk["text"].strip()
         if not text:
             continue
+        _emit(
+            f"Bloc {bloc['bloc_number']}/7 — slide audio {idx}/{len(chunks)} "
+            f"({len(text.split())} mots)"
+        )
         if mock:
             segment = AudioSegment.silent(duration=1000)
             mode = "mock"
         elif basic_tts:
-            audio_bytes = convert_to_speech_basic(text)
+            audio_bytes = convert_to_speech_basic(
+                text,
+                progress_callback=lambda msg, i=idx: _emit(
+                    f"Bloc {bloc['bloc_number']}/7 — slide {i}/{len(chunks)} · {msg}"
+                ),
+                **_basic_tts_pipeline_retry_kwargs(),
+            )
             segment = AudioSegment.from_mp3(io.BytesIO(audio_bytes))
             mode = "gtts"
         else:
@@ -332,6 +364,10 @@ def _synthesize_course_audio_synced_to_slides(
         full_audio += segment
         cursor_sec = end_sec
         attempts.append({"kind": mode, "chunk": idx, "duration": duration_sec})
+        _emit(
+            f"Bloc {bloc['bloc_number']}/7 — slide audio {idx}/{len(chunks)} OK "
+            f"({duration_sec:.1f}s)"
+        )
 
         timings.append({
             "slide_id": chunk.get("slide_id"),
@@ -1676,6 +1712,20 @@ def run_content_generation(folder_id, on_progress=None, mode="normal", model=Non
     is_mock = mode == "mock"
     is_mini = mode == "mini"
 
+    started_at = time.time()
+    logger.info(
+        "PIPELINE_CONTENT_START job=%s folder=%s platform=%s mode=%s model=%s "
+        "from_scratch=%s sub_parts=%s existing_words=%s",
+        job_id,
+        folder_id,
+        platform_id,
+        mode,
+        model or CLAUDE_MODEL,
+        bool(from_scratch),
+        len(sub_parts or []),
+        job.get("total_words") or 0,
+    )
+
     if is_mock:
         logger.info(f"🧪 MODE MOCK — génération factice pour dossier {folder_id}")
     elif is_mini:
@@ -1686,12 +1736,27 @@ def run_content_generation(folder_id, on_progress=None, mode="normal", model=Non
     try:
         done_set = _get_completed_segments(job_id)
         total_words = job["total_words"] or 0
+        logger.info(
+            "PIPELINE_CONTENT_RESUME_STATE job=%s folder=%s completed_segments=%s total_words=%s",
+            job_id,
+            folder_id,
+            len(done_set),
+            total_words,
+        )
 
         # En mode mini : seulement la première sous-partie, passe 1
         sub_parts_to_run = [sub_parts[0]] if is_mini else sub_parts
         passes_to_run = [1] if is_mini else [1, 2, 3]
 
         for sub_idx, sub_part_name in enumerate(sub_parts_to_run):
+            logger.info(
+                "PIPELINE_CONTENT_SUBPART_START job=%s folder=%s sub_part=%s/%s name=%s",
+                job_id,
+                folder_id,
+                sub_idx + 1,
+                len(sub_parts_to_run),
+                sub_part_name,
+            )
             passe1_text = _get_segment_text(job_id, sub_idx, 1) if (sub_idx, 1) in done_set else ""
             passe1_2_text = (
                 passe1_text + "\n\n" + _get_segment_text(job_id, sub_idx, 2)
@@ -1700,7 +1765,13 @@ def run_content_generation(folder_id, on_progress=None, mode="normal", model=Non
 
             for passe in passes_to_run:
                 if (sub_idx, passe) in done_set:
-                    logger.info(f"  ♻️ Sous-partie {sub_idx+1}, passe {passe} : déjà fait, skip")
+                    logger.info(
+                        "PIPELINE_CONTENT_SEGMENT_SKIP job=%s folder=%s sub_part=%s passe=%s reason=already_completed",
+                        job_id,
+                        folder_id,
+                        sub_idx + 1,
+                        passe,
+                    )
                     continue
 
                 msg = f"Sous-partie {sub_idx + 1}/{NUM_SUB_PARTS} · Passe {passe}/3 — {sub_part_name}"
@@ -1708,6 +1779,18 @@ def run_content_generation(folder_id, on_progress=None, mode="normal", model=Non
                     msg = f"[MOCK] {msg}"
                 _progress(sub_idx, passe, total_words, msg)
                 _update_job_db(job_id, current_sub_part=sub_idx, current_passe=passe)
+                segment_started_at = time.time()
+                logger.info(
+                    "PIPELINE_CONTENT_SEGMENT_START job=%s folder=%s sub_part=%s/%s passe=%s/%s mode=%s total_words_before=%s",
+                    job_id,
+                    folder_id,
+                    sub_idx + 1,
+                    len(sub_parts_to_run),
+                    passe,
+                    len(passes_to_run),
+                    mode,
+                    total_words,
+                )
 
                 if is_mock:
                     time.sleep(0.8)  # Simule un délai réaliste
@@ -1730,6 +1813,17 @@ def run_content_generation(folder_id, on_progress=None, mode="normal", model=Non
                 words_added = len(text.split())
                 total_words += words_added
                 _update_job_db(job_id, total_words=total_words)
+                logger.info(
+                    "PIPELINE_CONTENT_SEGMENT_DONE job=%s folder=%s sub_part=%s passe=%s "
+                    "words_added=%s total_words=%s duration_ms=%s",
+                    job_id,
+                    folder_id,
+                    sub_idx + 1,
+                    passe,
+                    words_added,
+                    total_words,
+                    int((time.time() - segment_started_at) * 1000),
+                )
 
                 if passe == 1:
                     passe1_text = text
@@ -1740,19 +1834,44 @@ def run_content_generation(folder_id, on_progress=None, mode="normal", model=Non
         if is_mini:
             _update_job_db(job_id, status="completed", total_words=total_words)
             _progress(1, 1, total_words, f"✅ [MINI] 1 segment généré ({total_words} mots) — pas d'upload Azure")
-            logger.info(f"✅ [MINI] Génération terminée pour dossier {folder_id} : {total_words} mots")
+            logger.info(
+                "PIPELINE_CONTENT_DONE job=%s folder=%s mode=mini total_words=%s duration_ms=%s",
+                job_id,
+                folder_id,
+                total_words,
+                int((time.time() - started_at) * 1000),
+            )
             return
 
         # Assemblage + upload
         _progress(NUM_SUB_PARTS, 3, total_words, "Assemblage et upload du texte final...")
+        logger.info(
+            "PIPELINE_CONTENT_ASSEMBLY_START job=%s folder=%s words_before_assembly=%s",
+            job_id,
+            folder_id,
+            total_words,
+        )
         final_words, filename = _assemble_and_upload(folder_id, platform_id, job_id)
 
         _update_job_db(job_id, status="completed", total_words=final_words)
         _progress(NUM_SUB_PARTS, 3, final_words, f"✅ Terminé : {final_words} mots — fichier {filename} ajouté aux sources")
-        logger.info(f"✅ Génération terminée pour dossier {folder_id} : {final_words} mots")
+        logger.info(
+            "PIPELINE_CONTENT_DONE job=%s folder=%s final_words=%s filename=%s duration_ms=%s",
+            job_id,
+            folder_id,
+            final_words,
+            filename,
+            int((time.time() - started_at) * 1000),
+        )
 
     except Exception as e:
-        logger.error(f"❌ Erreur génération contenu dossier {folder_id} : {e}")
+        logger.exception(
+            "PIPELINE_CONTENT_ERROR job=%s folder=%s duration_ms=%s error=%s",
+            job_id,
+            folder_id,
+            int((time.time() - started_at) * 1000),
+            e,
+        )
         _update_job_db(job_id, status="error", error_message=str(e))
         raise
 
@@ -1794,6 +1913,7 @@ def _build_contextual_break_audio(
     mock: bool = False,
     basic_tts: bool = False,
     llm_model: str | None = None,
+    on_progress=None,
 ):
     """Génère un Q&A/pause contextuel, fallback vers audioqapause si nécessaire."""
     from services.playlist_tts_service import (
@@ -1802,12 +1922,38 @@ def _build_contextual_break_audio(
         _get_recycled_qa_pause,
     )
 
+    def _emit(message: str):
+        if on_progress:
+            on_progress(message)
+
+    def _fallback(reason: str):
+        _emit(f"{filename} — audio pause réutilisable ({reason})...")
+        try:
+            return _get_recycled_qa_pause(filename), "audioqapause_fallback"
+        except Exception as fallback_error:
+            logger.warning(
+                f"⚠️ Break fallback {filename} indisponible ({fallback_error}); "
+                "silence de secours"
+            )
+            _emit(f"{filename} — audio pause réutilisable indisponible, silence de secours")
+            return _generate_silence_mp3(min(max(int(duration_sec or 1), 1), 10)), "silence_fallback"
+
     if mock:
         return _generate_silence_mp3(1), "mock"
+
+    contextual_basic_tts = os.getenv("BASIC_TTS_CONTEXTUAL_BREAKS", "false").lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    if basic_tts and not contextual_basic_tts:
+        return _fallback("mode test gTTS")
 
     try:
         from services.break_transition_service import build_break_transition_texts
 
+        _emit(f"{filename} — rédaction transition LLM...")
         intro, outro = build_break_transition_texts(
             filename=filename,
             duration_sec=duration_sec,
@@ -1818,16 +1964,22 @@ def _build_contextual_break_audio(
             get_bloc_text=lambda n: blocs_by_number.get(n, {}).get("text", ""),
             model=llm_model,
         )
+        _emit(f"{filename} — synthèse audio transition...")
         if basic_tts:
             from services.basic_tts_service import convert_to_speech_basic
+            convert_func = lambda text: convert_to_speech_basic(
+                text,
+                progress_callback=lambda msg: _emit(f"{filename} — {msg}"),
+                **_basic_tts_pipeline_retry_kwargs(),
+            )
             return _build_pause_audio(
                 intro, outro, duration_sec,
-                convert_func=convert_to_speech_basic,
+                convert_func=convert_func,
             ), "contextual_gtts"
         return _build_pause_audio(intro, outro, duration_sec), "contextual_fish"
     except Exception as e:
         logger.warning(f"⚠️ Break contextuel {filename} échoué : {e}; fallback audioqapause")
-        return _get_recycled_qa_pause(filename), "audioqapause_fallback"
+        return _fallback(type(e).__name__)
 
 
 def generate_audio_from_script(
@@ -1881,6 +2033,22 @@ def generate_audio_from_script(
 
     platform_id = job["platform_id"]
     job_id = job["id"]
+    started_at = time.time()
+    logger.info(
+        "PIPELINE_AUDIO_START job=%s folder=%s platform=%s force_all=%s mock=%s basic_tts=%s "
+        "sync_slides=%s auto_generate_slides=%s slide_max_slides=%s slide_pace=%s llm_model=%s",
+        job_id,
+        folder_id,
+        platform_id,
+        force_all,
+        mock,
+        basic_tts,
+        sync_slides,
+        auto_generate_slides,
+        slide_max_slides,
+        slide_pace,
+        llm_model,
+    )
     if next_folder_id is None:
         next_folder_id = _find_next_folder_id(platform_id, folder_id)
     if is_last_folder is None:
@@ -2002,6 +2170,19 @@ def generate_audio_from_script(
     dirty_count = sum(1 for b in blocs if b["dirty"])
     clean_count = 7 - dirty_count
     logger.info(f"🎯 {dirty_count}/7 blocs à régénérer, {clean_count}/7 conservés")
+    logger.info(
+        "PIPELINE_AUDIO_PLAN job=%s folder=%s playlist_items=%s total_words=%s blocs=%s dirty_blocs=%s clean_blocs=%s "
+        "next_folder_id=%s is_last_folder=%s",
+        job_id,
+        folder_id,
+        len(playlist_items),
+        total_words,
+        len(blocs),
+        dirty_count,
+        clean_count,
+        next_folder_id,
+        is_last_folder,
+    )
 
     _progress(0, len(playlist_items), f"{dirty_count}/7 blocs cours à régénérer ({clean_count} conservés)...")
 
@@ -2015,15 +2196,41 @@ def generate_audio_from_script(
     for item_idx, (filename, duration_sec, file_type, bloc_num) in enumerate(playlist_items):
         step = item_idx + 1
         bloc = blocs_by_number.get(bloc_num)
+        item_started_at = time.time()
+        logger.info(
+            "PIPELINE_AUDIO_ITEM_START job=%s folder=%s item=%s/%s filename=%s type=%s bloc=%s target_sec=%s",
+            job_id,
+            folder_id,
+            step,
+            len(playlist_items),
+            filename,
+            file_type,
+            bloc_num,
+            duration_sec,
+        )
 
         if file_type != "cours":
             if mock:
                 logger.info(f"   🧪 [MOCK] {filename}: skip Q&A/pause contextuel")
+                logger.info(
+                    "PIPELINE_AUDIO_ITEM_SKIP job=%s folder=%s filename=%s reason=mock_break duration_ms=%s",
+                    job_id,
+                    folder_id,
+                    filename,
+                    int((time.time() - item_started_at) * 1000),
+                )
                 skipped.append(filename)
                 continue
             if not force_all and dirty_count == 0:
                 logger.info(f"   ⏭️ {filename}: break conservé (aucun bloc cours dirty)")
                 _progress(step, len(playlist_items), f"{filename} — conservé")
+                logger.info(
+                    "PIPELINE_AUDIO_ITEM_SKIP job=%s folder=%s filename=%s reason=no_dirty_bloc duration_ms=%s",
+                    job_id,
+                    folder_id,
+                    filename,
+                    int((time.time() - item_started_at) * 1000),
+                )
                 skipped.append(filename)
                 continue
 
@@ -2039,18 +2246,38 @@ def generate_audio_from_script(
                 mock=mock,
                 basic_tts=basic_tts,
                 llm_model=llm_model,
+                on_progress=lambda msg: _progress(step, len(playlist_items), msg),
             )
+            _progress(step, len(playlist_items), f"{filename} — upload audio ({break_mode})...")
             upload_blob(CONTAINER_AUDIOS, f"{azure_prefix}{filename}", final_bytes)
             try:
                 final_duration = _measure_duration_ms(final_bytes) / 1000
             except Exception:
                 final_duration = duration_sec if break_mode == "audioqapause_fallback" else len(final_bytes) / 4000
             logger.info(f"   ✅ {filename} : {final_duration:.1f}s uploadé ({break_mode})")
+            _progress(step, len(playlist_items), f"{filename} — terminé ({break_mode}, {final_duration:.1f}s)")
+            logger.info(
+                "PIPELINE_AUDIO_ITEM_DONE job=%s folder=%s filename=%s type=%s mode=%s final_duration=%.1f duration_ms=%s",
+                job_id,
+                folder_id,
+                filename,
+                file_type,
+                break_mode,
+                final_duration,
+                int((time.time() - item_started_at) * 1000),
+            )
             generated.append(filename)
             continue
 
         if not bloc:
             logger.info(f"   ⏭️ {filename}: bloc {bloc_num} introuvable, skip")
+            logger.info(
+                "PIPELINE_AUDIO_ITEM_SKIP job=%s folder=%s filename=%s reason=bloc_missing duration_ms=%s",
+                job_id,
+                folder_id,
+                filename,
+                int((time.time() - item_started_at) * 1000),
+            )
             skipped.append(filename)
             continue
 
@@ -2059,11 +2286,27 @@ def generate_audio_from_script(
         if not bloc["dirty"]:
             logger.info(f"   ⏭️ Bloc {bloc['bloc_number']} ({filename}) : non modifié, conservé")
             _progress(step, len(playlist_items), f"Bloc {bloc['bloc_number']}/7 — conservé (non modifié)")
+            logger.info(
+                "PIPELINE_AUDIO_ITEM_SKIP job=%s folder=%s filename=%s bloc=%s reason=clean_bloc duration_ms=%s",
+                job_id,
+                folder_id,
+                filename,
+                bloc["bloc_number"],
+                int((time.time() - item_started_at) * 1000),
+            )
             skipped.append(filename)
             continue
 
         if not bloc["text"].strip():
             logger.info(f"   ⏭️ Bloc {bloc['bloc_number']} : texte vide, skip")
+            logger.info(
+                "PIPELINE_AUDIO_ITEM_SKIP job=%s folder=%s filename=%s bloc=%s reason=empty_text duration_ms=%s",
+                job_id,
+                folder_id,
+                filename,
+                bloc["bloc_number"],
+                int((time.time() - item_started_at) * 1000),
+            )
             skipped.append(filename)
             continue
 
@@ -2081,6 +2324,7 @@ def generate_audio_from_script(
                 filename,
                 mock=mock,
                 basic_tts=basic_tts,
+                progress_callback=lambda msg: _progress(step, len(playlist_items), msg),
             )
             slide_audio_timings.extend(bloc_timings)
             slide_sync_files.append(filename)
@@ -2101,7 +2345,15 @@ def generate_audio_from_script(
             # mais acceptable pour des tests. L'audio est plus court que la
             # playlist cible (ex: 33 min de gTTS vs 45 min de bloc cours) —
             # le reste sera du silence côté playlist horodatée.
-            final_bytes = convert_to_speech_basic(bloc["text"])
+            final_bytes = convert_to_speech_basic(
+                bloc["text"],
+                progress_callback=lambda msg: _progress(
+                    step,
+                    len(playlist_items),
+                    f"Bloc {bloc['bloc_number']}/7 — {msg}",
+                ),
+                **_basic_tts_pipeline_retry_kwargs(),
+            )
         else:
             _progress(step, len(playlist_items), f"Bloc {bloc['bloc_number']}/7 — génération TTS ({len(bloc['text'].split())} mots)...")
             logger.info(f"   🎙️ Bloc {bloc['bloc_number']} ({filename}) — TTS en cours...")
@@ -2135,6 +2387,17 @@ def generate_audio_from_script(
         else:
             final_duration = _measure_duration_ms(final_bytes) / 1000
         logger.info(f"   ✅ {filename} : {final_duration:.1f}s uploadé")
+        logger.info(
+            "PIPELINE_AUDIO_ITEM_DONE job=%s folder=%s filename=%s type=cours bloc=%s final_duration=%.1f "
+            "words=%s duration_ms=%s",
+            job_id,
+            folder_id,
+            filename,
+            bloc["bloc_number"],
+            final_duration,
+            len(bloc["text"].split()),
+            int((time.time() - item_started_at) * 1000),
+        )
         generated.append(filename)
 
         # Marquer les segments contributeurs comme propres (dirty=0)
@@ -2171,7 +2434,16 @@ def generate_audio_from_script(
         )
 
     _progress(len(playlist_items), len(playlist_items), f"✅ Terminé — {len(generated)} générés, {len(skipped)} conservés")
-    logger.info(f"✅ generate_audio_from_script : {len(generated)} régénérés, {len(skipped)} conservés")
+    logger.info(
+        "PIPELINE_AUDIO_DONE job=%s folder=%s generated=%s skipped=%s slide_sync=%s slide_timings=%s duration_ms=%s",
+        job_id,
+        folder_id,
+        len(generated),
+        len(skipped),
+        bool(sync_slides),
+        len(slide_audio_timings),
+        int((time.time() - started_at) * 1000),
+    )
 
     return {
         "generated": len(generated),
@@ -2660,6 +2932,13 @@ def run_content_review(folder_id, on_progress=None, model=None):
         raise ValueError(f"Aucun content_generation_job pour folder {folder_id}")
 
     job_id = job["id"]
+    started_at = time.time()
+    logger.info(
+        "PIPELINE_REVIEW_START job=%s folder=%s model=%s",
+        job_id,
+        folder_id,
+        model,
+    )
     conn = get_db_connection()
     cursor = conn.cursor()
     # Sont éligibles à la révision : les segments completed dont reviewed=0.
@@ -2680,7 +2959,12 @@ def run_content_review(folder_id, on_progress=None, model=None):
     total = len(rows)
     if total == 0:
         _progress(0, 0, "Tous les segments déjà révisés — rien à faire.")
-        logger.info(f"📋 Review folder {folder_id} : aucun segment à réviser (tous reviewed=1)")
+        logger.info(
+            "PIPELINE_REVIEW_DONE job=%s folder=%s reviewed=0 failed=0 applied=0 rejected=0 duration_ms=%s reason=already_reviewed",
+            job_id,
+            folder_id,
+            int((time.time() - started_at) * 1000),
+        )
         return {
             "segments_reviewed": 0,
             "segments_failed": 0,
@@ -2689,7 +2973,13 @@ def run_content_review(folder_id, on_progress=None, model=None):
             "details": [],
         }
 
-    logger.info(f"📋 Review folder {folder_id} : {total} segment(s) à auditer")
+    logger.info(
+        "PIPELINE_REVIEW_PLAN job=%s folder=%s segments_to_review=%s groups=%s",
+        job_id,
+        folder_id,
+        total,
+        len(_REVIEW_RULE_GROUPS),
+    )
     rules_text = _load_review_rules()
 
     total_applied = 0
@@ -2698,10 +2988,21 @@ def run_content_review(folder_id, on_progress=None, model=None):
     details = []
 
     for step, row in enumerate(rows, start=1):
+        segment_started_at = time.time()
         seg_id, sub_idx, sub_part_name, passe, text_content = row
         label = f"sous-partie {sub_idx + 1} / passe {passe}"
         _progress(step, total, f"Audit {label} (5 salves)…")
-        logger.info(f"  🔎 Review segment {seg_id} ({label}) — 5 salves")
+        logger.info(
+            "PIPELINE_REVIEW_SEGMENT_START job=%s folder=%s segment_id=%s step=%s/%s sub_part=%s passe=%s words=%s",
+            job_id,
+            folder_id,
+            seg_id,
+            step,
+            total,
+            sub_idx + 1,
+            passe,
+            len((text_content or "").split()),
+        )
 
         current_text = text_content
         all_applied = []
@@ -2709,13 +3010,30 @@ def run_content_review(folder_id, on_progress=None, model=None):
         segment_error = None  # None = toutes les salves ont réussi jusqu'ici
 
         for group in _REVIEW_RULE_GROUPS:
+            group_started_at = time.time()
             group_label = group["label"]
+            logger.info(
+                "PIPELINE_REVIEW_GROUP_START job=%s folder=%s segment_id=%s group=%s rules=%s",
+                job_id,
+                folder_id,
+                seg_id,
+                group_label,
+                ",".join(group.get("rules") or []),
+            )
             new_text, applied, rejected, group_error = _review_group_chunks(
                 current_text, rules_text, group, model=model
             )
             if group_error:
                 segment_error = group_error
-                logger.warning(f"    ⚠️ Segment {seg_id} salve '{group_label}' : {group_error}")
+                logger.warning(
+                    "PIPELINE_REVIEW_GROUP_ERROR job=%s folder=%s segment_id=%s group=%s duration_ms=%s error=%s",
+                    job_id,
+                    folder_id,
+                    seg_id,
+                    group_label,
+                    int((time.time() - group_started_at) * 1000),
+                    group_error,
+                )
                 break
 
             current_text = new_text
@@ -2724,14 +3042,34 @@ def run_content_review(folder_id, on_progress=None, model=None):
 
             if applied:
                 logger.info(
-                    f"    ✏️  Salve '{group_label}' : {len(applied)} patch(es) appliqué(s), {len(rejected)} rejeté(s)"
+                    "PIPELINE_REVIEW_GROUP_DONE job=%s folder=%s segment_id=%s group=%s applied=%s rejected=%s duration_ms=%s",
+                    job_id,
+                    folder_id,
+                    seg_id,
+                    group_label,
+                    len(applied),
+                    len(rejected),
+                    int((time.time() - group_started_at) * 1000),
                 )
             elif rejected:
                 logger.info(
-                    f"    ⚠️ Salve '{group_label}' : {len(rejected)} patch(es) rejeté(s), segment laissé en l'état"
+                    "PIPELINE_REVIEW_GROUP_DONE job=%s folder=%s segment_id=%s group=%s applied=0 rejected=%s duration_ms=%s",
+                    job_id,
+                    folder_id,
+                    seg_id,
+                    group_label,
+                    len(rejected),
+                    int((time.time() - group_started_at) * 1000),
                 )
             else:
-                logger.info(f"    ✅ Salve '{group_label}' : conforme (0 violation)")
+                logger.info(
+                    "PIPELINE_REVIEW_GROUP_DONE job=%s folder=%s segment_id=%s group=%s applied=0 rejected=0 duration_ms=%s",
+                    job_id,
+                    folder_id,
+                    seg_id,
+                    group_label,
+                    int((time.time() - group_started_at) * 1000),
+                )
 
         # Écriture finale en DB (une seule transaction par segment)
         conn = get_db_connection()
@@ -2747,6 +3085,16 @@ def run_content_review(folder_id, on_progress=None, model=None):
             conn.close()
             total_failed += 1
             details.append({"segment_id": seg_id, "sub_idx": sub_idx, "passe": passe, "error": segment_error})
+            logger.warning(
+                "PIPELINE_REVIEW_SEGMENT_FAILED job=%s folder=%s segment_id=%s applied=%s rejected=%s duration_ms=%s error=%s",
+                job_id,
+                folder_id,
+                seg_id,
+                len(all_applied),
+                len(all_rejected),
+                int((time.time() - segment_started_at) * 1000),
+                segment_error,
+            )
             continue
 
         # Toutes les 5 salves ont réussi
@@ -2762,19 +3110,40 @@ def run_content_review(folder_id, on_progress=None, model=None):
                 (current_text, new_word_count, seg_id),
             )
             logger.info(
-                f"    ✏️  Segment {seg_id} : {len(all_applied)} patch(es) total sur 5 salves, {len(all_rejected)} rejeté(s)"
+                "PIPELINE_REVIEW_SEGMENT_PATCHED job=%s folder=%s segment_id=%s applied=%s rejected=%s new_words=%s",
+                job_id,
+                folder_id,
+                seg_id,
+                len(all_applied),
+                len(all_rejected),
+                new_word_count,
             )
         else:
             cursor.execute(
                 "UPDATE content_generation_segments SET reviewed = 1, review_error = NULL WHERE id = ?",
                 (seg_id,),
             )
-            logger.info(f"    ✅ Segment {seg_id} : conforme sur les 5 salves")
+            logger.info(
+                "PIPELINE_REVIEW_SEGMENT_CLEAN job=%s folder=%s segment_id=%s rejected=%s",
+                job_id,
+                folder_id,
+                seg_id,
+                len(all_rejected),
+            )
         conn.commit()
         conn.close()
 
         total_applied += len(all_applied)
         total_rejected += len(all_rejected)
+        logger.info(
+            "PIPELINE_REVIEW_SEGMENT_DONE job=%s folder=%s segment_id=%s applied=%s rejected=%s duration_ms=%s",
+            job_id,
+            folder_id,
+            seg_id,
+            len(all_applied),
+            len(all_rejected),
+            int((time.time() - segment_started_at) * 1000),
+        )
         details.append(
             {"segment_id": seg_id, "sub_idx": sub_idx, "passe": passe, "applied": all_applied, "rejected": all_rejected}
         )
@@ -2785,9 +3154,15 @@ def run_content_review(folder_id, on_progress=None, model=None):
         f"Terminé : {total_applied} appliqués, {total_rejected} rejetés, {total_failed} en erreur",
     )
     logger.info(
-        f"✅ Review folder {folder_id} : {total - total_failed}/{total} audités, "
-        f"{total_applied} patch(es) appliqué(s), {total_rejected} rejeté(s), "
-        f"{total_failed} segment(s) en erreur reviewer"
+        "PIPELINE_REVIEW_DONE job=%s folder=%s reviewed=%s/%s applied=%s rejected=%s failed=%s duration_ms=%s",
+        job_id,
+        folder_id,
+        total - total_failed,
+        total,
+        total_applied,
+        total_rejected,
+        total_failed,
+        int((time.time() - started_at) * 1000),
     )
     return {
         "segments_reviewed": total - total_failed,
