@@ -427,15 +427,51 @@ function eventLabel(eventType) {
   return labels[eventType] || String(eventType || 'Événement').replace(/_/g, ' ')
 }
 
+function eventData(event) {
+  if (!event) return {}
+  const raw = event.data ?? event.data_json
+  if (!raw) return {}
+  if (typeof raw === 'object') return raw
+  try {
+    return JSON.parse(raw)
+  } catch {
+    return {}
+  }
+}
+
+function healthCheckLabel(key) {
+  const labels = {
+    segments_completed: 'Segments texte générés',
+    cg_jobs_completed: 'Jobs texte terminés',
+    docx_buildable: 'Word final téléchargeable',
+    pre_review_snapshotted: 'Snapshot avant review',
+    review_consistent: 'Review conformité',
+    audio_tts_files: 'Audio TTS à jour',
+    module_persistant: 'Module persistant',
+    health_error: 'Audit final',
+  }
+  return labels[key] || String(key || '').replace(/_/g, ' ')
+}
+
 function PipelineDiagnosticPanel({ diagnostic, loading, error, onRefresh }) {
   const health = diagnostic?.health
   const folders = diagnostic?.folders || []
   const events = diagnostic?.events || []
-  // events[] arrive déjà du plus ancien au plus récent depuis le backend
-  // (list_pipeline_events fait `for row in reversed(rows)`). On garde cet
-  // ordre et on prend les 8 derniers : du plus ancien (haut) au plus récent (bas).
-  const recentEvents = events.slice(-8)
   const [selectedEvent, setSelectedEvent] = useState(null)
+  const [eventFilter, setEventFilter] = useState('audio')
+  const audioEvents = events.filter(event => event.step === 'audio' || String(event.event_type || '').startsWith('audio_'))
+  const reviewEvents = events.filter(event => event.step === 'review' || String(event.event_type || '').includes('review'))
+  const visibleEvents = (
+    eventFilter === 'audio' ? audioEvents
+      : eventFilter === 'review' ? reviewEvents
+      : events
+  ).slice(-18)
+  const latestAudioEvent = audioEvents[audioEvents.length - 1]
+  const latestProgressEvent = [...audioEvents].reverse().find(event => event.event_type === 'audio_progress')
+  const latestProgressData = eventData(latestProgressEvent)
+  const latestStep = Number(latestProgressData.step || 0)
+  const latestTotal = Number(latestProgressData.total || 0)
+  const playlistPct = latestTotal > 0 ? Math.min(100, Math.round((latestStep / latestTotal) * 100)) : null
   const totals = folders.reduce((acc, folder) => ({
     words: acc.words + (folder.total_words || 0),
     segments: acc.segments + (folder.segments_completed || 0),
@@ -443,8 +479,11 @@ function PipelineDiagnosticPanel({ diagnostic, loading, error, onRefresh }) {
     dirty: acc.dirty + (folder.dirty_segments || 0),
     reviewErrors: acc.reviewErrors + (folder.review_errors || 0),
   }), { words: 0, segments: 0, reviewed: 0, dirty: 0, reviewErrors: 0 })
+  const audioReady = Math.max(0, totals.segments - totals.dirty)
+  const audioPct = totals.segments > 0 ? Math.round((audioReady / totals.segments) * 100) : 0
   const healthColor = health?.ok ? '#34d399' : health?.blocking?.length ? '#f87171' : '#fbbf24'
   const healthIcon = health?.ok ? 'verified' : health?.blocking?.length ? 'error_outline' : 'warning_amber'
+  const healthEntries = Object.entries(health?.checks || {})
 
   return (
     <div style={{
@@ -485,7 +524,7 @@ function PipelineDiagnosticPanel({ diagnostic, loading, error, onRefresh }) {
           <Icon name="article" /> {totals.words.toLocaleString('fr-FR')} mots
         </span>
         <span style={{ ...S.tag(totals.dirty ? 'amber' : 'green'), padding: '5px 10px' }}>
-          <Icon name="graphic_eq" /> {totals.dirty} segment{totals.dirty > 1 ? 's' : ''} audio dirty
+          <Icon name="graphic_eq" /> {totals.dirty} segment{totals.dirty > 1 ? 's' : ''} audio à générer
         </span>
         {totals.reviewErrors > 0 && (
           <span style={{ ...S.tag('red'), padding: '5px 10px' }}>
@@ -494,6 +533,106 @@ function PipelineDiagnosticPanel({ diagnostic, loading, error, onRefresh }) {
         )}
       </div>
 
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '12px', marginBottom: '14px' }}>
+        <div style={{ padding: '12px', borderRadius: '8px', background: 'rgba(15,23,42,0.45)', border: '1px solid rgba(148,163,184,0.12)' }}>
+          <div style={{ fontSize: '11px', color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '6px' }}>
+            En cours maintenant
+          </div>
+          <div style={{ fontSize: '13px', color: latestAudioEvent ? '#cbd5e1' : '#64748b', lineHeight: 1.45 }}>
+            {latestAudioEvent ? (
+              <>
+                <strong style={{ color: eventTone(latestAudioEvent.status).color }}>{eventLabel(latestAudioEvent.event_type)}</strong>
+                {latestAudioEvent.folder_id ? <span style={{ color: '#64748b' }}> · dossier {latestAudioEvent.folder_id}</span> : null}
+                {latestAudioEvent.message ? <span> · {latestAudioEvent.message}</span> : null}
+                {latestAudioEvent.error ? <span style={{ color: '#f87171' }}> · {latestAudioEvent.error}</span> : null}
+              </>
+            ) : (
+              'Aucun événement audio reçu.'
+            )}
+          </div>
+          {playlistPct !== null && (
+            <div style={{ marginTop: '10px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', color: '#94a3b8', marginBottom: '5px' }}>
+                <span>Playlist TTS</span>
+                <span>{latestStep}/{latestTotal}</span>
+              </div>
+              <div style={{ height: '6px', borderRadius: '999px', background: 'rgba(148,163,184,0.12)', overflow: 'hidden' }}>
+                <div style={{ width: `${playlistPct}%`, height: '100%', background: '#fbbf24' }} />
+              </div>
+            </div>
+          )}
+        </div>
+
+        <div style={{ padding: '12px', borderRadius: '8px', background: 'rgba(15,23,42,0.45)', border: '1px solid rgba(148,163,184,0.12)' }}>
+          <div style={{ fontSize: '11px', color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '6px' }}>
+            Avancement audio
+          </div>
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: '8px', marginBottom: '8px' }}>
+            <strong style={{ color: totals.dirty ? '#fbbf24' : '#34d399', fontSize: '22px' }}>{audioPct}%</strong>
+            <span style={{ color: '#94a3b8', fontSize: '12px' }}>
+              {audioReady}/{totals.segments || 0} segments audio OK
+            </span>
+          </div>
+          <div style={{ height: '7px', borderRadius: '999px', background: 'rgba(148,163,184,0.12)', overflow: 'hidden' }}>
+            <div style={{ width: `${audioPct}%`, height: '100%', background: totals.dirty ? '#fbbf24' : '#34d399' }} />
+          </div>
+        </div>
+      </div>
+
+      {folders.length > 0 && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '14px' }}>
+          {folders.map(folder => {
+            const folderEvents = audioEvents.filter(event => event.folder_id === folder.folder_id)
+            const lastFolderEvent = folderEvents[folderEvents.length - 1]
+            const pending = folder.dirty_segments || 0
+            const completed = folder.segments_completed || 0
+            const ready = Math.max(0, completed - pending)
+            const pct = completed > 0 ? Math.round((ready / completed) * 100) : 0
+            const statusColor = pending ? '#fbbf24' : '#34d399'
+            return (
+              <div key={folder.folder_id} style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+                gap: '12px',
+                alignItems: 'center',
+                padding: '10px 12px',
+                borderRadius: '8px',
+                border: '1px solid rgba(148,163,184,0.12)',
+                background: 'rgba(15,23,42,0.32)',
+              }}>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ color: '#e2e8f0', fontWeight: 700, fontSize: '12px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {folder.name || `Journée ${folder.position + 1}`}
+                  </div>
+                  <div style={{ color: '#64748b', fontSize: '11px', marginTop: '2px' }}>
+                    {Number(folder.total_words || 0).toLocaleString('fr-FR')} mots · {folder.reviewed_segments || 0}/{completed || 0} revus
+                  </div>
+                </div>
+                <div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', color: '#94a3b8', marginBottom: '5px' }}>
+                    <span style={{ color: statusColor }}>{pending ? `${pending} à générer` : 'Audio OK'}</span>
+                    <span>{ready}/{completed || 0}</span>
+                  </div>
+                  <div style={{ height: '5px', borderRadius: '999px', background: 'rgba(148,163,184,0.12)', overflow: 'hidden' }}>
+                    <div style={{ width: `${pct}%`, height: '100%', background: statusColor }} />
+                  </div>
+                </div>
+                <div style={{ color: '#94a3b8', fontSize: '11px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {lastFolderEvent ? (
+                    <>
+                      <Icon name={eventTone(lastFolderEvent.status).icon} style={{ color: eventTone(lastFolderEvent.status).color, fontSize: '12px' }} />{' '}
+                      {formatEventTime(lastFolderEvent.created_at)} · {lastFolderEvent.message || eventLabel(lastFolderEvent.event_type)}
+                    </>
+                  ) : (
+                    'Aucun événement audio pour ce dossier'
+                  )}
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      )}
+
       {health && !health.ok && (
         <div style={{
           color: healthColor,
@@ -501,21 +640,63 @@ function PipelineDiagnosticPanel({ diagnostic, loading, error, onRefresh }) {
           lineHeight: 1.45,
           marginBottom: '12px',
         }}>
-          {health.blocking?.length > 0 && <>Bloquants : {health.blocking.join(', ')}</>}
+          {health.blocking?.length > 0 && <>Bloquants : {health.blocking.map(healthCheckLabel).join(', ')}</>}
           {health.blocking?.length > 0 && health.warnings?.length > 0 && ' · '}
-          {health.warnings?.length > 0 && <>Warnings : {health.warnings.join(', ')}</>}
+          {health.warnings?.length > 0 && <>Warnings : {health.warnings.map(healthCheckLabel).join(', ')}</>}
         </div>
       )}
 
-      <div style={{ fontSize: '12px', color: '#94a3b8', marginBottom: '8px' }}>
-        <strong style={{ color: '#cbd5e1' }}>{totals.reviewed}/{totals.segments}</strong> segments revus · derniers événements
+      {healthEntries.length > 0 && (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))', gap: '8px', marginBottom: '14px' }}>
+          {healthEntries.map(([key, check]) => (
+            <div key={key} style={{
+              padding: '9px 10px',
+              borderRadius: '8px',
+              background: check?.ok ? 'rgba(16,185,129,0.07)' : 'rgba(239,68,68,0.07)',
+              border: `1px solid ${check?.ok ? 'rgba(16,185,129,0.18)' : 'rgba(239,68,68,0.18)'}`,
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: check?.ok ? '#34d399' : '#f87171', fontSize: '12px', fontWeight: 700, marginBottom: '3px' }}>
+                <Icon name={check?.ok ? 'check_circle' : 'error_outline'} style={{ fontSize: '13px' }} />
+                {healthCheckLabel(key)}
+              </div>
+              <div style={{ color: '#94a3b8', fontSize: '11px', lineHeight: 1.35 }}>
+                {check?.detail || 'Pas de détail disponible'}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', marginBottom: '8px' }}>
+        <div style={{ fontSize: '12px', color: '#94a3b8', flex: 1, minWidth: 0 }}>
+          <strong style={{ color: '#cbd5e1' }}>{totals.reviewed}/{totals.segments}</strong> segments revus · journal détaillé
+        </div>
+        {[
+          ['audio', 'Audio'],
+          ['review', 'Review'],
+          ['all', 'Tout'],
+        ].map(([value, label]) => (
+          <button
+            key={value}
+            type="button"
+            onClick={() => setEventFilter(value)}
+            style={{
+              ...S.btn(eventFilter === value ? 'ghost' : 'neutral'),
+              padding: '4px 9px',
+              fontSize: '11px',
+              opacity: eventFilter === value ? 1 : 0.72,
+            }}
+          >
+            {label}
+          </button>
+        ))}
       </div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: '7px' }}>
-        {recentEvents.length === 0 ? (
+        {visibleEvents.length === 0 ? (
           <div style={{ fontSize: '12px', color: '#64748b' }}>
-            Aucun événement structuré encore enregistré pour cette pipeline.
+            Aucun événement dans ce filtre.
           </div>
-        ) : recentEvents.map(event => {
+        ) : visibleEvents.map(event => {
           const tone = eventTone(event.status)
           const duration = formatDuration(event.duration_ms)
           return (
@@ -562,14 +743,13 @@ function EventDetailModal({ event, onClose }) {
   const tone = eventTone(event.status)
   let dataPreview = null
   try {
-    const parsed = typeof event.data_json === 'string' && event.data_json
-      ? JSON.parse(event.data_json)
-      : event.data_json
+    const raw = event.data ?? event.data_json
+    const parsed = typeof raw === 'string' && raw ? JSON.parse(raw) : raw
     if (parsed && Object.keys(parsed).length > 0) {
       dataPreview = JSON.stringify(parsed, null, 2)
     }
   } catch {
-    dataPreview = String(event.data_json || '')
+    dataPreview = String((event.data ?? event.data_json) || '')
   }
 
   return (
@@ -630,7 +810,7 @@ function EventDetailModal({ event, onClose }) {
         {event.message && (
           <div style={{ marginBottom: '14px' }}>
             <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.06em', color: '#64748b', marginBottom: '4px' }}>Message</div>
-            <div style={{ fontSize: '13px', color: '#cbd5e1', lineHeight: 1.5, padding: '10px 12px', background: 'rgba(167,139,250,0.06)', borderLeft: '3px solid rgba(167,139,250,0.4)', borderRadius: '6px' }}>
+            <div style={{ fontSize: '13px', color: '#cbd5e1', lineHeight: 1.5, padding: '10px 12px', background: 'rgba(167,139,250,0.06)', border: '1px solid rgba(167,139,250,0.22)', borderRadius: '6px' }}>
               {event.message}
             </div>
           </div>
@@ -639,7 +819,7 @@ function EventDetailModal({ event, onClose }) {
         {event.error && (
           <div style={{ marginBottom: '14px' }}>
             <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.06em', color: '#f87171', marginBottom: '4px' }}>Erreur</div>
-            <div style={{ fontSize: '13px', color: '#fecaca', lineHeight: 1.5, padding: '10px 12px', background: 'rgba(239,68,68,0.08)', borderLeft: '3px solid #f87171', borderRadius: '6px', fontFamily: 'monospace', wordBreak: 'break-word' }}>
+            <div style={{ fontSize: '13px', color: '#fecaca', lineHeight: 1.5, padding: '10px 12px', background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(248,113,113,0.32)', borderRadius: '6px', fontFamily: 'monospace', wordBreak: 'break-word' }}>
               {event.error}
             </div>
           </div>

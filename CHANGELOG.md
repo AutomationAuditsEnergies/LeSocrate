@@ -2,6 +2,22 @@
 
 ## 2026-05-05
 
+### feat: refonte du panneau diagnostic pipeline (FormationPipeline.jsx)
+
+`PipelineDiagnosticPanel` enrichi pour rendre le suivi de la synthèse audio plus
+lisible :
+
+- Carte "En cours maintenant" — dernier événement audio + barre de progression
+  playlist TTS (step/total parsé depuis `audio_progress`).
+- Carte "Audio prêt" — ratio segments propres / total avec barre verte.
+- Filtres événements (Audio / Review / Tout) — par défaut sur Audio, jusqu'à
+  18 événements affichés (au lieu de 8).
+- Audit santé : entrées (`segments_completed`, `audio_tts_files`,
+  `pre_review_snapshotted`, `module_persistant`, etc.) traduites en libellés FR
+  via `healthCheckLabel`.
+- Helper `eventData(event)` qui parse `data` ou `data_json` (string ou objet).
+- Renommage `audio dirty` → `audio à générer` dans le bandeau totaux.
+
 ### fix: `_build_course_blocs_from_segments` ne propageait pas `llm_model` → appel Anthropic résiduel
 
 Dans `generate_audio_from_script()`, l'appel à `_build_course_blocs_from_segments` n'incluait pas le
