@@ -2,6 +2,26 @@
 
 ## 2026-05-05
 
+### fix: logs Azure noyés par le SDK — root logger DEBUG → INFO + SDK museli
+
+`utils/logger.py` configurait `logging.basicConfig(level=DEBUG)`, ce qui
+allumait *tous* les loggers du système. Conséquence : les SDK Azure
+(`azure.core.pipeline.policies.http_logging_policy`,
+`urllib3.connectionpool`, etc.) déballaient chaque requête HTTP avec
+headers + corps — ~30 lignes par lecture de container Blob. Les logs
+métier `PIPELINE_*` ajoutés dans le commit précédent étaient donc
+illisibles dans Azure App Service.
+
+Fix :
+
+- Root logger en `INFO` par défaut, override possible via `LOG_LEVEL`
+  (env var App Service) pour debug ponctuel.
+- Liste explicite de 11 loggers tiers verbeux (`azure*`, `urllib3*`,
+  `msrest`, `msal`, `openai`, `httpx`) forcés à `WARNING` après
+  `basicConfig` — ils ne parlent plus que sur erreur réelle.
+- `force=True` sur `basicConfig` pour re-configurer même si un import
+  l'a déjà appelé.
+
 ### feat: observabilité Azure + retries gTTS bornés + relances review propres
 
 Trois axes pour rendre la pipeline débloquable et diagnostiquable depuis les
