@@ -1,15 +1,18 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { apiUrl } from '../api'
 
-const Icon = ({ name, className = '' }) => (
-  <span className={`material-icons ${className}`} style={{ fontSize: 'inherit' }}>{name}</span>
+const Icon = ({ name, className = '', style = {} }) => (
+  <span className={`material-icons ${className}`} style={{ fontSize: 'inherit', ...style }}>{name}</span>
 )
 
 // ─── Statuts qui nécessitent un polling ───────────────────────────────────────
 const POLLING_STATUSES = new Set([
   'reac_fetching', 'kb_building', 'global_generating', 'daily_splitting',
-  'tts_launched', 'audio_launched'
+  'tts_launched', 'audio_running'
 ])
+
+const AUDIO_DONE_STATUSES = new Set(['audio_completed', 'audio_launched'])
+const AUDIO_ACTIVE_STATUSES = new Set(['audio_running'])
 
 // ─── Mapping statut → étape active (0-indexed) ────────────────────────────────
 function statusToStep(status, job = null) {
@@ -30,8 +33,9 @@ function statusToStep(status, job = null) {
   //    le status. audio_error / audio_launched / tts_launched / etc. ne ────
   //    peuvent pas faire régresser au-delà de ce qui a été validé. ─────────
 
-  // Étape 7 (synthèse TTS audio en cours)
-  if (status === 'audio_launched') return 6
+  // Étape 7 (synthèse TTS audio)
+  if (AUDIO_DONE_STATUSES.has(status)) return 7
+  if (AUDIO_ACTIVE_STATUSES.has(status)) return 6
 
   // Étape 6 (génération texte cours) — texte lancé OU audio en erreur
   // (audio_error = on était à l'étape 7 ; les textes restent validés et
@@ -364,6 +368,169 @@ const S = {
   }),
 }
 
+function formatDuration(ms) {
+  if (!ms) return null
+  const totalSeconds = Math.max(1, Math.round(ms / 1000))
+  if (totalSeconds < 60) return `${totalSeconds}s`
+  const minutes = Math.floor(totalSeconds / 60)
+  const seconds = totalSeconds % 60
+  if (minutes < 60) return `${minutes}m${seconds ? ` ${seconds}s` : ''}`
+  const hours = Math.floor(minutes / 60)
+  const rest = minutes % 60
+  return `${hours}h${rest ? ` ${rest}m` : ''}`
+}
+
+function formatEventTime(value) {
+  if (!value) return ''
+  const date = new Date(String(value).replace(' ', 'T'))
+  if (Number.isNaN(date.getTime())) return String(value).slice(11, 16) || String(value)
+  return date.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })
+}
+
+function eventTone(status) {
+  if (status === 'completed') return { color: '#34d399', icon: 'check_circle' }
+  if (status === 'running') return { color: '#fbbf24', icon: 'hourglass_empty' }
+  if (status === 'error' || status === 'failed') return { color: '#f87171', icon: 'error_outline' }
+  return { color: '#a78bfa', icon: 'radio_button_unchecked' }
+}
+
+function eventLabel(eventType) {
+  const labels = {
+    pipeline_started: 'Pipeline démarrée',
+    pipeline_completed: 'Pipeline terminée',
+    step_started: 'Étape démarrée',
+    step_completed: 'Étape terminée',
+    step_failed: 'Étape échouée',
+    review_started: 'Review démarrée',
+    review_completed: 'Review terminée',
+    review_failed: 'Review échouée',
+    audio_started: 'Audio démarré',
+    audio_progress: 'Progression audio',
+    audio_folder_started: 'Journée audio démarrée',
+    audio_folder_completed: 'Journée audio terminée',
+    audio_folder_failed: 'Journée audio échouée',
+    audio_completed: 'Audio terminé',
+    audio_failed: 'Audio échoué',
+    continue_after_text_started: 'Reprise aval démarrée',
+    continue_after_text_completed: 'Reprise aval terminée',
+    continue_after_text_failed: 'Reprise aval échouée',
+  }
+  return labels[eventType] || String(eventType || 'Événement').replace(/_/g, ' ')
+}
+
+function PipelineDiagnosticPanel({ diagnostic, loading, error, onRefresh }) {
+  const health = diagnostic?.health
+  const folders = diagnostic?.folders || []
+  const events = diagnostic?.events || []
+  const recentEvents = events.slice(-8).reverse()
+  const totals = folders.reduce((acc, folder) => ({
+    words: acc.words + (folder.total_words || 0),
+    segments: acc.segments + (folder.segments_completed || 0),
+    reviewed: acc.reviewed + (folder.reviewed_segments || 0),
+    dirty: acc.dirty + (folder.dirty_segments || 0),
+    reviewErrors: acc.reviewErrors + (folder.review_errors || 0),
+  }), { words: 0, segments: 0, reviewed: 0, dirty: 0, reviewErrors: 0 })
+  const healthColor = health?.ok ? '#34d399' : health?.blocking?.length ? '#f87171' : '#fbbf24'
+  const healthIcon = health?.ok ? 'verified' : health?.blocking?.length ? 'error_outline' : 'warning_amber'
+
+  return (
+    <div style={{
+      marginTop: '18px',
+      padding: '14px',
+      borderRadius: '10px',
+      border: '1px solid rgba(148,163,184,0.16)',
+      background: 'rgba(15,23,42,0.34)',
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '12px', flexWrap: 'wrap' }}>
+        <div style={{ fontSize: '13px', color: '#e2e8f0', fontWeight: 700, flex: 1, minWidth: 0 }}>
+          <Icon name="analytics" /> Diagnostic pipeline
+        </div>
+        <button
+          type="button"
+          onClick={onRefresh}
+          disabled={loading}
+          style={{ ...S.btn('ghost'), padding: '5px 10px', fontSize: '11px' }}
+        >
+          <Icon name={loading ? 'hourglass_empty' : 'refresh'} /> Actualiser
+        </button>
+      </div>
+
+      {error && (
+        <div style={{ color: '#f87171', fontSize: '12px', marginBottom: '10px' }}>
+          <Icon name="error_outline" /> {error}
+        </div>
+      )}
+
+      <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '12px' }}>
+        <span style={{ ...S.tag(health?.ok ? 'green' : health?.blocking?.length ? 'red' : 'amber'), padding: '5px 10px' }}>
+          <Icon name={healthIcon} /> Audit {health?.ok ? 'OK' : health?.blocking?.length ? 'bloquant' : 'à surveiller'}
+        </span>
+        <span style={{ ...S.tag('violet'), padding: '5px 10px' }}>
+          <Icon name="folder" /> {folders.length} journée{folders.length > 1 ? 's' : ''}
+        </span>
+        <span style={{ ...S.tag('violet'), padding: '5px 10px' }}>
+          <Icon name="article" /> {totals.words.toLocaleString('fr-FR')} mots
+        </span>
+        <span style={{ ...S.tag(totals.dirty ? 'amber' : 'green'), padding: '5px 10px' }}>
+          <Icon name="graphic_eq" /> {totals.dirty} segment{totals.dirty > 1 ? 's' : ''} audio dirty
+        </span>
+        {totals.reviewErrors > 0 && (
+          <span style={{ ...S.tag('red'), padding: '5px 10px' }}>
+            <Icon name="report" /> {totals.reviewErrors} erreur{totals.reviewErrors > 1 ? 's' : ''} review
+          </span>
+        )}
+      </div>
+
+      {health && !health.ok && (
+        <div style={{
+          color: healthColor,
+          fontSize: '12px',
+          lineHeight: 1.45,
+          marginBottom: '12px',
+        }}>
+          {health.blocking?.length > 0 && <>Bloquants : {health.blocking.join(', ')}</>}
+          {health.blocking?.length > 0 && health.warnings?.length > 0 && ' · '}
+          {health.warnings?.length > 0 && <>Warnings : {health.warnings.join(', ')}</>}
+        </div>
+      )}
+
+      <div style={{ fontSize: '12px', color: '#94a3b8', marginBottom: '8px' }}>
+        <strong style={{ color: '#cbd5e1' }}>{totals.reviewed}/{totals.segments}</strong> segments revus · derniers événements
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '7px' }}>
+        {recentEvents.length === 0 ? (
+          <div style={{ fontSize: '12px', color: '#64748b' }}>
+            Aucun événement structuré encore enregistré pour cette pipeline.
+          </div>
+        ) : recentEvents.map(event => {
+          const tone = eventTone(event.status)
+          const duration = formatDuration(event.duration_ms)
+          return (
+            <div key={event.id} style={{
+              display: 'grid',
+              gridTemplateColumns: '54px minmax(0, 1fr) auto',
+              gap: '8px',
+              alignItems: 'center',
+              fontSize: '12px',
+              color: '#cbd5e1',
+            }}>
+              <span style={{ color: '#64748b' }}>{formatEventTime(event.created_at)}</span>
+              <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                <Icon name={tone.icon} style={{ color: tone.color, fontSize: '13px' }} />{' '}
+                <strong style={{ color: tone.color }}>{eventLabel(event.event_type)}</strong>
+                {event.folder_id ? <span style={{ color: '#64748b' }}> · dossier {event.folder_id}</span> : null}
+                {event.message ? <span style={{ color: '#94a3b8' }}> · {event.message}</span> : null}
+                {event.error ? <span style={{ color: '#f87171' }}> · {event.error}</span> : null}
+              </span>
+              {duration && <span style={{ color: '#64748b' }}>{duration}</span>}
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
 // ─── Stepper horizontal ───────────────────────────────────────────────────────
 function Stepper({ currentStep, status }) {
   return (
@@ -404,7 +571,7 @@ function Stepper({ currentStep, status }) {
 // ─── Carte d'un job existant ──────────────────────────────────────────────────
 function JobCard({ job, onSelect, selected }) {
   const step = statusToStep(job.status, job)
-  const statusColor = job.status === 'audio_launched' ? 'green'
+  const statusColor = AUDIO_DONE_STATUSES.has(job.status) ? 'green'
     : (job.status === 'error' || job.status === 'audio_error') ? 'red'
     : POLLING_STATUSES.has(job.status) ? 'amber'
     : 'violet'
@@ -1074,7 +1241,7 @@ function StepBlock({ stepIndex, currentStep, status, title, icon, children }) {
           {title}
         </span>
         {done && <span style={S.tag('green')}>Terminé</span>}
-        {active && POLLING_STATUSES.has(status) && status !== 'audio_launched' && <span style={S.tag('amber')}><Icon name="hourglass_empty" /> En cours…</span>}
+        {active && POLLING_STATUSES.has(status) && !AUDIO_DONE_STATUSES.has(status) && <span style={S.tag('amber')}><Icon name="hourglass_empty" /> En cours…</span>}
       </div>
       {(active || done) && children}
     </div>
@@ -1110,6 +1277,11 @@ export default function FormationPipeline() {
   // États étape 6 — Synthèse audio Fish Audio
   const [launchingAudio, setLaunchingAudio] = useState(false)
   const [audioError, setAudioError] = useState('')
+  const [continuingAfterTextFolders, setContinuingAfterTextFolders] = useState({})
+  const [continueAfterTextError, setContinueAfterTextError] = useState('')
+  const [pipelineDiagnostic, setPipelineDiagnostic] = useState(null)
+  const [pipelineDiagnosticLoading, setPipelineDiagnosticLoading] = useState(false)
+  const [pipelineDiagnosticError, setPipelineDiagnosticError] = useState('')
 
   // Module persistant lié à ce job (créé automatiquement à la fin de la pipeline).
   // Fetché depuis /api/hr/formation-modules, filtré par source_pipeline_job_id.
@@ -1176,15 +1348,36 @@ export default function FormationPipeline() {
     } catch (e) { /* silent */ }
   }, [])
 
+  const fetchPipelineDiagnostic = useCallback(async (jobId, { silent = false } = {}) => {
+    if (!jobId) return
+    if (!silent) setPipelineDiagnosticLoading(true)
+    setPipelineDiagnosticError('')
+    try {
+      const resp = await fetch(apiUrl(`/api/formation/${jobId}/diagnostic?events_limit=80`), { credentials: 'include' })
+      const data = await resp.json()
+      if (resp.ok) {
+        setPipelineDiagnostic(data)
+      } else {
+        setPipelineDiagnosticError(data.error || 'Diagnostic indisponible')
+      }
+    } catch {
+      setPipelineDiagnosticError('Erreur réseau diagnostic')
+    } finally {
+      if (!silent) setPipelineDiagnosticLoading(false)
+    }
+  }, [])
+
   // Poll l'auto-pilot toutes les 5s tant qu'il tourne
   useEffect(() => {
     if (!selectedJobId) return
     fetchAutoPilotStatus(selectedJobId)
+    fetchPipelineDiagnostic(selectedJobId, { silent: true })
     const interval = setInterval(() => {
       fetchAutoPilotStatus(selectedJobId)
+      fetchPipelineDiagnostic(selectedJobId, { silent: true })
     }, 5000)
     return () => clearInterval(interval)
-  }, [selectedJobId, fetchAutoPilotStatus])
+  }, [selectedJobId, fetchAutoPilotStatus, fetchPipelineDiagnostic])
 
   // ─── Fetch module lié au job courant ──────────────────────────────────────
   const fetchLinkedModule = useCallback(async (jobId) => {
@@ -1224,9 +1417,9 @@ export default function FormationPipeline() {
           if (!POLLING_STATUSES.has(data.status)) {
             clearInterval(pollingRef.current)
           }
-          // Quand la pipeline atteint audio_launched, un module est auto-créé côté
+          // Quand la pipeline atteint l'état audio final, un module est auto-créé côté
           // backend. On le récupère pour l'afficher dans le bloc Synthèse TTS.
-          if (data.status === 'audio_launched') {
+          if (AUDIO_DONE_STATUSES.has(data.status)) {
             fetchLinkedModule(selectedJobId)
           }
         }
@@ -1315,7 +1508,7 @@ export default function FormationPipeline() {
   // Fetch dès que la génération texte a été lancée, puis poll pendant qu'elle tourne.
   useEffect(() => {
     if (!job || !selectedJobId) return
-    if (!['tts_launched', 'audio_launched', 'audio_error'].includes(job.status)) return
+    if (!['tts_launched', 'audio_running', 'audio_completed', 'audio_launched', 'audio_error'].includes(job.status)) return
     fetchContentFolders(selectedJobId)
     // Poll toutes les 3s tant qu'au moins un dossier n'a pas fini son texte
     const interval = setInterval(() => {
@@ -1356,6 +1549,39 @@ export default function FormationPipeline() {
       setActionError('Erreur réseau')
     } finally {
       setResumingContent(false)
+    }
+  }
+
+  const handleContinueAfterText = async (folderId) => {
+    setContinueAfterTextError('')
+    setContinuingAfterTextFolders(prev => ({ ...prev, [folderId]: true }))
+    try {
+      const resp = await fetch(
+        apiUrl(`/api/formation/${selectedJobId}/content/${folderId}/continue-after-text`),
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({
+            model: job?.auto_pilot_model,
+            max_slides: 60,
+            pace: 'normal',
+          }),
+        },
+      )
+      const data = await resp.json()
+      if (resp.status !== 202 || data.error) {
+        setContinueAfterTextError(data.error || `Erreur ${resp.status}`)
+        setContinuingAfterTextFolders(prev => { const n = { ...prev }; delete n[folderId]; return n })
+        return
+      }
+      await fetchJob(selectedJobId)
+      await fetchContentFolders(selectedJobId)
+      await fetchVolumeAudit(selectedJobId)
+      await fetchPipelineDiagnostic(selectedJobId, { silent: true })
+    } catch {
+      setContinueAfterTextError('Erreur réseau')
+      setContinuingAfterTextFolders(prev => { const n = { ...prev }; delete n[folderId]; return n })
     }
   }
 
@@ -1447,6 +1673,35 @@ export default function FormationPipeline() {
       // Silencieux : endpoint optionnel
     }
   }, [])
+
+  useEffect(() => {
+    const ids = Object.keys(continuingAfterTextFolders)
+    if (ids.length === 0 || !selectedJobId) return
+    const interval = setInterval(() => {
+      fetchJob(selectedJobId)
+      fetchContentFolders(selectedJobId)
+      fetchVolumeAudit(selectedJobId)
+      fetchPipelineDiagnostic(selectedJobId, { silent: true })
+    }, 4000)
+    return () => clearInterval(interval)
+  }, [continuingAfterTextFolders, selectedJobId, fetchJob, fetchContentFolders, fetchVolumeAudit, fetchPipelineDiagnostic])
+
+  useEffect(() => {
+    setContinuingAfterTextFolders(prev => {
+      const next = { ...prev }
+      let changed = false
+      for (const f of contentFolders) {
+        const processed = (f.segments_reviewed || 0) + (f.segments_review_errors || 0)
+        const reviewDone = f.segments_completed > 0 && processed >= f.segments_completed
+        const audioClean = (f.dirty_segments || 0) === 0
+        if (next[f.folder_id] && reviewDone && audioClean) {
+          delete next[f.folder_id]
+          changed = true
+        }
+      }
+      return changed ? next : prev
+    })
+  }, [contentFolders])
 
   // Fetch dès qu'au moins une journée est completed
   useEffect(() => {
@@ -1659,6 +1914,7 @@ export default function FormationPipeline() {
         // Re-fetch le module : son champ voice_type vient d'être mis à jour
         // par le backend (cf. launch_audio → UPDATE formation_modules).
         await fetchLinkedModule(selectedJobId)
+        await fetchPipelineDiagnostic(selectedJobId, { silent: true })
       }
     } catch (e) {
       setAudioError('Erreur réseau')
@@ -1681,6 +1937,8 @@ export default function FormationPipeline() {
     setDailyEditIdx(null)
     setActionError('')
     setTtsResult(null)
+    setPipelineDiagnostic(null)
+    setPipelineDiagnosticError('')
   }
 
   // ─── Édition journée ──────────────────────────────────────────────────────
@@ -1710,6 +1968,7 @@ export default function FormationPipeline() {
   if (job?.status === 'tts_launched' && allContentCompleted) {
     currentStep = 6
   }
+  const audioBusy = launchingAudio || AUDIO_ACTIVE_STATUSES.has(job?.status)
   const selectedPipelineModel = pipelineModelLabel(job?.auto_pilot_model)
 
   // ─── Render ───────────────────────────────────────────────────────────────
@@ -1767,12 +2026,15 @@ export default function FormationPipeline() {
                   </div>
                 </div>
                 <span style={S.tag(
-                  job.status === 'audio_launched' ? 'green'
+                  AUDIO_DONE_STATUSES.has(job.status) ? 'green'
+                  : AUDIO_ACTIVE_STATUSES.has(job.status) ? 'amber'
                   : (job.status === 'error' || job.status === 'audio_error') ? 'red'
                   : 'violet'
                 )}>
-                  {job.status === 'audio_launched'
+                  {AUDIO_DONE_STATUSES.has(job.status)
                     ? 'Clôturée'
+                    : AUDIO_ACTIVE_STATUSES.has(job.status)
+                      ? 'Audio en cours'
                     : job.status?.replace(/_/g, ' ')}
                 </span>
               </div>
@@ -1884,11 +2146,11 @@ export default function FormationPipeline() {
               </div>
             )}
 
-            {/* Bandeau de clôture — affiché quand audio_launched (toutes les
+            {/* Bandeau de clôture — affiché quand l'audio est terminé (toutes les
                 étapes ont abouti). Marque visuellement la fin de la pipeline.
                 Le module persistant créé est affiché dedans (matérialise "1 RNCP
                 = 1 module durable", réutilisable pour de nouvelles promos). */}
-            {job.status === 'audio_launched' && (
+            {AUDIO_DONE_STATUSES.has(job.status) && (
               <div style={{
                 position: 'relative',
                 padding: '20px 24px',
@@ -2530,7 +2792,7 @@ export default function FormationPipeline() {
 
             {/* ── Étape 6 : Génération des cours (texte) + relecture PDF ── */}
             <StepBlock stepIndex={5} currentStep={currentStep} status={job.status} title="Génération des cours (texte)" icon="edit_note">
-              {job.status === 'tts_launched' || job.status === 'audio_launched' || job.status === 'audio_error' || ttsResult || (contentFolders.length > 0 && contentFolders.some(f => f.content_status === 'completed')) ? (
+              {['tts_launched', 'audio_running', 'audio_completed', 'audio_launched', 'audio_error'].includes(job.status) || ttsResult || (contentFolders.length > 0 && contentFolders.some(f => f.content_status === 'completed')) ? (
                 <div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '10px', color: allContentCompleted ? '#34d399' : '#fbbf24', fontSize: '15px', fontWeight: 600, marginBottom: '12px', flexWrap: 'wrap' }}>
                     <Icon name={allContentCompleted ? 'check_circle' : 'hourglass_top'} />
@@ -2556,6 +2818,7 @@ export default function FormationPipeline() {
                       const pct = Math.round((folder.segments_completed / folder.segments_total) * 100)
                       const isDone = folder.content_status === 'completed'
                       const isError = folder.content_status === 'error'
+                      const continuingAfterText = !!continuingAfterTextFolders[folder.folder_id]
                       return (
                         <div key={folder.folder_id} style={{
                           background: 'rgba(15,23,42,0.5)',
@@ -2648,6 +2911,21 @@ export default function FormationPipeline() {
                                   <Icon name="description" style={{ fontSize: '12px' }} /> Texte généré
                                 </div>
                                 <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                                  <button
+                                    style={{
+                                      ...S.btn('ghost'),
+                                      padding: '6px 12px',
+                                      fontSize: '12px',
+                                      borderColor: 'rgba(251, 191, 36, 0.35)',
+                                      color: '#fbbf24',
+                                    }}
+                                    disabled={!isDone || continuingAfterText}
+                                    onClick={() => handleContinueAfterText(folder.folder_id)}
+                                    title="Conserve le Word initial, remet à zéro les étapes aval, puis relance volume, conformité, Word 2, slides et gTTS synchronisé"
+                                  >
+                                    <Icon name={continuingAfterText ? 'hourglass_empty' : 'play_arrow'} />
+                                    {continuingAfterText ? 'Relance aval…' : 'Continuer après le texte'}
+                                  </button>
                                   <button
                                     style={{ ...S.btn('neutral'), padding: '6px 12px', fontSize: '12px' }}
                                     disabled={!isDone}
@@ -2833,6 +3111,11 @@ export default function FormationPipeline() {
                         Révision : {reviewError}
                       </div>
                     )}
+                    {continueAfterTextError && (
+                      <div style={{ fontSize: '13px', color: '#f87171', marginTop: '4px' }}>
+                        Reprise aval : {continueAfterTextError}
+                      </div>
+                    )}
                     {contentFolders.length === 0 && (
                       <div style={{ fontSize: '13px', color: '#64748b' }}>Chargement de l'état des journées…</div>
                     )}
@@ -3011,7 +3294,7 @@ export default function FormationPipeline() {
                     stepKey="review"
                     stepLabel="Révision conformité (étape 6bis)"
                     jobId={selectedJobId}
-                    disabled={!['tts_launched', 'audio_launched', 'audio_error'].includes(job.status)}
+                    disabled={!['tts_launched', 'audio_running', 'audio_completed', 'audio_launched', 'audio_error'].includes(job.status)}
                     disabledReason="En attente de la génération texte"
                     onExport={handleExportMission}
                     onExecute={handleExecuteMission}
@@ -3030,15 +3313,16 @@ export default function FormationPipeline() {
 
             {/* ── Étape 7 : Synthèse TTS Fish Audio ── */}
             <StepBlock stepIndex={6} currentStep={currentStep} status={job.status} title="Synthèse TTS Fish Audio" icon="record_voice_over">
-              {job.status === 'audio_launched' ? (
+              {AUDIO_DONE_STATUSES.has(job.status) || AUDIO_ACTIVE_STATUSES.has(job.status) ? (
                 <div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px', color: '#34d399', fontSize: '15px', fontWeight: 600, marginBottom: '12px' }}>
-                    <Icon name="check_circle" /> Synthèse audio lancée avec succès !
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px', color: AUDIO_ACTIVE_STATUSES.has(job.status) ? '#fbbf24' : '#34d399', fontSize: '15px', fontWeight: 600, marginBottom: '12px' }}>
+                    <Icon name={AUDIO_ACTIVE_STATUSES.has(job.status) ? 'hourglass_empty' : 'check_circle'} />{' '}
+                    {AUDIO_ACTIVE_STATUSES.has(job.status) ? 'Synthèse audio en cours' : 'Synthèse audio terminée'}
                   </div>
                   <div style={{ fontSize: '14px', color: '#94a3b8', marginBottom: '16px' }}>
-                    {contentFolders.length || job.nb_days} dossiers cours en cours de synthèse dans la plateforme{' '}
+                    {contentFolders.length || job.nb_days} dossiers cours dans la plateforme{' '}
                     <strong style={{ color: '#a78bfa' }}>{job.platform_name || `#${job.platform_id}`}</strong>.
-                    Suivez la progression audio (19 MP3 par journée) dans le <strong style={{ color: '#a78bfa' }}>HR Dashboard → Cours Folders</strong>.
+                    Le diagnostic ci-dessous suit les événements audio, les erreurs et l'état des segments.
                   </div>
 
                   {/* Module persistant créé à la fin de la pipeline — matérialise le
@@ -3085,42 +3369,42 @@ export default function FormationPipeline() {
                     <button
                       style={{ ...S.btn('neutral'), border: '1px dashed #64748b' }}
                       onClick={() => handleLaunchAudio(true, false)}
-                      disabled={launchingAudio || !allContentCompleted}
+                      disabled={audioBusy || !allContentCompleted}
                       title="Re-génère les 7 MP3 cours en mode mock (silence 1s). 0€."
                     >
-                      <Icon name="refresh" /> {launchingAudio ? '…' : 'Relancer TTS test (gratuit)'}
+                      <Icon name="refresh" /> {audioBusy ? '…' : 'Relancer TTS test (gratuit)'}
                     </button>
                     <button
                       style={{ ...S.btn('ghost'), borderColor: 'rgba(251,146,60,0.35)', color: '#fb923c' }}
                       onClick={() => handleLaunchAudio(false, true)}
-                      disabled={launchingAudio || !allContentCompleted}
+                      disabled={audioBusy || !allContentCompleted}
                       title="Re-synthèse via gTTS (Google Text-to-Speech, gratuit, voix basique). Permet d'écouter le texte sans payer Fish Audio."
                     >
-                      <Icon name="graphic_eq" /> {launchingAudio ? '…' : 'Relancer TTS voix basique (gratuit)'}
+                      <Icon name="graphic_eq" /> {audioBusy ? '…' : 'Relancer TTS voix basique (gratuit)'}
                     </button>
                     <button
                       style={{ ...S.btn('ghost'), borderColor: 'rgba(56,189,248,0.45)', color: '#38bdf8' }}
                       onClick={() => handleLaunchAudio(false, true, true, true)}
-                      disabled={launchingAudio || !allContentCompleted}
+                      disabled={audioBusy || !allContentCompleted}
                       title="Re-synthèse gratuite via gTTS, découpée par slides, avec stockage des timings slide ↔ audio."
                     >
-                      <Icon name="slideshow" /> {launchingAudio ? '…' : 'Relancer TTS slides + voix basique'}
+                      <Icon name="slideshow" /> {audioBusy ? '…' : 'Relancer TTS slides + voix basique'}
                     </button>
                     <button
                       style={S.btn('success')}
                       onClick={() => handleLaunchAudio(false, false)}
-                      disabled={launchingAudio || !allContentCompleted}
+                      disabled={audioBusy || !allContentCompleted}
                       title="Re-synthèse payante Fish Audio S2-Pro (~9$/journée)."
                     >
-                      <Icon name="refresh" /> {launchingAudio ? 'Lancement…' : 'Relancer TTS payant'}
+                      <Icon name="refresh" /> {audioBusy ? 'Lancement…' : 'Relancer TTS payant'}
                     </button>
                     <button
                       style={S.btn('success')}
                       onClick={() => handleLaunchAudio(false, false, true, true)}
-                      disabled={launchingAudio || !allContentCompleted}
+                      disabled={audioBusy || !allContentCompleted}
                       title="Re-synthèse payante Fish Audio S2-Pro avec découpage par slides et timings synchronisés."
                     >
-                      <Icon name="slideshow" /> {launchingAudio ? 'Lancement…' : 'Relancer TTS slides payant'}
+                      <Icon name="slideshow" /> {audioBusy ? 'Lancement…' : 'Relancer TTS slides payant'}
                     </button>
                   </div>
                   {audioError && (
@@ -3139,41 +3423,41 @@ export default function FormationPipeline() {
                     <button
                       style={S.btn('success')}
                       onClick={() => handleLaunchAudio(false, false)}
-                      disabled={launchingAudio || !allContentCompleted}
+                      disabled={audioBusy || !allContentCompleted}
                     >
-                      <Icon name="record_voice_over" /> {launchingAudio ? 'Lancement…' : `Lancer le TTS (${contentFolders.length || job.nb_days} journées)`}
+                      <Icon name="record_voice_over" /> {audioBusy ? 'Lancement…' : `Lancer le TTS (${contentFolders.length || job.nb_days} journées)`}
                     </button>
                     <button
                       style={{ ...S.btn('ghost'), borderColor: 'rgba(251,146,60,0.35)', color: '#fb923c' }}
                       onClick={() => handleLaunchAudio(false, true)}
-                      disabled={launchingAudio || !allContentCompleted}
+                      disabled={audioBusy || !allContentCompleted}
                       title="Synthèse via gTTS (Google Text-to-Speech, gratuit, voix basique). Utile pour écouter le rendu sans payer Fish Audio."
                     >
-                      <Icon name="graphic_eq" /> {launchingAudio ? '…' : 'TTS voix basique (gratuit)'}
+                      <Icon name="graphic_eq" /> {audioBusy ? '…' : 'TTS voix basique (gratuit)'}
                     </button>
                     <button
                       style={{ ...S.btn('ghost'), borderColor: 'rgba(56,189,248,0.45)', color: '#38bdf8' }}
                       onClick={() => handleLaunchAudio(false, true, true, true)}
-                      disabled={launchingAudio || !allContentCompleted}
+                      disabled={audioBusy || !allContentCompleted}
                       title="Test complet sans Fish Audio : génère les slides si besoin, synthétise en gTTS, concatène par slide et stocke les timings."
                     >
-                      <Icon name="slideshow" /> {launchingAudio ? '…' : 'TTS slides + voix basique'}
+                      <Icon name="slideshow" /> {audioBusy ? '…' : 'TTS slides + voix basique'}
                     </button>
                     <button
                       style={{ ...S.btn('neutral'), border: '1px dashed #64748b' }}
                       onClick={() => handleLaunchAudio(true, false)}
-                      disabled={launchingAudio || !allContentCompleted}
+                      disabled={audioBusy || !allContentCompleted}
                       title="Mode test : génère des MP3 de silence 1s au lieu d'appeler Fish Audio. 0 € de coût, permet de tester le flux jusqu'à la diffusion sans consommer ton budget TTS."
                     >
-                      <Icon name="science" /> {launchingAudio ? '…' : 'TTS test silence (gratuit)'}
+                      <Icon name="science" /> {audioBusy ? '…' : 'TTS test silence (gratuit)'}
                     </button>
                     <button
                       style={S.btn('success')}
                       onClick={() => handleLaunchAudio(false, false, true, true)}
-                      disabled={launchingAudio || !allContentCompleted}
+                      disabled={audioBusy || !allContentCompleted}
                       title="Synthèse payante Fish Audio avec génération des slides si besoin, découpage par slides et stockage des timings."
                     >
-                      <Icon name="slideshow" /> {launchingAudio ? 'Lancement…' : 'TTS slides payant'}
+                      <Icon name="slideshow" /> {audioBusy ? 'Lancement…' : 'TTS slides payant'}
                     </button>
                   </div>
                   {!allContentCompleted && (
@@ -3186,6 +3470,12 @@ export default function FormationPipeline() {
                   )}
                 </div>
               )}
+              <PipelineDiagnosticPanel
+                diagnostic={pipelineDiagnostic}
+                loading={pipelineDiagnosticLoading}
+                error={pipelineDiagnosticError}
+                onRefresh={() => fetchPipelineDiagnostic(selectedJobId)}
+              />
             </StepBlock>
           </>
         )}
@@ -3440,6 +3730,8 @@ function ReviewReportModal({ jobId, folder, onClose }) {
     '#25': 'Format cours à distance (visuel/interactif)',
     '#26': 'Énumérations mécaniques',
     '#27': 'Registre oral, pas écrit',
+    '#DB': 'Diff texte courant / snapshot avant révision',
+    '#ERR': 'Erreur reviewer',
   }
 
   return (
@@ -3480,6 +3772,17 @@ function ReviewReportModal({ jobId, folder, onClose }) {
                 lineHeight: 1.4,
               }}>
                 <Icon name="info" style={{ fontSize: '12px' }} /> <strong>Rapport reconstitué</strong>
+                {' — '}{report.reconstruction_note}
+              </div>
+            )}
+            {report?.is_db_fallback && (
+              <div style={{
+                fontSize: '11px', color: '#38bdf8', marginTop: '6px',
+                padding: '6px 10px', background: 'rgba(56, 189, 248, 0.08)',
+                borderLeft: '3px solid #38bdf8', borderRadius: '4px',
+                lineHeight: 1.4,
+              }}>
+                <Icon name="info" style={{ fontSize: '12px' }} /> <strong>Rapport reconstruit depuis la base</strong>
                 {' — '}{report.reconstruction_note}
               </div>
             )}

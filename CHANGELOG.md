@@ -1,5 +1,55 @@
 # Changelog
 
+## 2026-05-05
+
+### feat: observabilité durable de la pipeline (rapports + événements)
+
+Les rapports de conformité ne pouvaient plus être lus en prod Azure (filesystem
+local non fiable, le modal *Rapport de révision conformité* affichait
+*"Aucun rapport trouvé"* malgré une review effectuée). On bascule l'observabilité
+en DB, accessible via API.
+
+**Nouvelles tables** (`backend/database/db.py`) :
+- `content_review_reports` : snapshot durable par exécution de review (job_id,
+  folder_id, source, summary_json, report_json, created_at) + index
+  `(job_id, folder_id, created_at)`.
+- `formation_pipeline_events` : journal append-only des transitions importantes
+  de pipeline (job_id, folder_id, step, event_type, status, message, model,
+  duration_ms, data_json, error) + index sur `(job_id, created_at)`. Pensé pour
+  alimenter un futur dashboard qualité.
+- Colonne `text_content_pre_review` sur `content_generation_segments` : conserve
+  le texte avant review pour pouvoir diff/restaurer.
+
+**Nouveau service** (`backend/services/formation_observability_service.py`) :
+helpers d'écriture/lecture pour les deux tables, avec `ensure_observability_tables()`
+en cas de redémarrage tardif.
+
+**Nouveaux endpoints** (`backend/routes/formation_routes.py`) :
+- `GET /api/formation/<job_id>/events` — journal d'événements du pipeline
+- `GET /api/formation/<job_id>/diagnostic` — diagnostic complet du job
+
+**Helpers ajoutés** : `_build_db_review_report` (résout le bug "Aucun rapport
+trouvé"), `_write_api_review_report`, `_reset_folder_downstream_to_generated_text`,
+`_next_folder_in_formation`, `_make_audio_progress_logger`, `continue_after_text`
+(continue la pipeline après validation manuelle du texte).
+
+### fix: health service — folders d'un job filtrés par `formation_job_id`
+
+`compute_health(job_id)` joignait `cours_folders` sur `platform_id`, ce qui
+agrégeait à tort *tous* les folders de la plateforme (potentiellement plusieurs
+formations en parallèle). Désormais filtré sur `cf.formation_job_id = ?`.
+
+Fichier : `backend/services/formation_health_service.py`.
+
+### feat: gTTS — speedup post-traitement configurable
+
+`convert_to_speech_basic` accepte maintenant un paramètre `speed` (par défaut
+lu depuis `BASIC_TTS_SPEED`, défaut **1.28**). Le MP3 gTTS est passé dans
+`pydub.effects.speedup` après concat des chunks pour se rapprocher d'un débit
+*cours* (gTTS étant lent par défaut). Fallback silencieux si pydub indisponible.
+
+Fichier : `backend/services/basic_tts_service.py`.
+
 ## 2026-05-04
 
 ### feat: slides PPT générées depuis le script (sans audio) + protection admin

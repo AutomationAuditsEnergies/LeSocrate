@@ -468,6 +468,19 @@ def init_test_pipeline():
                        auto_pilot_volume_done=0,
                        auto_pilot_post_review_docs_done=0,
                        auto_pilot_error=None)
+            try:
+                from services.formation_observability_service import log_pipeline_event
+                log_pipeline_event(
+                    job_id,
+                    "pipeline_started",
+                    step="start",
+                    status="running",
+                    model="sonnet",
+                    message="Auto-pilot test lancé",
+                    data={"tts_mode": tts_mode, "use_claude_code": True, "test_mode": True},
+                )
+            except Exception:
+                pass
             eventlet.spawn(_tick_auto_pilot, job_id)
             logger.info(
                 f"🧪 [TEST] Auto-pilot (DB state machine) spawné pour job {job_id} "
@@ -887,9 +900,15 @@ def list_content(job_id):
                 (cg_id,),
             )
             n_review_errors = cursor.fetchone()[0]
+            cursor.execute(
+                "SELECT COUNT(*) FROM content_generation_segments "
+                "WHERE job_id = ? AND status = 'completed' AND COALESCE(dirty, 0) = 1",
+                (cg_id,),
+            )
+            n_dirty = cursor.fetchone()[0]
         else:
             cg_status, cg_words, cur_sub, cur_passe, cg_err = None, 0, 0, 1, None
-            n_completed, n_reviewed, n_review_errors = 0, 0, 0
+            n_completed, n_reviewed, n_review_errors, n_dirty = 0, 0, 0, 0
 
         result.append({
             "folder_id": fid,
@@ -903,6 +922,7 @@ def list_content(job_id):
             "segments_total": 18,
             "segments_reviewed": n_reviewed,
             "segments_review_errors": n_review_errors,
+            "dirty_segments": n_dirty,
             "current_sub_part": cur_sub,
             "current_passe": cur_passe,
             "error_message": cg_err,
@@ -976,6 +996,238 @@ def download_course_docx(job_id, folder_id):
 
 # ─── Rapport de révision conformité ──────────────────────────────────────────
 
+def _short_review_excerpt(text: str, limit: int = 220) -> str:
+    text = " ".join((text or "").split())
+    if len(text) <= limit:
+        return text
+    return text[:limit].rstrip() + "..."
+
+
+def _build_db_review_report(job_id: int, folder_id: int) -> dict | None:
+    """Fallback persistant pour les reviews API: reconstruit un rapport depuis
+    la DB quand aucun review_report.json Claude Code n'existe.
+
+    Les anciennes reviews API ne stockaient pas l'historique exact des patches.
+    On peut tout de même afficher un rapport exploitable: segments relus,
+    erreurs éventuelles, et segments dont le texte courant diffère du snapshot
+    pre-review.
+    """
+    from database.db import get_db_connection
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        SELECT cf.name, s.id, s.sub_part_index, s.passe,
+               COALESCE(s.reviewed, 0), COALESCE(s.review_error, ''),
+               COALESCE(s.text_content, ''), COALESCE(s.text_content_pre_review, ''),
+               COALESCE(s.word_count, 0)
+        FROM cours_folders cf
+        JOIN content_generation_jobs cj ON cj.folder_id = cf.id
+        JOIN content_generation_segments s ON s.job_id = cj.id
+        WHERE cf.id = ? AND cf.formation_job_id = ? AND s.status = 'completed'
+        ORDER BY s.sub_part_index ASC, s.passe ASC
+        """,
+        (folder_id, job_id),
+    )
+    rows = cursor.fetchall()
+    conn.close()
+    if not rows:
+        return None
+
+    folder_name = rows[0][0]
+    by_segment = []
+    changed_count = 0
+    reviewed_count = 0
+    failed_count = 0
+
+    for _, seg_id, sub_idx, passe, reviewed, review_error, text, pre_text, word_count in rows:
+        reviewed = int(reviewed or 0)
+        if reviewed:
+            reviewed_count += 1
+        if review_error and not reviewed:
+            failed_count += 1
+
+        before = (pre_text or text or "").strip()
+        after = (text or "").strip()
+        changed = bool(reviewed and pre_text and before != after)
+        patches_detail = []
+        patches_applied = 0
+        patches_rejected = 0
+
+        if changed:
+            changed_count += 1
+            patches_applied = 1
+            patches_detail.append({
+                "rule": "#DB",
+                "reason": "Texte modifié par la révision API; détail exact des patches non persisté sur les anciennes exécutions.",
+                "original": _short_review_excerpt(before),
+                "replacement": _short_review_excerpt(after),
+                "status": "applied",
+            })
+        elif review_error:
+            patches_rejected = 1
+            patches_detail.append({
+                "rule": "#ERR",
+                "reason": review_error[:220],
+                "original": "",
+                "replacement": "",
+                "status": "rejected",
+                "reject_reason": "erreur reviewer",
+            })
+
+        by_segment.append({
+            "sub_idx": sub_idx,
+            "passe": passe,
+            "segment_id_actual": seg_id,
+            "word_count": word_count,
+            "patches_applied": patches_applied,
+            "patches_rejected": patches_rejected,
+            "patches_detail": patches_detail,
+        })
+
+    by_rule = {}
+    if changed_count:
+        by_rule["#DB"] = {
+            "proposed": changed_count,
+            "applied": changed_count,
+            "rejected": 0,
+            "unknown": 0,
+        }
+    if failed_count:
+        by_rule["#ERR"] = {
+            "proposed": failed_count,
+            "applied": 0,
+            "rejected": failed_count,
+            "unknown": 0,
+        }
+
+    return {
+        "folder_id": folder_id,
+        "folder_name": folder_name,
+        "imported_at": None,
+        "generated_via": "db_review_status",
+        "is_db_fallback": True,
+        "reconstruction_note": (
+            "Aucun fichier review_report.json n'a été trouvé. Rapport reconstruit "
+            "depuis la base: statut des segments, erreurs reviewer et comparaison "
+            "texte courant / snapshot avant révision."
+        ),
+        "summary": {
+            "segments_reviewed": reviewed_count,
+            "patches_proposed": changed_count + failed_count,
+            "patches_applied": changed_count,
+            "patches_rejected": failed_count,
+            "patches_unknown": 0,
+            "segments_failed": failed_count,
+        },
+        "by_rule": by_rule,
+        "by_segment": by_segment,
+    }
+
+
+def _write_api_review_report(job_id: int, folder_id: int, result: dict, model: str | None) -> dict | None:
+    """Persiste un rapport conformité pour les reviews lancées via l'API."""
+    import json as _json
+    import os
+    from datetime import datetime
+    from services.claude_code_mission_service import mission_dir
+    from database.db import get_db_connection
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT name, position FROM cours_folders WHERE id = ? AND formation_job_id = ?",
+        (folder_id, job_id),
+    )
+    row = cursor.fetchone()
+    conn.close()
+    if not row:
+        return
+    folder_name, position = row
+
+    by_rule = {}
+    by_segment = []
+    for detail in result.get("details") or []:
+        applied = detail.get("applied") or []
+        rejected = detail.get("rejected") or []
+        patches_detail = []
+
+        for status, patches in (("applied", applied), ("rejected", rejected)):
+            for p in patches:
+                rule = str(p.get("rule_violated") or p.get("rule") or "?")
+                stat = by_rule.setdefault(rule, {"proposed": 0, "applied": 0, "rejected": 0, "unknown": 0})
+                stat["proposed"] += 1
+                stat[status] += 1
+                patches_detail.append({
+                    "rule": rule,
+                    "reason": str(p.get("reason") or "")[:240],
+                    "original": _short_review_excerpt(p.get("original") or ""),
+                    "replacement": _short_review_excerpt(p.get("replacement") or ""),
+                    "status": status,
+                    "reject_reason": p.get("reject_reason"),
+                })
+
+        if detail.get("error"):
+            stat = by_rule.setdefault("#ERR", {"proposed": 0, "applied": 0, "rejected": 0, "unknown": 0})
+            stat["proposed"] += 1
+            stat["rejected"] += 1
+            patches_detail.append({
+                "rule": "#ERR",
+                "reason": str(detail.get("error") or "")[:240],
+                "original": "",
+                "replacement": "",
+                "status": "rejected",
+                "reject_reason": "erreur reviewer",
+            })
+
+        by_segment.append({
+            "sub_idx": detail.get("sub_idx"),
+            "passe": detail.get("passe"),
+            "segment_id_actual": detail.get("segment_id"),
+            "patches_applied": len(applied),
+            "patches_rejected": len(rejected) + (1 if detail.get("error") else 0),
+            "patches_detail": patches_detail,
+        })
+
+    report = {
+        "folder_id": folder_id,
+        "folder_name": folder_name,
+        "imported_at": datetime.utcnow().isoformat() + "Z",
+        "generated_via": model or "api",
+        "summary": {
+            "segments_reviewed": result.get("segments_reviewed", 0),
+            "patches_proposed": result.get("patches_applied", 0) + result.get("patches_rejected", 0),
+            "patches_applied": result.get("patches_applied", 0),
+            "patches_rejected": result.get("patches_rejected", 0),
+            "segments_failed": result.get("segments_failed", 0),
+        },
+        "by_rule": by_rule,
+        "by_segment": sorted(by_segment, key=lambda x: (x.get("sub_idx") or 0, x.get("passe") or 0)),
+    }
+
+    chunk_id = f"day_{int(position or 0) + 1}_review_api"
+    chunk_dir = os.path.join(mission_dir(job_id, "review"), chunk_id)
+    os.makedirs(chunk_dir, exist_ok=True)
+    with open(os.path.join(chunk_dir, "review_report.json"), "w", encoding="utf-8") as f:
+        _json.dump(report, f, ensure_ascii=False, indent=2)
+    try:
+        from services.formation_observability_service import persist_review_report
+        persist_review_report(
+            job_id,
+            folder_id,
+            report,
+            source="api",
+            generated_via=model or "api",
+        )
+    except Exception as e:
+        logger.warning(
+            f"⚠️ Rapport conformité DB non persisté job={job_id} "
+            f"folder={folder_id} : {e}"
+        )
+    return report
+
+
 @formation_bp.route(
     "/api/formation/<int:job_id>/content/<int:folder_id>/review-report",
     methods=["GET"],
@@ -1014,14 +1266,25 @@ def get_review_report(job_id, folder_id):
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute(
-        "SELECT position FROM cours_folders WHERE id = ? AND platform_id = ?",
-        (folder_id, job["platform_id"]),
+        "SELECT position FROM cours_folders WHERE id = ? AND formation_job_id = ?",
+        (folder_id, job_id),
     )
     row = cursor.fetchone()
     conn.close()
     if not row:
-        return jsonify({"error": "Folder introuvable ou hors plateforme"}), 404
+        return jsonify({"error": "Folder introuvable ou hors pipeline"}), 404
     position = row[0]
+
+    try:
+        from services.formation_observability_service import get_latest_review_report
+        persisted_report = get_latest_review_report(job_id, folder_id)
+        if persisted_report:
+            return jsonify({"report": persisted_report, "source": "db"}), 200
+    except Exception as e:
+        logger.warning(
+            f"⚠️ Lecture rapport conformité DB impossible job={job_id} "
+            f"folder={folder_id} : {e}"
+        )
 
     # Multi-agents : 1 chunk_dir par groupe de règles. On cherche
     # day_N_review_<group_id> pour chacun, et on agrège les review_report.json.
@@ -1029,6 +1292,7 @@ def get_review_report(job_id, folder_id):
     from services.claude_code_mission_service import _REVIEW_RULE_GROUPS
     chunk_id_candidates = (
         [f"day_{position + 1}_review_{g['id']}" for g in _REVIEW_RULE_GROUPS]
+        + [f"day_{position + 1}_review_api"]
         + [f"day_{position + 1}_review"]  # legacy
     )
 
@@ -1113,6 +1377,20 @@ def get_review_report(job_id, folder_id):
             "by_rule": agg_by_rule,
             "by_segment": agg_segments,
         }
+        try:
+            from services.formation_observability_service import persist_review_report
+            persist_review_report(
+                job_id,
+                folder_id,
+                report,
+                source="file_import",
+                generated_via=generated_via,
+            )
+        except Exception as e:
+            logger.warning(
+                f"⚠️ Rapport conformité fichier non persisté job={job_id} "
+                f"folder={folder_id} : {e}"
+            )
         return jsonify({"report": report, "n_sub_reports": len(sub_reports)}), 200
 
     # Fallback : pas de review_report.json mais peut-être un output.md
@@ -1138,6 +1416,9 @@ def get_review_report(job_id, folder_id):
             break
 
     if not chunk_dir_with_output:
+        report = _build_db_review_report(job_id, folder_id)
+        if report:
+            return jsonify({"report": report, "source": "db_fallback"}), 200
         return jsonify({
             "error": "Aucun rapport de révision trouvé pour ce dossier",
             "report": None,
@@ -1281,6 +1562,20 @@ def get_review_report(job_id, folder_id):
         "by_rule": by_rule,
         "by_segment": by_segment,
     }
+    try:
+        from services.formation_observability_service import persist_review_report
+        persist_review_report(
+            job_id,
+            folder_id,
+            report,
+            source="output_md_reconstruction",
+            generated_via=report["generated_via"],
+        )
+    except Exception as e:
+        logger.warning(
+            f"⚠️ Rapport conformité reconstruit non persisté job={job_id} "
+            f"folder={folder_id} : {e}"
+        )
     return jsonify({"report": report, "source_path": chunk_dir_with_output, "lite": True}), 200
 
 
@@ -1504,18 +1799,18 @@ def review_content(job_id, folder_id):
     if not job:
         return jsonify({"error": "Job pipeline introuvable"}), 404
 
-    # Vérifier que le folder appartient bien à la plateforme du job
+    # Vérifier que le folder appartient bien à ce job formation
     from database.db import get_db_connection
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute(
-        "SELECT platform_id FROM cours_folders WHERE id = ?",
-        (folder_id,),
+        "SELECT id FROM cours_folders WHERE id = ? AND formation_job_id = ?",
+        (folder_id, job_id),
     )
     row = cursor.fetchone()
     conn.close()
-    if not row or row[0] != job["platform_id"]:
-        return jsonify({"error": "Folder inexistant ou hors plateforme"}), 404
+    if not row:
+        return jsonify({"error": "Folder inexistant ou hors pipeline"}), 404
 
     data = request.get_json(silent=True) or {}
     model = _resolve_pipeline_api_model(job, data.get("model"))
@@ -1527,8 +1822,50 @@ def review_content(job_id, folder_id):
         import sys, traceback
         logger.info(f"🚀 SPAWN review greenlet job={job_id} folder={_folder_id} model={model}")
         sys.stdout.flush()
+        started_at = time.time()
+        try:
+            from services.formation_observability_service import log_pipeline_event
+            log_pipeline_event(
+                job_id,
+                "review_started",
+                step="review",
+                status="running",
+                folder_id=_folder_id,
+                model=str(model) if model else None,
+                message="Révision conformité API démarrée",
+            )
+        except Exception:
+            pass
         try:
             result = run_content_review(_folder_id, model=model)
+            duration_ms = int((time.time() - started_at) * 1000)
+            try:
+                _write_api_review_report(job_id, _folder_id, result, model)
+            except Exception as report_error:
+                logger.warning(
+                    f"⚠️ Rapport review API non écrit job={job_id} "
+                    f"folder={_folder_id} : {report_error}"
+                )
+            try:
+                from services.formation_observability_service import log_pipeline_event
+                log_pipeline_event(
+                    job_id,
+                    "review_completed",
+                    step="review",
+                    status="completed",
+                    folder_id=_folder_id,
+                    model=str(model) if model else None,
+                    duration_ms=duration_ms,
+                    message="Révision conformité API terminée",
+                    data={
+                        "segments_reviewed": result.get("segments_reviewed", 0),
+                        "patches_applied": result.get("patches_applied", 0),
+                        "patches_rejected": result.get("patches_rejected", 0),
+                        "segments_failed": result.get("segments_failed", 0),
+                    },
+                )
+            except Exception:
+                pass
             logger.info(
                 f"✅ Review job={job_id} folder={_folder_id} : "
                 f"{result['segments_reviewed']} audités, "
@@ -1537,8 +1874,24 @@ def review_content(job_id, folder_id):
             )
             sys.stdout.flush()
         except Exception as e:
+            duration_ms = int((time.time() - started_at) * 1000)
             logger.error(f"❌ Review job={job_id} folder={_folder_id} : échec : {e}")
             logger.error(traceback.format_exc())
+            try:
+                from services.formation_observability_service import log_pipeline_event
+                log_pipeline_event(
+                    job_id,
+                    "review_failed",
+                    step="review",
+                    status="error",
+                    folder_id=_folder_id,
+                    model=str(model) if model else None,
+                    duration_ms=duration_ms,
+                    message="Révision conformité API échouée",
+                    error=str(e)[:500],
+                )
+            except Exception:
+                pass
             sys.stdout.flush()
 
     eventlet.spawn(_run_review, folder_id)
@@ -1770,6 +2123,29 @@ def health_pipeline(job_id):
 
 # ─── Étape 7 : Lancement de la synthèse TTS Fish Audio ───────────────────────
 
+def _make_audio_progress_logger(job_id: int, folder_id: int, voice_type: str):
+    """Callback branché sur generate_audio_from_script pour sortir de la boîte noire."""
+    def _on_progress(step, total, message):
+        try:
+            from services.formation_observability_service import log_pipeline_event
+            log_pipeline_event(
+                job_id,
+                "audio_progress",
+                step="audio",
+                status="running",
+                folder_id=folder_id,
+                message=message,
+                data={
+                    "step": step,
+                    "total": total,
+                    "voice_type": voice_type,
+                },
+            )
+        except Exception:
+            pass
+    return _on_progress
+
+
 @formation_bp.route("/api/formation/<int:job_id>/launch-audio", methods=["POST"])
 def launch_audio(job_id):
     """
@@ -1840,11 +2216,32 @@ def launch_audio(job_id):
         mode_label = "[MOCK]" if mock else "[gTTS]" if basic_tts else ""
         logger.info(f"🚀 SPAWN greenlet job={job_id} folder={folder_id} mock={mock} basic_tts={basic_tts} force_all={force_all}")
         sys.stdout.flush()
+        started_at = time.time()
+        voice_type = "mock" if mock else ("gtts" if basic_tts else "fish_audio")
+        try:
+            from services.formation_observability_service import log_pipeline_event
+            log_pipeline_event(
+                job_id,
+                "audio_folder_started",
+                step="audio",
+                status="running",
+                folder_id=folder_id,
+                message="Synthèse audio journée démarrée",
+                data={
+                    "voice_type": voice_type,
+                    "force_all": force_all,
+                    "sync_slides": sync_slides,
+                    "auto_generate_slides": auto_generate_slides,
+                },
+            )
+        except Exception:
+            pass
         try:
             logger.info(f"🎙️ {mode_label} Job {job_id} folder {folder_id} : synthèse audio démarrée")
             sys.stdout.flush()
             generate_audio_from_script(
                 folder_id,
+                on_progress=_make_audio_progress_logger(job_id, folder_id, voice_type),
                 force_all=force_all,
                 mock=mock,
                 basic_tts=basic_tts,
@@ -1853,36 +2250,124 @@ def launch_audio(job_id):
                 sync_slides=sync_slides,
                 auto_generate_slides=auto_generate_slides,
             )
+            duration_ms = int((time.time() - started_at) * 1000)
+            try:
+                from services.formation_observability_service import log_pipeline_event
+                log_pipeline_event(
+                    job_id,
+                    "audio_folder_completed",
+                    step="audio",
+                    status="completed",
+                    folder_id=folder_id,
+                    duration_ms=duration_ms,
+                    message="Synthèse audio journée terminée",
+                    data={"voice_type": voice_type},
+                )
+            except Exception:
+                pass
             logger.info(f"✅ {mode_label} Job {job_id} folder {folder_id} : synthèse audio terminée")
             sys.stdout.flush()
+            return True
         except Exception as e:
+            duration_ms = int((time.time() - started_at) * 1000)
             logger.error(f"❌ Job {job_id} folder {folder_id} : synthèse audio échouée : {e}")
             logger.error(traceback.format_exc())
+            try:
+                from services.formation_observability_service import log_pipeline_event
+                log_pipeline_event(
+                    job_id,
+                    "audio_folder_failed",
+                    step="audio",
+                    status="error",
+                    folder_id=folder_id,
+                    duration_ms=duration_ms,
+                    message="Synthèse audio journée échouée",
+                    data={"voice_type": voice_type},
+                    error=str(e)[:500],
+                )
+            except Exception:
+                pass
             sys.stdout.flush()
             try:
                 update_job(job_id, status="audio_error", error_message=f"folder {folder_id}: {str(e)[:500]}")
             except Exception as ue:
                 logger.error(f"❌ Impossible de marquer job {job_id} en audio_error : {ue}")
+            return False
 
     # Synthèse audio SÉQUENTIELLE entre journées (pas parallèle).
     # Raison : pour gTTS et Fish Audio, lancer plusieurs folders en parallèle
     # multiplie les requêtes simultanées vers l'API tierce → rate limit (429)
     # immédiat. On séquentialise via 1 seul greenlet qui itère.
     def _run_all_audios_sequential():
+        run_started_at = time.time()
+        failures = []
         for idx, fid in enumerate(folder_ids):
             next_fid = folder_ids[idx + 1] if idx + 1 < len(folder_ids) else None
-            _run_audio(fid, next_folder_id=next_fid, is_last_folder=next_fid is None)
+            ok = _run_audio(fid, next_folder_id=next_fid, is_last_folder=next_fid is None)
+            if not ok:
+                failures.append(fid)
             # Petit cooldown entre folders pour aérer le rate limit côté
             # API tierce. Configurable, surtout utile pour gTTS.
             import time as _t
             cooldown = int(os.getenv("AUDIO_COOLDOWN_BETWEEN_FOLDERS_SEC", "30"))
-            if cooldown > 0:
+            if cooldown > 0 and idx + 1 < len(folder_ids):
                 logger.info(f"⏸ Cooldown {cooldown}s avant folder suivant")
                 _t.sleep(cooldown)
+        try:
+            from services.formation_observability_service import log_pipeline_event
+            if failures:
+                log_pipeline_event(
+                    job_id,
+                    "audio_failed",
+                    step="audio",
+                    status="error",
+                    duration_ms=int((time.time() - run_started_at) * 1000),
+                    message=f"Synthèse audio terminée avec {len(failures)} échec(s)",
+                    data={"failed_folder_ids": failures, "folder_ids": folder_ids},
+                    error=f"{len(failures)} dossier(s) audio en erreur",
+                )
+            else:
+                log_pipeline_event(
+                    job_id,
+                    "audio_completed",
+                    step="audio",
+                    status="completed",
+                    duration_ms=int((time.time() - run_started_at) * 1000),
+                    message=f"Synthèse audio terminée pour {len(folder_ids)} journée(s)",
+                    data={"folder_ids": folder_ids},
+                )
+        except Exception:
+            pass
+        if failures:
+            update_job(
+                job_id,
+                status="audio_error",
+                error_message=f"Synthèse audio incomplète : {len(failures)} dossier(s) en erreur",
+            )
+        else:
+            update_job(job_id, status="audio_completed", error_message=None)
+
+    update_job(job_id, status="audio_running", error_message=None)
+    try:
+        from services.formation_observability_service import log_pipeline_event
+        log_pipeline_event(
+            job_id,
+            "audio_started",
+            step="audio",
+            status="running",
+            message=f"Synthèse audio lancée pour {len(folder_ids)} journée(s)",
+            data={
+                "folder_ids": folder_ids,
+                "voice_type": "mock" if mock else ("gtts" if basic_tts else "fish_audio"),
+                "force_all": force_all,
+                "sync_slides": sync_slides,
+                "auto_generate_slides": auto_generate_slides,
+            },
+        )
+    except Exception:
+        pass
 
     eventlet.spawn(_run_all_audios_sequential)
-
-    update_job(job_id, status="audio_launched")
 
     # Marquer la plateforme comme 'ready' : le contenu est validé, la synthèse
     # audio tourne en background. Côté HR Dashboard, l'overlay "Module en
@@ -1966,12 +2451,323 @@ def launch_audio(job_id):
     return jsonify({
         "message": f"Synthèse audio lancée pour {len(folder_ids)} journées{mode_suffix}",
         "folder_ids": folder_ids,
-        "status": "audio_launched",
+        "status": "audio_running",
         "mock": mock,
         "basic_tts": basic_tts,
         "sync_slides": sync_slides,
         "auto_generate_slides": auto_generate_slides,
     })
+
+
+def _reset_folder_downstream_to_generated_text(job_id: int, folder_id: int) -> dict:
+    """Conserve le texte initial et remet à zéro volume/review/slides/audio."""
+    from database.db import get_db_connection
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        SELECT cf.id, cf.name, cf.position, cj.id, cj.platform_id
+        FROM cours_folders cf
+        JOIN content_generation_jobs cj ON cj.folder_id = cf.id
+        WHERE cf.id = ? AND cf.formation_job_id = ? AND cj.status = 'completed'
+        """,
+        (folder_id, job_id),
+    )
+    row = cursor.fetchone()
+    if not row:
+        conn.close()
+        raise ValueError("Journée introuvable ou texte non généré")
+
+    _, folder_name, position, content_job_id, platform_id = row
+    cursor.execute(
+        """
+        SELECT id, COALESCE(text_content, ''), text_content_pre_review
+        FROM content_generation_segments
+        WHERE job_id = ? AND status = 'completed'
+        ORDER BY sub_part_index ASC, passe ASC
+        """,
+        (content_job_id,),
+    )
+    segments = cursor.fetchall()
+    if not segments:
+        conn.close()
+        raise ValueError("Aucun segment texte complété pour cette journée")
+
+    restored = 0
+    total_words = 0
+    for seg_id, current_text, original_text in segments:
+        base_text = (original_text if original_text is not None else current_text) or ""
+        word_count = len(base_text.split())
+        total_words += word_count
+        if original_text is not None and original_text != current_text:
+            restored += 1
+        cursor.execute(
+            """
+            UPDATE content_generation_segments
+            SET text_content = ?, word_count = ?, dirty = 1,
+                reviewed = 0, review_error = NULL
+            WHERE id = ?
+            """,
+            (base_text, word_count, seg_id),
+        )
+
+    cursor.execute(
+        """
+        UPDATE content_generation_jobs
+        SET total_words = ?, status = 'completed', error_message = NULL,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+        """,
+        (total_words, content_job_id),
+    )
+    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='content_review_reports'")
+    if cursor.fetchone():
+        cursor.execute(
+            "DELETE FROM content_review_reports WHERE job_id = ? AND folder_id = ?",
+            (job_id, folder_id),
+        )
+    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='script_slide_decks'")
+    if cursor.fetchone():
+        cursor.execute(
+            "DELETE FROM script_slide_decks WHERE folder_id = ? AND content_job_id = ?",
+            (folder_id, content_job_id),
+        )
+        deleted_decks = cursor.rowcount
+    else:
+        deleted_decks = 0
+
+    conn.commit()
+    conn.close()
+
+    update_job(
+        job_id,
+        status="tts_launched",
+        auto_pilot_volume_done=0,
+        auto_pilot_post_review_docs_done=0,
+        auto_pilot_error=None,
+    )
+    return {
+        "folder_id": folder_id,
+        "folder_name": folder_name,
+        "position": position,
+        "content_job_id": content_job_id,
+        "platform_id": platform_id,
+        "segments": len(segments),
+        "segments_restored": restored,
+        "total_words": total_words,
+        "deleted_slide_decks": deleted_decks,
+    }
+
+
+def _next_folder_in_formation(job_id: int, folder_id: int) -> int | None:
+    from database.db import get_db_connection
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT position FROM cours_folders WHERE id = ? AND formation_job_id = ?",
+        (folder_id, job_id),
+    )
+    row = cursor.fetchone()
+    if not row:
+        conn.close()
+        return None
+    cursor.execute(
+        """
+        SELECT id FROM cours_folders
+        WHERE formation_job_id = ? AND position > ?
+        ORDER BY position ASC, id ASC
+        LIMIT 1
+        """,
+        (job_id, row[0]),
+    )
+    next_row = cursor.fetchone()
+    conn.close()
+    return next_row[0] if next_row else None
+
+
+@formation_bp.route(
+    "/api/formation/<int:job_id>/content/<int:folder_id>/continue-after-text",
+    methods=["POST"],
+)
+def continue_after_text(job_id, folder_id):
+    """Relance les étapes aval d'une journée sans régénérer le texte initial.
+
+    Flux : reset aval → volume safety API → review API → Word 2 → slides → gTTS sync.
+    """
+    if not _require_admin():
+        return jsonify({"error": "Non autorisé"}), 403
+
+    job = get_job(job_id)
+    if not job:
+        return jsonify({"error": "Job introuvable"}), 404
+
+    from services.claude_code_mission_service import _EXECUTION_STATE
+    state_key = (job_id, f"continue_after_text_{folder_id}")
+    if _EXECUTION_STATE.get(state_key, {}).get("status") == "running":
+        return jsonify({"error": "Cette relance aval est déjà en cours pour cette journée"}), 409
+
+    data = request.get_json(silent=True) or {}
+    model = _resolve_pipeline_api_model(job, data.get("model"))
+    max_slides = int(data.get("max_slides") or 60)
+    pace = data.get("pace") or "normal"
+
+    _EXECUTION_STATE[state_key] = {"status": "running", "model": str(model), "folder_id": folder_id}
+
+    import eventlet
+
+    def _run():
+        started_at = time.time()
+        try:
+            from services.claude_code_mission_service import run_volume_safety_api
+            from services.content_generation_service import (
+                _assemble_and_upload,
+                _update_job_db,
+                generate_audio_from_script,
+                run_content_review,
+            )
+            from services.formation_observability_service import log_pipeline_event
+
+            log_pipeline_event(
+                job_id,
+                "continue_after_text_started",
+                step="post_text_retry",
+                status="running",
+                folder_id=folder_id,
+                model=str(model) if model else None,
+                message="Relance aval depuis le texte généré",
+                data={"voice_type": "gtts", "sync_slides": True, "max_slides": max_slides, "pace": pace},
+            )
+
+            reset_info = _reset_folder_downstream_to_generated_text(job_id, folder_id)
+            log_pipeline_event(
+                job_id,
+                "continue_after_text_reset",
+                step="post_text_retry",
+                status="completed",
+                folder_id=folder_id,
+                model=str(model) if model else None,
+                message="Étapes aval remises à zéro",
+                data=reset_info,
+            )
+
+            volume_result = run_volume_safety_api(job_id, folder_id, model=model)
+            log_pipeline_event(
+                job_id,
+                "continue_after_text_volume_completed",
+                step="volume_safety",
+                status="completed",
+                folder_id=folder_id,
+                model=str(model) if model else None,
+                message="Sécurité volume terminée",
+                data={
+                    "skipped": bool(volume_result.get("skipped")),
+                    "target_reached": bool(volume_result.get("target_reached", True)),
+                    "enriched": len(volume_result.get("enriched") or []),
+                    "failed": len(volume_result.get("failed") or []),
+                },
+            )
+
+            review_result = run_content_review(folder_id, model=model)
+            _write_api_review_report(job_id, folder_id, review_result, model)
+
+            final_words, filename = _assemble_and_upload(
+                folder_id,
+                reset_info["platform_id"],
+                reset_info["content_job_id"],
+            )
+            _update_job_db(reset_info["content_job_id"], total_words=final_words)
+            log_pipeline_event(
+                job_id,
+                "continue_after_text_review_completed",
+                step="review",
+                status="completed",
+                folder_id=folder_id,
+                model=str(model) if model else None,
+                message="Révision conformité et Word 2 générés",
+                data={
+                    "segments_reviewed": review_result.get("segments_reviewed", 0),
+                    "segments_failed": review_result.get("segments_failed", 0),
+                    "patches_applied": review_result.get("patches_applied", 0),
+                    "doc_filename": filename,
+                    "total_words": final_words,
+                },
+            )
+
+            next_folder_id = _next_folder_in_formation(job_id, folder_id)
+            update_job(job_id, status="audio_running", error_message=None)
+            audio_result = generate_audio_from_script(
+                folder_id,
+                on_progress=_make_audio_progress_logger(job_id, folder_id, "gtts"),
+                force_all=True,
+                mock=False,
+                basic_tts=True,
+                next_folder_id=next_folder_id,
+                is_last_folder=next_folder_id is None,
+                sync_slides=True,
+                auto_generate_slides=True,
+                slide_max_slides=max_slides,
+                slide_pace=pace,
+                slide_model=model,
+            )
+            update_job(job_id, status="audio_completed", error_message=None)
+            log_pipeline_event(
+                job_id,
+                "continue_after_text_completed",
+                step="audio",
+                status="completed",
+                folder_id=folder_id,
+                model=str(model) if model else None,
+                duration_ms=int((time.time() - started_at) * 1000),
+                message="Relance aval terminée avec gTTS et slides synchronisées",
+                data=audio_result,
+            )
+            _EXECUTION_STATE[state_key] = {
+                "status": "done",
+                "model": str(model),
+                "folder_id": folder_id,
+                "result": audio_result,
+            }
+        except Exception as e:
+            err = str(e)[:500]
+            logger.error(f"❌ Continue after text job={job_id} folder={folder_id} : {err}")
+            try:
+                update_job(job_id, status="audio_error", error_message=f"folder {folder_id}: {err}")
+            except Exception:
+                pass
+            try:
+                from services.formation_observability_service import log_pipeline_event
+                log_pipeline_event(
+                    job_id,
+                    "continue_after_text_failed",
+                    step="post_text_retry",
+                    status="error",
+                    folder_id=folder_id,
+                    model=str(model) if model else None,
+                    duration_ms=int((time.time() - started_at) * 1000),
+                    message="Relance aval échouée",
+                    error=err,
+                )
+            except Exception:
+                pass
+            _EXECUTION_STATE[state_key] = {
+                "status": "error",
+                "model": str(model),
+                "folder_id": folder_id,
+                "error": err,
+            }
+
+    eventlet.spawn(_run)
+    return jsonify({
+        "ok": True,
+        "status": "running",
+        "folder_id": folder_id,
+        "model": str(model),
+        "tts_mode": "gtts",
+        "sync_slides": True,
+        "auto_generate_slides": True,
+    }), 202
 
 
 # ─── Liste des jobs ───────────────────────────────────────────────────────────
@@ -2083,7 +2879,8 @@ def _determine_next_ap_step(job_id: int) -> str | None:
     # 2. KB
     kb_done = j.get("status") in (
         "global_ready", "global_validated", "daily_ready",
-        "daily_validated", "tts_launched", "audio_launched",
+        "daily_validated", "tts_launched", "audio_running",
+        "audio_completed", "audio_launched",
     )
     if not kb_done:
         try:
@@ -2175,7 +2972,7 @@ def _determine_next_ap_step(job_id: int) -> str | None:
     """, (job_id,))
     dirty_count = cursor.fetchone()[0]
     conn.close()
-    if dirty_count > 0 or j.get("status") != "audio_launched":
+    if dirty_count > 0 or j.get("status") not in ("audio_completed", "audio_launched"):
         return "audio"
 
     return None  # tout est fait
@@ -2483,28 +3280,76 @@ def _execute_ap_step(job_id: int, step: str, job: dict) -> None:
 
         mock = (tts_mode == "mock")
         basic_tts = (tts_mode == "gtts")
+        voice_type = "mock" if mock else ("gtts" if basic_tts else "fish_audio")
+        update_job(job_id, status="audio_running", error_message=None)
         for idx, fid in enumerate(folder_ids):
             next_fid = folder_ids[idx + 1] if idx + 1 < len(folder_ids) else None
-            generate_audio_from_script(
-                fid,
-                force_all=False,
-                mock=mock,
-                basic_tts=basic_tts,
-                next_folder_id=next_fid,
-                is_last_folder=next_fid is None,
-            )
+            folder_started_at = time.time()
+            try:
+                from services.formation_observability_service import log_pipeline_event
+                log_pipeline_event(
+                    job_id,
+                    "audio_folder_started",
+                    step="audio",
+                    status="running",
+                    folder_id=fid,
+                    message="Synthèse audio journée démarrée",
+                    data={"voice_type": voice_type, "auto_pilot": True},
+                )
+            except Exception:
+                pass
+            try:
+                generate_audio_from_script(
+                    fid,
+                    on_progress=_make_audio_progress_logger(job_id, fid, voice_type),
+                    force_all=False,
+                    mock=mock,
+                    basic_tts=basic_tts,
+                    next_folder_id=next_fid,
+                    is_last_folder=next_fid is None,
+                )
+            except Exception as e:
+                try:
+                    from services.formation_observability_service import log_pipeline_event
+                    log_pipeline_event(
+                        job_id,
+                        "audio_folder_failed",
+                        step="audio",
+                        status="error",
+                        folder_id=fid,
+                        duration_ms=int((time.time() - folder_started_at) * 1000),
+                        message="Synthèse audio journée échouée",
+                        data={"voice_type": voice_type, "auto_pilot": True},
+                        error=str(e)[:500],
+                    )
+                except Exception:
+                    pass
+                raise
+            try:
+                from services.formation_observability_service import log_pipeline_event
+                log_pipeline_event(
+                    job_id,
+                    "audio_folder_completed",
+                    step="audio",
+                    status="completed",
+                    folder_id=fid,
+                    duration_ms=int((time.time() - folder_started_at) * 1000),
+                    message="Synthèse audio journée terminée",
+                    data={"voice_type": voice_type, "auto_pilot": True},
+                )
+            except Exception:
+                pass
             eventlet.sleep(5)
         # Status posé APRÈS le loop — si Azure redémarre en cours de route,
         # dirty=1 sur les folders non traités permettra à _determine_next_ap_step
         # de détecter que l'audio est incomplet et de relancer l'étape.
-        update_job(job_id, status="audio_launched")
+        update_job(job_id, status="audio_completed", error_message=None)
 
         # Module persistant
         try:
             from datetime import datetime as _dt
             from config import FRANCE_TZ as _tz
             j2 = get_job(job_id)
-            voice_type = "mock" if mock else ("gtts" if basic_tts else "fish_audio")
             conn = get_db_connection()
             cur = conn.cursor()
             rncp = j2.get("rncp_code") or ""
@@ -2567,6 +3412,7 @@ def _tick_auto_pilot(job_id: int) -> None:
 
     should_respawn = False
     current_step = "?"
+    started_at = None
     try:
         j = get_job(job_id)
         if not j or not j.get("auto_pilot_enabled"):
@@ -2575,20 +3421,75 @@ def _tick_auto_pilot(job_id: int) -> None:
         step = _determine_next_ap_step(job_id)
         if step is None:
             update_job(job_id, auto_pilot_step="done", auto_pilot_error=None)
+            try:
+                from services.formation_observability_service import log_pipeline_event
+                log_pipeline_event(
+                    job_id,
+                    "pipeline_completed",
+                    step="done",
+                    status="completed",
+                    model=j.get("auto_pilot_model"),
+                    message="Auto-pilot terminé",
+                )
+            except Exception:
+                pass
             logger.info(f"🤖 ✅ Auto-pilot TERMINÉ job {job_id}")
             return
 
         current_step = step
         update_job(job_id, auto_pilot_step=step, auto_pilot_error=None)
         logger.info(f"🤖 Auto-pilot job {job_id} → step={step}")
+        started_at = time.time()
+        try:
+            from services.formation_observability_service import log_pipeline_event
+            log_pipeline_event(
+                job_id,
+                "step_started",
+                step=step,
+                status="running",
+                model=j.get("auto_pilot_model"),
+                message=f"Étape auto-pilot démarrée : {step}",
+                data={
+                    "tts_mode": j.get("auto_pilot_tts_mode"),
+                    "use_claude_code": bool(j.get("auto_pilot_use_cc")),
+                },
+            )
+        except Exception:
+            pass
 
         _execute_ap_step(job_id, step, j)
+        try:
+            from services.formation_observability_service import log_pipeline_event
+            log_pipeline_event(
+                job_id,
+                "step_completed",
+                step=step,
+                status="completed",
+                model=j.get("auto_pilot_model"),
+                duration_ms=int((time.time() - started_at) * 1000) if started_at else None,
+                message=f"Étape auto-pilot terminée : {step}",
+            )
+        except Exception:
+            pass
         should_respawn = True
 
     except Exception as e:
         err = str(e)[:500]
         logger.error(f"❌ Auto-pilot job {job_id} step={current_step} : {err}")
         update_job(job_id, auto_pilot_error=err)
+        try:
+            from services.formation_observability_service import log_pipeline_event
+            log_pipeline_event(
+                job_id,
+                "step_failed",
+                step=current_step,
+                status="error",
+                duration_ms=int((time.time() - started_at) * 1000) if started_at else None,
+                message=f"Étape auto-pilot échouée : {current_step}",
+                error=err,
+            )
+        except Exception:
+            pass
 
     finally:
         _hb_stop[0] = True
@@ -2709,6 +3610,19 @@ def run_auto_pilot(job_id):
                auto_pilot_volume_done=0,
                auto_pilot_post_review_docs_done=0,
                auto_pilot_error=None)
+    try:
+        from services.formation_observability_service import log_pipeline_event
+        log_pipeline_event(
+            job_id,
+            "pipeline_started",
+            step="start",
+            status="running",
+            model=model,
+            message="Auto-pilot lancé",
+            data={"tts_mode": tts_mode, "use_claude_code": use_cc},
+        )
+    except Exception:
+        pass
 
     import eventlet
     eventlet.spawn(_tick_auto_pilot, job_id)
@@ -2740,3 +3654,147 @@ def auto_pilot_status(job_id):
     if step:
         return jsonify({"status": "running", "step": step, "model": model, "tts_mode": tts_mode}), 200
     return jsonify({"status": "starting", "model": model, "tts_mode": tts_mode}), 200
+
+
+@formation_bp.route("/api/formation/<int:job_id>/events", methods=["GET"])
+def formation_pipeline_events(job_id):
+    """Retourne les événements structurés de pipeline pour diagnostic/dashboard."""
+    if not _require_admin():
+        return jsonify({"error": "Non autorisé"}), 403
+    job = get_job(job_id)
+    if not job:
+        return jsonify({"error": "Job introuvable"}), 404
+    try:
+        limit = int(request.args.get("limit", 200))
+    except (TypeError, ValueError):
+        limit = 200
+    from services.formation_observability_service import list_pipeline_events
+    return jsonify({"events": list_pipeline_events(job_id, limit=limit)}), 200
+
+
+@formation_bp.route("/api/formation/<int:job_id>/diagnostic", methods=["GET"])
+def formation_pipeline_diagnostic(job_id):
+    """Snapshot exploitable par l'UI : état job + health + événements récents.
+
+    Objectif : ne plus diagnostiquer une pipeline depuis un simple status global.
+    Cet endpoint agrège les signaux de contrôle sans relancer d'étape coûteuse.
+    """
+    if not _require_admin():
+        return jsonify({"error": "Non autorisé"}), 403
+    job = get_job(job_id)
+    if not job:
+        return jsonify({"error": "Job introuvable"}), 404
+
+    try:
+        events_limit = int(request.args.get("events_limit", 80))
+    except (TypeError, ValueError):
+        events_limit = 80
+
+    try:
+        from services.formation_health_service import compute_health
+        health = compute_health(job_id)
+    except Exception as e:
+        logger.warning(f"⚠️ Diagnostic health job {job_id} : {e}")
+        health = {
+            "ok": False,
+            "blocking": ["health_error"],
+            "warnings": [],
+            "checks": {"health_error": {"ok": False, "detail": str(e)[:500]}},
+        }
+
+    try:
+        from services.claude_code_mission_service import compute_volume_audit
+        volume_audit = compute_volume_audit(job_id)
+    except Exception as e:
+        logger.warning(f"⚠️ Diagnostic volume job {job_id} : {e}")
+        volume_audit = None
+
+    from services.formation_observability_service import list_pipeline_events
+    events = list_pipeline_events(job_id, limit=events_limit)
+
+    folders = []
+    try:
+        from database.db import get_db_connection
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT
+                cf.id,
+                cf.name,
+                cf.position,
+                cgj.id,
+                cgj.status,
+                COALESCE(cgj.total_words, 0),
+                COUNT(cgs.id),
+                SUM(CASE WHEN cgs.status = 'completed' THEN 1 ELSE 0 END),
+                SUM(CASE WHEN COALESCE(cgs.reviewed, 0) = 1 THEN 1 ELSE 0 END),
+                SUM(CASE WHEN cgs.review_error IS NOT NULL THEN 1 ELSE 0 END),
+                SUM(CASE WHEN COALESCE(cgs.dirty, 0) = 1 THEN 1 ELSE 0 END)
+            FROM cours_folders cf
+            LEFT JOIN content_generation_jobs cgj ON cgj.folder_id = cf.id
+            LEFT JOIN content_generation_segments cgs ON cgs.job_id = cgj.id
+            WHERE cf.formation_job_id = ?
+            GROUP BY cf.id, cf.name, cf.position, cgj.id, cgj.status, cgj.total_words
+            ORDER BY cf.position ASC, cf.id ASC
+            """,
+            (job_id,),
+        )
+        for row in cursor.fetchall():
+            (
+                folder_id,
+                name,
+                position,
+                content_job_id,
+                content_status,
+                total_words,
+                segments_total,
+                segments_completed,
+                reviewed_segments,
+                review_errors,
+                dirty_segments,
+            ) = row
+            folders.append({
+                "folder_id": folder_id,
+                "name": name,
+                "position": position,
+                "content_job_id": content_job_id,
+                "content_status": content_status,
+                "total_words": total_words or 0,
+                "segments_total": segments_total or 0,
+                "segments_completed": segments_completed or 0,
+                "reviewed_segments": reviewed_segments or 0,
+                "review_errors": review_errors or 0,
+                "dirty_segments": dirty_segments or 0,
+            })
+        conn.close()
+    except Exception as e:
+        logger.warning(f"⚠️ Diagnostic folders job {job_id} : {e}")
+
+    public_job = {
+        key: job.get(key)
+        for key in (
+            "id",
+            "status",
+            "platform_id",
+            "platform_name",
+            "tp_name",
+            "rncp_code",
+            "nb_days",
+            "auto_pilot_enabled",
+            "auto_pilot_step",
+            "auto_pilot_error",
+            "auto_pilot_model",
+            "auto_pilot_tts_mode",
+            "error_message",
+        )
+        if key in job
+    }
+
+    return jsonify({
+        "job": public_job,
+        "health": health,
+        "volume_audit": volume_audit,
+        "folders": folders,
+        "events": events,
+    }), 200

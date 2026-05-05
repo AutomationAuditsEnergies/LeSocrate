@@ -57,7 +57,29 @@ def _split_for_gtts(text: str, max_chars: int = _CHUNK_MAX_CHARS) -> list:
     return [c for c in chunks if c]
 
 
-def convert_to_speech_basic(text: str, lang: str = "fr") -> bytes:
+def _speedup_mp3(audio_bytes: bytes, speed: float) -> bytes:
+    """Accélère légèrement un MP3 gTTS pour se rapprocher d'un débit cours."""
+    if speed <= 1.0:
+        return audio_bytes
+    try:
+        from pydub import AudioSegment, effects
+
+        audio = AudioSegment.from_mp3(io.BytesIO(audio_bytes))
+        sped = effects.speedup(
+            audio,
+            playback_speed=speed,
+            chunk_size=150,
+            crossfade=25,
+        )
+        output = io.BytesIO()
+        sped.export(output, format="mp3", bitrate="128k")
+        return output.getvalue()
+    except Exception as exc:
+        logger.warning(f"⚠️ gTTS speedup ignoré (speed={speed}) : {exc}")
+        return audio_bytes
+
+
+def convert_to_speech_basic(text: str, lang: str = "fr", speed: float | None = None) -> bytes:
     """
     Génère un MP3 à partir d'un texte via gTTS.
 
@@ -75,6 +97,8 @@ def convert_to_speech_basic(text: str, lang: str = "fr") -> bytes:
     Args:
         text: texte à synthétiser.
         lang: code de langue ISO 639 ('fr', 'en', 'es', ...).
+        speed: facteur d'accélération optionnel. Si absent, lit
+            BASIC_TTS_SPEED, défaut 1.28.
 
     Returns:
         bytes du MP3 complet.
@@ -94,10 +118,11 @@ def convert_to_speech_basic(text: str, lang: str = "fr") -> bytes:
     # 5× avec backoff 60/120/240/480/960s = wait max ~30 min sur le pire cas.
     inter_chunk_delay = float(os.getenv("BASIC_TTS_CHUNK_DELAY_SEC", "3.0"))
     max_429_retries = int(os.getenv("BASIC_TTS_MAX_429_RETRIES", "5"))
+    speed = float(speed if speed is not None else os.getenv("BASIC_TTS_SPEED", "1.28"))
 
     logger.info(
         f"🎙️ gTTS : synthèse de {len(text)} caractères en {len(chunks)} chunk(s) "
-        f"(delay={inter_chunk_delay}s, max_retries={max_429_retries})"
+        f"(delay={inter_chunk_delay}s, max_retries={max_429_retries}, speed={speed})"
     )
 
     parts = []
@@ -142,4 +167,4 @@ def convert_to_speech_basic(text: str, lang: str = "fr") -> bytes:
     if not parts:
         raise ValueError("Aucun chunk produit (texte vide ?)")
 
-    return b"".join(parts)
+    return _speedup_mp3(b"".join(parts), speed)

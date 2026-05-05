@@ -345,6 +345,11 @@ def init_database():
             logger.info("✅ Colonne review_error ajoutée à content_generation_segments")
         except Exception:
             pass
+        try:
+            cursor.execute("ALTER TABLE content_generation_segments ADD COLUMN text_content_pre_review TEXT")
+            logger.info("✅ Colonne text_content_pre_review ajoutée à content_generation_segments")
+        except Exception:
+            pass
 
         # Migration : ajouter colonnes from_scratch + module_contents (pipeline formation)
         cursor.execute("PRAGMA table_info(content_generation_jobs)")
@@ -493,6 +498,56 @@ def init_database():
         if "voice_updated_at" not in fm_cols:
             cursor.execute("ALTER TABLE formation_modules ADD COLUMN voice_updated_at TIMESTAMP")
             logger.info("✅ Colonne voice_updated_at ajoutée à formation_modules")
+
+        # ─── Observabilité pipeline : rapports conformité + événements ───────
+        # Les rapports de conformité ne peuvent pas dépendre uniquement du
+        # filesystem local en production Azure. Cette table garde un snapshot
+        # durable par exécution de review, récupérable par le frontend.
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS content_review_reports (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            job_id INTEGER NOT NULL,
+            folder_id INTEGER NOT NULL,
+            source TEXT DEFAULT 'api',
+            generated_via TEXT,
+            summary_json TEXT DEFAULT '{}',
+            report_json TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (job_id) REFERENCES formation_pipeline_jobs(id),
+            FOREIGN KEY (folder_id) REFERENCES cours_folders(id)
+        )
+        """)
+        cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_content_review_reports_job_folder
+        ON content_review_reports(job_id, folder_id, created_at)
+        """)
+        logger.info("✅ Table content_review_reports créée/vérifiée")
+
+        # Append-only : chaque transition importante de pipeline est conservée
+        # pour diagnostic et futur dashboard qualité.
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS formation_pipeline_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            job_id INTEGER NOT NULL,
+            folder_id INTEGER,
+            step TEXT,
+            event_type TEXT NOT NULL,
+            status TEXT DEFAULT 'info',
+            message TEXT,
+            model TEXT,
+            duration_ms INTEGER,
+            data_json TEXT DEFAULT '{}',
+            error TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (job_id) REFERENCES formation_pipeline_jobs(id),
+            FOREIGN KEY (folder_id) REFERENCES cours_folders(id)
+        )
+        """)
+        cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_formation_pipeline_events_job
+        ON formation_pipeline_events(job_id, created_at)
+        """)
+        logger.info("✅ Table formation_pipeline_events créée/vérifiée")
 
         # Colonne source_module_id sur platform_config (nullable, FK vers le module)
         cursor.execute("PRAGMA table_info(platform_config)")

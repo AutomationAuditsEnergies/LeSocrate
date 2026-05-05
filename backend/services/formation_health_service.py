@@ -237,7 +237,6 @@ def compute_health(job_id: int) -> dict:
             "checks": {"job_state": {"ok": False, "detail": f"Job {job_id} introuvable"}},
         }
 
-    platform_id = job["platform_id"]
     nb_days = job.get("nb_days") or 0
     expected_segments_per_day = 6 * 3  # 6 sous-parties × 3 passes (modèle pédagogique)
     expected_total_segments = nb_days * expected_segments_per_day
@@ -250,10 +249,10 @@ def compute_health(job_id: int) -> dict:
         SELECT cf.id, cf.name, cf.position, cj.id, cj.status
         FROM cours_folders cf
         LEFT JOIN content_generation_jobs cj ON cj.folder_id = cf.id
-        WHERE cf.platform_id = ?
+        WHERE cf.formation_job_id = ?
         ORDER BY cf.position ASC
         """,
-        (platform_id,),
+        (job_id,),
     )
     folders = cursor.fetchall()  # [(folder_id, name, position, cg_job_id, cg_status)]
 
