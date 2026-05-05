@@ -2,6 +2,33 @@
 
 ## 2026-05-05
 
+### fix: timestamps diagnostic en heure Paris (était UTC)
+
+`formatEventTime` dans `FormationPipeline.jsx` parsait les `created_at` SQLite
+sans timezone, ce qui faisait que JS les interprétait comme heure locale alors
+que la DB stocke en UTC (`CURRENT_TIMESTAMP`). Résultat : un événement qui
+arrivait à 13:01 Paris s'affichait "11:01" dans le diagnostic.
+
+Désormais, `formatEventTime` ajoute explicitement `Z` à la string SQL pour
+forcer le parsing UTC, puis appelle `toLocaleTimeString('fr-FR', { timeZone:
+'Europe/Paris' })`. Affichage cohérent avec l'heure de l'utilisateur.
+
+### feat: dropdown modèle LLM sur "Continuer après le texte" + persistance
+
+Le bouton **Continuer après le texte** est maintenant accompagné d'un
+`<select>` qui permet de choisir explicitement le modèle LLM pour la relance
+aval (DeepSeek Pro / DeepSeek Flash / Sonnet / Haiku). Initialisé depuis
+`job.auto_pilot_model` si présent, sinon **DeepSeek Pro** par défaut.
+
+Le choix est :
+- envoyé dans le payload de `POST /api/formation/<job_id>/content/<folder_id>/continue-after-text`
+- **persisté** côté backend dans `auto_pilot_model` (via `update_job`), pour que
+  les futurs clics ou redémarrages auto-pilot retrouvent le bon provider
+  sans qu'il faille le repasser explicitement
+
+Conséquence : un job historique sans `auto_pilot_model` (NULL en DB) peut être
+forcé en DeepSeek depuis l'UI sans toucher aux variables d'environnement Azure.
+
 ### fix: provider LLM — fallback robuste quand `auto_pilot_model` est null + traçabilité events audio
 
 Suite du fix précédent : un job historique sans `auto_pilot_model` persisté

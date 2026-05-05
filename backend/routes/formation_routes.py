@@ -2637,6 +2637,16 @@ def continue_after_text(job_id, folder_id):
     max_slides = int(data.get("max_slides") or 60)
     pace = data.get("pace") or "normal"
 
+    # Persiste le choix de modèle utilisé pour cette relance, pour que les
+    # futurs `continue_after_text` ou redémarrages auto-pilot retrouvent le
+    # bon provider sans qu'il faille le repasser dans le payload.
+    if model and model != job.get("auto_pilot_model"):
+        try:
+            update_job(job_id, auto_pilot_model=model)
+            job["auto_pilot_model"] = model
+        except Exception as e:
+            logger.warning(f"⚠️ Persistance auto_pilot_model={model} échouée pour job {job_id}: {e}")
+
     _EXECUTION_STATE[state_key] = {"status": "running", "model": str(model), "folder_id": folder_id}
 
     import eventlet

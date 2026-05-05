@@ -382,9 +382,18 @@ function formatDuration(ms) {
 
 function formatEventTime(value) {
   if (!value) return ''
-  const date = new Date(String(value).replace(' ', 'T'))
+  // SQLite CURRENT_TIMESTAMP est en UTC. La string arrive sans timezone
+  // ("2026-05-05 11:01:23") — on force le parsing UTC en ajoutant 'Z',
+  // sinon JS l'interprète comme heure locale et l'affichage est décalé.
+  const isoLike = String(value).replace(' ', 'T')
+  const hasTz = isoLike.endsWith('Z') || /[+-]\d{2}:\d{2}$/.test(isoLike)
+  const date = new Date(hasTz ? isoLike : `${isoLike}Z`)
   if (Number.isNaN(date.getTime())) return String(value).slice(11, 16) || String(value)
-  return date.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })
+  return date.toLocaleTimeString('fr-FR', {
+    hour: '2-digit',
+    minute: '2-digit',
+    timeZone: 'Europe/Paris',
+  })
 }
 
 function eventTone(status) {
@@ -1397,6 +1406,15 @@ export default function FormationPipeline() {
   const [audioError, setAudioError] = useState('')
   const [continuingAfterTextFolders, setContinuingAfterTextFolders] = useState({})
   const [continueAfterTextError, setContinueAfterTextError] = useState('')
+  // Modèle utilisé pour la relance aval. Initialisé sur l'auto_pilot_model du
+  // job courant si présent, sinon DeepSeek Pro (cas des jobs historiques sans
+  // colonne persistée).
+  const [continueAfterTextModel, setContinueAfterTextModel] = useState('deepseek-v4-pro')
+  useEffect(() => {
+    if (job?.auto_pilot_model) {
+      setContinueAfterTextModel(job.auto_pilot_model)
+    }
+  }, [job?.auto_pilot_model])
   const [pipelineDiagnostic, setPipelineDiagnostic] = useState(null)
   const [pipelineDiagnosticLoading, setPipelineDiagnosticLoading] = useState(false)
   const [pipelineDiagnosticError, setPipelineDiagnosticError] = useState('')
@@ -1670,10 +1688,11 @@ export default function FormationPipeline() {
     }
   }
 
-  const handleContinueAfterText = async (folderId) => {
+  const handleContinueAfterText = async (folderId, modelOverride = null) => {
     setContinueAfterTextError('')
     setContinuingAfterTextFolders(prev => ({ ...prev, [folderId]: true }))
     try {
+      const chosenModel = modelOverride || continueAfterTextModel || job?.auto_pilot_model
       const resp = await fetch(
         apiUrl(`/api/formation/${selectedJobId}/content/${folderId}/continue-after-text`),
         {
@@ -1681,7 +1700,7 @@ export default function FormationPipeline() {
           headers: { 'Content-Type': 'application/json' },
           credentials: 'include',
           body: JSON.stringify({
-            model: job?.auto_pilot_model,
+            model: chosenModel,
             max_slides: 60,
             pace: 'normal',
           }),
@@ -3028,7 +3047,27 @@ export default function FormationPipeline() {
                                 }}>
                                   <Icon name="description" style={{ fontSize: '12px' }} /> Texte généré
                                 </div>
-                                <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                                <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center' }}>
+                                  <select
+                                    value={continueAfterTextModel}
+                                    onChange={e => setContinueAfterTextModel(e.target.value)}
+                                    disabled={continuingAfterText}
+                                    style={{
+                                      padding: '6px 8px',
+                                      fontSize: '12px',
+                                      background: 'rgba(15, 23, 42, 0.6)',
+                                      color: '#cbd5e1',
+                                      border: '1px solid rgba(167, 139, 250, 0.3)',
+                                      borderRadius: '6px',
+                                      cursor: 'pointer',
+                                    }}
+                                    title="Modèle LLM utilisé pour la relance aval (transitions, closings, review)"
+                                  >
+                                    <option value="deepseek-v4-pro">DeepSeek Pro</option>
+                                    <option value="deepseek-v4-flash">DeepSeek Flash</option>
+                                    <option value="sonnet">Claude Sonnet</option>
+                                    <option value="haiku">Claude Haiku</option>
+                                  </select>
                                   <button
                                     style={{
                                       ...S.btn('ghost'),
