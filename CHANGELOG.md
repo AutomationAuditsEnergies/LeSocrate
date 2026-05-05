@@ -2,6 +2,28 @@
 
 ## 2026-05-05
 
+### fix: provider LLM — fallback robuste quand `auto_pilot_model` est null + traçabilité events audio
+
+Suite du fix précédent : un job historique sans `auto_pilot_model` persisté
+(NULL en DB) faisait retomber `_resolve_pipeline_api_model(job)` sur `None`,
+ce qui propageait `llm_model=None` jusqu'aux services de transition qui
+finissaient par appeler `default_model()` → fallback Anthropic dès qu'une
+clé `ANTHROPIC_API_KEY` était configurée. Les jobs DeepSeek historiques
+plantaient donc encore sur "credit balance too low".
+
+`_resolve_pipeline_api_model` chaîne désormais 4 fallbacks :
+1. modèle explicite passé en argument
+2. `auto_pilot_model` du job
+3. env var `FORMATION_LLM_PROVIDER` ou `LLM_PROVIDER` (`deepseek` →
+   `deepseek-v4-pro`, `anthropic` → `sonnet`)
+4. `DEEPSEEK_API_KEY` présente sans `ANTHROPIC_API_KEY` → `deepseek-v4-pro`
+
+Et tous les `log_pipeline_event` de la phase audio (`audio_folder_started`,
+`audio_folder_completed`, `audio_folder_failed`, `step_failed`) reçoivent
+maintenant `model=_resolve_pipeline_api_model(job)` — visible directement
+dans la modale de détail (champ "Modèle LLM"), pour vérifier en un coup
+d'œil quel provider a été utilisé.
+
 ### fix: cohérence provider LLM — transitions/closings respectent le modèle du job
 
 Quand la pipeline était lancée avec DeepSeek (`auto_pilot_model="deepseek-v4-pro"`),

@@ -69,11 +69,31 @@ def _normalize_pipeline_model_choice(raw, default=None):
 def _resolve_pipeline_api_model(job: dict | None, requested_model=None):
     """Résout le modèle API à utiliser pour une action du job.
 
-    Priorité : modèle explicite de la requête, puis modèle choisi au lancement
-    de la pipeline (`auto_pilot_model`). Ça évite les retours silencieux vers
-    le modèle par défaut global quand l'utilisateur a choisi DeepSeek.
+    Priorité :
+      1. modèle explicite passé en argument
+      2. modèle choisi au lancement (`auto_pilot_model`)
+      3. fallback FORMATION_LLM_PROVIDER (env var) → deepseek-v4-pro / sonnet
+      4. fallback DEEPSEEK_API_KEY (sans ANTHROPIC_API_KEY) → deepseek-v4-pro
+      5. None (laisse les services retomber sur leur default_model())
+
+    Garantit qu'un job lancé en DeepSeek reste en DeepSeek pour TOUTES les
+    étapes, même si `auto_pilot_model` n'a pas été persisté côté DB (jobs
+    historiques) — ce qui évite que les services de transition retombent
+    silencieusement sur Anthropic.
     """
     model = requested_model or (job or {}).get("auto_pilot_model")
+    if not model:
+        provider = (
+            os.environ.get("FORMATION_LLM_PROVIDER")
+            or os.environ.get("LLM_PROVIDER")
+            or ""
+        ).strip().lower()
+        if provider == "deepseek":
+            model = "deepseek-v4-pro"
+        elif provider == "anthropic":
+            model = "sonnet"
+        elif os.environ.get("DEEPSEEK_API_KEY") and not os.environ.get("ANTHROPIC_API_KEY"):
+            model = "deepseek-v4-pro"
     if not model:
         return None
     model = str(model).strip()
@@ -2227,6 +2247,7 @@ def launch_audio(job_id):
                 status="running",
                 folder_id=folder_id,
                 message="Synthèse audio journée démarrée",
+                model=_resolve_pipeline_api_model(job),
                 data={
                     "voice_type": voice_type,
                     "force_all": force_all,
@@ -2262,6 +2283,7 @@ def launch_audio(job_id):
                     folder_id=folder_id,
                     duration_ms=duration_ms,
                     message="Synthèse audio journée terminée",
+                    model=_resolve_pipeline_api_model(job),
                     data={"voice_type": voice_type},
                 )
             except Exception:
@@ -2283,6 +2305,7 @@ def launch_audio(job_id):
                     folder_id=folder_id,
                     duration_ms=duration_ms,
                     message="Synthèse audio journée échouée",
+                    model=_resolve_pipeline_api_model(job),
                     data={"voice_type": voice_type},
                     error=str(e)[:500],
                 )
@@ -3296,6 +3319,7 @@ def _execute_ap_step(job_id: int, step: str, job: dict) -> None:
                     status="running",
                     folder_id=fid,
                     message="Synthèse audio journée démarrée",
+                    model=_resolve_pipeline_api_model(job),
                     data={"voice_type": voice_type, "auto_pilot": True},
                 )
             except Exception:
@@ -3322,6 +3346,7 @@ def _execute_ap_step(job_id: int, step: str, job: dict) -> None:
                         folder_id=fid,
                         duration_ms=int((time.time() - folder_started_at) * 1000),
                         message="Synthèse audio journée échouée",
+                        model=_resolve_pipeline_api_model(job),
                         data={"voice_type": voice_type, "auto_pilot": True},
                         error=str(e)[:500],
                     )
@@ -3338,6 +3363,7 @@ def _execute_ap_step(job_id: int, step: str, job: dict) -> None:
                     folder_id=fid,
                     duration_ms=int((time.time() - folder_started_at) * 1000),
                     message="Synthèse audio journée terminée",
+                    model=_resolve_pipeline_api_model(job),
                     data={"voice_type": voice_type, "auto_pilot": True},
                 )
             except Exception:
@@ -3490,6 +3516,7 @@ def _tick_auto_pilot(job_id: int) -> None:
                 duration_ms=int((time.time() - started_at) * 1000) if started_at else None,
                 message=f"Étape auto-pilot échouée : {current_step}",
                 error=err,
+                model=_resolve_pipeline_api_model(job),
             )
         except Exception:
             pass
