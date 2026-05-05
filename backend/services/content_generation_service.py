@@ -1980,6 +1980,7 @@ def generate_audio_from_script(
         source_folder_id=folder_id,
         next_folder_id=next_folder_id,
         is_last_folder=is_last_folder,
+        model=llm_model,
     )
     if carryover_out:
         logger.info(

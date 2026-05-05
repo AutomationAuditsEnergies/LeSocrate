@@ -12,6 +12,7 @@ import WarningTemplate from '../components/slides/templates/WarningTemplate';
 import TipTemplate from '../components/slides/templates/TipTemplate';
 import OpinionTemplate from '../components/slides/templates/OpinionTemplate';
 import TransitionTemplate from '../components/slides/templates/TransitionTemplate';
+import FrameworkTemplate from '../components/slides/templates/FrameworkTemplate';
 
 const COMMON_PROPS = {
   badge: 'TP-CRCD',
@@ -177,6 +178,38 @@ const TEMPLATE_PREVIEWS = [
       to_topic: 'Les gestes métier',
     },
   },
+  {
+    type: 'framework',
+    label: 'Framework — 4 satellites + cœur',
+    description: 'Modèle conceptuel circulaire à 4 axes (ex. 5 forces de Porter).',
+    data: {
+      title: 'Les 4 forces de Porter',
+      center: { title: 'Intensité de rivalité entre concurrents' },
+      segments: [
+        { title: 'Menace des nouveaux entrants', desc: "Barrières à l'entrée faibles." },
+        { title: 'Menace des produits de substitution', desc: 'Alternatives plus efficaces.' },
+        { title: 'Pouvoir de négociation des clients', desc: 'Clients nombreux ou concentrés.' },
+        { title: 'Pouvoir de négociation des fournisseurs', desc: 'Fournisseurs peu nombreux.' },
+      ],
+    },
+  },
+  {
+    type: 'framework',
+    label: 'Framework — 6 satellites + cœur',
+    description: 'Variante plus dense (modèles à 6 leviers ou étapes).',
+    data: {
+      title: 'Les 6 leviers de la performance',
+      center: { title: 'Performance commerciale' },
+      segments: [
+        { title: 'Prospection', desc: 'Volume des contacts entrants.' },
+        { title: 'Qualification', desc: 'Tri du besoin réel.' },
+        { title: 'Argumentaire', desc: 'Promesse adaptée.' },
+        { title: 'Closing', desc: 'Décision claire.' },
+        { title: 'Onboarding', desc: 'Démarrage sans friction.' },
+        { title: 'Fidélisation', desc: 'Valeur dans la durée.' },
+      ],
+    },
+  },
 ];
 
 export default function TestSlides() {
@@ -211,6 +244,8 @@ export default function TestSlides() {
         return <OpinionTemplate {...slide.data} {...COMMON_PROPS} />;
       case 'transition':
         return <TransitionTemplate {...slide.data} {...COMMON_PROPS} />;
+      case 'framework':
+        return <FrameworkTemplate {...slide.data} {...COMMON_PROPS} />;
       default:
         return null;
     }

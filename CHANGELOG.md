@@ -2,6 +2,18 @@
 
 ## 2026-05-05
 
+### fix: `_build_course_blocs_from_segments` ne propageait pas `llm_model` → appel Anthropic résiduel
+
+Dans `generate_audio_from_script()`, l'appel à `_build_course_blocs_from_segments` n'incluait pas le
+paramètre `model=llm_model`. Conséquence : si le bloc 7 d'un cours dépassait son budget TTS (cas
+"dernier dossier"), `_reduce_last_bloc_to_budget` recevait `model=None` et tombait sur
+`default_model()` → appel Anthropic malgré le modèle affiché "deepseek-v4-pro" dans les events.
+
+Fix chirurgical : ajout de `model=llm_model` dans l'appel à `_build_course_blocs_from_segments`
+(`content_generation_service.py` ligne ~1975).
+
+
+
 ### fix: timestamps diagnostic en heure Paris (était UTC)
 
 `formatEventTime` dans `FormationPipeline.jsx` parsait les `created_at` SQLite
@@ -28,6 +40,26 @@ Le choix est :
 
 Conséquence : un job historique sans `auto_pilot_model` (NULL en DB) peut être
 forcé en DeepSeek depuis l'UI sans toucher aux variables d'environnement Azure.
+
+### feat: nouveau template slide `Framework` (modèle conceptuel circulaire)
+
+Inspiré du pattern "5 forces de Porter" : anneau coloré segmenté + cœur central
+texte + N satellites (4 ou 6) avec titre + description courte. Pensé pour les
+modèles conceptuels denses (frameworks stratégie, piliers d'une démarche, leviers).
+
+- `frontend/src/components/slides/templates/FrameworkTemplate.jsx` : SVG ring
+  segmenté (palette pastel orange/turquoise/sarcelle/vert/jaune/corail), cœur
+  blanc avec titre central, satellites positionnés par calcul d'angle.
+- Placement elliptique adaptatif (`distanceX` ≠ `distanceY`, factors par zone) :
+  satellites latéraux ancrés gauche/droite du cercle ; satellites verticaux
+  ancrés au-dessus / en-dessous de leur arc, alignés vers le bord extérieur de
+  la slide (text-align gauche pour côté gauche, droite pour côté droit).
+- 2 exemples ajoutés à `TestSlides.jsx` : *Les 4 forces de Porter* (4 satellites
+  + cœur) et *Les 6 leviers de la performance* (6 satellites + cœur).
+- Style cohérent avec les autres templates : fond crème `#FFF9E6`, header badge
+  rouge + brandName, Fredoka pour les titres / Poppins pour le corps.
+
+Visible sur `/test-slides` (route publique).
 
 ### fix: provider LLM — fallback robuste quand `auto_pilot_model` est null + traçabilité events audio
 
