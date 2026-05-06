@@ -396,6 +396,36 @@ function formatEventTime(value) {
   })
 }
 
+function formatJobTimestamp(value) {
+  if (!value) return ''
+  const isoLike = String(value).replace(' ', 'T')
+  const hasTz = isoLike.endsWith('Z') || /[+-]\d{2}:\d{2}$/.test(isoLike)
+  const date = new Date(hasTz ? isoLike : `${isoLike}Z`)
+  if (Number.isNaN(date.getTime())) return String(value)
+  return date.toLocaleString('fr-FR', {
+    day: '2-digit',
+    month: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    timeZone: 'Europe/Paris',
+  })
+}
+
+function setPipelineJobInUrl(jobId, { replace = false } = {}) {
+  if (typeof window === 'undefined') return
+  const url = new URL(window.location.href)
+  if (jobId) {
+    url.searchParams.set('job', String(jobId))
+  } else {
+    url.searchParams.delete('job')
+  }
+  window.history[replace ? 'replaceState' : 'pushState'](
+    null,
+    '',
+    `${url.pathname}${url.search}${url.hash}`,
+  )
+}
+
 function eventTone(status) {
   if (status === 'completed') return { color: '#34d399', icon: 'check_circle' }
   if (status === 'running') return { color: '#fbbf24', icon: 'hourglass_empty' }
@@ -882,6 +912,8 @@ function JobCard({ job, onSelect, selected }) {
     : (job.status === 'error' || job.status === 'audio_error') ? 'red'
     : POLLING_STATUSES.has(job.status) ? 'amber'
     : 'violet'
+  const createdAt = formatJobTimestamp(job.created_at)
+  const platformLabel = job.platform_id ? `P${job.platform_id}` : 'P?'
 
   return (
     <div
@@ -899,14 +931,41 @@ function JobCard({ job, onSelect, selected }) {
         justifyContent: 'space-between',
         gap: '12px',
       }}
+      title={`Job #${job.id} · ${platformLabel}${job.platform_name ? ` · ${job.platform_name}` : ''}`}
     >
-      <div>
-        <div style={{ fontWeight: 600, fontSize: '15px', color: '#e2e8f0' }}>{job.tp_name}</div>
-        {job.platform_name && (
-          <div style={{ fontSize: '11px', color: '#8b5cf6', fontWeight: 500, marginTop: '1px' }}>{job.platform_name}</div>
-        )}
-        <div style={{ fontSize: '12px', color: '#64748b', marginTop: '2px' }}>
-          {job.total_hours}h — {job.nb_days} jour{job.nb_days > 1 ? 's' : ''} · RNCP {job.rncp_code}
+      <div style={{ minWidth: 0, flex: '1 1 auto' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+          <div style={{ fontWeight: 600, fontSize: '15px', color: '#e2e8f0' }}>{job.tp_name}</div>
+          <span style={{
+            fontSize: '11px',
+            fontWeight: 700,
+            color: '#c4b5fd',
+            background: 'rgba(139,92,246,0.14)',
+            border: '1px solid rgba(139,92,246,0.24)',
+            borderRadius: '999px',
+            padding: '2px 8px',
+          }}>
+            Job #{job.id}
+          </span>
+          <span style={{
+            fontSize: '11px',
+            fontWeight: 700,
+            color: '#94a3b8',
+            background: 'rgba(148,163,184,0.08)',
+            border: '1px solid rgba(148,163,184,0.16)',
+            borderRadius: '999px',
+            padding: '2px 8px',
+          }}>
+            {platformLabel}
+          </span>
+        </div>
+        <div style={{ fontSize: '11px', color: '#a78bfa', fontWeight: 600, marginTop: '4px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {job.platform_name || 'Plateforme sans nom'}
+        </div>
+        <div style={{ fontSize: '12px', color: '#64748b', marginTop: '3px', display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+          <span>{job.total_hours}h · {job.nb_days} jour{job.nb_days > 1 ? 's' : ''}</span>
+          <span>RNCP {job.rncp_code}</span>
+          {createdAt && <span>Créé le {createdAt}</span>}
         </div>
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -2243,11 +2302,13 @@ export default function FormationPipeline() {
   const handleJobCreated = async (jobId) => {
     setShowNew(false)
     setSelectedJobId(jobId)
+    setPipelineJobInUrl(jobId)
     await fetchJobs()
   }
 
   const handleSelectJob = (j) => {
     setSelectedJobId(j.id)
+    setPipelineJobInUrl(j.id)
     setJob(j)
     setGlobalProgram(j.global_program || '')
     setDailyPrograms([])
@@ -2257,6 +2318,24 @@ export default function FormationPipeline() {
     setPipelineDiagnostic(null)
     setPipelineDiagnosticError('')
   }
+
+  useEffect(() => {
+    if (showNew || selectedJobId || jobs.length === 0) return
+    const rawJobId = new URLSearchParams(window.location.search).get('job')
+    const parsedJobId = Number(rawJobId)
+    if (!parsedJobId) return
+    const initialJob = jobs.find(j => j.id === parsedJobId)
+    if (!initialJob) return
+    setSelectedJobId(initialJob.id)
+    setJob(initialJob)
+    setGlobalProgram(initialJob.global_program || '')
+    setDailyPrograms([])
+    setDailyEditIdx(null)
+    setActionError('')
+    setTtsResult(null)
+    setPipelineDiagnostic(null)
+    setPipelineDiagnosticError('')
+  }, [jobs, selectedJobId, showNew])
 
   // ─── Édition journée ──────────────────────────────────────────────────────
   const startEditDay = (idx) => {
@@ -2296,7 +2375,7 @@ export default function FormationPipeline() {
         <div style={{ fontSize: '22px', color: '#8B5CF6' }}><Icon name="school" /></div>
         <h1 style={S.topBarTitle}>Pipeline Formation</h1>
         <div style={{ flex: 1 }} />
-        <button style={S.btn('ghost')} onClick={() => { setShowNew(v => !v); setSelectedJobId(null) }}>
+        <button style={S.btn('ghost')} onClick={() => { setShowNew(v => !v); setSelectedJobId(null); setPipelineJobInUrl(null) }}>
           <Icon name={showNew ? 'close' : 'add'} /> {showNew ? 'Annuler' : 'Nouveau pipeline'}
         </button>
       </div>
@@ -2330,6 +2409,11 @@ export default function FormationPipeline() {
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '12px' }}>
                 <div>
                   <div style={{ fontSize: '20px', fontWeight: 700, color: '#e2e8f0' }}>{job.tp_name}</div>
+                  <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginTop: '6px' }}>
+                    <span style={S.tag('violet')}>Job #{job.id}</span>
+                    <span style={S.tag('violet')}>P{job.platform_id || '?'}</span>
+                    {job.created_at && <span style={S.tag('violet')}>Créé le {formatJobTimestamp(job.created_at)}</span>}
+                  </div>
                   {job.platform_name && (
                     <div style={{ fontSize: '12px', color: '#8b5cf6', fontWeight: 600, marginTop: '2px' }}>
                       <Icon name="layers" /> {job.platform_name}
@@ -4070,6 +4154,7 @@ function ReviewReportModal({ jobId, folder, onClose }) {
     '#DB': 'Diff texte courant / snapshot avant révision',
     '#ERR': 'Erreur reviewer',
   }
+  const reportTimestamp = report?.imported_at || report?.persisted_at
 
   return (
     <div onClick={onClose} style={{
@@ -4094,9 +4179,9 @@ function ReviewReportModal({ jobId, folder, onClose }) {
             <div style={{ fontSize: '15px', color: '#e2e8f0', fontWeight: 600 }}>
               {folder.folder_name || `Dossier ${folder.folder_id}`}
             </div>
-            {report?.imported_at && (
+            {reportTimestamp && (
               <div style={{ fontSize: '11px', color: '#94a3b8', marginTop: '4px' }}>
-                Importé le {new Date(report.imported_at).toLocaleString('fr-FR')}
+                Rapport généré le {new Date(String(reportTimestamp).replace(' ', 'T')).toLocaleString('fr-FR')}
                 {report.generated_via && ` · ${report.generated_via}`}
                 {report.via_positional_fallback && ' · résolution positionnelle (ids segment obsolètes)'}
               </div>

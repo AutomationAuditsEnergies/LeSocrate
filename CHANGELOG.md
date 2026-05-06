@@ -1,5 +1,19 @@
 # Changelog
 
+## 2026-05-06
+
+### feat: liste des jobs enrichie + deep-link `?job=` (FormationPipeline.jsx)
+
+`JobCard` montre désormais des pills **Job #X** et **PX** (platform_id),
+le nom de la plateforme bien plus visible, et la date de création
+formatée en heure Paris (`formatJobTimestamp`).
+
+Helper `setPipelineJobInUrl(jobId)` qui synchronise le job sélectionné
+dans `?job=…` via `pushState` / `replaceState`. Au chargement, un
+`useEffect` lit `?job=` et restaure la sélection si l'ID correspond à
+un job présent. Permet de bookmarker / partager l'URL d'un pipeline
+précis et de revenir dessus après reload.
+
 ## 2026-05-05
 
 ### chore: marqueur `LOGGING_BOOT v2` dans `configure_logging()`
