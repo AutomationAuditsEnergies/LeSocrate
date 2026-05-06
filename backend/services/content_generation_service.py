@@ -2338,7 +2338,7 @@ def generate_audio_from_script(
             continue
 
         if sync_slides:
-            mode_label = "MOCK" if mock else "BASIC gTTS" if basic_tts else "Fish Audio"
+            mode_label = "MOCK" if mock else "BASIC edge-tts" if basic_tts else "Fish Audio"
             _progress(
                 step,
                 len(playlist_items),
@@ -2365,8 +2365,8 @@ def generate_audio_from_script(
             from services.playlist_tts_service import _generate_silence_mp3
             final_bytes = _generate_silence_mp3(1)
         elif basic_tts:
-            _progress(step, len(playlist_items), f"[BASIC] Bloc {bloc['bloc_number']}/7 — gTTS ({len(bloc['text'].split())} mots)...")
-            logger.info(f"   🔊 [BASIC gTTS] Bloc {bloc['bloc_number']} ({filename}) — génération via gTTS…")
+            _progress(step, len(playlist_items), f"[BASIC] Bloc {bloc['bloc_number']}/7 — edge-tts ({len(bloc['text'].split())} mots)...")
+            logger.info(f"   🔊 [BASIC edge-tts] Bloc {bloc['bloc_number']} ({filename}) — génération via edge-tts…")
             from services.basic_tts_service import convert_to_speech_basic
             # Pas de padding : la durée gTTS ne matche pas les créneaux cours,
             # mais acceptable pour des tests. L'audio est plus court que la

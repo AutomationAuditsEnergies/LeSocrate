@@ -2,6 +2,47 @@
 
 ## 2026-05-06
 
+### feat: TTS basique migré de gTTS vers edge-tts (Microsoft Edge, voix neurales)
+
+**Pourquoi**
+
+gTTS utilise l'API non officielle de Google Translate, qui se rate-limit
+agressivement (~50k chars/h, soit ~12% du volume d'une journée pipeline).
+Même avec retries 30s→60s→120s, Google reste bloqué et la pipeline crashe
+en `429 Too Many Requests`. Voir l'incident audio job 7 du 06/05/2026.
+
+**Solution**
+
+Réécriture de `basic_tts_service.py` pour utiliser edge-tts (la même API
+backend que Microsoft utilise dans le navigateur Edge pour la lecture
+audio). Avantages :
+
+- Sans clé API, gratuit, voix neurales fr-FR (DeniseNeural par défaut).
+- Beaucoup plus tolérant que gTTS sur le volume.
+- Qualité audio largement supérieure (voix neurales vs voix gTTS robotique).
+- Configurable via `EDGE_TTS_VOICE` (Henri, Vivienne, Remy disponibles).
+
+**Détails techniques**
+
+- Edge-tts utilise asyncio + websockets en interne. Pour rester compatible
+  avec eventlet+monkey_patch (Flask/SocketIO), la coroutine est encapsulée
+  dans `eventlet.tpool.execute` qui isole l'event loop dans un vrai thread.
+- Signature de `convert_to_speech_basic` strictement identique : aucun
+  caller n'a besoin d'être modifié.
+- Speed converti en rate edge-tts natif (`speed=1.28` → `rate="+28%"`),
+  pydub speedup retiré (plus nécessaire, edge-tts gère nativement).
+- Défaut `BASIC_TTS_SPEED=1.0` (voix neurales déjà naturelles, vs 1.28
+  pour gTTS qui était lent).
+- `requirements.txt` : `gTTS>=2.5.0` → `edge-tts>=7.2.0`.
+
+**Impact**
+
+- Identifiants stables (`tts_mode="gtts"`, colonne `voice_type="gtts"`)
+  conservés tels quels — ce sont des clés d'API et de DB historiques pour
+  "TTS basique gratuit", l'implémentation derrière a juste changé.
+- Labels visibles utilisateur dans les events pipeline mis à jour
+  ("BASIC gTTS" → "BASIC edge-tts").
+
 ### fix: reprise pipeline — accept 200/202, reset status stale, logs détaillés
 
 **Frontend (`FormationPipeline.jsx`)**

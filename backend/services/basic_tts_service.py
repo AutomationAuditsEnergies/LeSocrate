@@ -1,28 +1,41 @@
 """
 Basic TTS service — voix de synthèse gratuite pour tests bout-en-bout.
 
-Utilise gTTS (Google Text-to-Speech, API web gratuite). Sortie MP3 directe,
-pas de dépendance ffmpeg/pydub. Voix naturelle acceptable pour du test.
+Utilise edge-tts (Microsoft Edge Text-to-Speech, sans clé API). Voix
+neurales fr-FR, beaucoup plus tolérantes que gTTS sur le volume (gTTS =
+API non officielle Google Translate, bloque autour de 50k chars/h).
 
-Rate-limit possible côté Google (non-officielle). Pour du volume important,
-retomber sur Fish Audio S2-Pro (qualité, payant).
+Voix françaises disponibles (configurable via `EDGE_TTS_VOICE`) :
+- fr-FR-DeniseNeural (féminine, défaut)
+- fr-FR-HenriNeural (masculine)
+- fr-FR-VivienneMultilingualNeural (féminine, multilingue)
+- fr-FR-RemyMultilingualNeural (masculine, multilingue)
+
+Edge-tts utilise asyncio + websockets en interne. Pour rester compatible
+avec l'eventlet+monkey_patch du serveur Flask/SocketIO, on encapsule la
+coroutine dans `eventlet.tpool.execute` qui la fait tourner dans un vrai
+thread isolé. Le greenlet appelant attend sans bloquer le hub.
 
 Usage : 3ᵉ option dans l'étape 7 de `/formation-pipeline`, à côté de Fish
 Audio (payant) et du mock silence (gratuit mais pas écoutable).
 """
 
-import io
+import asyncio
+import os
 import re
+import time
 
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-# gTTS limite chaque requête à ~5000 caractères. On garde une marge.
+# Edge-tts gère du long texte mais on chunke pour le progress reporting
+# et l'isolation des erreurs réseau sur de gros volumes.
 _CHUNK_MAX_CHARS = 4000
+_DEFAULT_VOICE = "fr-FR-DeniseNeural"
 
 
-def _split_for_gtts(text: str, max_chars: int = _CHUNK_MAX_CHARS) -> list:
+def _split_for_tts(text: str, max_chars: int = _CHUNK_MAX_CHARS) -> list:
     """Découpe un texte long en chunks de max_chars caractères, en coupant
     préférentiellement sur des fins de phrases. Sinon sur des fins de
     propositions, sinon sur des espaces."""
@@ -30,7 +43,6 @@ def _split_for_gtts(text: str, max_chars: int = _CHUNK_MAX_CHARS) -> list:
     if len(text) <= max_chars:
         return [text]
 
-    # Tente d'abord par phrase (. ? !)
     sentences = re.split(r"(?<=[.!?])\s+", text)
     chunks = []
     current = ""
@@ -41,9 +53,7 @@ def _split_for_gtts(text: str, max_chars: int = _CHUNK_MAX_CHARS) -> list:
             if current:
                 chunks.append(current.strip())
                 current = ""
-            # Si une seule phrase est trop longue, la couper brutalement
             while len(s) > max_chars:
-                # Cherche un espace proche de max_chars pour couper proprement
                 cut = s.rfind(" ", 0, max_chars)
                 if cut == -1:
                     cut = max_chars
@@ -57,26 +67,32 @@ def _split_for_gtts(text: str, max_chars: int = _CHUNK_MAX_CHARS) -> list:
     return [c for c in chunks if c]
 
 
-def _speedup_mp3(audio_bytes: bytes, speed: float) -> bytes:
-    """Accélère légèrement un MP3 gTTS pour se rapprocher d'un débit cours."""
-    if speed <= 1.0:
-        return audio_bytes
-    try:
-        from pydub import AudioSegment, effects
+def _speed_to_rate(speed: float) -> str:
+    """Convertit speed=1.28 (multiplicateur) en rate edge-tts '+28%'."""
+    pct = int(round((speed - 1.0) * 100))
+    return f"{pct:+d}%"
 
-        audio = AudioSegment.from_mp3(io.BytesIO(audio_bytes))
-        sped = effects.speedup(
-            audio,
-            playback_speed=speed,
-            chunk_size=150,
-            crossfade=25,
-        )
-        output = io.BytesIO()
-        sped.export(output, format="mp3", bitrate="128k")
-        return output.getvalue()
-    except Exception as exc:
-        logger.warning(f"⚠️ gTTS speedup ignoré (speed={speed}) : {exc}")
-        return audio_bytes
+
+async def _synthesize_chunk_async(text: str, voice: str, rate: str) -> bytes:
+    """Synthèse d'un chunk via edge-tts, retourne les bytes MP3."""
+    import edge_tts
+
+    communicate = edge_tts.Communicate(text, voice=voice, rate=rate)
+    audio_chunks = []
+    async for chunk in communicate.stream():
+        if chunk.get("type") == "audio":
+            audio_chunks.append(chunk["data"])
+    return b"".join(audio_chunks)
+
+
+def _synthesize_chunk_sync(text: str, voice: str, rate: str) -> bytes:
+    """Wrapper synchrone : asyncio.run dans un thread isolé via tpool."""
+    import eventlet.tpool
+
+    def _runner():
+        return asyncio.run(_synthesize_chunk_async(text, voice, rate))
+
+    return eventlet.tpool.execute(_runner)
 
 
 def convert_to_speech_basic(
@@ -88,50 +104,44 @@ def convert_to_speech_basic(
     retry_base_wait_sec: float | None = None,
 ) -> bytes:
     """
-    Génère un MP3 à partir d'un texte via gTTS.
+    Génère un MP3 à partir d'un texte via edge-tts.
 
     Pour les textes longs, découpe en chunks et concatène les MP3 octet-
-    par-octet. La concaténation naïve fonctionne car gTTS produit des MP3
-    avec des paramètres cohérents entre appels.
+    par-octet. La concaténation naïve fonctionne car edge-tts produit des
+    MP3 avec des paramètres cohérents entre appels.
 
-    **Rate limit Google** : gTTS est une API non-officielle avec protections
-    anti-abuse. Sur du gros volume, Google jette des 429 (Too Many Requests).
-    On gère ça avec :
-    - Sleep entre chaque chunk (`BASIC_TTS_CHUNK_DELAY_SEC`, défaut 1.5s)
-    - Retry exponentiel sur 429 (`BASIC_TTS_MAX_429_RETRIES`, défaut 2)
-      avec wait configuré par `BASIC_TTS_429_BASE_WAIT_SEC` (défaut 20s).
+    Edge-tts est nettement plus tolérant que gTTS sur le volume, mais on
+    garde le retry exponentiel pour les erreurs réseau transitoires.
 
     Args:
         text: texte à synthétiser.
-        lang: code de langue ISO 639 ('fr', 'en', 'es', ...).
-        speed: facteur d'accélération optionnel. Si absent, lit
-            BASIC_TTS_SPEED, défaut 1.28.
+        lang: code de langue (conservé pour compat — la voix par défaut
+            est fr-FR-DeniseNeural, override via EDGE_TTS_VOICE).
+        speed: facteur d'accélération multiplicatif. Si absent, lit
+            BASIC_TTS_SPEED, défaut 1.0 (voix neurales naturelles).
 
     Returns:
         bytes du MP3 complet.
 
     Raises:
-        ImportError si gTTS n'est pas installé.
-        gtts.tts.gTTSError si Google renvoie un 429 après tous les retries.
+        ImportError si edge-tts n'est pas installé.
+        Exception si tous les retries échouent.
     """
-    import os
-    import time
-    from gtts import gTTS
-    from gtts.tts import gTTSError
+    chunks = _split_for_tts(text)
 
-    chunks = _split_for_gtts(text)
-    # Google peut bloquer longtemps sur abuse. Les pipelines passent des
-    # retries plus courts pour échouer lisiblement plutôt que rester invisibles.
-    inter_chunk_delay = float(os.getenv("BASIC_TTS_CHUNK_DELAY_SEC", "3.0"))
+    inter_chunk_delay = float(os.getenv("BASIC_TTS_CHUNK_DELAY_SEC", "0.5"))
     if max_429_retries is None:
-        max_429_retries = int(os.getenv("BASIC_TTS_MAX_429_RETRIES", "2"))
+        max_429_retries = int(os.getenv("BASIC_TTS_MAX_429_RETRIES", "3"))
     if retry_base_wait_sec is None:
-        retry_base_wait_sec = float(os.getenv("BASIC_TTS_429_BASE_WAIT_SEC", "20"))
-    speed = float(speed if speed is not None else os.getenv("BASIC_TTS_SPEED", "1.28"))
+        retry_base_wait_sec = float(os.getenv("BASIC_TTS_429_BASE_WAIT_SEC", "5"))
+    speed = float(speed if speed is not None else os.getenv("BASIC_TTS_SPEED", "1.0"))
+
+    voice = os.getenv("EDGE_TTS_VOICE", _DEFAULT_VOICE)
+    rate = _speed_to_rate(speed)
 
     logger.info(
-        f"🎙️ gTTS : synthèse de {len(text)} caractères en {len(chunks)} chunk(s) "
-        f"(delay={inter_chunk_delay}s, max_retries={max_429_retries}, speed={speed})"
+        f"🎙️ edge-tts : synthèse de {len(text)} caractères en {len(chunks)} chunk(s) "
+        f"(voice={voice}, rate={rate}, max_retries={max_429_retries})"
     )
 
     parts = []
@@ -139,32 +149,29 @@ def convert_to_speech_basic(
         if not chunk.strip():
             continue
         if progress_callback:
-            progress_callback(f"gTTS chunk {i}/{len(chunks)} — synthèse")
+            progress_callback(f"edge-tts chunk {i}/{len(chunks)} — synthèse")
 
-        # Retry loop sur 429
         chunk_bytes = None
         last_error = None
         for attempt in range(max_429_retries + 1):
             try:
-                tts = gTTS(text=chunk, lang=lang, slow=False)
-                buf = io.BytesIO()
-                tts.write_to_fp(buf)
-                chunk_bytes = buf.getvalue()
+                chunk_bytes = _synthesize_chunk_sync(chunk, voice, rate)
+                if not chunk_bytes:
+                    raise RuntimeError("edge-tts a renvoyé 0 bytes")
                 break
-            except gTTSError as e:
+            except Exception as e:
                 last_error = e
-                err_str = str(e)
-                is_429 = "429" in err_str or "Too Many Requests" in err_str
-                if not is_429 or attempt >= max_429_retries:
+                if attempt >= max_429_retries:
                     raise
                 wait = retry_base_wait_sec * (2 ** attempt)
+                err_short = str(e)[:200]
                 logger.warning(
-                    f"⏳ gTTS chunk {i}/{len(chunks)} : 429 Google. "
+                    f"⏳ edge-tts chunk {i}/{len(chunks)} a échoué : {err_short}. "
                     f"Attente {wait}s avant retry {attempt + 1}/{max_429_retries}"
                 )
                 if progress_callback:
                     progress_callback(
-                        f"gTTS chunk {i}/{len(chunks)} — 429 Google, "
+                        f"edge-tts chunk {i}/{len(chunks)} — erreur, "
                         f"attente {int(wait)}s avant retry {attempt + 1}/{max_429_retries}"
                     )
                 time.sleep(wait)
@@ -173,16 +180,18 @@ def convert_to_speech_basic(
             raise last_error or RuntimeError(f"Chunk {i} échoué sans erreur identifiée")
 
         parts.append(chunk_bytes)
-        logger.debug(f"   chunk {i}/{len(chunks)} ({len(chunk)} chars) → {len(chunk_bytes)} bytes MP3")
+        logger.debug(
+            f"   chunk {i}/{len(chunks)} ({len(chunk)} chars) → {len(chunk_bytes)} bytes MP3"
+        )
         if progress_callback:
-            progress_callback(f"gTTS chunk {i}/{len(chunks)} — OK")
+            progress_callback(f"edge-tts chunk {i}/{len(chunks)} — OK")
 
-        # Sleep entre chunks (sauf après le dernier) pour ne pas saturer Google.
-        # Sous eventlet+monkey_patch, time.sleep yield au scheduler.
+        # Petit délai entre chunks pour rester courtois (edge-tts est tolérant
+        # mais on évite de saturer le service Microsoft).
         if i < len(chunks) and inter_chunk_delay > 0:
             time.sleep(inter_chunk_delay)
 
     if not parts:
         raise ValueError("Aucun chunk produit (texte vide ?)")
 
-    return _speedup_mp3(b"".join(parts), speed)
+    return b"".join(parts)
