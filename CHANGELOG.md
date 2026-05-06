@@ -2,6 +2,34 @@
 
 ## 2026-05-06
 
+### fix: résolution robuste du folder dans `continue_after_text` (formation_routes.py)
+
+La route `continue_after_text` retombait en erreur quand le folder
+demandé était orphelin (`cours_folders.formation_job_id IS NULL`) ou
+mal rattaché — typiquement après un crash/reprise de pipeline ou une
+réparation incomplète.
+
+Quatre helpers ajoutés :
+
+- `_completed_text_folder_candidates(job_id)` : folders rattachés au
+  job qui ont vraiment un texte `completed` (jointure
+  `content_generation_jobs` + comptage `content_generation_segments`).
+- `_requested_text_folder_state(job_id, folder_id)` : état texte d'un
+  folder précis, même non-completed et même si `formation_job_id` est
+  NULL.
+- `_claim_single_completed_orphan_folder(job_id, requested)` : rattache
+  un unique folder completed orphelin du même `platform_id` quand le
+  lien historique est cassé. Pose `formation_job_id` via UPDATE atomique
+  (clause `WHERE id=? AND formation_job_id IS NULL`) pour éviter le vol
+  de folder.
+- `_resolve_continue_after_text_folder(job_id, requested_folder_id)` :
+  orchestrateur — tente la résolution directe, déclenche
+  `repair_orphan_content_folders(job_id)` du service en filet de
+  sécurité, puis fallback sur le claim d'orphelin si nécessaire.
+
+Trace structurée `PIPELINE_FOLDER_REPAIR` émise quand un orphelin est
+réparé, pour audit dans les logs Azure.
+
 ### feat: liste des jobs enrichie + deep-link `?job=` (FormationPipeline.jsx)
 
 `JobCard` montre désormais des pills **Job #X** et **PX** (platform_id),

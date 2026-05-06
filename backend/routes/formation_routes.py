@@ -2760,6 +2760,240 @@ def _reset_folder_downstream_to_generated_text(job_id: int, folder_id: int) -> d
     }
 
 
+def _completed_text_folder_candidates(job_id: int) -> list[dict]:
+    """Liste les dossiers rattachés au job qui ont vraiment un texte complet."""
+    from database.db import get_db_connection
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        SELECT
+            cf.id,
+            cf.name,
+            cf.position,
+            cf.platform_id,
+            cgj.id,
+            cgj.status,
+            COALESCE(cgj.total_words, 0),
+            SUM(CASE WHEN cgs.status = 'completed' THEN 1 ELSE 0 END)
+        FROM cours_folders cf
+        JOIN content_generation_jobs cgj ON cgj.folder_id = cf.id
+        LEFT JOIN content_generation_segments cgs ON cgs.job_id = cgj.id
+        WHERE cf.formation_job_id = ?
+        GROUP BY cf.id, cf.name, cf.position, cf.platform_id, cgj.id, cgj.status, cgj.total_words
+        HAVING cgj.status = 'completed'
+           AND SUM(CASE WHEN cgs.status = 'completed' THEN 1 ELSE 0 END) > 0
+        ORDER BY cf.position ASC, cf.id ASC
+        """,
+        (job_id,),
+    )
+    rows = cursor.fetchall()
+    conn.close()
+    return [
+        {
+            "folder_id": row[0],
+            "folder_name": row[1],
+            "position": row[2],
+            "platform_id": row[3],
+            "content_job_id": row[4],
+            "content_status": row[5],
+            "total_words": row[6] or 0,
+            "segments_completed": row[7] or 0,
+        }
+        for row in rows
+    ]
+
+
+def _requested_text_folder_state(job_id: int, folder_id: int) -> dict | None:
+    """Retourne l'état texte du folder demandé, même s'il n'est pas completed."""
+    from database.db import get_db_connection
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        SELECT
+            cf.id,
+            cf.name,
+            cf.position,
+            cf.platform_id,
+            cf.formation_job_id,
+            cgj.id,
+            cgj.status,
+            COALESCE(cgj.total_words, 0),
+            COALESCE(SUM(CASE WHEN cgs.status = 'completed' THEN 1 ELSE 0 END), 0)
+        FROM cours_folders cf
+        LEFT JOIN content_generation_jobs cgj ON cgj.folder_id = cf.id
+        LEFT JOIN content_generation_segments cgs ON cgs.job_id = cgj.id
+        WHERE cf.id = ?
+        GROUP BY cf.id, cf.name, cf.position, cf.platform_id, cf.formation_job_id,
+                 cgj.id, cgj.status, cgj.total_words
+        """,
+        (folder_id,),
+    )
+    row = cursor.fetchone()
+    conn.close()
+    if not row:
+        return None
+    return {
+        "folder_id": row[0],
+        "folder_name": row[1],
+        "position": row[2],
+        "platform_id": row[3],
+        "formation_job_id": row[4],
+        "content_job_id": row[5],
+        "content_status": row[6],
+        "total_words": row[7] or 0,
+        "segments_completed": row[8] or 0,
+    }
+
+
+def _claim_single_completed_orphan_folder(job_id: int, requested: dict | None) -> dict | None:
+    """Rattache un unique folder completed orphelin quand l'ancien lien est cassé."""
+    from database.db import get_db_connection
+
+    job = get_job(job_id)
+    if not job:
+        return None
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    params = [job["platform_id"]]
+    day_filter = ""
+    if requested and requested.get("folder_name"):
+        import re
+
+        match = re.match(r"^\s*Jour\s+(\d+)\b", requested["folder_name"], flags=re.IGNORECASE)
+        if match:
+            day_filter = "AND cf.name LIKE ?"
+            params.append(f"Jour {match.group(1)}%")
+    cursor.execute(
+        f"""
+        SELECT
+            cf.id,
+            cf.name,
+            cf.position,
+            cf.platform_id,
+            cgj.id,
+            cgj.status,
+            COALESCE(cgj.total_words, 0),
+            SUM(CASE WHEN cgs.status = 'completed' THEN 1 ELSE 0 END)
+        FROM cours_folders cf
+        JOIN content_generation_jobs cgj ON cgj.folder_id = cf.id
+        LEFT JOIN content_generation_segments cgs ON cgs.job_id = cgj.id
+        WHERE cf.platform_id = ?
+          AND cf.formation_job_id IS NULL
+          {day_filter}
+        GROUP BY cf.id, cf.name, cf.position, cf.platform_id, cgj.id, cgj.status, cgj.total_words
+        HAVING cgj.status = 'completed'
+           AND SUM(CASE WHEN cgs.status = 'completed' THEN 1 ELSE 0 END) > 0
+        ORDER BY cf.created_at DESC, cf.id DESC
+        """,
+        tuple(params),
+    )
+    rows = cursor.fetchall()
+    if len(rows) != 1:
+        conn.close()
+        return None
+
+    row = rows[0]
+    folder_id = row[0]
+    cursor.execute(
+        """
+        UPDATE cours_folders
+        SET formation_job_id = ?
+        WHERE id = ? AND formation_job_id IS NULL
+        """,
+        (job_id, folder_id),
+    )
+    conn.commit()
+    conn.close()
+    logger.warning(
+        "PIPELINE_FOLDER_REPAIR job=%s repaired=1 missing=0 folders=%s reason=continue_after_text_orphan",
+        job_id,
+        [{"folder_id": folder_id, "name": row[1]}],
+    )
+    return {
+        "folder_id": row[0],
+        "folder_name": row[1],
+        "position": row[2],
+        "platform_id": row[3],
+        "content_job_id": row[4],
+        "content_status": row[5],
+        "total_words": row[6] or 0,
+        "segments_completed": row[7] or 0,
+    }
+
+
+def _resolve_continue_after_text_folder(job_id: int, requested_folder_id: int) -> tuple[int, dict | None]:
+    """Valide le folder de relance aval et corrige les anciens liens cassés."""
+    try:
+        from services.formation_pipeline_service import repair_orphan_content_folders
+        repair_orphan_content_folders(job_id)
+    except Exception as e:
+        logger.warning(f"⚠️ Réparation folders avant relance aval job {job_id} ignorée : {e}")
+
+    requested = _requested_text_folder_state(job_id, requested_folder_id)
+    if (
+        requested
+        and requested.get("formation_job_id") == job_id
+        and requested.get("content_status") == "completed"
+        and (requested.get("segments_completed") or 0) > 0
+    ):
+        return requested_folder_id, None
+
+    candidates = _completed_text_folder_candidates(job_id)
+    if requested and requested.get("position") is not None:
+        same_position = [c for c in candidates if c.get("position") == requested.get("position")]
+        if len(same_position) == 1:
+            resolved = same_position[0]
+            return int(resolved["folder_id"]), {
+                "requested_folder_id": requested_folder_id,
+                "resolved_folder_id": resolved["folder_id"],
+                "reason": "same_position_completed_folder",
+                "requested_state": requested,
+            }
+    if len(candidates) == 1:
+        resolved = candidates[0]
+        return int(resolved["folder_id"]), {
+            "requested_folder_id": requested_folder_id,
+            "resolved_folder_id": resolved["folder_id"],
+            "reason": "single_completed_folder_for_job",
+            "requested_state": requested,
+        }
+
+    orphan = _claim_single_completed_orphan_folder(job_id, requested)
+    if orphan:
+        return int(orphan["folder_id"]), {
+            "requested_folder_id": requested_folder_id,
+            "resolved_folder_id": orphan["folder_id"],
+            "reason": "single_completed_orphan_folder_claimed",
+            "requested_state": requested,
+        }
+
+    available = [
+        f"folder {c['folder_id']} ({c['segments_completed']} segments, {c['total_words']} mots)"
+        for c in candidates
+    ]
+    requested_detail = (
+        "introuvable"
+        if not requested
+        else (
+            f"status={requested.get('content_status') or 'aucun content_job'}, "
+            f"segments={requested.get('segments_completed') or 0}, "
+            f"formation_job_id={requested.get('formation_job_id')}"
+        )
+    )
+    raise ValueError(
+        f"Folder {requested_folder_id} non prêt pour relance aval ({requested_detail}). "
+        + (
+            "Folder(s) texte completed disponible(s) : " + "; ".join(available)
+            if available
+            else "Aucun folder texte completed disponible pour ce job."
+        )
+    )
+
+
 def _next_folder_in_formation(job_id: int, folder_id: int) -> int | None:
     from database.db import get_db_connection
 
@@ -2803,15 +3037,11 @@ def continue_after_text(job_id, folder_id):
     if not job:
         return jsonify({"error": "Job introuvable"}), 404
 
-    from services.claude_code_mission_service import _EXECUTION_STATE
-    state_key = (job_id, f"continue_after_text_{folder_id}")
-    if _EXECUTION_STATE.get(state_key, {}).get("status") == "running":
-        return jsonify({"error": "Cette relance aval est déjà en cours pour cette journée"}), 409
-
     data = request.get_json(silent=True) or {}
     model = _resolve_pipeline_api_model(job, data.get("model"))
     max_slides = int(data.get("max_slides") or 60)
     pace = data.get("pace") or "normal"
+    requested_folder_id = int(folder_id)
 
     # Persiste le choix de modèle utilisé pour cette relance, pour que les
     # futurs `continue_after_text` ou redémarrages auto-pilot retrouvent le
@@ -2822,6 +3052,38 @@ def continue_after_text(job_id, folder_id):
             job["auto_pilot_model"] = model
         except Exception as e:
             logger.warning(f"⚠️ Persistance auto_pilot_model={model} échouée pour job {job_id}: {e}")
+
+    try:
+        folder_id, folder_resolution = _resolve_continue_after_text_folder(job_id, requested_folder_id)
+    except ValueError as e:
+        logger.warning(
+            "PIPELINE_CONTINUE_FOLDER_INVALID job=%s requested_folder=%s error=%s",
+            job_id,
+            requested_folder_id,
+            str(e)[:500],
+        )
+        return jsonify({
+            "error": str(e),
+            "requested_folder_id": requested_folder_id,
+        }), 400
+
+    if folder_id != requested_folder_id:
+        logger.warning(
+            "PIPELINE_CONTINUE_FOLDER_RESOLVED job=%s requested_folder=%s resolved_folder=%s reason=%s",
+            job_id,
+            requested_folder_id,
+            folder_id,
+            (folder_resolution or {}).get("reason"),
+        )
+
+    from services.claude_code_mission_service import _EXECUTION_STATE
+    state_key = (job_id, f"continue_after_text_{folder_id}")
+    if _EXECUTION_STATE.get(state_key, {}).get("status") == "running":
+        return jsonify({
+            "error": "Cette relance aval est déjà en cours pour cette journée",
+            "folder_id": folder_id,
+            "requested_folder_id": requested_folder_id,
+        }), 409
 
     update_job(
         job_id,
@@ -2872,6 +3134,9 @@ def continue_after_text(job_id, folder_id):
                     "max_slides": max_slides,
                     "pace": pace,
                     "cleared_previous_events": cleared_events_count,
+                    "requested_folder_id": requested_folder_id,
+                    "resolved_folder_id": folder_id,
+                    "folder_resolution": folder_resolution,
                 },
             )
 
@@ -2999,6 +3264,8 @@ def continue_after_text(job_id, folder_id):
         "ok": True,
         "status": "running",
         "folder_id": folder_id,
+        "requested_folder_id": requested_folder_id,
+        "folder_resolution": folder_resolution,
         "model": str(model),
         "tts_mode": "gtts",
         "sync_slides": True,
