@@ -2338,6 +2338,7 @@ def _make_audio_progress_logger(job_id: int, folder_id: int, voice_type: str):
                     "step": step,
                     "total": total,
                     "voice_type": voice_type,
+                    "tts_engine": "edge-tts" if voice_type == "gtts" else voice_type,
                 },
             )
         except Exception:

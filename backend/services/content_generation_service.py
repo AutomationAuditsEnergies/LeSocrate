@@ -45,6 +45,25 @@ _CARRYOVER_COLUMNS_READY = False
 _FISHAUDIO_TAG_RE = re.compile(r"\[[^\[\]\n]{1,50}\]")
 
 
+_MP3_BITRATES_KBPS = {
+    # key = (mpeg_version, layer)
+    # version: 1 = MPEG-1, 2 = MPEG-2, 2.5 = MPEG-2.5
+    # layer: 1 = Layer I, 2 = Layer II, 3 = Layer III
+    (1, 1): [None, 32, 64, 96, 128, 160, 192, 224, 256, 288, 320, 352, 384, 416, 448],
+    (1, 2): [None, 32, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 384],
+    (1, 3): [None, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320],
+    (2, 1): [None, 32, 48, 56, 64, 80, 96, 112, 128, 144, 160, 176, 192, 224, 256],
+    (2, 2): [None, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160],
+    (2, 3): [None, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160],
+}
+
+_MP3_SAMPLE_RATES = {
+    1: [44100, 48000, 32000],
+    2: [22050, 24000, 16000],
+    2.5: [11025, 12000, 8000],
+}
+
+
 def _basic_tts_pipeline_retry_kwargs() -> dict:
     """Retry gTTS pour les pipelines — backoff exponentiel sur 429 Google."""
     try:
@@ -155,6 +174,91 @@ def _strip_tts_tags_for_sync(text: str) -> str:
     cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
     cleaned = re.sub(r"\n[ \t]+", "\n", cleaned)
     return cleaned.strip()
+
+
+def _skip_id3v2(audio_bytes: bytes) -> int:
+    """Return byte offset after an ID3v2 header, if present."""
+    if len(audio_bytes) < 10 or audio_bytes[:3] != b"ID3":
+        return 0
+    size = 0
+    for b in audio_bytes[6:10]:
+        size = (size << 7) | (b & 0x7F)
+    footer = 10 if (audio_bytes[5] & 0x10) else 0
+    return min(len(audio_bytes), 10 + size + footer)
+
+
+def _mp3_duration_seconds_no_ffprobe(audio_bytes: bytes) -> float:
+    """Estimate MP3 duration by summing MPEG frame durations.
+
+    This avoids pydub/ffprobe in Azure App Service, where ffmpeg binaries are
+    not installed. It is used only for already-encoded MP3 bytes from Edge TTS
+    and the bundled silence asset.
+    """
+    data = audio_bytes or b""
+    i = _skip_id3v2(data)
+    duration = 0.0
+    frames = 0
+    limit = len(data) - 4
+
+    while i < limit:
+        b1, b2, b3, b4 = data[i], data[i + 1], data[i + 2], data[i + 3]
+        if b1 != 0xFF or (b2 & 0xE0) != 0xE0:
+            i += 1
+            continue
+
+        version_bits = (b2 >> 3) & 0x03
+        layer_bits = (b2 >> 1) & 0x03
+        bitrate_idx = (b3 >> 4) & 0x0F
+        sample_rate_idx = (b3 >> 2) & 0x03
+        padding = (b3 >> 1) & 0x01
+
+        if version_bits == 1 or layer_bits == 0 or bitrate_idx in (0, 15) or sample_rate_idx == 3:
+            i += 1
+            continue
+
+        version = {3: 1, 2: 2, 0: 2.5}.get(version_bits)
+        layer = {3: 1, 2: 2, 1: 3}.get(layer_bits)
+        bitrate_kbps = _MP3_BITRATES_KBPS.get((1 if version == 1 else 2, layer), [None])[bitrate_idx]
+        sample_rate = _MP3_SAMPLE_RATES[version][sample_rate_idx]
+        if not bitrate_kbps or not sample_rate:
+            i += 1
+            continue
+
+        bitrate = bitrate_kbps * 1000
+        if layer == 1:
+            samples_per_frame = 384
+            frame_size = int(((12 * bitrate) / sample_rate + padding) * 4)
+        elif layer == 2:
+            samples_per_frame = 1152
+            frame_size = int((144 * bitrate) / sample_rate + padding)
+        else:
+            samples_per_frame = 1152 if version == 1 else 576
+            coeff = 144 if version == 1 else 72
+            frame_size = int((coeff * bitrate) / sample_rate + padding)
+
+        if frame_size <= 4:
+            i += 1
+            continue
+
+        duration += samples_per_frame / sample_rate
+        frames += 1
+        i += frame_size
+
+    if frames == 0:
+        raise ValueError("Durée MP3 impossible à mesurer sans ffprobe (aucune frame MPEG trouvée)")
+    return duration
+
+
+def _silent_mp3_approx_no_ffmpeg(duration_sec: float) -> tuple[bytes, float]:
+    """Return bundled silent MP3 bytes repeated close to the requested duration."""
+    from services.playlist_tts_service import _generate_silence_mp3
+
+    if duration_sec <= 0:
+        return b"", 0.0
+    one_sec = _generate_silence_mp3(1)
+    one_sec_duration = _mp3_duration_seconds_no_ffprobe(one_sec)
+    repeat = max(1, int(round(duration_sec / one_sec_duration)))
+    return one_sec * repeat, one_sec_duration * repeat
 
 
 def _word_slice(text: str, start: int, end: int) -> str:
@@ -302,7 +406,6 @@ def _synthesize_course_audio_synced_to_slides(
     progress_callback=None,
 ):
     """Generate one course MP3 by slide-sized chunks and return slide timings."""
-    from pydub import AudioSegment
     from services.tts_service import convert_to_speech
 
     target_sec = int(bloc["target_sec"])
@@ -318,6 +421,8 @@ def _synthesize_course_audio_synced_to_slides(
 
     if basic_tts:
         from services.basic_tts_service import convert_to_speech_basic
+    else:
+        from pydub import AudioSegment
 
     chunks = _build_slide_audio_chunks(bloc, slides)
     if not chunks:
@@ -327,8 +432,13 @@ def _synthesize_course_audio_synced_to_slides(
         if progress_callback:
             progress_callback(message)
 
-    full_audio = AudioSegment.silent(duration=_COURSE_START_SILENCE_SECONDS * 1000)
-    cursor_sec = float(_COURSE_START_SILENCE_SECONDS)
+    if basic_tts:
+        start_silence_bytes, start_silence_sec = _silent_mp3_approx_no_ffmpeg(_COURSE_START_SILENCE_SECONDS)
+        audio_parts = [start_silence_bytes]
+        cursor_sec = start_silence_sec
+    else:
+        full_audio = AudioSegment.silent(duration=_COURSE_START_SILENCE_SECONDS * 1000)
+        cursor_sec = float(_COURSE_START_SILENCE_SECONDS)
     timings = []
     attempts = []
 
@@ -351,17 +461,20 @@ def _synthesize_course_audio_synced_to_slides(
                 ),
                 **_basic_tts_pipeline_retry_kwargs(),
             )
-            segment = AudioSegment.from_mp3(io.BytesIO(audio_bytes))
+            duration_sec = _mp3_duration_seconds_no_ffprobe(audio_bytes)
+            audio_parts.append(audio_bytes)
             mode = "gtts"
         else:
             audio_bytes = convert_to_speech(text, speed=api_speed)
             segment = AudioSegment.from_mp3(io.BytesIO(audio_bytes))
             mode = f"fish_audio_speed={api_speed}"
 
-        duration_sec = len(segment) / 1000
+        if not basic_tts:
+            duration_sec = len(segment) / 1000
         start_sec = cursor_sec
         end_sec = start_sec + duration_sec
-        full_audio += segment
+        if not basic_tts:
+            full_audio += segment
         cursor_sec = end_sec
         attempts.append({"kind": mode, "chunk": idx, "duration": duration_sec})
         _emit(
@@ -379,19 +492,28 @@ def _synthesize_course_audio_synced_to_slides(
             "word_end": chunk.get("word_end"),
         })
 
-    final_duration = len(full_audio) / 1000
-    if final_duration < target_sec:
-        full_audio += AudioSegment.silent(duration=int((target_sec - final_duration) * 1000))
-    elif final_duration > target_sec and not (mock or basic_tts):
-        raise ValueError(
-            f"Bloc {bloc['bloc_number']} sync trop long "
-            f"({final_duration:.1f}s > cible {target_sec}s)."
-        )
+    if basic_tts:
+        final_duration = cursor_sec
+        if final_duration < target_sec:
+            padding_bytes, _ = _silent_mp3_approx_no_ffmpeg(target_sec - final_duration)
+            audio_parts.append(padding_bytes)
+        output_bytes = b"".join(audio_parts)
+    else:
+        final_duration = len(full_audio) / 1000
+        if final_duration < target_sec:
+            full_audio += AudioSegment.silent(duration=int((target_sec - final_duration) * 1000))
+        elif final_duration > target_sec and not mock:
+            raise ValueError(
+                f"Bloc {bloc['bloc_number']} sync trop long "
+                f"({final_duration:.1f}s > cible {target_sec}s)."
+            )
 
-    output = io.BytesIO()
-    full_audio.export(output, format="mp3", bitrate="128k")
+        output = io.BytesIO()
+        full_audio.export(output, format="mp3", bitrate="128k")
+        output_bytes = output.getvalue()
     fit_method = "slide_sync_mock" if mock else "slide_sync_gtts" if basic_tts else f"slide_sync_fish_speed={api_speed}"
-    return output.getvalue(), cursor_sec - _COURSE_START_SILENCE_SECONDS, fit_method, attempts, _merge_adjacent_slide_timings(timings)
+    voice_start_sec = start_silence_sec if basic_tts else _COURSE_START_SILENCE_SECONDS
+    return output_bytes, cursor_sec - voice_start_sec, fit_method, attempts, _merge_adjacent_slide_timings(timings)
 
 
 def _format_carryover_for_next_course(text: str) -> str:
