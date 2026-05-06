@@ -46,15 +46,15 @@ _FISHAUDIO_TAG_RE = re.compile(r"\[[^\[\]\n]{1,50}\]")
 
 
 def _basic_tts_pipeline_retry_kwargs() -> dict:
-    """Retry gTTS court pour les pipelines de test, afin d'éviter les blocages longs."""
+    """Retry gTTS pour les pipelines — backoff exponentiel sur 429 Google."""
     try:
-        max_retries = int(os.getenv("BASIC_TTS_PIPELINE_MAX_429_RETRIES", "1"))
+        max_retries = int(os.getenv("BASIC_TTS_PIPELINE_MAX_429_RETRIES", "3"))
     except ValueError:
-        max_retries = 1
+        max_retries = 3
     try:
-        base_wait = float(os.getenv("BASIC_TTS_PIPELINE_429_BASE_WAIT_SEC", "20"))
+        base_wait = float(os.getenv("BASIC_TTS_PIPELINE_429_BASE_WAIT_SEC", "30"))
     except ValueError:
-        base_wait = 20.0
+        base_wait = 30.0
     return {
         "max_429_retries": max(0, max_retries),
         "retry_base_wait_sec": max(1.0, base_wait),

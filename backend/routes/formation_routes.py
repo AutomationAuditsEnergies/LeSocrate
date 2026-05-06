@@ -3030,10 +3030,39 @@ def _next_folder_in_formation(job_id: int, folder_id: int) -> int | None:
     "/api/formation/<int:job_id>/content/<int:folder_id>/continue-after-text",
     methods=["POST"],
 )
+def _get_folder_info_for_resume(job_id: int, folder_id: int) -> dict:
+    """Lit platform_id / content_job_id sans modifier l'état (pour from_step != 'volume')."""
+    from database.db import get_db_connection
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        SELECT cf.id, cf.name, cf.position, cj.id, cj.platform_id
+        FROM cours_folders cf
+        JOIN content_generation_jobs cj ON cj.folder_id = cf.id
+        WHERE cf.id = ? AND cf.formation_job_id = ? AND cj.status = 'completed'
+        """,
+        (folder_id, job_id),
+    )
+    row = cursor.fetchone()
+    conn.close()
+    if not row:
+        raise ValueError("Journée introuvable ou texte non généré")
+    _, folder_name, position, content_job_id, platform_id = row
+    return {
+        "folder_id": folder_id,
+        "folder_name": folder_name,
+        "position": position,
+        "content_job_id": content_job_id,
+        "platform_id": platform_id,
+    }
+
+
 def continue_after_text(job_id, folder_id):
     """Relance les étapes aval d'une journée sans régénérer le texte initial.
 
-    Flux : reset aval → volume safety API → review API → Word 2 → slides → gTTS sync.
+    Flux complet : reset aval → volume safety API → review API → Word 2 → slides → gTTS sync.
+    Paramètre from_step : 'volume' (défaut), 'review', 'tts' — saute les étapes en amont.
     """
     if not _require_admin():
         return jsonify({"error": "Non autorisé"}), 403
@@ -3047,6 +3076,10 @@ def continue_after_text(job_id, folder_id):
     max_slides = int(data.get("max_slides") or 60)
     pace = data.get("pace") or "normal"
     requested_folder_id = int(folder_id)
+    _STEP_ORDER = ["volume", "review", "tts"]
+    raw_from_step = data.get("from_step", "volume")
+    from_step = raw_from_step if raw_from_step in _STEP_ORDER else "volume"
+    from_step_idx = _STEP_ORDER.index(from_step)
 
     # Persiste le choix de modèle utilisé pour cette relance, pour que les
     # futurs `continue_after_text` ou redémarrages auto-pilot retrouvent le
@@ -3145,60 +3178,65 @@ def continue_after_text(job_id, folder_id):
                 },
             )
 
-            reset_info = _reset_folder_downstream_to_generated_text(job_id, folder_id)
-            log_pipeline_event(
-                job_id,
-                "continue_after_text_reset",
-                step="post_text_retry",
-                status="completed",
-                folder_id=folder_id,
-                model=str(model) if model else None,
-                message="Étapes aval remises à zéro",
-                data=reset_info,
-            )
+            if from_step_idx == 0:
+                reset_info = _reset_folder_downstream_to_generated_text(job_id, folder_id)
+                log_pipeline_event(
+                    job_id,
+                    "continue_after_text_reset",
+                    step="post_text_retry",
+                    status="completed",
+                    folder_id=folder_id,
+                    model=str(model) if model else None,
+                    message="Étapes aval remises à zéro",
+                    data=reset_info,
+                )
+            else:
+                reset_info = _get_folder_info_for_resume(job_id, folder_id)
 
-            volume_result = run_volume_safety_api(job_id, folder_id, model=model)
-            log_pipeline_event(
-                job_id,
-                "continue_after_text_volume_completed",
-                step="volume_safety",
-                status="completed",
-                folder_id=folder_id,
-                model=str(model) if model else None,
-                message="Sécurité volume terminée",
-                data={
-                    "skipped": bool(volume_result.get("skipped")),
-                    "target_reached": bool(volume_result.get("target_reached", True)),
-                    "enriched": len(volume_result.get("enriched") or []),
-                    "failed": len(volume_result.get("failed") or []),
-                },
-            )
+            if from_step_idx <= 0:
+                volume_result = run_volume_safety_api(job_id, folder_id, model=model)
+                log_pipeline_event(
+                    job_id,
+                    "continue_after_text_volume_completed",
+                    step="volume_safety",
+                    status="completed",
+                    folder_id=folder_id,
+                    model=str(model) if model else None,
+                    message="Sécurité volume terminée",
+                    data={
+                        "skipped": bool(volume_result.get("skipped")),
+                        "target_reached": bool(volume_result.get("target_reached", True)),
+                        "enriched": len(volume_result.get("enriched") or []),
+                        "failed": len(volume_result.get("failed") or []),
+                    },
+                )
 
-            review_result = run_content_review(folder_id, model=model)
-            _write_api_review_report(job_id, folder_id, review_result, model)
+            if from_step_idx <= 1:
+                review_result = run_content_review(folder_id, model=model)
+                _write_api_review_report(job_id, folder_id, review_result, model)
 
-            final_words, filename = _assemble_and_upload(
-                folder_id,
-                reset_info["platform_id"],
-                reset_info["content_job_id"],
-            )
-            _update_job_db(reset_info["content_job_id"], total_words=final_words)
-            log_pipeline_event(
-                job_id,
-                "continue_after_text_review_completed",
-                step="review",
-                status="completed",
-                folder_id=folder_id,
-                model=str(model) if model else None,
-                message="Révision conformité et Word 2 générés",
-                data={
-                    "segments_reviewed": review_result.get("segments_reviewed", 0),
-                    "segments_failed": review_result.get("segments_failed", 0),
-                    "patches_applied": review_result.get("patches_applied", 0),
-                    "doc_filename": filename,
-                    "total_words": final_words,
-                },
-            )
+                final_words, filename = _assemble_and_upload(
+                    folder_id,
+                    reset_info["platform_id"],
+                    reset_info["content_job_id"],
+                )
+                _update_job_db(reset_info["content_job_id"], total_words=final_words)
+                log_pipeline_event(
+                    job_id,
+                    "continue_after_text_review_completed",
+                    step="review",
+                    status="completed",
+                    folder_id=folder_id,
+                    model=str(model) if model else None,
+                    message="Révision conformité et Word 2 générés",
+                    data={
+                        "segments_reviewed": review_result.get("segments_reviewed", 0),
+                        "segments_failed": review_result.get("segments_failed", 0),
+                        "patches_applied": review_result.get("patches_applied", 0),
+                        "doc_filename": filename,
+                        "total_words": final_words,
+                    },
+                )
 
             next_folder_id = _next_folder_in_formation(job_id, folder_id)
             update_job(job_id, status="audio_running", error_message=None)

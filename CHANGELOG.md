@@ -2,6 +2,39 @@
 
 ## 2026-05-06
 
+### feat: reprise pipeline depuis n'importe quelle étape + retry gTTS plus tolérant
+
+**Backend — `continue_after_text` accepte `from_step` (`formation_routes.py`)**
+
+L'endpoint `/api/formation/<job>/content/<folder>/continue-after-text`
+accepte désormais un paramètre `from_step` (`"volume"` par défaut,
+`"review"`, ou `"tts"`) qui permet de reprendre la pipeline aval
+depuis l'étape choisie en sautant celles qui précèdent. La suite
+s'enchaîne automatiquement jusqu'au TTS+slides synchronisé. Nouveau
+helper `_get_folder_info_for_resume` qui lit `platform_id` et
+`content_job_id` sans déclencher le reset de l'état aval (utile
+quand on saute la phase reset+volume).
+
+**Frontend — section déroulable "Reprendre depuis une étape" (`FormationPipeline.jsx`)**
+
+Sortie du bouton "Continuer après le texte" et du sélecteur de
+modèle de la zone TEXTE GÉNÉRÉ. Remplacés par un encart déroulable
+juste en dessous, avec 3 boutons : `Depuis : Volume`, `Depuis :
+Conformité`, `Depuis : TTS`. Chacun appelle `handleContinueAfterText`
+avec le `from_step` correspondant. La zone TEXTE GÉNÉRÉ reste pour
+les actions de consultation (Voir, Slides, Word, Word 2, Rapport).
+
+**Backend — retry gTTS pipeline plus tolérant (`content_generation_service.py`)**
+
+Défauts de `_basic_tts_pipeline_retry_kwargs` passés de
+`max_retries=1`/`base_wait=20s` à `max_retries=3`/`base_wait=30s`.
+Backoff exponentiel : 30s → 60s → 120s (max ~3.5 min d'attente par
+chunk avant abandon). Évite les crashs `429 Too Many Requests` quand
+Google met plus de 20s à lever le rate limit sur du volume (7 blocs
+× 4 chunks par journée). Toujours configurable via
+`BASIC_TTS_PIPELINE_MAX_429_RETRIES` et
+`BASIC_TTS_PIPELINE_429_BASE_WAIT_SEC`.
+
 ### feat: traçabilité pipeline avec IDs explicites (formation_job_id / content_job_id / folder_id)
 
 Refonte de la traçabilité pour rendre les logs Azure et l'UI

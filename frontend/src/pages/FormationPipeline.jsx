@@ -1670,6 +1670,7 @@ export default function FormationPipeline() {
   const [continuingAfterTextFolders, setContinuingAfterTextFolders] = useState({})
   const [continueAfterTextError, setContinueAfterTextError] = useState('')
   const [continueAfterTextNotice, setContinueAfterTextNotice] = useState('')
+  const [resumeExpanded, setResumeExpanded] = useState({})
   // Modèle utilisé pour la relance aval. Initialisé sur l'auto_pilot_model du
   // job courant si présent, sinon DeepSeek Pro (cas des jobs historiques sans
   // colonne persistée).
@@ -1961,7 +1962,7 @@ export default function FormationPipeline() {
     }
   }
 
-  const handleContinueAfterText = async (folderId, modelOverride = null) => {
+  const handleContinueAfterText = async (folderId, modelOverride = null, fromStep = 'volume') => {
     setContinueAfterTextError('')
     setContinueAfterTextNotice('')
     setContinuingAfterTextFolders(prev => ({ ...prev, [folderId]: true }))
@@ -1977,6 +1978,7 @@ export default function FormationPipeline() {
             model: chosenModel,
             max_slides: 60,
             pace: 'normal',
+            from_step: fromStep,
           }),
         },
       )
@@ -3394,47 +3396,6 @@ export default function FormationPipeline() {
                                   <Icon name="description" style={{ fontSize: '12px' }} /> Texte généré
                                 </div>
                                 <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center' }}>
-                                  <select
-                                    value={continueAfterTextModel}
-                                    onChange={e => setContinueAfterTextModel(e.target.value)}
-                                    disabled={continuingAfterText}
-                                    style={{
-                                      padding: '6px 8px',
-                                      fontSize: '12px',
-                                      background: 'rgba(15, 23, 42, 0.6)',
-                                      color: '#cbd5e1',
-                                      border: '1px solid rgba(167, 139, 250, 0.3)',
-                                      borderRadius: '6px',
-                                      cursor: 'pointer',
-                                    }}
-                                    title="Modèle LLM utilisé pour la relance aval (transitions, closings, review)"
-                                  >
-                                    <option value="deepseek-v4-pro">DeepSeek Pro</option>
-                                    <option value="deepseek-v4-flash">DeepSeek Flash</option>
-                                    <option value="sonnet">Claude Sonnet</option>
-                                    <option value="haiku">Claude Haiku</option>
-                                  </select>
-                                  <button
-                                    style={{
-                                      ...S.btn('ghost'),
-                                      padding: '6px 12px',
-                                      fontSize: '12px',
-                                      borderColor: 'rgba(251, 191, 36, 0.35)',
-                                      color: '#fbbf24',
-                                    }}
-                                    disabled={!canUseFolder || continuingAfterText}
-                                    onClick={() => handleContinueAfterText(folder.folder_id)}
-                                    title={
-                                      !belongsToSelectedJob
-                                        ? 'Dossier rattaché à un autre job'
-                                        : !isDone
-                                          ? 'Texte non terminé'
-                                          : 'Conserve le Word initial, remet à zéro les étapes aval, puis relance volume, conformité, Word 2, slides et gTTS synchronisé'
-                                    }
-                                  >
-                                    <Icon name={continuingAfterText ? 'hourglass_empty' : 'play_arrow'} />
-                                    {continuingAfterText ? 'Relance aval…' : 'Continuer après le texte'}
-                                  </button>
                                   <button
                                     style={{ ...S.btn('neutral'), padding: '6px 12px', fontSize: '12px' }}
                                     disabled={!canUseFolder}
@@ -3451,9 +3412,6 @@ export default function FormationPipeline() {
                                   >
                                     <Icon name="slideshow" /> Slides
                                   </button>
-                                  {/* Word original = snapshot pris au finalize content,
-                                      AVANT que la révision conformité ne touche au texte.
-                                      Permet la comparaison avant/après. */}
                                   <button
                                     style={{ ...S.btn('primary'), padding: '6px 12px', fontSize: '12px' }}
                                     disabled={!canUseFolder}
@@ -3464,7 +3422,6 @@ export default function FormationPipeline() {
                                   >
                                     <Icon name="description" /> Word
                                   </button>
-                                  {/* Word 2 = texte ACTUEL en DB (= post-révision si appliquée). */}
                                   {(folder.segments_reviewed || 0) > 0 && (
                                     <button
                                       style={{
@@ -3480,7 +3437,6 @@ export default function FormationPipeline() {
                                       <Icon name="description" /> Word 2
                                     </button>
                                   )}
-                                  {/* Bouton "Rapport" — stats détaillées de la dernière révision. */}
                                   {(folder.segments_reviewed || 0) > 0 && (
                                     <button
                                       style={{
@@ -3498,6 +3454,96 @@ export default function FormationPipeline() {
                                   )}
                                 </div>
                               </div>
+
+                              {/* ── Reprendre depuis une étape ─────────────── */}
+                              {(() => {
+                                const isOpen = !!resumeExpanded[folder.folder_id]
+                                return (
+                                  <div style={{
+                                    borderRadius: '8px',
+                                    border: '1px solid rgba(251, 191, 36, 0.25)',
+                                    background: 'rgba(251, 191, 36, 0.04)',
+                                    overflow: 'hidden',
+                                  }}>
+                                    <button
+                                      onClick={() => setResumeExpanded(prev => ({ ...prev, [folder.folder_id]: !isOpen }))}
+                                      style={{
+                                        width: '100%',
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        gap: '6px',
+                                        padding: '7px 10px',
+                                        background: 'none',
+                                        border: 'none',
+                                        cursor: 'pointer',
+                                        color: '#fbbf24',
+                                        fontSize: '11px',
+                                        fontWeight: 700,
+                                        textTransform: 'uppercase',
+                                        letterSpacing: '0.07em',
+                                      }}
+                                    >
+                                      <Icon name={isOpen ? 'expand_less' : 'chevron_right'} style={{ fontSize: '14px' }} />
+                                      Reprendre depuis une étape
+                                      {continuingAfterText && (
+                                        <span style={{ marginLeft: 'auto', fontWeight: 400, fontSize: '10px', color: '#fbbf24', opacity: 0.8 }}>
+                                          <Icon name="hourglass_empty" style={{ fontSize: '11px' }} /> en cours…
+                                        </span>
+                                      )}
+                                    </button>
+                                    {isOpen && (
+                                      <div style={{ padding: '0 10px 10px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                                          <span style={{ fontSize: '11px', color: '#94a3b8' }}>Modèle :</span>
+                                          <select
+                                            value={continueAfterTextModel}
+                                            onChange={e => setContinueAfterTextModel(e.target.value)}
+                                            disabled={continuingAfterText}
+                                            style={{
+                                              padding: '4px 8px',
+                                              fontSize: '12px',
+                                              background: 'rgba(15, 23, 42, 0.6)',
+                                              color: '#cbd5e1',
+                                              border: '1px solid rgba(167, 139, 250, 0.3)',
+                                              borderRadius: '6px',
+                                              cursor: 'pointer',
+                                            }}
+                                          >
+                                            <option value="deepseek-v4-pro">DeepSeek Pro</option>
+                                            <option value="deepseek-v4-flash">DeepSeek Flash</option>
+                                            <option value="sonnet">Claude Sonnet</option>
+                                            <option value="haiku">Claude Haiku</option>
+                                          </select>
+                                        </div>
+                                        <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                                          {[
+                                            { step: 'volume', label: 'Volume', icon: 'auto_fix_high', title: 'Reset + volume + conformité + Word 2 + slides + TTS' },
+                                            { step: 'review', label: 'Conformité', icon: 'rule', title: 'Saute le volume — lance conformité + Word 2 + slides + TTS' },
+                                            { step: 'tts', label: 'TTS', icon: 'record_voice_over', title: 'Saute volume et conformité — lance uniquement slides + TTS' },
+                                          ].map(({ step, label, icon, title }) => (
+                                            <button
+                                              key={step}
+                                              style={{
+                                                ...S.btn('ghost'),
+                                                padding: '6px 12px',
+                                                fontSize: '12px',
+                                                borderColor: continuingAfterText ? 'rgba(251,191,36,0.15)' : 'rgba(251,191,36,0.4)',
+                                                color: continuingAfterText ? '#78716c' : '#fbbf24',
+                                              }}
+                                              disabled={!canUseFolder || continuingAfterText}
+                                              onClick={() => handleContinueAfterText(folder.folder_id, null, step)}
+                                              title={!canUseFolder ? 'Texte non terminé ou dossier hors job' : title}
+                                            >
+                                              <Icon name={continuingAfterText ? 'hourglass_empty' : icon} style={{ fontSize: '13px' }} />
+                                              {' '}Depuis : {label}
+                                            </button>
+                                          ))}
+                                        </div>
+                                      </div>
+                                    )}
+                                  </div>
+                                )
+                              })()}
 
                               <FlowArrowDown height={18} />
 
