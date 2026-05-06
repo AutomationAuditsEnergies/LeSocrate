@@ -3519,7 +3519,8 @@ export default function FormationPipeline() {
                                           {[
                                             { step: 'volume', label: 'Volume', icon: 'auto_fix_high', title: 'Reset + volume + conformité + Word 2 + slides + TTS' },
                                             { step: 'review', label: 'Conformité', icon: 'rule', title: 'Saute le volume — lance conformité + Word 2 + slides + TTS' },
-                                            { step: 'tts', label: 'TTS', icon: 'record_voice_over', title: 'Saute volume et conformité — lance uniquement slides + TTS' },
+                                            { step: 'slides', label: 'Slides', icon: 'slideshow', title: 'Saute volume et conformité — supprime le deck slides existant, régénère les slides puis lance le TTS' },
+                                            { step: 'tts', label: 'TTS', icon: 'record_voice_over', title: 'Saute tout — conserve les slides existantes et relance uniquement le TTS dessus' },
                                           ].map(({ step, label, icon, title }) => (
                                             <button
                                               key={step}

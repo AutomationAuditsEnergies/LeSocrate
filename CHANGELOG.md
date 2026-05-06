@@ -2,6 +2,27 @@
 
 ## 2026-05-06
 
+### feat: 4ᵉ étape "Slides" séparée de TTS dans Reprendre depuis…
+
+Précédemment, "Depuis : TTS" englobait à la fois la régénération des
+slides et la synthèse audio. Or les deux sont jointes par la persistance
+du deck slides en DB (`script_slide_decks`) mais séparables : si le deck
+existe, `generate_audio_from_script` le réutilise tel quel ; s'il manque
+et `auto_generate_slides=True`, il est régénéré.
+
+Le bouton "Reprendre depuis une étape" propose désormais 4 boutons :
+
+- **Volume** : reset complet → volume → conformité + Word 2 → slides + TTS
+- **Conformité** : conformité + Word 2 → slides + TTS
+- **Slides** : supprime le deck existant → régénère les slides → TTS sync
+- **TTS** : conserve les slides existantes → relance uniquement le TTS dessus
+
+Backend : ajout de `_delete_slide_deck_for_resume(folder_id, content_job_id)`
+qui purge `script_slide_decks` pour le folder, et insertion de la
+condition `if from_step_idx <= 2` (≤ slides) avant le TTS pour décider de
+supprimer ou non le deck. Logs `PIPELINE_RESUME_STEP_SLIDES_RESET` /
+`SKIP` pour traçabilité.
+
 ### feat: TTS basique migré de gTTS vers edge-tts (Microsoft Edge, voix neurales)
 
 **Pourquoi**

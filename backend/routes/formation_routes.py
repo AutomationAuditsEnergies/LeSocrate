@@ -3058,6 +3058,25 @@ def _get_folder_info_for_resume(job_id: int, folder_id: int) -> dict:
     }
 
 
+def _delete_slide_deck_for_resume(folder_id: int, content_job_id: int) -> int:
+    """Supprime le deck slides existant pour forcer la régénération à l'étape suivante."""
+    from database.db import get_db_connection
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='script_slide_decks'")
+    if not cursor.fetchone():
+        conn.close()
+        return 0
+    cursor.execute(
+        "DELETE FROM script_slide_decks WHERE folder_id = ? AND content_job_id = ?",
+        (folder_id, content_job_id),
+    )
+    deleted = cursor.rowcount
+    conn.commit()
+    conn.close()
+    return deleted
+
+
 def continue_after_text(job_id, folder_id):
     """Relance les étapes aval d'une journée sans régénérer le texte initial.
 
@@ -3076,7 +3095,7 @@ def continue_after_text(job_id, folder_id):
     max_slides = int(data.get("max_slides") or 60)
     pace = data.get("pace") or "normal"
     requested_folder_id = int(folder_id)
-    _STEP_ORDER = ["volume", "review", "tts"]
+    _STEP_ORDER = ["volume", "review", "slides", "tts"]
     raw_from_step = data.get("from_step", "volume")
     from_step = raw_from_step if raw_from_step in _STEP_ORDER else "volume"
     from_step_idx = _STEP_ORDER.index(from_step)
@@ -3364,7 +3383,36 @@ def continue_after_text(job_id, folder_id):
                     job_id, folder_id, from_step,
                 )
 
-            # ── Étape 4 : SLIDES + TTS (toujours exécutée) ──────────────────
+            # ── Étape 4 : SLIDES (force régénération si from_step <= slides) ─
+            # Slides et TTS sont jointes par la persistance du deck en DB.
+            # Si on vient de "slides" ou avant, on supprime le deck pour forcer
+            # une régénération propre. Si on vient de "tts", on conserve les
+            # slides existantes et on relance uniquement le TTS sync dessus.
+            if from_step_idx <= 2:
+                deleted_decks = _delete_slide_deck_for_resume(folder_id, reset_info["content_job_id"])
+                logger.info(
+                    "PIPELINE_RESUME_STEP_SLIDES_RESET formation_job_id=%s folder_id=%s "
+                    "content_job_id=%s deleted_decks=%s — slides seront régénérées avant TTS",
+                    job_id, folder_id, reset_info["content_job_id"], deleted_decks,
+                )
+                log_pipeline_event(
+                    job_id,
+                    "continue_after_text_slides_reset",
+                    step="slides",
+                    status="completed",
+                    folder_id=folder_id,
+                    model=str(model) if model else None,
+                    message="Deck slides supprimé — régénération automatique avant TTS",
+                    data={"deleted_decks": deleted_decks},
+                )
+            else:
+                logger.info(
+                    "PIPELINE_RESUME_STEP_SLIDES_SKIP formation_job_id=%s folder_id=%s "
+                    "from_step=%s — slides existantes conservées",
+                    job_id, folder_id, from_step,
+                )
+
+            # ── Étape 5 : TTS (toujours exécutée) ───────────────────────────
             tts_started = time.time()
             next_folder_id = _next_folder_in_formation(job_id, folder_id)
             logger.info(
