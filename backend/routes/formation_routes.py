@@ -889,7 +889,7 @@ def list_content(job_id):
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute(
-        """SELECT id, name, position FROM cours_folders
+        """SELECT id, name, position, platform_id, formation_job_id FROM cours_folders
            WHERE formation_job_id = ? ORDER BY position ASC, id ASC""",
         (job_id,),
     )
@@ -897,7 +897,7 @@ def list_content(job_id):
 
     daily_programs = _json.loads(job["daily_programs"] or "[]")
     result = []
-    for idx, (fid, fname, fpos) in enumerate(folders):
+    for idx, (fid, fname, fpos, f_platform_id, f_formation_job_id) in enumerate(folders):
         day_meta = daily_programs[idx] if idx < len(daily_programs) else {}
 
         cursor.execute(
@@ -936,13 +936,18 @@ def list_content(job_id):
             )
             n_dirty = cursor.fetchone()[0]
         else:
+            cg_id = None
             cg_status, cg_words, cur_sub, cur_passe, cg_err = None, 0, 0, 1, None
             n_completed, n_reviewed, n_review_errors, n_dirty = 0, 0, 0, 0
 
         result.append({
             "folder_id": fid,
+            "folder_label": f"F{fid}",
             "folder_name": fname,
             "position": fpos,
+            "platform_id": f_platform_id,
+            "formation_job_id": f_formation_job_id,
+            "content_job_id": cg_id,
             "day_number": day_meta.get("day_number", idx + 1),
             "day_title": day_meta.get("title", fname),
             "content_status": cg_status,
@@ -4242,6 +4247,8 @@ def formation_pipeline_diagnostic(job_id):
                 cf.id,
                 cf.name,
                 cf.position,
+                cf.platform_id,
+                cf.formation_job_id,
                 cgj.id,
                 cgj.status,
                 COALESCE(cgj.total_words, 0),
@@ -4254,7 +4261,8 @@ def formation_pipeline_diagnostic(job_id):
             LEFT JOIN content_generation_jobs cgj ON cgj.folder_id = cf.id
             LEFT JOIN content_generation_segments cgs ON cgs.job_id = cgj.id
             WHERE cf.formation_job_id = ?
-            GROUP BY cf.id, cf.name, cf.position, cgj.id, cgj.status, cgj.total_words
+            GROUP BY cf.id, cf.name, cf.position, cf.platform_id, cf.formation_job_id,
+                     cgj.id, cgj.status, cgj.total_words
             ORDER BY cf.position ASC, cf.id ASC
             """,
             (job_id,),
@@ -4264,6 +4272,8 @@ def formation_pipeline_diagnostic(job_id):
                 folder_id,
                 name,
                 position,
+                platform_id,
+                formation_job_id,
                 content_job_id,
                 content_status,
                 total_words,
@@ -4275,8 +4285,11 @@ def formation_pipeline_diagnostic(job_id):
             ) = row
             folders.append({
                 "folder_id": folder_id,
+                "folder_label": f"F{folder_id}",
                 "name": name,
                 "position": position,
+                "platform_id": platform_id,
+                "formation_job_id": formation_job_id,
                 "content_job_id": content_job_id,
                 "content_status": content_status,
                 "total_words": total_words or 0,
@@ -4294,8 +4307,10 @@ def formation_pipeline_diagnostic(job_id):
         key: job.get(key)
         for key in (
             "id",
+            "job_label",
             "status",
             "platform_id",
+            "platform_label",
             "platform_name",
             "tp_name",
             "rncp_code",

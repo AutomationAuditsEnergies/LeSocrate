@@ -1017,7 +1017,10 @@ def get_job(job_id: int) -> dict | None:
     if not row:
         return None
     return {
-        "id": row[0], "platform_id": row[1], "tp_name": row[2],
+        "id": row[0], "job_label": f"Job #{row[0]}",
+        "platform_id": row[1],
+        "platform_label": f"P{row[1]}" if row[1] is not None else None,
+        "tp_name": row[2],
         "rncp_code": row[3], "total_hours": row[4], "nb_days": row[5],
         "reac_text": row[6], "rc_text": row[7], "rome_text": row[8],
         "global_program": row[9],
@@ -1081,11 +1084,14 @@ def list_jobs(platform_id: int = None) -> list:
     return [
         {
             "id": r[0], "tp_name": r[1], "rncp_code": r[2],
+            "job_label": f"Job #{r[0]}",
             "total_hours": r[3], "nb_days": r[4], "status": r[5],
             "global_program_validated": bool(r[6]),
             "daily_programs_validated": bool(r[7]),
             "created_at": r[8], "updated_at": r[9],
-            "platform_id": r[10], "platform_name": r[11],
+            "platform_id": r[10],
+            "platform_label": f"P{r[10]}" if r[10] is not None else None,
+            "platform_name": r[11],
         }
         for r in rows
     ]

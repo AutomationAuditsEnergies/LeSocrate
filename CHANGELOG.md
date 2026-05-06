@@ -2,6 +2,46 @@
 
 ## 2026-05-06
 
+### feat: traçabilité pipeline avec IDs explicites (formation_job_id / content_job_id / folder_id)
+
+Refonte de la traçabilité pour rendre les logs Azure et l'UI
+diagnostic exploitables sans avoir à deviner à quel niveau
+hiérarchique appartient un `job=X`.
+
+**Logs structurés (`content_generation_service.py`)**
+
+Tous les préfixes `PIPELINE_CONTENT_*`, `PIPELINE_AUDIO_*`,
+`PIPELINE_REVIEW_*` portent désormais
+`formation_job_id=… content_job_id=… folder_id=…` au lieu d'un
+unique `job=…` ambigu (qui pouvait référencer le job formation OU
+le job content_generation selon le contexte).
+
+`get_job_from_db` (lecture du job content_generation depuis le
+folder) joint désormais `cours_folders` pour exposer
+`formation_job_id` et `folder_name` directement, évitant aux
+appelants de devoir refaire la jointure.
+
+**Labels API (`formation_pipeline_service.py`)**
+
+`get_job` et `list_jobs` exposent désormais `job_label` (`Job #X`)
+et `platform_label` (`PX`) prêts à afficher.
+
+**Routes (`formation_routes.py`)**
+
+`list_content` et `formation_pipeline_diagnostic` renvoient
+`folder_label` (`FX`), `platform_id`, `formation_job_id`,
+`content_job_id` pour chaque dossier — finie l'ambiguïté entre
+les deux niveaux d'IDs.
+
+**UI (`FormationPipeline.jsx`)**
+
+Helpers `formatJobIdentity(job)` et `formatFolderIdentity(folder)`
+qui standardisent l'affichage `Job #X · PY · TPname` et
+`FX · Texte #Y · Nom`. Détection visuelle des folders qui
+n'appartiennent **pas** au job sélectionné (`belongsToSelectedJob`)
+avec bandeau rouge — complète la réparation des orphelins côté
+backend par une alerte côté UI.
+
 ### fix: résolution robuste du folder dans `continue_after_text` (formation_routes.py)
 
 La route `continue_after_text` retombait en erreur quand le folder

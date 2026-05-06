@@ -411,6 +411,21 @@ function formatJobTimestamp(value) {
   })
 }
 
+function formatJobIdentity(job) {
+  if (!job) return 'Aucun job'
+  const jobLabel = job.job_label || (job.id ? `Job #${job.id}` : 'Job ?')
+  const platformLabel = job.platform_label || (job.platform_id ? `P${job.platform_id}` : 'P?')
+  return `${jobLabel} · ${platformLabel}`
+}
+
+function formatFolderIdentity(folder) {
+  if (!folder) return 'Dossier ?'
+  const dayLabel = folder.day_number ? `Jour ${folder.day_number}` : `Jour ${(folder.position ?? 0) + 1}`
+  const folderLabel = folder.folder_label || (folder.folder_id ? `F${folder.folder_id}` : 'F?')
+  const contentLabel = folder.content_job_id ? `Texte #${folder.content_job_id}` : 'Texte non créé'
+  return `${dayLabel} · ${folderLabel} · ${contentLabel}`
+}
+
 function setPipelineJobInUrl(jobId, { replace = false } = {}) {
   if (typeof window === 'undefined') return
   const url = new URL(window.location.href)
@@ -485,6 +500,7 @@ function healthCheckLabel(key) {
 
 function PipelineDiagnosticPanel({ diagnostic, loading, error, onRefresh }) {
   const health = diagnostic?.health
+  const diagnosticJob = diagnostic?.job
   const folders = diagnostic?.folders || []
   const events = diagnostic?.events || []
   const [selectedEvent, setSelectedEvent] = useState(null)
@@ -544,6 +560,11 @@ function PipelineDiagnosticPanel({ diagnostic, loading, error, onRefresh }) {
       )}
 
       <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '12px' }}>
+        {diagnosticJob && (
+          <span style={{ ...S.tag('violet'), padding: '5px 10px' }}>
+            <Icon name="tag" /> {formatJobIdentity(diagnosticJob)}
+          </span>
+        )}
         <span style={{ ...S.tag(health?.ok ? 'green' : health?.blocking?.length ? 'red' : 'amber'), padding: '5px 10px' }}>
           <Icon name={healthIcon} /> Audit {health?.ok ? 'OK' : health?.blocking?.length ? 'bloquant' : 'à surveiller'}
         </span>
@@ -572,7 +593,7 @@ function PipelineDiagnosticPanel({ diagnostic, loading, error, onRefresh }) {
             {latestAudioEvent ? (
               <>
                 <strong style={{ color: eventTone(latestAudioEvent.status).color }}>{eventLabel(latestAudioEvent.event_type)}</strong>
-                {latestAudioEvent.folder_id ? <span style={{ color: '#64748b' }}> · dossier {latestAudioEvent.folder_id}</span> : null}
+                {latestAudioEvent.folder_id ? <span style={{ color: '#64748b' }}> · F{latestAudioEvent.folder_id}</span> : null}
                 {latestAudioEvent.message ? <span> · {latestAudioEvent.message}</span> : null}
                 {latestAudioEvent.error ? <span style={{ color: '#f87171' }}> · {latestAudioEvent.error}</span> : null}
               </>
@@ -635,6 +656,7 @@ function PipelineDiagnosticPanel({ diagnostic, loading, error, onRefresh }) {
                     {folder.name || `Journée ${folder.position + 1}`}
                   </div>
                   <div style={{ color: '#64748b', fontSize: '11px', marginTop: '2px' }}>
+                    {folder.folder_label || `F${folder.folder_id}`} · Texte #{folder.content_job_id || '?'} ·{' '}
                     {Number(folder.total_words || 0).toLocaleString('fr-FR')} mots · {folder.reviewed_segments || 0}/{completed || 0} revus
                   </div>
                 </div>
@@ -753,7 +775,7 @@ function PipelineDiagnosticPanel({ diagnostic, loading, error, onRefresh }) {
               <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                 <Icon name={tone.icon} style={{ color: tone.color, fontSize: '13px' }} />{' '}
                 <strong style={{ color: tone.color }}>{eventLabel(event.event_type)}</strong>
-                {event.folder_id ? <span style={{ color: '#64748b' }}> · dossier {event.folder_id}</span> : null}
+                {event.folder_id ? <span style={{ color: '#64748b' }}> · F{event.folder_id}</span> : null}
                 {event.message ? <span style={{ color: '#94a3b8' }}> · {event.message}</span> : null}
                 {event.error ? <span style={{ color: '#f87171' }}> · {event.error}</span> : null}
               </span>
@@ -829,8 +851,9 @@ function EventDetailModal({ event, onClose }) {
         </div>
 
         <div style={{ display: 'grid', gridTemplateColumns: '120px 1fr', gap: '8px 14px', fontSize: '13px', marginBottom: '16px' }}>
+          {event.job_id && (<><span style={{ color: '#64748b' }}>Job formation</span><span style={{ color: '#cbd5e1' }}>Job #{event.job_id}</span></>)}
           {event.step && (<><span style={{ color: '#64748b' }}>Étape</span><span style={{ color: '#cbd5e1' }}>{event.step}</span></>)}
-          {event.folder_id && (<><span style={{ color: '#64748b' }}>Dossier</span><span style={{ color: '#cbd5e1' }}>#{event.folder_id}</span></>)}
+          {event.folder_id && (<><span style={{ color: '#64748b' }}>Dossier journée</span><span style={{ color: '#cbd5e1' }}>F{event.folder_id}</span></>)}
           {event.model && (<><span style={{ color: '#64748b' }}>Modèle LLM</span><span style={{ color: '#a78bfa', fontFamily: 'monospace' }}>{event.model}</span></>)}
           {event.duration_ms != null && (<><span style={{ color: '#64748b' }}>Durée</span><span style={{ color: '#cbd5e1' }}>{formatDuration(event.duration_ms) || `${event.duration_ms} ms`}</span></>)}
           <span style={{ color: '#64748b' }}>Type</span><span style={{ color: '#cbd5e1', fontFamily: 'monospace' }}>{event.event_type}</span>
@@ -913,7 +936,8 @@ function JobCard({ job, onSelect, selected }) {
     : POLLING_STATUSES.has(job.status) ? 'amber'
     : 'violet'
   const createdAt = formatJobTimestamp(job.created_at)
-  const platformLabel = job.platform_id ? `P${job.platform_id}` : 'P?'
+  const platformLabel = job.platform_label || (job.platform_id ? `P${job.platform_id}` : 'P?')
+  const jobLabel = job.job_label || `Job #${job.id}`
 
   return (
     <div
@@ -931,7 +955,7 @@ function JobCard({ job, onSelect, selected }) {
         justifyContent: 'space-between',
         gap: '12px',
       }}
-      title={`Job #${job.id} · ${platformLabel}${job.platform_name ? ` · ${job.platform_name}` : ''}`}
+      title={`${jobLabel} · ${platformLabel}${job.platform_name ? ` · ${job.platform_name}` : ''}`}
     >
       <div style={{ minWidth: 0, flex: '1 1 auto' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
@@ -945,7 +969,7 @@ function JobCard({ job, onSelect, selected }) {
             borderRadius: '999px',
             padding: '2px 8px',
           }}>
-            Job #{job.id}
+            {jobLabel}
           </span>
           <span style={{
             fontSize: '11px',
@@ -1645,6 +1669,7 @@ export default function FormationPipeline() {
   const [audioError, setAudioError] = useState('')
   const [continuingAfterTextFolders, setContinuingAfterTextFolders] = useState({})
   const [continueAfterTextError, setContinueAfterTextError] = useState('')
+  const [continueAfterTextNotice, setContinueAfterTextNotice] = useState('')
   // Modèle utilisé pour la relance aval. Initialisé sur l'auto_pilot_model du
   // job courant si présent, sinon DeepSeek Pro (cas des jobs historiques sans
   // colonne persistée).
@@ -1670,6 +1695,10 @@ export default function FormationPipeline() {
   const [actionError, setActionError] = useState('')
 
   const pollingRef = useRef(null)
+  const selectedJobIdRef = useRef(null)
+  useEffect(() => {
+    selectedJobIdRef.current = selectedJobId
+  }, [selectedJobId])
 
   // ─── Fetch liste des jobs ─────────────────────────────────────────────────
   const fetchJobs = useCallback(async () => {
@@ -1691,7 +1720,8 @@ export default function FormationPipeline() {
     try {
       const resp = await fetch(apiUrl(`/api/formation/${id}`), { credentials: 'include' })
       const data = await resp.json()
-      if (data.id) {
+      if (selectedJobIdRef.current && Number(selectedJobIdRef.current) !== Number(id)) return
+      if (data.id && Number(data.id) === Number(id)) {
         setJob(data)
         // Synchroniser les états locaux si pas en train d'éditer
         if (!globalEditing) setGlobalProgram(data.global_program || '')
@@ -1730,6 +1760,7 @@ export default function FormationPipeline() {
     try {
       const resp = await fetch(apiUrl(`/api/formation/${jobId}/diagnostic?events_limit=80`), { credentials: 'include' })
       const data = await resp.json()
+      if (selectedJobIdRef.current && Number(selectedJobIdRef.current) !== Number(jobId)) return
       if (resp.ok) {
         setPipelineDiagnostic(data)
       } else {
@@ -1874,9 +1905,12 @@ export default function FormationPipeline() {
     try {
       const resp = await fetch(apiUrl(`/api/formation/${jobId}/content`), { credentials: 'include' })
       const data = await resp.json()
+      if (selectedJobIdRef.current && Number(selectedJobIdRef.current) !== Number(jobId)) return
       if (data.folders) setContentFolders(data.folders)
+      else setContentFolders([])
     } catch (e) {
       console.error('fetchContentFolders:', e)
+      setContentFolders([])
     }
   }, [])
 
@@ -1929,6 +1963,7 @@ export default function FormationPipeline() {
 
   const handleContinueAfterText = async (folderId, modelOverride = null) => {
     setContinueAfterTextError('')
+    setContinueAfterTextNotice('')
     setContinuingAfterTextFolders(prev => ({ ...prev, [folderId]: true }))
     try {
       const chosenModel = modelOverride || continueAfterTextModel || job?.auto_pilot_model
@@ -1950,6 +1985,19 @@ export default function FormationPipeline() {
         setContinueAfterTextError(data.error || `Erreur ${resp.status}`)
         setContinuingAfterTextFolders(prev => { const n = { ...prev }; delete n[folderId]; return n })
         return
+      }
+      const resolvedFolderId = data.folder_id || folderId
+      if (resolvedFolderId !== folderId) {
+        const reason = data.folder_resolution?.reason
+        setContinueAfterTextNotice(
+          `Relance redirigée vers F${resolvedFolderId}${reason ? ` (${reason})` : ''}`,
+        )
+        setContinuingAfterTextFolders(prev => {
+          const next = { ...prev }
+          delete next[folderId]
+          next[resolvedFolderId] = true
+          return next
+        })
       }
       await fetchJob(selectedJobId)
       await fetchContentFolders(selectedJobId)
@@ -2044,6 +2092,7 @@ export default function FormationPipeline() {
       const resp = await fetch(apiUrl(`/api/formation/${jobId}/volume-audit`), { credentials: 'include' })
       if (resp.status === 403) return
       const data = await resp.json()
+      if (selectedJobIdRef.current && Number(selectedJobIdRef.current) !== Number(jobId)) return
       if (data.folders) setVolumeAudit(data)
     } catch (e) {
       // Silencieux : endpoint optionnel
@@ -2301,12 +2350,37 @@ export default function FormationPipeline() {
 
   const handleJobCreated = async (jobId) => {
     setShowNew(false)
+    resetJobScopedState()
     setSelectedJobId(jobId)
     setPipelineJobInUrl(jobId)
     await fetchJobs()
   }
 
+  const resetJobScopedState = () => {
+    setContentFolders([])
+    setViewingFolder(null)
+    setReportFolder(null)
+    setTtsResult(null)
+    setAudioError('')
+    setContinueAfterTextError('')
+    setContinueAfterTextNotice('')
+    setContinuingAfterTextFolders({})
+    setReviewingFolders({})
+    setReviewError('')
+    setVolumeAudit(null)
+    setSafetyRunning({})
+    setSafetyError('')
+    setPipelineDiagnostic(null)
+    setPipelineDiagnosticError('')
+    setAutoPilotState(null)
+    setLinkedModule(null)
+    setPendingMissions({})
+    setMissionModal(null)
+    setMissionError('')
+  }
+
   const handleSelectJob = (j) => {
+    resetJobScopedState()
     setSelectedJobId(j.id)
     setPipelineJobInUrl(j.id)
     setJob(j)
@@ -2314,9 +2388,6 @@ export default function FormationPipeline() {
     setDailyPrograms([])
     setDailyEditIdx(null)
     setActionError('')
-    setTtsResult(null)
-    setPipelineDiagnostic(null)
-    setPipelineDiagnosticError('')
   }
 
   useEffect(() => {
@@ -2326,15 +2397,13 @@ export default function FormationPipeline() {
     if (!parsedJobId) return
     const initialJob = jobs.find(j => j.id === parsedJobId)
     if (!initialJob) return
+    resetJobScopedState()
     setSelectedJobId(initialJob.id)
     setJob(initialJob)
     setGlobalProgram(initialJob.global_program || '')
     setDailyPrograms([])
     setDailyEditIdx(null)
     setActionError('')
-    setTtsResult(null)
-    setPipelineDiagnostic(null)
-    setPipelineDiagnosticError('')
   }, [jobs, selectedJobId, showNew])
 
   // ─── Édition journée ──────────────────────────────────────────────────────
@@ -2375,7 +2444,7 @@ export default function FormationPipeline() {
         <div style={{ fontSize: '22px', color: '#8B5CF6' }}><Icon name="school" /></div>
         <h1 style={S.topBarTitle}>Pipeline Formation</h1>
         <div style={{ flex: 1 }} />
-        <button style={S.btn('ghost')} onClick={() => { setShowNew(v => !v); setSelectedJobId(null); setPipelineJobInUrl(null) }}>
+        <button style={S.btn('ghost')} onClick={() => { resetJobScopedState(); setShowNew(v => !v); setSelectedJobId(null); setJob(null); setPipelineJobInUrl(null) }}>
           <Icon name={showNew ? 'close' : 'add'} /> {showNew ? 'Annuler' : 'Nouveau pipeline'}
         </button>
       </div>
@@ -2410,8 +2479,8 @@ export default function FormationPipeline() {
                 <div>
                   <div style={{ fontSize: '20px', fontWeight: 700, color: '#e2e8f0' }}>{job.tp_name}</div>
                   <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginTop: '6px' }}>
-                    <span style={S.tag('violet')}>Job #{job.id}</span>
-                    <span style={S.tag('violet')}>P{job.platform_id || '?'}</span>
+                    <span style={S.tag('violet')}>{job.job_label || `Job #${job.id}`}</span>
+                    <span style={S.tag('violet')}>{job.platform_label || `P${job.platform_id || '?'}`}</span>
                     {job.created_at && <span style={S.tag('violet')}>Créé le {formatJobTimestamp(job.created_at)}</span>}
                   </div>
                   {job.platform_name && (
@@ -3219,11 +3288,14 @@ export default function FormationPipeline() {
                       const pct = Math.round((folder.segments_completed / folder.segments_total) * 100)
                       const isDone = folder.content_status === 'completed'
                       const isError = folder.content_status === 'error'
+                      const folderIdentity = formatFolderIdentity(folder)
+                      const belongsToSelectedJob = !folder.formation_job_id || folder.formation_job_id === selectedJobId
+                      const canUseFolder = isDone && belongsToSelectedJob
                       const continuingAfterText = !!continuingAfterTextFolders[folder.folder_id]
                       return (
                         <div key={folder.folder_id} style={{
                           background: 'rgba(15,23,42,0.5)',
-                          border: `1px solid ${isError ? 'rgba(239,68,68,0.3)' : isDone ? 'rgba(16,185,129,0.25)' : 'rgba(99,102,241,0.2)'}`,
+                          border: `1px solid ${!belongsToSelectedJob || isError ? 'rgba(239,68,68,0.3)' : isDone ? 'rgba(16,185,129,0.25)' : 'rgba(99,102,241,0.2)'}`,
                           borderRadius: '10px',
                           padding: '12px 14px',
                         }}>
@@ -3232,8 +3304,18 @@ export default function FormationPipeline() {
                               <div style={{ fontSize: '14px', fontWeight: 600, color: '#e2e8f0', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                                 Jour {folder.day_number} — {folder.day_title}
                               </div>
+                              <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginTop: '5px' }}>
+                                <span style={{ ...S.tag('violet'), padding: '2px 7px', fontSize: '10.5px' }}>
+                                  {formatJobIdentity(job)}
+                                </span>
+                                <span style={{ ...S.tag(belongsToSelectedJob ? 'violet' : 'red'), padding: '2px 7px', fontSize: '10.5px' }}>
+                                  {folderIdentity}
+                                </span>
+                              </div>
                               <div style={{ fontSize: '12px', color: '#64748b', marginTop: '2px' }}>
-                                {isDone
+                                {!belongsToSelectedJob
+                                  ? <span style={{ color: '#f87171' }}>Ce dossier appartient au job #{folder.formation_job_id}, pas au job sélectionné.</span>
+                                  : isDone
                                   ? `✓ ${folder.total_words.toLocaleString('fr-FR')} mots générés`
                                   : isError
                                     ? <span style={{ color: '#f87171' }}>Erreur — {folder.error_message || 'inconnu'}</span>
@@ -3296,7 +3378,7 @@ export default function FormationPipeline() {
                                 padding: '8px 10px',
                                 borderRadius: '8px',
                                 background: 'rgba(167, 139, 250, 0.06)',
-                                borderLeft: '3px solid rgba(167, 139, 250, 0.5)',
+                                border: '1px solid rgba(167, 139, 250, 0.22)',
                               }}>
                                 <div style={{
                                   fontSize: '10px',
@@ -3340,26 +3422,32 @@ export default function FormationPipeline() {
                                       borderColor: 'rgba(251, 191, 36, 0.35)',
                                       color: '#fbbf24',
                                     }}
-                                    disabled={!isDone || continuingAfterText}
+                                    disabled={!canUseFolder || continuingAfterText}
                                     onClick={() => handleContinueAfterText(folder.folder_id)}
-                                    title="Conserve le Word initial, remet à zéro les étapes aval, puis relance volume, conformité, Word 2, slides et gTTS synchronisé"
+                                    title={
+                                      !belongsToSelectedJob
+                                        ? 'Dossier rattaché à un autre job'
+                                        : !isDone
+                                          ? 'Texte non terminé'
+                                          : 'Conserve le Word initial, remet à zéro les étapes aval, puis relance volume, conformité, Word 2, slides et gTTS synchronisé'
+                                    }
                                   >
                                     <Icon name={continuingAfterText ? 'hourglass_empty' : 'play_arrow'} />
                                     {continuingAfterText ? 'Relance aval…' : 'Continuer après le texte'}
                                   </button>
                                   <button
                                     style={{ ...S.btn('neutral'), padding: '6px 12px', fontSize: '12px' }}
-                                    disabled={!isDone}
+                                    disabled={!canUseFolder}
                                     onClick={() => setViewingFolder(folder)}
-                                    title={isDone ? 'Lire le texte de la journée' : 'En attente de génération'}
+                                    title={canUseFolder ? 'Lire le texte de la journée' : 'En attente de génération ou dossier hors job'}
                                   >
                                     <Icon name="visibility" /> Voir
                                   </button>
                                   <button
                                     style={{ ...S.btn('neutral'), padding: '6px 12px', fontSize: '12px' }}
-                                    disabled={!isDone}
+                                    disabled={!canUseFolder}
                                     onClick={() => window.open(`/generated-slides?job_id=${selectedJobId}&folder_id=${folder.folder_id}`, '_blank')}
-                                    title={isDone ? 'Prévisualiser les slides générées depuis le texte' : 'En attente de génération'}
+                                    title={canUseFolder ? 'Prévisualiser les slides générées depuis le texte' : 'En attente de génération ou dossier hors job'}
                                   >
                                     <Icon name="slideshow" /> Slides
                                   </button>
@@ -3368,11 +3456,11 @@ export default function FormationPipeline() {
                                       Permet la comparaison avant/après. */}
                                   <button
                                     style={{ ...S.btn('primary'), padding: '6px 12px', fontSize: '12px' }}
-                                    disabled={!isDone}
+                                    disabled={!canUseFolder}
                                     onClick={() => handleDownloadDocx(folder.folder_id, 'pre_review')}
-                                    title={isDone
+                                    title={canUseFolder
                                       ? 'Télécharger le Word AVANT révision conformité (texte tel que généré)'
-                                      : 'En attente de génération'}
+                                      : 'En attente de génération ou dossier hors job'}
                                   >
                                     <Icon name="description" /> Word
                                   </button>
@@ -3385,7 +3473,7 @@ export default function FormationPipeline() {
                                         fontSize: '12px',
                                         background: 'linear-gradient(135deg, #34d399, #10b981)',
                                       }}
-                                      disabled={!isDone}
+                                      disabled={!canUseFolder}
                                       onClick={() => handleDownloadDocx(folder.folder_id, 'current')}
                                       title="Télécharger le Word APRÈS révision conformité (texte révisé, utilisé pour le TTS)"
                                     >
@@ -3418,7 +3506,7 @@ export default function FormationPipeline() {
                                 padding: '8px 10px',
                                 borderRadius: '8px',
                                 background: 'rgba(245, 158, 11, 0.05)',
-                                borderLeft: '3px solid rgba(245, 158, 11, 0.5)',
+                                border: '1px solid rgba(245, 158, 11, 0.22)',
                               }}>
                                 <div style={{
                                   fontSize: '10px',
@@ -3438,14 +3526,16 @@ export default function FormationPipeline() {
                                   const deficit = folderAudit?.deficit || 0
                                   const running = !!safetyRunning[folder.folder_id]
                                   const atTarget = isDone && deficit === 0 && folderAudit
-                                  const disabled = !isDone || running || atTarget
+                                  const disabled = !canUseFolder || running || atTarget
                                   return (
                                     <button
                                       style={{ ...S.btn('ghost'), padding: '6px 12px', fontSize: '12px' }}
                                       disabled={disabled}
                                       onClick={() => handleLaunchVolumeSafety(folder.folder_id, 'api')}
                                       title={
-                                        !isDone
+                                        !belongsToSelectedJob
+                                          ? 'Dossier rattaché à un autre job'
+                                          : !isDone
                                           ? 'En attente de génération'
                                           : running
                                             ? 'Enrichissement en cours'
@@ -3472,7 +3562,7 @@ export default function FormationPipeline() {
                                 padding: '8px 10px',
                                 borderRadius: '8px',
                                 background: 'rgba(52, 211, 153, 0.05)',
-                                borderLeft: '3px solid rgba(52, 211, 153, 0.5)',
+                                border: '1px solid rgba(52, 211, 153, 0.2)',
                               }}>
                                 <div style={{
                                   fontSize: '10px',
@@ -3494,14 +3584,16 @@ export default function FormationPipeline() {
                                   const nComp = folder.segments_completed || 0
                                   const allClean = isDone && nComp > 0 && nRev >= nComp && nErr === 0 && !reviewing
                                   const hasRetryable = nErr > 0
-                                  const disabled = !isDone || reviewing || allClean
+                                  const disabled = !canUseFolder || reviewing || allClean
                                   return (
                                     <button
                                       style={{ ...S.btn('ghost'), padding: '6px 12px', fontSize: '12px' }}
                                       disabled={disabled}
                                       onClick={() => handleReviewFolder(folder.folder_id)}
                                       title={
-                                        !isDone
+                                        !belongsToSelectedJob
+                                          ? 'Dossier rattaché à un autre job'
+                                          : !isDone
                                           ? 'En attente de génération'
                                           : reviewing
                                             ? 'Révision en cours'
@@ -3535,6 +3627,11 @@ export default function FormationPipeline() {
                     {continueAfterTextError && (
                       <div style={{ fontSize: '13px', color: '#f87171', marginTop: '4px' }}>
                         Reprise aval : {continueAfterTextError}
+                      </div>
+                    )}
+                    {continueAfterTextNotice && (
+                      <div style={{ fontSize: '13px', color: '#fbbf24', marginTop: '4px' }}>
+                        Reprise aval : {continueAfterTextNotice}
                       </div>
                     )}
                     {contentFolders.length === 0 && (
@@ -3804,7 +3901,7 @@ export default function FormationPipeline() {
                       <Icon name="graphic_eq" /> {audioBusy ? '…' : 'Relancer TTS voix basique (gratuit)'}
                     </button>
                     <button
-                      style={{ ...S.btn('ghost'), borderColor: 'rgba(56,189,248,0.45)', color: '#38bdf8' }}
+                      style={{ ...S.btn('ghost'), borderColor: 'rgba(167,139,250,0.4)', color: '#a78bfa' }}
                       onClick={() => handleLaunchAudio(false, true, true, true)}
                       disabled={audioBusy || !allContentCompleted}
                       title="Re-synthèse gratuite via gTTS, découpée par slides, avec stockage des timings slide ↔ audio."
@@ -3857,7 +3954,7 @@ export default function FormationPipeline() {
                       <Icon name="graphic_eq" /> {audioBusy ? '…' : 'TTS voix basique (gratuit)'}
                     </button>
                     <button
-                      style={{ ...S.btn('ghost'), borderColor: 'rgba(56,189,248,0.45)', color: '#38bdf8' }}
+                      style={{ ...S.btn('ghost'), borderColor: 'rgba(167,139,250,0.4)', color: '#a78bfa' }}
                       onClick={() => handleLaunchAudio(false, true, true, true)}
                       disabled={audioBusy || !allContentCompleted}
                       title="Test complet sans Fish Audio : génère les slides si besoin, synthétise en gTTS, concatène par slide et stocke les timings."
@@ -4190,7 +4287,7 @@ function ReviewReportModal({ jobId, folder, onClose }) {
               <div style={{
                 fontSize: '11px', color: '#fbbf24', marginTop: '6px',
                 padding: '6px 10px', background: 'rgba(251, 191, 36, 0.08)',
-                borderLeft: '3px solid #fbbf24', borderRadius: '4px',
+                border: '1px solid rgba(251, 191, 36, 0.24)', borderRadius: '4px',
                 lineHeight: 1.4,
               }}>
                 <Icon name="info" style={{ fontSize: '12px' }} /> <strong>Rapport reconstitué</strong>
@@ -4199,9 +4296,9 @@ function ReviewReportModal({ jobId, folder, onClose }) {
             )}
             {report?.is_db_fallback && (
               <div style={{
-                fontSize: '11px', color: '#38bdf8', marginTop: '6px',
-                padding: '6px 10px', background: 'rgba(56, 189, 248, 0.08)',
-                borderLeft: '3px solid #38bdf8', borderRadius: '4px',
+                fontSize: '11px', color: '#a78bfa', marginTop: '6px',
+                padding: '6px 10px', background: 'rgba(167, 139, 250, 0.08)',
+                border: '1px solid rgba(167, 139, 250, 0.24)', borderRadius: '4px',
                 lineHeight: 1.4,
               }}>
                 <Icon name="info" style={{ fontSize: '12px' }} /> <strong>Rapport reconstruit depuis la base</strong>

@@ -1499,12 +1499,16 @@ def get_job_from_db(folder_id):
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("""
-        SELECT id, platform_id, program_text, program_title, sub_parts, status,
-               current_sub_part, current_passe, total_words, error_message,
-               from_scratch, module_contents,
-               carryover_in_text, carryover_in_source_folder_id,
-               carryover_out_text, carryover_out_target_folder_id
-        FROM content_generation_jobs WHERE folder_id = ?
+        SELECT cgj.id, cgj.platform_id, cgj.program_text, cgj.program_title,
+               cgj.sub_parts, cgj.status, cgj.current_sub_part,
+               cgj.current_passe, cgj.total_words, cgj.error_message,
+               cgj.from_scratch, cgj.module_contents,
+               cgj.carryover_in_text, cgj.carryover_in_source_folder_id,
+               cgj.carryover_out_text, cgj.carryover_out_target_folder_id,
+               cf.formation_job_id, cf.name
+        FROM content_generation_jobs cgj
+        LEFT JOIN cours_folders cf ON cf.id = cgj.folder_id
+        WHERE cgj.folder_id = ?
     """, (folder_id,))
     row = cursor.fetchone()
     conn.close()
@@ -1521,6 +1525,8 @@ def get_job_from_db(folder_id):
         "carryover_in_source_folder_id": row[13],
         "carryover_out_text": row[14] or "",
         "carryover_out_target_folder_id": row[15],
+        "formation_job_id": row[16],
+        "folder_name": row[17],
     }
 
 
@@ -1702,6 +1708,7 @@ def run_content_generation(folder_id, on_progress=None, mode="normal", model=Non
         raise ValueError(f"Aucun job trouvé pour le dossier {folder_id}")
 
     job_id = job["id"]
+    formation_job_id = job.get("formation_job_id")
     platform_id = job["platform_id"]
     program_text = job["program_text"]
     program_title = job["program_title"]
@@ -1714,8 +1721,9 @@ def run_content_generation(folder_id, on_progress=None, mode="normal", model=Non
 
     started_at = time.time()
     logger.info(
-        "PIPELINE_CONTENT_START job=%s folder=%s platform=%s mode=%s model=%s "
+        "PIPELINE_CONTENT_START formation_job_id=%s content_job_id=%s folder_id=%s platform_id=%s mode=%s model=%s "
         "from_scratch=%s sub_parts=%s existing_words=%s",
+        formation_job_id,
         job_id,
         folder_id,
         platform_id,
@@ -1737,7 +1745,8 @@ def run_content_generation(folder_id, on_progress=None, mode="normal", model=Non
         done_set = _get_completed_segments(job_id)
         total_words = job["total_words"] or 0
         logger.info(
-            "PIPELINE_CONTENT_RESUME_STATE job=%s folder=%s completed_segments=%s total_words=%s",
+            "PIPELINE_CONTENT_RESUME_STATE formation_job_id=%s content_job_id=%s folder_id=%s completed_segments=%s total_words=%s",
+            formation_job_id,
             job_id,
             folder_id,
             len(done_set),
@@ -1750,7 +1759,8 @@ def run_content_generation(folder_id, on_progress=None, mode="normal", model=Non
 
         for sub_idx, sub_part_name in enumerate(sub_parts_to_run):
             logger.info(
-                "PIPELINE_CONTENT_SUBPART_START job=%s folder=%s sub_part=%s/%s name=%s",
+                "PIPELINE_CONTENT_SUBPART_START formation_job_id=%s content_job_id=%s folder_id=%s sub_part=%s/%s name=%s",
+                formation_job_id,
                 job_id,
                 folder_id,
                 sub_idx + 1,
@@ -1766,7 +1776,8 @@ def run_content_generation(folder_id, on_progress=None, mode="normal", model=Non
             for passe in passes_to_run:
                 if (sub_idx, passe) in done_set:
                     logger.info(
-                        "PIPELINE_CONTENT_SEGMENT_SKIP job=%s folder=%s sub_part=%s passe=%s reason=already_completed",
+                        "PIPELINE_CONTENT_SEGMENT_SKIP formation_job_id=%s content_job_id=%s folder_id=%s sub_part=%s passe=%s reason=already_completed",
+                        formation_job_id,
                         job_id,
                         folder_id,
                         sub_idx + 1,
@@ -1781,7 +1792,8 @@ def run_content_generation(folder_id, on_progress=None, mode="normal", model=Non
                 _update_job_db(job_id, current_sub_part=sub_idx, current_passe=passe)
                 segment_started_at = time.time()
                 logger.info(
-                    "PIPELINE_CONTENT_SEGMENT_START job=%s folder=%s sub_part=%s/%s passe=%s/%s mode=%s total_words_before=%s",
+                    "PIPELINE_CONTENT_SEGMENT_START formation_job_id=%s content_job_id=%s folder_id=%s sub_part=%s/%s passe=%s/%s mode=%s total_words_before=%s",
+                    formation_job_id,
                     job_id,
                     folder_id,
                     sub_idx + 1,
@@ -1814,8 +1826,9 @@ def run_content_generation(folder_id, on_progress=None, mode="normal", model=Non
                 total_words += words_added
                 _update_job_db(job_id, total_words=total_words)
                 logger.info(
-                    "PIPELINE_CONTENT_SEGMENT_DONE job=%s folder=%s sub_part=%s passe=%s "
+                    "PIPELINE_CONTENT_SEGMENT_DONE formation_job_id=%s content_job_id=%s folder_id=%s sub_part=%s passe=%s "
                     "words_added=%s total_words=%s duration_ms=%s",
+                    formation_job_id,
                     job_id,
                     folder_id,
                     sub_idx + 1,
@@ -1835,7 +1848,8 @@ def run_content_generation(folder_id, on_progress=None, mode="normal", model=Non
             _update_job_db(job_id, status="completed", total_words=total_words)
             _progress(1, 1, total_words, f"✅ [MINI] 1 segment généré ({total_words} mots) — pas d'upload Azure")
             logger.info(
-                "PIPELINE_CONTENT_DONE job=%s folder=%s mode=mini total_words=%s duration_ms=%s",
+                "PIPELINE_CONTENT_DONE formation_job_id=%s content_job_id=%s folder_id=%s mode=mini total_words=%s duration_ms=%s",
+                formation_job_id,
                 job_id,
                 folder_id,
                 total_words,
@@ -1846,7 +1860,8 @@ def run_content_generation(folder_id, on_progress=None, mode="normal", model=Non
         # Assemblage + upload
         _progress(NUM_SUB_PARTS, 3, total_words, "Assemblage et upload du texte final...")
         logger.info(
-            "PIPELINE_CONTENT_ASSEMBLY_START job=%s folder=%s words_before_assembly=%s",
+            "PIPELINE_CONTENT_ASSEMBLY_START formation_job_id=%s content_job_id=%s folder_id=%s words_before_assembly=%s",
+            formation_job_id,
             job_id,
             folder_id,
             total_words,
@@ -1856,7 +1871,8 @@ def run_content_generation(folder_id, on_progress=None, mode="normal", model=Non
         _update_job_db(job_id, status="completed", total_words=final_words)
         _progress(NUM_SUB_PARTS, 3, final_words, f"✅ Terminé : {final_words} mots — fichier {filename} ajouté aux sources")
         logger.info(
-            "PIPELINE_CONTENT_DONE job=%s folder=%s final_words=%s filename=%s duration_ms=%s",
+            "PIPELINE_CONTENT_DONE formation_job_id=%s content_job_id=%s folder_id=%s final_words=%s filename=%s duration_ms=%s",
+            formation_job_id,
             job_id,
             folder_id,
             final_words,
@@ -1866,7 +1882,8 @@ def run_content_generation(folder_id, on_progress=None, mode="normal", model=Non
 
     except Exception as e:
         logger.exception(
-            "PIPELINE_CONTENT_ERROR job=%s folder=%s duration_ms=%s error=%s",
+            "PIPELINE_CONTENT_ERROR formation_job_id=%s content_job_id=%s folder_id=%s duration_ms=%s error=%s",
+            formation_job_id,
             job_id,
             folder_id,
             int((time.time() - started_at) * 1000),
@@ -2033,10 +2050,12 @@ def generate_audio_from_script(
 
     platform_id = job["platform_id"]
     job_id = job["id"]
+    formation_job_id = job.get("formation_job_id")
     started_at = time.time()
     logger.info(
-        "PIPELINE_AUDIO_START job=%s folder=%s platform=%s force_all=%s mock=%s basic_tts=%s "
+        "PIPELINE_AUDIO_START formation_job_id=%s content_job_id=%s folder_id=%s platform_id=%s force_all=%s mock=%s basic_tts=%s "
         "sync_slides=%s auto_generate_slides=%s slide_max_slides=%s slide_pace=%s llm_model=%s",
+        formation_job_id,
         job_id,
         folder_id,
         platform_id,
@@ -2171,8 +2190,9 @@ def generate_audio_from_script(
     clean_count = 7 - dirty_count
     logger.info(f"🎯 {dirty_count}/7 blocs à régénérer, {clean_count}/7 conservés")
     logger.info(
-        "PIPELINE_AUDIO_PLAN job=%s folder=%s playlist_items=%s total_words=%s blocs=%s dirty_blocs=%s clean_blocs=%s "
+        "PIPELINE_AUDIO_PLAN formation_job_id=%s content_job_id=%s folder_id=%s playlist_items=%s total_words=%s blocs=%s dirty_blocs=%s clean_blocs=%s "
         "next_folder_id=%s is_last_folder=%s",
+        formation_job_id,
         job_id,
         folder_id,
         len(playlist_items),
@@ -2198,7 +2218,8 @@ def generate_audio_from_script(
         bloc = blocs_by_number.get(bloc_num)
         item_started_at = time.time()
         logger.info(
-            "PIPELINE_AUDIO_ITEM_START job=%s folder=%s item=%s/%s filename=%s type=%s bloc=%s target_sec=%s",
+            "PIPELINE_AUDIO_ITEM_START formation_job_id=%s content_job_id=%s folder_id=%s item=%s/%s filename=%s type=%s bloc=%s target_sec=%s",
+            formation_job_id,
             job_id,
             folder_id,
             step,
@@ -2213,7 +2234,8 @@ def generate_audio_from_script(
             if mock:
                 logger.info(f"   🧪 [MOCK] {filename}: skip Q&A/pause contextuel")
                 logger.info(
-                    "PIPELINE_AUDIO_ITEM_SKIP job=%s folder=%s filename=%s reason=mock_break duration_ms=%s",
+                    "PIPELINE_AUDIO_ITEM_SKIP formation_job_id=%s content_job_id=%s folder_id=%s filename=%s reason=mock_break duration_ms=%s",
+                    formation_job_id,
                     job_id,
                     folder_id,
                     filename,
@@ -2225,7 +2247,8 @@ def generate_audio_from_script(
                 logger.info(f"   ⏭️ {filename}: break conservé (aucun bloc cours dirty)")
                 _progress(step, len(playlist_items), f"{filename} — conservé")
                 logger.info(
-                    "PIPELINE_AUDIO_ITEM_SKIP job=%s folder=%s filename=%s reason=no_dirty_bloc duration_ms=%s",
+                    "PIPELINE_AUDIO_ITEM_SKIP formation_job_id=%s content_job_id=%s folder_id=%s filename=%s reason=no_dirty_bloc duration_ms=%s",
+                    formation_job_id,
                     job_id,
                     folder_id,
                     filename,
@@ -2257,7 +2280,8 @@ def generate_audio_from_script(
             logger.info(f"   ✅ {filename} : {final_duration:.1f}s uploadé ({break_mode})")
             _progress(step, len(playlist_items), f"{filename} — terminé ({break_mode}, {final_duration:.1f}s)")
             logger.info(
-                "PIPELINE_AUDIO_ITEM_DONE job=%s folder=%s filename=%s type=%s mode=%s final_duration=%.1f duration_ms=%s",
+                "PIPELINE_AUDIO_ITEM_DONE formation_job_id=%s content_job_id=%s folder_id=%s filename=%s type=%s mode=%s final_duration=%.1f duration_ms=%s",
+                formation_job_id,
                 job_id,
                 folder_id,
                 filename,
@@ -2272,7 +2296,8 @@ def generate_audio_from_script(
         if not bloc:
             logger.info(f"   ⏭️ {filename}: bloc {bloc_num} introuvable, skip")
             logger.info(
-                "PIPELINE_AUDIO_ITEM_SKIP job=%s folder=%s filename=%s reason=bloc_missing duration_ms=%s",
+                "PIPELINE_AUDIO_ITEM_SKIP formation_job_id=%s content_job_id=%s folder_id=%s filename=%s reason=bloc_missing duration_ms=%s",
+                formation_job_id,
                 job_id,
                 folder_id,
                 filename,
@@ -2287,7 +2312,8 @@ def generate_audio_from_script(
             logger.info(f"   ⏭️ Bloc {bloc['bloc_number']} ({filename}) : non modifié, conservé")
             _progress(step, len(playlist_items), f"Bloc {bloc['bloc_number']}/7 — conservé (non modifié)")
             logger.info(
-                "PIPELINE_AUDIO_ITEM_SKIP job=%s folder=%s filename=%s bloc=%s reason=clean_bloc duration_ms=%s",
+                "PIPELINE_AUDIO_ITEM_SKIP formation_job_id=%s content_job_id=%s folder_id=%s filename=%s bloc=%s reason=clean_bloc duration_ms=%s",
+                formation_job_id,
                 job_id,
                 folder_id,
                 filename,
@@ -2300,7 +2326,8 @@ def generate_audio_from_script(
         if not bloc["text"].strip():
             logger.info(f"   ⏭️ Bloc {bloc['bloc_number']} : texte vide, skip")
             logger.info(
-                "PIPELINE_AUDIO_ITEM_SKIP job=%s folder=%s filename=%s bloc=%s reason=empty_text duration_ms=%s",
+                "PIPELINE_AUDIO_ITEM_SKIP formation_job_id=%s content_job_id=%s folder_id=%s filename=%s bloc=%s reason=empty_text duration_ms=%s",
+                formation_job_id,
                 job_id,
                 folder_id,
                 filename,
@@ -2388,8 +2415,9 @@ def generate_audio_from_script(
             final_duration = _measure_duration_ms(final_bytes) / 1000
         logger.info(f"   ✅ {filename} : {final_duration:.1f}s uploadé")
         logger.info(
-            "PIPELINE_AUDIO_ITEM_DONE job=%s folder=%s filename=%s type=cours bloc=%s final_duration=%.1f "
+            "PIPELINE_AUDIO_ITEM_DONE formation_job_id=%s content_job_id=%s folder_id=%s filename=%s type=cours bloc=%s final_duration=%.1f "
             "words=%s duration_ms=%s",
+            formation_job_id,
             job_id,
             folder_id,
             filename,
@@ -2435,7 +2463,8 @@ def generate_audio_from_script(
 
     _progress(len(playlist_items), len(playlist_items), f"✅ Terminé — {len(generated)} générés, {len(skipped)} conservés")
     logger.info(
-        "PIPELINE_AUDIO_DONE job=%s folder=%s generated=%s skipped=%s slide_sync=%s slide_timings=%s duration_ms=%s",
+        "PIPELINE_AUDIO_DONE formation_job_id=%s content_job_id=%s folder_id=%s generated=%s skipped=%s slide_sync=%s slide_timings=%s duration_ms=%s",
+        formation_job_id,
         job_id,
         folder_id,
         len(generated),
@@ -2932,9 +2961,11 @@ def run_content_review(folder_id, on_progress=None, model=None):
         raise ValueError(f"Aucun content_generation_job pour folder {folder_id}")
 
     job_id = job["id"]
+    formation_job_id = job.get("formation_job_id")
     started_at = time.time()
     logger.info(
-        "PIPELINE_REVIEW_START job=%s folder=%s model=%s",
+        "PIPELINE_REVIEW_START formation_job_id=%s content_job_id=%s folder_id=%s model=%s",
+        formation_job_id,
         job_id,
         folder_id,
         model,
@@ -2960,7 +2991,8 @@ def run_content_review(folder_id, on_progress=None, model=None):
     if total == 0:
         _progress(0, 0, "Tous les segments déjà révisés — rien à faire.")
         logger.info(
-            "PIPELINE_REVIEW_DONE job=%s folder=%s reviewed=0 failed=0 applied=0 rejected=0 duration_ms=%s reason=already_reviewed",
+            "PIPELINE_REVIEW_DONE formation_job_id=%s content_job_id=%s folder_id=%s reviewed=0 failed=0 applied=0 rejected=0 duration_ms=%s reason=already_reviewed",
+            formation_job_id,
             job_id,
             folder_id,
             int((time.time() - started_at) * 1000),
@@ -2974,7 +3006,8 @@ def run_content_review(folder_id, on_progress=None, model=None):
         }
 
     logger.info(
-        "PIPELINE_REVIEW_PLAN job=%s folder=%s segments_to_review=%s groups=%s",
+        "PIPELINE_REVIEW_PLAN formation_job_id=%s content_job_id=%s folder_id=%s segments_to_review=%s groups=%s",
+        formation_job_id,
         job_id,
         folder_id,
         total,
@@ -2993,7 +3026,8 @@ def run_content_review(folder_id, on_progress=None, model=None):
         label = f"sous-partie {sub_idx + 1} / passe {passe}"
         _progress(step, total, f"Audit {label} (5 salves)…")
         logger.info(
-            "PIPELINE_REVIEW_SEGMENT_START job=%s folder=%s segment_id=%s step=%s/%s sub_part=%s passe=%s words=%s",
+            "PIPELINE_REVIEW_SEGMENT_START formation_job_id=%s content_job_id=%s folder_id=%s segment_id=%s step=%s/%s sub_part=%s passe=%s words=%s",
+            formation_job_id,
             job_id,
             folder_id,
             seg_id,
@@ -3013,7 +3047,8 @@ def run_content_review(folder_id, on_progress=None, model=None):
             group_started_at = time.time()
             group_label = group["label"]
             logger.info(
-                "PIPELINE_REVIEW_GROUP_START job=%s folder=%s segment_id=%s group=%s rules=%s",
+                "PIPELINE_REVIEW_GROUP_START formation_job_id=%s content_job_id=%s folder_id=%s segment_id=%s group=%s rules=%s",
+                formation_job_id,
                 job_id,
                 folder_id,
                 seg_id,
@@ -3026,7 +3061,8 @@ def run_content_review(folder_id, on_progress=None, model=None):
             if group_error:
                 segment_error = group_error
                 logger.warning(
-                    "PIPELINE_REVIEW_GROUP_ERROR job=%s folder=%s segment_id=%s group=%s duration_ms=%s error=%s",
+                    "PIPELINE_REVIEW_GROUP_ERROR formation_job_id=%s content_job_id=%s folder_id=%s segment_id=%s group=%s duration_ms=%s error=%s",
+                    formation_job_id,
                     job_id,
                     folder_id,
                     seg_id,
@@ -3042,7 +3078,8 @@ def run_content_review(folder_id, on_progress=None, model=None):
 
             if applied:
                 logger.info(
-                    "PIPELINE_REVIEW_GROUP_DONE job=%s folder=%s segment_id=%s group=%s applied=%s rejected=%s duration_ms=%s",
+                    "PIPELINE_REVIEW_GROUP_DONE formation_job_id=%s content_job_id=%s folder_id=%s segment_id=%s group=%s applied=%s rejected=%s duration_ms=%s",
+                    formation_job_id,
                     job_id,
                     folder_id,
                     seg_id,
@@ -3053,7 +3090,8 @@ def run_content_review(folder_id, on_progress=None, model=None):
                 )
             elif rejected:
                 logger.info(
-                    "PIPELINE_REVIEW_GROUP_DONE job=%s folder=%s segment_id=%s group=%s applied=0 rejected=%s duration_ms=%s",
+                    "PIPELINE_REVIEW_GROUP_DONE formation_job_id=%s content_job_id=%s folder_id=%s segment_id=%s group=%s applied=0 rejected=%s duration_ms=%s",
+                    formation_job_id,
                     job_id,
                     folder_id,
                     seg_id,
@@ -3063,7 +3101,8 @@ def run_content_review(folder_id, on_progress=None, model=None):
                 )
             else:
                 logger.info(
-                    "PIPELINE_REVIEW_GROUP_DONE job=%s folder=%s segment_id=%s group=%s applied=0 rejected=0 duration_ms=%s",
+                    "PIPELINE_REVIEW_GROUP_DONE formation_job_id=%s content_job_id=%s folder_id=%s segment_id=%s group=%s applied=0 rejected=0 duration_ms=%s",
+                    formation_job_id,
                     job_id,
                     folder_id,
                     seg_id,
@@ -3086,7 +3125,8 @@ def run_content_review(folder_id, on_progress=None, model=None):
             total_failed += 1
             details.append({"segment_id": seg_id, "sub_idx": sub_idx, "passe": passe, "error": segment_error})
             logger.warning(
-                "PIPELINE_REVIEW_SEGMENT_FAILED job=%s folder=%s segment_id=%s applied=%s rejected=%s duration_ms=%s error=%s",
+                "PIPELINE_REVIEW_SEGMENT_FAILED formation_job_id=%s content_job_id=%s folder_id=%s segment_id=%s applied=%s rejected=%s duration_ms=%s error=%s",
+                formation_job_id,
                 job_id,
                 folder_id,
                 seg_id,
@@ -3110,7 +3150,8 @@ def run_content_review(folder_id, on_progress=None, model=None):
                 (current_text, new_word_count, seg_id),
             )
             logger.info(
-                "PIPELINE_REVIEW_SEGMENT_PATCHED job=%s folder=%s segment_id=%s applied=%s rejected=%s new_words=%s",
+                "PIPELINE_REVIEW_SEGMENT_PATCHED formation_job_id=%s content_job_id=%s folder_id=%s segment_id=%s applied=%s rejected=%s new_words=%s",
+                formation_job_id,
                 job_id,
                 folder_id,
                 seg_id,
@@ -3124,7 +3165,8 @@ def run_content_review(folder_id, on_progress=None, model=None):
                 (seg_id,),
             )
             logger.info(
-                "PIPELINE_REVIEW_SEGMENT_CLEAN job=%s folder=%s segment_id=%s rejected=%s",
+                "PIPELINE_REVIEW_SEGMENT_CLEAN formation_job_id=%s content_job_id=%s folder_id=%s segment_id=%s rejected=%s",
+                formation_job_id,
                 job_id,
                 folder_id,
                 seg_id,
@@ -3136,7 +3178,8 @@ def run_content_review(folder_id, on_progress=None, model=None):
         total_applied += len(all_applied)
         total_rejected += len(all_rejected)
         logger.info(
-            "PIPELINE_REVIEW_SEGMENT_DONE job=%s folder=%s segment_id=%s applied=%s rejected=%s duration_ms=%s",
+            "PIPELINE_REVIEW_SEGMENT_DONE formation_job_id=%s content_job_id=%s folder_id=%s segment_id=%s applied=%s rejected=%s duration_ms=%s",
+            formation_job_id,
             job_id,
             folder_id,
             seg_id,
@@ -3154,7 +3197,8 @@ def run_content_review(folder_id, on_progress=None, model=None):
         f"Terminé : {total_applied} appliqués, {total_rejected} rejetés, {total_failed} en erreur",
     )
     logger.info(
-        "PIPELINE_REVIEW_DONE job=%s folder=%s reviewed=%s/%s applied=%s rejected=%s failed=%s duration_ms=%s",
+        "PIPELINE_REVIEW_DONE formation_job_id=%s content_job_id=%s folder_id=%s reviewed=%s/%s applied=%s rejected=%s failed=%s duration_ms=%s",
+        formation_job_id,
         job_id,
         folder_id,
         total - total_failed,
