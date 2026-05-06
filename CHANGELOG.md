@@ -2,6 +2,19 @@
 
 ## 2026-05-06
 
+### fix: state "Reprendre depuis…" coincé après crash TTS
+
+Le useEffect qui libère `continuingAfterTextFolders[folder_id]` (et
+réactive les boutons "Depuis : …") ne reset que quand
+`reviewDone && audioClean`. Mais après un crash TTS, `dirty_segments=18`
+reste, donc `audioClean=false`, et le state reste à `true` pour toujours
+→ les boutons sont définitivement grisés sur ce job, l'utilisateur ne
+peut plus relancer.
+
+Ajout d'un 2ᵉ cas de reset : si `job.status === 'audio_error'`, on
+libère aussi le state (le run est terminé en échec, on doit pouvoir
+relancer). Le useEffect dépend désormais aussi de `job?.status`.
+
 ### feat: 4ᵉ étape "Slides" séparée de TTS dans Reprendre depuis…
 
 Précédemment, "Depuis : TTS" englobait à la fois la régénération des

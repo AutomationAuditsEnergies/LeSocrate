@@ -2117,18 +2117,22 @@ export default function FormationPipeline() {
     setContinuingAfterTextFolders(prev => {
       const next = { ...prev }
       let changed = false
+      const isJobErrored = job?.status === 'audio_error'
       for (const f of contentFolders) {
         const processed = (f.segments_reviewed || 0) + (f.segments_review_errors || 0)
         const reviewDone = f.segments_completed > 0 && processed >= f.segments_completed
         const audioClean = (f.dirty_segments || 0) === 0
-        if (next[f.folder_id] && reviewDone && audioClean) {
+        // Reset quand le run est fini : soit succès (review faite + audio clean),
+        // soit échec terminal (job en audio_error). Sans ce 2ᵉ cas, le state
+        // restait coincé à true après un crash TTS, désactivant les boutons.
+        if (next[f.folder_id] && reviewDone && (audioClean || isJobErrored)) {
           delete next[f.folder_id]
           changed = true
         }
       }
       return changed ? next : prev
     })
-  }, [contentFolders])
+  }, [contentFolders, job?.status])
 
   // Fetch dès qu'au moins une journée est completed
   useEffect(() => {
