@@ -2398,7 +2398,7 @@ def launch_audio(job_id):
     force_all = bool(data.get("force_all", True))
     # 3 modes de synthèse audio (priorité décroissante) :
     # - mock=True      → MP3 silence 1s, test gratuit
-    # - basic_tts=True → gTTS (Google, voix basique gratuite)
+    # - basic_tts=True → Edge TTS (voix basique gratuite ; identifiant DB historique "gtts")
     # - (défaut)       → Fish Audio S2-Pro (voix studio payante)
     mock = bool(data.get("mock", False))
     basic_tts = bool(data.get("basic_tts", False))
@@ -2412,8 +2412,8 @@ def launch_audio(job_id):
 
     def _run_audio(folder_id, next_folder_id=None, is_last_folder=False):
         import sys, traceback
-        mode_label = "[MOCK]" if mock else "[gTTS]" if basic_tts else ""
-        logger.info(f"🚀 SPAWN greenlet job={job_id} folder={folder_id} mock={mock} basic_tts={basic_tts} force_all={force_all}")
+        mode_label = "[MOCK]" if mock else "[BASIC edge-tts]" if basic_tts else ""
+        logger.info(f"🚀 SPAWN greenlet job={job_id} folder={folder_id} mock={mock} basic_tts={basic_tts} engine={'edge-tts' if basic_tts else 'fish_audio'} force_all={force_all}")
         sys.stdout.flush()
         started_at = time.time()
         voice_type = "mock" if mock else ("gtts" if basic_tts else "fish_audio")
@@ -2498,7 +2498,7 @@ def launch_audio(job_id):
             return False
 
     # Synthèse audio SÉQUENTIELLE entre journées (pas parallèle).
-    # Raison : pour gTTS et Fish Audio, lancer plusieurs folders en parallèle
+    # Raison : pour Edge TTS et Fish Audio, lancer plusieurs folders en parallèle
     # multiplie les requêtes simultanées vers l'API tierce → rate limit (429)
     # immédiat. On séquentialise via 1 seul greenlet qui itère.
     def _run_all_audios_sequential():
@@ -2510,7 +2510,7 @@ def launch_audio(job_id):
             if not ok:
                 failures.append(fid)
             # Petit cooldown entre folders pour aérer le rate limit côté
-            # API tierce. Configurable, surtout utile pour gTTS.
+            # API tierce. Configurable, surtout utile pour Edge TTS.
             import time as _t
             cooldown = int(os.getenv("AUDIO_COOLDOWN_BETWEEN_FOLDERS_SEC", "30"))
             if cooldown > 0 and idx + 1 < len(folder_ids):
@@ -2645,7 +2645,7 @@ def launch_audio(job_id):
     if mock:
         mode_suffix = " (MOCK — silence 1s)"
     elif basic_tts:
-        mode_suffix = " (gTTS — voix basique gratuite)"
+        mode_suffix = " (Edge TTS — voix basique gratuite)"
     else:
         mode_suffix = ""
     if sync_slides:
@@ -3026,10 +3026,6 @@ def _next_folder_in_formation(job_id: int, folder_id: int) -> int | None:
     return next_row[0] if next_row else None
 
 
-@formation_bp.route(
-    "/api/formation/<int:job_id>/content/<int:folder_id>/continue-after-text",
-    methods=["POST"],
-)
 def _get_folder_info_for_resume(job_id: int, folder_id: int) -> dict:
     """Lit platform_id / content_job_id sans modifier l'état (pour from_step != 'volume')."""
     from database.db import get_db_connection
@@ -3077,10 +3073,14 @@ def _delete_slide_deck_for_resume(folder_id: int, content_job_id: int) -> int:
     return deleted
 
 
+@formation_bp.route(
+    "/api/formation/<int:job_id>/content/<int:folder_id>/continue-after-text",
+    methods=["POST"],
+)
 def continue_after_text(job_id, folder_id):
     """Relance les étapes aval d'une journée sans régénérer le texte initial.
 
-    Flux complet : reset aval → volume safety API → review API → Word 2 → slides → gTTS sync.
+    Flux complet : reset aval → volume safety API → review API → Word 2 → slides → Edge TTS sync.
     Paramètre from_step : 'volume' (défaut), 'review', 'tts' — saute les étapes en amont.
     """
     if not _require_admin():
@@ -3228,6 +3228,7 @@ def continue_after_text(job_id, folder_id):
                 message=f"Relance aval depuis l'étape '{from_step}'",
                 data={
                     "voice_type": "gtts",
+                    "tts_engine": "edge-tts",
                     "sync_slides": True,
                     "max_slides": max_slides,
                     "pace": pace,
@@ -3454,7 +3455,7 @@ def continue_after_text(job_id, folder_id):
                 folder_id=folder_id,
                 model=str(model) if model else None,
                 duration_ms=int((time.time() - started_at) * 1000),
-                message="Relance aval terminée avec gTTS et slides synchronisées",
+                message="Relance aval terminée avec Edge TTS et slides synchronisées",
                 data=audio_result,
             )
             _EXECUTION_STATE[state_key] = {
@@ -3506,6 +3507,7 @@ def continue_after_text(job_id, folder_id):
         "folder_resolution": folder_resolution,
         "model": str(model),
         "tts_mode": "gtts",
+        "tts_engine": "edge-tts",
         "sync_slides": True,
         "auto_generate_slides": True,
     }), 202

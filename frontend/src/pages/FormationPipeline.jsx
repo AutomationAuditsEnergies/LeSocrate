@@ -235,7 +235,7 @@ function FlowMerge({ color = FLOW_COLOR }) {
 // ─── Voix TTS : labels + couleurs pour l'affichage du module persistant ──────
 function voiceLabel(t) {
   if (t === 'fish_audio') return 'Fish Audio S2-Pro (payant)'
-  if (t === 'gtts') return 'gTTS — voix basique gratuite'
+  if (t === 'gtts') return 'Edge TTS — voix basique gratuite'
   if (t === 'mock') return 'Mock — silence (test)'
   return t || 'inconnue'
 }
@@ -1965,6 +1965,7 @@ export default function FormationPipeline() {
   const handleContinueAfterText = async (folderId, modelOverride = null, fromStep = 'volume') => {
     setContinueAfterTextError('')
     setContinueAfterTextNotice('')
+    setPipelineDiagnostic(null)
     setContinuingAfterTextFolders(prev => ({ ...prev, [folderId]: true }))
     try {
       const chosenModel = modelOverride || continueAfterTextModel || job?.auto_pilot_model
@@ -2319,12 +2320,13 @@ export default function FormationPipeline() {
   // ─── Étape 6 — lancement de la synthèse audio Fish Audio ──────────────────
   // 3 modes de synthèse audio dans l'étape 7 :
   // - mock=true       → MP3 silence 1s, test gratuit (ne produit aucun audio réel)
-  // - basicTts=true   → gTTS (Google, voix basique gratuite) — vraie voix, utile
+  // - basicTts=true   → Edge TTS (voix basique gratuite) — vraie voix, utile
   //                      pour vérifier le flux et écouter le texte sans payer Fish
   // - (par défaut)    → Fish Audio S2-Pro (voix studio payante)
   const handleLaunchAudio = async (mock = false, basicTts = false, syncSlides = false, autoGenerateSlides = false) => {
     setLaunchingAudio(true)
     setAudioError('')
+    setPipelineDiagnostic(null)
     try {
       const resp = await fetch(apiUrl(`/api/formation/${selectedJobId}/launch-audio`), {
         method: 'POST',
@@ -3933,7 +3935,7 @@ export default function FormationPipeline() {
 
                   {/* Bouton relancer : utile quand le précédent run a échoué (ex: force_all bug)
                       ou si on veut re-générer les MP3 suite à une édition de texte.
-                      3 voies : silence (0€), gTTS (0€, vraie voix basique), Fish Audio (payant). */}
+                      3 voies : silence (0€), Edge TTS (0€, vraie voix basique), Fish Audio (payant). */}
                   <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
                     <button
                       style={{ ...S.btn('neutral'), border: '1px dashed #64748b' }}
@@ -3947,17 +3949,17 @@ export default function FormationPipeline() {
                       style={{ ...S.btn('ghost'), borderColor: 'rgba(251,146,60,0.35)', color: '#fb923c' }}
                       onClick={() => handleLaunchAudio(false, true)}
                       disabled={audioBusy || !allContentCompleted}
-                      title="Re-synthèse via gTTS (Google Text-to-Speech, gratuit, voix basique). Permet d'écouter le texte sans payer Fish Audio."
+                      title="Re-synthèse via Edge TTS (Microsoft Edge, gratuit, voix basique). Permet d'écouter le texte sans payer Fish Audio."
                     >
-                      <Icon name="graphic_eq" /> {audioBusy ? '…' : 'Relancer TTS voix basique (gratuit)'}
+                      <Icon name="graphic_eq" /> {audioBusy ? '…' : 'Relancer Edge TTS voix basique'}
                     </button>
                     <button
                       style={{ ...S.btn('ghost'), borderColor: 'rgba(167,139,250,0.4)', color: '#a78bfa' }}
                       onClick={() => handleLaunchAudio(false, true, true, true)}
                       disabled={audioBusy || !allContentCompleted}
-                      title="Re-synthèse gratuite via gTTS, découpée par slides, avec stockage des timings slide ↔ audio."
+                      title="Re-synthèse gratuite via Edge TTS, découpée par slides, avec stockage des timings slide ↔ audio."
                     >
-                      <Icon name="slideshow" /> {audioBusy ? '…' : 'Relancer TTS slides + voix basique'}
+                      <Icon name="slideshow" /> {audioBusy ? '…' : 'Relancer slides + Edge TTS'}
                     </button>
                     <button
                       style={S.btn('success')}
@@ -4000,17 +4002,17 @@ export default function FormationPipeline() {
                       style={{ ...S.btn('ghost'), borderColor: 'rgba(251,146,60,0.35)', color: '#fb923c' }}
                       onClick={() => handleLaunchAudio(false, true)}
                       disabled={audioBusy || !allContentCompleted}
-                      title="Synthèse via gTTS (Google Text-to-Speech, gratuit, voix basique). Utile pour écouter le rendu sans payer Fish Audio."
+                      title="Synthèse via Edge TTS (Microsoft Edge, gratuit, voix basique). Utile pour écouter le rendu sans payer Fish Audio."
                     >
-                      <Icon name="graphic_eq" /> {audioBusy ? '…' : 'TTS voix basique (gratuit)'}
+                      <Icon name="graphic_eq" /> {audioBusy ? '…' : 'Edge TTS voix basique'}
                     </button>
                     <button
                       style={{ ...S.btn('ghost'), borderColor: 'rgba(167,139,250,0.4)', color: '#a78bfa' }}
                       onClick={() => handleLaunchAudio(false, true, true, true)}
                       disabled={audioBusy || !allContentCompleted}
-                      title="Test complet sans Fish Audio : génère les slides si besoin, synthétise en gTTS, concatène par slide et stocke les timings."
+                      title="Test complet sans Fish Audio : génère les slides si besoin, synthétise via Edge TTS, concatène par slide et stocke les timings."
                     >
-                      <Icon name="slideshow" /> {audioBusy ? '…' : 'TTS slides + voix basique'}
+                      <Icon name="slideshow" /> {audioBusy ? '…' : 'Slides + Edge TTS'}
                     </button>
                     <button
                       style={{ ...S.btn('neutral'), border: '1px dashed #64748b' }}

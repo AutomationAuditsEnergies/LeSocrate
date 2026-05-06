@@ -2,6 +2,40 @@
 
 ## 2026-05-06
 
+### fix: route continue-after-text mal décorée + diagnostic stale + labels Edge TTS
+
+**Backend — bug critique du décorateur Flask**
+
+Le décorateur `@formation_bp.route(".../continue-after-text", methods=["POST"])`
+était attaché à `_get_folder_info_for_resume` au lieu de
+`continue_after_text`, parce que le helper avait été inséré entre le
+décorateur et la fonction cible dans un commit précédent. Conséquence :
+toute requête sur `/continue-after-text` exécutait le helper qui
+retourne un `dict`, pas une `Response` Flask → **502 Bad Gateway** côté
+client. Cause unique des 502 observés depuis ce matin sur les boutons
+"Depuis : …". Décorateur déplacé juste avant `def continue_after_text`.
+
+**Backend — labels "gTTS" → "Edge TTS"**
+
+Cohérence avec la migration moteur faite plus tôt : les libellés visibles
+utilisateur dans les logs et messages d'event passent de "gTTS" à
+"Edge TTS" (mode_label, mode_suffix, message des events). Ajout d'un
+champ `tts_engine: "edge-tts"` à côté du `voice_type: "gtts"` (clé DB
+historique conservée) pour clarifier qui est l'identifiant et qui est
+le moteur réel.
+
+**Frontend — diagnostic stale au clic + labels**
+
+Reset de `pipelineDiagnostic` (`setPipelineDiagnostic(null)`) au début
+de `handleContinueAfterText` et `handleLaunchAudio` : sans ça, le
+panneau "Diagnostic pipeline" continuait d'afficher les events du
+précédent run jusqu'au prochain fetch. Avec ce reset, le panneau se
+vide dès le clic puis affiche les nouveaux events au fur et à mesure.
+
+Labels UI "gTTS" → "Edge TTS" (boutons "Edge TTS voix basique",
+"Slides + Edge TTS", `voiceLabel('gtts')` retourne "Edge TTS — voix
+basique gratuite").
+
 ### fix: state "Reprendre depuis…" coincé après crash TTS
 
 Le useEffect qui libère `continuingAfterTextFolders[folder_id]` (et
