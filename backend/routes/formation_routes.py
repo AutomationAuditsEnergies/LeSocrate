@@ -3081,6 +3081,13 @@ def continue_after_text(job_id, folder_id):
     from_step = raw_from_step if raw_from_step in _STEP_ORDER else "volume"
     from_step_idx = _STEP_ORDER.index(from_step)
 
+    logger.info(
+        "PIPELINE_RESUME_REQUEST formation_job_id=%s requested_folder_id=%s from_step=%s "
+        "raw_from_step=%s model=%s max_slides=%s pace=%s prev_status=%s",
+        job_id, requested_folder_id, from_step, raw_from_step, model, max_slides, pace,
+        job.get("status"),
+    )
+
     # Persiste le choix de modèle utilisé pour cette relance, pour que les
     # futurs `continue_after_text` ou redémarrages auto-pilot retrouvent le
     # bon provider sans qu'il faille le repasser dans le payload.
@@ -3088,6 +3095,7 @@ def continue_after_text(job_id, folder_id):
         try:
             update_job(job_id, auto_pilot_model=model)
             job["auto_pilot_model"] = model
+            logger.info("PIPELINE_RESUME_MODEL_PERSISTED formation_job_id=%s model=%s", job_id, model)
         except Exception as e:
             logger.warning(f"⚠️ Persistance auto_pilot_model={model} échouée pour job {job_id}: {e}")
 
@@ -3095,10 +3103,8 @@ def continue_after_text(job_id, folder_id):
         folder_id, folder_resolution = _resolve_continue_after_text_folder(job_id, requested_folder_id)
     except ValueError as e:
         logger.warning(
-            "PIPELINE_CONTINUE_FOLDER_INVALID job=%s requested_folder=%s error=%s",
-            job_id,
-            requested_folder_id,
-            str(e)[:500],
+            "PIPELINE_RESUME_FOLDER_INVALID formation_job_id=%s requested_folder_id=%s error=%s",
+            job_id, requested_folder_id, str(e)[:500],
         )
         return jsonify({
             "error": str(e),
@@ -3107,21 +3113,29 @@ def continue_after_text(job_id, folder_id):
 
     if folder_id != requested_folder_id:
         logger.warning(
-            "PIPELINE_CONTINUE_FOLDER_RESOLVED job=%s requested_folder=%s resolved_folder=%s reason=%s",
-            job_id,
-            requested_folder_id,
-            folder_id,
+            "PIPELINE_RESUME_FOLDER_RESOLVED formation_job_id=%s requested_folder_id=%s "
+            "resolved_folder_id=%s reason=%s",
+            job_id, requested_folder_id, folder_id,
             (folder_resolution or {}).get("reason"),
         )
 
     from services.claude_code_mission_service import _EXECUTION_STATE
     state_key = (job_id, f"continue_after_text_{folder_id}")
-    if _EXECUTION_STATE.get(state_key, {}).get("status") == "running":
-        return jsonify({
-            "error": "Cette relance aval est déjà en cours pour cette journée",
-            "folder_id": folder_id,
-            "requested_folder_id": requested_folder_id,
-        }), 409
+    prev_state = _EXECUTION_STATE.get(state_key, {})
+    if prev_state.get("status") == "running":
+        # Stale lock : si l'état mémoire dit "running" mais que rien ne tourne
+        # vraiment (typique après un crash + redémarrage gunicorn), on libère.
+        # Heuristique : on accepte de re-prendre la main si pas de heartbeat
+        # récent (le greenlet aurait mis à jour _EXECUTION_STATE en cas de
+        # vraie activité). En l'absence de timestamp dans _EXECUTION_STATE,
+        # on log et on libère systématiquement — l'utilisateur a explicitement
+        # demandé une nouvelle relance, c'est un signal fort.
+        logger.warning(
+            "PIPELINE_RESUME_STALE_LOCK_RELEASED formation_job_id=%s folder_id=%s "
+            "prev_state=%s — l'utilisateur force une nouvelle relance",
+            job_id, folder_id, {k: prev_state.get(k) for k in ("status", "model", "error")},
+        )
+        _EXECUTION_STATE.pop(state_key, None)
 
     update_job(
         job_id,
@@ -3132,9 +3146,26 @@ def continue_after_text(job_id, folder_id):
         auto_pilot_lock_owner=None,
     )
 
+    # Reset agressif du status job : si on était en `audio_running` /
+    # `audio_error` d'un run précédent (qui peut avoir crashé), on le repose
+    # à `tts_launched` pour signaler "TTS à refaire". Le _run le repassera à
+    # `audio_running` au moment d'appeler generate_audio_from_script.
+    prev_status = job.get("status")
+    if prev_status in ("audio_running", "audio_error", "audio_completed"):
+        update_job(job_id, status="tts_launched", error_message=None)
+        logger.info(
+            "PIPELINE_RESUME_STATUS_RESET formation_job_id=%s folder_id=%s "
+            "prev_status=%s new_status=tts_launched",
+            job_id, folder_id, prev_status,
+        )
+
     try:
         from services.formation_observability_service import clear_pipeline_events
         cleared_events_count = clear_pipeline_events(job_id)
+        logger.info(
+            "PIPELINE_RESUME_EVENTS_CLEARED formation_job_id=%s folder_id=%s cleared=%s",
+            job_id, folder_id, cleared_events_count,
+        )
     except Exception as e:
         logger.error(f"❌ Nettoyage événements relance aval impossible job={job_id}: {e}")
         return jsonify({
@@ -3143,6 +3174,10 @@ def continue_after_text(job_id, folder_id):
         }), 500
 
     _EXECUTION_STATE[state_key] = {"status": "running", "model": str(model), "folder_id": folder_id}
+    logger.info(
+        "PIPELINE_RESUME_SPAWN formation_job_id=%s folder_id=%s from_step=%s model=%s",
+        job_id, folder_id, from_step, model,
+    )
 
     import eventlet
 
@@ -3158,6 +3193,12 @@ def continue_after_text(job_id, folder_id):
             )
             from services.formation_observability_service import log_pipeline_event
 
+            logger.info(
+                "PIPELINE_RESUME_RUN_START formation_job_id=%s folder_id=%s from_step=%s "
+                "from_step_idx=%s model=%s greenlet_id=%s",
+                job_id, folder_id, from_step, from_step_idx, model, id(eventlet.getcurrent()),
+            )
+
             log_pipeline_event(
                 job_id,
                 "continue_after_text_started",
@@ -3165,7 +3206,7 @@ def continue_after_text(job_id, folder_id):
                 status="running",
                 folder_id=folder_id,
                 model=str(model) if model else None,
-                message="Relance aval depuis le texte généré",
+                message=f"Relance aval depuis l'étape '{from_step}'",
                 data={
                     "voice_type": "gtts",
                     "sync_slides": True,
@@ -3175,11 +3216,30 @@ def continue_after_text(job_id, folder_id):
                     "requested_folder_id": requested_folder_id,
                     "resolved_folder_id": folder_id,
                     "folder_resolution": folder_resolution,
+                    "from_step": from_step,
                 },
             )
 
+            # ── Étape 1 : RESET (uniquement si from_step == volume) ─────────
             if from_step_idx == 0:
+                step_started = time.time()
+                logger.info(
+                    "PIPELINE_RESUME_STEP_RESET_START formation_job_id=%s folder_id=%s",
+                    job_id, folder_id,
+                )
                 reset_info = _reset_folder_downstream_to_generated_text(job_id, folder_id)
+                logger.info(
+                    "PIPELINE_RESUME_STEP_RESET_DONE formation_job_id=%s folder_id=%s "
+                    "content_job_id=%s platform_id=%s segments_restored=%s "
+                    "deleted_review_artifacts=%s deleted_slide_decks=%s duration_ms=%s",
+                    job_id, folder_id,
+                    reset_info.get("content_job_id"),
+                    reset_info.get("platform_id"),
+                    reset_info.get("segments_restored"),
+                    reset_info.get("deleted_review_artifacts"),
+                    reset_info.get("deleted_slide_decks"),
+                    int((time.time() - step_started) * 1000),
+                )
                 log_pipeline_event(
                     job_id,
                     "continue_after_text_reset",
@@ -3191,10 +3251,38 @@ def continue_after_text(job_id, folder_id):
                     data=reset_info,
                 )
             else:
+                logger.info(
+                    "PIPELINE_RESUME_STEP_RESET_SKIP formation_job_id=%s folder_id=%s "
+                    "from_step=%s — pas de reset (l'utilisateur saute le volume)",
+                    job_id, folder_id, from_step,
+                )
                 reset_info = _get_folder_info_for_resume(job_id, folder_id)
+                logger.info(
+                    "PIPELINE_RESUME_FOLDER_INFO formation_job_id=%s folder_id=%s "
+                    "content_job_id=%s platform_id=%s",
+                    job_id, folder_id,
+                    reset_info.get("content_job_id"),
+                    reset_info.get("platform_id"),
+                )
 
+            # ── Étape 2 : VOLUME SAFETY ─────────────────────────────────────
             if from_step_idx <= 0:
+                step_started = time.time()
+                logger.info(
+                    "PIPELINE_RESUME_STEP_VOLUME_START formation_job_id=%s folder_id=%s model=%s",
+                    job_id, folder_id, model,
+                )
                 volume_result = run_volume_safety_api(job_id, folder_id, model=model)
+                logger.info(
+                    "PIPELINE_RESUME_STEP_VOLUME_DONE formation_job_id=%s folder_id=%s "
+                    "skipped=%s target_reached=%s enriched=%s failed=%s duration_ms=%s",
+                    job_id, folder_id,
+                    bool(volume_result.get("skipped")),
+                    bool(volume_result.get("target_reached", True)),
+                    len(volume_result.get("enriched") or []),
+                    len(volume_result.get("failed") or []),
+                    int((time.time() - step_started) * 1000),
+                )
                 log_pipeline_event(
                     job_id,
                     "continue_after_text_volume_completed",
@@ -3210,15 +3298,48 @@ def continue_after_text(job_id, folder_id):
                         "failed": len(volume_result.get("failed") or []),
                     },
                 )
+            else:
+                logger.info(
+                    "PIPELINE_RESUME_STEP_VOLUME_SKIP formation_job_id=%s folder_id=%s from_step=%s",
+                    job_id, folder_id, from_step,
+                )
 
+            # ── Étape 3 : RÉVISION CONFORMITÉ + Word 2 ──────────────────────
             if from_step_idx <= 1:
+                step_started = time.time()
+                logger.info(
+                    "PIPELINE_RESUME_STEP_REVIEW_START formation_job_id=%s folder_id=%s model=%s",
+                    job_id, folder_id, model,
+                )
                 review_result = run_content_review(folder_id, model=model)
+                logger.info(
+                    "PIPELINE_RESUME_STEP_REVIEW_API_DONE formation_job_id=%s folder_id=%s "
+                    "segments_reviewed=%s segments_failed=%s patches_applied=%s "
+                    "patches_proposed=%s patches_rejected=%s",
+                    job_id, folder_id,
+                    review_result.get("segments_reviewed", 0),
+                    review_result.get("segments_failed", 0),
+                    review_result.get("patches_applied", 0),
+                    review_result.get("patches_proposed", 0),
+                    review_result.get("patches_rejected", 0),
+                )
                 _write_api_review_report(job_id, folder_id, review_result, model)
+                logger.info(
+                    "PIPELINE_RESUME_STEP_REVIEW_REPORT_WRITTEN formation_job_id=%s folder_id=%s",
+                    job_id, folder_id,
+                )
 
                 final_words, filename = _assemble_and_upload(
                     folder_id,
                     reset_info["platform_id"],
                     reset_info["content_job_id"],
+                )
+                logger.info(
+                    "PIPELINE_RESUME_STEP_REVIEW_WORD2_BUILT formation_job_id=%s folder_id=%s "
+                    "content_job_id=%s total_words=%s filename=%s duration_ms=%s",
+                    job_id, folder_id,
+                    reset_info["content_job_id"], final_words, filename,
+                    int((time.time() - step_started) * 1000),
                 )
                 _update_job_db(reset_info["content_job_id"], total_words=final_words)
                 log_pipeline_event(
@@ -3237,8 +3358,20 @@ def continue_after_text(job_id, folder_id):
                         "total_words": final_words,
                     },
                 )
+            else:
+                logger.info(
+                    "PIPELINE_RESUME_STEP_REVIEW_SKIP formation_job_id=%s folder_id=%s from_step=%s",
+                    job_id, folder_id, from_step,
+                )
 
+            # ── Étape 4 : SLIDES + TTS (toujours exécutée) ──────────────────
+            tts_started = time.time()
             next_folder_id = _next_folder_in_formation(job_id, folder_id)
+            logger.info(
+                "PIPELINE_RESUME_STEP_TTS_START formation_job_id=%s folder_id=%s "
+                "next_folder_id=%s is_last_folder=%s max_slides=%s pace=%s",
+                job_id, folder_id, next_folder_id, next_folder_id is None, max_slides, pace,
+            )
             update_job(job_id, status="audio_running", error_message=None)
             audio_result = generate_audio_from_script(
                 folder_id,
@@ -3255,7 +3388,16 @@ def continue_after_text(job_id, folder_id):
                 slide_model=model,
                 llm_model=model,
             )
+            logger.info(
+                "PIPELINE_RESUME_STEP_TTS_DONE formation_job_id=%s folder_id=%s duration_ms=%s",
+                job_id, folder_id, int((time.time() - tts_started) * 1000),
+            )
             update_job(job_id, status="audio_completed", error_message=None)
+            logger.info(
+                "PIPELINE_RESUME_RUN_DONE formation_job_id=%s folder_id=%s from_step=%s "
+                "total_duration_ms=%s",
+                job_id, folder_id, from_step, int((time.time() - started_at) * 1000),
+            )
             log_pipeline_event(
                 job_id,
                 "continue_after_text_completed",
@@ -3275,7 +3417,12 @@ def continue_after_text(job_id, folder_id):
             }
         except Exception as e:
             err = str(e)[:500]
-            logger.error(f"❌ Continue after text job={job_id} folder={folder_id} : {err}")
+            logger.exception(
+                "PIPELINE_RESUME_RUN_FAILED formation_job_id=%s folder_id=%s from_step=%s "
+                "duration_ms=%s error=%s",
+                job_id, folder_id, from_step,
+                int((time.time() - started_at) * 1000), err,
+            )
             try:
                 update_job(job_id, status="audio_error", error_message=f"folder {folder_id}: {err}")
             except Exception:

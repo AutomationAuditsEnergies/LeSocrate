@@ -1983,7 +1983,7 @@ export default function FormationPipeline() {
         },
       )
       const data = await resp.json()
-      if (resp.status !== 202 || data.error) {
+      if (!resp.ok || data.error) {
         setContinueAfterTextError(data.error || `Erreur ${resp.status}`)
         setContinuingAfterTextFolders(prev => { const n = { ...prev }; delete n[folderId]; return n })
         return

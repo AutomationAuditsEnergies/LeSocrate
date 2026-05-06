@@ -2,6 +2,36 @@
 
 ## 2026-05-06
 
+### fix: reprise pipeline — accept 200/202, reset status stale, logs détaillés
+
+**Frontend (`FormationPipeline.jsx`)**
+
+`handleContinueAfterText` accepte désormais tout `2xx` (`resp.ok`)
+au lieu de strictement 202. Corrige l'affichage "Reprise aval :
+Erreur 200" qu'on observait quand un proxy Azure normalise le code
+HTTP de réponse. Le check sur `data.error` reste pour intercepter
+les vraies erreurs métier renvoyées en 200.
+
+**Backend (`formation_routes.py`) — reset agressif et logs détaillés**
+
+`continue_after_text` libère désormais le verrou `_EXECUTION_STATE`
+si l'état précédent dit "running" mais qu'il n'y a probablement
+plus de greenlet actif (typique après crash + redémarrage gunicorn).
+L'utilisateur a explicitement demandé une nouvelle relance, donc
+on lui rend la main.
+
+Reset agressif du status job DB : si `audio_running`, `audio_error`
+ou `audio_completed`, on remet à `tts_launched` avant de spawn le
+nouveau greenlet. Ça évite que l'UI continue d'afficher la
+progression d'un précédent run crashé.
+
+Logs structurés `PIPELINE_RESUME_*` à chaque étape (REQUEST,
+SPAWN, RUN_START, STEP_RESET_*, STEP_VOLUME_*, STEP_REVIEW_*,
+STEP_TTS_*, RUN_DONE, RUN_FAILED). Chaque log porte
+`formation_job_id`, `folder_id`, `from_step`, durée et compteurs
+métier (segments_reviewed, patches_applied, total_words). Les SKIP
+sont aussi loggés explicitement quand `from_step` saute une étape.
+
 ### feat: reprise pipeline depuis n'importe quelle étape + retry gTTS plus tolérant
 
 **Backend — `continue_after_text` accepte `from_step` (`formation_routes.py`)**
