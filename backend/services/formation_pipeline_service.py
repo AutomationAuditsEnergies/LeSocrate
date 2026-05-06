@@ -781,8 +781,11 @@ def launch_tts_for_all_days(job_id: int, platform_id: int, model: str = None):
             position = cursor.fetchone()[0]
 
             cursor.execute(
-                "INSERT INTO cours_folders (platform_id, name, position) VALUES (?, ?, ?)",
-                (platform_id, folder_name, position)
+                """
+                INSERT INTO cours_folders (platform_id, name, position, formation_job_id)
+                VALUES (?, ?, ?, ?)
+                """,
+                (platform_id, folder_name, position, job_id)
             )
             folder_id = cursor.lastrowid
             folder_ids.append(folder_id)
@@ -827,6 +830,89 @@ def launch_tts_for_all_days(job_id: int, platform_id: int, model: str = None):
 
     update_job(job_id, status="tts_launched")
     return folder_ids
+
+
+def repair_orphan_content_folders(job_id: int) -> dict:
+    """Rattache les dossiers cours créés par l'ancien launch-tts sans job_id.
+
+    Bug historique : la route manuelle de génération texte créait les
+    `cours_folders` avec `platform_id` uniquement. Le texte existait, mais le
+    dashboard filtrait par `formation_job_id` et voyait donc 0 journée.
+    """
+    job = get_job(job_id)
+    if not job:
+        return {"repaired": 0, "missing": 0, "folders": []}
+
+    daily_programs = json.loads(job.get("daily_programs") or "[]")
+    if not daily_programs:
+        return {"repaired": 0, "missing": 0, "folders": []}
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    repaired = []
+    missing = 0
+    try:
+        for day_data in daily_programs:
+            day_num = day_data.get("day_number", len(repaired) + missing + 1)
+            day_title = day_data.get("title", f"Jour {day_num}")
+            folder_name = f"Jour {day_num} — {day_title}"
+
+            cursor.execute(
+                """
+                SELECT id FROM cours_folders
+                WHERE formation_job_id = ? AND name = ?
+                LIMIT 1
+                """,
+                (job_id, folder_name),
+            )
+            if cursor.fetchone():
+                continue
+
+            cursor.execute(
+                """
+                SELECT cf.id
+                FROM cours_folders cf
+                LEFT JOIN content_generation_jobs cgj ON cgj.folder_id = cf.id
+                WHERE cf.platform_id = ?
+                  AND cf.name = ?
+                  AND cf.formation_job_id IS NULL
+                ORDER BY CASE WHEN cgj.id IS NULL THEN 1 ELSE 0 END,
+                         cf.created_at DESC,
+                         cf.id DESC
+                LIMIT 1
+                """,
+                (job["platform_id"], folder_name),
+            )
+            row = cursor.fetchone()
+            if not row:
+                missing += 1
+                continue
+
+            folder_id = row[0]
+            cursor.execute(
+                """
+                UPDATE cours_folders
+                SET formation_job_id = ?
+                WHERE id = ? AND formation_job_id IS NULL
+                """,
+                (job_id, folder_id),
+            )
+            if cursor.rowcount:
+                repaired.append({"folder_id": folder_id, "name": folder_name})
+
+        conn.commit()
+    finally:
+        conn.close()
+
+    if repaired:
+        logger.warning(
+            "PIPELINE_FOLDER_REPAIR job=%s repaired=%s missing=%s folders=%s",
+            job_id,
+            len(repaired),
+            missing,
+            repaired,
+        )
+    return {"repaired": len(repaired), "missing": missing, "folders": repaired}
 
 
 def _format_day_program_text(day_data: dict, tp_name: str) -> str:

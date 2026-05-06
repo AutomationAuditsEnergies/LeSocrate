@@ -408,8 +408,11 @@ def init_test_pipeline():
             )
             position = cursor.fetchone()[0]
             cursor.execute(
-                "INSERT INTO cours_folders (platform_id, name, position) VALUES (?, ?, ?)",
-                (platform_id, folder_name, position),
+                """
+                INSERT INTO cours_folders (platform_id, name, position, formation_job_id)
+                VALUES (?, ?, ?, ?)
+                """,
+                (platform_id, folder_name, position, job_id),
             )
             folder_id = cursor.lastrowid
 
@@ -873,6 +876,12 @@ def list_content(job_id):
     job = get_job(job_id)
     if not job:
         return jsonify({"error": "Job introuvable"}), 404
+
+    try:
+        from services.formation_pipeline_service import repair_orphan_content_folders
+        repair_orphan_content_folders(job_id)
+    except Exception as e:
+        logger.warning(f"⚠️ Réparation cours_folders job {job_id} ignorée : {e}")
 
     from database.db import get_db_connection
     import json as _json
@@ -2814,6 +2823,25 @@ def continue_after_text(job_id, folder_id):
         except Exception as e:
             logger.warning(f"⚠️ Persistance auto_pilot_model={model} échouée pour job {job_id}: {e}")
 
+    update_job(
+        job_id,
+        auto_pilot_enabled=0,
+        auto_pilot_step="manual_continue_after_text",
+        auto_pilot_error=None,
+        auto_pilot_locked_at=None,
+        auto_pilot_lock_owner=None,
+    )
+
+    try:
+        from services.formation_observability_service import clear_pipeline_events
+        cleared_events_count = clear_pipeline_events(job_id)
+    except Exception as e:
+        logger.error(f"❌ Nettoyage événements relance aval impossible job={job_id}: {e}")
+        return jsonify({
+            "error": "Impossible de nettoyer le journal de pipeline avant relance",
+            "details": str(e)[:500],
+        }), 500
+
     _EXECUTION_STATE[state_key] = {"status": "running", "model": str(model), "folder_id": folder_id}
 
     import eventlet
@@ -2838,7 +2866,13 @@ def continue_after_text(job_id, folder_id):
                 folder_id=folder_id,
                 model=str(model) if model else None,
                 message="Relance aval depuis le texte généré",
-                data={"voice_type": "gtts", "sync_slides": True, "max_slides": max_slides, "pace": pace},
+                data={
+                    "voice_type": "gtts",
+                    "sync_slides": True,
+                    "max_slides": max_slides,
+                    "pace": pace,
+                    "cleared_previous_events": cleared_events_count,
+                },
             )
 
             reset_info = _reset_folder_downstream_to_generated_text(job_id, folder_id)
@@ -3896,6 +3930,12 @@ def formation_pipeline_diagnostic(job_id):
     job = get_job(job_id)
     if not job:
         return jsonify({"error": "Job introuvable"}), 404
+
+    try:
+        from services.formation_pipeline_service import repair_orphan_content_folders
+        repair_orphan_content_folders(job_id)
+    except Exception as e:
+        logger.warning(f"⚠️ Diagnostic repair folders job {job_id} : {e}")
 
     try:
         events_limit = int(request.args.get("events_limit", 80))

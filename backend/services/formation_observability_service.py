@@ -319,5 +319,55 @@ def list_pipeline_events(job_id: int, *, limit: int = 200) -> list[dict]:
     return events
 
 
+def clear_pipeline_events(
+    job_id: int,
+    *,
+    folder_id: int | None = None,
+    include_global_events: bool = True,
+) -> int:
+    """Supprime les événements d'une tentative pour repartir sur un dashboard propre.
+
+    Par défaut, sans `folder_id`, on nettoie tout le journal du job. C'est le
+    comportement attendu pour une relance "continuer après le texte" : le texte
+    reste en DB, mais les traces aval précédentes ne polluent plus l'UI.
+    """
+    ensure_observability_tables()
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    if folder_id is None:
+        cursor.execute(
+            "DELETE FROM formation_pipeline_events WHERE job_id = ?",
+            (job_id,),
+        )
+    elif include_global_events:
+        cursor.execute(
+            """
+            DELETE FROM formation_pipeline_events
+            WHERE job_id = ? AND (folder_id = ? OR folder_id IS NULL)
+            """,
+            (job_id, folder_id),
+        )
+    else:
+        cursor.execute(
+            "DELETE FROM formation_pipeline_events WHERE job_id = ? AND folder_id = ?",
+            (job_id, folder_id),
+        )
+    deleted = cursor.rowcount or 0
+    conn.commit()
+    conn.close()
+    logger.info(
+        "PIPELINE_EVENTS_CLEARED %s",
+        _compact_for_log(
+            {
+                "job_id": job_id,
+                "folder_id": folder_id,
+                "include_global_events": include_global_events,
+                "deleted_events": deleted,
+            }
+        ),
+    )
+    return int(deleted)
+
+
 def now_iso_utc() -> str:
     return datetime.utcnow().isoformat() + "Z"

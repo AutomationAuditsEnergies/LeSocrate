@@ -3018,7 +3018,7 @@ def run_content_review(folder_id, on_progress=None, model=None):
                 folder_id,
                 seg_id,
                 group_label,
-                ",".join(group.get("rules") or []),
+                ",".join(str(rule) for rule in (group.get("rules") or [])),
             )
             new_text, applied, rejected, group_error = _review_group_chunks(
                 current_text, rules_text, group, model=model
