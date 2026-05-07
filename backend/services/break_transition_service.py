@@ -153,6 +153,7 @@ def fallback_break_transition(
     bloc_num: int,
     duration_sec: int,
     schedule_neutral: bool = False,
+    next_item_type: str | None = None,
 ) -> tuple[str, str]:
     """Fallback statique sans appel LLM."""
     if break_type == "pause_midi":
@@ -165,6 +166,11 @@ def fallback_break_transition(
         intro = f"On fait maintenant une pause de {label}. Prenez le temps de souffler."
     if break_type == "qa" and label:
         intro = f"On prend maintenant {label} pour vos questions sur la partie que l'on vient de travailler. Vous pouvez les poser dans le chat."
+    if break_type == "qa" and next_item_type in {"pause", "pause_midi"}:
+        outro = (
+            "Très bien, on clôt ce temps de questions. Merci pour vos retours, "
+            "gardez simplement ces repères en tête pour la suite."
+        )
     if schedule_neutral:
         if break_type == "qa":
             outro = "Très bien, on clôt ce temps de questions. Gardez ces repères en tête pour la suite de la journée."
@@ -212,6 +218,15 @@ def _build_prompt(
             "Ne parle ni de pause déjeuner, ni de prochain cours, ni de reprise immédiate."
         )
         target = "intro 20-45 mots, outro 20-50 mots"
+    elif break_type == "qa" and next_item_type in {"pause", "pause_midi"}:
+        role = (
+            "INTRO : annonce le temps de questions, mentionne le chat, et contextualise "
+            "brièvement avec le thème qui vient d'être travaillé.\n"
+            "OUTRO : clôture chaleureusement le temps de questions SANS annoncer la pause "
+            "et SANS dire qu'on reprend le cours. Le fichier suivant annoncera lui-même "
+            "ce qui se passe ensuite."
+        )
+        target = "intro 35-70 mots, outro 35-70 mots"
     elif break_type == "qa":
         role = (
             "INTRO : annonce le temps de questions, mentionne le chat, et contextualise "
@@ -354,7 +369,11 @@ def generate_break_transition(
             f"({type(e).__name__}: {str(e)[:160]})"
         )
         return fallback_break_transition(
-            break_type, bloc_num, duration_sec, schedule_neutral=schedule_neutral
+            break_type,
+            bloc_num,
+            duration_sec,
+            schedule_neutral=schedule_neutral,
+            next_item_type=next_item_type,
         )
 
 

@@ -2677,6 +2677,240 @@ def _playlist_items_for_platform(platform_id: int) -> list:
     return items or list(PLAYLIST_SPEC)
 
 
+def _build_edge_muted_filler_audio(duration_sec: float, on_progress=None) -> tuple[bytes, float]:
+    """Build near-silence with Edge TTS itself, keeping the MP3 format uniform.
+
+    We deliberately do not reuse `assets/silence_1s.mp3`: that file has a
+    different sample rate/bitrate and was the root of the 302:01 browser bug.
+    Edge TTS with volume=-100% gives compatible 24 kHz / 48 kbps frames.
+    """
+    if duration_sec <= 0:
+        return b"", 0.0
+
+    from services.basic_tts_service import convert_to_speech_basic, concat_mp3_bytes
+
+    filler_text = os.getenv("EDGE_TTS_MUTED_FILLER_TEXT", "un.").strip() or "un."
+    filler_volume = os.getenv("EDGE_TTS_MUTED_FILLER_VOLUME", "-100%").strip() or "-100%"
+
+    if on_progress:
+        on_progress(f"filler muet Edge TTS ({duration_sec:.1f}s cible)")
+
+    seed = convert_to_speech_basic(
+        filler_text,
+        volume=filler_volume,
+        **_basic_tts_pipeline_retry_kwargs(),
+    )
+    seed_duration = _mp3_duration_seconds_no_ffprobe(seed)
+    if seed_duration <= 0:
+        return b"", 0.0
+
+    repeat = int(duration_sec // seed_duration)
+    if repeat <= 0:
+        return b"", 0.0
+
+    filler = concat_mp3_bytes([seed] * repeat)
+    return filler, seed_duration * repeat
+
+
+def _build_timed_edge_break_audio(
+    intro_text: str,
+    outro_text: str,
+    duration_sec: int,
+    *,
+    on_progress=None,
+) -> tuple[bytes, float]:
+    """Build an Edge TTS break with intro at start and outro at slot end."""
+    from services.basic_tts_service import convert_to_speech_basic, concat_mp3_bytes
+
+    intro_text = (intro_text or "").strip()
+    outro_text = (outro_text or "").strip()
+    if not intro_text and not outro_text:
+        raise ValueError("Break Edge vide")
+
+    parts = []
+    cursor_sec = 0.0
+    lead_in_sec = _env_float("EDGE_TTS_BREAK_LEAD_IN_SEC", 5.0, min_value=0.0, max_value=30.0)
+
+    lead_bytes, lead_duration = _build_edge_muted_filler_audio(
+        lead_in_sec,
+        on_progress=on_progress,
+    )
+    if lead_bytes:
+        parts.append(lead_bytes)
+        cursor_sec += lead_duration
+
+    if intro_text:
+        if on_progress:
+            on_progress("Edge TTS intro")
+        intro_bytes = convert_to_speech_basic(
+            intro_text,
+            progress_callback=on_progress,
+            **_basic_tts_pipeline_retry_kwargs(),
+        )
+        cursor_sec += _mp3_duration_seconds_no_ffprobe(intro_bytes)
+        parts.append(intro_bytes)
+
+    outro_bytes = b""
+    outro_duration = 0.0
+    if outro_text:
+        if on_progress:
+            on_progress("Edge TTS outro")
+        outro_bytes = convert_to_speech_basic(
+            outro_text,
+            progress_callback=on_progress,
+            **_basic_tts_pipeline_retry_kwargs(),
+        )
+        outro_duration = _mp3_duration_seconds_no_ffprobe(outro_bytes)
+
+    target = float(max(int(duration_sec or 0), 0))
+    filler_target = max(0.0, target - cursor_sec - outro_duration)
+    filler_bytes, filler_duration = _build_edge_muted_filler_audio(
+        filler_target,
+        on_progress=on_progress,
+    )
+    if filler_bytes:
+        parts.append(filler_bytes)
+        cursor_sec += filler_duration
+
+    if outro_bytes:
+        parts.append(outro_bytes)
+        cursor_sec += outro_duration
+
+    return concat_mp3_bytes(parts), cursor_sec
+
+
+def _course_opening_transitions_enabled() -> bool:
+    value = (os.getenv("COURSE_OPENING_TRANSITIONS", "true") or "").strip().lower()
+    return value not in {"0", "false", "no", "off"}
+
+
+def _split_opening_for_rewrite(text: str, max_sentences: int = 3, max_words: int = 90) -> tuple[str, str]:
+    clean = (text or "").strip()
+    if not clean:
+        return "", ""
+
+    sentences = [s.strip() for s in _SENTENCE_SPLIT_RE.split(clean) if s.strip()]
+    if not sentences:
+        return clean, ""
+
+    opening_parts = []
+    opening_words = 0
+    for sentence in sentences:
+        opening_parts.append(sentence)
+        opening_words += len(sentence.split())
+        if len(opening_parts) >= max_sentences or opening_words >= max_words:
+            break
+
+    opening = " ".join(opening_parts).strip()
+    rest = " ".join(sentences[len(opening_parts):]).strip()
+    return opening, rest
+
+
+def _parse_course_opening_json(raw: str) -> str:
+    raw = (raw or "").strip().replace("```json", "```")
+    if "```" in raw:
+        raw = max(raw.split("```"), key=len).strip()
+    match = re.search(r"\{[\s\S]*\}", raw)
+    if not match:
+        raise ValueError("réponse sans JSON")
+    data = json.loads(match.group(0))
+    opening = re.sub(r"\s+", " ", (data.get("opening") or "").strip())
+    if len(opening.split()) < 12:
+        raise ValueError("opening trop courte")
+    return opening
+
+
+def _fallback_course_opening(opening: str, previous_item_type: str | None) -> str:
+    if previous_item_type in {"pause", "pause_midi"}:
+        lead = "Très bien, on se remet tranquillement dans le fil."
+    elif previous_item_type == "qa":
+        lead = "Très bien, on garde vos questions en tête et on avance dans la suite."
+    else:
+        lead = "Très bien, on continue avec la suite."
+    opening = re.sub(r"\s+", " ", (opening or "").strip())
+    return f"{lead} Pour entrer dans cette partie, on va poser l'idée de départ simplement : {opening}"
+
+
+def _rewrite_course_opening_for_audio(
+    bloc: dict,
+    playlist_items: list,
+    item_idx: int,
+    *,
+    model: str | None = None,
+) -> str:
+    """Rewrite only the first sentences of a course audio for a natural handoff."""
+    text = (bloc.get("text") or "").strip()
+    bloc_number = int(bloc.get("bloc_number") or 0)
+    if not text or bloc_number <= 1 or not _course_opening_transitions_enabled():
+        return text
+
+    opening, rest = _split_opening_for_rewrite(text)
+    if not opening or not rest:
+        return text
+
+    previous_item_type = playlist_items[item_idx - 1][2] if item_idx > 0 else None
+    previous_label = {
+        "qa": "une séance de questions-réponses",
+        "pause": "une pause courte",
+        "pause_midi": "la pause déjeuner",
+        "cours": "un cours",
+        None: "le début de journée",
+    }.get(previous_item_type, str(previous_item_type))
+
+    rest_preview = " ".join(rest.split()[:90])
+    prompt = f"""Tu écris l'ouverture audio d'un bloc de cours pour une classe virtuelle.
+
+BLOC COURS : {bloc_number}/7
+ÉLÉMENT JUSTE AVANT CE COURS : {previous_label}
+
+OUVERTURE ACTUELLE À REMANIER LÉGÈREMENT :
+---
+{opening}
+---
+
+SUITE IMMÉDIATE QUI VIENDRA APRÈS TON OUVERTURE :
+---
+{rest_preview}
+---
+
+MISSION :
+Réécris uniquement l'ouverture actuelle pour que le démarrage du fichier audio soit naturel.
+Il faut une transition pédagogique chaleureuse, puis une reformulation légère des premières idées.
+
+CONSIGNES STRICTES :
+- Ne résume pas le cours précédent.
+- Ne répète pas la conclusion, le Q&A ou la pause qui viennent déjà d'avoir lieu.
+- Si l'élément précédent est une pause, ne dis pas "la pause est terminée".
+- Ne spoile pas tout le bloc : ouvre seulement la porte du sujet.
+- Ne change pas le fond : conserve les idées de l'ouverture actuelle.
+- Garde un volume proche de l'ouverture actuelle pour ne pas décaler les slides.
+- Termine de façon à enchaîner naturellement avec la suite immédiate.
+- 45 à 95 mots.
+- Pas d'horaires, pas de markdown, pas de guillemets.
+
+Réponds uniquement avec ce JSON valide :
+{{"opening": "nouvelle ouverture"}}"""
+
+    try:
+        raw = _llm_post(
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=700,
+            model=model or CLAUDE_MODEL,
+            timeout=90,
+        )
+        rewritten = _parse_course_opening_json(raw)
+    except Exception as e:
+        logger.warning(
+            "⚠️ Ouverture bloc %s fallback (%s: %s)",
+            bloc_number,
+            type(e).__name__,
+            str(e)[:160],
+        )
+        rewritten = _fallback_course_opening(opening, previous_item_type)
+
+    return f"{rewritten}\n\n{rest}".strip()
+
+
 def _build_contextual_break_audio(
     filename: str,
     duration_sec: int,
@@ -2714,6 +2948,57 @@ def _build_contextual_break_audio(
             _emit(f"{filename} — audio pause réutilisable indisponible, silence de secours")
             return _generate_silence_mp3(min(max(int(duration_sec or 1), 1), 10)), "silence_fallback"
 
+    def _generic_break_texts():
+        from services.playlist_tts_service import (
+            _get_pause_midi_text,
+            _get_pause_text,
+            _get_qa_text,
+        )
+        if file_type == "qa":
+            intro, outro = _get_qa_text(bloc_num)
+            next_type = playlist_items[item_idx + 1][2] if item_idx + 1 < len(playlist_items) else None
+            if next_type in {"pause", "pause_midi"}:
+                outro = (
+                    "Très bien, on clôt cette session de questions. Merci pour vos questions "
+                    "et pour les points que vous avez voulu clarifier. Gardez ces repères en "
+                    "tête, ils vont nous servir pour la suite de la journée."
+                )
+            return (
+                intro,
+                "Je vous laisse utiliser ce temps pour poser vos questions, relire vos notes "
+                "et clarifier ce qui doit l'être avant de passer à la suite.",
+                outro,
+            )
+        if file_type == "pause_midi" or filename.startswith("pause_midi_"):
+            intro, outro = _get_pause_midi_text()
+            return (
+                intro,
+                "Prenez vraiment ce temps pour couper, vous restaurer et revenir disponible "
+                "pour la suite de la journée.",
+                outro,
+            )
+        intro, outro = _get_pause_text(bloc_num)
+        return (
+            intro,
+            "Profitez-en pour souffler, vous étirer, boire un peu d'eau et revenir avec de "
+            "l'attention pour la suite.",
+            outro,
+        )
+
+    def _generic_basic_tts_break():
+        intro, middle, outro = _generic_break_texts()
+        intro = " ".join(p for p in (intro, middle) if (p or "").strip())
+        audio_bytes, final_duration = _build_timed_edge_break_audio(
+            intro,
+            outro,
+            duration_sec,
+            on_progress=lambda msg: _emit(f"{filename} — {msg}"),
+        )
+        _emit(
+            f"{filename} — Edge TTS générique calé ({final_duration:.1f}s/{duration_sec}s)"
+        )
+        return audio_bytes, "generic_edge_timed"
+
     if mock:
         return _generate_silence_mp3(1), "mock"
 
@@ -2724,7 +3009,13 @@ def _build_contextual_break_audio(
         "on",
     }
     if basic_tts and not contextual_basic_tts:
-        return _fallback("mode test gTTS")
+        try:
+            return _generic_basic_tts_break()
+        except Exception as e:
+            logger.warning(
+                f"⚠️ Break générique Edge {filename} échoué : {e}; fallback audioqapause"
+            )
+            return _fallback("generic_edge_failed")
 
     try:
         from services.break_transition_service import build_break_transition_texts
@@ -2748,16 +3039,17 @@ def _build_contextual_break_audio(
         )
         _emit(f"{filename} — synthèse audio transition...")
         if basic_tts:
-            from services.basic_tts_service import convert_to_speech_basic
-            convert_func = lambda text: convert_to_speech_basic(
-                text,
-                progress_callback=lambda msg: _emit(f"{filename} — {msg}"),
-                **_basic_tts_pipeline_retry_kwargs(),
+            audio_bytes, final_duration = _build_timed_edge_break_audio(
+                intro,
+                outro,
+                duration_sec,
+                on_progress=lambda msg: _emit(f"{filename} — {msg}"),
             )
-            return _build_pause_audio(
-                intro, outro, duration_sec,
-                convert_func=convert_func,
-            ), "contextual_gtts"
+            _emit(
+                f"{filename} — transition Edge TTS calée "
+                f"({final_duration:.1f}s/{duration_sec}s)"
+            )
+            return audio_bytes, "contextual_edge_timed"
         return _build_pause_audio(intro, outro, duration_sec), "contextual_fish"
     except Exception as e:
         logger.warning(f"⚠️ Break contextuel {filename} échoué : {e}; fallback audioqapause")
@@ -3131,9 +3423,16 @@ def generate_audio_from_script(
             _progress(step, len(playlist_items), f"{filename} — upload audio ({break_mode})...")
             upload_blob(CONTAINER_AUDIOS, f"{azure_prefix}{filename}", final_bytes)
             try:
-                final_duration = _measure_duration_ms(final_bytes) / 1000
+                final_duration = _mp3_duration_seconds_no_ffprobe(final_bytes)
             except Exception:
-                final_duration = duration_sec if break_mode == "audioqapause_fallback" else len(final_bytes) / 4000
+                try:
+                    final_duration = _measure_duration_ms(final_bytes) / 1000
+                except Exception:
+                    final_duration = (
+                        duration_sec
+                        if break_mode == "audioqapause_fallback"
+                        else len(final_bytes) / 6000
+                    )
             logger.info(f"   ✅ {filename} : {final_duration:.1f}s uploadé ({break_mode})")
             _progress(step, len(playlist_items), f"{filename} — terminé ({break_mode}, {final_duration:.1f}s)")
             logger.info(
@@ -3207,12 +3506,36 @@ def generate_audio_from_script(
             skipped.append(filename)
             continue
 
+        audio_bloc = bloc
+        if not mock and _course_opening_transitions_enabled() and int(bloc.get("bloc_number") or 0) > 1:
+            rewritten_text = _rewrite_course_opening_for_audio(
+                bloc,
+                playlist_items,
+                item_idx,
+                model=llm_model,
+            )
+            if rewritten_text and rewritten_text != (bloc.get("text") or "").strip():
+                audio_bloc = dict(bloc)
+                audio_bloc["text"] = rewritten_text
+                audio_bloc["word_count"] = len(rewritten_text.split())
+                logger.info(
+                    "PIPELINE_AUDIO_COURSE_OPENING_REWRITTEN formation_job_id=%s "
+                    "content_job_id=%s folder_id=%s bloc=%s filename=%s words_before=%s words_after=%s",
+                    formation_job_id,
+                    job_id,
+                    folder_id,
+                    bloc["bloc_number"],
+                    filename,
+                    len((bloc.get("text") or "").split()),
+                    len(rewritten_text.split()),
+                )
+
         if sync_slides:
             mode_label = "MOCK" if mock else "BASIC edge-tts" if basic_tts else "Fish Audio"
             _progress(
                 step,
                 len(playlist_items),
-                f"[SYNC SLIDES] Bloc {bloc['bloc_number']}/7 — {mode_label} ({len(bloc['text'].split())} mots)...",
+                f"[SYNC SLIDES] Bloc {bloc['bloc_number']}/7 — {mode_label} ({len(audio_bloc['text'].split())} mots)...",
             )
             logger.info(f"   🖼️ Bloc {bloc['bloc_number']} ({filename}) — TTS synchronisé slides")
             # Runtime fit : préfixe le tampon intra-jour, capture le surplus
@@ -3227,7 +3550,7 @@ def generate_audio_from_script(
                 runtime_unconsumed_chunks,
                 runtime_consumed_chunks,
             ) = _synthesize_course_audio_synced_to_slides(
-                bloc,
+                audio_bloc,
                 slide_deck.get("slides", []) if slide_deck else [],
                 filename,
                 mock=mock,
@@ -3276,7 +3599,7 @@ def generate_audio_from_script(
             from services.playlist_tts_service import _generate_silence_mp3
             final_bytes = _generate_silence_mp3(1)
         elif basic_tts:
-            _progress(step, len(playlist_items), f"[BASIC] Bloc {bloc['bloc_number']}/7 — edge-tts ({len(bloc['text'].split())} mots)...")
+            _progress(step, len(playlist_items), f"[BASIC] Bloc {bloc['bloc_number']}/7 — edge-tts ({len(audio_bloc['text'].split())} mots)...")
             logger.info(f"   🔊 [BASIC edge-tts] Bloc {bloc['bloc_number']} ({filename}) — génération via edge-tts…")
             from services.basic_tts_service import convert_to_speech_basic
             # Pas de padding : la durée gTTS ne matche pas les créneaux cours,
@@ -3284,7 +3607,7 @@ def generate_audio_from_script(
             # playlist cible (ex: 33 min de gTTS vs 45 min de bloc cours) —
             # le reste sera du silence côté playlist horodatée.
             final_bytes = convert_to_speech_basic(
-                bloc["text"],
+                audio_bloc["text"],
                 progress_callback=lambda msg: _progress(
                     step,
                     len(playlist_items),
@@ -3294,10 +3617,10 @@ def generate_audio_from_script(
                 **_basic_tts_pipeline_retry_kwargs(),
             )
         else:
-            _progress(step, len(playlist_items), f"Bloc {bloc['bloc_number']}/7 — génération TTS ({len(bloc['text'].split())} mots)...")
+            _progress(step, len(playlist_items), f"Bloc {bloc['bloc_number']}/7 — génération TTS ({len(audio_bloc['text'].split())} mots)...")
             logger.info(f"   🎙️ Bloc {bloc['bloc_number']} ({filename}) — TTS en cours...")
             final_bytes, voice_duration, fit_method, attempts = _synthesize_course_audio_to_fit(
-                bloc,
+                audio_bloc,
                 convert_to_speech,
                 _measure_duration_ms,
                 _pad_audio_to_duration,

@@ -411,6 +411,97 @@ class ContextualBreakUsesConsumedTextTest(unittest.TestCase):
         self.assertEqual(captured["next"], "prochain texte consomme")
 
 
+class BasicTTSBreaksUseEdgeVoiceTest(unittest.TestCase):
+    def test_basic_tts_generic_break_does_not_recycle_fish_audio(self):
+        seen_texts = []
+        seen_volumes = []
+
+        def fake_tts(text, **kwargs):
+            seen_texts.append(text)
+            seen_volumes.append(kwargs.get("volume", "+0%"))
+            return _mp3_chunk(f"EDGE{len(seen_texts)}")
+
+        with patch(
+            "services.basic_tts_service.convert_to_speech_basic",
+            side_effect=fake_tts,
+        ), patch.object(
+            cgs, "_mp3_duration_seconds_no_ffprobe",
+            side_effect=[4.0, 3.0, 1.0, 1.0],
+        ), patch(
+            "services.playlist_tts_service._get_recycled_qa_pause",
+            side_effect=AssertionError("ne doit pas recycler audioqapause en mode Edge"),
+        ):
+            audio_bytes, mode = cgs._build_contextual_break_audio(
+                filename="qa_9h45_9h55.mp3",
+                duration_sec=600,
+                file_type="qa",
+                bloc_num=1,
+                item_idx=1,
+                playlist_items=[
+                    ("cours.mp3", 2700, "cours", 1),
+                    ("qa_9h45_9h55.mp3", 600, "qa", 1),
+                    ("pause_9h55_10h05.mp3", 600, "pause", 1),
+                ],
+                blocs_by_number={},
+                mock=False,
+                basic_tts=True,
+            )
+
+        self.assertEqual(mode, "generic_edge_timed")
+        self.assertEqual(len(seen_texts), 4)
+        self.assertEqual(seen_volumes, ["-100%", "+0%", "+0%", "-100%"])
+        self.assertIn("clôt", seen_texts[2].lower())
+        self.assertNotIn("reprend", seen_texts[2].lower())
+        self.assertEqual(audio_bytes.count(b"ID3"), 1)
+        self.assertIn(b"EDGE1", audio_bytes)
+        self.assertIn(b"EDGE2", audio_bytes)
+        self.assertIn(b"EDGE3", audio_bytes)
+        self.assertIn(b"EDGE4", audio_bytes)
+        self.assertLess(audio_bytes.index(b"EDGE1"), audio_bytes.index(b"EDGE2"))
+        self.assertLess(audio_bytes.index(b"EDGE2"), audio_bytes.index(b"EDGE4"))
+        self.assertLess(audio_bytes.index(b"EDGE4"), audio_bytes.rindex(b"EDGE3"))
+
+
+class CourseOpeningRewriteTest(unittest.TestCase):
+    def test_rewrites_only_opening_and_preserves_rest(self):
+        bloc = _make_bloc(
+            (
+                "C'est un état d'esprit. C'est la promesse que vous faites au client. "
+                "Il faut poser ce cadre clairement. Ensuite, on détaille les gestes "
+                "professionnels qui permettent de tenir cette promesse."
+            ),
+            target_sec=2700,
+            bloc_number=2,
+        )
+
+        with patch.object(
+            cgs,
+            "_llm_post",
+            return_value=(
+                '{"opening": "Très bien, on reprend tranquillement le fil. '
+                "Dans cette partie, on va installer une idée simple : la qualité "
+                "de prise en charge ne repose pas seulement sur une procédure, "
+                "elle repose aussi sur une posture professionnelle.\"}"
+            ),
+        ):
+            rewritten = cgs._rewrite_course_opening_for_audio(
+                bloc,
+                [
+                    ("cours_9h00_9h45.mp3", 2700, "cours", 1),
+                    ("qa_9h45_9h55.mp3", 600, "qa", 1),
+                    ("pause_9h55_10h05.mp3", 600, "pause", 1),
+                    ("cours_10h05_10h50.mp3", 2700, "cours", 2),
+                ],
+                3,
+                model="test-model",
+            )
+
+        opening, rest = rewritten.split("\n\n", 1)
+        self.assertIn("on reprend tranquillement le fil", opening)
+        self.assertNotIn("C'est un état d'esprit", opening)
+        self.assertIn("Ensuite, on détaille les gestes professionnels", rest)
+
+
 class HelperSplitTextNaturalKeepsLongSentenceIntactTest(unittest.TestCase):
     def test_sentence_longer_than_max_is_not_split(self):
         # Une seule phrase de 40 mots, avec max_words=10 → garde entière.
@@ -477,7 +568,7 @@ class BasicTTSParallelWorkersTest(unittest.TestCase):
         ), patch.object(
             bts,
             "_synthesize_chunk_sync",
-            side_effect=lambda chunk, voice, rate: _mp3_chunk(chunk[:1].upper()),
+            side_effect=lambda chunk, voice, rate, volume: _mp3_chunk(chunk[:1].upper()),
         ):
             audio = bts.convert_to_speech_basic(
                 "ignored",
