@@ -2,6 +2,20 @@
 
 ## 2026-05-07
 
+### fix: headers MP3 Azure Blob (audio/mpeg + inline) pour éditeur audio
+
+**Symptôme** — après le fix du 302:01, l'éditeur audio affichait toujours `Impossible de charger l'audio : Failed to fetch` alors que côté Network on voyait bien la requête au blob répondre **200 + 17.6 Mo téléchargés**. Test de vérif : "Ouvrir dans un nouvel onglet" sur l'URL SAS → Chrome **télécharge** le fichier au lieu de l'ouvrir avec le player audio natif.
+
+**Cause** — les blobs uploadés via `azure_blob_service.upload_blob` n'avaient aucun `content_settings` explicite. Azure servait donc les MP3 avec un Content-Type par défaut (`application/octet-stream`) et sans Content-Disposition. Conséquence : Chrome traite la réponse comme un téléchargement, et WaveSurfer (`MediaElement` backend par défaut en v7) refuse de la consommer comme source audio → erreur générique `Failed to fetch` même si le fetch HTTP a réussi à 200.
+
+**Fix en deux temps**
+
+1. **Nouveaux uploads** — `_content_settings_for_blob(blob_path)` retourne le bon `ContentSettings` selon l'extension : `.mp3` → `audio/mpeg` + `inline`, `.json` → `application/json; charset=utf-8`, `.txt` → `text/plain`, `.pdf` → `application/pdf`. Appliqué dans `upload_blob` via `content_settings=...`.
+
+2. **Blobs existants (rétroactif, sans re-upload)** — la route `/api/hr/cours-folders/<id>/audio-url/<filename>` ajoute `content_type` et `content_disposition` aux paramètres de `generate_blob_sas`. Ces deux options se traduisent en query string SAS `rsct` et `rscd` qui **override les headers du blob au moment du download**, sans toucher au blob lui-même. Donc les MP3 du job 5 déjà uploadés avec le mauvais Content-Type sont servis correctement dès la génération de la prochaine SAS URL.
+
+**Bonus inclus** — garde-fou côté `create_platform_from_module` : refuse la création si `voice_type == "mock"` (module silencieux de test). Listing modules : `reusable: false` pour les modules mock. Évite le scénario où une plateforme partirait en prod avec uniquement du silence.
+
 ### fix: MP3 Edge TTS à 302:01 et waveform muette — retrait du padding silence incompatible
 
 **Symptôme** — sur la plateforme, les `cours_*.mp3` du job 5 (TP DENKNDEED) affichaient une durée délirante de 302:01 au lieu de 45:00 / 60:00, et la forme d'onde restait plate (aucune voix audible) dans l'éditeur audio.

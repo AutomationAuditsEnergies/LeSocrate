@@ -180,7 +180,7 @@ def create_hr_blueprint(socketio):
                 "source_platform_name": r[9],
                 "voice_type": r[10],
                 "voice_updated_at": r[11],
-                "reusable": r[4] == "validated" and r[8] > 0,
+                "reusable": r[4] == "validated" and r[8] > 0 and r[10] != "mock",
             } for r in rows]
             return jsonify({"success": True, "modules": modules}), 200
         except Exception as e:
@@ -603,17 +603,26 @@ def create_hr_blueprint(socketio):
             # Mode module_id (nouveau — priorité sur formation_id si les deux présents)
             if module_id:
                 cursor.execute(
-                    "SELECT source_platform_id, status, source_pipeline_job_id FROM formation_modules WHERE id = ?",
+                    "SELECT source_platform_id, status, source_pipeline_job_id, voice_type FROM formation_modules WHERE id = ?",
                     (module_id,),
                 )
                 row = cursor.fetchone()
                 if not row:
                     conn.close()
                     return jsonify({"success": False, "error": "Module introuvable"}), 404
-                source_platform_id, m_status, m_job_id = row
+                source_platform_id, m_status, m_job_id, m_voice_type = row
                 if m_status == "archived":
                     conn.close()
                     return jsonify({"success": False, "error": "Ce module est archivé"}), 400
+                if m_voice_type == "mock":
+                    conn.close()
+                    return jsonify({
+                        "success": False,
+                        "error": (
+                            "Ce module a été généré en mode test silencieux. "
+                            "Relancez le TTS avec Edge TTS ou Fish Audio avant de créer une plateforme."
+                        ),
+                    }), 400
                 cursor.execute("SELECT COUNT(*) FROM cours_folders WHERE platform_id = ?", (source_platform_id,))
                 if cursor.fetchone()[0] == 0:
                     conn.close()
@@ -2736,6 +2745,8 @@ def create_hr_blueprint(socketio):
                 account_key=account_key,
                 permission=BlobSasPermissions(read=True),
                 expiry=expiry,
+                content_type="audio/mpeg",
+                content_disposition=f'inline; filename="{os.path.basename(filename)}"',
             )
             url = f"https://{account_name}.blob.core.windows.net/audiostts/{blob_path}?{sas_token}"
             return jsonify({"success": True, "url": url})

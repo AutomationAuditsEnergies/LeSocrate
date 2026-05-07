@@ -1,11 +1,28 @@
 import os
-from azure.storage.blob import BlobServiceClient
+from azure.storage.blob import BlobServiceClient, ContentSettings
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
 CONTAINER_DOCUMENTS = "documenttts"
 CONTAINER_AUDIOS = "audiostts"
+
+
+def _content_settings_for_blob(blob_path):
+    """Headers Azure adaptés aux fichiers servis directement au navigateur."""
+    lower = (blob_path or "").lower()
+    if lower.endswith(".mp3"):
+        return ContentSettings(
+            content_type="audio/mpeg",
+            content_disposition=f'inline; filename="{os.path.basename(blob_path)}"',
+        )
+    if lower.endswith(".json"):
+        return ContentSettings(content_type="application/json; charset=utf-8")
+    if lower.endswith(".txt"):
+        return ContentSettings(content_type="text/plain; charset=utf-8")
+    if lower.endswith(".pdf"):
+        return ContentSettings(content_type="application/pdf")
+    return None
 
 
 def _get_blob_service_client():
@@ -24,7 +41,11 @@ def upload_blob(container_name, blob_path, data):
     """Upload des bytes ou un file-like vers Azure Blob Storage"""
     client = _get_blob_service_client()
     blob_client = client.get_blob_client(container=container_name, blob=blob_path)
-    blob_client.upload_blob(data, overwrite=True)
+    blob_client.upload_blob(
+        data,
+        overwrite=True,
+        content_settings=_content_settings_for_blob(blob_path),
+    )
     logger.info(f"✅ Blob uploadé: {container_name}/{blob_path}")
     return blob_path
 
