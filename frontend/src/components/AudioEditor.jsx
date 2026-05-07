@@ -50,23 +50,24 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
   const [bugRegions, setBugRegions] = useState([])    // [{start, end, severity}] en secondes
   const bugRegionRefsRef = useRef([])                 // instances WaveSurfer Region pour cleanup
 
-  const sasUrlRef = useRef(null)   // SAS URL courante (mise à jour après cut/replace)
+  const audioUrlRef = useRef(null)   // URL audio courante (mise à jour après cut/replace)
 
-  // Récupère une SAS URL fraîche depuis le backend
-  const fetchSasUrl = useCallback(async () => {
-    const resp = await fetch(
-      apiUrl(`/api/hr/cours-folders/${folderId}/audio-url/${filename}`),
-      { credentials: 'include' }
+  // URL backend same-API pour éviter les échecs CORS du Blob Azure direct.
+  const buildAudioUrl = useCallback(() => {
+    const url = apiUrl(
+      `/api/hr/cours-folders/${folderId}/audio-stream/${filename}?v=${Date.now()}`
     )
-    const data = await resp.json()
-    if (!data.success) throw new Error(data.error || 'SAS URL indisponible')
-    sasUrlRef.current = data.url
-    return data.url
+    audioUrlRef.current = url
+    return url
   }, [folderId, filename])
 
   // ── Init WaveSurfer ──
   useEffect(() => {
     if (!waveRef.current) return
+
+    let cancelled = false
+    setError(null)
+    setLoading(true)
 
     const regions = RegionsPlugin.create()
     regionsRef.current = regions
@@ -84,6 +85,8 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
       minPxPerSec: 0, // auto-fit au chargement
       autoScroll: true,
       fillParent: true,
+      blobMimeType: 'audio/mpeg',
+      fetchParams: { credentials: 'include' },
       plugins: [regions],
     })
     wsRef.current = ws
@@ -119,10 +122,18 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
     const waveEl = waveRef.current
     waveEl?.addEventListener('wheel', handleWheel, { passive: false })
 
-    // Charger via SAS URL (stream direct Azure, pas de proxy)
-    fetchSasUrl()
-      .then(url => ws.load(url))
-      .catch(e => setError('Impossible de charger l\'audio : ' + e.message))
+    // Charger via le backend : le Blob Azure direct peut répondre 200 tout en
+    // échouant côté JS si CORS n'est pas configuré sur le compte Storage.
+    Promise.resolve(buildAudioUrl())
+      .then(url => { if (!cancelled) return ws.load(url) })
+      .catch(e => {
+        if (cancelled) return
+        // ws.destroy() pendant un fetch en cours déclenche un AbortError que
+        // Chrome propage souvent en "TypeError: Failed to fetch" — bruit qui
+        // collait un faux message d'erreur sur la 2e tentative réussie.
+        if (e?.name === 'AbortError') return
+        setError('Impossible de charger l\'audio : ' + e.message)
+      })
 
     ws.on('ready', () => {
       setDuration(ws.getDuration() * 1000)
@@ -154,12 +165,13 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
     })
 
     return () => {
+      cancelled = true
       waveEl?.removeEventListener('wheel', handleWheel)
       ws.destroy()
       stopStitchedPlayback()
       bugRegionRefsRef.current = []
     }
-  }, [darkMode, fetchSasUrl])
+  }, [darkMode, buildAudioUrl])
 
   // Changer la couleur de la région selon le mode
   useEffect(() => {
@@ -343,7 +355,7 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
         // Recharger depuis une nouvelle SAS URL (le blob a changé)
         setTimeout(async () => {
           try {
-            const freshUrl = await fetchSasUrl()
+            const freshUrl = buildAudioUrl()
             setLoading(true)
             wsRef.current?.load(freshUrl)
           } catch (e) { /* ignore */ }
@@ -426,7 +438,7 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
         setReplaceText('')
         setTimeout(async () => {
           try {
-            const freshUrl = await fetchSasUrl()
+            const freshUrl = buildAudioUrl()
             setLoading(true)
             wsRef.current?.load(freshUrl)
           } catch (e) { /* ignore */ }

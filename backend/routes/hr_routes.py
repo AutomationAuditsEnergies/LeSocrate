@@ -2770,9 +2770,10 @@ def create_hr_blueprint(socketio):
                 audio_bytes,
                 mimetype="audio/mpeg",
                 headers={
-                    "Content-Disposition": f"inline; filename={filename}",
+                    "Content-Disposition": f'inline; filename="{os.path.basename(filename)}"',
                     "Accept-Ranges": "bytes",
                     "Content-Length": str(len(audio_bytes)),
+                    "Cache-Control": "no-store",
                 }
             )
         except Exception as e:

@@ -2,6 +2,23 @@
 
 ## 2026-05-07
 
+### fix: éditeur audio — proxy backend + race condition cleanup
+
+**Symptôme** — l'éditeur affichait toujours `Impossible de charger l'audio : Failed to fetch` malgré le fix headers (`05d37cb`). Network montrait pourtant 200 + 17.6 Mo téléchargés. Console : aucune erreur CORS visible (juste une erreur d'extension Chrome `content.js`). Deux paires de requêtes identiques observées dans Network → indice de remount du composant React.
+
+**Hypothèses non discernables à distance**
+
+1. **CORS post-flight bloqué côté JS** — Azure Blob répond 200 mais sans `Access-Control-Allow-Origin`, le browser bloque le body côté JS et propage `TypeError: Failed to fetch`. Plausible mais pas confirmé (Chrome n'a pas affiché l'erreur dans Console).
+2. **Race condition React** — `wavesurfer.js:319-321` attache un `AbortController` au fetch interne. Quand le useEffect se ré-exécute (re-mount, dépendance changée), `ws.destroy()` abort le fetch → `AbortError` que Chrome sérialise en `TypeError: Failed to fetch`. Le `.catch` dans `AudioEditor.jsx` ne filtrait pas ce cas et collait un message d'erreur sur la 1re tentative annulée, persistant même après que la 2e tentative ait chargé l'audio avec succès.
+
+**Fix défensif (couvre les deux hypothèses)**
+
+1. **Proxy backend** — `AudioEditor.jsx` charge maintenant le MP3 via la route `/api/hr/cours-folders/<id>/audio-stream/<filename>` (route `stream_audio_file` existante) au lieu de l'URL SAS Azure Blob directe. Plus de surface CORS à gérer côté Storage. WaveSurfer reçoit l'URL backend avec `fetchParams: { credentials: 'include' }` pour la session, et `blobMimeType: 'audio/mpeg'` en sécurité. Cache buster `?v=Date.now()` dans l'URL pour éviter de servir un cache stale après cut/replace.
+2. **Backend `stream_audio_file`** — `Content-Disposition` quote correctement le filename via `os.path.basename`, ajout de `Cache-Control: no-store`. `Accept-Ranges` reste mais WaveSurfer 7 ne fait pas de Range request (vérifié dans `wavesurfer.js`), donc pas besoin d'implémenter `206 Partial Content`.
+3. **Race condition** — flag `cancelled` dans le useEffect d'`AudioEditor.jsx`, `setError(null)` + `setLoading(true)` au début pour reset l'état d'erreur au remount, filtrage explicite des `AbortError` dans le `.catch` (ne pas afficher une erreur pour un cleanup normal).
+
+**Trade-off à connaître** — le proxy fait transiter ~17 Mo via App Service France au lieu d'aller direct au blob régional. Latence d'ouverture de l'éditeur passe de ~4s à ~10-30s. Acceptable pour usage admin (cible : régénération de plateforme HR), à surveiller. `Cache-Control: no-store` force le retéléchargement à chaque ouverture — si un jour la latence devient gênante, remplacer par `private, max-age=300`.
+
 ### fix: headers MP3 Azure Blob (audio/mpeg + inline) pour éditeur audio
 
 **Symptôme** — après le fix du 302:01, l'éditeur audio affichait toujours `Impossible de charger l'audio : Failed to fetch` alors que côté Network on voyait bien la requête au blob répondre **200 + 17.6 Mo téléchargés**. Test de vérif : "Ouvrir dans un nouvel onglet" sur l'URL SAS → Chrome **télécharge** le fichier au lieu de l'ouvrir avec le player audio natif.
