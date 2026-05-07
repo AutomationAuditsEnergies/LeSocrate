@@ -2346,6 +2346,87 @@ def _make_audio_progress_logger(job_id: int, folder_id: int, voice_type: str):
     return _on_progress
 
 
+def _finalize_audio_ready_state(job_id: int, voice_type: str) -> dict:
+    """Marque la plateforme exploitable et garantit le module persistant.
+
+    Idempotent : utilisé après une relance audio manuelle, notamment
+    `continue_after_text`, où les MP3 sont déjà produits mais la finalisation
+    historique de `launch_audio` n'était pas rejouée.
+    """
+    from datetime import datetime as _dt
+    from config import FRANCE_TZ as _tz
+    from database.db import get_db_connection
+
+    job = get_job(job_id)
+    if not job:
+        raise ValueError(f"Job {job_id} introuvable pour finalisation audio")
+
+    platform_id = job.get("platform_id")
+    rncp = job.get("rncp_code") or ""
+    tp_name = job.get("tp_name") or f"Job {job_id}"
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            "UPDATE platform_config SET status = 'ready' WHERE id = ? AND status = 'pending'",
+            (platform_id,),
+        )
+        platform_ready_updated = cursor.rowcount or 0
+
+        cursor.execute(
+            "SELECT id, version FROM formation_modules WHERE source_pipeline_job_id = ?",
+            (job_id,),
+        )
+        existing = cursor.fetchone()
+
+        if existing:
+            module_id, version = existing[0], existing[1]
+            cursor.execute(
+                """UPDATE formation_modules
+                   SET voice_type = ?, voice_updated_at = CURRENT_TIMESTAMP,
+                       source_platform_id = COALESCE(source_platform_id, ?),
+                       status = 'validated',
+                       validated_at = COALESCE(validated_at, CURRENT_TIMESTAMP)
+                   WHERE id = ?""",
+                (voice_type, platform_id, module_id),
+            )
+            module_created = False
+        else:
+            cursor.execute("SELECT COUNT(*) FROM formation_modules WHERE rncp_code = ?", (rncp,))
+            n = cursor.fetchone()[0] + 1
+            version = f"{_dt.now(_tz).year}-v{n}"
+            cursor.execute(
+                """
+                INSERT INTO formation_modules
+                (rncp_code, tp_name, version, status, source_pipeline_job_id,
+                 source_platform_id, voice_type, voice_updated_at, validated_at)
+                VALUES (?, ?, ?, 'validated', ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                """,
+                (rncp, tp_name, version, job_id, platform_id, voice_type),
+            )
+            module_id = cursor.lastrowid
+            module_created = True
+
+        conn.commit()
+        result = {
+            "platform_id": platform_id,
+            "platform_ready_updated": int(platform_ready_updated),
+            "module_id": module_id,
+            "module_created": module_created,
+            "module_version": version,
+            "voice_type": voice_type,
+        }
+        logger.info(
+            "PIPELINE_AUDIO_FINALIZED formation_job_id=%s platform_id=%s "
+            "module_id=%s module_created=%s voice_type=%s ready_updated=%s",
+            job_id, platform_id, module_id, module_created, voice_type, platform_ready_updated,
+        )
+        return result
+    finally:
+        conn.close()
+
+
 @formation_bp.route("/api/formation/<int:job_id>/launch-audio", methods=["POST"])
 def launch_audio(job_id):
     """
@@ -3442,6 +3523,7 @@ def continue_after_text(job_id, folder_id):
                 "PIPELINE_RESUME_STEP_TTS_DONE formation_job_id=%s folder_id=%s duration_ms=%s",
                 job_id, folder_id, int((time.time() - tts_started) * 1000),
             )
+            finalize_result = _finalize_audio_ready_state(job_id, "gtts")
             update_job(job_id, status="audio_completed", error_message=None)
             logger.info(
                 "PIPELINE_RESUME_RUN_DONE formation_job_id=%s folder_id=%s from_step=%s "
@@ -3457,13 +3539,21 @@ def continue_after_text(job_id, folder_id):
                 model=str(model) if model else None,
                 duration_ms=int((time.time() - started_at) * 1000),
                 message="Relance aval terminée avec Edge TTS et slides synchronisées",
-                data=audio_result,
+                data={
+                    **(audio_result or {}),
+                    "finalize": finalize_result,
+                    "tts_engine": "edge-tts",
+                },
             )
             _EXECUTION_STATE[state_key] = {
                 "status": "done",
                 "model": str(model),
                 "folder_id": folder_id,
-                "result": audio_result,
+                "result": {
+                    **(audio_result or {}),
+                    "finalize": finalize_result,
+                    "tts_engine": "edge-tts",
+                },
             }
         except Exception as e:
             err = str(e)[:500]
@@ -4539,6 +4629,22 @@ def formation_pipeline_diagnostic(job_id):
     except Exception as e:
         logger.warning(f"⚠️ Diagnostic folders job {job_id} : {e}")
 
+    finalize_result = None
+    try:
+        audio_done = job.get("status") in ("audio_completed", "audio_launched")
+        audio_clean = bool(folders) and sum(int(f.get("dirty_segments") or 0) for f in folders) == 0
+        if audio_done and audio_clean:
+            voice_type = job.get("auto_pilot_tts_mode") or "gtts"
+            finalize_result = _finalize_audio_ready_state(job_id, voice_type)
+            job = get_job(job_id) or job
+            try:
+                from services.formation_health_service import compute_health
+                health = compute_health(job_id)
+            except Exception as health_e:
+                logger.warning(f"⚠️ Diagnostic health recompute job {job_id} : {health_e}")
+    except Exception as e:
+        logger.warning(f"⚠️ Diagnostic finalisation audio job {job_id} : {e}")
+
     public_job = {
         key: job.get(key)
         for key in (
@@ -4567,4 +4673,5 @@ def formation_pipeline_diagnostic(job_id):
         "volume_audit": volume_audit,
         "folders": folders,
         "events": events,
+        "finalize": finalize_result,
     }), 200
