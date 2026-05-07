@@ -3527,6 +3527,7 @@ export default function FormationPipeline() {
                                             { step: 'review', label: 'Conformité', icon: 'rule', title: 'Saute le volume — lance conformité + Word 2 + slides + TTS' },
                                             { step: 'slides', label: 'Slides', icon: 'slideshow', title: 'Saute volume et conformité — supprime le deck slides existant, régénère les slides puis lance le TTS' },
                                             { step: 'tts', label: 'TTS', icon: 'record_voice_over', title: 'Saute tout — conserve les slides existantes et relance uniquement le TTS dessus' },
+                                            { step: 'tts_fast', label: 'TTS — pipeline presque instantanée', icon: 'bolt', title: 'Mode test uniquement — conserve les slides existantes, relance le TTS Edge avec parallélisation/cache, sans modifier le chemin TTS normal' },
                                           ].map(({ step, label, icon, title }) => (
                                             <button
                                               key={step}
