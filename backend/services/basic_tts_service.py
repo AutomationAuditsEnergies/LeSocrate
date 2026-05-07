@@ -35,6 +35,45 @@ _CHUNK_MAX_CHARS = 4000
 _DEFAULT_VOICE = "fr-FR-DeniseNeural"
 
 
+def _skip_id3v2(audio_bytes: bytes) -> int:
+    """Retourne l'offset après un header ID3v2, s'il existe."""
+    if len(audio_bytes) < 10 or audio_bytes[:3] != b"ID3":
+        return 0
+    size = 0
+    for b in audio_bytes[6:10]:
+        size = (size << 7) | (b & 0x7F)
+    footer = 10 if (audio_bytes[5] & 0x10) else 0
+    return min(len(audio_bytes), 10 + size + footer)
+
+
+def _strip_id3v1(audio_bytes: bytes) -> bytes:
+    if len(audio_bytes) >= 128 and audio_bytes[-128:-125] == b"TAG":
+        return audio_bytes[:-128]
+    return audio_bytes
+
+
+def concat_mp3_bytes(parts: list[bytes]) -> bytes:
+    """Concatène des MP3 Edge TTS en gardant un seul header metadata.
+
+    Edge TTS renvoie des MP3 frame-compatible entre appels, mais chaque chunk
+    peut porter son propre header ID3. Des headers ID3 au milieu du flux font
+    dérailler les durées côté navigateur/WaveSurfer. On garde le premier
+    header éventuel, puis on concatène les frames audio des chunks suivants.
+    """
+    cleaned = []
+    for idx, part in enumerate(parts):
+        if not part:
+            continue
+        data = _strip_id3v1(bytes(part))
+        if idx > 0:
+            data = data[_skip_id3v2(data):]
+        if data:
+            cleaned.append(data)
+    if not cleaned:
+        raise ValueError("Aucun chunk MP3 à concaténer")
+    return b"".join(cleaned)
+
+
 def _split_for_tts(text: str, max_chars: int = _CHUNK_MAX_CHARS) -> list:
     """Découpe un texte long en chunks de max_chars caractères, en coupant
     préférentiellement sur des fins de phrases. Sinon sur des fins de
@@ -106,9 +145,9 @@ def convert_to_speech_basic(
     """
     Génère un MP3 à partir d'un texte via edge-tts.
 
-    Pour les textes longs, découpe en chunks et concatène les MP3 octet-
-    par-octet. La concaténation naïve fonctionne car edge-tts produit des
-    MP3 avec des paramètres cohérents entre appels.
+    Pour les textes longs, découpe en chunks et concatène les frames MP3 en
+    retirant les headers ID3 intermédiaires. Les paramètres audio Edge TTS
+    restent cohérents entre appels.
 
     Edge-tts est nettement plus tolérant que gTTS sur le volume, mais on
     garde le retry exponentiel pour les erreurs réseau transitoires.
@@ -194,4 +233,4 @@ def convert_to_speech_basic(
     if not parts:
         raise ValueError("Aucun chunk produit (texte vide ?)")
 
-    return b"".join(parts)
+    return concat_mp3_bytes(parts)

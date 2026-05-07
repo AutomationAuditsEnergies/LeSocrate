@@ -420,7 +420,7 @@ def _synthesize_course_audio_synced_to_slides(
         )
 
     if basic_tts:
-        from services.basic_tts_service import convert_to_speech_basic
+        from services.basic_tts_service import convert_to_speech_basic, concat_mp3_bytes
     else:
         from pydub import AudioSegment
 
@@ -433,9 +433,13 @@ def _synthesize_course_audio_synced_to_slides(
             progress_callback(message)
 
     if basic_tts:
-        start_silence_bytes, start_silence_sec = _silent_mp3_approx_no_ffmpeg(_COURSE_START_SILENCE_SECONDS)
-        audio_parts = [start_silence_bytes]
-        cursor_sec = start_silence_sec
+        # Ne pas préfixer/padder Edge TTS avec le silence MP3 embarqué :
+        # il est en 8 kb/s / 22 kHz alors qu'Edge TTS sort un autre encodage.
+        # Le mélange de flux faisait calculer au navigateur des durées géantes
+        # (ex. 300 minutes) et une waveform muette. En mode Edge TTS gratuit,
+        # on privilégie un MP3 écoutable et des timings slides réels.
+        audio_parts = []
+        cursor_sec = 0.0
     else:
         full_audio = AudioSegment.silent(duration=_COURSE_START_SILENCE_SECONDS * 1000)
         cursor_sec = float(_COURSE_START_SILENCE_SECONDS)
@@ -494,10 +498,7 @@ def _synthesize_course_audio_synced_to_slides(
 
     if basic_tts:
         final_duration = cursor_sec
-        if final_duration < target_sec:
-            padding_bytes, _ = _silent_mp3_approx_no_ffmpeg(target_sec - final_duration)
-            audio_parts.append(padding_bytes)
-        output_bytes = b"".join(audio_parts)
+        output_bytes = concat_mp3_bytes(audio_parts)
     else:
         final_duration = len(full_audio) / 1000
         if final_duration < target_sec:
@@ -511,8 +512,14 @@ def _synthesize_course_audio_synced_to_slides(
         output = io.BytesIO()
         full_audio.export(output, format="mp3", bitrate="128k")
         output_bytes = output.getvalue()
-    fit_method = "slide_sync_mock" if mock else "slide_sync_gtts" if basic_tts else f"slide_sync_fish_speed={api_speed}"
-    voice_start_sec = start_silence_sec if basic_tts else _COURSE_START_SILENCE_SECONDS
+    fit_method = (
+        "slide_sync_mock"
+        if mock
+        else "slide_sync_edge_no_padding"
+        if basic_tts
+        else f"slide_sync_fish_speed={api_speed}"
+    )
+    voice_start_sec = 0.0 if basic_tts else _COURSE_START_SILENCE_SECONDS
     return output_bytes, cursor_sec - voice_start_sec, fit_method, attempts, _merge_adjacent_slide_timings(timings)
 
 

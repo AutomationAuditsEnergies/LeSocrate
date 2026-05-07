@@ -1,5 +1,27 @@
 # Changelog
 
+## 2026-05-07
+
+### fix: MP3 Edge TTS à 302:01 et waveform muette — retrait du padding silence incompatible
+
+**Symptôme** — sur la plateforme, les `cours_*.mp3` du job 5 (TP DENKNDEED) affichaient une durée délirante de 302:01 au lieu de 45:00 / 60:00, et la forme d'onde restait plate (aucune voix audible) dans l'éditeur audio.
+
+**Root cause** — le fix précédent `30ee86d` (avoid ffprobe for edge tts sync) avait introduit `_silent_mp3_approx_no_ffmpeg` qui répète `backend/assets/silence_1s.mp3` en bytes pour padder/préfixer la voix Edge TTS jusqu'à `target_sec`. Or les deux flux ont des paramètres MPEG incompatibles :
+
+- Edge TTS : MPEG-2 Layer 3, **24 000 Hz**, mono, **48 kbps**
+- silence_1s.mp3 : MPEG-2 Layer 3, **22 050 Hz**, mono, **8 kbps**
+
+Concaténer ces frames hétérogènes en bytes crée un MP3 que les décodeurs (ffprobe, et surtout WaveSurfer côté navigateur) ne savent pas mesurer correctement — ils estiment la durée à partir du bitrate du premier header, donnant une valeur très éloignée de la réalité (`[mp3] Estimating duration from bitrate, this may be inaccurate`). Décodage hétérogène → waveform plate.
+
+**Fix** — en mode `basic_tts` (Edge TTS), `_synthesize_course_audio_synced_to_slides` ne préfixe plus avec un silence d'amorce et ne padde plus jusqu'à `target_sec`. Les chunks Edge TTS sont concaténés via `concat_mp3_bytes` (nouveau, dans `basic_tts_service.py`) qui retire les ID3v2 et ID3v1 intermédiaires pour ne garder qu'un seul header. Conséquences :
+
+- Le MP3 final est un flux MPEG-2 L3 24 kHz homogène, mesurable correctement par tous les lecteurs.
+- La durée du fichier == durée parlée réelle (plus de cible 45 min remplie de silence).
+- `fit_method` passe à `slide_sync_edge_no_padding` pour traçabilité.
+- `concat_mp3_bytes` est aussi utilisé dans `convert_to_speech_basic` lui-même (textes longs splittés en plusieurs chunks Edge TTS) → un seul header ID3 à la fin au lieu d'un par chunk.
+
+**À régénérer** — les MP3 du job 5 déjà uploadés dans `documentstts/audiostts` sont corrompus de manière permanente. Relancer la phase audio via "Reprendre depuis Audio" pour réécrire les blobs avec le nouveau code.
+
 ## 2026-05-06
 
 ### fix: route continue-after-text mal décorée + diagnostic stale + labels Edge TTS
