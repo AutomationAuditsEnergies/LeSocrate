@@ -11,6 +11,41 @@ const hasCrCdTitle = (title = '') => /\bCRCD\b/i.test(title)
 
 const COURS_DURATIONS_MAP = { 1: 45, 2: 45, 3: 55, 4: 45, 5: 60, 6: 60, 7: 50 }
 
+const AUDIO_PLAYLIST_ITEMS = [
+  { filename: 'cours_9h00_9h45.mp3', type: 'cours', label: '9h00 → 9h45' },
+  { filename: 'qa_9h45_9h55.mp3', type: 'qa', label: '9h45 → 9h55' },
+  { filename: 'pause_9h55_10h05.mp3', type: 'pause', label: '9h55 → 10h05' },
+  { filename: 'cours_10h05_10h50.mp3', type: 'cours', label: '10h05 → 10h50' },
+  { filename: 'qa_10h50_11h00.mp3', type: 'qa', label: '10h50 → 11h00' },
+  { filename: 'pause_11h00_11h05.mp3', type: 'pause', label: '11h00 → 11h05' },
+  { filename: 'cours_11h05_12h00.mp3', type: 'cours', label: '11h05 → 12h00' },
+  { filename: 'qa_12h00_12h10.mp3', type: 'qa', label: '12h00 → 12h10' },
+  { filename: 'pause_12h10_12h20.mp3', type: 'pause', label: '12h10 → 12h20' },
+  { filename: 'pause_midi_13h15_14h45.mp3', type: 'pause', label: 'Midi 13h15 → 14h45' },
+  { filename: 'cours_12h20_13h05.mp3', type: 'cours', label: '12h20 → 13h05' },
+  { filename: 'qa_13h05_13h15.mp3', type: 'qa', label: '13h05 → 13h15' },
+  { filename: 'cours_14h45_15h45.mp3', type: 'cours', label: '14h45 → 15h45' },
+  { filename: 'qa_15h45_16h00.mp3', type: 'qa', label: '15h45 → 16h00' },
+  { filename: 'cours_16h00_17h00.mp3', type: 'cours', label: '16h00 → 17h00' },
+  { filename: 'qa_17h00_17h15.mp3', type: 'qa', label: '17h00 → 17h15' },
+  { filename: 'pause_17h15_17h25.mp3', type: 'pause', label: '17h15 → 17h25' },
+  { filename: 'cours_17h25_18h15.mp3', type: 'cours', label: '17h25 → 18h15' },
+  { filename: 'qa_18h15_18h30.mp3', type: 'qa', label: '18h15 → 18h30' },
+]
+
+const AUDIO_FILTERS = [
+  { value: 'cours', label: 'Cours' },
+  { value: 'qa', label: 'Q&A' },
+  { value: 'pause', label: 'Pauses' },
+  { value: 'all', label: 'Tous' },
+]
+
+const AUDIO_TYPE_META = {
+  cours: { label: 'Cours', icon: 'record_voice_over', color: '#16a34a', lightBg: '#f0fdf4', darkBg: '#14532d22', lightBorder: '#bbf7d0', darkBorder: '#166534' },
+  qa: { label: 'Q&A', icon: 'forum', color: '#2563eb', lightBg: '#eff6ff', darkBg: '#1d4ed822', lightBorder: '#bfdbfe', darkBorder: '#1d4ed8' },
+  pause: { label: 'Pause', icon: 'free_breakfast', color: '#f59e0b', lightBg: '#fffbeb', darkBg: '#92400e22', lightBorder: '#fde68a', darkBorder: '#b45309' },
+}
+
 // ─── Component ───────────────────────────────────────────────────────────────
 export default function CoursFoldersModal({ platformId, platformName, onClose }) {
   const [view, setView] = useState('folders') // 'folders' | 'documents'
@@ -52,6 +87,7 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
   const [savingEdit, setSavingEdit] = useState(false)
   const [dirtyBlocs, setDirtyBlocs] = useState(null) // {dirty_blocs, total_blocs, has_script}
   const [audioEditorFile, setAudioEditorFile] = useState(null) // filename ouvert dans l'éditeur
+  const [audioTypeFilter, setAudioTypeFilter] = useState('cours')
   const [mockUploading, setMockUploading] = useState(false)
   const [mockUploadQueue, setMockUploadQueue] = useState([]) // [{name, status, error}]
   const contentPollingRef = useRef(null)
@@ -1202,54 +1238,74 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
                   <div className="px-4 py-3 flex items-center gap-2" style={{ backgroundColor: darkMode ? '#1e293b' : '#f1f5f9', borderBottom: `1px solid ${colors.border}` }}>
                     <Icon name="music_note" style={{ color: '#7c3aed', fontSize: '18px' }} />
                     <span className="text-sm font-semibold" style={{ color: colors.text }}>Audios générés</span>
-                    {generatedAudios.length > 0 && (
-                      <span className="ml-auto text-xs px-2 py-0.5 rounded-full" style={{ backgroundColor: darkMode ? '#14532d' : '#dcfce7', color: '#16a34a' }}>
-                        {generatedAudios.filter(a => a.filename?.startsWith('cours_')).length}/7 cours
-                      </span>
-                    )}
+                    <select
+                      value={audioTypeFilter}
+                      onChange={(e) => setAudioTypeFilter(e.target.value)}
+                      className="ml-auto text-xs rounded-lg px-2 py-1 outline-none"
+                      style={{
+                        backgroundColor: darkMode ? '#0f172a' : '#ffffff',
+                        border: `1px solid ${colors.border}`,
+                        color: colors.textSecondary,
+                        cursor: 'pointer',
+                      }}
+                      title="Filtrer les audios générés"
+                    >
+                      {AUDIO_FILTERS.map(option => (
+                        <option key={option.value} value={option.value}>{option.label}</option>
+                      ))}
+                    </select>
+                    {generatedAudios.length > 0 && (() => {
+                      const generatedMap = Object.fromEntries(generatedAudios.map(a => [a.filename, a]))
+                      const expected = AUDIO_PLAYLIST_ITEMS.filter(item => audioTypeFilter === 'all' || item.type === audioTypeFilter)
+                      const readyCount = expected.filter(item => generatedMap[item.filename]).length
+                      const badgeLabel = audioTypeFilter === 'all'
+                        ? `${readyCount}/${expected.length}`
+                        : `${readyCount}/${expected.length} ${AUDIO_FILTERS.find(f => f.value === audioTypeFilter)?.label.toLowerCase()}`
+                      return (
+                        <span className="text-xs px-2 py-0.5 rounded-full" style={{ backgroundColor: darkMode ? '#14532d' : '#dcfce7', color: '#16a34a' }}>
+                          {badgeLabel}
+                        </span>
+                      )
+                    })()}
                   </div>
 
                   <div className="px-3 py-3 space-y-1.5 max-h-80 overflow-y-auto">
                     {(() => {
-                      const EXPECTED_COURS = [
-                        'cours_9h00_9h45.mp3',
-                        'cours_10h05_10h50.mp3',
-                        'cours_11h05_12h00.mp3',
-                        'cours_12h20_13h05.mp3',
-                        'cours_14h45_15h45.mp3',
-                        'cours_16h00_17h00.mp3',
-                        'cours_17h25_18h15.mp3',
-                      ]
                       const generatedMap = Object.fromEntries(generatedAudios.map(a => [a.filename, a]))
-                      return EXPECTED_COURS.map((filename) => {
-                        const audio = generatedMap[filename]
-                        const label = filename.replace('cours_', '').replace('.mp3', '').replace('_', ' → ')
+                      const visibleItems = AUDIO_PLAYLIST_ITEMS.filter(item => audioTypeFilter === 'all' || item.type === audioTypeFilter)
+                      return visibleItems.map((item) => {
+                        const audio = generatedMap[item.filename]
+                        const meta = AUDIO_TYPE_META[item.type] || AUDIO_TYPE_META.cours
                         return (
                           <div
-                            key={filename}
+                            key={item.filename}
                             className="rounded-xl px-3 py-2.5 flex items-center gap-2.5"
                             style={{
-                              backgroundColor: audio ? (darkMode ? '#14532d22' : '#f0fdf4') : colors.innerBg,
-                              border: `1px solid ${audio ? (darkMode ? '#166534' : '#bbf7d0') : colors.border}`,
+                              backgroundColor: audio ? (darkMode ? meta.darkBg : meta.lightBg) : colors.innerBg,
+                              border: `1px solid ${audio ? (darkMode ? meta.darkBorder : meta.lightBorder) : colors.border}`,
                             }}
                           >
                             <Icon
                               name={audio ? 'check_circle' : 'radio_button_unchecked'}
-                              style={{ color: audio ? '#22c55e' : colors.textMuted, fontSize: '16px', flexShrink: 0 }}
+                              style={{ color: audio ? meta.color : colors.textMuted, fontSize: '16px', flexShrink: 0 }}
                             />
                             <div className="flex-1 min-w-0">
-                              <p className="text-xs font-medium" style={{ color: audio ? (darkMode ? '#86efac' : '#166534') : colors.textMuted }}>
-                                {label}
+                              <p className="text-xs font-medium flex items-center gap-1.5" style={{ color: audio ? (darkMode ? colors.text : '#14532d') : colors.textMuted }}>
+                                <Icon name={meta.icon} style={{ color: audio ? meta.color : colors.textMuted, fontSize: '13px' }} />
+                                <span>{item.label}</span>
+                                <span style={{ color: audio ? meta.color : colors.textMuted, fontWeight: 700 }}>
+                                  · {meta.label}
+                                </span>
                               </p>
                               {audio && (
-                                <p className="text-xs" style={{ color: darkMode ? '#4ade8055' : '#86efac99' }}>
-                                  {audio.size_mb} Mo
+                                <p className="text-xs" style={{ color: darkMode ? colors.textMuted : '#64748b' }}>
+                                  {audio.size_mb} Mo · {item.filename}
                                 </p>
                               )}
                             </div>
                             {audio && (
                               <button
-                                onClick={() => setAudioEditorFile(filename)}
+                                onClick={() => setAudioEditorFile(item.filename)}
                                 title="Éditer cet audio (couper / remplacer)"
                                 className="flex-shrink-0 rounded-lg p-1 hover:opacity-80 transition-opacity"
                                 style={{ backgroundColor: darkMode ? '#2d1b69' : '#ede9fe' }}

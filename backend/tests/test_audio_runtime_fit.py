@@ -8,6 +8,7 @@ durées et éviter les appels réseau Edge TTS pendant les tests.
 import unittest
 from unittest.mock import patch
 
+from services import basic_tts_service as bts
 from services import content_generation_service as cgs
 
 
@@ -297,6 +298,48 @@ class RuntimeFitConclusionFallbackTest(unittest.TestCase):
         self.assertNotIn(b"LONG", audio_bytes)
 
 
+class RuntimeFitMicroChunkRefinementTest(unittest.TestCase):
+    def test_measured_overflow_is_split_smaller_before_stopping(self):
+        sentence = " ".join(["mot"] * 20) + "."
+        text = " ".join([sentence, sentence, sentence])
+        bloc = _make_bloc(text, target_sec=200)
+        fake_slide_chunk = {
+            "slide_id": "slide-test",
+            "word_start": 0,
+            "word_end": len(text.split()),
+            "text": text,
+        }
+
+        with patch.object(
+            cgs, "_build_slide_audio_chunks", return_value=[fake_slide_chunk],
+        ), patch(
+            "services.basic_tts_service.convert_to_speech_basic",
+            return_value=_mp3_chunk("VOICE"),
+        ), patch.object(
+            cgs, "_mp3_duration_seconds_no_ffprobe",
+            side_effect=[120.0, 40.0, 40.0],
+        ), patch.object(
+            cgs, "_synthesize_short_conclusion_audio",
+            return_value=(_mp3_chunk("CONCL"), 20.0),
+        ):
+            (
+                audio_bytes, voice_duration, fit_method,
+                attempts, timings, unconsumed, consumed,
+            ) = cgs._synthesize_course_audio_synced_to_slides(
+                bloc, [], "cours.mp3",
+                mock=False, basic_tts=True,
+                runtime_fit=True,
+                conclusion_margin_sec=90,
+            )
+
+        kinds = [a["kind"] for a in attempts]
+        self.assertIn("gtts_split_after_measured_overflow", kinds)
+        self.assertIn("conclusion", kinds)
+        self.assertEqual(len(consumed), 2)
+        self.assertEqual(unconsumed, [])
+        self.assertLessEqual(voice_duration, 200 + cgs._TOLERANCE_OVERFLOW_SEC)
+
+
 class RuntimeFitFinalizeSafetyTest(unittest.TestCase):
     def test_dirty_marking_waits_until_carryover_is_persisted(self):
         with patch.object(
@@ -400,8 +443,94 @@ class HelperMaxChunkWordsAdaptiveTest(unittest.TestCase):
         self.assertEqual(cgs._max_chunk_words_for_remaining(300), 300)
         self.assertEqual(cgs._max_chunk_words_for_remaining(299), 150)
         self.assertEqual(cgs._max_chunk_words_for_remaining(120), 150)
-        self.assertEqual(cgs._max_chunk_words_for_remaining(119), 0)
+        self.assertEqual(cgs._max_chunk_words_for_remaining(119), 60)
+        self.assertEqual(cgs._max_chunk_words_for_remaining(25), 60)
+        self.assertEqual(cgs._max_chunk_words_for_remaining(24), 0)
         self.assertEqual(cgs._max_chunk_words_for_remaining(0), 0)
+
+
+class RuntimeConclusionTextTest(unittest.TestCase):
+    def test_contextual_conclusion_reuses_consumed_content_and_is_longer(self):
+        text = (
+            "La posture d'écoute active permet de reformuler sans juger et de clarifier la demande. "
+            "Le conseiller doit ensuite vérifier les informations essentielles avant de proposer une solution. "
+            "Face à une tension, il ralentit le rythme, reconnaît l'émotion et garde un cadre professionnel. "
+            "La clôture de l'échange sert à résumer l'accord, confirmer la prochaine étape et sécuriser le client."
+        )
+        conclusion = cgs._build_runtime_conclusion_text(
+            [{"text": text}],
+            remaining_sec=150,
+            bloc_number=1,
+        )
+
+        self.assertIn("écoute active", conclusion)
+        self.assertIn("Avant de s'arrêter", conclusion)
+        self.assertGreater(len(conclusion.split()), 160)
+
+
+class BasicTTSParallelWorkersTest(unittest.TestCase):
+    def test_parallel_workers_keep_output_order(self):
+        with patch.object(
+            bts,
+            "_split_for_tts",
+            return_value=["alpha.", "beta.", "gamma."],
+        ), patch.object(
+            bts,
+            "_synthesize_chunk_sync",
+            side_effect=lambda chunk, voice, rate: _mp3_chunk(chunk[:1].upper()),
+        ):
+            audio = bts.convert_to_speech_basic(
+                "ignored",
+                parallel_workers=3,
+                max_429_retries=0,
+            )
+
+        self.assertLess(audio.find(b"A"), audio.find(b"B"))
+        self.assertLess(audio.find(b"B"), audio.find(b"G"))
+
+
+class FastTTSModeIsolationTest(unittest.TestCase):
+    def test_fast_runtime_fit_uses_parallel_workers_and_exact_cache(self):
+        cgs._clear_edge_tts_fast_cache_for_tests()
+        text = "Une phrase courte pour le cache rapide."
+        bloc = _make_bloc(text, target_sec=2700)
+        seen_workers = []
+
+        def fake_tts(text_arg, **kwargs):
+            seen_workers.append(kwargs.get("parallel_workers"))
+            return _mp3_chunk("VOICE")
+
+        try:
+            with patch(
+                "services.basic_tts_service.convert_to_speech_basic",
+                side_effect=fake_tts,
+            ), patch.object(
+                cgs, "_mp3_duration_seconds_no_ffprobe", return_value=3.0,
+            ), patch.object(
+                cgs, "_synthesize_short_conclusion_audio",
+                return_value=(_mp3_chunk("CONCL"), 3.0),
+            ):
+                first = cgs._synthesize_course_audio_synced_to_slides(
+                    bloc, [], "cours.mp3",
+                    mock=False, basic_tts=True,
+                    runtime_fit=True,
+                    fast_tts_pipeline=True,
+                    conclusion_margin_sec=90,
+                )
+                second = cgs._synthesize_course_audio_synced_to_slides(
+                    bloc, [], "cours.mp3",
+                    mock=False, basic_tts=True,
+                    runtime_fit=True,
+                    fast_tts_pipeline=True,
+                    conclusion_margin_sec=90,
+                )
+        finally:
+            cgs._clear_edge_tts_fast_cache_for_tests()
+
+        self.assertEqual(first[2], "slide_sync_edge_runtime_fit_fast")
+        self.assertEqual(second[2], "slide_sync_edge_runtime_fit_fast")
+        self.assertEqual(len(seen_workers), 1, "Le deuxième appel doit venir du cache exact")
+        self.assertGreater(seen_workers[0], 1)
 
 
 if __name__ == "__main__":
