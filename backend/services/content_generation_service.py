@@ -3174,6 +3174,14 @@ def generate_audio_from_script(
         if on_progress:
             on_progress(step, total, msg)
 
+    # 1er event audio_progress émis dès l'entrée pour que la barre
+    # « Playlist TTS X/19 » apparaisse côté frontend, avant les ~6 min de
+    # préparation (chargement segments, découpage en blocs, transitions,
+    # slides). Sinon l'utilisateur voit « Aucun événement audio reçu »
+    # tout le temps de la préparation et croit que rien ne tourne.
+    # `total` corrigera tout seul plus bas une fois `playlist_items` calculé.
+    _progress(0, len(PLAYLIST_SPEC), "Préparation TTS — chargement du script et découpage…")
+
     job = get_job_from_db(folder_id)
     if not job:
         raise ValueError(f"Aucun script TTS pour le dossier {folder_id}")
