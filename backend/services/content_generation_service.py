@@ -357,7 +357,7 @@ _TOLERANCE_OVERFLOW_SEC = 2.0
 # Marge réservée en fin de bloc pour générer la conclusion + un peu de buffer.
 _DEFAULT_CONCLUSION_MARGIN_SEC = 90
 
-_SENTENCE_END_RE = re.compile(r"(?<=[.!?…])\s+")
+_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?…])\s+")
 
 
 def _max_chunk_words_for_remaining(remaining_sec: float) -> int:
@@ -398,7 +398,7 @@ def _split_text_natural(text: str, max_words: int) -> list:
             continue
 
         # Paragraphe trop gros : on découpe par phrases sans jamais splitter une phrase.
-        sentences = _SENTENCE_END_RE.split(para)
+        sentences = _SENTENCE_SPLIT_RE.split(para)
         current = []
         current_count = 0
 
@@ -528,11 +528,13 @@ _DEFAULT_CONCLUSION_TEMPLATE = (
     "Très bien, on va s'arrêter ici pour cette partie. "
     "On reprendra la suite dans la prochaine."
 )
+_FALLBACK_CONCLUSION_TEMPLATE = "On s'arrête ici. On reprend la suite après."
 
 
 def _synthesize_short_conclusion_audio(
     basic_tts: bool,
     progress_callback=None,
+    template: str | None = None,
 ) -> tuple:
     """Génère un MP3 court de transition à coller en fin de bloc tronqué.
 
@@ -551,7 +553,11 @@ def _synthesize_short_conclusion_audio(
 
     from services.basic_tts_service import convert_to_speech_basic
 
-    template = os.getenv("EDGE_TTS_CONCLUSION_TEMPLATE", _DEFAULT_CONCLUSION_TEMPLATE).strip()
+    template = (
+        template
+        if template is not None
+        else os.getenv("EDGE_TTS_CONCLUSION_TEMPLATE", _DEFAULT_CONCLUSION_TEMPLATE)
+    ).strip()
     if not template:
         template = _DEFAULT_CONCLUSION_TEMPLATE
 
@@ -601,7 +607,15 @@ def _synthesize_course_audio_synced_to_slides(
         - `prepended_chunks` ignoré, `unconsumed_chunks` toujours [].
 
     Returns:
-        (audio_bytes, voice_duration_sec, fit_method, attempts, timings, unconsumed_chunks)
+        (
+            audio_bytes,
+            voice_duration_sec,
+            fit_method,
+            attempts,
+            timings,
+            unconsumed_chunks,
+            consumed_chunks,
+        )
     """
     from services.tts_service import convert_to_speech
 
@@ -619,7 +633,7 @@ def _synthesize_course_audio_synced_to_slides(
 
     if basic_tts:
         from services.basic_tts_service import convert_to_speech_basic, concat_mp3_bytes
-    else:
+    if not basic_tts or mock:
         from pydub import AudioSegment
 
     base_chunks = _build_slide_audio_chunks(bloc, slides)
@@ -655,6 +669,7 @@ def _synthesize_course_audio_synced_to_slides(
     timings = []
     attempts = []
     unconsumed_chunks = []
+    consumed_chunks = []
 
     # Tracking pour observed_wpm (runtime_fit uniquement).
     total_words_generated = 0
@@ -728,7 +743,6 @@ def _synthesize_course_audio_synced_to_slides(
                 **_basic_tts_pipeline_retry_kwargs(),
             )
             duration_sec = _mp3_duration_seconds_no_ffprobe(audio_bytes)
-            audio_parts.append(audio_bytes)
             mode = "gtts"
         else:
             audio_bytes = convert_to_speech(text, speed=api_speed)
@@ -737,9 +751,32 @@ def _synthesize_course_audio_synced_to_slides(
 
         if not basic_tts:
             duration_sec = len(segment) / 1000
+
+        if (
+            use_runtime_fit
+            and cursor_sec + duration_sec
+            > (target_sec - conclusion_margin_sec) + _TOLERANCE_OVERFLOW_SEC
+        ):
+            stopped_for_runtime_fit = True
+            unconsumed_chunks.extend(chunks[chunk_idx:])
+            attempts.append({
+                "kind": f"{mode}_rejected_overflow",
+                "chunk": chunk_idx + 1,
+                "duration": duration_sec,
+                "words": len(text.split()),
+                "limit_sec": target_sec - conclusion_margin_sec,
+            })
+            _emit(
+                f"Bloc {bloc['bloc_number']}/7 — slide audio {chunk_idx + 1}/{len(chunks)} "
+                f"reportée ({duration_sec:.1f}s dépasserait la marge)"
+            )
+            break
+
         start_sec = cursor_sec
         end_sec = start_sec + duration_sec
-        if not basic_tts:
+        if basic_tts:
+            audio_parts.append(audio_bytes)
+        else:
             full_audio += segment
         cursor_sec = end_sec
         attempts.append({"kind": mode, "chunk": chunk_idx + 1, "duration": duration_sec})
@@ -761,20 +798,34 @@ def _synthesize_course_audio_synced_to_slides(
         if use_runtime_fit:
             total_words_generated += len(text.split())
             total_duration_generated += duration_sec
+            consumed_chunks.append(dict(chunk))
 
         chunk_idx += 1
 
     # ── Conclusion automatique si on a stoppé volontairement ────────────────
-    if use_runtime_fit and stopped_for_runtime_fit and total_duration_generated > 0:
-        try:
+    if use_runtime_fit and stopped_for_runtime_fit:
+        def _try_append_conclusion(kind: str, template: str | None = None) -> bool:
+            nonlocal cursor_sec
             conclusion_bytes, conclusion_dur = _synthesize_short_conclusion_audio(
                 basic_tts=True,
                 progress_callback=_emit,
+                template=template,
             )
+            if cursor_sec + conclusion_dur > target_sec + _TOLERANCE_OVERFLOW_SEC:
+                attempts.append({
+                    "kind": f"{kind}_rejected_overflow",
+                    "chunk": "end",
+                    "duration": conclusion_dur,
+                    "limit_sec": target_sec,
+                })
+                _emit(
+                    f"Bloc {bloc['bloc_number']}/7 — conclusion {kind} ignorée "
+                    f"({conclusion_dur:.1f}s dépasserait la cible)"
+                )
+                return False
+
             audio_parts.append(conclusion_bytes)
-            attempts.append({"kind": "conclusion", "chunk": "end", "duration": conclusion_dur})
-            # Étendre le end_time du dernier timing pour couvrir la conclusion :
-            # le frontend continue d'afficher cette slide pendant la transition.
+            attempts.append({"kind": kind, "chunk": "end", "duration": conclusion_dur})
             if timings:
                 last = timings[-1]
                 last["end_time"] = round(float(last["end_time"]) + conclusion_dur, 3)
@@ -783,6 +834,20 @@ def _synthesize_course_audio_synced_to_slides(
             _emit(
                 f"Bloc {bloc['bloc_number']}/7 — conclusion ajoutée ({conclusion_dur:.1f}s)"
             )
+            return True
+
+        try:
+            appended = _try_append_conclusion("conclusion")
+            if not appended:
+                appended = _try_append_conclusion(
+                    "conclusion_fallback",
+                    template=_FALLBACK_CONCLUSION_TEMPLATE,
+                )
+            if not appended:
+                logger.warning(
+                    f"⚠️ Bloc {bloc['bloc_number']} — aucune conclusion ajoutée "
+                    "(elles dépassaient la cible)"
+                )
         except Exception as e:
             logger.warning(
                 f"⚠️ Bloc {bloc['bloc_number']} — génération conclusion échouée : "
@@ -791,6 +856,11 @@ def _synthesize_course_audio_synced_to_slides(
 
     # ── Assemblage final ────────────────────────────────────────────────────
     if basic_tts:
+        if use_runtime_fit and stopped_for_runtime_fit and not audio_parts:
+            raise ValueError(
+                f"Bloc {bloc['bloc_number']} runtime fit : aucun audio généré "
+                "avant le report du texte."
+            )
         final_duration = cursor_sec
         output_bytes = concat_mp3_bytes(audio_parts) if audio_parts else b""
     else:
@@ -824,6 +894,7 @@ def _synthesize_course_audio_synced_to_slides(
         attempts,
         _merge_adjacent_slide_timings(timings),
         unconsumed_chunks,
+        consumed_chunks,
     )
 
 
@@ -2364,6 +2435,7 @@ def _build_contextual_break_audio(
     basic_tts: bool = False,
     llm_model: str | None = None,
     on_progress=None,
+    use_runtime_consumed_text: bool = False,
 ):
     """Génère un Q&A/pause contextuel, fallback vers audioqapause si nécessaire."""
     from services.playlist_tts_service import (
@@ -2404,6 +2476,12 @@ def _build_contextual_break_audio(
         from services.break_transition_service import build_break_transition_texts
 
         _emit(f"{filename} — rédaction transition LLM...")
+        def _get_bloc_text_for_break(n):
+            bloc = blocs_by_number.get(n, {})
+            if use_runtime_consumed_text:
+                return bloc.get("runtime_consumed_text", "")
+            return bloc.get("text", "")
+
         intro, outro = build_break_transition_texts(
             filename=filename,
             duration_sec=duration_sec,
@@ -2411,7 +2489,7 @@ def _build_contextual_break_audio(
             bloc_num=bloc_num,
             item_idx=item_idx,
             playlist_items=playlist_items,
-            get_bloc_text=lambda n: blocs_by_number.get(n, {}).get("text", ""),
+            get_bloc_text=_get_bloc_text_for_break,
             model=llm_model,
         )
         _emit(f"{filename} — synthèse audio transition...")
@@ -2430,6 +2508,78 @@ def _build_contextual_break_audio(
     except Exception as e:
         logger.warning(f"⚠️ Break contextuel {filename} échoué : {e}; fallback audioqapause")
         return _fallback(type(e).__name__)
+
+
+def _mark_content_segments_clean(job_id: int, seg_keys) -> None:
+    unique_keys = sorted(set(seg_keys or []))
+    if not unique_keys:
+        return
+
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        for sub_idx, passe in unique_keys:
+            cur.execute("""
+                UPDATE content_generation_segments
+                SET dirty = 0
+                WHERE job_id = ? AND sub_part_index = ? AND passe = ?
+            """, (job_id, sub_idx, passe))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _allow_audio_overflow_lost() -> bool:
+    return os.getenv("ALLOW_AUDIO_OVERFLOW_LOST", "false").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def _finalize_runtime_fit_carryover_and_clean(
+    *,
+    job_id: int,
+    pending_clean_seg_keys,
+    runtime_carryover_text: str,
+    carryover_out: str,
+    folder_id: int,
+    next_folder_id: int | None,
+    is_last_folder: bool,
+    formation_job_id: int | None,
+) -> str:
+    runtime_carryover_text = (runtime_carryover_text or "").strip()
+
+    if runtime_carryover_text:
+        runtime_words = len(runtime_carryover_text.split())
+        if next_folder_id and not is_last_folder:
+            fused_carryover = runtime_carryover_text
+            if carryover_out:
+                fused_carryover = runtime_carryover_text + "\n\n" + carryover_out
+            _store_cross_day_carryover(folder_id, next_folder_id, fused_carryover)
+            carryover_out = fused_carryover
+            logger.info(
+                "PIPELINE_AUDIO_RUNTIME_CARRYOVER formation_job_id=%s folder_id=%s "
+                "next_folder_id=%s runtime_words=%s total_carryover_words=%s",
+                formation_job_id, folder_id, next_folder_id,
+                runtime_words, len(fused_carryover.split()),
+            )
+        elif _allow_audio_overflow_lost():
+            logger.warning(
+                "PIPELINE_AUDIO_OVERFLOW_LOST formation_job_id=%s folder_id=%s "
+                "lost_words=%s reason=no_next_folder is_last_folder=%s",
+                formation_job_id, folder_id, runtime_words, is_last_folder,
+            )
+        else:
+            raise ValueError(
+                "Surplus audio runtime non consommé sans jour suivant "
+                f"({runtime_words} mots, folder_id={folder_id}). "
+                "Définir ALLOW_AUDIO_OVERFLOW_LOST=true pour autoriser une perte explicite."
+            )
+
+    _mark_content_segments_clean(job_id, pending_clean_seg_keys)
+    return carryover_out
 
 
 def generate_audio_from_script(
@@ -2651,6 +2801,7 @@ def generate_audio_from_script(
     # Uniquement actif en mode `basic_tts + sync_slides` (Edge TTS runtime fit).
     intra_day_carryover_chunks = []
     runtime_fit_enabled = bool(basic_tts and not mock and sync_slides)
+    pending_clean_seg_keys = set()
 
     for item_idx, (filename, duration_sec, file_type, bloc_num) in enumerate(playlist_items):
         step = item_idx + 1
@@ -2709,6 +2860,7 @@ def generate_audio_from_script(
                 basic_tts=basic_tts,
                 llm_model=llm_model,
                 on_progress=lambda msg: _progress(step, len(playlist_items), msg),
+                use_runtime_consumed_text=runtime_fit_enabled,
             )
             _progress(step, len(playlist_items), f"{filename} — upload audio ({break_mode})...")
             upload_blob(CONTAINER_AUDIOS, f"{azure_prefix}{filename}", final_bytes)
@@ -2759,6 +2911,8 @@ def generate_audio_from_script(
             )
 
         if not bloc["dirty"]:
+            if runtime_fit_enabled:
+                bloc["runtime_consumed_text"] = bloc.get("text", "")
             logger.info(f"   ⏭️ Bloc {bloc['bloc_number']} ({filename}) : non modifié, conservé")
             _progress(step, len(playlist_items), f"Bloc {bloc['bloc_number']}/7 — conservé (non modifié)")
             logger.info(
@@ -2805,6 +2959,7 @@ def generate_audio_from_script(
                 attempts,
                 bloc_timings,
                 runtime_unconsumed_chunks,
+                runtime_consumed_chunks,
             ) = _synthesize_course_audio_synced_to_slides(
                 bloc,
                 slide_deck.get("slides", []) if slide_deck else [],
@@ -2821,6 +2976,11 @@ def generate_audio_from_script(
                 consumed_chunks = len(intra_day_carryover_chunks)
                 consumed_words = sum(
                     len((c.get("text") or "").split()) for c in intra_day_carryover_chunks
+                )
+                bloc["runtime_consumed_text"] = "\n\n".join(
+                    (c.get("text") or "").strip()
+                    for c in (runtime_consumed_chunks or [])
+                    if (c.get("text") or "").strip()
                 )
                 intra_day_carryover_chunks = list(runtime_unconsumed_chunks or [])
                 unconsumed_words = sum(
@@ -2880,7 +3040,9 @@ def generate_audio_from_script(
         blob_path = f"{azure_prefix}{filename}"
         upload_blob(CONTAINER_AUDIOS, blob_path, final_bytes)
 
-        if sync_slides:
+        if sync_slides and basic_tts:
+            final_duration = voice_duration
+        elif sync_slides:
             try:
                 final_duration = _measure_duration_ms(final_bytes) / 1000
             except Exception:
@@ -2919,16 +3081,10 @@ def generate_audio_from_script(
             if segments[i]["dirty"]
         ]
         if seg_keys:
-            conn = get_db_connection()
-            cur2 = conn.cursor()
-            for sub_idx, passe in seg_keys:
-                cur2.execute("""
-                    UPDATE content_generation_segments
-                    SET dirty = 0
-                    WHERE job_id = ? AND sub_part_index = ? AND passe = ?
-                """, (job_id, sub_idx, passe))
-            conn.commit()
-            conn.close()
+            if runtime_fit_enabled:
+                pending_clean_seg_keys.update(seg_keys)
+            else:
+                _mark_content_segments_clean(job_id, seg_keys)
 
     if sync_slides and slide_deck:
         from services.script_slide_generation_service import update_script_slide_deck_audio_sync
@@ -2957,30 +3113,16 @@ def generate_audio_from_script(
             if (c.get("text") or "").strip()
         )
 
-    if runtime_carryover_text:
-        runtime_words = len(runtime_carryover_text.split())
-        if next_folder_id and not is_last_folder:
-            # Fusion : runtime EN PREMIER (mots qui auraient dû être lus
-            # mais reportés), puis statique (mots jamais alloués au bloc 7).
-            # `_store_cross_day_carryover` écrase la valeur précédemment
-            # écrite par `_handle_last_bloc_overflow`.
-            fused_carryover = runtime_carryover_text
-            if carryover_out:
-                fused_carryover = runtime_carryover_text + "\n\n" + carryover_out
-            _store_cross_day_carryover(folder_id, next_folder_id, fused_carryover)
-            carryover_out = fused_carryover
-            logger.info(
-                "PIPELINE_AUDIO_RUNTIME_CARRYOVER formation_job_id=%s folder_id=%s "
-                "next_folder_id=%s runtime_words=%s total_carryover_words=%s",
-                formation_job_id, folder_id, next_folder_id,
-                runtime_words, len(fused_carryover.split()),
-            )
-        else:
-            logger.warning(
-                "PIPELINE_AUDIO_OVERFLOW_LOST formation_job_id=%s folder_id=%s "
-                "lost_words=%s reason=no_next_folder is_last_folder=%s",
-                formation_job_id, folder_id, runtime_words, is_last_folder,
-            )
+    carryover_out = _finalize_runtime_fit_carryover_and_clean(
+        job_id=job_id,
+        pending_clean_seg_keys=pending_clean_seg_keys,
+        runtime_carryover_text=runtime_carryover_text,
+        carryover_out=carryover_out,
+        folder_id=folder_id,
+        next_folder_id=next_folder_id,
+        is_last_folder=bool(is_last_folder),
+        formation_job_id=formation_job_id,
+    )
 
     _progress(len(playlist_items), len(playlist_items), f"✅ Terminé — {len(generated)} générés, {len(skipped)} conservés")
     logger.info(

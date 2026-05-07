@@ -65,7 +65,7 @@ class RuntimeFitStopsBeforeOverflowTest(unittest.TestCase):
         ):
             (
                 audio_bytes, voice_duration, fit_method,
-                attempts, timings, unconsumed,
+                attempts, timings, unconsumed, consumed,
             ) = cgs._synthesize_course_audio_synced_to_slides(
                 bloc, [], "cours.mp3",
                 mock=False, basic_tts=True,
@@ -74,13 +74,13 @@ class RuntimeFitStopsBeforeOverflowTest(unittest.TestCase):
             )
 
         self.assertEqual(fit_method, "slide_sync_edge_runtime_fit")
-        # Tolérance technique 2s (arrondis frame MP3) + durée conclusion (5s).
-        self.assertLessEqual(voice_duration, 2700 + 5 + 2)
+        self.assertLessEqual(voice_duration, 2700 + cgs._TOLERANCE_OVERFLOW_SEC)
         # On a forcément stoppé avant la fin → surplus non consommé.
         self.assertGreater(
             len(unconsumed), 0,
             "Le runtime fit doit reporter le surplus quand on dépasse",
         )
+        self.assertGreater(len(consumed), 0)
 
 
 class ConclusionAppendedAfterStopTest(unittest.TestCase):
@@ -110,7 +110,7 @@ class ConclusionAppendedAfterStopTest(unittest.TestCase):
         ):
             (
                 audio_bytes, voice_duration, fit_method,
-                attempts, timings, unconsumed,
+                attempts, timings, unconsumed, consumed,
             ) = cgs._synthesize_course_audio_synced_to_slides(
                 bloc, [], "cours.mp3",
                 mock=False, basic_tts=True,
@@ -184,7 +184,7 @@ class NoRuntimeFitReturnsEmptyUnconsumedTest(unittest.TestCase):
         ):
             (
                 audio_bytes, voice_duration, fit_method,
-                attempts, timings, unconsumed,
+                attempts, timings, unconsumed, consumed,
             ) = cgs._synthesize_course_audio_synced_to_slides(
                 bloc, [], "cours.mp3",
                 mock=False, basic_tts=True,
@@ -193,6 +193,7 @@ class NoRuntimeFitReturnsEmptyUnconsumedTest(unittest.TestCase):
 
         self.assertEqual(fit_method, "slide_sync_edge_no_padding")
         self.assertEqual(unconsumed, [])
+        self.assertEqual(consumed, [])
 
 
 class ConcatMp3BytesUsedSingleId3Test(unittest.TestCase):
@@ -228,6 +229,145 @@ class ConcatMp3BytesUsedSingleId3Test(unittest.TestCase):
         )
 
 
+class RuntimeFitRejectsMeasuredOverflowTest(unittest.TestCase):
+    def test_measured_overflow_chunk_is_not_concatenated(self):
+        text = " ".join(["mot"] * 100) + "."
+        bloc = _make_bloc(text, target_sec=220)
+
+        with patch(
+            "services.basic_tts_service.convert_to_speech_basic",
+            return_value=_mp3_chunk("VOICE"),
+        ), patch.object(
+            cgs, "_mp3_duration_seconds_no_ffprobe", return_value=140.0,
+        ), patch.object(
+            cgs, "_synthesize_short_conclusion_audio",
+            return_value=(_mp3_chunk("CONCL"), 5.0),
+        ):
+            (
+                audio_bytes, voice_duration, fit_method,
+                attempts, timings, unconsumed, consumed,
+            ) = cgs._synthesize_course_audio_synced_to_slides(
+                bloc, [], "cours.mp3",
+                mock=False, basic_tts=True,
+                runtime_fit=True,
+                conclusion_margin_sec=90,
+            )
+
+        self.assertLessEqual(voice_duration, 220 + cgs._TOLERANCE_OVERFLOW_SEC)
+        self.assertEqual(consumed, [])
+        self.assertEqual(len(unconsumed), 1)
+        self.assertEqual(unconsumed[0]["text"], text)
+        self.assertIn("gtts_rejected_overflow", [a["kind"] for a in attempts])
+        self.assertNotIn(b"VOICE", audio_bytes)
+        self.assertIn(b"CONCL", audio_bytes)
+
+
+class RuntimeFitConclusionFallbackTest(unittest.TestCase):
+    def test_too_long_conclusion_uses_short_fallback(self):
+        text = _phrases_text(n_phrases=80, words_per_phrase=7)
+        bloc = _make_bloc(text, target_sec=250)
+
+        with patch(
+            "services.basic_tts_service.convert_to_speech_basic",
+            return_value=_mp3_chunk("VOICE"),
+        ), patch.object(
+            cgs, "_mp3_duration_seconds_no_ffprobe", return_value=100.0,
+        ), patch.object(
+            cgs, "_synthesize_short_conclusion_audio",
+            side_effect=[
+                (_mp3_chunk("LONG"), 200.0),
+                (_mp3_chunk("SHORT"), 5.0),
+            ],
+        ):
+            (
+                audio_bytes, voice_duration, fit_method,
+                attempts, timings, unconsumed, consumed,
+            ) = cgs._synthesize_course_audio_synced_to_slides(
+                bloc, [], "cours.mp3",
+                mock=False, basic_tts=True,
+                runtime_fit=True,
+                conclusion_margin_sec=90,
+            )
+
+        kinds = [a["kind"] for a in attempts]
+        self.assertIn("conclusion_rejected_overflow", kinds)
+        self.assertIn("conclusion_fallback", kinds)
+        self.assertLessEqual(voice_duration, 250 + cgs._TOLERANCE_OVERFLOW_SEC)
+        self.assertIn(b"SHORT", audio_bytes)
+        self.assertNotIn(b"LONG", audio_bytes)
+
+
+class RuntimeFitFinalizeSafetyTest(unittest.TestCase):
+    def test_dirty_marking_waits_until_carryover_is_persisted(self):
+        with patch.object(
+            cgs, "_store_cross_day_carryover", side_effect=RuntimeError("boom")
+        ), patch.object(cgs, "_mark_content_segments_clean") as mark_clean:
+            with self.assertRaises(RuntimeError):
+                cgs._finalize_runtime_fit_carryover_and_clean(
+                    job_id=3,
+                    pending_clean_seg_keys={(0, 1)},
+                    runtime_carryover_text="texte reporte",
+                    carryover_out="",
+                    folder_id=9,
+                    next_folder_id=10,
+                    is_last_folder=False,
+                    formation_job_id=5,
+                )
+
+        mark_clean.assert_not_called()
+
+
+class ContextualBreakUsesConsumedTextTest(unittest.TestCase):
+    def test_contextual_break_prefers_runtime_consumed_text(self):
+        captured = {}
+
+        def fake_build_break_transition_texts(**kwargs):
+            get_bloc_text = kwargs["get_bloc_text"]
+            captured["prev"] = get_bloc_text(1)
+            captured["next"] = get_bloc_text(2)
+            return "intro", "outro"
+
+        blocs_by_number = {
+            1: {
+                "text": "texte complet avec partie reportee",
+                "runtime_consumed_text": "texte reellement enseigne",
+            },
+            2: {
+                "text": "prochain texte complet",
+                "runtime_consumed_text": "prochain texte consomme",
+            },
+        }
+
+        with patch(
+            "services.break_transition_service.build_break_transition_texts",
+            side_effect=fake_build_break_transition_texts,
+        ), patch(
+            "services.playlist_tts_service._build_pause_audio",
+            return_value=b"AUDIO",
+        ):
+            audio_bytes, mode = cgs._build_contextual_break_audio(
+                filename="qa_9h45_9h55.mp3",
+                duration_sec=600,
+                file_type="qa",
+                bloc_num=1,
+                item_idx=1,
+                playlist_items=[
+                    ("cours.mp3", 2700, "cours", 1),
+                    ("qa_9h45_9h55.mp3", 600, "qa", 1),
+                    ("cours2.mp3", 2700, "cours", 2),
+                ],
+                blocs_by_number=blocs_by_number,
+                mock=False,
+                basic_tts=False,
+                use_runtime_consumed_text=True,
+            )
+
+        self.assertEqual(audio_bytes, b"AUDIO")
+        self.assertEqual(mode, "contextual_fish")
+        self.assertEqual(captured["prev"], "texte reellement enseigne")
+        self.assertEqual(captured["next"], "prochain texte consomme")
+
+
 class HelperSplitTextNaturalKeepsLongSentenceIntactTest(unittest.TestCase):
     def test_sentence_longer_than_max_is_not_split(self):
         # Une seule phrase de 40 mots, avec max_words=10 → garde entière.
@@ -247,6 +387,9 @@ class HelperSplitTextNaturalKeepsLongSentenceIntactTest(unittest.TestCase):
         self.assertEqual(len(out), 3)
         for sub in out:
             self.assertLessEqual(len(sub.split()), 8)
+
+    def test_sentence_boundary_positions_still_use_sentence_end_regex(self):
+        self.assertEqual(cgs._sentence_boundary_positions(["Bonjour.", "Suite"]), [1])
 
 
 class HelperMaxChunkWordsAdaptiveTest(unittest.TestCase):

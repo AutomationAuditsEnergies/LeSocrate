@@ -54,7 +54,7 @@ class AudioMp3IntegrityTest(unittest.TestCase):
             "_mp3_duration_seconds_no_ffprobe",
             side_effect=[3.0, 4.0],
         ):
-            audio_bytes, voice_duration, fit_method, attempts, timings, unconsumed = (
+            audio_bytes, voice_duration, fit_method, attempts, timings, unconsumed, consumed = (
                 cgs._synthesize_course_audio_synced_to_slides(
                     bloc,
                     slides,
@@ -69,6 +69,7 @@ class AudioMp3IntegrityTest(unittest.TestCase):
         self.assertEqual(attempts[0]["duration"], 3.0)
         self.assertEqual(timings[0]["start_time"], 0.0)
         self.assertEqual(unconsumed, [])  # runtime_fit=False par défaut → rien reporté
+        self.assertEqual(consumed, [])
         self.assertNotIn(b"meta-two", audio_bytes)
 
 
