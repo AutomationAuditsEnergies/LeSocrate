@@ -21,6 +21,7 @@ Audio (payant) et du mock silence (gratuit mais pas écoutable).
 """
 
 import asyncio
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import os
 import re
 import time
@@ -112,11 +113,11 @@ def _speed_to_rate(speed: float) -> str:
     return f"{pct:+d}%"
 
 
-async def _synthesize_chunk_async(text: str, voice: str, rate: str) -> bytes:
+async def _synthesize_chunk_async(text: str, voice: str, rate: str, volume: str) -> bytes:
     """Synthèse d'un chunk via edge-tts, retourne les bytes MP3."""
     import edge_tts
 
-    communicate = edge_tts.Communicate(text, voice=voice, rate=rate)
+    communicate = edge_tts.Communicate(text, voice=voice, rate=rate, volume=volume)
     audio_chunks = []
     async for chunk in communicate.stream():
         if chunk.get("type") == "audio":
@@ -124,12 +125,12 @@ async def _synthesize_chunk_async(text: str, voice: str, rate: str) -> bytes:
     return b"".join(audio_chunks)
 
 
-def _synthesize_chunk_sync(text: str, voice: str, rate: str) -> bytes:
+def _synthesize_chunk_sync(text: str, voice: str, rate: str, volume: str) -> bytes:
     """Wrapper synchrone : asyncio.run dans un thread isolé via tpool."""
     import eventlet.tpool
 
     def _runner():
-        return asyncio.run(_synthesize_chunk_async(text, voice, rate))
+        return asyncio.run(_synthesize_chunk_async(text, voice, rate, volume))
 
     return eventlet.tpool.execute(_runner)
 
@@ -141,6 +142,8 @@ def convert_to_speech_basic(
     progress_callback=None,
     max_429_retries: int | None = None,
     retry_base_wait_sec: float | None = None,
+    parallel_workers: int | None = None,
+    volume: str | None = None,
 ) -> bytes:
     """
     Génère un MP3 à partir d'un texte via edge-tts.
@@ -158,6 +161,11 @@ def convert_to_speech_basic(
             est fr-FR-DeniseNeural, override via EDGE_TTS_VOICE).
         speed: facteur d'accélération multiplicatif. Si absent, lit
             BASIC_TTS_SPEED, défaut 1.0 (voix neurales naturelles).
+        parallel_workers: nombre de chunks Edge TTS à synthétiser en parallèle.
+            Par défaut, reste séquentiel. À utiliser uniquement pour les
+            pipelines de test, car Edge TTS peut throttler si on monte trop haut.
+        volume: volume Edge TTS (`+0%` par défaut). Utilisé notamment pour
+            générer du filler muet compatible avec les MP3 Edge.
 
     Returns:
         bytes du MP3 complet.
@@ -174,30 +182,30 @@ def convert_to_speech_basic(
     if retry_base_wait_sec is None:
         retry_base_wait_sec = float(os.getenv("BASIC_TTS_429_BASE_WAIT_SEC", "5"))
     speed = float(speed if speed is not None else os.getenv("BASIC_TTS_SPEED", "1.0"))
+    try:
+        parallel_workers = int(parallel_workers or 1)
+    except (TypeError, ValueError):
+        parallel_workers = 1
+    parallel_workers = max(1, min(parallel_workers, len(chunks) or 1))
 
     voice = os.getenv("EDGE_TTS_VOICE", _DEFAULT_VOICE)
     rate = _speed_to_rate(speed)
+    volume = volume or os.getenv("EDGE_TTS_VOLUME", "+0%")
 
     logger.info(
         f"🎙️ edge-tts : synthèse de {len(text)} caractères en {len(chunks)} chunk(s) "
-        f"(voice={voice}, rate={rate}, max_retries={max_429_retries})"
+        f"(voice={voice}, rate={rate}, volume={volume}, max_retries={max_429_retries})"
     )
 
-    parts = []
-    for i, chunk in enumerate(chunks, start=1):
-        if not chunk.strip():
-            continue
-        if progress_callback:
-            progress_callback(f"edge-tts chunk {i}/{len(chunks)} — synthèse")
-
+    def _synthesize_one(i: int, chunk: str) -> bytes:
         chunk_bytes = None
         last_error = None
         for attempt in range(max_429_retries + 1):
             try:
-                chunk_bytes = _synthesize_chunk_sync(chunk, voice, rate)
+                chunk_bytes = _synthesize_chunk_sync(chunk, voice, rate, volume)
                 if not chunk_bytes:
                     raise RuntimeError("edge-tts a renvoyé 0 bytes")
-                break
+                return chunk_bytes
             except Exception as e:
                 last_error = e
                 if attempt >= max_429_retries:
@@ -214,22 +222,58 @@ def convert_to_speech_basic(
                         f"attente {int(wait)}s avant retry {attempt + 1}/{max_429_retries}"
                     )
                 time.sleep(wait)
+        raise last_error or RuntimeError(f"Chunk {i} échoué sans erreur identifiée")
 
-        if chunk_bytes is None:
-            raise last_error or RuntimeError(f"Chunk {i} échoué sans erreur identifiée")
+    prepared_chunks = [(i, chunk) for i, chunk in enumerate(chunks, start=1) if chunk.strip()]
+    if not prepared_chunks:
+        raise ValueError("Aucun chunk produit (texte vide ?)")
 
-        parts.append(chunk_bytes)
-        logger.debug(
-            f"   chunk {i}/{len(chunks)} ({len(chunk)} chars) → {len(chunk_bytes)} bytes MP3"
+    parts_by_index = {}
+
+    if parallel_workers > 1 and len(prepared_chunks) > 1:
+        logger.info(
+            f"⚡ edge-tts test rapide : {len(prepared_chunks)} chunk(s) "
+            f"avec {parallel_workers} worker(s)"
         )
         if progress_callback:
-            progress_callback(f"edge-tts chunk {i}/{len(chunks)} — OK")
+            progress_callback(
+                f"edge-tts parallèle — {len(prepared_chunks)} chunks / {parallel_workers} workers"
+            )
+        with ThreadPoolExecutor(max_workers=parallel_workers) as executor:
+            futures = {}
+            for i, chunk in prepared_chunks:
+                if progress_callback:
+                    progress_callback(f"edge-tts chunk {i}/{len(chunks)} — synthèse")
+                futures[executor.submit(_synthesize_one, i, chunk)] = (i, chunk)
+            for future in as_completed(futures):
+                i, chunk = futures[future]
+                chunk_bytes = future.result()
+                parts_by_index[i] = chunk_bytes
+                logger.debug(
+                    f"   chunk {i}/{len(chunks)} ({len(chunk)} chars) → {len(chunk_bytes)} bytes MP3"
+                )
+                if progress_callback:
+                    progress_callback(f"edge-tts chunk {i}/{len(chunks)} — OK")
+    else:
+        for i, chunk in prepared_chunks:
+            if progress_callback:
+                progress_callback(f"edge-tts chunk {i}/{len(chunks)} — synthèse")
 
-        # Petit délai entre chunks pour rester courtois (edge-tts est tolérant
-        # mais on évite de saturer le service Microsoft).
-        if i < len(chunks) and inter_chunk_delay > 0:
-            time.sleep(inter_chunk_delay)
+            chunk_bytes = _synthesize_one(i, chunk)
+            parts_by_index[i] = chunk_bytes
+            logger.debug(
+                f"   chunk {i}/{len(chunks)} ({len(chunk)} chars) → {len(chunk_bytes)} bytes MP3"
+            )
+            if progress_callback:
+                progress_callback(f"edge-tts chunk {i}/{len(chunks)} — OK")
 
+            # Petit délai entre chunks pour rester courtois (edge-tts est tolérant
+            # mais on évite de saturer le service Microsoft). Le mode parallèle
+            # est réservé au bouton test rapide, donc il saute ce délai séquentiel.
+            if i < prepared_chunks[-1][0] and inter_chunk_delay > 0:
+                time.sleep(inter_chunk_delay)
+
+    parts = [parts_by_index[i] for i, _chunk in prepared_chunks if i in parts_by_index]
     if not parts:
         raise ValueError("Aucun chunk produit (texte vide ?)")
 
