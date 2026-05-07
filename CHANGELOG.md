@@ -2,6 +2,36 @@
 
 ## 2026-05-07
 
+### feat: génération audio cours pilotée par la durée réelle Edge TTS (runtime fit + carryover)
+
+**Symptôme** — un cours cible 45 min sortait à 50 min en mode Edge TTS. Le découpage 7 blocs reposait uniquement sur un budget de mots calé à 192 wpm Fish Audio, alors qu'Edge TTS lit à ~170 wpm → ratio 1.13× sur la durée. Conséquence supplémentaire : si le script journée dépasse le budget total, le surplus était absorbé par le bloc 7 au lieu d'être reporté proprement au jour suivant.
+
+**Nouveau modèle (Edge TTS uniquement, Fish Audio inchangé)** — le texte de la journée est traité comme une file ordonnée de chunks. Chaque bloc cours consomme la file progressivement en mesurant la durée réelle Edge TTS et stoppe **avant** dépassement. Conclusion courte ajoutée. Surplus reporté au bloc suivant ou au jour suivant.
+
+**Architecture** — 5 étapes commitées séparément pour faciliter le review :
+
+1. **Helpers de découpe** (`content_generation_service.py`) — `_max_chunk_words_for_remaining` (paliers adaptatifs 600 / 300 / 150 / 0 mots selon la marge restante), `_split_text_natural` (paragraphes → phrases, **jamais de split intra-phrase** : une phrase plus grosse que le plafond reste entière), `_split_chunk_for_runtime_fit` (préserve `slide_id`, recalcule `word_start` / `word_end`).
+
+2. **Conclusion audio** — `_synthesize_short_conclusion_audio(basic_tts=True)` génère un MP3 court depuis un template configurable (`EDGE_TTS_CONCLUSION_TEMPLATE`, défaut "Très bien, on va s'arrêter ici pour cette partie. On reprendra la suite dans la prochaine.").
+
+3. **Runtime fit** dans `_synthesize_course_audio_synced_to_slides` — nouveaux paramètres `prepended_chunks`, `conclusion_margin_sec` (défaut 90 s, env `EDGE_TTS_CONCLUSION_MARGIN_SEC`), `runtime_fit`. Boucle `while` qui :
+   - calcule `remaining_sec = target_sec - margin - cursor_sec` à chaque itération ;
+   - récupère le plafond de mots adaptatif ;
+   - sub-chunke JIT le chunk courant si nécessaire (frontière naturelle) ;
+   - estime la durée du sous-chunk via `observed_wpm` (bootstrap 170, recalculé à mesure : `total_words_generated * 60 / total_duration_generated`) ;
+   - stoppe et reporte intégralement le sous-chunk si `cursor + estimated > target - margin + 2s` (tolérance arrondi MP3) ;
+   - injecte la conclusion via `_synthesize_short_conclusion_audio` quand stop volontaire ;
+   - étend le `end_time` du dernier timing slide pour couvrir la conclusion (le frontend continue d'afficher la slide pendant la transition).
+   Retour augmenté d'un 6e élément `unconsumed_chunks`. `fit_method = "slide_sync_edge_runtime_fit"`.
+
+4. **Boucle orchestration** (`generate_audio_from_script`) — tampon `intra_day_carryover_chunks` propagé entre blocs cours. Bascule auto `clean → dirty` si carryover en attente sur un bloc qui était propre. Après le dernier cours : si tampon non vide, fusion avec le `carryover_out` statique (runtime EN PREMIER, statique APRÈS) puis `_store_cross_day_carryover(folder_id, next_folder_id, fused_text)`. Si pas de `next_folder_id` → log `WARNING PIPELINE_AUDIO_OVERFLOW_LOST` avec word count perdu. Logs structurés `PIPELINE_AUDIO_BLOC_RUNTIME` et `PIPELINE_AUDIO_RUNTIME_CARRYOVER`.
+
+5. **Tests** (`backend/tests/test_audio_runtime_fit.py`) — 7 tests unittest avec mocks déterministes sur `convert_to_speech_basic`, `_mp3_duration_seconds_no_ffprobe` et `_synthesize_short_conclusion_audio`. Couvre : stop avant dépassement, conclusion ajoutée + extension du timing, prepended_chunks consommés en premier, mode par défaut sans cascade, ID3 unique après concat, helpers (palier adaptatif + frontière naturelle gardée).
+
+**Garanties** — `voice_duration ≤ target_sec + 2s` (tolérance technique MP3). Aucun split intra-phrase. Le bloc 7 n'absorbe plus le surplus. Fish Audio strictement inchangé (pas de `runtime_fit`, pas de `prepended_chunks`). Mode mock inchangé.
+
+**Calibration** — `MAX_CHUNK_WORDS` 600 / 300 / 150 fixés en constantes module ; à ajuster en env si besoin lors d'un futur tuning.
+
 ### fix: éditeur audio — proxy backend + race condition cleanup
 
 **Symptôme** — l'éditeur affichait toujours `Impossible de charger l'audio : Failed to fetch` malgré le fix headers (`05d37cb`). Network montrait pourtant 200 + 17.6 Mo téléchargés. Console : aucune erreur CORS visible (juste une erreur d'extension Chrome `content.js`). Deux paires de requêtes identiques observées dans Network → indice de remount du composant React.

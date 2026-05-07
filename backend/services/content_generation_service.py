@@ -336,6 +336,134 @@ def _slides_for_bloc(slides: list, bloc: dict) -> list:
     return relevant
 
 
+# ── Runtime fit Edge TTS : sub-chunking adaptatif + frontières naturelles ───
+# Plafonds de mots par chunk en fonction du temps restant dans le bloc.
+# Plus on s'approche de la cible, plus les chunks doivent être petits pour
+# pouvoir s'arrêter pile à la limite sans dépasser.
+_MAX_CHUNK_WORDS_HIGH = 600          # remaining > 12 min : chunks confortables
+_MAX_CHUNK_WORDS_MID = 300           # 5–12 min : on resserre
+_MAX_CHUNK_WORDS_LOW = 150           # 2–5 min : phrase par phrase
+_REMAINING_HIGH_SEC = 12 * 60
+_REMAINING_MID_SEC = 5 * 60
+_REMAINING_LOW_SEC = 2 * 60
+
+# Edge TTS lit autour de 170 mots/min en français rate=+0%. Bootstrap pour
+# l'estimation runtime, ensuite on calcule un wpm réel observé.
+_BOOTSTRAP_WPM_EDGE_TTS = 170.0
+
+# Tolérance d'arrondi sur la durée mesurée (frames MP3 = ~26 ms).
+_TOLERANCE_OVERFLOW_SEC = 2.0
+
+# Marge réservée en fin de bloc pour générer la conclusion + un peu de buffer.
+_DEFAULT_CONCLUSION_MARGIN_SEC = 90
+
+_SENTENCE_END_RE = re.compile(r"(?<=[.!?…])\s+")
+
+
+def _max_chunk_words_for_remaining(remaining_sec: float) -> int:
+    """Plafond de mots adaptatif selon la marge restante avant target_sec - margin.
+
+    Retourne 0 si on est en zone "stop" (< 2 min) — signal au caller que
+    le prochain chunk ne doit pas être généré.
+    """
+    if remaining_sec >= _REMAINING_HIGH_SEC:
+        return _MAX_CHUNK_WORDS_HIGH
+    if remaining_sec >= _REMAINING_MID_SEC:
+        return _MAX_CHUNK_WORDS_MID
+    if remaining_sec >= _REMAINING_LOW_SEC:
+        return _MAX_CHUNK_WORDS_LOW
+    return 0
+
+
+def _split_text_natural(text: str, max_words: int) -> list:
+    """Découpe `text` en sous-segments ≤ max_words sur frontières naturelles.
+
+    Règles strictes (validées par l'utilisateur) :
+    1. Découpe d'abord par paragraphes (`\\n\\n`).
+    2. Un paragraphe ≤ max_words forme un sous-segment.
+    3. Sinon, découpe par phrases ; on accumule les phrases tant que ≤ max_words.
+    4. Si une phrase isolée dépasse max_words, on la garde **entière** —
+       on ne split jamais au milieu d'une phrase juste pour respecter le seuil.
+    """
+    if max_words <= 0 or not text or not text.strip():
+        return [text] if (text and text.strip()) else []
+
+    paragraphs = [p.strip() for p in text.split("\n\n") if p.strip()]
+    sub_chunks = []
+
+    for para in paragraphs:
+        para_words = para.split()
+        if len(para_words) <= max_words:
+            sub_chunks.append(para)
+            continue
+
+        # Paragraphe trop gros : on découpe par phrases sans jamais splitter une phrase.
+        sentences = _SENTENCE_END_RE.split(para)
+        current = []
+        current_count = 0
+
+        for sent in sentences:
+            sent = sent.strip()
+            if not sent:
+                continue
+            sent_count = len(sent.split())
+
+            if not current:
+                # Toujours commencer un sous-chunk avec la phrase, même si elle dépasse seule.
+                current = [sent]
+                current_count = sent_count
+                continue
+
+            if current_count + sent_count <= max_words:
+                current.append(sent)
+                current_count += sent_count
+            else:
+                sub_chunks.append(" ".join(current))
+                current = [sent]
+                current_count = sent_count
+
+        if current:
+            sub_chunks.append(" ".join(current))
+
+    return sub_chunks
+
+
+def _split_chunk_for_runtime_fit(chunk: dict, max_words: int) -> list:
+    """Découpe un chunk slide en sous-chunks naturels en propageant `slide_id`.
+
+    Recalcule `word_start` / `word_end` en avançant un curseur depuis le
+    `word_start` original. Les sous-chunks restent attachés à la même slide
+    parente — le frontend affiche cette slide pendant tout le segment, peu
+    importe combien d'appels Edge TTS ont été nécessaires.
+    """
+    text = chunk.get("text") or ""
+    if max_words <= 0 or not text.strip():
+        return [chunk]
+
+    if len(text.split()) <= max_words:
+        return [chunk]
+
+    sub_texts = _split_text_natural(text, max_words)
+    if len(sub_texts) <= 1:
+        return [chunk]
+
+    word_start = int(chunk.get("word_start") or 0)
+    sub_chunks = []
+    cursor = word_start
+
+    for sub_text in sub_texts:
+        sub_count = len(sub_text.split())
+        sub_chunks.append({
+            "slide_id": chunk.get("slide_id"),
+            "word_start": cursor,
+            "word_end": cursor + sub_count,
+            "text": sub_text,
+        })
+        cursor += sub_count
+
+    return sub_chunks
+
+
 def _build_slide_audio_chunks(bloc: dict, slides: list) -> list:
     """Partition a course bloc into text chunks driven by slide start markers."""
     bloc_start = int(bloc.get("start_w") or 0)
@@ -396,6 +524,49 @@ def _merge_adjacent_slide_timings(timings: list) -> list:
     return merged
 
 
+_DEFAULT_CONCLUSION_TEMPLATE = (
+    "Très bien, on va s'arrêter ici pour cette partie. "
+    "On reprendra la suite dans la prochaine."
+)
+
+
+def _synthesize_short_conclusion_audio(
+    basic_tts: bool,
+    progress_callback=None,
+) -> tuple:
+    """Génère un MP3 court de transition à coller en fin de bloc tronqué.
+
+    Utilisé uniquement en mode `basic_tts` (Edge TTS) pour boucher la marge
+    réservée par `conclusion_margin_sec` quand le runtime fit a stoppé la
+    génération avant la fin du créneau. Le texte vient de la variable d'env
+    `EDGE_TTS_CONCLUSION_TEMPLATE` ou du template par défaut.
+
+    Retourne `(audio_bytes, duration_sec)`. Lève si appelé hors basic_tts —
+    Fish Audio garde son comportement actuel sans cette branche.
+    """
+    if not basic_tts:
+        raise NotImplementedError(
+            "_synthesize_short_conclusion_audio n'est implémenté que pour basic_tts (Edge TTS)"
+        )
+
+    from services.basic_tts_service import convert_to_speech_basic
+
+    template = os.getenv("EDGE_TTS_CONCLUSION_TEMPLATE", _DEFAULT_CONCLUSION_TEMPLATE).strip()
+    if not template:
+        template = _DEFAULT_CONCLUSION_TEMPLATE
+
+    if progress_callback:
+        progress_callback("génération conclusion de transition")
+
+    audio_bytes = convert_to_speech_basic(
+        template,
+        progress_callback=lambda msg: progress_callback(f"conclusion · {msg}") if progress_callback else None,
+        **_basic_tts_pipeline_retry_kwargs(),
+    )
+    duration_sec = _mp3_duration_seconds_no_ffprobe(audio_bytes)
+    return audio_bytes, duration_sec
+
+
 def _synthesize_course_audio_synced_to_slides(
     bloc: dict,
     slides: list,
@@ -404,8 +575,34 @@ def _synthesize_course_audio_synced_to_slides(
     mock: bool,
     basic_tts: bool,
     progress_callback=None,
+    prepended_chunks: list = None,
+    conclusion_margin_sec: int = None,
+    runtime_fit: bool = False,
 ):
-    """Generate one course MP3 by slide-sized chunks and return slide timings."""
+    """Generate one course MP3 by slide-sized chunks and return slide timings.
+
+    Mode `runtime_fit=True` (Edge TTS uniquement) :
+        - Mesure la durée Edge TTS réelle de chaque chunk via
+          `_mp3_duration_seconds_no_ffprobe`, et calcule un `observed_wpm`
+          à mesure (bootstrap _BOOTSTRAP_WPM_EDGE_TTS).
+        - Sub-chunke adaptativement (paliers 600/300/150 mots) selon la
+          marge restante avant `target_sec - conclusion_margin_sec`.
+        - Stoppe la génération avant dépassement et reporte les chunks
+          non générés via le retour `unconsumed_chunks` (cascade vers le
+          bloc suivant ou le carryover inter-jours).
+        - Préfixe `prepended_chunks` (carryover intra-jour des blocs
+          précédents) en tête de la file.
+        - Ajoute une conclusion courte juste avant la fin si stop volontaire,
+          en étendant le `end_time` du dernier timing slide pour que le
+          frontend continue d'afficher la slide pendant la transition.
+
+    Mode classique (Fish Audio sync slides, ou basic_tts sans runtime_fit) :
+        - Comportement d'origine inchangé : génère tous les chunks slide.
+        - `prepended_chunks` ignoré, `unconsumed_chunks` toujours [].
+
+    Returns:
+        (audio_bytes, voice_duration_sec, fit_method, attempts, timings, unconsumed_chunks)
+    """
     from services.tts_service import convert_to_speech
 
     target_sec = int(bloc["target_sec"])
@@ -413,6 +610,7 @@ def _synthesize_course_audio_synced_to_slides(
     word_count = bloc.get("word_count") or len((bloc.get("text") or "").split())
     word_budget = _estimated_words_budget_for_course(target_sec, api_speed)
 
+    # Garde-fou Fish Audio : préserve le comportement existant.
     if not mock and not basic_tts and word_budget > 0 and word_count > word_budget:
         raise ValueError(
             f"Bloc {bloc['bloc_number']} trop long avant TTS sync "
@@ -424,20 +622,31 @@ def _synthesize_course_audio_synced_to_slides(
     else:
         from pydub import AudioSegment
 
-    chunks = _build_slide_audio_chunks(bloc, slides)
-    if not chunks:
+    base_chunks = _build_slide_audio_chunks(bloc, slides)
+    if not base_chunks:
         raise ValueError(f"Bloc {bloc['bloc_number']} vide pour sync slides")
+
+    # Runtime fit n'est supporté qu'en basic_tts (Edge TTS). Sinon ignoré.
+    use_runtime_fit = bool(runtime_fit and basic_tts)
+
+    # Préfixer le carryover intra-jour uniquement en runtime_fit.
+    if use_runtime_fit and prepended_chunks:
+        chunks = list(prepended_chunks) + list(base_chunks)
+    else:
+        chunks = list(base_chunks)
+
+    if conclusion_margin_sec is None:
+        conclusion_margin_sec = int(os.getenv(
+            "EDGE_TTS_CONCLUSION_MARGIN_SEC",
+            _DEFAULT_CONCLUSION_MARGIN_SEC,
+        ))
 
     def _emit(message: str):
         if progress_callback:
             progress_callback(message)
 
     if basic_tts:
-        # Ne pas préfixer/padder Edge TTS avec le silence MP3 embarqué :
-        # il est en 8 kb/s / 22 kHz alors qu'Edge TTS sort un autre encodage.
-        # Le mélange de flux faisait calculer au navigateur des durées géantes
-        # (ex. 300 minutes) et une waveform muette. En mode Edge TTS gratuit,
-        # on privilégie un MP3 écoutable et des timings slides réels.
+        # Pas de silence d'amorce (cf. fix 302:01 — encodages incompatibles).
         audio_parts = []
         cursor_sec = 0.0
     else:
@@ -445,22 +654,75 @@ def _synthesize_course_audio_synced_to_slides(
         cursor_sec = float(_COURSE_START_SILENCE_SECONDS)
     timings = []
     attempts = []
+    unconsumed_chunks = []
 
-    for idx, chunk in enumerate(chunks, start=1):
-        text = chunk["text"].strip()
+    # Tracking pour observed_wpm (runtime_fit uniquement).
+    total_words_generated = 0
+    total_duration_generated = 0.0
+    stopped_for_runtime_fit = False
+
+    # Index manuel pour pouvoir capturer le reste de la file en cas de stop.
+    chunk_idx = 0
+    while chunk_idx < len(chunks):
+        chunk = chunks[chunk_idx]
+        text = (chunk.get("text") or "").strip()
         if not text:
+            chunk_idx += 1
             continue
+
+        # ── Runtime fit : décision de stop + sub-chunk JIT ──────────────────
+        if use_runtime_fit:
+            remaining_sec = target_sec - conclusion_margin_sec - cursor_sec
+            max_words = _max_chunk_words_for_remaining(remaining_sec)
+
+            if max_words == 0:
+                # Marge < 2 min : on ne génère plus rien, on reporte tout.
+                stopped_for_runtime_fit = True
+                unconsumed_chunks.extend(chunks[chunk_idx:])
+                break
+
+            # Sub-chunk JIT si le chunk dépasse le plafond du palier courant.
+            # Garantit la coupe sur frontière naturelle (paragraphe → phrase).
+            if len(text.split()) > max_words:
+                sub_chunks = _split_chunk_for_runtime_fit(chunk, max_words)
+                if len(sub_chunks) > 1:
+                    chunks = chunks[:chunk_idx] + list(sub_chunks) + chunks[chunk_idx + 1:]
+                    chunk = chunks[chunk_idx]
+                    text = (chunk.get("text") or "").strip()
+
+            # Estimer la durée de ce sous-chunk avec le wpm réel observé.
+            observed_wpm = (
+                (total_words_generated * 60.0 / total_duration_generated)
+                if total_duration_generated > 0
+                else _BOOTSTRAP_WPM_EDGE_TTS
+            )
+            chunk_words = len(text.split())
+            estimated_chunk_sec = (
+                chunk_words * 60.0 / observed_wpm if observed_wpm > 0 else 0.0
+            )
+
+            # Si le sous-chunk (déjà découpé sur frontière naturelle) dépasse
+            # encore : on stoppe et on le reporte ENTIER (jamais de coupe
+            # intra-phrase). Tolérance technique 2s pour arrondis frame MP3.
+            if (cursor_sec + estimated_chunk_sec
+                    > (target_sec - conclusion_margin_sec) + _TOLERANCE_OVERFLOW_SEC):
+                stopped_for_runtime_fit = True
+                unconsumed_chunks.extend(chunks[chunk_idx:])
+                break
+
+        # ── Génération du chunk (mock / basic_tts / fish_audio) ─────────────
         _emit(
-            f"Bloc {bloc['bloc_number']}/7 — slide audio {idx}/{len(chunks)} "
+            f"Bloc {bloc['bloc_number']}/7 — slide audio {chunk_idx + 1}/{len(chunks)} "
             f"({len(text.split())} mots)"
         )
+
         if mock:
             segment = AudioSegment.silent(duration=1000)
             mode = "mock"
         elif basic_tts:
             audio_bytes = convert_to_speech_basic(
                 text,
-                progress_callback=lambda msg, i=idx: _emit(
+                progress_callback=lambda msg, i=chunk_idx + 1: _emit(
                     f"Bloc {bloc['bloc_number']}/7 — slide {i}/{len(chunks)} · {msg}"
                 ),
                 **_basic_tts_pipeline_retry_kwargs(),
@@ -480,9 +742,9 @@ def _synthesize_course_audio_synced_to_slides(
         if not basic_tts:
             full_audio += segment
         cursor_sec = end_sec
-        attempts.append({"kind": mode, "chunk": idx, "duration": duration_sec})
+        attempts.append({"kind": mode, "chunk": chunk_idx + 1, "duration": duration_sec})
         _emit(
-            f"Bloc {bloc['bloc_number']}/7 — slide audio {idx}/{len(chunks)} OK "
+            f"Bloc {bloc['bloc_number']}/7 — slide audio {chunk_idx + 1}/{len(chunks)} OK "
             f"({duration_sec:.1f}s)"
         )
 
@@ -496,9 +758,41 @@ def _synthesize_course_audio_synced_to_slides(
             "word_end": chunk.get("word_end"),
         })
 
+        if use_runtime_fit:
+            total_words_generated += len(text.split())
+            total_duration_generated += duration_sec
+
+        chunk_idx += 1
+
+    # ── Conclusion automatique si on a stoppé volontairement ────────────────
+    if use_runtime_fit and stopped_for_runtime_fit and total_duration_generated > 0:
+        try:
+            conclusion_bytes, conclusion_dur = _synthesize_short_conclusion_audio(
+                basic_tts=True,
+                progress_callback=_emit,
+            )
+            audio_parts.append(conclusion_bytes)
+            attempts.append({"kind": "conclusion", "chunk": "end", "duration": conclusion_dur})
+            # Étendre le end_time du dernier timing pour couvrir la conclusion :
+            # le frontend continue d'afficher cette slide pendant la transition.
+            if timings:
+                last = timings[-1]
+                last["end_time"] = round(float(last["end_time"]) + conclusion_dur, 3)
+                last["duration"] = round(float(last["duration"]) + conclusion_dur, 3)
+            cursor_sec += conclusion_dur
+            _emit(
+                f"Bloc {bloc['bloc_number']}/7 — conclusion ajoutée ({conclusion_dur:.1f}s)"
+            )
+        except Exception as e:
+            logger.warning(
+                f"⚠️ Bloc {bloc['bloc_number']} — génération conclusion échouée : "
+                f"{e} (on continue sans)"
+            )
+
+    # ── Assemblage final ────────────────────────────────────────────────────
     if basic_tts:
         final_duration = cursor_sec
-        output_bytes = concat_mp3_bytes(audio_parts)
+        output_bytes = concat_mp3_bytes(audio_parts) if audio_parts else b""
     else:
         final_duration = len(full_audio) / 1000
         if final_duration < target_sec:
@@ -512,15 +806,25 @@ def _synthesize_course_audio_synced_to_slides(
         output = io.BytesIO()
         full_audio.export(output, format="mp3", bitrate="128k")
         output_bytes = output.getvalue()
+
     fit_method = (
         "slide_sync_mock"
         if mock
+        else "slide_sync_edge_runtime_fit"
+        if use_runtime_fit
         else "slide_sync_edge_no_padding"
         if basic_tts
         else f"slide_sync_fish_speed={api_speed}"
     )
     voice_start_sec = 0.0 if basic_tts else _COURSE_START_SILENCE_SECONDS
-    return output_bytes, cursor_sec - voice_start_sec, fit_method, attempts, _merge_adjacent_slide_timings(timings)
+    return (
+        output_bytes,
+        cursor_sec - voice_start_sec,
+        fit_method,
+        attempts,
+        _merge_adjacent_slide_timings(timings),
+        unconsumed_chunks,
+    )
 
 
 def _format_carryover_for_next_course(text: str) -> str:
@@ -2342,6 +2646,12 @@ def generate_audio_from_script(
     slide_audio_timings = []
     slide_sync_files = []
 
+    # Tampon intra-jour : chunks structurés non consommés par un bloc cours
+    # précédent (runtime_fit a stoppé avant la fin) → préfixés au bloc suivant.
+    # Uniquement actif en mode `basic_tts + sync_slides` (Edge TTS runtime fit).
+    intra_day_carryover_chunks = []
+    runtime_fit_enabled = bool(basic_tts and not mock and sync_slides)
+
     for item_idx, (filename, duration_sec, file_type, bloc_num) in enumerate(playlist_items):
         step = item_idx + 1
         bloc = blocs_by_number.get(bloc_num)
@@ -2437,6 +2747,17 @@ def generate_audio_from_script(
 
         target_sec = bloc["target_sec"]
 
+        # Si on a un carryover intra-jour à injecter, on doit régénérer ce bloc
+        # même s'il était propre côté texte initial (sinon l'ancien MP3 ne
+        # contiendra pas le carryover qu'on doit lire au début).
+        if runtime_fit_enabled and intra_day_carryover_chunks and not bloc["dirty"]:
+            bloc["dirty"] = True
+            logger.info(
+                f"   🔁 Bloc {bloc['bloc_number']} ({filename}) : forcé dirty=True "
+                f"(carryover intra-jour à injecter, "
+                f"{sum(len((c.get('text') or '').split()) for c in intra_day_carryover_chunks)} mots)"
+            )
+
         if not bloc["dirty"]:
             logger.info(f"   ⏭️ Bloc {bloc['bloc_number']} ({filename}) : non modifié, conservé")
             _progress(step, len(playlist_items), f"Bloc {bloc['bloc_number']}/7 — conservé (non modifié)")
@@ -2474,14 +2795,48 @@ def generate_audio_from_script(
                 f"[SYNC SLIDES] Bloc {bloc['bloc_number']}/7 — {mode_label} ({len(bloc['text'].split())} mots)...",
             )
             logger.info(f"   🖼️ Bloc {bloc['bloc_number']} ({filename}) — TTS synchronisé slides")
-            final_bytes, voice_duration, fit_method, attempts, bloc_timings = _synthesize_course_audio_synced_to_slides(
+            # Runtime fit : préfixe le tampon intra-jour, capture le surplus
+            # non consommé pour cascade au bloc suivant.
+            prepended_for_call = intra_day_carryover_chunks if runtime_fit_enabled else None
+            (
+                final_bytes,
+                voice_duration,
+                fit_method,
+                attempts,
+                bloc_timings,
+                runtime_unconsumed_chunks,
+            ) = _synthesize_course_audio_synced_to_slides(
                 bloc,
                 slide_deck.get("slides", []) if slide_deck else [],
                 filename,
                 mock=mock,
                 basic_tts=basic_tts,
                 progress_callback=lambda msg: _progress(step, len(playlist_items), msg),
+                prepended_chunks=prepended_for_call,
+                runtime_fit=runtime_fit_enabled,
             )
+            # Le tampon est consommé par cet appel ; le runtime peut en
+            # produire un nouveau pour le prochain bloc cours.
+            if runtime_fit_enabled:
+                consumed_chunks = len(intra_day_carryover_chunks)
+                consumed_words = sum(
+                    len((c.get("text") or "").split()) for c in intra_day_carryover_chunks
+                )
+                intra_day_carryover_chunks = list(runtime_unconsumed_chunks or [])
+                unconsumed_words = sum(
+                    len((c.get("text") or "").split()) for c in intra_day_carryover_chunks
+                )
+                logger.info(
+                    "PIPELINE_AUDIO_BLOC_RUNTIME formation_job_id=%s content_job_id=%s "
+                    "folder_id=%s bloc=%s target_sec=%s voice_duration=%.1f "
+                    "chunks_generated=%s prepended_chunks=%s prepended_words=%s "
+                    "unconsumed_chunks=%s unconsumed_words=%s fit_method=%s",
+                    formation_job_id, job_id, folder_id, bloc["bloc_number"],
+                    target_sec, voice_duration, len(attempts),
+                    consumed_chunks, consumed_words,
+                    len(intra_day_carryover_chunks), unconsumed_words,
+                    fit_method,
+                )
             slide_audio_timings.extend(bloc_timings)
             slide_sync_files.append(filename)
             logger.info(
@@ -2590,6 +2945,43 @@ def generate_audio_from_script(
             },
         )
 
+    # ── 5. Cascade finale : runtime carryover après le dernier bloc cours ──
+    # Si runtime_fit a stoppé un bloc avant la fin et qu'il reste du surplus
+    # après le dernier cours de la journée, on doit le reporter au folder
+    # suivant (en plus du carryover statique calculé en pré-allocation).
+    runtime_carryover_text = ""
+    if runtime_fit_enabled and intra_day_carryover_chunks:
+        runtime_carryover_text = "\n\n".join(
+            (c.get("text") or "").strip()
+            for c in intra_day_carryover_chunks
+            if (c.get("text") or "").strip()
+        )
+
+    if runtime_carryover_text:
+        runtime_words = len(runtime_carryover_text.split())
+        if next_folder_id and not is_last_folder:
+            # Fusion : runtime EN PREMIER (mots qui auraient dû être lus
+            # mais reportés), puis statique (mots jamais alloués au bloc 7).
+            # `_store_cross_day_carryover` écrase la valeur précédemment
+            # écrite par `_handle_last_bloc_overflow`.
+            fused_carryover = runtime_carryover_text
+            if carryover_out:
+                fused_carryover = runtime_carryover_text + "\n\n" + carryover_out
+            _store_cross_day_carryover(folder_id, next_folder_id, fused_carryover)
+            carryover_out = fused_carryover
+            logger.info(
+                "PIPELINE_AUDIO_RUNTIME_CARRYOVER formation_job_id=%s folder_id=%s "
+                "next_folder_id=%s runtime_words=%s total_carryover_words=%s",
+                formation_job_id, folder_id, next_folder_id,
+                runtime_words, len(fused_carryover.split()),
+            )
+        else:
+            logger.warning(
+                "PIPELINE_AUDIO_OVERFLOW_LOST formation_job_id=%s folder_id=%s "
+                "lost_words=%s reason=no_next_folder is_last_folder=%s",
+                formation_job_id, folder_id, runtime_words, is_last_folder,
+            )
+
     _progress(len(playlist_items), len(playlist_items), f"✅ Terminé — {len(generated)} générés, {len(skipped)} conservés")
     logger.info(
         "PIPELINE_AUDIO_DONE formation_job_id=%s content_job_id=%s folder_id=%s generated=%s skipped=%s slide_sync=%s slide_timings=%s duration_ms=%s",
@@ -2612,6 +3004,7 @@ def generate_audio_from_script(
         "slide_timings": len(slide_audio_timings),
         "carryover_out_words": len(carryover_out.split()) if carryover_out else 0,
         "carryover_target_folder_id": next_folder_id if carryover_out else None,
+        "runtime_carryover_words": len(runtime_carryover_text.split()) if runtime_carryover_text else 0,
     }
 
 
