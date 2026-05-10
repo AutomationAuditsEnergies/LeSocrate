@@ -2,6 +2,23 @@
 
 ## 2026-05-10
 
+### feat: textes Q&A/pauses génériques restaurés + visibles dans le modal Script TTS
+
+**Backend — `_generic_break_texts` simplifiée** (`content_generation_service.py`)
+- Le commit `52525f1` (07/05) avait ajouté un texte « du milieu » entre intro et outro (« Je vous laisse utiliser ce temps… », « Profitez-en pour souffler, vous étirer… ») et un outro spécial « Très bien, on clôt cette session de questions… » quand un Q&A précède une pause. Restauration des variants statiques d'origine : `_generic_break_texts` retourne directement `(intro, outro)` issus de `_get_qa_text` / `_get_pause_text` / `_get_pause_midi_text` (`playlist_tts_service.py`).
+- `_generic_basic_tts_break` n'a plus à concaténer `intro + middle` ; le texte passé à `_build_timed_edge_break_audio` est désormais celui des variants `_QA_VARIANTS` / `_PAUSE_VARIANTS` exactement.
+- Les variants `_QA_VARIANTS` / `_PAUSE_VARIANTS` / `_PAUSE_MIDI_INTRO` / `_PAUSE_MIDI_OUTRO` ne sont pas modifiés : on ne fait que ré-utiliser les anciens textes tels quels.
+
+**Backend — exposition des textes breaks à l'UI** (`content_generation_service.py`)
+- Nouvelle helper `_build_breaks_for_ui(platform_id)` : retourne les textes intro/outro statiques pour chaque Q&A/pause de la playlist effective (`_playlist_items_for_platform` — donc le mode été/hiver est respecté). Pour chaque break : `filename`, `duration_sec`, `type`, `bloc_number`, `intro`, `outro`.
+- `get_course_script_plan_for_ui` renvoie désormais une clé `breaks` à côté de `course_blocs`.
+- Limite assumée : si un jour Fish Audio est utilisé avec le LLM contextuel, les textes réellement prononcés ne sont pas persistés et ne peuvent donc pas être affichés ; on montre les variants statiques (qui restent le fallback).
+
+**Frontend — vue « Cours audio » étendue** (`CoursFolders.jsx`)
+- Nouveau state `scriptActiveBreak` (par filename) en parallèle de `scriptActiveCourse`. Cliquer sur un break désactive la sélection cours et inversement (un seul item actif à la fois dans la sidebar).
+- Sidebar : sous la liste des 7 cours, nouvelle section « Q&A et pauses » avec un item par Q&A/pause de la playlist (icône `forum` pour Q&A, `restaurant` pour la pause déjeuner, `pause_circle` pour les pauses courtes).
+- Panneau de détail : quand un break est sélectionné, affichage de l'intro et de l'outro dans deux blocs distincts (police monospace, `whitespace-pre-wrap`), avec un bandeau d'info qui rappelle que le reste du créneau est rempli en silence Edge TTS.
+
 ### feat: aperçu « Cours audio » dans le modal Script TTS + garde-fous closings
 
 **Backend — plan de découpe des cours pour l'UI** (`content_generation_service.py`)

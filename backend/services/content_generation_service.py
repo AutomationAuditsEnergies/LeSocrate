@@ -2974,39 +2974,13 @@ def _build_contextual_break_audio(
             _get_qa_text,
         )
         if file_type == "qa":
-            intro, outro = _get_qa_text(bloc_num)
-            next_type = playlist_items[item_idx + 1][2] if item_idx + 1 < len(playlist_items) else None
-            if next_type in {"pause", "pause_midi"}:
-                outro = (
-                    "Très bien, on clôt cette session de questions. Merci pour vos questions "
-                    "et pour les points que vous avez voulu clarifier. Gardez ces repères en "
-                    "tête, ils vont nous servir pour la suite de la journée."
-                )
-            return (
-                intro,
-                "Je vous laisse utiliser ce temps pour poser vos questions, relire vos notes "
-                "et clarifier ce qui doit l'être avant de passer à la suite.",
-                outro,
-            )
+            return _get_qa_text(bloc_num)
         if file_type == "pause_midi" or filename.startswith("pause_midi_"):
-            intro, outro = _get_pause_midi_text()
-            return (
-                intro,
-                "Prenez vraiment ce temps pour couper, vous restaurer et revenir disponible "
-                "pour la suite de la journée.",
-                outro,
-            )
-        intro, outro = _get_pause_text(bloc_num)
-        return (
-            intro,
-            "Profitez-en pour souffler, vous étirer, boire un peu d'eau et revenir avec de "
-            "l'attention pour la suite.",
-            outro,
-        )
+            return _get_pause_midi_text()
+        return _get_pause_text(bloc_num)
 
     def _generic_basic_tts_break():
-        intro, middle, outro = _generic_break_texts()
-        intro = " ".join(p for p in (intro, middle) if (p or "").strip())
+        intro, outro = _generic_break_texts()
         audio_bytes, final_duration = _build_timed_edge_break_audio(
             intro,
             outro,
@@ -4021,6 +3995,45 @@ def _save_course_script_plan(platform_id: int, folder_id: int, payload: dict) ->
         logger.warning(f"⚠️ Sauvegarde plan script cours impossible folder={folder_id}: {e}")
 
 
+def _build_breaks_for_ui(platform_id: int) -> list:
+    """Retourne les textes intro/outro des Q&A et pauses (variants génériques).
+
+    Reflète la playlist effective de la plateforme (été/hiver). Les textes
+    rendus correspondent aux variants statiques utilisés en Edge TTS et en
+    fallback Fish Audio ; les versions LLM contextuelles ne sont pas
+    persistées et ne peuvent donc pas être affichées ici.
+    """
+    from services.playlist_tts_service import (
+        _playlist_items_for_platform,
+        _get_pause_midi_text,
+        _get_pause_text,
+        _get_qa_text,
+    )
+
+    items = _playlist_items_for_platform(platform_id)
+    breaks = []
+    for filename, duration, file_type, bloc_num in items:
+        if file_type == "cours":
+            continue
+        if file_type == "qa":
+            intro, outro = _get_qa_text(bloc_num)
+        elif file_type == "pause_midi" or filename.startswith("pause_midi_"):
+            intro, outro = _get_pause_midi_text()
+        elif file_type == "pause":
+            intro, outro = _get_pause_text(bloc_num)
+        else:
+            continue
+        breaks.append({
+            "filename": filename,
+            "duration_sec": int(duration or 0),
+            "type": file_type,
+            "bloc_number": int(bloc_num or 0),
+            "intro": intro,
+            "outro": outro,
+        })
+    return breaks
+
+
 def get_course_script_plan_for_ui(folder_id: int, job: dict | None = None) -> dict:
     """Retourne les 7 textes cours affichables dans la modale Script TTS.
 
@@ -4035,7 +4048,10 @@ def get_course_script_plan_for_ui(folder_id: int, job: dict | None = None) -> di
             "course_blocs": [],
             "course_blocs_source": "none",
             "course_blocs_note": "Aucun job de contenu pour ce dossier.",
+            "breaks": [],
         }
+
+    breaks = _build_breaks_for_ui(job["platform_id"])
 
     dirty_info = get_script_dirty_blocs(folder_id)
     saved = _load_saved_course_script_plan(job["platform_id"], folder_id)
@@ -4048,6 +4064,7 @@ def get_course_script_plan_for_ui(folder_id: int, job: dict | None = None) -> di
             "course_blocs_note": "Dernière version réellement envoyée au TTS.",
             "dirty_blocs": 0,
             "total_blocs": dirty_info.get("total_blocs", 7),
+            "breaks": breaks,
         }
 
     preview = _build_course_blocs_preview(folder_id, job)
@@ -4065,6 +4082,7 @@ def get_course_script_plan_for_ui(folder_id: int, job: dict | None = None) -> di
         "course_blocs_note": note,
         "dirty_blocs": dirty_info.get("dirty_blocs", 0),
         "total_blocs": dirty_info.get("total_blocs", 7),
+        "breaks": breaks,
     }
 
 

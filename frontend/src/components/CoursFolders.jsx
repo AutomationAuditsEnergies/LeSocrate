@@ -85,6 +85,7 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
   const [contentScriptView, setContentScriptView] = useState('source') // 'source' | 'courses'
   const [scriptActiveSubPart, setScriptActiveSubPart] = useState(0)
   const [scriptActiveCourse, setScriptActiveCourse] = useState(1)
+  const [scriptActiveBreak, setScriptActiveBreak] = useState(null)
   const [editingSegment, setEditingSegment] = useState(null) // {sub_part_index, passe}
   const [editText, setEditText] = useState('')
   const [savingEdit, setSavingEdit] = useState(false)
@@ -409,6 +410,7 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
         setContentScriptView('source')
         setScriptActiveSubPart(0)
         setScriptActiveCourse(data.course_blocs?.[0]?.bloc_number || 1)
+        setScriptActiveBreak(null)
         setEditingSegment(null)
       } else {
         alert(data.error || 'Script non disponible')
@@ -1945,7 +1947,7 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
                   Cours audio
                 </p>
                 {contentScriptModal.course_blocs?.map((bloc) => {
-                  const isActive = scriptActiveCourse === bloc.bloc_number
+                  const isActive = !scriptActiveBreak && scriptActiveCourse === bloc.bloc_number
                   const statusLabel = {
                     generated: 'Généré',
                     preserved: 'Conservé',
@@ -1956,7 +1958,7 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
                     <button
                       key={bloc.bloc_number}
                       type="button"
-                      onClick={() => setScriptActiveCourse(bloc.bloc_number)}
+                      onClick={() => { setScriptActiveCourse(bloc.bloc_number); setScriptActiveBreak(null) }}
                       className="w-full text-left px-4 py-2.5 transition-colors"
                       style={{
                         backgroundColor: isActive ? (darkMode ? '#312e81' : '#ede9fe') : 'transparent',
@@ -1987,10 +1989,105 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
                     </button>
                   )
                 })}
+                {(contentScriptModal.breaks?.length > 0) && (
+                  <>
+                    <p className="px-4 pt-4 pb-2 text-xs font-semibold uppercase tracking-widest" style={{ color: '#7c3aed' }}>
+                      Q&amp;A et pauses
+                    </p>
+                    {contentScriptModal.breaks.map((br) => {
+                      const isActive = scriptActiveBreak === br.filename
+                      const typeLabel = br.type === 'qa' ? 'Q&A' : br.type === 'pause_midi' ? 'Pause déj.' : 'Pause'
+                      const iconName = br.type === 'qa' ? 'forum' : br.type === 'pause_midi' ? 'restaurant' : 'pause_circle'
+                      return (
+                        <button
+                          key={br.filename}
+                          type="button"
+                          onClick={() => setScriptActiveBreak(br.filename)}
+                          className="w-full text-left px-4 py-2.5 transition-colors"
+                          style={{
+                            backgroundColor: isActive ? (darkMode ? '#312e81' : '#ede9fe') : 'transparent',
+                            boxShadow: isActive ? 'inset 0 0 0 1px rgba(124, 58, 237, 0.42)' : 'inset 0 0 0 1px transparent',
+                          }}
+                        >
+                          <div className="flex items-start gap-2">
+                            <span
+                              className="flex-shrink-0 w-6 h-6 rounded-full flex items-center justify-center mt-0.5"
+                              style={{ backgroundColor: isActive ? '#7c3aed' : (darkMode ? '#334155' : '#e2e8f0'), color: isActive ? 'white' : colors.textSecondary }}
+                            >
+                              <Icon name={iconName} style={{ fontSize: '14px' }} />
+                            </span>
+                            <div className="min-w-0">
+                              <p className="text-xs font-semibold leading-snug" style={{ color: isActive ? (darkMode ? '#e9d5ff' : '#4c1d95') : colors.text }}>
+                                {typeLabel} · {Math.round((br.duration_sec || 0) / 60)} min
+                              </p>
+                              <p className="text-xs mt-0.5 truncate" style={{ color: colors.textMuted }}>
+                                {br.filename}
+                              </p>
+                            </div>
+                          </div>
+                        </button>
+                      )
+                    })}
+                  </>
+                )}
               </div>
 
               <div className="flex-1 overflow-y-auto p-5 space-y-4">
                 {(() => {
+                  if (scriptActiveBreak) {
+                    const br = (contentScriptModal.breaks || []).find(b => b.filename === scriptActiveBreak)
+                    if (!br) {
+                      return (
+                        <div className="rounded-xl p-4 text-sm" style={{ backgroundColor: colors.innerBg, color: colors.textMuted }}>
+                          Q&amp;A ou pause introuvable.
+                        </div>
+                      )
+                    }
+                    const typeLabel = br.type === 'qa' ? 'Q&A' : br.type === 'pause_midi' ? 'Pause déjeuner' : 'Pause'
+                    return (
+                      <>
+                        <div className="flex items-start gap-3 pb-3" style={{ borderBottom: `1px solid ${colors.border}` }}>
+                          <span className="text-sm font-bold px-2.5 py-0.5 rounded-full" style={{ backgroundColor: '#7c3aed', color: 'white' }}>
+                            {typeLabel}
+                          </span>
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm font-semibold" style={{ color: colors.text }}>
+                              {br.filename}
+                            </p>
+                            <p className="text-xs mt-1" style={{ color: colors.textMuted }}>
+                              Texte générique · {Math.round((br.duration_sec || 0) / 60)} min · variant bloc {br.bloc_number}
+                            </p>
+                          </div>
+                        </div>
+
+                        <div className="rounded-xl px-4 py-3 text-xs leading-relaxed" style={{ backgroundColor: colors.innerBg, border: `1px solid ${colors.border}`, color: colors.textSecondary }}>
+                          Textes statiques utilisés pour ce {typeLabel.toLowerCase()}. Le reste du créneau est rempli par un silence Edge TTS calé sur la durée cible.
+                        </div>
+
+                        <div className="rounded-xl overflow-hidden" style={{ border: `1px solid ${colors.border}` }}>
+                          <div className="px-4 py-2" style={{ backgroundColor: darkMode ? '#0f172a' : '#f8fafc' }}>
+                            <span className="text-xs font-bold" style={{ color: colors.textSecondary }}>Intro (au début du fichier)</span>
+                          </div>
+                          <div className="px-4 py-3" style={{ backgroundColor: colors.cardBg }}>
+                            <p className="text-xs leading-relaxed whitespace-pre-wrap" style={{ color: colors.text, fontFamily: 'monospace' }}>
+                              {br.intro || '—'}
+                            </p>
+                          </div>
+                        </div>
+
+                        <div className="rounded-xl overflow-hidden" style={{ border: `1px solid ${colors.border}` }}>
+                          <div className="px-4 py-2" style={{ backgroundColor: darkMode ? '#0f172a' : '#f8fafc' }}>
+                            <span className="text-xs font-bold" style={{ color: colors.textSecondary }}>Outro (à la fin du fichier)</span>
+                          </div>
+                          <div className="px-4 py-3" style={{ backgroundColor: colors.cardBg }}>
+                            <p className="text-xs leading-relaxed whitespace-pre-wrap" style={{ color: colors.text, fontFamily: 'monospace' }}>
+                              {br.outro || '—'}
+                            </p>
+                          </div>
+                        </div>
+                      </>
+                    )
+                  }
                   const blocs = contentScriptModal.course_blocs || []
                   const active = blocs.find(b => b.bloc_number === scriptActiveCourse) || blocs[0]
                   if (!active) {
