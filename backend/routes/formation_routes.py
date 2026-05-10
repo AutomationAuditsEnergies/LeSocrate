@@ -3179,14 +3179,18 @@ def continue_after_text(job_id, folder_id):
     requested_folder_id = int(folder_id)
     _STEP_ORDER = ["volume", "review", "slides", "tts"]
     raw_from_step = data.get("from_step", "volume")
-    from_step = raw_from_step if raw_from_step in _STEP_ORDER else "volume"
+    fast_tts_pipeline = bool(raw_from_step == "tts_fast" or data.get("fast_tts_pipeline"))
+    from_step = "tts" if raw_from_step == "tts_fast" else raw_from_step
+    from_step = from_step if from_step in _STEP_ORDER else "volume"
+    if from_step != "tts":
+        fast_tts_pipeline = False
     from_step_idx = _STEP_ORDER.index(from_step)
 
     logger.info(
         "PIPELINE_RESUME_REQUEST formation_job_id=%s requested_folder_id=%s from_step=%s "
-        "raw_from_step=%s model=%s max_slides=%s pace=%s prev_status=%s",
+        "raw_from_step=%s model=%s max_slides=%s pace=%s fast_tts_pipeline=%s prev_status=%s",
         job_id, requested_folder_id, from_step, raw_from_step, model, max_slides, pace,
-        job.get("status"),
+        fast_tts_pipeline, job.get("status"),
     )
 
     # Persiste le choix de modèle utilisé pour cette relance, pour que les
@@ -3276,8 +3280,8 @@ def continue_after_text(job_id, folder_id):
 
     _EXECUTION_STATE[state_key] = {"status": "running", "model": str(model), "folder_id": folder_id}
     logger.info(
-        "PIPELINE_RESUME_SPAWN formation_job_id=%s folder_id=%s from_step=%s model=%s",
-        job_id, folder_id, from_step, model,
+        "PIPELINE_RESUME_SPAWN formation_job_id=%s folder_id=%s from_step=%s model=%s fast_tts_pipeline=%s",
+        job_id, folder_id, from_step, model, fast_tts_pipeline,
     )
 
     import eventlet
@@ -3296,8 +3300,8 @@ def continue_after_text(job_id, folder_id):
 
             logger.info(
                 "PIPELINE_RESUME_RUN_START formation_job_id=%s folder_id=%s from_step=%s "
-                "from_step_idx=%s model=%s greenlet_id=%s",
-                job_id, folder_id, from_step, from_step_idx, model, id(eventlet.getcurrent()),
+                "from_step_idx=%s model=%s fast_tts_pipeline=%s greenlet_id=%s",
+                job_id, folder_id, from_step, from_step_idx, model, fast_tts_pipeline, id(eventlet.getcurrent()),
             )
 
             log_pipeline_event(
@@ -3307,7 +3311,12 @@ def continue_after_text(job_id, folder_id):
                 status="running",
                 folder_id=folder_id,
                 model=str(model) if model else None,
-                message=f"Relance aval depuis l'étape '{from_step}'",
+                message=(
+                    "Relance aval depuis l'étape 'tts' "
+                    "(pipeline presque instantanée)"
+                    if fast_tts_pipeline
+                    else f"Relance aval depuis l'étape '{from_step}'"
+                ),
                 data={
                     "voice_type": "gtts",
                     "tts_engine": "edge-tts",
@@ -3319,6 +3328,8 @@ def continue_after_text(job_id, folder_id):
                     "resolved_folder_id": folder_id,
                     "folder_resolution": folder_resolution,
                     "from_step": from_step,
+                    "raw_from_step": raw_from_step,
+                    "fast_tts_pipeline": fast_tts_pipeline,
                 },
             )
 
@@ -3500,8 +3511,8 @@ def continue_after_text(job_id, folder_id):
             next_folder_id = _next_folder_in_formation(job_id, folder_id)
             logger.info(
                 "PIPELINE_RESUME_STEP_TTS_START formation_job_id=%s folder_id=%s "
-                "next_folder_id=%s is_last_folder=%s max_slides=%s pace=%s",
-                job_id, folder_id, next_folder_id, next_folder_id is None, max_slides, pace,
+                "next_folder_id=%s is_last_folder=%s max_slides=%s pace=%s fast_tts_pipeline=%s",
+                job_id, folder_id, next_folder_id, next_folder_id is None, max_slides, pace, fast_tts_pipeline,
             )
             update_job(job_id, status="audio_running", error_message=None)
             audio_result = generate_audio_from_script(
@@ -3518,6 +3529,7 @@ def continue_after_text(job_id, folder_id):
                 slide_pace=pace,
                 slide_model=model,
                 llm_model=model,
+                fast_tts_pipeline=fast_tts_pipeline,
             )
             logger.info(
                 "PIPELINE_RESUME_STEP_TTS_DONE formation_job_id=%s folder_id=%s duration_ms=%s",
@@ -3538,11 +3550,16 @@ def continue_after_text(job_id, folder_id):
                 folder_id=folder_id,
                 model=str(model) if model else None,
                 duration_ms=int((time.time() - started_at) * 1000),
-                message="Relance aval terminée avec Edge TTS et slides synchronisées",
+                message=(
+                    "Relance aval terminée avec Edge TTS rapide test et slides synchronisées"
+                    if fast_tts_pipeline
+                    else "Relance aval terminée avec Edge TTS et slides synchronisées"
+                ),
                 data={
                     **(audio_result or {}),
                     "finalize": finalize_result,
                     "tts_engine": "edge-tts",
+                    "fast_tts_pipeline": fast_tts_pipeline,
                 },
             )
             _EXECUTION_STATE[state_key] = {
@@ -3553,6 +3570,7 @@ def continue_after_text(job_id, folder_id):
                     **(audio_result or {}),
                     "finalize": finalize_result,
                     "tts_engine": "edge-tts",
+                    "fast_tts_pipeline": fast_tts_pipeline,
                 },
             }
         except Exception as e:
@@ -3601,6 +3619,7 @@ def continue_after_text(job_id, folder_id):
         "tts_engine": "edge-tts",
         "sync_slides": True,
         "auto_generate_slides": True,
+        "fast_tts_pipeline": fast_tts_pipeline,
     }), 202
 
 

@@ -1,8 +1,46 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import ChatPanel from '../components/ChatPanel.jsx'
 import LeftSidebar from '../components/LeftSidebar.jsx'
 import { apiUrl, apiFetch, getPlatformName, setPlatformId } from '../api'
+
+const BREAK_AUDIO_TYPES = new Set(['qa', 'pause', 'pause_midi'])
+
+function isBreakAudioType(type) {
+  return BREAK_AUDIO_TYPES.has(type)
+}
+
+function formatCountdown(seconds) {
+  const total = Math.max(0, Math.ceil(Number(seconds) || 0))
+  const minutes = Math.floor(total / 60)
+  const secs = total % 60
+  return `${minutes}:${String(secs).padStart(2, '0')}`
+}
+
+function getBreakSlideCopy(type) {
+  if (type === 'qa') {
+    return {
+      eyebrow: 'Questions-réponses',
+      title: 'Posez vos questions dans le chat',
+      body: 'Le cours reprend automatiquement à la fin de ce temps.',
+      countdownLabel: 'Reprise dans',
+    }
+  }
+  if (type === 'pause_midi') {
+    return {
+      eyebrow: 'Pause déjeuner',
+      title: 'Prenez le temps de couper',
+      body: 'Le cours reprend automatiquement après la pause.',
+      countdownLabel: 'Reprise dans',
+    }
+  }
+  return {
+    eyebrow: 'Pause',
+    title: 'Soufflez quelques minutes',
+    body: 'Le cours reprend automatiquement après la pause.',
+    countdownLabel: 'Reprise dans',
+  }
+}
 
 export default function Video() {
   const navigate = useNavigate()
@@ -13,6 +51,7 @@ export default function Video() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [showPlayPrompt, setShowPlayPrompt] = useState(false)
+  const [breakRemaining, setBreakRemaining] = useState(null)
   const audioRef = useRef(null)
 
   // Synchroniser la propriété muted directement sur l'élément DOM
@@ -78,66 +117,84 @@ export default function Video() {
     setShowPlayPrompt(false)
   }
 
-  // Charger les informations audio depuis l'API
-  useEffect(() => {
-    const fetchAudioStatus = async () => {
-      try {
-        const response = await apiFetch('/api/video/status')
-        const data = await response.json()
+  const fetchAudioStatus = useCallback(async ({ silent = false } = {}) => {
+    try {
+      if (!silent) {
+        setLoading(true)
+      }
+      const response = await apiFetch('/api/video/status')
+      const data = await response.json()
 
-        if (!data.authenticated) {
-          navigate('/')
-          return
-        }
+      if (!data.authenticated) {
+        navigate('/')
+        return
+      }
 
-        if (data.status === 'waiting') {
-          // Rediriger vers la page d'attente
-          navigate('/attente')
-          return
-        }
+      if (data.status === 'waiting') {
+        navigate('/attente')
+        return
+      }
 
-        if (data.status === 'finished') {
-          setAudioInfo({ status: 'finished' })
-          setLoading(false)
-          return
-        }
+      if (data.status === 'finished') {
+        setAudioInfo({ status: 'finished' })
+        setLoading(false)
+        return
+      }
 
-        if (data.status === 'playing') {
-          setAudioInfo({
-            status: 'playing',
-            filename: data.audio_filename,
-            title: data.audio_title,
-            offset: data.offset,
-            id: data.audio_id,
-            type: data.audio_type,
-          })
-          setLoading(false)
+      if (data.status === 'playing') {
+        setError(null)
+        setAudioInfo({
+          status: 'playing',
+          filename: data.audio_filename,
+          title: data.audio_title,
+          offset: data.offset,
+          duration: data.audio_duration,
+          remaining: data.remaining,
+          id: data.audio_id,
+          type: data.audio_type,
+        })
+        if (isBreakAudioType(data.audio_type)) {
+          setBreakRemaining(data.remaining ?? Math.max(0, (data.audio_duration || 0) - (data.offset || 0)))
         }
-      } catch (err) {
-        console.error('Erreur chargement audio:', err)
-        setError('Impossible de charger le cours')
         setLoading(false)
       }
+    } catch (err) {
+      console.error('Erreur chargement audio:', err)
+      setError('Impossible de charger le cours')
+      setLoading(false)
     }
-
-    fetchAudioStatus()
   }, [navigate])
+
+  // Charger les informations audio depuis l'API
+  useEffect(() => {
+    fetchAudioStatus()
+  }, [fetchAudioStatus])
 
   // Positionner l'audio à l'offset correct quand il est chargé
   useEffect(() => {
     if (audioInfo?.status === 'playing' && audioRef.current) {
       const audio = audioRef.current
       const targetOffset = audioInfo.offset || 0
+      const isBreakAudio = isBreakAudioType(audioInfo.type)
       let hasAttemptedPlay = false
+      let countdownTimer = null
+
+      const updateBreakRemaining = () => {
+        if (!isBreakAudio) return
+        const duration = Number(audioInfo.duration || audio.duration || 0)
+        if (!Number.isFinite(duration) || duration <= 0) return
+        setBreakRemaining(Math.max(0, Math.ceil(duration - audio.currentTime)))
+      }
 
       const handleLoadedMetadata = () => {
         if (targetOffset > 0) {
           audio.currentTime = targetOffset
         }
+        updateBreakRemaining()
       }
 
       const handleSeeked = () => {
-        // Ne pas lancer play() ici — laisser canplay s'en charger
+        updateBreakRemaining()
       }
 
       const handleCanPlay = () => {
@@ -161,21 +218,41 @@ export default function Video() {
         console.error('[Audio] Erreur chargement:', audio.error)
       }
 
+      let endedTimer = null
+      const handleEnded = () => {
+        setShowPlayPrompt(false)
+        endedTimer = window.setTimeout(() => {
+          fetchAudioStatus({ silent: true })
+        }, 500)
+      }
+
       audio.addEventListener('loadedmetadata', handleLoadedMetadata)
       audio.addEventListener('seeked', handleSeeked)
       audio.addEventListener('canplay', handleCanPlay)
       audio.addEventListener('error', handleError)
+      audio.addEventListener('ended', handleEnded)
 
       audio.load()
+      if (isBreakAudio) {
+        setBreakRemaining(audioInfo.remaining ?? Math.max(0, (audioInfo.duration || 0) - targetOffset))
+        countdownTimer = window.setInterval(updateBreakRemaining, 500)
+      }
 
       return () => {
         audio.removeEventListener('loadedmetadata', handleLoadedMetadata)
         audio.removeEventListener('seeked', handleSeeked)
         audio.removeEventListener('canplay', handleCanPlay)
         audio.removeEventListener('error', handleError)
+        audio.removeEventListener('ended', handleEnded)
+        if (endedTimer) {
+          window.clearTimeout(endedTimer)
+        }
+        if (countdownTimer) {
+          window.clearInterval(countdownTimer)
+        }
       }
     }
-  }, [audioInfo])
+  }, [audioInfo, fetchAudioStatus])
 
   // Afficher le chargement
   if (loading) {
@@ -203,6 +280,18 @@ export default function Video() {
       </div>
     )
   }
+
+  const isBreakScreen = audioInfo?.status === 'playing' && isBreakAudioType(audioInfo.type)
+  const breakCopy = getBreakSlideCopy(audioInfo?.type)
+  const breakDuration = Math.max(1, Number(audioInfo?.duration || 0))
+  const breakSecondsRemaining = Math.max(
+    0,
+    Number(breakRemaining ?? audioInfo?.remaining ?? 0)
+  )
+  const breakProgress = Math.min(
+    100,
+    Math.max(0, ((breakDuration - breakSecondsRemaining) / breakDuration) * 100)
+  )
 
   return (
     <>
@@ -233,17 +322,48 @@ export default function Video() {
             className="relative aspect-video w-full rounded-3xl overflow-hidden flex items-center justify-center shadow-2xl border-4 bg-gradient-to-br from-gray-700 to-gray-900"
             style={{ transform: 'translateY(-20px)', borderColor: '#E4E4E4' }}
           >
-            <div className="flex flex-col items-center justify-center">
-              <div className="w-40 h-40 rounded-full bg-white flex items-center justify-center">
-                <svg xmlns="http://www.w3.org/2000/svg" className="w-24 h-24 text-gray-800" fill="currentColor" viewBox="0 0 24 24">
-                  <path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z" />
-                </svg>
+            {isBreakScreen ? (
+              <div className="absolute inset-0 flex flex-col items-center justify-center px-8 text-center" style={{ backgroundColor: '#2B2138' }}>
+                <div className="mb-5 text-sm font-semibold uppercase tracking-[0.2em]" style={{ color: '#D8C7FF' }}>
+                  {breakCopy.eyebrow}
+                </div>
+                <h2 className="max-w-2xl text-4xl font-semibold leading-tight text-white">
+                  {breakCopy.title}
+                </h2>
+                <p className="mt-4 max-w-xl text-base leading-7" style={{ color: '#E7DCF7' }}>
+                  {breakCopy.body}
+                </p>
+
+                <div className="mt-10 w-full max-w-xl">
+                  <div className="flex items-end justify-between gap-4">
+                    <span className="text-sm font-medium" style={{ color: '#D8C7FF' }}>
+                      {breakCopy.countdownLabel}
+                    </span>
+                    <span className="text-6xl font-semibold tabular-nums text-white">
+                      {formatCountdown(breakSecondsRemaining)}
+                    </span>
+                  </div>
+                  <div className="mt-4 h-3 overflow-hidden rounded-full" style={{ backgroundColor: 'rgba(248, 247, 245, 0.18)' }}>
+                    <div
+                      className="h-full rounded-full transition-[width] duration-500 ease-out"
+                      style={{ width: `${breakProgress}%`, backgroundColor: '#BFA7FF' }}
+                    />
+                  </div>
+                </div>
               </div>
-              <span className="mt-4 text-white text-xl font-medium">Professeur</span>
-            </div>
+            ) : (
+              <div className="flex flex-col items-center justify-center">
+                <div className="w-40 h-40 rounded-full bg-white flex items-center justify-center">
+                  <svg xmlns="http://www.w3.org/2000/svg" className="w-24 h-24 text-gray-800" fill="currentColor" viewBox="0 0 24 24">
+                    <path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z" />
+                  </svg>
+                </div>
+                <span className="mt-4 text-white text-xl font-medium">Professeur</span>
+              </div>
+            )}
 
             <div className="absolute bottom-6 left-6 bg-black/60 text-white text-xs px-3 py-1.5 rounded-lg backdrop-blur-sm">
-              Professeur
+              {isBreakScreen ? breakCopy.eyebrow : 'Professeur'}
             </div>
 
             {showPlayPrompt && (

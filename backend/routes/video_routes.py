@@ -87,7 +87,9 @@ def video_status():
                     "audio_title": audio_info["title"],
                     "audio_id": audio_info["id"],
                     "audio_type": audio_info["type"],
+                    "audio_duration": audio_info.get("duration", 0),
                     "offset": offset,
+                    "remaining": max(0, int(audio_info.get("duration", 0)) - int(offset or 0)),
                     "cours_termine": False,
                 }
             ),
@@ -166,7 +168,9 @@ def cours_status():
                 "audio_filename": audio_info["filename"],
                 "audio_title": audio_info["title"],
                 "audio_type": audio_info["type"],
+                "audio_duration": audio_info.get("duration", 0),
                 "offset": offset,
+                "remaining": max(0, int(audio_info.get("duration", 0)) - int(offset or 0)),
             }
 
         logger.debug(f"📊 Statut cours: {result['status']}")
