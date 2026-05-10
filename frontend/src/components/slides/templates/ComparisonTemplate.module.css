@@ -1,0 +1,185 @@
+.slide {
+  aspect-ratio: 16/9;
+  width: 90vw;
+  max-width: 1200px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-radius: 6px;
+  box-shadow:
+    0 2px 4px rgba(0, 0, 0, 0.04),
+    0 8px 20px rgba(0, 0, 0, 0.09),
+    0 28px 52px rgba(0, 0, 0, 0.11);
+  background-color: #fff9e6;
+  background-image: radial-gradient(circle, rgba(0, 0, 0, 0.055) 1px, transparent 1px);
+  background-size: 22px 22px;
+}
+
+/* ── Header ───────────────────────────────────────────── */
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 40px;
+  background: white;
+  border-bottom: 2px solid #eee8d8;
+  flex-shrink: 0;
+}
+
+.badge {
+  background: #dc2626;
+  color: white;
+  font-family: 'Poppins', sans-serif;
+  font-weight: 700;
+  padding: 5px 14px;
+  font-size: 0.82rem;
+  border-radius: 6px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.brandName {
+  font-family: 'Poppins', sans-serif;
+  font-weight: 700;
+  font-size: 0.88rem;
+  text-transform: uppercase;
+  color: #2d241e;
+  letter-spacing: 0.1em;
+}
+
+/* ── Body ─────────────────────────────────────────────── */
+.body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  padding: 18px 36px 22px;
+  gap: 14px;
+  min-height: 0;
+}
+
+.title {
+  font-family: 'Fredoka', sans-serif;
+  font-size: 1.85rem;
+  color: #2d241e;
+  font-weight: 700;
+  text-transform: uppercase;
+  text-align: center;
+  line-height: 1.1;
+  flex-shrink: 0;
+}
+
+/* ── Columns ──────────────────────────────────────────── */
+.cols {
+  flex: 1;
+  display: flex;
+  align-items: stretch;
+  min-height: 0;
+}
+
+.col {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  border-radius: 16px;
+  overflow: hidden;
+  border: 2px solid var(--col-color);
+  background: var(--col-bg);
+}
+
+.colHeader {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 22px;
+  background: var(--col-color);
+  box-shadow: inset 0 -3px 10px rgba(0, 0, 0, 0.18);
+  flex-shrink: 0;
+}
+
+.colIcon {
+  font-size: 1.25rem;
+  line-height: 1;
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.25));
+}
+
+.colLabel {
+  font-family: 'Fredoka', sans-serif;
+  color: white;
+  font-size: 1.15rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.22);
+}
+
+.colBody {
+  flex: 1;
+  padding: 14px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: var(--col-bg);
+}
+
+/* ── Items — left-accent cards ────────────────────────── */
+.item {
+  display: flex;
+  align-items: flex-start;
+  padding: 9px 14px;
+  border-left: 3px solid var(--col-color);
+  border-radius: 0 10px 10px 0;
+  background: rgba(255, 255, 255, 0.78);
+}
+
+.itemText {
+  font-family: 'Poppins', sans-serif;
+  font-size: 0.84rem;
+  color: #333;
+  line-height: 1.45;
+}
+
+/* ── VS Separator ─────────────────────────────────────── */
+.separator {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 52px;
+  flex-shrink: 0;
+  position: relative;
+}
+
+.separator::before {
+  content: '';
+  position: absolute;
+  top: 15%;
+  bottom: 15%;
+  left: 50%;
+  width: 1px;
+  background: linear-gradient(
+    to bottom,
+    transparent,
+    #c5bba8 25%,
+    #c5bba8 75%,
+    transparent
+  );
+  transform: translateX(-50%);
+}
+
+.vsBadge {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: linear-gradient(145deg, #2d241e 0%, #4a3930 100%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: 'Fredoka', sans-serif;
+  font-size: 0.95rem;
+  color: white;
+  font-weight: 700;
+  position: relative;
+  z-index: 1;
+  letter-spacing: 0.03em;
+  box-shadow:
+    0 2px 4px rgba(0, 0, 0, 0.15),
+    0 6px 18px rgba(45, 36, 30, 0.28);
+}

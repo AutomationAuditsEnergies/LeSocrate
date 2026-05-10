@@ -39,6 +39,7 @@ WPM_REFERENCE = 182
 # (un gap > 5 min signale un volume_safety insuffisant en amont, pas un closing à
 # rallonge pédagogiquement absurde).
 MAX_CLOSING_WORDS = 700
+_FORBIDDEN_DEICTIC_RE = re.compile(r"\b(hier|demain)\b", re.IGNORECASE)
 
 
 # Templates pour le cas court (15-45 s) — cycle déterministe par bloc
@@ -91,6 +92,8 @@ CONSIGNES :
 - Pas de tag TTS spécifique, juste du texte oral fluide.
 - Ne dis jamais "hier" ni "demain" ; utilise "au cours dernier" ou
   "au prochain cours" si nécessaire.
+- N'invente jamais une échéance d'examen, un passage devant jury ou un contexte
+  de certification daté qui n'apparaît pas explicitement dans l'extrait.
 - Ne dis jamais "questions", "questions-réponses", "pause", "chat",
   "on reprend juste après", ni "on continue après la pause".
 - Les temps de questions dans le chat sont gérés par un autre fichier audio :
@@ -134,6 +137,8 @@ TON :
 - Pas de discours direct entre guillemets (TTS le lirait littéralement).
 - Ne dis jamais "hier" ni "demain" ; utilise "au cours dernier" ou
   "au prochain cours" si nécessaire.
+- N'invente jamais une échéance d'examen, un passage devant jury ou un contexte
+  de certification daté qui n'apparaît pas explicitement dans l'extrait.
 - Ne dis jamais "questions", "questions-réponses", "pause", "chat",
   "on reprend juste après", ni "on continue après la pause".
 - Les temps de questions dans le chat sont gérés par un autre fichier audio :
@@ -165,6 +170,8 @@ TON :
 - Pas mécanique ni grandiloquent.
 - Pas de discours direct entre guillemets.
 - Ne dis jamais "hier" ni "demain".
+- N'invente jamais une échéance d'examen, un passage devant jury ou un contexte
+  de certification daté qui n'apparaît pas explicitement dans l'extrait.
 - Ne dis pas "je vous vois", "levez la main", "vous m'entendez", ni aucune
   formule qui suppose une présence physique ou une visio.
 
@@ -180,6 +187,11 @@ def _clean_closing_text(text):
     return text
 
 
+def _has_forbidden_deictic_marker(text):
+    """Empêche les closings qui inventent un "demain" ou un "hier" daté."""
+    return bool(_FORBIDDEN_DEICTIC_RE.search(text or ""))
+
+
 def _fallback_for_gap(gap_sec, is_last_bloc, bloc_num):
     """Fallback statique si le LLM échoue. Choisi selon la taille du gap."""
     if gap_sec < GAP_SHORT_SEC:
@@ -192,7 +204,7 @@ def _fallback_for_gap(gap_sec, is_last_bloc, bloc_num):
         )
     return (
         "On a vu pas mal de choses dans ce bloc. Prenez un instant pour intégrer, "
-        "et on se retrouve juste après pour la suite."
+        "et on garde ces repères pour la suite du parcours."
     )
 
 
@@ -258,6 +270,8 @@ def generate_closing(
         text = _clean_closing_text(text or "")
         if not text:
             raise ValueError("LLM closing empty")
+        if _has_forbidden_deictic_marker(text):
+            raise ValueError("LLM closing contains forbidden temporal marker")
         logger.info(
             f"   📝 Closing bloc {bloc_num} (gap {gap_sec:.0f}s, {registre}) : "
             f"{len(text.split())} mots générés"

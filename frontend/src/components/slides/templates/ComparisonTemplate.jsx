@@ -1,23 +1,15 @@
 import React from 'react';
+import styles from './ComparisonTemplate.module.css';
 
-const Header = ({ badge = 'TP-CRCD', brandName = 'SALES HACKING' }) => (
-  <div className="flex justify-between items-center px-10 py-3 bg-white border-b-2 border-[#E5E5E5]">
-    <div className="bg-[#DC2626] text-white font-['Poppins'] font-bold px-4 py-2 text-[0.85rem] rounded-md">{badge}</div>
-    <span className="font-['Poppins'] font-bold text-[0.95rem] uppercase text-[#2d241e]">{brandName}</span>
-  </div>
-);
-
-// cols: [{ label, color, icon, items: [string] }]
-// mode: 'binary' (2 cols, bad/good) | 'ternary' (3 cols)
+// cols: [{ label, color, icon, bg, items: [string] }]
 const ComparisonTemplate = ({
   title = 'Deux façons de conclure un appel',
   cols = [
     {
       label: 'À éviter',
-      color: '#DC2626',
+      color: '#E07A6F',
       icon: '✗',
-      bg: '#FEF2F2',
-      accent: '#FECACA',
+      bg: '#FDF4F3',
       items: [
         '"OK ben je vous envoie une brochure."',
         'Pas de date de rappel fixée.',
@@ -27,10 +19,9 @@ const ComparisonTemplate = ({
     },
     {
       label: 'Bonne pratique',
-      color: '#16A34A',
+      color: '#A7B85A',
       icon: '✓',
-      bg: '#F0FDF4',
-      accent: '#BBF7D0',
+      bg: '#F4F7E6',
       items: [
         '"Je suis disponible jeudi 14h30 ou vendredi 10h — lequel vous convient ?"',
         'Créneau précis proposé immédiatement.',
@@ -42,58 +33,38 @@ const ComparisonTemplate = ({
   badge = 'TP-CRCD',
   brandName = 'SALES HACKING',
 }) => (
-  <div className="aspect-video w-[90vw] max-w-[1200px] bg-[#FFF9E6] flex flex-col overflow-hidden shadow-[0_25px_50px_-12px_rgba(0,0,0,0.25)]">
-    <Header badge={badge} brandName={brandName} />
+  <div className={styles.slide}>
+    <div className={styles.header}>
+      <div className={styles.badge}>{badge}</div>
+      <span className={styles.brandName}>{brandName}</span>
+    </div>
 
-    <div className="flex-1 flex flex-col px-10 py-5 gap-4">
-      <h1 className="font-['Fredoka'] text-[1.9rem] text-[#2d241e] font-bold text-center uppercase leading-tight">
-        {title}
-      </h1>
+    <div className={styles.body}>
+      <h1 className={styles.title}>{title}</h1>
 
-      <div className="flex-1 flex gap-4 items-stretch">
+      <div className={styles.cols}>
         {cols.map((col, i) => (
           <React.Fragment key={i}>
             <div
-              className="flex-1 flex flex-col rounded-2xl overflow-hidden border-2"
-              style={{ borderColor: col.color, backgroundColor: col.bg }}
+              className={styles.col}
+              style={{ '--col-color': col.color, '--col-bg': col.bg }}
             >
-              {/* En-tête colonne */}
-              <div
-                className="flex items-center gap-3 px-6 py-3"
-                style={{ backgroundColor: col.color }}
-              >
-                <span className="text-white text-2xl font-bold">{col.icon}</span>
-                <span className="font-['Poppins'] font-bold text-white text-[1rem] uppercase tracking-wide">
-                  {col.label}
-                </span>
+              <div className={styles.colHeader}>
+                <span className={styles.colIcon}>{col.icon}</span>
+                <span className={styles.colLabel}>{col.label}</span>
               </div>
-
-              {/* Items */}
-              <div className="flex-1 flex flex-col justify-center px-6 py-4 gap-3">
+              <div className={styles.colBody}>
                 {col.items.map((item, j) => (
-                  <div key={j} className="flex items-start gap-3">
-                    <div
-                      className="mt-1 w-5 h-5 rounded-full flex-shrink-0 flex items-center justify-center text-xs font-bold text-white"
-                      style={{ backgroundColor: col.color }}
-                    >
-                      {j + 1}
-                    </div>
-                    <p className="font-['Poppins'] text-[0.9rem] text-[#2d241e] leading-snug">
-                      {item}
-                    </p>
+                  <div key={j} className={styles.item}>
+                    <p className={styles.itemText}>{item}</p>
                   </div>
                 ))}
               </div>
             </div>
 
-            {/* Séparateur VS (sauf après la dernière colonne) */}
             {i < cols.length - 1 && (
-              <div className="flex items-center justify-center w-10 flex-shrink-0">
-                <div className="flex flex-col items-center gap-1">
-                  <div className="w-px flex-1 bg-[#CBD5E1]" />
-                  <span className="font-['Fredoka'] text-[1.1rem] font-bold text-[#94A3B8] px-2">VS</span>
-                  <div className="w-px flex-1 bg-[#CBD5E1]" />
-                </div>
+              <div className={styles.separator}>
+                <div className={styles.vsBadge}>VS</div>
               </div>
             )}
           </React.Fragment>

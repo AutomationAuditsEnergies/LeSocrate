@@ -1061,6 +1061,7 @@ def _synthesize_course_audio_synced_to_slides(
                     "chunk": "end",
                     "duration": conclusion_dur,
                     "limit_sec": target_sec,
+                    "text": template or "",
                 })
                 _emit(
                     f"Bloc {bloc['bloc_number']}/7 — conclusion {kind} ignorée "
@@ -1069,7 +1070,12 @@ def _synthesize_course_audio_synced_to_slides(
                 return False
 
             audio_parts.append(conclusion_bytes)
-            attempts.append({"kind": kind, "chunk": "end", "duration": conclusion_dur})
+            attempts.append({
+                "kind": kind,
+                "chunk": "end",
+                "duration": conclusion_dur,
+                "text": template or "",
+            })
             if timings:
                 last = timings[-1]
                 last["end_time"] = round(float(last["end_time"]) + conclusion_dur, 3)
@@ -1531,6 +1537,7 @@ def _build_course_blocs_from_segments(
     next_folder_id=None,
     is_last_folder=False,
     model=None,
+    preview=False,
 ):
     """Découpe le script en 7 blocs en respectant les fins d'idées ET le budget TTS.
 
@@ -1627,6 +1634,7 @@ def _build_course_blocs_from_segments(
         next_folder_id=next_folder_id,
         is_last_folder=is_last_folder,
         model=model,
+        preview=preview,
     )
 
     return blocs, total_words, carryover_out
@@ -1718,6 +1726,7 @@ def _handle_last_bloc_overflow(
     next_folder_id=None,
     is_last_folder=False,
     model=None,
+    preview=False,
 ):
     """Si le bloc 7 dépasse, reporte vers le cours suivant ou réduit le dernier jour."""
     if not blocs:
@@ -1726,7 +1735,7 @@ def _handle_last_bloc_overflow(
     last = blocs[-1]
     budget = int(last.get("word_budget") or 0)
     if budget <= 0 or last["word_count"] <= budget:
-        if source_folder_id:
+        if source_folder_id and not preview:
             _clear_cross_day_carryover_from_source(source_folder_id, next_folder_id)
         return ""
 
@@ -1761,13 +1770,22 @@ def _handle_last_bloc_overflow(
         if not same_clean_carryover:
             last["dirty"] = True
 
-        if source_folder_id and not same_clean_carryover:
+        if source_folder_id and not same_clean_carryover and not preview:
             _store_cross_day_carryover(source_folder_id, next_folder_id, carryover_text)
         logger.warning(
             f"   🔁 Bloc 7 trop chargé : {len(carryover_text.split())} mots reportés "
             f"vers folder {next_folder_id}"
         )
         return carryover_text
+
+    if preview:
+        last["overflow_unresolved"] = True
+        last["overflow_words"] = max(0, last["word_count"] - budget)
+        logger.warning(
+            f"   👁️ Preview : dernier bloc au-dessus du budget "
+            f"({last['word_count']} mots / budget {budget}), sans remaniement API"
+        )
+        return ""
 
     # Dernier jour : pas de J+1, on remanie ce bloc par API avant TTS.
     reduced_text = _reduce_last_bloc_to_budget(last, model=model)
@@ -1845,6 +1863,7 @@ def _apply_closing_transitions(blocs, api_speed, model=None):
                 continue
             bloc["text"] = bloc["text"].rstrip() + "\n\n" + closing.strip()
             bloc["closing_added"] = True
+            bloc["closing_text"] = closing.strip()
             bloc["closing_words"] = closing_words
             new_word_count = len(bloc["text"].split())
             bloc["word_count"] = new_word_count
@@ -3368,6 +3387,23 @@ def generate_audio_from_script(
             _edge_tts_fast_cache_enabled(),
         )
     pending_clean_seg_keys = set()
+    course_script_plan = []
+
+    def _record_course_bloc(bloc, *, status, text=None, final_duration_sec=None,
+                            skipped_reason=None, opening_rewritten=False,
+                            runtime_conclusions=None):
+        course_script_plan.append(
+            _serialize_course_bloc(
+                bloc,
+                playlist_items,
+                status=status,
+                text=text,
+                final_duration_sec=final_duration_sec,
+                skipped_reason=skipped_reason,
+                opening_rewritten=opening_rewritten,
+                runtime_conclusions=runtime_conclusions,
+            )
+        )
 
     for item_idx, (filename, duration_sec, file_type, bloc_num) in enumerate(playlist_items):
         step = item_idx + 1
@@ -3459,6 +3495,16 @@ def generate_audio_from_script(
 
         if not bloc:
             logger.info(f"   ⏭️ {filename}: bloc {bloc_num} introuvable, skip")
+            _record_course_bloc(
+                {
+                    "bloc_number": bloc_num,
+                    "filename": filename,
+                    "target_sec": duration_sec,
+                    "text": "",
+                },
+                status="skipped",
+                skipped_reason="bloc_missing",
+            )
             logger.info(
                 "PIPELINE_AUDIO_ITEM_SKIP formation_job_id=%s content_job_id=%s folder_id=%s filename=%s reason=bloc_missing duration_ms=%s",
                 formation_job_id,
@@ -3488,6 +3534,12 @@ def generate_audio_from_script(
                 bloc["runtime_consumed_text"] = bloc.get("text", "")
             logger.info(f"   ⏭️ Bloc {bloc['bloc_number']} ({filename}) : non modifié, conservé")
             _progress(step, len(playlist_items), f"Bloc {bloc['bloc_number']}/7 — conservé (non modifié)")
+            _record_course_bloc(
+                bloc,
+                status="preserved",
+                text=bloc.get("runtime_consumed_text") or bloc.get("text", ""),
+                skipped_reason="clean_bloc",
+            )
             logger.info(
                 "PIPELINE_AUDIO_ITEM_SKIP formation_job_id=%s content_job_id=%s folder_id=%s filename=%s bloc=%s reason=clean_bloc duration_ms=%s",
                 formation_job_id,
@@ -3502,6 +3554,12 @@ def generate_audio_from_script(
 
         if not bloc["text"].strip():
             logger.info(f"   ⏭️ Bloc {bloc['bloc_number']} : texte vide, skip")
+            _record_course_bloc(
+                bloc,
+                status="skipped",
+                text="",
+                skipped_reason="empty_text",
+            )
             logger.info(
                 "PIPELINE_AUDIO_ITEM_SKIP formation_job_id=%s content_job_id=%s folder_id=%s filename=%s bloc=%s reason=empty_text duration_ms=%s",
                 formation_job_id,
@@ -3515,6 +3573,8 @@ def generate_audio_from_script(
             continue
 
         audio_bloc = bloc
+        opening_rewritten = False
+        runtime_conclusions = []
         if not mock and _course_opening_transitions_enabled() and int(bloc.get("bloc_number") or 0) > 1:
             rewritten_text = _rewrite_course_opening_for_audio(
                 bloc,
@@ -3526,6 +3586,7 @@ def generate_audio_from_script(
                 audio_bloc = dict(bloc)
                 audio_bloc["text"] = rewritten_text
                 audio_bloc["word_count"] = len(rewritten_text.split())
+                opening_rewritten = True
                 logger.info(
                     "PIPELINE_AUDIO_COURSE_OPENING_REWRITTEN formation_job_id=%s "
                     "content_job_id=%s folder_id=%s bloc=%s filename=%s words_before=%s words_after=%s",
@@ -3568,6 +3629,19 @@ def generate_audio_from_script(
                 runtime_fit=runtime_fit_enabled,
                 fast_tts_pipeline=fast_tts_pipeline,
             )
+            runtime_conclusions = [
+                {
+                    "kind": a.get("kind"),
+                    "duration": a.get("duration"),
+                    "text": a.get("text") or "",
+                }
+                for a in attempts
+                if a.get("kind") in {
+                    "conclusion",
+                    "conclusion_fallback",
+                    "conclusion_ultra_fallback",
+                } and (a.get("text") or "").strip()
+            ]
             # Le tampon est consommé par cet appel ; le runtime peut en
             # produire un nouveau pour le prochain bloc cours.
             if runtime_fit_enabled:
@@ -3671,6 +3745,32 @@ def generate_audio_from_script(
             len(bloc["text"].split()),
             int((time.time() - item_started_at) * 1000),
         )
+        course_text_for_ui = audio_bloc.get("text", "")
+        if runtime_fit_enabled:
+            consumed_text_for_ui = (bloc.get("runtime_consumed_text") or "").strip()
+            if consumed_text_for_ui:
+                course_text_for_ui = consumed_text_for_ui
+            elif runtime_conclusions:
+                course_text_for_ui = ""
+            conclusion_texts = [
+                (item.get("text") or "").strip()
+                for item in runtime_conclusions
+                if (item.get("text") or "").strip()
+            ]
+            if conclusion_texts:
+                course_text_for_ui = (
+                    course_text_for_ui.rstrip()
+                    + "\n\n"
+                    + "\n\n".join(conclusion_texts)
+                ).strip()
+        _record_course_bloc(
+            bloc,
+            status="generated",
+            text=course_text_for_ui,
+            final_duration_sec=round(float(final_duration), 3),
+            opening_rewritten=opening_rewritten,
+            runtime_conclusions=runtime_conclusions,
+        )
         generated.append(filename)
 
         # Marquer les segments contributeurs comme propres (dirty=0)
@@ -3737,6 +3837,24 @@ def generate_audio_from_script(
         int((time.time() - started_at) * 1000),
     )
 
+    mode = "mock" if mock else "edge_tts_sync" if (basic_tts and sync_slides) else "edge_tts" if basic_tts else "fish_audio"
+    _save_course_script_plan(
+        platform_id,
+        folder_id,
+        {
+            "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "platform_id": platform_id,
+            "folder_id": folder_id,
+            "content_job_id": job_id,
+            "formation_job_id": formation_job_id,
+            "mode": mode,
+            "sync_slides": bool(sync_slides),
+            "basic_tts": bool(basic_tts),
+            "mock": bool(mock),
+            "course_blocs": course_script_plan,
+        },
+    )
+
     return {
         "generated": len(generated),
         "skipped": len(skipped),
@@ -3749,6 +3867,204 @@ def generate_audio_from_script(
         "runtime_carryover_words": len(runtime_carryover_text.split()) if runtime_carryover_text else 0,
         "fast_tts_pipeline": bool(fast_tts_pipeline),
         "fast_tts_workers": _edge_tts_fast_workers() if fast_tts_pipeline else 1,
+    }
+
+
+_COURSE_SCRIPT_PLAN_BLOB = "content-script-plan.json"
+
+
+def _course_filename_for_bloc(playlist_spec, bloc_number: int) -> str:
+    return next(
+        (
+            filename
+            for filename, _duration, file_type, spec_bloc in playlist_spec
+            if file_type == "cours" and spec_bloc == bloc_number
+        ),
+        f"cours_bloc{bloc_number}.mp3",
+    )
+
+
+def _course_duration_for_bloc(playlist_spec, bloc_number: int) -> int:
+    from services.playlist_tts_service import COURS_DURATIONS_MIN
+
+    return next(
+        (
+            int(duration)
+            for _filename, duration, file_type, spec_bloc in playlist_spec
+            if file_type == "cours" and spec_bloc == bloc_number
+        ),
+        int(COURS_DURATIONS_MIN.get(bloc_number, 0) * 60),
+    )
+
+
+def _serialize_course_bloc(
+    bloc: dict,
+    playlist_spec,
+    *,
+    status: str,
+    text: str | None = None,
+    final_duration_sec: float | None = None,
+    skipped_reason: str | None = None,
+    opening_rewritten: bool = False,
+    runtime_conclusions: list | None = None,
+) -> dict:
+    from services.playlist_tts_service import COURS_DURATIONS_MIN
+
+    bloc_number = int(bloc.get("bloc_number") or 0)
+    bloc_text = text if text is not None else (bloc.get("text") or "")
+    runtime_conclusions = runtime_conclusions or []
+    return {
+        "bloc_number": bloc_number,
+        "filename": bloc.get("filename") or _course_filename_for_bloc(playlist_spec, bloc_number),
+        "duration_sec": int(bloc.get("target_sec") or _course_duration_for_bloc(playlist_spec, bloc_number)),
+        "duration_min": round(int(bloc.get("target_sec") or 0) / 60, 1) if bloc.get("target_sec") else COURS_DURATIONS_MIN.get(bloc_number),
+        "status": status,
+        "text": bloc_text,
+        "word_count": len((bloc_text or "").split()),
+        "planned_word_count": int(bloc.get("word_count") or len((bloc.get("text") or "").split())),
+        "word_budget": int(bloc.get("word_budget") or 0),
+        "dirty": bool(bloc.get("dirty")),
+        "closing_added": bool(bloc.get("closing_added") or runtime_conclusions),
+        "closing_text": bloc.get("closing_text") or "",
+        "closing_words": int(bloc.get("closing_words") or 0),
+        "runtime_conclusions": runtime_conclusions,
+        "opening_rewritten": bool(opening_rewritten),
+        "final_duration_sec": final_duration_sec,
+        "skipped_reason": skipped_reason or "",
+        "overflow_unresolved": bool(bloc.get("overflow_unresolved")),
+        "overflow_words": int(bloc.get("overflow_words") or 0),
+    }
+
+
+def _load_segments_for_course_plan(job: dict, *, sync_slides: bool = False) -> list:
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT sub_part_index, passe, text_content, word_count, dirty
+        FROM content_generation_segments
+        WHERE job_id = ? AND status = 'completed'
+        ORDER BY sub_part_index ASC, passe ASC
+    """, (job["id"],))
+    rows = cursor.fetchall()
+    conn.close()
+
+    segments = []
+    for r in rows:
+        text = r[2] or ""
+        if sync_slides:
+            text = _strip_tts_tags_for_sync(text)
+        segments.append({
+            "sub_idx": r[0],
+            "passe": r[1],
+            "text": text,
+            "word_count": len(text.split()) if sync_slides else r[3],
+            "dirty": bool(r[4]),
+        })
+
+    carryover_in = (job.get("carryover_in_text") or "").strip()
+    if carryover_in and segments:
+        segments[0]["text"] = carryover_in + "\n\n" + (segments[0]["text"] or "")
+        segments[0]["word_count"] = len(segments[0]["text"].split())
+        segments[0]["dirty"] = True
+
+    return segments
+
+
+def _build_course_blocs_preview(folder_id: int, job: dict) -> list:
+    from services.playlist_tts_service import COURS_DURATIONS_MIN, PLAYLIST_SPEC
+
+    segments = _load_segments_for_course_plan(job, sync_slides=False)
+    if not segments:
+        return []
+
+    next_folder_id = _find_next_folder_id(job["platform_id"], folder_id)
+    blocs, _total_words, _carryover_out = _build_course_blocs_from_segments(
+        segments,
+        COURS_DURATIONS_MIN,
+        PLAYLIST_SPEC,
+        force_all=False,
+        source_folder_id=None,
+        next_folder_id=next_folder_id,
+        is_last_folder=next_folder_id is None,
+        preview=True,
+    )
+    return [
+        _serialize_course_bloc(bloc, PLAYLIST_SPEC, status="preview")
+        for bloc in blocs
+    ]
+
+
+def _load_saved_course_script_plan(platform_id: int, folder_id: int) -> dict | None:
+    try:
+        from services.azure_blob_service import download_blob, CONTAINER_AUDIOS
+
+        blob_path = f"platform-{platform_id}/folder-{folder_id}/playlist/{_COURSE_SCRIPT_PLAN_BLOB}"
+        raw = download_blob(CONTAINER_AUDIOS, blob_path)
+        return json.loads(raw.decode("utf-8"))
+    except Exception as e:
+        if "BlobNotFound" not in str(e) and "The specified blob does not exist" not in str(e):
+            logger.warning(f"⚠️ Lecture plan script cours impossible folder={folder_id}: {e}")
+        return None
+
+
+def _save_course_script_plan(platform_id: int, folder_id: int, payload: dict) -> None:
+    try:
+        from services.azure_blob_service import upload_blob, CONTAINER_AUDIOS
+
+        blob_path = f"platform-{platform_id}/folder-{folder_id}/playlist/{_COURSE_SCRIPT_PLAN_BLOB}"
+        upload_blob(
+            CONTAINER_AUDIOS,
+            blob_path,
+            json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8"),
+        )
+    except Exception as e:
+        logger.warning(f"⚠️ Sauvegarde plan script cours impossible folder={folder_id}: {e}")
+
+
+def get_course_script_plan_for_ui(folder_id: int, job: dict | None = None) -> dict:
+    """Retourne les 7 textes cours affichables dans la modale Script TTS.
+
+    Priorité à la dernière génération audio persistée, car elle contient les
+    closings et conclusions réellement envoyés au TTS. Si elle n'existe pas ou
+    si le texte a été modifié depuis, on retombe sur une prévisualisation sans
+    appel LLM et sans effet de bord.
+    """
+    job = job or get_job_from_db(folder_id)
+    if not job:
+        return {
+            "course_blocs": [],
+            "course_blocs_source": "none",
+            "course_blocs_note": "Aucun job de contenu pour ce dossier.",
+        }
+
+    dirty_info = get_script_dirty_blocs(folder_id)
+    saved = _load_saved_course_script_plan(job["platform_id"], folder_id)
+    if saved and saved.get("course_blocs") and not dirty_info.get("dirty_blocs"):
+        return {
+            "course_blocs": saved.get("course_blocs") or [],
+            "course_blocs_source": "last_audio_generation",
+            "course_blocs_generated_at": saved.get("generated_at"),
+            "course_blocs_mode": saved.get("mode"),
+            "course_blocs_note": "Dernière version réellement envoyée au TTS.",
+            "dirty_blocs": 0,
+            "total_blocs": dirty_info.get("total_blocs", 7),
+        }
+
+    preview = _build_course_blocs_preview(folder_id, job)
+    note = "Prévisualisation du découpage actuel, avant génération audio."
+    if saved and saved.get("course_blocs"):
+        note = (
+            "Le texte a été modifié depuis la dernière génération audio. "
+            "Affichage du découpage actuel à régénérer."
+        )
+    return {
+        "course_blocs": preview,
+        "course_blocs_source": "preview",
+        "course_blocs_generated_at": None,
+        "course_blocs_mode": None,
+        "course_blocs_note": note,
+        "dirty_blocs": dirty_info.get("dirty_blocs", 0),
+        "total_blocs": dirty_info.get("total_blocs", 7),
     }
 
 

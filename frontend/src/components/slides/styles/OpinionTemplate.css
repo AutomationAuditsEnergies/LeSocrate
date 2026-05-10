@@ -51,9 +51,9 @@
   gap: 0.5rem;
   background-color: var(--color-purple-light);
   border: 2px solid var(--color-purple);
-  padding: 0.5rem 1.25rem;
+  padding: 0.4rem 1rem;
   border-radius: 25px;
-  margin-bottom: 1.5rem;
+  margin-bottom: 1rem;
 }
 
 .opinion-badge span {
@@ -73,7 +73,7 @@
 /* Titre */
 .opinion-title {
   color: var(--text-brown);
-  margin-bottom: 2rem;
+  margin-bottom: 1.25rem;
   line-height: 1.3;
 }
 
@@ -81,11 +81,11 @@
 .opinion-bubble {
   background-color: white;
   border-radius: 20px;
-  padding: 2rem 2.5rem;
+  padding: 1.25rem 2rem;
   position: relative;
   box-shadow: 0 8px 30px -10px rgba(168, 85, 247, 0.25);
   border: 2px solid var(--color-purple-light);
-  margin-bottom: 1.5rem;
+  margin-bottom: 1rem;
 }
 
 .opinion-bubble::before {

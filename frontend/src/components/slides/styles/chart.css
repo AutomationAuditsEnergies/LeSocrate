@@ -56,9 +56,9 @@
 /* --- CONTENU PRINCIPAL --- */
 .chart-main-content {
   flex: 1;
-  padding: 3rem 5rem;
+  padding: 1.5rem 4rem;
   display: flex;
-  gap: 4rem;
+  gap: 3rem;
   align-items: center;
 }
 
@@ -72,7 +72,7 @@
 
 .chart-slide-title {
   font-family: 'Fredoka', sans-serif;
-  font-size: 3.5rem;
+  font-size: 2.2rem;
   color: var(--text-brown);
   margin: 0;
   line-height: 1.1;
@@ -80,7 +80,7 @@
 
 .chart-slide-desc {
   font-family: 'Poppins', sans-serif;
-  font-size: 1.1rem;
+  font-size: 0.9rem;
   color: #4a4a4a;
   line-height: 1.7;
   font-weight: 400;

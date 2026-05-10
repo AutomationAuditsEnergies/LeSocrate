@@ -61,7 +61,7 @@
 /* --- CONTENU --- */
 .facilitator-main-content {
   flex: 1;
-  padding: 1rem 5rem 4rem 5rem;
+  padding: 1rem 3rem 1.5rem 3rem;
   display: flex;
   flex-direction: column;
   justify-content: center;
@@ -70,10 +70,10 @@
 
 .facilitator-slide-title {
   font-family: 'Fredoka', sans-serif;
-  font-size: 3rem;
+  font-size: 2rem;
   color: var(--text-brown);
   text-align: left;
-  margin-bottom: 3rem;
+  margin-bottom: 1.5rem;
   line-height: 1.1;
   max-width: 800px;
 }

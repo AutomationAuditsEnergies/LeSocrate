@@ -24,7 +24,7 @@
 /* Titre */
 .transition-title {
   color: var(--text-brown);
-  margin-bottom: 3rem;
+  margin-bottom: 1.5rem;
   text-align: center;
 }
 
@@ -34,7 +34,7 @@
   align-items: center;
   justify-content: center;
   gap: 2rem;
-  margin-bottom: 3rem;
+  margin-bottom: 1.5rem;
 }
 
 /* Topics */

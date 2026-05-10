@@ -81,7 +81,10 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
   const [promptPreview, setPromptPreview] = useState(null)
   const [contentScriptModal, setContentScriptModal] = useState(null)
   const [loadingContentScript, setLoadingContentScript] = useState(false)
+  const [, setLoadingScript] = useState(false)
+  const [contentScriptView, setContentScriptView] = useState('source') // 'source' | 'courses'
   const [scriptActiveSubPart, setScriptActiveSubPart] = useState(0)
+  const [scriptActiveCourse, setScriptActiveCourse] = useState(1)
   const [editingSegment, setEditingSegment] = useState(null) // {sub_part_index, passe}
   const [editText, setEditText] = useState('')
   const [savingEdit, setSavingEdit] = useState(false)
@@ -403,7 +406,9 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
       const data = await resp.json()
       if (data.success) {
         setContentScriptModal(data)
+        setContentScriptView('source')
         setScriptActiveSubPart(0)
+        setScriptActiveCourse(data.course_blocs?.[0]?.bloc_number || 1)
         setEditingSegment(null)
       } else {
         alert(data.error || 'Script non disponible')
@@ -1761,9 +1766,38 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
                 <div>
                   <h3 className="text-lg font-bold">Script TTS — {contentScriptModal.program_title}</h3>
                   <p className="text-xs" style={{ color: '#ddd6fe' }}>
-                    {(contentScriptModal.total_words || 0).toLocaleString('fr-FR')} mots · {contentScriptModal.sub_parts?.length} sous-parties
+                    {(contentScriptModal.total_words || 0).toLocaleString('fr-FR')} mots · {contentScriptModal.sub_parts?.length} sous-parties · {contentScriptModal.course_blocs?.length || 0} cours audio
                   </p>
                 </div>
+              </div>
+              <div className="ml-auto mr-3 flex rounded-lg p-1" style={{ backgroundColor: 'rgba(255,255,255,0.14)' }}>
+                {[
+                  { value: 'source', label: 'Sous-parties', icon: 'segment' },
+                  { value: 'courses', label: 'Cours audio', icon: 'record_voice_over' },
+                ].map(option => {
+                  const active = contentScriptView === option.value
+                  const disabled = option.value === 'courses' && !(contentScriptModal.course_blocs?.length > 0)
+                  return (
+                    <button
+                      key={option.value}
+                      type="button"
+                      onClick={() => {
+                        if (disabled) return
+                        setContentScriptView(option.value)
+                        setEditingSegment(null)
+                      }}
+                      disabled={disabled}
+                      className="flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-40"
+                      style={{
+                        backgroundColor: active ? '#f8fafc' : 'transparent',
+                        color: active ? '#5b21b6' : '#f5f3ff',
+                      }}
+                    >
+                      <Icon name={option.icon} style={{ fontSize: '14px' }} />
+                      {option.label}
+                    </button>
+                  )
+                })}
               </div>
               <button onClick={() => { setContentScriptModal(null); setEditingSegment(null) }} className="text-white hover:bg-white/20 rounded-full p-1">
                 <Icon name="close" className="text-2xl" />
@@ -1771,6 +1805,7 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
             </div>
 
             {/* Corps : sidebar + contenu */}
+            {contentScriptView === 'source' ? (
             <div className="flex flex-1 min-h-0">
 
               {/* Sidebar sommaire */}
@@ -1790,7 +1825,7 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
                       className="w-full text-left px-4 py-2.5 transition-colors"
                       style={{
                         backgroundColor: isActive ? (darkMode ? '#3b0764' : '#ede9fe') : 'transparent',
-                        borderLeft: isActive ? '3px solid #7c3aed' : '3px solid transparent',
+                        boxShadow: isActive ? 'inset 0 0 0 1px rgba(124, 58, 237, 0.42)' : 'inset 0 0 0 1px transparent',
                       }}
                     >
                       <div className="flex items-start gap-2">
@@ -1900,6 +1935,165 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
                 })()}
               </div>
             </div>
+            ) : (
+            <div className="flex flex-1 min-h-0">
+              <div
+                className="flex-shrink-0 overflow-y-auto border-r py-3"
+                style={{ width: '280px', borderColor: colors.border, backgroundColor: darkMode ? '#111827' : '#f8fafc' }}
+              >
+                <p className="px-4 pb-2 text-xs font-semibold uppercase tracking-widest" style={{ color: '#7c3aed' }}>
+                  Cours audio
+                </p>
+                {contentScriptModal.course_blocs?.map((bloc) => {
+                  const isActive = scriptActiveCourse === bloc.bloc_number
+                  const statusLabel = {
+                    generated: 'Généré',
+                    preserved: 'Conservé',
+                    preview: 'Prévu',
+                    skipped: 'Ignoré',
+                  }[bloc.status] || bloc.status
+                  return (
+                    <button
+                      key={bloc.bloc_number}
+                      type="button"
+                      onClick={() => setScriptActiveCourse(bloc.bloc_number)}
+                      className="w-full text-left px-4 py-2.5 transition-colors"
+                      style={{
+                        backgroundColor: isActive ? (darkMode ? '#312e81' : '#ede9fe') : 'transparent',
+                        boxShadow: isActive ? 'inset 0 0 0 1px rgba(124, 58, 237, 0.42)' : 'inset 0 0 0 1px transparent',
+                      }}
+                    >
+                      <div className="flex items-start gap-2">
+                        <span
+                          className="flex-shrink-0 w-6 h-6 rounded-full text-xs font-bold flex items-center justify-center mt-0.5"
+                          style={{ backgroundColor: isActive ? '#7c3aed' : (darkMode ? '#334155' : '#e2e8f0'), color: isActive ? 'white' : colors.textSecondary }}
+                        >
+                          {bloc.bloc_number}
+                        </span>
+                        <div className="min-w-0">
+                          <p className="text-xs font-semibold leading-snug" style={{ color: isActive ? (darkMode ? '#e9d5ff' : '#4c1d95') : colors.text }}>
+                            Cours {bloc.bloc_number} · {Math.round((bloc.duration_sec || 0) / 60)} min
+                          </p>
+                          <p className="text-xs mt-0.5 truncate" style={{ color: colors.textMuted }}>
+                            {statusLabel} · {(bloc.word_count || 0).toLocaleString('fr-FR')} mots
+                          </p>
+                          {(bloc.closing_added || bloc.runtime_conclusions?.length > 0) && (
+                            <p className="text-xs mt-0.5" style={{ color: '#7c3aed' }}>
+                              conclusion ajoutée
+                            </p>
+                          )}
+                        </div>
+                      </div>
+                    </button>
+                  )
+                })}
+              </div>
+
+              <div className="flex-1 overflow-y-auto p-5 space-y-4">
+                {(() => {
+                  const blocs = contentScriptModal.course_blocs || []
+                  const active = blocs.find(b => b.bloc_number === scriptActiveCourse) || blocs[0]
+                  if (!active) {
+                    return (
+                      <div className="rounded-xl p-4 text-sm" style={{ backgroundColor: colors.innerBg, color: colors.textMuted }}>
+                        Aucun cours audio disponible.
+                      </div>
+                    )
+                  }
+                  const sourceLabel = contentScriptModal.course_blocs_source === 'last_audio_generation'
+                    ? 'Dernière génération TTS'
+                    : 'Prévisualisation'
+                  const statusLabel = {
+                    generated: 'Généré',
+                    preserved: 'Conservé',
+                    preview: 'Prévu',
+                    skipped: 'Ignoré',
+                  }[active.status] || active.status
+                  const conclusionBlocks = []
+                  if (active.closing_text) {
+                    conclusionBlocks.push({ label: 'Conclusion de partie', text: active.closing_text })
+                  }
+                  ;(active.runtime_conclusions || []).forEach((item, idx) => {
+                    if (item.text) conclusionBlocks.push({ label: `Conclusion Edge TTS ${idx + 1}`, text: item.text })
+                  })
+                  return (
+                    <>
+                      <div className="flex items-start gap-3 pb-3" style={{ borderBottom: `1px solid ${colors.border}` }}>
+                        <span className="text-sm font-bold px-2.5 py-0.5 rounded-full" style={{ backgroundColor: '#7c3aed', color: 'white' }}>
+                          Cours {active.bloc_number}
+                        </span>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-semibold" style={{ color: colors.text }}>
+                            {active.filename}
+                          </p>
+                          <p className="text-xs mt-1" style={{ color: colors.textMuted }}>
+                            {sourceLabel} · {statusLabel} · {(active.word_count || 0).toLocaleString('fr-FR')} mots · {Math.round((active.duration_sec || 0) / 60)} min
+                          </p>
+                        </div>
+                        {active.final_duration_sec && (
+                          <span className="text-xs rounded-full px-2 py-1" style={{ backgroundColor: darkMode ? '#334155' : '#f1f5f9', color: colors.textSecondary }}>
+                            audio {Math.round(active.final_duration_sec / 60)} min
+                          </span>
+                        )}
+                      </div>
+
+                      {contentScriptModal.course_blocs_note && (
+                        <div className="rounded-xl px-4 py-3 text-xs leading-relaxed" style={{ backgroundColor: colors.innerBg, border: `1px solid ${colors.border}`, color: colors.textSecondary }}>
+                          {contentScriptModal.course_blocs_note}
+                          {(contentScriptModal.dirty_blocs || 0) > 0 && ` ${contentScriptModal.dirty_blocs}/${contentScriptModal.total_blocs || 7} bloc(s) à régénérer.`}
+                        </div>
+                      )}
+
+                      {active.opening_rewritten && (
+                        <div className="rounded-xl px-4 py-3 text-xs" style={{ backgroundColor: darkMode ? '#312e81' : '#ede9fe', border: `1px solid ${darkMode ? '#4c1d95' : '#c4b5fd'}`, color: darkMode ? '#ddd6fe' : '#5b21b6' }}>
+                          L'ouverture de ce cours a été réécrite pour enchaîner naturellement avec le fichier précédent.
+                        </div>
+                      )}
+
+                      {active.overflow_unresolved && (
+                        <div className="rounded-xl px-4 py-3 text-xs" style={{ backgroundColor: darkMode ? '#431407' : '#fff7ed', border: `1px solid ${darkMode ? '#7c2d12' : '#fed7aa'}`, color: darkMode ? '#fdba74' : '#c2410c' }}>
+                          Ce bloc dépasse encore le budget de {active.overflow_words?.toLocaleString('fr-FR')} mots dans la prévisualisation.
+                        </div>
+                      )}
+
+                      {conclusionBlocks.length > 0 && (
+                        <div className="rounded-xl overflow-hidden" style={{ border: `1px solid ${colors.border}` }}>
+                          <div className="px-4 py-2 flex items-center gap-2" style={{ backgroundColor: darkMode ? '#1e1b4b' : '#ede9fe' }}>
+                            <Icon name="flag" style={{ color: '#7c3aed', fontSize: '16px' }} />
+                            <span className="text-xs font-bold" style={{ color: '#7c3aed' }}>Conclusions ajoutées</span>
+                          </div>
+                          <div className="p-4 space-y-3" style={{ backgroundColor: colors.cardBg }}>
+                            {conclusionBlocks.map((item, idx) => (
+                              <div key={idx} className="rounded-lg p-3" style={{ backgroundColor: colors.innerBg, border: `1px solid ${colors.border}` }}>
+                                <p className="mb-2 text-xs font-semibold" style={{ color: '#7c3aed' }}>{item.label}</p>
+                                <p className="text-xs leading-relaxed whitespace-pre-wrap" style={{ color: colors.text, fontFamily: 'monospace' }}>
+                                  {item.text}
+                                </p>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      <div className="rounded-xl overflow-hidden" style={{ border: `1px solid ${colors.border}` }}>
+                        <div className="px-4 py-2 flex items-center justify-between" style={{ backgroundColor: darkMode ? '#0f172a' : '#f8fafc' }}>
+                          <span className="text-xs font-bold" style={{ color: colors.textSecondary }}>Texte complet du cours audio</span>
+                          <span className="text-xs" style={{ color: colors.textMuted }}>
+                            budget {(active.word_budget || 0).toLocaleString('fr-FR')} mots
+                          </span>
+                        </div>
+                        <div className="px-4 py-3" style={{ backgroundColor: colors.cardBg }}>
+                          <p className="text-xs leading-relaxed whitespace-pre-wrap" style={{ color: colors.text, fontFamily: 'monospace' }}>
+                            {active.text || 'Aucun texte pour ce cours.'}
+                          </p>
+                        </div>
+                      </div>
+                    </>
+                  )
+                })()}
+              </div>
+            </div>
+            )}
           </div>
         </div>
       )}

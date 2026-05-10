@@ -1,5 +1,33 @@
 # Changelog
 
+## 2026-05-10
+
+### feat: aperçu « Cours audio » dans le modal Script TTS + garde-fous closings
+
+**Backend — plan de découpe des cours pour l'UI** (`content_generation_service.py`)
+- Nouvelles helpers : `_course_filename_for_bloc`, `_course_duration_for_bloc`, `_serialize_course_bloc`, `_load_segments_for_course_plan`, `_build_course_blocs_preview`, `_load_saved_course_script_plan`, `_save_course_script_plan`, `get_course_script_plan_for_ui`.
+- Mode `preview=True` pour `_build_course_blocs_from_segments` / `_handle_last_bloc_overflow` : pas de remaniement API, pas de carryover persisté ; flag `overflow_unresolved` + `overflow_words` posé sur le dernier bloc si dépassement budget.
+- Capture systématique du texte des conclusions/closings (`closing_text`, et `text` dans `attempts`) pour les rendre visibles côté UI.
+- `_record_course_bloc()` interne à `generate_audio_from_script` : enregistre statut (`generated` / `preserved` / `preview` / `skipped`), durée finale, texte, opening reformulé, runtime conclusions ajoutées.
+
+**Backend — route exposée** (`hr_routes.py`) — `GET /api/hr/cours-folders/<id>/content-job/script` renvoie en plus `course_blocs` (via `get_course_script_plan_for_ui`) à côté des `sub_parts`.
+
+**Backend — closings durcis** (`closing_transition_service.py`)
+- Regex `_FORBIDDEN_DEICTIC_RE = \b(hier|demain)\b` : si le LLM ressort un closing contenant ces marqueurs temporels, on lève `ValueError` et on bascule en fallback statique. Évite les closings qui prétendent qu'« hier » s'est passé X ou que « demain » sera Y.
+- Nouvelle consigne dans les 3 prompts (court / moyen / long) : « N'invente jamais une échéance d'examen, un passage devant jury ou un contexte de certification daté qui n'apparaît pas explicitement dans l'extrait. »
+- Fallback long retravaillé : « on garde ces repères pour la suite du parcours » au lieu de « on se retrouve juste après pour la suite » (cohérent avec la règle no-`questions`/`pause`/`après`).
+
+**Frontend — vue « Cours audio »** (`CoursFolders.jsx`)
+- Toggle dans le header du modal Script TTS : `Sous-parties` (vue source historique) ↔ `Cours audio` (nouvelle vue).
+- Sidebar gauche : liste des blocs cours avec numéro, durée min, statut (`Généré` / `Conservé` / `Prévu` / `Ignoré`), nb mots, indicateur « conclusion ajoutée ».
+- Vue principale : texte du cours sélectionné (avec marquage closing/runtime conclusions), désactivée tant qu'aucun `course_blocs` côté API.
+- Sélection initiale = bloc 1 (ou premier disponible). Bordure active passe d'un `borderLeft` à un `boxShadow` inset 1px violet (cosmétique cohérente sidebar source).
+
+**Frontend — templates slides — polish visuel**
+- `ComparisonTemplate.jsx` : suppression du `Header` interne (badge TP-CRCD / brand) — désormais géré par le shell de slide. Palette adoucie : rouge `#DC2626` → `#E07A6F`, vert `#16A34A` → `#A7B85A` ; passage à `ComparisonTemplate.module.css`.
+- Ajustements typographiques / espacements / radius sur `AnalogyTemplate`, `OpinionTemplate`, `RecapTemplate`, `TipTemplate`, `TransitionTemplate`, `casestudy`, `chart`, `facilitator`, `playful`, `reflection`.
+- Mineurs `StatsTemplate.jsx`, `StoryTemplate.jsx`, `RecapTemplate.jsx`, `AnalogyTemplate.jsx`.
+
 ## 2026-05-07
 
 ### feat: génération audio cours pilotée par la durée réelle Edge TTS (runtime fit + carryover)

@@ -17,7 +17,7 @@ const AnalogyTemplate = ({ title, text, concept, comparison, badge, brandName })
 
       <div className="flex-1 flex flex-col items-center justify-center p-8">
         {/* Titre principal */}
-        <h1 className="font-fredoka text-4xl mb-12 text-center analogy-title">
+        <h1 className="font-fredoka text-3xl mb-5 text-center analogy-title">
           {title}
         </h1>
 

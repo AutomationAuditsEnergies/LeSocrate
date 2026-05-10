@@ -39,26 +39,26 @@ const StatsTemplate = ({
       </div>
 
       {/* MAIN CONTENT */}
-      <div className="flex-1 px-24 py-8 flex flex-col items-center justify-start">
+      <div className="flex-1 px-14 py-4 flex flex-col items-center justify-start">
 
         {/* SECTION TITRE */}
-        <div className="text-center mb-6 max-w-[800px]">
-          <div className="font-['Poppins'] text-base font-semibold tracking-widest text-[#666] uppercase mb-2">
+        <div className="text-center mb-3 max-w-[800px]">
+          <div className="font-['Poppins'] text-[0.8rem] font-semibold tracking-widest text-[#666] uppercase mb-1">
             {eyebrow}
           </div>
-          <h1 className="font-['Fredoka'] text-[3.5rem] text-[#2d241e] leading-tight mb-4 uppercase">
+          <h1 className="font-['Fredoka'] text-[2rem] text-[#2d241e] leading-tight mb-2 uppercase">
             {title}
           </h1>
-          <p className="font-['Poppins'] text-base text-[#555] leading-relaxed">
+          <p className="font-['Poppins'] text-[0.9rem] text-[#555] leading-relaxed">
             {description || "Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore."}
           </p>
         </div>
 
         {/* BANDEAU STATS */}
-        <div className="w-full bg-[#81D4FA] rounded-[20px] border-2 border-[#2d241e] shadow-[8px_8px_0_rgba(0,0,0,0.05)] py-2 flex justify-around items-center mb-12">
+        <div className="w-full bg-[#81D4FA] rounded-[20px] border-2 border-[#2d241e] shadow-[8px_8px_0_rgba(0,0,0,0.05)] py-2 flex justify-around items-center mb-4">
           {defaultStats.map((stat, idx) => (
             <div key={idx} className="text-center">
-              <div className="font-['Fredoka'] text-[5rem] font-bold text-[#2d241e] leading-none">
+              <div className="font-['Fredoka'] text-[3rem] font-bold text-[#2d241e] leading-none">
                 {stat.number}
               </div>
             </div>

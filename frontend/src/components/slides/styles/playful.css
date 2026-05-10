@@ -57,7 +57,7 @@
 /* --- CONTENU --- */
 .playful-main-content {
   flex: 1;
-  padding: 2rem 4rem;
+  padding: 1.25rem 3rem;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -66,10 +66,10 @@
 
 .playful-main-title {
   font-family: 'Fredoka', sans-serif;
-  font-size: 3rem;
+  font-size: 2rem;
   color: var(--text-brown);
   text-align: center;
-  margin-bottom: 2.5rem;
+  margin-bottom: 1.25rem;
   line-height: 1.2;
   position: relative;
   z-index: 2;
@@ -78,7 +78,7 @@
 /* --- CARTES --- */
 .playful-cards-grid {
   display: flex;
-  gap: 2.5rem;
+  gap: 1.5rem;
   width: 100%;
   justify-content: center;
   z-index: 2;

@@ -2407,8 +2407,10 @@ def create_hr_blueprint(socketio):
         if denied:
             return denied
 
-        from services.content_generation_service import get_job_from_db
-        import json as _json
+        from services.content_generation_service import (
+            get_course_script_plan_for_ui,
+            get_job_from_db,
+        )
         job = get_job_from_db(folder_id)
         if not job:
             return jsonify({"success": False, "error": "Aucun job pour ce dossier"}), 404
@@ -2448,11 +2450,14 @@ def create_hr_blueprint(socketio):
             for idx, data in sorted(sub_parts_data.items())
         ]
 
+        course_plan = get_course_script_plan_for_ui(folder_id, job=job)
+
         return jsonify({
             "success": True,
             "program_title": job["program_title"],
             "total_words": job["total_words"],
             "sub_parts": sub_parts_list,
+            **course_plan,
         }), 200
 
     @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/content-job/segment", methods=["PATCH"])

@@ -29,8 +29,8 @@ const RecapTemplate = ({ title, points = [], badge, brandName }) => {
     <div className="recap-slide">
       <Header badge={badge} brandName={brandName} />
 
-      <div className="flex-1 flex flex-col items-center justify-center p-8">
-        <h1 className="font-fredoka text-5xl mb-10 text-center recap-title-text">
+      <div className="flex-1 flex flex-col items-center justify-center p-6">
+        <h1 className="font-fredoka text-5xl mb-5 text-center recap-title-text">
           {title}
         </h1>
 
