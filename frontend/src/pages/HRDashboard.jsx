@@ -1745,7 +1745,7 @@ function CreatePlatformView({
                         opacity: autoPilotMode === 'test' ? 0.5 : 1,
                       }}
                     >
-                      <option value="gtts">gTTS — voix basique gratuite (recommandé pour test)</option>
+                      <option value="gtts">Edge TTS — voix basique gratuite Microsoft (recommandé pour test)</option>
                       <option value="mock">Mock — silence 1 s (gratuit, pour tester l'orchestration)</option>
                       <option value="fish_audio">Fish Audio S2-Pro (payant, ~9$/journée)</option>
                     </select>

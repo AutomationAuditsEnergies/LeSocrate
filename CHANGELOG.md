@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-05-11
+
+### fix(ui): label « gTTS » → « Edge TTS » dans le dropdown auto-pilot
+
+Le dropdown « Voix TTS pour l'étape audio » du formulaire « Nouvelle plateforme » (HRDashboard) affichait encore « gTTS — voix basique gratuite (recommandé pour test) » alors que la migration gTTS → Edge TTS a déjà été faite côté backend (cf. `9de3898`). L'identifiant DB historique reste `"gtts"` (utilisé par `auto_pilot_tts_mode`, `tts_mode`, `voice_type`, mapping `basic_tts == (tts_mode == "gtts")` dans `formation_routes.py`), mais le pipeline route déjà vers Edge TTS (voix neurales Microsoft).
+
+Modif minimale : libellé seulement, sans toucher à la valeur `"gtts"` ni au backend. Cohérent avec `FormationPipeline.jsx:238` qui affichait déjà « Edge TTS — voix basique gratuite » ailleurs dans l'UI.
+
 ## 2026-05-10
 
 ### feat: modal Script TTS affiche le texte réellement lu (même si script modifié depuis)
