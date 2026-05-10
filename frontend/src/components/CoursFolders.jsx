@@ -2135,9 +2135,19 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
                       </div>
 
                       {contentScriptModal.course_blocs_note && (
-                        <div className="rounded-xl px-4 py-3 text-xs leading-relaxed" style={{ backgroundColor: colors.innerBg, border: `1px solid ${colors.border}`, color: colors.textSecondary }}>
+                        <div
+                          className="rounded-xl px-4 py-3 text-xs leading-relaxed"
+                          style={contentScriptModal.course_blocs_stale ? {
+                            backgroundColor: darkMode ? '#431407' : '#fff7ed',
+                            border: `1px solid ${darkMode ? '#7c2d12' : '#fed7aa'}`,
+                            color: darkMode ? '#fdba74' : '#c2410c',
+                          } : {
+                            backgroundColor: colors.innerBg,
+                            border: `1px solid ${colors.border}`,
+                            color: colors.textSecondary,
+                          }}
+                        >
                           {contentScriptModal.course_blocs_note}
-                          {(contentScriptModal.dirty_blocs || 0) > 0 && ` ${contentScriptModal.dirty_blocs}/${contentScriptModal.total_blocs || 7} bloc(s) à régénérer.`}
                         </div>
                       )}
 

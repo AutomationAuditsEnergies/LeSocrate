@@ -2,6 +2,20 @@
 
 ## 2026-05-10
 
+### feat: modal Script TTS affiche le texte réellement lu (même si script modifié depuis)
+
+**Symptôme** — la vue « Cours audio » affichait le découpage théorique (label « Prévu · N mots ») même quand un audio avait été généré juste avant et qu'on avait toute l'info pour montrer le texte réellement envoyé au TTS (avec opening reformulé, conclusion Edge TTS runtime ajoutée, carryover consommé). Dès qu'on touchait un segment côté Sous-parties, ou que la pipeline marquait un bloc dirty, on perdait l'accès au texte vraiment lu.
+
+**Cause** — `get_course_script_plan_for_ui` ne retournait le plan persisté que si `dirty_blocs == 0`. Sinon → preview, alors qu'on a déjà `_save_course_script_plan(...)` qui stocke en blob Azure le `course_script_plan` rempli depuis `_record_course_bloc` (lignes 3722-3747) avec `course_text_for_ui` = `runtime_consumed_text` + conclusions runtime — donc le vrai texte envoyé au TTS.
+
+**Backend** (`content_generation_service.py`, `get_course_script_plan_for_ui`)
+- Prio inconditionnelle au plan persisté dès qu'il existe et qu'il contient `course_blocs`. Le flag `course_blocs_source="last_audio_generation"` est conservé.
+- Nouveau champ `course_blocs_stale` (bool) : vrai si `dirty_blocs > 0`. Le frontend l'utilise pour basculer le bandeau d'info en orange « warning » au lieu d'une teinte neutre.
+- `course_blocs_note` intègre directement le ratio « X/Y bloc(s) à régénérer » quand stale ; le frontend ne fait plus la concaténation lui-même.
+
+**Frontend** (`CoursFolders.jsx`)
+- Bandeau de note du panneau Cours audio : palette orange (`#fff7ed` / `#fed7aa` / `#c2410c` en clair, `#431407` / `#7c2d12` / `#fdba74` en sombre) quand `course_blocs_stale` est vrai. Sinon palette neutre (inchangée).
+
 ### feat: textes Q&A/pauses génériques restaurés + visibles dans le modal Script TTS
 
 **Backend — `_generic_break_texts` simplifiée** (`content_generation_service.py`)

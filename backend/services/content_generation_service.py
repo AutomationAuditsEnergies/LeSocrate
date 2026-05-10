@@ -4054,34 +4054,40 @@ def get_course_script_plan_for_ui(folder_id: int, job: dict | None = None) -> di
     breaks = _build_breaks_for_ui(job["platform_id"])
 
     dirty_info = get_script_dirty_blocs(folder_id)
+    dirty_blocs = int(dirty_info.get("dirty_blocs", 0) or 0)
+    total_blocs = int(dirty_info.get("total_blocs", 7) or 7)
     saved = _load_saved_course_script_plan(job["platform_id"], folder_id)
-    if saved and saved.get("course_blocs") and not dirty_info.get("dirty_blocs"):
+    if saved and saved.get("course_blocs"):
+        if dirty_blocs:
+            note = (
+                f"Texte réellement lu lors de la dernière génération TTS. "
+                f"{dirty_blocs}/{total_blocs} bloc(s) à régénérer "
+                f"(le script a été modifié depuis)."
+            )
+        else:
+            note = "Texte réellement lu lors de la dernière génération TTS."
         return {
             "course_blocs": saved.get("course_blocs") or [],
             "course_blocs_source": "last_audio_generation",
             "course_blocs_generated_at": saved.get("generated_at"),
             "course_blocs_mode": saved.get("mode"),
-            "course_blocs_note": "Dernière version réellement envoyée au TTS.",
-            "dirty_blocs": 0,
-            "total_blocs": dirty_info.get("total_blocs", 7),
+            "course_blocs_note": note,
+            "course_blocs_stale": bool(dirty_blocs),
+            "dirty_blocs": dirty_blocs,
+            "total_blocs": total_blocs,
             "breaks": breaks,
         }
 
     preview = _build_course_blocs_preview(folder_id, job)
-    note = "Prévisualisation du découpage actuel, avant génération audio."
-    if saved and saved.get("course_blocs"):
-        note = (
-            "Le texte a été modifié depuis la dernière génération audio. "
-            "Affichage du découpage actuel à régénérer."
-        )
     return {
         "course_blocs": preview,
         "course_blocs_source": "preview",
         "course_blocs_generated_at": None,
         "course_blocs_mode": None,
-        "course_blocs_note": note,
-        "dirty_blocs": dirty_info.get("dirty_blocs", 0),
-        "total_blocs": dirty_info.get("total_blocs", 7),
+        "course_blocs_note": "Prévisualisation du découpage actuel, avant génération audio.",
+        "course_blocs_stale": False,
+        "dirty_blocs": dirty_blocs,
+        "total_blocs": total_blocs,
         "breaks": breaks,
     }
 
