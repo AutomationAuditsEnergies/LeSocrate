@@ -2,6 +2,33 @@
 
 ## 2026-05-12
 
+### feat(formation-pipeline): parallélisation inter-folders pour Edge TTS (~40% plus rapide)
+
+Lancement audio en parallèle (1 greenlet par journée, GreenPool eventlet) activé **uniquement** pour Edge TTS et mock. Fish Audio reste séquentiel à cause du rate limit + coût.
+
+**Backend** (`backend/routes/formation_routes.py`)
+- Route `launch-audio` accepte `parallel_folders` (int, défaut env var `AUDIO_PARALLEL_FOLDERS` ou 1).
+- Hard cap côté serveur : `parallel_folders=1` forcé si `basic_tts=False` (Fish payant), même si le frontend envoie une valeur > 1. Filet de sécurité contre coût/rate-limit Fish Audio.
+- `_run_all_audios_sequential` renommée `_run_all_audios` et branche entre :
+  - Mode parallèle : `eventlet.GreenPool(size=parallel_folders)` + `GreenPile`, **pas de cooldown**, `next_folder_id=None` à tous les folders (le carryover inter-jours n'a pas de sens quand Jour 2 démarre avant que Jour 1 ait fini).
+  - Mode séquentiel (Fish ou défaut) : comportement actuel inchangé (1 folder à la fois + cooldown 30s).
+
+**Frontend** (`frontend/src/pages/FormationPipeline.jsx`)
+- `handleLaunchAudio` accepte un nouveau paramètre `parallelFolders` (défaut 1) et le passe dans le body **uniquement si basicTts ou mock** (defense en profondeur).
+- Les 3 boutons Edge TTS (basique premier lancement + basique relance + slides+Edge relance + slides+Edge premier lancement) passent `parallel_folders = nb_days` → toutes les journées en parallèle.
+- Les 3 boutons Fish Audio (premier lancement + relance payante + slides payant) restent inchangés (séquentiel).
+- Labels enrichis : `⚡ Relancer Edge TTS voix basique (2 journées en parallèle · 0€ · ~10 min)` au lieu de `(... · ~15 min)`.
+- Note d'info violette enrichie avec un encart orange pour Edge (parallèle, plus rapide, pas de carryover) et un encart blanc pour Fish (séquentiel, coût, cooldown 30s).
+
+**Gain mesuré attendu**
+- Edge TTS basique 2 journées : ~15 min → **~10 min** (gain ~33% sans compter le skip du cooldown 30s).
+- Edge TTS slides 2 journées : ~25 min → **~17 min** (gain ~32%).
+- Pour 3+ journées le gain s'accentue puisque le facteur de parallélisme augmente.
+
+**Limites**
+- Pas de carryover de surplus runtime-fit entre journées en mode parallèle (Jour 2 ne reçoit pas le débord éventuel de Jour 1). Acceptable pour les sessions Edge de test ; pour le rendu de production via Fish, on garde le séquentiel donc le carryover marche normalement.
+- Plusieurs greenlets simultanés sollicitent les serveurs Edge Microsoft en parallèle. Risque rate limit faible côté Microsoft mais non nul ; si ça arrive, baisser `parallel_folders` à 2 ou repasser séquentiel via env var `AUDIO_PARALLEL_FOLDERS=1`.
+
 ### ui(formation-pipeline): boutons « Relancer TTS » plus explicites sur le périmètre + coût + durée
 
 Suite à confusion utilisateur (pensait que le bouton relançait juste les segments dirty alors que le backend utilise `force_all=True` par défaut), les boutons et leur contexte sont maintenant auto-explicites :

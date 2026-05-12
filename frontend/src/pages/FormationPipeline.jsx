@@ -2432,21 +2432,27 @@ export default function FormationPipeline() {
   // - basicTts=true   → Edge TTS (voix basique gratuite) — vraie voix, utile
   //                      pour vérifier le flux et écouter le texte sans payer Fish
   // - (par défaut)    → Fish Audio S2-Pro (voix studio payante)
-  const handleLaunchAudio = async (mock = false, basicTts = false, syncSlides = false, autoGenerateSlides = false) => {
+  const handleLaunchAudio = async (mock = false, basicTts = false, syncSlides = false, autoGenerateSlides = false, parallelFolders = 1) => {
     setLaunchingAudio(true)
     setAudioError('')
     setPipelineDiagnostic(null)
     try {
+      const body = {
+        mock,
+        basic_tts: basicTts,
+        sync_slides: syncSlides,
+        auto_generate_slides: autoGenerateSlides,
+      }
+      // Parallélisation activée uniquement pour Edge TTS / mock (Fish reste séquentiel).
+      // Le backend hard-cap aussi côté serveur en cas de basic_tts=false.
+      if (parallelFolders > 1 && (basicTts || mock)) {
+        body.parallel_folders = parallelFolders
+      }
       const resp = await fetch(apiUrl(`/api/formation/${selectedJobId}/launch-audio`), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
-        body: JSON.stringify({
-          mock,
-          basic_tts: basicTts,
-          sync_slides: syncSlides,
-          auto_generate_slides: autoGenerateSlides,
-        }),
+        body: JSON.stringify(body),
       })
       const data = await resp.json()
       if (data.error) setAudioError(data.error)
@@ -4025,6 +4031,11 @@ export default function FormationPipeline() {
                     </div>
                     Chaque clic réécrit <strong>tous</strong> les MP3 des {contentFolders.length || job.nb_days} journées (19 MP3/jour = {(contentFolders.length || job.nb_days) * 19} fichiers au total : cours + Q&amp;A + pauses), pas seulement les segments marqués <em>dirty</em>.
                     Le <code style={{ color: '#a78bfa' }}>course_script_plan.json</code> et <code style={{ color: '#a78bfa' }}>audio_sync.timings</code> sont réécrits alignés sur les nouveaux MP3 — indispensable pour que les annotations Script TTS pointent au bon endroit.
+                    <div style={{ marginTop: '6px', fontSize: '12px', color: '#fb923c' }}>
+                      ⚡ <strong>Edge TTS</strong> : journées en <strong>parallèle</strong> (~40% plus rapide). Pas de carryover de surplus runtime-fit entre journées dans ce mode.
+                      <br/>
+                      💰 <strong>Fish Audio</strong> : reste séquentiel (coût + rate limit), avec cooldown 30s entre journées.
+                    </div>
                   </div>
                   <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
                     <button
@@ -4037,19 +4048,19 @@ export default function FormationPipeline() {
                     </button>
                     <button
                       style={{ ...S.btn('ghost'), borderColor: 'rgba(251,146,60,0.35)', color: '#fb923c' }}
-                      onClick={() => handleLaunchAudio(false, true)}
+                      onClick={() => handleLaunchAudio(false, true, false, false, contentFolders.length || job.nb_days)}
                       disabled={audioBusy || !allContentCompleted}
-                      title={`Régénération COMPLÈTE via Microsoft Edge TTS (voix basique, vraie voix synthétique). 0€. Estimer ~10-20 min pour ${contentFolders.length || job.nb_days} journées (cooldown 30s entre journées). Idéal pour tester sans payer Fish Audio.`}
+                      title={`Régénération COMPLÈTE via Microsoft Edge TTS (voix basique, vraie voix synthétique). 0€. ⚡ Journées en PARALLÈLE (1 greenlet/journée), pas de cooldown. Estimer ~8-12 min pour ${contentFolders.length || job.nb_days} journées (au lieu de ~15-20 min en séquentiel). Pas de carryover de surplus runtime-fit entre journées en mode parallèle.`}
                     >
-                      <Icon name="graphic_eq" /> {audioBusy ? '…' : `Relancer Edge TTS voix basique (${contentFolders.length || job.nb_days} journées · 0€ · ~15 min)`}
+                      <Icon name="graphic_eq" /> {audioBusy ? '…' : `⚡ Relancer Edge TTS voix basique (${contentFolders.length || job.nb_days} journées en parallèle · 0€ · ~10 min)`}
                     </button>
                     <button
                       style={{ ...S.btn('ghost'), borderColor: 'rgba(167,139,250,0.4)', color: '#a78bfa' }}
-                      onClick={() => handleLaunchAudio(false, true, true, true)}
+                      onClick={() => handleLaunchAudio(false, true, true, true, contentFolders.length || job.nb_days)}
                       disabled={audioBusy || !allContentCompleted}
-                      title={`Régénération COMPLÈTE Edge TTS avec génération de slides + timings slide↔audio. 0€. Plus long que Edge basique (~20-30 min pour ${contentFolders.length || job.nb_days} journées) à cause du découpage slide-par-slide.`}
+                      title={`Régénération COMPLÈTE Edge TTS avec génération de slides + timings slide↔audio. 0€. ⚡ Journées en PARALLÈLE. Estimer ~15-18 min pour ${contentFolders.length || job.nb_days} journées (au lieu de ~25-30 min en séquentiel). Pas de carryover entre journées en mode parallèle.`}
                     >
-                      <Icon name="slideshow" /> {audioBusy ? '…' : `Relancer slides + Edge TTS (${contentFolders.length || job.nb_days} journées · 0€ · ~25 min)`}
+                      <Icon name="slideshow" /> {audioBusy ? '…' : `⚡ Relancer slides + Edge TTS (${contentFolders.length || job.nb_days} journées en parallèle · 0€ · ~17 min)`}
                     </button>
                     <button
                       style={S.btn('success')}
@@ -4090,19 +4101,19 @@ export default function FormationPipeline() {
                     </button>
                     <button
                       style={{ ...S.btn('ghost'), borderColor: 'rgba(251,146,60,0.35)', color: '#fb923c' }}
-                      onClick={() => handleLaunchAudio(false, true)}
+                      onClick={() => handleLaunchAudio(false, true, false, false, contentFolders.length || job.nb_days)}
                       disabled={audioBusy || !allContentCompleted}
-                      title="Synthèse via Edge TTS (Microsoft Edge, gratuit, voix basique). Utile pour écouter le rendu sans payer Fish Audio."
+                      title="Synthèse via Edge TTS (Microsoft Edge, gratuit, voix basique). ⚡ Journées en parallèle. Utile pour écouter le rendu sans payer Fish Audio."
                     >
-                      <Icon name="graphic_eq" /> {audioBusy ? '…' : `Edge TTS voix basique (${contentFolders.length || job.nb_days} journées)`}
+                      <Icon name="graphic_eq" /> {audioBusy ? '…' : `⚡ Edge TTS voix basique (${contentFolders.length || job.nb_days} journées en parallèle)`}
                     </button>
                     <button
                       style={{ ...S.btn('ghost'), borderColor: 'rgba(167,139,250,0.4)', color: '#a78bfa' }}
-                      onClick={() => handleLaunchAudio(false, true, true, true)}
+                      onClick={() => handleLaunchAudio(false, true, true, true, contentFolders.length || job.nb_days)}
                       disabled={audioBusy || !allContentCompleted}
-                      title="Test complet sans Fish Audio : génère les slides si besoin, synthétise via Edge TTS, concatène par slide et stocke les timings."
+                      title="Test complet sans Fish Audio : génère les slides si besoin, synthétise via Edge TTS, concatène par slide et stocke les timings. ⚡ Journées en parallèle."
                     >
-                      <Icon name="slideshow" /> {audioBusy ? '…' : `Slides + Edge TTS (${contentFolders.length || job.nb_days} journées)`}
+                      <Icon name="slideshow" /> {audioBusy ? '…' : `⚡ Slides + Edge TTS (${contentFolders.length || job.nb_days} journées en parallèle)`}
                     </button>
                     <button
                       style={{ ...S.btn('neutral'), border: '1px dashed #64748b' }}

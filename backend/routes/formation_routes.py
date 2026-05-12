@@ -2520,6 +2520,29 @@ def launch_audio(job_id):
     if mock and basic_tts:
         return jsonify({"error": "mock et basic_tts sont mutuellement exclusifs"}), 400
 
+    # Parallélisation inter-folders (1 greenlet par journée en simultané).
+    # Réservé à Edge TTS / mock pour éviter le rate limit Fish Audio.
+    # Côté backend on hard-cap à 1 si basic_tts=False (donc Fish) — défense
+    # en profondeur, le frontend ne doit pas l'envoyer pour les boutons Fish.
+    raw_parallel = data.get("parallel_folders")
+    try:
+        parallel_folders = int(raw_parallel) if raw_parallel is not None else int(os.getenv("AUDIO_PARALLEL_FOLDERS", "1"))
+    except (TypeError, ValueError):
+        parallel_folders = 1
+    parallel_folders = max(1, parallel_folders)
+    if not (basic_tts or mock):
+        # Hard guard : Fish Audio paye à l'usage et a un rate limit strict.
+        # On refuse la parallélisation côté serveur même si le client la
+        # demande. Le frontend ne devrait pas l'envoyer pour les boutons
+        # payants — c'est un filet de sécurité supplémentaire.
+        if parallel_folders > 1:
+            logger.warning(
+                f"⚠️ parallel_folders={parallel_folders} ignoré : Fish Audio reste séquentiel "
+                f"(coût + rate limit)"
+            )
+        parallel_folders = 1
+    parallel_folders = min(parallel_folders, len(folder_ids))
+
     import eventlet
     from services.content_generation_service import generate_audio_from_script
 
@@ -2610,25 +2633,44 @@ def launch_audio(job_id):
                 logger.error(f"❌ Impossible de marquer job {job_id} en audio_error : {ue}")
             return False
 
-    # Synthèse audio SÉQUENTIELLE entre journées (pas parallèle).
-    # Raison : pour Edge TTS et Fish Audio, lancer plusieurs folders en parallèle
-    # multiplie les requêtes simultanées vers l'API tierce → rate limit (429)
-    # immédiat. On séquentialise via 1 seul greenlet qui itère.
-    def _run_all_audios_sequential():
+    # Synthèse audio : séquentielle par défaut, ou parallèle si parallel_folders>1.
+    # - Séquentiel (Fish Audio + défaut) : 1 folder à la fois + cooldown 30s.
+    #   Évite le rate limit côté Fish Audio (qui est payant et a un quota strict).
+    # - Parallèle (Edge TTS uniquement, sur demande explicite frontend ou env) :
+    #   tous les folders en simultané dans un GreenPool. Pas de cooldown.
+    #   Pas de carryover inter-jours (next_folder_id=None) parce que Jour 2 démarre
+    #   avant que Jour 1 ne sache s'il a du surplus à reporter.
+    def _run_all_audios():
         run_started_at = time.time()
         failures = []
-        for idx, fid in enumerate(folder_ids):
-            next_fid = folder_ids[idx + 1] if idx + 1 < len(folder_ids) else None
-            ok = _run_audio(fid, next_folder_id=next_fid, is_last_folder=next_fid is None)
-            if not ok:
-                failures.append(fid)
-            # Petit cooldown entre folders pour aérer le rate limit côté
-            # API tierce. Configurable, surtout utile pour Edge TTS.
-            import time as _t
-            cooldown = int(os.getenv("AUDIO_COOLDOWN_BETWEEN_FOLDERS_SEC", "30"))
-            if cooldown > 0 and idx + 1 < len(folder_ids):
-                logger.info(f"⏸ Cooldown {cooldown}s avant folder suivant")
-                _t.sleep(cooldown)
+
+        if parallel_folders > 1 and len(folder_ids) > 1:
+            import eventlet as _ev
+            logger.info(
+                f"🚀 PARALLEL audio: {len(folder_ids)} folder(s) sur pool de "
+                f"{parallel_folders} (mode={'edge' if basic_tts else 'mock'})"
+            )
+            pool = _ev.GreenPool(size=parallel_folders)
+            pile = _ev.GreenPile(pool)
+            for fid in folder_ids:
+                # En parallèle, pas de carryover inter-jours (cf. raison ci-dessus).
+                pile.spawn(_run_audio, fid, None, True)
+            for idx, ok in enumerate(pile):
+                if not ok:
+                    failures.append(folder_ids[idx])
+        else:
+            for idx, fid in enumerate(folder_ids):
+                next_fid = folder_ids[idx + 1] if idx + 1 < len(folder_ids) else None
+                ok = _run_audio(fid, next_folder_id=next_fid, is_last_folder=next_fid is None)
+                if not ok:
+                    failures.append(fid)
+                # Petit cooldown entre folders pour aérer le rate limit côté
+                # API tierce. Configurable, surtout utile pour Fish Audio.
+                import eventlet as _ev
+                cooldown = int(os.getenv("AUDIO_COOLDOWN_BETWEEN_FOLDERS_SEC", "30"))
+                if cooldown > 0 and idx + 1 < len(folder_ids):
+                    logger.info(f"⏸ Cooldown {cooldown}s avant folder suivant")
+                    _ev.sleep(cooldown)
         try:
             from services.formation_observability_service import log_pipeline_event
             if failures:
@@ -2683,7 +2725,7 @@ def launch_audio(job_id):
     except Exception:
         pass
 
-    eventlet.spawn(_run_all_audios_sequential)
+    eventlet.spawn(_run_all_audios)
 
     # Marquer la plateforme comme 'ready' : le contenu est validé, la synthèse
     # audio tourne en background. Côté HR Dashboard, l'overlay "Module en
