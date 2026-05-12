@@ -2,6 +2,34 @@
 
 ## 2026-05-12
 
+### feat(content-review): splice MP3 chirurgical ms-précis au moment du Appliquer (Phase B)
+
+Quand l'admin clique « Appliquer » sur une annotation `source_type=course`, le backend ne se contente plus de marquer le bloc `dirty=1` — il **patche directement le MP3 en place sur Azure** au millisecond près. Plus besoin de régénérer 10 min de TTS pour corriger 30 secondes.
+
+**Comment ça marche**
+1. Récupère le `script_slide_deck` du job → `audio_sync.timings` (déjà persistés à chaque génération de chunk audio, lignes ~1198 de `content_generation_service.py`). Chaque timing porte `{slide_id, audio_filename, start_time, end_time, word_start, word_end}`.
+2. Récupère le texte complet du bloc cours via `get_course_script_plan_for_ui`.
+3. `_find_word_range` localise `original_paragraph` dans le texte du bloc (matching normalisé sur espaces, fallback case-insensitive) → indices de mots.
+4. Filtre les timings du même `audio_filename` dont la plage `[word_start, word_end]` chevauche le paragraphe → `splice_start_sec` / `splice_end_sec`.
+5. Génère le TTS du `proposed_text` via `convert_to_speech` (Fish Audio S2-Pro).
+6. Télécharge le MP3 original depuis Azure (`audiostts/platform-X/folder-Y/playlist/<filename>`), splice via pydub avec crossfade 25 ms aux jointures.
+7. Re-uploade le MP3 patché à la même URL.
+8. `_splice_recompute_timings` : retire les timings de la plage spliced, insère un timing `patched-<annotation_id>` avec la nouvelle durée, **décale tous les timings suivants** du delta `(new_dur - old_dur)`. Persisté via `update_script_slide_deck_audio_sync`.
+
+**Garanties**
+- Best-effort : toute exception est attrapée et stockée dans `splice_error`. L'apply reste réussi (correction_status=applied) même si le splice échoue.
+- `source_type=course` + splice OK → segment source NON marqué `dirty=1` (sinon la prochaine régénération bloc écraserait le splice).
+- `source_type=segment` → patch texte segment + `dirty=1` (comportement Phase A préservé, pas de splice direct).
+
+**Nouvelles colonnes** (`content_script_annotations`)
+- `splice_status` : `done | error | skipped`
+- `splice_error` : message d'erreur si échec
+- `splice_blob_path` : chemin Azure du MP3 patché (pour audit)
+
+**Frontend** : badge « 🎯 MP3 patché ms-précis » (vert) ou « Splice échoué : … » (rouge) sous le diff Avant/Après, visible uniquement quand `correction_status=applied`.
+
+**Limite connue (à corriger Phase 3)** — pour `source_type=course` avec splice OK, le texte source en DB n'est PAS mis à jour parce qu'on ne sait pas dans quel segment se trouve le passage. Conséquence : si l'utilisateur clique plus tard « régénérer tout », le bloc complet sera re-TTS-é depuis le texte source non corrigé, écrasant le splice. Workaround pour rendre une correction durable : annoter depuis l'onglet « Source » (`source_type=segment`).
+
 ### feat(content-review): correction immédiate DeepSeek sur sélection — preview avant/après (Phase A)
 
 Quand l'admin surligne du texte dans la modal Script TTS et ajoute un commentaire, DeepSeek réécrit le paragraphe alentour en appliquant la consigne. La proposition apparaît côte-à-côte (Avant / Après) dans le panneau d'annotation, avec boutons Appliquer / Rejeter. Sur Appliquer, le texte du segment source est mis à jour en DB et le segment marqué `dirty=1 reviewed=0` — la prochaine régénération audio le re-fera. Étape suivante (Phase B) : splice MP3 chirurgical au moment de Appliquer, pour ne PAS re-générer tout le bloc de 10 min.

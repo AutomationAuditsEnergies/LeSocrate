@@ -61,6 +61,9 @@ def _ensure_annotations_table() -> None:
         "ALTER TABLE content_script_annotations ADD COLUMN correction_status TEXT DEFAULT 'pending'",
         "ALTER TABLE content_script_annotations ADD COLUMN correction_error TEXT",
         "ALTER TABLE content_script_annotations ADD COLUMN applied_at TIMESTAMP",
+        "ALTER TABLE content_script_annotations ADD COLUMN splice_status TEXT",
+        "ALTER TABLE content_script_annotations ADD COLUMN splice_error TEXT",
+        "ALTER TABLE content_script_annotations ADD COLUMN splice_blob_path TEXT",
     ):
         try:
             cursor.execute(ddl)
@@ -136,6 +139,9 @@ def _row_to_annotation(row) -> dict:
         "correction_status": row[16] or "pending",
         "correction_error": row[17] or "",
         "applied_at": row[18] or "",
+        "splice_status": row[19] or "",
+        "splice_error": row[20] or "",
+        "splice_blob_path": row[21] or "",
     }
 
 
@@ -155,7 +161,8 @@ def list_script_annotations(folder_id: int, *, include_deleted: bool = False) ->
                bloc_number, filename, selected_text, comment, status,
                markdown_path, created_at, updated_at,
                original_paragraph, proposed_text, correction_status,
-               correction_error, applied_at
+               correction_error, applied_at,
+               splice_status, splice_error, splice_blob_path
         FROM content_script_annotations
         WHERE folder_id = ? AND job_id = ? {where_deleted}
         ORDER BY created_at ASC, id ASC
@@ -531,6 +538,18 @@ def apply_script_annotation(folder_id: int, annotation_id: int) -> dict:
         conn.close()
         raise ValueError("Pas de correction proposée à appliquer")
 
+    # Récupère aussi bloc_number/filename pour décider d'un éventuel splice MP3.
+    cursor.execute(
+        """
+        SELECT bloc_number, filename
+        FROM content_script_annotations WHERE id = ?
+        """,
+        (annotation_id,),
+    )
+    extra = cursor.fetchone()
+    bloc_number = extra[0] if extra else None
+    filename = (extra[1] if extra else None) or ""
+
     if source_type == "segment" and sub_part_index is not None and passe is not None and original_paragraph:
         cursor.execute(
             """
@@ -568,11 +587,243 @@ def apply_script_annotation(folder_id: int, annotation_id: int) -> dict:
     conn.commit()
     conn.close()
 
+    # Splice MP3 chirurgical pour les annotations source_type=course.
+    # Pour les annotations source_type=segment, la régénération TTS sélective
+    # (dirty=1 sur le segment) couvre déjà la mise à jour audio à la prochaine
+    # régénération du bloc — pas de splice direct du MP3 ici.
+    splice_result = {"status": "skipped", "blob_path": "", "error": "source_type != course"}
+    if source_type == "course":
+        splice_result = _attempt_audio_splice(
+            folder_id,
+            context["job_id"],
+            context["platform_id"],
+            annotation_id,
+            bloc_number=bloc_number,
+            filename=filename,
+            original_paragraph=original_paragraph,
+            proposed_text=proposed_text,
+        )
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        UPDATE content_script_annotations
+        SET splice_status = ?, splice_error = ?, splice_blob_path = ?,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+        """,
+        (
+            splice_result["status"],
+            splice_result["error"] or None,
+            splice_result["blob_path"] or None,
+            annotation_id,
+        ),
+    )
+    conn.commit()
+    conn.close()
+
     path = write_script_annotations_markdown(folder_id)
     return {
         "annotations": list_script_annotations(folder_id)["annotations"],
         "markdown_path": path,
     }
+
+
+def _find_word_range(haystack: str, needle: str) -> tuple[int, int] | None:
+    haystack_norm = " ".join((haystack or "").split())
+    needle_norm = " ".join((needle or "").split())
+    if not haystack_norm or not needle_norm:
+        return None
+    pos = haystack_norm.find(needle_norm)
+    if pos < 0:
+        pos = haystack_norm.lower().find(needle_norm.lower())
+    if pos < 0:
+        return None
+    before = haystack_norm[:pos]
+    word_start = len(before.split())
+    word_end = word_start + len(needle_norm.split())
+    return word_start, word_end
+
+
+def _course_bloc_text(folder_id: int, bloc_number: int) -> str | None:
+    """Récupère le texte complet d'un bloc cours via le plan UI."""
+    try:
+        from services.content_generation_service import get_course_script_plan_for_ui
+        plan = get_course_script_plan_for_ui(folder_id)
+        for bloc in plan.get("course_blocs") or []:
+            if int(bloc.get("bloc_number") or 0) == int(bloc_number):
+                return bloc.get("text") or ""
+    except Exception as exc:
+        logger.warning(f"⚠️ Lecture course_blocs impossible folder={folder_id} bloc={bloc_number}: {exc}")
+    return None
+
+
+def _splice_recompute_timings(timings: list, audio_filename: str, splice_start_sec: float,
+                              splice_end_sec: float, new_dur_sec: float,
+                              word_start: int, word_end: int, slide_id: str) -> list:
+    """Remplace les timings dans [splice_start_sec, splice_end_sec] par un seul
+    timing patch, et décale les suivants de la différence de durée."""
+    delta_sec = new_dur_sec - (splice_end_sec - splice_start_sec)
+    out = []
+    insertion_done = False
+    patch = {
+        "slide_id": slide_id,
+        "audio_filename": audio_filename,
+        "start_time": round(splice_start_sec, 3),
+        "end_time": round(splice_start_sec + new_dur_sec, 3),
+        "duration": round(new_dur_sec, 3),
+        "word_start": int(word_start),
+        "word_end": int(word_end),
+        "patched": True,
+    }
+    for item in timings or []:
+        if item.get("audio_filename") != audio_filename:
+            out.append(item)
+            continue
+        t_start = float(item.get("start_time") or 0)
+        t_end = float(item.get("end_time") or 0)
+        if t_end <= splice_start_sec + 1e-6:
+            out.append(item)
+        elif t_start >= splice_end_sec - 1e-6:
+            if not insertion_done:
+                out.append(patch)
+                insertion_done = True
+            shifted = dict(item)
+            shifted["start_time"] = round(t_start + delta_sec, 3)
+            shifted["end_time"] = round(t_end + delta_sec, 3)
+            out.append(shifted)
+        # else : chunk dans la plage, supprimé (remplacé par patch)
+    if not insertion_done:
+        out.append(patch)
+    return out
+
+
+def _attempt_audio_splice(
+    folder_id: int,
+    job_id: int,
+    platform_id: int,
+    annotation_id: int,
+    *,
+    bloc_number: int | None,
+    filename: str,
+    original_paragraph: str,
+    proposed_text: str,
+) -> dict:
+    """Tente le splice ms-précis du MP3 du bloc cours concerné.
+
+    Retourne {"status": done|skipped|error, "blob_path": str, "error": str}.
+    Best-effort : toute exception est captée et renvoyée en status=error.
+    """
+    out = {"status": "skipped", "blob_path": "", "error": ""}
+    if not filename or not bloc_number or not original_paragraph or not proposed_text:
+        out["error"] = "données manquantes (filename/bloc_number/paragraph)"
+        return out
+
+    try:
+        from services.script_slide_generation_service import (
+            get_latest_script_slide_deck,
+            update_script_slide_deck_audio_sync,
+        )
+        deck = get_latest_script_slide_deck(folder_id, job_id)
+        if not deck:
+            out["error"] = "Aucun script_slide_deck pour ce job"
+            return out
+        audio_sync = deck.get("audio_sync") or {}
+        timings = audio_sync.get("timings") or []
+        if not timings:
+            out["error"] = "audio_sync.timings absent"
+            return out
+
+        bloc_text = _course_bloc_text(folder_id, int(bloc_number))
+        if not bloc_text:
+            out["error"] = f"texte bloc {bloc_number} introuvable"
+            return out
+
+        rng = _find_word_range(bloc_text, original_paragraph)
+        if not rng:
+            out["error"] = "paragraphe introuvable dans le texte du bloc"
+            return out
+        word_start, word_end = rng
+
+        overlapping = []
+        for t in timings:
+            if t.get("audio_filename") != filename:
+                continue
+            try:
+                w_s = int(t.get("word_start"))
+                w_e = int(t.get("word_end"))
+            except (TypeError, ValueError):
+                continue
+            if w_e <= word_start or w_s >= word_end:
+                continue
+            overlapping.append(t)
+        if not overlapping:
+            out["error"] = f"aucun timing ne couvre word_range=[{word_start},{word_end}] pour {filename}"
+            return out
+
+        splice_start_sec = min(float(t.get("start_time") or 0) for t in overlapping)
+        splice_end_sec = max(float(t.get("end_time") or 0) for t in overlapping)
+        splice_start_ms = max(0, int(splice_start_sec * 1000))
+        splice_end_ms = max(splice_start_ms + 1, int(splice_end_sec * 1000))
+
+        from services.tts_service import convert_to_speech
+        from services.azure_blob_service import download_blob, upload_blob, CONTAINER_AUDIOS
+        from pydub import AudioSegment
+        import io
+
+        new_tts_bytes = convert_to_speech(proposed_text)
+        new_segment = AudioSegment.from_file(io.BytesIO(new_tts_bytes), format="mp3")
+
+        blob_path = f"platform-{platform_id}/folder-{folder_id}/playlist/{filename}"
+        original_bytes = download_blob(CONTAINER_AUDIOS, blob_path)
+        original = AudioSegment.from_file(io.BytesIO(original_bytes), format="mp3")
+
+        head = original[:splice_start_ms]
+        tail = original[splice_end_ms:]
+        crossfade = 25 if len(head) > 50 and len(new_segment) > 50 else 0
+        if crossfade:
+            patched = head.append(new_segment, crossfade=crossfade)
+        else:
+            patched = head + new_segment
+        if crossfade and len(tail) > 50:
+            patched = patched.append(tail, crossfade=crossfade)
+        else:
+            patched = patched + tail
+
+        buf = io.BytesIO()
+        patched.export(buf, format="mp3", bitrate="128k")
+        upload_blob(CONTAINER_AUDIOS, blob_path, buf.getvalue())
+
+        new_dur_sec = len(new_segment) / 1000.0
+        new_word_end = word_start + len(" ".join(proposed_text.split()).split())
+        slide_id = f"patched-{annotation_id}"
+        new_timings = _splice_recompute_timings(
+            timings,
+            filename,
+            splice_start_sec,
+            splice_end_sec,
+            new_dur_sec,
+            word_start,
+            new_word_end,
+            slide_id,
+        )
+        audio_sync_updated = dict(audio_sync)
+        audio_sync_updated["timings"] = new_timings
+        update_script_slide_deck_audio_sync(deck["deck_id"], audio_sync_updated)
+
+        out["status"] = "done"
+        out["blob_path"] = blob_path
+        logger.info(
+            f"✂️ Splice annotation {annotation_id} : {filename} "
+            f"[{splice_start_sec:.2f}s-{splice_end_sec:.2f}s] → {new_dur_sec:.2f}s "
+            f"(Δ={new_dur_sec - (splice_end_sec - splice_start_sec):+.2f}s)"
+        )
+    except Exception as exc:
+        out["status"] = "error"
+        out["error"] = str(exc)[:500]
+        logger.exception(f"❌ Splice annotation {annotation_id} échoué")
+    return out
 
 
 def reject_script_annotation(folder_id: int, annotation_id: int) -> dict:

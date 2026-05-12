@@ -391,6 +391,9 @@ def init_database():
             ("correction_status", "ALTER TABLE content_script_annotations ADD COLUMN correction_status TEXT DEFAULT 'pending'"),
             ("correction_error", "ALTER TABLE content_script_annotations ADD COLUMN correction_error TEXT"),
             ("applied_at", "ALTER TABLE content_script_annotations ADD COLUMN applied_at TIMESTAMP"),
+            ("splice_status", "ALTER TABLE content_script_annotations ADD COLUMN splice_status TEXT"),
+            ("splice_error", "ALTER TABLE content_script_annotations ADD COLUMN splice_error TEXT"),
+            ("splice_blob_path", "ALTER TABLE content_script_annotations ADD COLUMN splice_blob_path TEXT"),
         ):
             try:
                 cursor.execute(_ddl)

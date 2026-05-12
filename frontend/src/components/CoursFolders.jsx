@@ -1194,6 +1194,23 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
                 “{annotation.selected_text}”
               </p>
 
+              {status === 'applied' && annotation.splice_status && (
+                <p
+                  className="mt-2 text-[10px] font-semibold uppercase tracking-wide"
+                  style={{
+                    color: annotation.splice_status === 'done' ? '#166534'
+                      : annotation.splice_status === 'error' ? '#991b1b'
+                      : colors.textMuted,
+                  }}
+                >
+                  {annotation.splice_status === 'done'
+                    ? '🎯 MP3 patché ms-précis'
+                    : annotation.splice_status === 'error'
+                    ? `Splice échoué : ${annotation.splice_error || 'erreur'}`
+                    : `Splice ${annotation.splice_status}`}
+                </p>
+              )}
+
               {(annotation.original_paragraph || annotation.proposed_text) && status !== 'pending' && (
                 <div className="mt-3 grid gap-2 md:grid-cols-2">
                   <div
