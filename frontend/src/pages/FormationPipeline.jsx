@@ -2589,7 +2589,28 @@ export default function FormationPipeline() {
   if (job?.status === 'tts_launched' && allContentCompleted) {
     currentStep = 6
   }
-  const audioBusy = launchingAudio || AUDIO_ACTIVE_STATUSES.has(job?.status)
+  // Détection "stale running" : Azure App Service peut redémarrer le backend
+  // (déploiement GitHub Actions, scaling, etc.) en plein run TTS → les greenlets
+  // meurent silencieusement et le job reste figé en `audio_running` à vie.
+  // Sans détection, l'UI bloque les boutons "Relancer" indéfiniment.
+  // Heuristique : si statut=audio_running mais aucun event audio depuis > 3 min,
+  // on considère que la pipeline est morte et on permet la relance.
+  const STALE_AUDIO_RUN_MS = 3 * 60 * 1000
+  const _audioEvents = (pipelineDiagnostic?.events || []).filter(
+    e => e.step === 'audio' || String(e.event_type || '').startsWith('audio_')
+  )
+  const _lastAudioEventAt = _audioEvents.length > 0
+    ? new Date(_audioEvents[_audioEvents.length - 1].created_at).getTime()
+    : null
+  const audioStale = (
+    AUDIO_ACTIVE_STATUSES.has(job?.status)
+    && _lastAudioEventAt !== null
+    && (Date.now() - _lastAudioEventAt) > STALE_AUDIO_RUN_MS
+  )
+  const audioStaleMinutes = audioStale && _lastAudioEventAt
+    ? Math.floor((Date.now() - _lastAudioEventAt) / 60000)
+    : 0
+  const audioBusy = launchingAudio || (AUDIO_ACTIVE_STATUSES.has(job?.status) && !audioStale)
   const selectedPipelineModel = pipelineModelLabel(job?.auto_pilot_model)
 
   // ─── Render ───────────────────────────────────────────────────────────────
@@ -4040,6 +4061,26 @@ export default function FormationPipeline() {
                           {linkedModule.voice_type && ' Relancer le TTS avec une voix différente met à jour les MP3 et la voix du module en place.'}
                         </div>
                       </div>
+                    </div>
+                  )}
+
+                  {audioStale && (
+                    <div style={{
+                      fontSize: '13px',
+                      color: '#fef3c7',
+                      backgroundColor: 'rgba(234, 88, 12, 0.18)',
+                      border: '1px solid rgba(234, 88, 12, 0.55)',
+                      borderRadius: '10px',
+                      padding: '12px 14px',
+                      marginBottom: '12px',
+                      lineHeight: 1.55,
+                    }}>
+                      <div style={{ fontWeight: 700, color: '#fdba74', marginBottom: '4px' }}>
+                        <Icon name="warning" style={{ fontSize: '15px' }} /> Pipeline probablement interrompue
+                      </div>
+                      Le job est marqué <strong>« en cours »</strong> mais aucun événement audio n'a été émis depuis <strong>{audioStaleMinutes} min</strong>. Cause typique : redémarrage Azure App Service (déploiement, scaling) qui tue les greenlets en plein run sans nettoyer le statut DB.
+                      <br />
+                      Les boutons « Relancer » ci-dessous sont activés — un nouveau run remplacera proprement l'ancien. Pour éviter ce cas, évite de pousser du code pendant qu'une pipeline tourne.
                     </div>
                   )}
 

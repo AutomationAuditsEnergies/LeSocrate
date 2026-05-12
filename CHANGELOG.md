@@ -26,6 +26,24 @@ Ajouté **sous la barre statique « X/N à jour »** une seconde barre cyan **«
 
 Résultat : pendant le run Edge TTS parallèle des 2 journées, chaque journée affiche sa propre barre cyan qui avance indépendamment de l'autre, sans avoir à F5.
 
+### ui(formation-pipeline): détection « stale audio running » + débloque les boutons Relancer
+
+Quand Azure App Service redémarre le backend en plein run TTS (déploiement GitHub Actions, scaling instance, etc.), les greenlets eventlet meurent silencieusement et le `formation_pipeline_jobs.status` reste figé à `audio_running` indéfiniment. Conséquence côté UI : `audioBusy = AUDIO_ACTIVE_STATUSES.has(job.status)` reste `true` → tous les boutons « Relancer » affichent `…` et sont désactivés → l'utilisateur ne peut plus rien relancer.
+
+**Détection heuristique** dans `FormationPipeline.jsx` :
+- Lecture du timestamp du dernier event audio (filtre `step === 'audio' || event_type starts_with 'audio_'`).
+- Si `AUDIO_ACTIVE_STATUSES.has(status)` ET dernier event > **3 min** → considère le run comme « stale ».
+- `audioBusy` ignore alors `audio_running` (mais reste vrai pendant `launchingAudio` court instant après un clic frais).
+
+**Bandeau d'avertissement orange** juste avant les boutons Relancer quand stale :
+> ⚠️ Pipeline probablement interrompue
+> Le job est marqué « en cours » mais aucun événement audio n'a été émis depuis X min. Cause typique : redémarrage Azure App Service (déploiement, scaling) qui tue les greenlets en plein run sans nettoyer le statut DB.
+> Les boutons « Relancer » ci-dessous sont activés — un nouveau run remplacera proprement l'ancien.
+
+**Côté backend rien à changer** : `launch_audio` accepte déjà un relancement même si le statut est `audio_running` (il fait juste `update_job(status="audio_running")` sans vérification préalable du status d'avant — confirmé via grep).
+
+**Workaround utilisateur tant que ce fix n'est pas déployé** : tu peux SQL-update manuellement `formation_pipeline_jobs SET status='audio_error' WHERE id=8` côté Azure si tu veux débloquer maintenant.
+
 ### feat(formation-pipeline): parallélisation inter-folders pour Edge TTS (~40% plus rapide)
 
 Lancement audio en parallèle (1 greenlet par journée, GreenPool eventlet) activé **uniquement** pour Edge TTS et mock. Fish Audio reste séquentiel à cause du rate limit + coût.
