@@ -37,10 +37,13 @@ function statusToStep(status, job = null) {
   if (AUDIO_DONE_STATUSES.has(status)) return 7
   if (AUDIO_ACTIVE_STATUSES.has(status)) return 6
 
-  // Étape 6 (génération texte cours) — texte lancé OU audio en erreur
-  // (audio_error = on était à l'étape 7 ; les textes restent validés et
-  // l'utilisateur peut relancer le TTS)
-  if (status === 'tts_launched' || status === 'audio_error') return 6
+  // Étape 6 (génération texte cours). Une fois tous les textes complétés, le
+  // calcul de `currentStep` plus bas avance explicitement à l'étape audio.
+  if (status === 'tts_launched') return 5
+
+  // audio_error = on était à l'étape 7 ; les textes restent validés et
+  // l'utilisateur peut relancer le TTS.
+  if (status === 'audio_error') return 6
 
   // Étape 5 (programmes journée validés)
   if (job.daily_programs_validated) return 5
@@ -78,6 +81,21 @@ const STEP_LABELS = [
   { icon: 'edit_note', label: 'Génération cours' },
   { icon: 'record_voice_over', label: 'Synthèse TTS' },
 ]
+
+const AUTO_PILOT_STEP_LABELS = {
+  start: 'démarrage',
+  reac: 'téléchargement REAC',
+  kb: 'enrichissement Knowledge Base',
+  global: 'programme global',
+  daily: 'programmes journée',
+  content: 'génération texte',
+  volume_safety: 'sécurité volume',
+  review: 'révision conformité',
+  post_review_docs: 'document final',
+  audio: 'synthèse audio',
+  done: 'terminé',
+  '?': '—',
+}
 
 // ─── Connecteurs visuels entre étapes du pipeline ─────────────────────────────
 // Matérialise le flux de données : RNCP → REAC → split (API/CC) → ... → merge → TTS.
@@ -459,7 +477,7 @@ function eventLabel(eventType) {
     review_completed: 'Review terminée',
     review_failed: 'Review échouée',
     audio_started: 'Audio démarré',
-    audio_progress: 'Progression audio',
+    audio_progress: 'Fichier playlist en cours',
     audio_folder_started: 'Journée audio démarrée',
     audio_folder_completed: 'Journée audio terminée',
     audio_folder_failed: 'Journée audio échouée',
@@ -491,7 +509,7 @@ function healthCheckLabel(key) {
     docx_buildable: 'Word final téléchargeable',
     pre_review_snapshotted: 'Snapshot avant review',
     review_consistent: 'Review conformité',
-    audio_tts_files: 'Audio TTS à jour',
+    audio_tts_files: 'Segments texte audio à jour',
     module_persistant: 'Module persistant',
     health_error: 'Audit final',
   }
@@ -527,6 +545,7 @@ function PipelineDiagnosticPanel({ diagnostic, loading, error, onRefresh }) {
   }), { words: 0, segments: 0, reviewed: 0, dirty: 0, reviewErrors: 0 })
   const audioReady = Math.max(0, totals.segments - totals.dirty)
   const audioPct = totals.segments > 0 ? Math.round((audioReady / totals.segments) * 100) : 0
+  const showGlobalAudioSummary = folders.length > 1
   const healthColor = health?.ok ? '#34d399' : health?.blocking?.length ? '#f87171' : '#fbbf24'
   const healthIcon = health?.ok ? 'verified' : health?.blocking?.length ? 'error_outline' : 'warning_amber'
   const healthEntries = Object.entries(health?.checks || {})
@@ -575,7 +594,9 @@ function PipelineDiagnosticPanel({ diagnostic, loading, error, onRefresh }) {
           <Icon name="article" /> {totals.words.toLocaleString('fr-FR')} mots
         </span>
         <span style={{ ...S.tag(totals.dirty ? 'amber' : 'green'), padding: '5px 10px' }}>
-          <Icon name="graphic_eq" /> {totals.dirty} segment{totals.dirty > 1 ? 's' : ''} audio à générer
+          <Icon name="graphic_eq" /> {totals.dirty
+            ? `${totals.dirty} segment${totals.dirty > 1 ? 's' : ''} texte à régénérer en audio`
+            : 'Segments texte audio à jour'}
         </span>
         {totals.reviewErrors > 0 && (
           <span style={{ ...S.tag('red'), padding: '5px 10px' }}>
@@ -604,8 +625,8 @@ function PipelineDiagnosticPanel({ diagnostic, loading, error, onRefresh }) {
           {playlistPct !== null && (
             <div style={{ marginTop: '10px' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', color: '#94a3b8', marginBottom: '5px' }}>
-                <span>Playlist TTS</span>
-                <span>{latestStep}/{latestTotal}</span>
+                <span>Fichiers playlist MP3</span>
+                <span>{latestStep}/{latestTotal} fichiers</span>
               </div>
               <div style={{ height: '6px', borderRadius: '999px', background: 'rgba(148,163,184,0.12)', overflow: 'hidden' }}>
                 <div style={{ width: `${playlistPct}%`, height: '100%', background: '#fbbf24' }} />
@@ -614,20 +635,22 @@ function PipelineDiagnosticPanel({ diagnostic, loading, error, onRefresh }) {
           )}
         </div>
 
-        <div style={{ padding: '12px', borderRadius: '8px', background: 'rgba(15,23,42,0.45)', border: '1px solid rgba(148,163,184,0.12)' }}>
-          <div style={{ fontSize: '11px', color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '6px' }}>
-            Avancement audio
+        {showGlobalAudioSummary && (
+          <div style={{ padding: '12px', borderRadius: '8px', background: 'rgba(15,23,42,0.45)', border: '1px solid rgba(148,163,184,0.12)' }}>
+            <div style={{ fontSize: '11px', color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '6px' }}>
+              Segments texte audio à jour
+            </div>
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: '8px', marginBottom: '8px' }}>
+              <strong style={{ color: totals.dirty ? '#fbbf24' : '#34d399', fontSize: '22px' }}>{audioPct}%</strong>
+              <span style={{ color: '#94a3b8', fontSize: '12px' }}>
+                {audioReady}/{totals.segments || 0} à jour
+              </span>
+            </div>
+            <div style={{ height: '7px', borderRadius: '999px', background: 'rgba(148,163,184,0.12)', overflow: 'hidden' }}>
+              <div style={{ width: `${audioPct}%`, height: '100%', background: totals.dirty ? '#fbbf24' : '#34d399' }} />
+            </div>
           </div>
-          <div style={{ display: 'flex', alignItems: 'baseline', gap: '8px', marginBottom: '8px' }}>
-            <strong style={{ color: totals.dirty ? '#fbbf24' : '#34d399', fontSize: '22px' }}>{audioPct}%</strong>
-            <span style={{ color: '#94a3b8', fontSize: '12px' }}>
-              {audioReady}/{totals.segments || 0} segments audio OK
-            </span>
-          </div>
-          <div style={{ height: '7px', borderRadius: '999px', background: 'rgba(148,163,184,0.12)', overflow: 'hidden' }}>
-            <div style={{ width: `${audioPct}%`, height: '100%', background: totals.dirty ? '#fbbf24' : '#34d399' }} />
-          </div>
-        </div>
+        )}
       </div>
 
       {folders.length > 0 && (
@@ -661,9 +684,13 @@ function PipelineDiagnosticPanel({ diagnostic, loading, error, onRefresh }) {
                   </div>
                 </div>
                 <div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', color: '#94a3b8', marginBottom: '5px' }}>
-                    <span style={{ color: statusColor }}>{pending ? `${pending} à générer` : 'Audio OK'}</span>
-                    <span>{ready}/{completed || 0}</span>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: '10px', flexWrap: 'wrap', fontSize: '11px', color: '#94a3b8', marginBottom: '5px' }}>
+                    <span style={{ color: statusColor }}>
+                      {pending
+                        ? `${pending} segment${pending > 1 ? 's' : ''} texte à régénérer`
+                        : 'Segments texte audio à jour'}
+                    </span>
+                    <span>{ready}/{completed || 0} à jour</span>
                   </div>
                   <div style={{ height: '5px', borderRadius: '999px', background: 'rgba(148,163,184,0.12)', overflow: 'hidden' }}>
                     <div style={{ width: `${pct}%`, height: '100%', background: statusColor }} />
@@ -787,6 +814,88 @@ function PipelineDiagnosticPanel({ diagnostic, loading, error, onRefresh }) {
       {selectedEvent && (
         <EventDetailModal event={selectedEvent} onClose={() => setSelectedEvent(null)} />
       )}
+    </div>
+  )
+}
+
+function PipelineActiveNotice({ job, autoPilotState, diagnostic, contentFolders }) {
+  if (!job) return null
+  const autoRunning = autoPilotState?.status === 'running'
+  const contentDone = contentFolders.length > 0 &&
+    contentFolders.every(folder => folder.content_status === 'completed')
+  const statusRunning = (
+    job.status === 'tts_launched'
+      ? !contentDone
+      : POLLING_STATUSES.has(job.status) && !AUDIO_DONE_STATUSES.has(job.status)
+  )
+  if (!autoRunning && !statusRunning) return null
+
+  const stepKey = autoPilotState?.step ||
+    (job.status === 'tts_launched' ? 'content'
+      : job.status === 'audio_running' ? 'audio'
+      : job.status === 'daily_splitting' ? 'daily'
+      : job.status === 'global_generating' ? 'global'
+      : job.status === 'kb_building' ? 'kb'
+      : job.status === 'reac_fetching' ? 'reac'
+      : '?')
+  const label = AUTO_PILOT_STEP_LABELS[stepKey] || String(stepKey || '—').replace(/_/g, ' ')
+  const expected = diagnostic?.folder_resolution?.expected_count || job.nb_days || contentFolders.length || 0
+  const completed = contentFolders.filter(folder => folder.content_status === 'completed').length
+  const activeFolder = contentFolders.find(folder => folder.content_status && folder.content_status !== 'completed')
+  const events = diagnostic?.events || []
+  const latestEvent = [...events].reverse().find(event => event.status === 'running') || events[events.length - 1]
+  const duplicates = diagnostic?.folder_resolution?.duplicates || []
+  const model = autoPilotState?.model || job.auto_pilot_model
+  const ttsMode = autoPilotState?.tts_mode || job.auto_pilot_tts_mode
+
+  return (
+    <div style={{
+      padding: '14px 18px',
+      marginBottom: '20px',
+      borderRadius: '12px',
+      background: 'linear-gradient(135deg, rgba(59,130,246,0.15), rgba(139,92,246,0.08))',
+      border: '1px solid rgba(59,130,246,0.4)',
+      display: 'flex',
+      alignItems: 'flex-start',
+      gap: '14px',
+      flexWrap: 'wrap',
+    }}>
+      <div style={{
+        width: '38px', height: '38px', borderRadius: '10px',
+        background: 'rgba(59,130,246,0.2)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        flex: '0 0 auto',
+      }}>
+        <Icon name="autorenew" style={{ fontSize: '22px', color: '#60a5fa' }} />
+      </div>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: '14px', fontWeight: 700, color: '#60a5fa' }}>
+          Étape active : {label}
+        </div>
+        <div style={{ fontSize: '12px', color: '#94a3b8', marginTop: '3px' }}>
+          {stepKey === 'content'
+            ? `Génération texte en cours — ${completed}/${expected || job.nb_days} journée${(expected || job.nb_days) > 1 ? 's' : ''} terminée${completed > 1 ? 's' : ''}`
+            : stepKey === 'audio'
+              ? `Synthèse audio en cours — ${diagnostic?.folders?.length || contentFolders.length || expected || job.nb_days} journée${(expected || job.nb_days) > 1 ? 's' : ''} prévue${(expected || job.nb_days) > 1 ? 's' : ''}`
+              : 'La pipeline travaille sur cette étape.'}
+          {activeFolder ? ` · dossier actif : ${activeFolder.folder_label || `F${activeFolder.folder_id}`}` : ''}
+          {ttsMode ? <> · TTS : <strong>{ttsMode}</strong></> : null}
+          {model ? <> · modèle : <strong>{pipelineModelLabel(model)}</strong></> : null}
+        </div>
+        {latestEvent && (
+          <div style={{ fontSize: '11.5px', color: '#cbd5e1', marginTop: '7px' }}>
+            <Icon name="schedule" style={{ fontSize: '13px', color: '#94a3b8' }} />{' '}
+            {formatEventTime(latestEvent.created_at)} · {eventLabel(latestEvent.event_type)}
+            {latestEvent.message ? ` · ${latestEvent.message}` : ''}
+          </div>
+        )}
+        {duplicates.length > 0 && (
+          <div style={{ fontSize: '11.5px', color: '#fbbf24', marginTop: '7px' }}>
+            <Icon name="warning_amber" style={{ fontSize: '13px' }} />{' '}
+            {duplicates.length} dossier{duplicates.length > 1 ? 's' : ''} doublon{duplicates.length > 1 ? 's' : ''} détecté{duplicates.length > 1 ? 's' : ''} et ignoré{duplicates.length > 1 ? 's' : ''} pour les étapes aval.
+          </div>
+        )}
+      </div>
     </div>
   )
 }
@@ -2523,51 +2632,12 @@ export default function FormationPipeline() {
               )}
             </div>
 
-            {/* Bandeau auto-pilot — affiché quand l'orchestration automatique
-                est active. Permet à l'utilisateur de comprendre que la pipeline
-                tourne sans intervention et qu'il n'a pas besoin de cliquer. */}
-            {autoPilotState && autoPilotState.status === 'running' && (
-              <div style={{
-                padding: '14px 18px',
-                marginBottom: '20px',
-                borderRadius: '12px',
-                background: 'linear-gradient(135deg, rgba(59,130,246,0.15), rgba(139,92,246,0.08))',
-                border: '1px solid rgba(59,130,246,0.4)',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '14px',
-                flexWrap: 'wrap',
-              }}>
-                <div style={{
-                  width: '38px', height: '38px', borderRadius: '10px',
-                  background: 'rgba(59,130,246,0.2)',
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                }}>
-                  <Icon name="autorenew" style={{ fontSize: '22px', color: '#60a5fa' }} className="material-icons" />
-                </div>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: '14px', fontWeight: 700, color: '#60a5fa' }}>
-                    Auto-pilot en cours — étape : {(() => {
-                      const labels = {
-                        start: 'démarrage', reac: 'téléchargement REAC',
-                        kb: 'enrichissement Knowledge Base', global: 'programme global',
-                        daily: 'programmes journée', content: 'génération texte (long)',
-                        volume_safety: 'sécurité volume',
-                        review: 'révision conformité',
-                        post_review_docs: 'document final',
-                        audio: 'synthèse audio', done: 'terminé', '?': '—',
-                      }
-                      return labels[autoPilotState.step] || autoPilotState.step
-                    })()}
-                  </div>
-                  <div style={{ fontSize: '12px', color: '#94a3b8', marginTop: '2px' }}>
-                    Toutes les étapes s'enchaînent automatiquement — TTS : <strong>{autoPilotState.tts_mode || 'gtts'}</strong>
-                    {' · '}modèle : <strong>{pipelineModelLabel(autoPilotState.model)}</strong>
-                    {' · '}stop-on-error
-                  </div>
-                </div>
-              </div>
-            )}
+            <PipelineActiveNotice
+              job={job}
+              autoPilotState={autoPilotState}
+              diagnostic={pipelineDiagnostic}
+              contentFolders={contentFolders}
+            />
             {autoPilotState && autoPilotState.status === 'error' && (
               <div style={{
                 padding: '12px 16px',

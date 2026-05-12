@@ -747,13 +747,180 @@ def refine_content(
 
 # ─── Lancement TTS par journée ────────────────────────────────────────────────
 
+def expected_course_folder_name(day_data: dict, fallback_day_number: int) -> str:
+    """Nom stable du dossier cours attendu pour une journée validée."""
+    day_data = day_data or {}
+    day_num = day_data.get("day_number") or fallback_day_number
+    day_title = day_data.get("title") or f"Jour {day_num}"
+    return f"Jour {day_num} — {day_title}"
+
+
+def _folder_row_to_dict(row, day_data: dict, day_index: int, duplicate_of: int = None) -> dict:
+    return {
+        "folder_id": row[0],
+        "name": row[1],
+        "position": row[2],
+        "platform_id": row[3],
+        "formation_job_id": row[4],
+        "content_job_id": row[5],
+        "content_status": row[6],
+        "total_words": row[7] or 0,
+        "segments_completed": row[8] or 0,
+        "day_number": (day_data or {}).get("day_number") or day_index + 1,
+        "day_title": (day_data or {}).get("title") or row[1],
+        "expected_name": expected_course_folder_name(day_data, day_index + 1),
+        "duplicate_of": duplicate_of,
+    }
+
+
+def get_expected_course_folders(
+    job_id: int,
+    *,
+    create_missing: bool = False,
+    platform_id: int = None,
+) -> dict:
+    """Résout les folders canoniques d'un job, un seul par journée attendue.
+
+    Si des doublons existent pour un même nom de journée, on garde le folder le
+    plus avancé, puis le plus ancien. Les doublons restent en base mais les
+    étapes aval peuvent les ignorer proprement.
+    """
+    job = get_job(job_id)
+    if not job:
+        raise ValueError(f"Job {job_id} introuvable")
+
+    daily_programs = json.loads(job.get("daily_programs") or "[]")
+    resolved_platform_id = platform_id or job.get("platform_id")
+    folders = []
+    duplicates = []
+    missing = []
+    created = []
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        for idx, day_data in enumerate(daily_programs):
+            folder_name = expected_course_folder_name(day_data, idx + 1)
+            cursor.execute(
+                """
+                SELECT
+                    cf.id,
+                    cf.name,
+                    cf.position,
+                    cf.platform_id,
+                    cf.formation_job_id,
+                    cgj.id,
+                    cgj.status,
+                    COALESCE(cgj.total_words, 0),
+                    COALESCE(SUM(CASE WHEN cgs.status = 'completed' THEN 1 ELSE 0 END), 0)
+                FROM cours_folders cf
+                LEFT JOIN content_generation_jobs cgj ON cgj.folder_id = cf.id
+                LEFT JOIN content_generation_segments cgs ON cgs.job_id = cgj.id
+                WHERE cf.formation_job_id = ? AND cf.name = ?
+                GROUP BY cf.id, cf.name, cf.position, cf.platform_id, cf.formation_job_id,
+                         cgj.id, cgj.status, cgj.total_words
+                ORDER BY
+                    CASE
+                        WHEN cgj.status = 'completed' THEN 0
+                        WHEN COALESCE(cgj.total_words, 0) > 0 THEN 1
+                        WHEN cgj.status = 'running' THEN 2
+                        WHEN cgj.status = 'idle' THEN 3
+                        WHEN cgj.id IS NULL THEN 5
+                        ELSE 4
+                    END,
+                    COALESCE(cgj.total_words, 0) DESC,
+                    COALESCE(SUM(CASE WHEN cgs.status = 'completed' THEN 1 ELSE 0 END), 0) DESC,
+                    cf.position ASC,
+                    cf.id ASC
+                """,
+                (job_id, folder_name),
+            )
+            matches = cursor.fetchall()
+
+            if not matches and create_missing:
+                cursor.execute(
+                    "SELECT COALESCE(MAX(position), -1) + 1 FROM cours_folders WHERE platform_id = ?",
+                    (resolved_platform_id,),
+                )
+                position = cursor.fetchone()[0]
+                cursor.execute(
+                    "INSERT INTO cours_folders (platform_id, name, position, formation_job_id) VALUES (?, ?, ?, ?)",
+                    (resolved_platform_id, folder_name, position, job_id),
+                )
+                folder_id = cursor.lastrowid
+                created.append({"folder_id": folder_id, "name": folder_name})
+                matches = [(
+                    folder_id,
+                    folder_name,
+                    position,
+                    resolved_platform_id,
+                    job_id,
+                    None,
+                    None,
+                    0,
+                    0,
+                )]
+
+            if not matches:
+                missing.append({
+                    "day_number": (day_data or {}).get("day_number") or idx + 1,
+                    "name": folder_name,
+                })
+                continue
+
+            canonical = _folder_row_to_dict(matches[0], day_data, idx)
+            folders.append(canonical)
+            for duplicate in matches[1:]:
+                duplicates.append(
+                    _folder_row_to_dict(
+                        duplicate,
+                        day_data,
+                        idx,
+                        duplicate_of=canonical["folder_id"],
+                    )
+                )
+
+        if created:
+            conn.commit()
+    finally:
+        conn.close()
+
+    return {
+        "expected_count": len(daily_programs),
+        "folders": folders,
+        "folder_ids": [f["folder_id"] for f in folders],
+        "duplicates": duplicates,
+        "missing": missing,
+        "created": created,
+    }
+
+
+def is_expected_course_folder(job_id: int, folder_id: int) -> bool:
+    """True si le folder est le folder canonique d'une journée attendue."""
+    try:
+        state = get_expected_course_folders(job_id)
+    except Exception:
+        logger.warning(
+            "PIPELINE_FOLDER_CANONICAL_CHECK_FAILED job=%s folder=%s",
+            job_id,
+            folder_id,
+            exc_info=True,
+        )
+        return True
+    expected_ids = set(state.get("folder_ids") or [])
+    return not expected_ids or folder_id in expected_ids
+
+
 def launch_tts_for_all_days(job_id: int, platform_id: int, model: str = None):
     """
     Crée un dossier cours par journée et lance la génération TTS (from scratch).
     Appelle content_generation_service en mode from_scratch.
     """
-    import math
-    from services.content_generation_service import start_generation_job
+    from services.content_generation_service import (
+        get_job_from_db,
+        run_content_generation,
+        start_generation_job,
+    )
 
     job = get_job(job_id)
     if not job:
@@ -763,52 +930,24 @@ def launch_tts_for_all_days(job_id: int, platform_id: int, model: str = None):
     if not daily_programs:
         raise ValueError("Aucun programme journée disponible")
 
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    folder_ids = []
-
-    try:
-        for day_data in daily_programs:
-            day_num = day_data.get("day_number", len(folder_ids) + 1)
-            day_title = day_data.get("title", f"Jour {day_num}")
-            folder_name = f"Jour {day_num} — {day_title}"
-
-            # Position = dernier + 1 pour cette plateforme
-            cursor.execute(
-                "SELECT COALESCE(MAX(position), -1) + 1 FROM cours_folders WHERE platform_id = ?",
-                (platform_id,)
-            )
-            position = cursor.fetchone()[0]
-
-            cursor.execute(
-                """
-                INSERT INTO cours_folders (platform_id, name, position, formation_job_id)
-                VALUES (?, ?, ?, ?)
-                """,
-                (platform_id, folder_name, position, job_id)
-            )
-            folder_id = cursor.lastrowid
-            folder_ids.append(folder_id)
-
-            # Programme texte de la journée (pour le job TTS)
-            day_program_text = _format_day_program_text(day_data, job["tp_name"])
-
-            # Sous-parties = les 6 sous-parties de la journée
-            sub_parts = [sp["name"] for sp in day_data.get("sub_parts", [])]
-
-            # Contenu des modules par sous-partie (pour les passes from-scratch)
-            module_contents = {
-                sp["name"]: sp.get("module_content", "")
-                for sp in day_data.get("sub_parts", [])
-            }
-
-        conn.commit()
-
-    finally:
-        conn.close()
+    folder_state = get_expected_course_folders(
+        job_id,
+        create_missing=True,
+        platform_id=platform_id,
+    )
+    folder_ids = folder_state["folder_ids"]
+    folders_by_name = {
+        f["expected_name"]: f
+        for f in folder_state["folders"]
+    }
 
     # Lancer génération TTS pour chaque journée
-    for i, (folder_id, day_data) in enumerate(zip(folder_ids, daily_programs)):
+    for i, day_data in enumerate(daily_programs):
+        folder_name = expected_course_folder_name(day_data, i + 1)
+        folder_info = folders_by_name.get(folder_name)
+        if not folder_info:
+            raise RuntimeError(f"Folder attendu introuvable : {folder_name}")
+        folder_id = folder_info["folder_id"]
         day_program_text = _format_day_program_text(day_data, job["tp_name"])
         sub_parts = [sp["name"] for sp in day_data.get("sub_parts", [])]
         module_contents = {
@@ -816,17 +955,36 @@ def launch_tts_for_all_days(job_id: int, platform_id: int, model: str = None):
             for sp in day_data.get("sub_parts", [])
         }
 
-        start_generation_job(
-            folder_id=folder_id,
-            platform_id=platform_id,
-            program_text=day_program_text,
-            program_title=job["tp_name"],
-            sub_parts_override=sub_parts,
-            module_contents=module_contents,
-            from_scratch=True,
-            model=model,
-        )
-        logger.info(f"🚀 TTS lancé pour dossier {folder_id} (Jour {i+1})")
+        existing_job = get_job_from_db(folder_id)
+        if existing_job:
+            status = existing_job.get("status")
+            if status == "completed":
+                logger.info(f"⏭ Texte déjà complet pour dossier {folder_id} (Jour {i+1})")
+                continue
+            if status == "running":
+                logger.info(f"⏭ Texte déjà en cours pour dossier {folder_id} (Jour {i+1})")
+                continue
+
+            def _resume_existing(fid=folder_id):
+                try:
+                    run_content_generation(fid, mode="normal", model=model)
+                except Exception as e:
+                    logger.error(f"❌ Reprise génération dossier {fid} : {e}")
+
+            threading.Thread(target=_resume_existing, daemon=True).start()
+            logger.info(f"♻️ Reprise génération pour dossier {folder_id} (Jour {i+1})")
+        else:
+            start_generation_job(
+                folder_id=folder_id,
+                platform_id=platform_id,
+                program_text=day_program_text,
+                program_title=job["tp_name"],
+                sub_parts_override=sub_parts,
+                module_contents=module_contents,
+                from_scratch=True,
+                model=model,
+            )
+            logger.info(f"🚀 TTS lancé pour dossier {folder_id} (Jour {i+1})")
 
     update_job(job_id, status="tts_launched")
     return folder_ids

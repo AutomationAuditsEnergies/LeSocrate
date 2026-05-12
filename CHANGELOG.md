@@ -2,6 +2,41 @@
 
 ## 2026-05-11
 
+### feat(pipeline): robustesse auto-pilot — résolution canonique des dossiers cours + diagnostic UI
+
+Refonte ciblée de la pipeline formation auto-pilot pour fiabiliser l'enchaînement contenu → TTS quand des doublons de dossiers apparaissent (double-clic « Lancer », retry après crash, relance manuelle d'une journée).
+
+**1. Résolution canonique des dossiers cours** (`backend/services/formation_pipeline_service.py`)
+- Nouvelle fonction `get_expected_course_folders(job_id, *, create_missing=False)` : pour chaque journée `daily_programs[i]`, on cherche le `cours_folder` correspondant par `name` exact (`expected_course_folder_name`) et on garde **un seul** folder canonique par jour. Tri par priorité : `cg_status == 'completed'` > `total_words > 0` > `running` > `idle` > pas de job > autre, puis `total_words DESC`, `segments_completed DESC`, `position ASC`, `id ASC`.
+- Retourne `{folder_ids, duplicates, missing, created, expected_count}` — les doublons restent en DB mais ne sont plus consommés en aval.
+- `launch_tts_for_all_days(...)` réécrit pour s'appuyer sur ce résolveur (avec `create_missing=True`) au lieu de re-créer aveuglément un folder par journée.
+- Helper `expected_course_folder_name(day_data, fallback)` mutualisé.
+
+**2. Health check ciblé canonique** (`backend/services/formation_health_service.py`)
+- `compute_health()` n'audite plus tous les `cours_folders` avec `formation_job_id == job_id` (qui incluent les doublons) — il appelle `get_expected_course_folders(job_id)` et restreint la requête aux `folder_ids` canoniques via `IN (?, ?, ...)`.
+- Nouveau check `course_folders_expected` : `ok = len(folders) == nb_days and not missing_folders`. Les doublons sont remontés en `warnings` sans casser le check.
+- Fallback safe en cas d'exception du résolveur (`resolution_failed` dans `missing`).
+
+**3. AI stop decision + carryover runtime cours** (`backend/services/content_generation_service.py`)
+- `_ai_should_defer_chunk_before_conclusion(...)` : décision pilotée par LLM (Claude) sur le fait de garder un chunk pour la conclusion plutôt que de le sortir dans le bloc courant. Guardé par `_course_ai_stop_decision_enabled()` (flag `AI_COURSE_STOP_DECISION_ENABLED`) + fenêtre temporelle `_course_ai_stop_window_sec()`.
+- `_rewrite_runtime_carryover_chunks(...)` : réécrit les chunks de carryover récupérés du bloc précédent pour qu'ils enchaînent naturellement (suppression de répétitions, ajout d'une accroche).
+- `_parse_course_handoff_json(...)` + `_fallback_course_opening(...)` : gestion robuste du handoff opening/closing entre blocs cours, avec fallback statique si le JSON Claude est invalide.
+- Helpers `_compact_words` / `_tail_words` / `_extract_llm_json` pour le pré-traitement des prompts.
+- `_snapshot_pre_review_for_content_job(job_id)` : capture les fichiers actifs avant review pour pouvoir comparer ensuite.
+
+**4. Persistance des review reports** (`backend/services/claude_code_mission_service.py`)
+- `_persist_review_reports_from_active_files(job_id, generated_via)` : lit les fichiers de review générés par Claude Code Mission et les persiste en blob pour rester accessibles même après nettoyage local.
+
+**5. Diagnostic auto-pilot exposé via API** (`backend/routes/formation_routes.py`, ~400 lignes touchées)
+- Les endpoints diagnostic auto-pilot retournent désormais `folder_resolution: {expected_count, folder_ids, duplicates, missing}` + `events` enrichis avec status `running`.
+- Le frontend reçoit de quoi afficher l'état réel de la résolution sans re-requêter la DB.
+
+**6. UI bandeau actif Pipeline** (`frontend/src/pages/FormationPipeline.jsx`)
+- Nouveau composant `PipelineActiveNotice({ job, autoPilotState, diagnostic, contentFolders })` : affiche le step auto-pilot courant (mapping `AUTO_PILOT_STEP_LABELS`), le folder actif, le compteur `completed/expected`, la liste des doublons détectés, le modèle Claude et le mode TTS en cours.
+- Bandeau `showGlobalAudioSummary` quand `folders.length > 1`.
+
+**Pourquoi maintenant** — la pipeline auto-pilot enchaîne en série création folder → contenu → TTS, et un double-clic sur « Lancer » créait 2 dossiers `"Jour 1 — …"` avec 2 `content_generation_jobs` en parallèle. Le health check tombait à mi-pipeline et l'utilisateur perdait du temps à comprendre quel folder était le « bon ». Maintenant on a un canonical résolu côté backend, et l'UI le montre.
+
 ### fix(ui): label « gTTS » → « Edge TTS » dans le dropdown auto-pilot
 
 Le dropdown « Voix TTS pour l'étape audio » du formulaire « Nouvelle plateforme » (HRDashboard) affichait encore « gTTS — voix basique gratuite (recommandé pour test) » alors que la migration gTTS → Edge TTS a déjà été faite côté backend (cf. `9de3898`). L'identifiant DB historique reste `"gtts"` (utilisé par `auto_pilot_tts_mode`, `tts_mode`, `voice_type`, mapping `basic_tts == (tts_mode == "gtts")` dans `formation_routes.py`), mais le pipeline route déjà vers Edge TTS (voix neurales Microsoft).

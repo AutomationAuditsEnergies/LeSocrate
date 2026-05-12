@@ -241,20 +241,61 @@ def compute_health(job_id: int) -> dict:
     expected_segments_per_day = 6 * 3  # 6 sous-parties × 3 passes (modèle pédagogique)
     expected_total_segments = nb_days * expected_segments_per_day
 
-    # Inventaire des cours_folders + cg_jobs + segments
+    # Inventaire des cours_folders + cg_jobs + segments. On audite uniquement
+    # le folder canonique de chaque journée attendue : des doublons peuvent
+    # exister après un double clic/retry, mais ils ne doivent pas faire échouer
+    # la pipeline si les journées attendues sont cohérentes.
+    try:
+        from services.formation_pipeline_service import get_expected_course_folders
+        folder_state = get_expected_course_folders(job_id)
+    except Exception as e:
+        logger.warning(f"Health canonical folders job {job_id} : {e}")
+        folder_state = {
+            "expected_count": nb_days,
+            "folder_ids": [],
+            "duplicates": [],
+            "missing": [{"name": "resolution_failed"}],
+        }
+
+    canonical_folder_ids = folder_state.get("folder_ids") or []
+    duplicate_folders = folder_state.get("duplicates") or []
+    missing_folders = folder_state.get("missing") or []
+
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute(
-        """
-        SELECT cf.id, cf.name, cf.position, cj.id, cj.status
-        FROM cours_folders cf
-        LEFT JOIN content_generation_jobs cj ON cj.folder_id = cf.id
-        WHERE cf.formation_job_id = ?
-        ORDER BY cf.position ASC
-        """,
-        (job_id,),
-    )
-    folders = cursor.fetchall()  # [(folder_id, name, position, cg_job_id, cg_status)]
+    if canonical_folder_ids:
+        placeholders = ",".join("?" * len(canonical_folder_ids))
+        cursor.execute(
+            f"""
+            SELECT cf.id, cf.name, cf.position, cj.id, cj.status
+            FROM cours_folders cf
+            LEFT JOIN content_generation_jobs cj ON cj.folder_id = cf.id
+            WHERE cf.id IN ({placeholders})
+            ORDER BY cf.position ASC
+            """,
+            tuple(canonical_folder_ids),
+        )
+        folders = cursor.fetchall()  # [(folder_id, name, position, cg_job_id, cg_status)]
+    else:
+        placeholders = ""
+        folders = []
+    checks["course_folders_expected"] = {
+        "ok": len(folders) == nb_days and not missing_folders,
+        "detail": (
+            f"{len(folders)}/{nb_days} journée(s) canonique(s)"
+            + (
+                f" · {len(duplicate_folders)} doublon(s) ignoré(s)"
+                if duplicate_folders
+                else ""
+            )
+        ),
+        "duplicates": duplicate_folders,
+        "missing": missing_folders,
+    }
+    if missing_folders or len(folders) != nb_days:
+        blocking.append("course_folders_expected")
+    if duplicate_folders:
+        warnings.append("duplicate_course_folders")
 
     # 1. Segments completed
     n_completed = 0

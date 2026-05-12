@@ -1930,6 +1930,131 @@ def _import_review_chunk(job_id: int, chunk: dict, output: str, generated_via: s
     }
 
 
+def _persist_review_reports_from_active_files(job_id: int, generated_via: str) -> int:
+    """Aggregate Claude Code chunk reports into durable DB reports.
+
+    The chunk JSON files are useful for local debugging, but the UI must not
+    depend on them after a deploy/restart. This persists one full report per
+    folder before `step_review` is archived.
+    """
+    base_dir = mission_dir(job_id, "review")
+    if not os.path.isdir(base_dir):
+        return 0
+
+    reports_by_folder = {}
+    for entry in sorted(os.listdir(base_dir)):
+        report_path = os.path.join(base_dir, entry, "review_report.json")
+        if not os.path.exists(report_path):
+            continue
+        try:
+            with open(report_path, "r", encoding="utf-8") as f:
+                report = json.load(f)
+        except Exception as exc:
+            logger.warning(f"⚠️ Rapport review illisible {report_path}: {exc}")
+            continue
+        folder_id = report.get("folder_id")
+        if folder_id is None:
+            continue
+        reports_by_folder.setdefault(int(folder_id), []).append((entry, report))
+
+    if not reports_by_folder:
+        return 0
+
+    from services.formation_observability_service import persist_review_report
+
+    persisted = 0
+    for folder_id, sub_reports in reports_by_folder.items():
+        agg_summary = {
+            "segments_reviewed": 0,
+            "patches_proposed": 0,
+            "patches_applied": 0,
+            "patches_rejected": 0,
+            "segments_failed": 0,
+        }
+        agg_by_rule = {}
+        agg_by_segment = {}
+        latest_imported = None
+        any_positional = False
+        agents_used = []
+        folder_name = None
+
+        for chunk_id, report in sub_reports:
+            summary = report.get("summary") or {}
+            agg_summary["segments_reviewed"] = max(
+                agg_summary["segments_reviewed"],
+                int(summary.get("segments_reviewed") or 0),
+            )
+            for key in ("patches_proposed", "patches_applied", "patches_rejected", "segments_failed"):
+                agg_summary[key] += int(summary.get(key) or 0)
+
+            for rule, stats in (report.get("by_rule") or {}).items():
+                agg = agg_by_rule.setdefault(
+                    rule,
+                    {"proposed": 0, "applied": 0, "rejected": 0, "unknown": 0},
+                )
+                for stat_key, value in (stats or {}).items():
+                    agg[stat_key] = agg.get(stat_key, 0) + int(value or 0)
+
+            for segment in (report.get("by_segment") or []):
+                key = (segment.get("sub_idx"), segment.get("passe"))
+                if key not in agg_by_segment:
+                    agg_by_segment[key] = {
+                        "sub_idx": segment.get("sub_idx"),
+                        "passe": segment.get("passe"),
+                        "segment_id_actual": segment.get("segment_id_actual"),
+                        "patches_applied": 0,
+                        "patches_rejected": 0,
+                        "patches_detail": [],
+                    }
+                agg_by_segment[key]["patches_applied"] += int(segment.get("patches_applied") or 0)
+                agg_by_segment[key]["patches_rejected"] += int(segment.get("patches_rejected") or 0)
+                for detail in segment.get("patches_detail") or []:
+                    detail_copy = dict(detail)
+                    detail_copy["agent_group"] = chunk_id
+                    agg_by_segment[key]["patches_detail"].append(detail_copy)
+
+            imported_at = report.get("imported_at")
+            if imported_at and (latest_imported is None or imported_at > latest_imported):
+                latest_imported = imported_at
+            if report.get("via_positional_fallback"):
+                any_positional = True
+            if report.get("folder_name") and not folder_name:
+                folder_name = report.get("folder_name")
+            agents_used.append(chunk_id)
+
+        aggregate = {
+            "folder_id": folder_id,
+            "folder_name": folder_name,
+            "imported_at": latest_imported,
+            "generated_via": generated_via,
+            "via_positional_fallback": any_positional,
+            "n_agents": len(sub_reports),
+            "agents_used": agents_used,
+            "summary": agg_summary,
+            "by_rule": agg_by_rule,
+            "by_segment": sorted(
+                agg_by_segment.values(),
+                key=lambda x: (x.get("sub_idx") or 0, x.get("passe") or 0),
+            ),
+        }
+        persist_review_report(
+            job_id,
+            folder_id,
+            aggregate,
+            source="claude_code_aggregate",
+            generated_via=generated_via,
+        )
+        persisted += 1
+
+    logger.info(
+        "PIPELINE_REVIEW_REPORTS_AGGREGATED job_id=%s persisted=%s folders=%s",
+        job_id,
+        persisted,
+        sorted(reports_by_folder),
+    )
+    return persisted
+
+
 # ─── Orchestrateur chunked ────────────────────────────────────────────────────
 
 def _execute_chunked(job_id: int, step_key: str, model: str) -> dict:
@@ -2143,6 +2268,24 @@ def _execute_chunked(job_id: int, step_key: str, model: str) -> dict:
         _finalize_content_step(job_id, model)
 
     if step_key == "review":
+        try:
+            persisted_reports = _persist_review_reports_from_active_files(
+                job_id,
+                f"claude_code_{model}",
+            )
+            if chunks_done > 0 and persisted_reports == 0:
+                logger.warning(
+                    "⚠️ Aucun rapport review agrégé persisté en DB "
+                    "job=%s chunks_done=%s",
+                    job_id,
+                    chunks_done,
+                )
+        except Exception as exc:
+            logger.warning(
+                "⚠️ Agrégation durable des rapports review échouée job=%s : %s",
+                job_id,
+                exc,
+            )
         # Marquer reviewed=1 sur tous les segments touchés, après que TOUS les
         # agents multi-rules ont passé. Pas conditionné aux erreurs : même si
         # certains chunks ont raté (ex : 1 agent sur 4), les autres ont fait
@@ -2358,14 +2501,26 @@ def compute_volume_audit(job_id: int) -> dict:
     if not job:
         return {"target": _TARGET_WORDS_PER_DAY, "folders": []}
 
+    try:
+        from services.formation_pipeline_service import get_expected_course_folders
+        folder_state = get_expected_course_folders(job_id)
+        canonical_ids = folder_state.get("folder_ids") or []
+    except Exception:
+        logger.warning("Volume audit canonical folders failed for job %s", job_id, exc_info=True)
+        canonical_ids = []
+
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute(
-        """SELECT id, name, position FROM cours_folders
-           WHERE formation_job_id = ? ORDER BY position ASC""",
-        (job_id,),
-    )
-    folders = cursor.fetchall()
+    if canonical_ids:
+        placeholders = ",".join("?" * len(canonical_ids))
+        cursor.execute(
+            f"""SELECT id, name, position FROM cours_folders
+               WHERE id IN ({placeholders}) ORDER BY position ASC""",
+            tuple(canonical_ids),
+        )
+        folders = cursor.fetchall()
+    else:
+        folders = []
 
     out = []
     for fid, fname, pos in folders:

@@ -885,15 +885,21 @@ def list_content(job_id):
 
     from database.db import get_db_connection
     import json as _json
+    from services.formation_pipeline_service import get_expected_course_folders
 
+    folder_state = get_expected_course_folders(job_id)
+    folders = [
+        (
+            f["folder_id"],
+            f["name"],
+            f["position"],
+            f["platform_id"],
+            f["formation_job_id"],
+        )
+        for f in folder_state.get("folders", [])
+    ]
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute(
-        """SELECT id, name, position, platform_id, formation_job_id FROM cours_folders
-           WHERE formation_job_id = ? ORDER BY position ASC, id ASC""",
-        (job_id,),
-    )
-    folders = cursor.fetchall()
 
     daily_programs = _json.loads(job["daily_programs"] or "[]")
     result = []
@@ -963,7 +969,15 @@ def list_content(job_id):
         })
 
     conn.close()
-    return jsonify({"folders": result, "job_status": job["status"]})
+    return jsonify({
+        "folders": result,
+        "job_status": job["status"],
+        "folder_resolution": {
+            "expected_count": folder_state.get("expected_count", 0),
+            "duplicates": folder_state.get("duplicates", []),
+            "missing": folder_state.get("missing", []),
+        },
+    })
 
 
 @formation_bp.route("/api/formation/<int:job_id>/content/<int:folder_id>/text", methods=["GET"])
@@ -1161,7 +1175,11 @@ def _build_db_review_report(job_id: int, folder_id: int) -> dict | None:
 
 
 def _write_api_review_report(job_id: int, folder_id: int, result: dict, model: str | None) -> dict | None:
-    """Persiste un rapport conformité pour les reviews lancées via l'API."""
+    """Persiste un rapport conformité pour les reviews lancées via l'API.
+
+    La DB est la source durable. Le fichier local est seulement un artefact de
+    debug, car il peut disparaître ou être inaccessible en hébergement.
+    """
     import json as _json
     import os
     from datetime import datetime
@@ -1240,23 +1258,25 @@ def _write_api_review_report(job_id: int, folder_id: int, result: dict, model: s
         "by_segment": sorted(by_segment, key=lambda x: (x.get("sub_idx") or 0, x.get("passe") or 0)),
     }
 
+    from services.formation_observability_service import persist_review_report
+    report_id = persist_review_report(
+        job_id,
+        folder_id,
+        report,
+        source="api",
+        generated_via=model or "api",
+    )
+    report["persisted_report_id"] = report_id
+
     chunk_id = f"day_{int(position or 0) + 1}_review_api"
     chunk_dir = os.path.join(mission_dir(job_id, "review"), chunk_id)
-    os.makedirs(chunk_dir, exist_ok=True)
-    with open(os.path.join(chunk_dir, "review_report.json"), "w", encoding="utf-8") as f:
-        _json.dump(report, f, ensure_ascii=False, indent=2)
     try:
-        from services.formation_observability_service import persist_review_report
-        persist_review_report(
-            job_id,
-            folder_id,
-            report,
-            source="api",
-            generated_via=model or "api",
-        )
+        os.makedirs(chunk_dir, exist_ok=True)
+        with open(os.path.join(chunk_dir, "review_report.json"), "w", encoding="utf-8") as f:
+            _json.dump(report, f, ensure_ascii=False, indent=2)
     except Exception as e:
         logger.warning(
-            f"⚠️ Rapport conformité DB non persisté job={job_id} "
+            f"⚠️ Rapport conformité fichier non écrit job={job_id} "
             f"folder={folder_id} : {e}"
         )
     return report
@@ -1936,14 +1956,19 @@ def resume_content(job_id):
         return jsonify({"error": "Job introuvable"}), 404
 
     from database.db import get_db_connection
+    from services.formation_pipeline_service import get_expected_course_folders
+    folder_ids = get_expected_course_folders(job_id).get("folder_ids") or []
+    if not folder_ids:
+        return jsonify({"error": "Aucun cours_folder attendu pour ce job"}), 400
+    placeholders = ",".join("?" * len(folder_ids))
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute(
-        """SELECT f.id, cg.status
+        f"""SELECT f.id, cg.status
            FROM cours_folders f
            LEFT JOIN content_generation_jobs cg ON cg.folder_id = f.id
-           WHERE f.formation_job_id = ? ORDER BY f.position ASC, f.id ASC""",
-        (job_id,),
+           WHERE f.id IN ({placeholders}) ORDER BY f.position ASC, f.id ASC""",
+        tuple(folder_ids),
     )
     rows = cursor.fetchall()
     conn.close()
@@ -2041,10 +2066,11 @@ def review_content(job_id, folder_id):
             try:
                 _write_api_review_report(job_id, _folder_id, result, model)
             except Exception as report_error:
-                logger.warning(
-                    f"⚠️ Rapport review API non écrit job={job_id} "
+                logger.error(
+                    f"❌ Rapport review API non persisté job={job_id} "
                     f"folder={_folder_id} : {report_error}"
                 )
+                raise
             try:
                 from services.formation_observability_service import log_pipeline_event
                 log_pipeline_event(
@@ -2443,12 +2469,17 @@ def launch_audio(job_id):
         return jsonify({"error": "Job introuvable"}), 404
 
     from database.db import get_db_connection
+    from services.formation_pipeline_service import get_expected_course_folders
+    folder_ids = get_expected_course_folders(job_id).get("folder_ids") or []
+    if not folder_ids:
+        return jsonify({"error": "Aucun cours_folder attendu pour ce job"}), 400
+    placeholders = ",".join("?" * len(folder_ids))
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute(
-        """SELECT f.id FROM cours_folders f
-           WHERE f.formation_job_id = ? ORDER BY f.position ASC, f.id ASC""",
-        (job_id,),
+        f"""SELECT f.id FROM cours_folders f
+           WHERE f.id IN ({placeholders}) ORDER BY f.position ASC, f.id ASC""",
+        tuple(folder_ids),
     )
     folder_ids = [r[0] for r in cursor.fetchall()]
 
@@ -2850,11 +2881,17 @@ def _reset_folder_downstream_to_generated_text(job_id: int, folder_id: int) -> d
 def _completed_text_folder_candidates(job_id: int) -> list[dict]:
     """Liste les dossiers rattachés au job qui ont vraiment un texte complet."""
     from database.db import get_db_connection
+    from services.formation_pipeline_service import get_expected_course_folders
+
+    folder_ids = get_expected_course_folders(job_id).get("folder_ids") or []
+    if not folder_ids:
+        return []
+    placeholders = ",".join("?" * len(folder_ids))
 
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute(
-        """
+        f"""
         SELECT
             cf.id,
             cf.name,
@@ -2867,13 +2904,13 @@ def _completed_text_folder_candidates(job_id: int) -> list[dict]:
         FROM cours_folders cf
         JOIN content_generation_jobs cgj ON cgj.folder_id = cf.id
         LEFT JOIN content_generation_segments cgs ON cgs.job_id = cgj.id
-        WHERE cf.formation_job_id = ?
+        WHERE cf.id IN ({placeholders})
         GROUP BY cf.id, cf.name, cf.position, cf.platform_id, cgj.id, cgj.status, cgj.total_words
         HAVING cgj.status = 'completed'
            AND SUM(CASE WHEN cgs.status = 'completed' THEN 1 ELSE 0 END) > 0
         ORDER BY cf.position ASC, cf.id ASC
         """,
-        (job_id,),
+        tuple(folder_ids),
     )
     rows = cursor.fetchall()
     conn.close()
@@ -3082,30 +3119,14 @@ def _resolve_continue_after_text_folder(job_id: int, requested_folder_id: int) -
 
 
 def _next_folder_in_formation(job_id: int, folder_id: int) -> int | None:
-    from database.db import get_db_connection
+    from services.formation_pipeline_service import get_expected_course_folders
 
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        "SELECT position FROM cours_folders WHERE id = ? AND formation_job_id = ?",
-        (folder_id, job_id),
-    )
-    row = cursor.fetchone()
-    if not row:
-        conn.close()
+    folder_ids = get_expected_course_folders(job_id).get("folder_ids") or []
+    try:
+        idx = folder_ids.index(folder_id)
+    except ValueError:
         return None
-    cursor.execute(
-        """
-        SELECT id FROM cours_folders
-        WHERE formation_job_id = ? AND position > ?
-        ORDER BY position ASC, id ASC
-        LIMIT 1
-        """,
-        (job_id, row[0]),
-    )
-    next_row = cursor.fetchone()
-    conn.close()
-    return next_row[0] if next_row else None
+    return folder_ids[idx + 1] if idx + 1 < len(folder_ids) else None
 
 
 def _get_folder_info_for_resume(job_id: int, folder_id: int) -> dict:
@@ -3760,18 +3781,24 @@ def _determine_next_ap_step(job_id: int) -> str | None:
     # Filtre par formation_job_id (pas platform_id) pour éviter de compter les
     # segments d'un pipeline précédent sur la même plateforme.
     expected_segs = (j.get("nb_days") or 0) * 18
+    from services.formation_pipeline_service import get_expected_course_folders
+    folder_state = get_expected_course_folders(job_id)
+    folder_ids = folder_state.get("folder_ids") or []
+    if expected_segs == 0 or len(folder_ids) < (j.get("nb_days") or 0):
+        return "content"
+    placeholders = ",".join("?" * len(folder_ids))
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("""
+    cursor.execute(f"""
         SELECT COALESCE(SUM(CASE WHEN cgs.status = 'completed' THEN 1 ELSE 0 END), 0)
         FROM content_generation_segments cgs
         JOIN content_generation_jobs cgj ON cgj.id = cgs.job_id
         JOIN cours_folders cf ON cf.id = cgj.folder_id
-        WHERE cf.formation_job_id = ?
-    """, (job_id,))
+        WHERE cf.id IN ({placeholders})
+    """, tuple(folder_ids))
     completed_segs = cursor.fetchone()[0]
     conn.close()
-    if expected_segs == 0 or completed_segs < expected_segs:
+    if completed_segs < expected_segs:
         return "content"
 
     # 5.5. Volume safety : l'audit réel est prioritaire sur le flag DB.
@@ -3796,13 +3823,13 @@ def _determine_next_ap_step(job_id: int) -> str | None:
     # 6. Révision conformité
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("""
+    cursor.execute(f"""
         SELECT COUNT(*) FROM content_generation_segments cgs
         JOIN content_generation_jobs cgj ON cgj.id = cgs.job_id
         JOIN cours_folders cf ON cf.id = cgj.folder_id
-        WHERE cf.formation_job_id = ? AND cgs.status = 'completed'
+        WHERE cf.id IN ({placeholders}) AND cgs.status = 'completed'
           AND COALESCE(cgs.reviewed, 0) = 0
-    """, (job_id,))
+    """, tuple(folder_ids))
     not_reviewed = cursor.fetchone()[0]
     conn.close()
     if not_reviewed > 0:
@@ -3817,12 +3844,12 @@ def _determine_next_ap_step(job_id: int) -> str | None:
     # est positionné au début du loop audio, donc non fiable en cas de restart)
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("""
+    cursor.execute(f"""
         SELECT COUNT(*) FROM content_generation_segments cgs
         JOIN content_generation_jobs cgj ON cgj.id = cgs.job_id
         JOIN cours_folders cf ON cf.id = cgj.folder_id
-        WHERE cf.formation_job_id = ? AND COALESCE(cgs.dirty, 1) = 1
-    """, (job_id,))
+        WHERE cf.id IN ({placeholders}) AND COALESCE(cgs.dirty, 1) = 1
+    """, tuple(folder_ids))
     dirty_count = cursor.fetchone()[0]
     conn.close()
     if dirty_count > 0 or j.get("status") not in ("audio_completed", "audio_launched"):
@@ -3920,41 +3947,50 @@ def _execute_ap_step(job_id: int, step: str, job: dict) -> None:
             #   - aucun thread mort possible (pas de thread du tout)
             import json as _json
             from services.content_generation_service import run_content_generation, get_job_from_db
-            from services.formation_pipeline_service import _format_day_program_text
+            from services.formation_pipeline_service import (
+                _format_day_program_text,
+                expected_course_folder_name,
+                get_expected_course_folders,
+            )
 
             daily_programs = _json.loads(job.get("daily_programs") or "[]")
-            for day_data in daily_programs:
-                day_num = day_data.get("day_number", 0)
-                day_title = day_data.get("title", f"Jour {day_num}")
-                folder_name = f"Jour {day_num} — {day_title}"
-
-                # 1. Créer le folder s'il n'existe pas
-                conn = get_db_connection()
-                cursor = conn.cursor()
-                cursor.execute(
-                    "SELECT id FROM cours_folders WHERE formation_job_id = ? AND name = ?",
-                    (job_id, folder_name),
+            update_job(
+                job_id,
+                status="tts_launched",
+                auto_pilot_volume_done=0,
+                auto_pilot_post_review_docs_done=0,
+                error_message=None,
+            )
+            folder_state = get_expected_course_folders(
+                job_id,
+                create_missing=True,
+                platform_id=platform_id,
+            )
+            folders_by_name = {
+                f["expected_name"]: f
+                for f in folder_state.get("folders", [])
+            }
+            if folder_state.get("duplicates"):
+                logger.warning(
+                    "PIPELINE_CONTENT_DUPLICATE_FOLDERS job=%s duplicates=%s",
+                    job_id,
+                    [
+                        {
+                            "folder_id": d["folder_id"],
+                            "name": d["name"],
+                            "duplicate_of": d.get("duplicate_of"),
+                        }
+                        for d in folder_state["duplicates"]
+                    ],
                 )
-                row = cursor.fetchone()
-                conn.close()
 
-                if row:
-                    folder_id = row[0]
-                else:
-                    conn = get_db_connection()
-                    cursor = conn.cursor()
-                    cursor.execute(
-                        "SELECT COALESCE(MAX(position), -1) + 1 FROM cours_folders WHERE platform_id = ?",
-                        (platform_id,),
-                    )
-                    position = cursor.fetchone()[0]
-                    cursor.execute(
-                        "INSERT INTO cours_folders (platform_id, name, position, formation_job_id) VALUES (?, ?, ?, ?)",
-                        (platform_id, folder_name, position, job_id),
-                    )
-                    folder_id = cursor.lastrowid
-                    conn.commit()
-                    conn.close()
+            for idx, day_data in enumerate(daily_programs):
+                folder_name = expected_course_folder_name(day_data, idx + 1)
+                folder_info = folders_by_name.get(folder_name)
+                if not folder_info:
+                    raise RuntimeError(f"Folder attendu introuvable : {folder_name}")
+                folder_id = folder_info["folder_id"]
+                day_num = day_data.get("day_number", idx + 1)
 
                 # 2. Créer le content_generation_job s'il n'existe pas (sans thread)
                 cg_job = get_job_from_db(folder_id)
@@ -3992,12 +4028,6 @@ def _execute_ap_step(job_id: int, step: str, job: dict) -> None:
                 run_content_generation(folder_id, model=api_model)
                 logger.info(f"🤖   ✓ Jour {day_num} terminé (folder {folder_id})")
 
-            update_job(
-                job_id,
-                status="tts_launched",
-                auto_pilot_volume_done=0,
-                auto_pilot_post_review_docs_done=0,
-            )
         logger.info(f"🤖 ✓ Contenu généré job {job_id}")
 
     elif step == "volume_safety":
@@ -4038,26 +4068,30 @@ def _execute_ap_step(job_id: int, step: str, job: dict) -> None:
                 + "; ".join(m for m in (failure_msg, remaining_msg) if m)
             )
 
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute(
-            """
-            UPDATE content_generation_segments
-            SET review_error = NULL
-            WHERE id IN (
-                SELECT cgs.id
-                FROM content_generation_segments cgs
-                JOIN content_generation_jobs cgj ON cgj.id = cgs.job_id
-                JOIN cours_folders cf ON cf.id = cgj.folder_id
-                WHERE cf.formation_job_id = ?
-                  AND cgs.status = 'completed'
-                  AND COALESCE(cgs.reviewed, 0) = 0
+        from services.formation_pipeline_service import get_expected_course_folders
+        folder_ids = get_expected_course_folders(job_id).get("folder_ids") or []
+        if folder_ids:
+            placeholders = ",".join("?" * len(folder_ids))
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                f"""
+                UPDATE content_generation_segments
+                SET review_error = NULL
+                WHERE id IN (
+                    SELECT cgs.id
+                    FROM content_generation_segments cgs
+                    JOIN content_generation_jobs cgj ON cgj.id = cgs.job_id
+                    JOIN cours_folders cf ON cf.id = cgj.folder_id
+                    WHERE cf.id IN ({placeholders})
+                      AND cgs.status = 'completed'
+                      AND COALESCE(cgs.reviewed, 0) = 0
+                )
+                """,
+                tuple(folder_ids),
             )
-            """,
-            (job_id,),
-        )
-        conn.commit()
-        conn.close()
+            conn.commit()
+            conn.close()
 
         update_job(job_id, auto_pilot_volume_done=1, auto_pilot_post_review_docs_done=0)
         logger.info(f"🤖 ✓ Volume safety terminée job {job_id}")
@@ -4067,18 +4101,15 @@ def _execute_ap_step(job_id: int, step: str, job: dict) -> None:
             execute_mission_locally(job_id, "review", cc_model)
         else:
             from services.content_generation_service import run_content_review
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            cursor.execute(
-                "SELECT id FROM cours_folders WHERE formation_job_id = ? ORDER BY position ASC",
-                (job_id,),
-            )
-            folder_ids = [r[0] for r in cursor.fetchall()]
-            conn.close()
+            from services.formation_pipeline_service import get_expected_course_folders
+            folder_ids = get_expected_course_folders(job_id).get("folder_ids") or []
             failed = []
+            reports_written = 0
             for fid in folder_ids:
                 try:
                     result = run_content_review(fid, model=api_model)
+                    _write_api_review_report(job_id, fid, result, api_model)
+                    reports_written += 1
                     if result.get("segments_failed", 0) > 0:
                         failed.append(f"{fid}({result['segments_failed']} segments échoués)")
                 except Exception as e:
@@ -4086,22 +4117,33 @@ def _execute_ap_step(job_id: int, step: str, job: dict) -> None:
                     failed.append(str(fid))
             if failed:
                 raise RuntimeError(f"Review échouée sur folders : {', '.join(failed)}")
+            logger.info(
+                "🤖 ✓ Rapports conformité persistés job %s : %s/%s",
+                job_id,
+                reports_written,
+                len(folder_ids),
+            )
         update_job(job_id, auto_pilot_post_review_docs_done=0)
         logger.info(f"🤖 ✓ Révision conformité terminée job {job_id}")
 
     elif step == "post_review_docs":
         from services.content_generation_service import _assemble_and_upload, _update_job_db
+        from services.formation_pipeline_service import get_expected_course_folders
+        folder_ids = get_expected_course_folders(job_id).get("folder_ids") or []
+        if not folder_ids:
+            raise RuntimeError("Aucun texte complété à assembler après révision")
+        placeholders = ",".join("?" * len(folder_ids))
         conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute(
-            """
+            f"""
             SELECT cf.id, cgj.id
             FROM cours_folders cf
             JOIN content_generation_jobs cgj ON cgj.folder_id = cf.id
-            WHERE cf.formation_job_id = ? AND cgj.status = 'completed'
+            WHERE cf.id IN ({placeholders}) AND cgj.status = 'completed'
             ORDER BY cf.position ASC
             """,
-            (job_id,),
+            tuple(folder_ids),
         )
         rows = cursor.fetchall()
         conn.close()
@@ -4120,14 +4162,8 @@ def _execute_ap_step(job_id: int, step: str, job: dict) -> None:
 
     elif step == "audio":
         from services.content_generation_service import generate_audio_from_script
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT id FROM cours_folders WHERE formation_job_id = ? ORDER BY position ASC",
-            (job_id,),
-        )
-        folder_ids = [r[0] for r in cursor.fetchall()]
-        conn.close()
+        from services.formation_pipeline_service import get_expected_course_folders
+        folder_ids = get_expected_course_folders(job_id).get("folder_ids") or []
         if not folder_ids:
             raise RuntimeError("Aucun cours_folder trouvé pour la plateforme")
 
@@ -4581,13 +4617,23 @@ def formation_pipeline_diagnostic(job_id):
     from services.formation_observability_service import list_pipeline_events
     events = list_pipeline_events(job_id, limit=events_limit)
 
+    try:
+        from services.formation_pipeline_service import get_expected_course_folders
+        folder_state = get_expected_course_folders(job_id)
+    except Exception as e:
+        logger.warning(f"⚠️ Diagnostic résolution folders job {job_id} : {e}")
+        folder_state = {"expected_count": 0, "folder_ids": [], "duplicates": [], "missing": []}
+
     folders = []
     try:
         from database.db import get_db_connection
         conn = get_db_connection()
         cursor = conn.cursor()
-        cursor.execute(
-            """
+        folder_ids = folder_state.get("folder_ids") or []
+        if folder_ids:
+            placeholders = ",".join("?" * len(folder_ids))
+            cursor.execute(
+                f"""
             SELECT
                 cf.id,
                 cf.name,
@@ -4605,45 +4651,45 @@ def formation_pipeline_diagnostic(job_id):
             FROM cours_folders cf
             LEFT JOIN content_generation_jobs cgj ON cgj.folder_id = cf.id
             LEFT JOIN content_generation_segments cgs ON cgs.job_id = cgj.id
-            WHERE cf.formation_job_id = ?
+            WHERE cf.id IN ({placeholders})
             GROUP BY cf.id, cf.name, cf.position, cf.platform_id, cf.formation_job_id,
                      cgj.id, cgj.status, cgj.total_words
             ORDER BY cf.position ASC, cf.id ASC
             """,
-            (job_id,),
-        )
-        for row in cursor.fetchall():
-            (
-                folder_id,
-                name,
-                position,
-                platform_id,
-                formation_job_id,
-                content_job_id,
-                content_status,
-                total_words,
-                segments_total,
-                segments_completed,
-                reviewed_segments,
-                review_errors,
-                dirty_segments,
-            ) = row
-            folders.append({
-                "folder_id": folder_id,
-                "folder_label": f"F{folder_id}",
-                "name": name,
-                "position": position,
-                "platform_id": platform_id,
-                "formation_job_id": formation_job_id,
-                "content_job_id": content_job_id,
-                "content_status": content_status,
-                "total_words": total_words or 0,
-                "segments_total": segments_total or 0,
-                "segments_completed": segments_completed or 0,
-                "reviewed_segments": reviewed_segments or 0,
-                "review_errors": review_errors or 0,
-                "dirty_segments": dirty_segments or 0,
-            })
+                tuple(folder_ids),
+            )
+            for row in cursor.fetchall():
+                (
+                    folder_id,
+                    name,
+                    position,
+                    platform_id,
+                    formation_job_id,
+                    content_job_id,
+                    content_status,
+                    total_words,
+                    segments_total,
+                    segments_completed,
+                    reviewed_segments,
+                    review_errors,
+                    dirty_segments,
+                ) = row
+                folders.append({
+                    "folder_id": folder_id,
+                    "folder_label": f"F{folder_id}",
+                    "name": name,
+                    "position": position,
+                    "platform_id": platform_id,
+                    "formation_job_id": formation_job_id,
+                    "content_job_id": content_job_id,
+                    "content_status": content_status,
+                    "total_words": total_words or 0,
+                    "segments_total": segments_total or 0,
+                    "segments_completed": segments_completed or 0,
+                    "reviewed_segments": reviewed_segments or 0,
+                    "review_errors": review_errors or 0,
+                    "dirty_segments": dirty_segments or 0,
+                })
         conn.close()
     except Exception as e:
         logger.warning(f"⚠️ Diagnostic folders job {job_id} : {e}")
@@ -4691,6 +4737,11 @@ def formation_pipeline_diagnostic(job_id):
         "health": health,
         "volume_audit": volume_audit,
         "folders": folders,
+        "folder_resolution": {
+            "expected_count": folder_state.get("expected_count", 0),
+            "duplicates": folder_state.get("duplicates", []),
+            "missing": folder_state.get("missing", []),
+        },
         "events": events,
         "finalize": finalize_result,
     }), 200

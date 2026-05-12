@@ -650,6 +650,128 @@ def _limit_text_words_natural(text: str, max_words: int) -> str:
     return " ".join(selected or [sentences[0]]).strip()
 
 
+def _compact_words(text: str, max_words: int) -> str:
+    words = _strip_tts_tags_for_sync(text or "").split()
+    if max_words <= 0 or len(words) <= max_words:
+        return " ".join(words).strip()
+    return " ".join(words[:max_words]).strip()
+
+
+def _tail_words(text: str, max_words: int) -> str:
+    words = _strip_tts_tags_for_sync(text or "").split()
+    if max_words <= 0 or len(words) <= max_words:
+        return " ".join(words).strip()
+    return " ".join(words[-max_words:]).strip()
+
+
+def _extract_llm_json(raw: str) -> dict:
+    raw = (raw or "").strip().replace("```json", "```")
+    if "```" in raw:
+        raw = max(raw.split("```"), key=len).strip()
+    match = re.search(r"\{[\s\S]*\}", raw)
+    if match:
+        raw = match.group(0)
+    return json.loads(raw)
+
+
+def _course_ai_stop_decision_enabled() -> bool:
+    value = (os.getenv("COURSE_AI_STOP_DECISION", "true") or "").strip().lower()
+    return value not in {"0", "false", "no", "off"}
+
+
+def _course_ai_stop_window_sec() -> float:
+    return _env_float("COURSE_AI_STOP_WINDOW_SEC", 420, min_value=60, max_value=900)
+
+
+def _ai_should_defer_chunk_before_conclusion(
+    *,
+    bloc_number: int,
+    remaining_before_conclusion_sec: float,
+    consumed_chunks: list,
+    candidate_chunk: dict,
+    next_chunk: dict | None = None,
+    model: str | None = None,
+) -> tuple[bool, str]:
+    """Ask the LLM whether the next chunk should be deferred before closing.
+
+    This is intentionally used only inside the end-of-block window. The goal is
+    to avoid starting a new pedagogical section just before the closing, without
+    relying on keyword heuristics.
+    """
+    if not _course_ai_stop_decision_enabled():
+        return False, ""
+
+    candidate_text = (candidate_chunk.get("text") or "").strip()
+    if len(candidate_text.split()) < 35:
+        return False, ""
+
+    consumed_text = "\n\n".join(
+        (chunk.get("text") or "").strip()
+        for chunk in (consumed_chunks or [])
+        if (chunk.get("text") or "").strip()
+    )
+    if len(consumed_text.split()) < 120:
+        return False, ""
+
+    prompt = f"""Tu es monteur pédagogique pour un cours audio horodaté.
+
+On approche de la conclusion du bloc {bloc_number}/7. Il reste environ
+{int(max(0, remaining_before_conclusion_sec))} secondes avant la marge réservée
+à la conclusion.
+
+TA MISSION :
+Décider si le PROCHAIN PASSAGE doit être lu maintenant, ou reporté au cours
+suivant pour permettre une conclusion propre.
+
+Juge pédagogiquement, PAS par mots-clés :
+- CONTINUE si le passage prolonge, illustre ou referme clairement l'idée en cours.
+- REPORTE si le passage ouvre un nouveau grand sujet, une nouvelle section, ou
+  une idée qui mérite une vraie introduction au début du prochain fichier audio.
+- REPORTE aussi si le passage commencerait brutalement une idée que la conclusion
+  interromprait aussitôt.
+
+FIN DE CE QUI A ÉTÉ LU :
+---
+{_tail_words(consumed_text, 260)}
+---
+
+PROCHAIN PASSAGE CANDIDAT :
+---
+{_compact_words(candidate_text, 260)}
+---
+
+PASSAGE QUI SUIT ÉVENTUELLEMENT :
+---
+{_compact_words((next_chunk or {}).get("text") or "", 120) or "(indisponible)"}
+---
+
+Réponds uniquement avec ce JSON valide :
+{{
+  "decision": "continue" ou "defer",
+  "reason": "raison courte en français"
+}}"""
+
+    try:
+        raw = _llm_post(
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=500,
+            model=model or CLAUDE_MODEL,
+            timeout=90,
+        )
+        data = _extract_llm_json(raw)
+        decision = str(data.get("decision") or "").strip().lower()
+        reason = re.sub(r"\s+", " ", str(data.get("reason") or "")).strip()
+        return decision == "defer", reason
+    except Exception as e:
+        logger.warning(
+            "⚠️ Décision IA de fin de bloc indisponible bloc %s (%s: %s)",
+            bloc_number,
+            type(e).__name__,
+            str(e)[:160],
+        )
+        return False, ""
+
+
 def _build_runtime_conclusion_text(consumed_chunks: list, remaining_sec: float, bloc_number: int) -> str:
     """Conclusion humaine basée sur le contenu réellement enseigné dans le bloc."""
     consumed_text = "\n\n".join(
@@ -748,6 +870,7 @@ def _synthesize_course_audio_synced_to_slides(
     conclusion_margin_sec: int = None,
     runtime_fit: bool = False,
     fast_tts_pipeline: bool = False,
+    llm_model: str | None = None,
 ):
     """Generate one course MP3 by slide-sized chunks and return slide timings.
 
@@ -807,12 +930,6 @@ def _synthesize_course_audio_synced_to_slides(
     # Runtime fit n'est supporté qu'en basic_tts (Edge TTS). Sinon ignoré.
     use_runtime_fit = bool(runtime_fit and basic_tts)
 
-    # Préfixer le carryover intra-jour uniquement en runtime_fit.
-    if use_runtime_fit and prepended_chunks:
-        chunks = list(prepended_chunks) + list(base_chunks)
-    else:
-        chunks = list(base_chunks)
-
     if conclusion_margin_sec is None:
         conclusion_margin_sec = int(os.getenv(
             "EDGE_TTS_CONCLUSION_MARGIN_SEC",
@@ -825,6 +942,24 @@ def _synthesize_course_audio_synced_to_slides(
         if progress_callback:
             progress_callback(message)
 
+    # Préfixer le carryover intra-jour uniquement en runtime_fit. Si du texte a
+    # été reporté du bloc précédent, on l'amorce et on reformule son début avant
+    # de l'envoyer au TTS.
+    runtime_handoff_meta = {}
+    if use_runtime_fit and prepended_chunks:
+        _emit(f"Bloc {bloc['bloc_number']}/7 — rédaction amorce IA du passage reporté...")
+        rewritten_prepended, runtime_handoff_meta = _rewrite_runtime_carryover_chunks(
+            prepended_chunks,
+            base_chunks,
+            bloc_number=int(bloc.get("bloc_number") or 0),
+            model=llm_model,
+        )
+        if runtime_handoff_meta:
+            _emit(f"Bloc {bloc['bloc_number']}/7 — amorce IA du passage reporté ajoutée")
+        chunks = list(rewritten_prepended) + list(base_chunks)
+    else:
+        chunks = list(base_chunks)
+
     fast_tts_pipeline = bool(fast_tts_pipeline and use_runtime_fit)
 
     if basic_tts:
@@ -836,6 +971,13 @@ def _synthesize_course_audio_synced_to_slides(
         cursor_sec = float(_COURSE_START_SILENCE_SECONDS)
     timings = []
     attempts = []
+    if runtime_handoff_meta:
+        attempts.append({
+            "kind": "ai_runtime_handoff_opening",
+            "chunk": "start",
+            "text": runtime_handoff_meta.get("opening_text") or "",
+            "original_start": runtime_handoff_meta.get("original_start") or "",
+        })
     unconsumed_chunks = []
     consumed_chunks = []
 
@@ -843,6 +985,11 @@ def _synthesize_course_audio_synced_to_slides(
     total_words_generated = 0
     total_duration_generated = 0.0
     stopped_for_runtime_fit = False
+    ai_stop_checks = 0
+    try:
+        ai_stop_check_limit = max(0, int(os.getenv("COURSE_AI_STOP_CHECKS_PER_BLOCK", "2")))
+    except (TypeError, ValueError):
+        ai_stop_check_limit = 2
 
     def _synthesize_basic_measured(text: str, progress_prefix: str) -> tuple:
         cache_key = None
@@ -899,6 +1046,43 @@ def _synthesize_course_audio_synced_to_slides(
                     chunks = chunks[:chunk_idx] + list(sub_chunks) + chunks[chunk_idx + 1:]
                     chunk = chunks[chunk_idx]
                     text = (chunk.get("text") or "").strip()
+
+            # Décision pédagogique IA : dans la fenêtre de fin, on demande si le
+            # passage candidat doit être reporté pour éviter d'ouvrir un grand
+            # pan juste avant la conclusion.
+            if (
+                ai_stop_checks < ai_stop_check_limit
+                and remaining_sec <= _course_ai_stop_window_sec()
+                and consumed_chunks
+            ):
+                ai_stop_checks += 1
+                should_defer, defer_reason = _ai_should_defer_chunk_before_conclusion(
+                    bloc_number=int(bloc.get("bloc_number") or 0),
+                    remaining_before_conclusion_sec=remaining_sec,
+                    consumed_chunks=consumed_chunks,
+                    candidate_chunk=chunk,
+                    next_chunk=chunks[chunk_idx + 1] if chunk_idx + 1 < len(chunks) else None,
+                    model=llm_model,
+                )
+                attempts.append({
+                    "kind": "ai_boundary_defer" if should_defer else "ai_boundary_continue",
+                    "chunk": chunk_idx + 1,
+                    "remaining_sec": round(float(remaining_sec), 3),
+                    "words": len(text.split()),
+                    "reason": defer_reason,
+                })
+                if should_defer:
+                    stopped_for_runtime_fit = True
+                    unconsumed_chunks.extend(chunks[chunk_idx:])
+                    _emit(
+                        f"Bloc {bloc['bloc_number']}/7 — décision IA : nouveau pan reporté "
+                        f"avant conclusion ({defer_reason or 'raison non fournie'})"
+                    )
+                    break
+                _emit(
+                    f"Bloc {bloc['bloc_number']}/7 — décision IA : passage gardé "
+                    f"avant conclusion ({defer_reason or 'continuité pédagogique'})"
+                )
 
             # Estimer la durée de ce sous-chunk avec le wpm réel observé.
             observed_wpm = (
@@ -2511,6 +2695,31 @@ def run_content_generation(folder_id, on_progress=None, mode="normal", model=Non
         job.get("total_words") or 0,
     )
 
+    if formation_job_id:
+        try:
+            from services.formation_pipeline_service import is_expected_course_folder
+            if not is_expected_course_folder(formation_job_id, folder_id):
+                msg = (
+                    "Folder doublon ignore : il ne correspond pas a une "
+                    "journee canonique du programme valide."
+                )
+                _update_job_db(job_id, status="ignored_duplicate", error_message=msg)
+                logger.warning(
+                    "PIPELINE_CONTENT_DUPLICATE_SKIPPED formation_job_id=%s content_job_id=%s folder_id=%s",
+                    formation_job_id,
+                    job_id,
+                    folder_id,
+                )
+                return
+        except Exception:
+            logger.warning(
+                "PIPELINE_CONTENT_CANONICAL_GUARD_FAILED formation_job_id=%s content_job_id=%s folder_id=%s",
+                formation_job_id,
+                job_id,
+                folder_id,
+                exc_info=True,
+            )
+
     if is_mock:
         logger.info(f"🧪 MODE MOCK — génération factice pour dossier {folder_id}")
     elif is_mini:
@@ -2826,20 +3035,25 @@ def _split_opening_for_rewrite(text: str, max_sentences: int = 3, max_words: int
 
 
 def _parse_course_opening_json(raw: str) -> str:
-    raw = (raw or "").strip().replace("```json", "```")
-    if "```" in raw:
-        raw = max(raw.split("```"), key=len).strip()
-    match = re.search(r"\{[\s\S]*\}", raw)
-    if not match:
-        raise ValueError("réponse sans JSON")
-    data = json.loads(match.group(0))
+    data = _extract_llm_json(raw)
     opening = re.sub(r"\s+", " ", (data.get("opening") or "").strip())
     if len(opening.split()) < 12:
         raise ValueError("opening trop courte")
     return opening
 
 
-def _fallback_course_opening(opening: str, previous_item_type: str | None) -> str:
+def _parse_course_handoff_json(raw: str) -> tuple[str, str]:
+    data = _extract_llm_json(raw)
+    opening = re.sub(r"\s+", " ", (data.get("opening") or "").strip())
+    rewritten_start = re.sub(r"\s+", " ", (data.get("rewritten_start") or "").strip())
+    if len(opening.split()) < 10:
+        raise ValueError("opening trop courte")
+    if len(rewritten_start.split()) < 12:
+        raise ValueError("rewritten_start trop court")
+    return opening, rewritten_start
+
+
+def _fallback_course_opening(opening: str, previous_item_type: str | None) -> tuple[str, str]:
     if previous_item_type in {"pause", "pause_midi"}:
         lead = "Très bien, on se remet tranquillement dans le fil."
     elif previous_item_type == "qa":
@@ -2847,7 +3061,7 @@ def _fallback_course_opening(opening: str, previous_item_type: str | None) -> st
     else:
         lead = "Très bien, on continue avec la suite."
     opening = re.sub(r"\s+", " ", (opening or "").strip())
-    return f"{lead} Pour entrer dans cette partie, on va poser l'idée de départ simplement : {opening}"
+    return lead, f"Pour entrer dans cette partie, on va reprendre l'idée proprement : {opening}"
 
 
 def _rewrite_course_opening_for_audio(
@@ -2856,16 +3070,17 @@ def _rewrite_course_opening_for_audio(
     item_idx: int,
     *,
     model: str | None = None,
-) -> str:
-    """Rewrite only the first sentences of a course audio for a natural handoff."""
+    previous_excerpt: str = "",
+) -> tuple[str, dict]:
+    """Build an oral handoff and rewrite the first sentences of a course audio."""
     text = (bloc.get("text") or "").strip()
     bloc_number = int(bloc.get("bloc_number") or 0)
-    if not text or bloc_number <= 1 or not _course_opening_transitions_enabled():
-        return text
+    if not text or not _course_opening_transitions_enabled():
+        return text, {}
 
     opening, rest = _split_opening_for_rewrite(text)
-    if not opening or not rest:
-        return text
+    if not opening:
+        return text, {}
 
     previous_item_type = playlist_items[item_idx - 1][2] if item_idx > 0 else None
     previous_label = {
@@ -2877,12 +3092,17 @@ def _rewrite_course_opening_for_audio(
     }.get(previous_item_type, str(previous_item_type))
 
     rest_preview = " ".join(rest.split()[:90])
-    prompt = f"""Tu écris l'ouverture audio d'un bloc de cours pour une classe virtuelle.
+    prompt = f"""Tu écris l'amorce audio d'un bloc de cours pour une classe virtuelle.
 
 BLOC COURS : {bloc_number}/7
 ÉLÉMENT JUSTE AVANT CE COURS : {previous_label}
 
-OUVERTURE ACTUELLE À REMANIER LÉGÈREMENT :
+CONTEXTE PRÉCÉDENT DISPONIBLE :
+---
+{previous_excerpt or "(aucun contexte précédent disponible)"}
+---
+
+DÉBUT ACTUEL À AMORCER ET REMANIER :
 ---
 {opening}
 ---
@@ -2893,22 +3113,27 @@ SUITE IMMÉDIATE QUI VIENDRA APRÈS TON OUVERTURE :
 ---
 
 MISSION :
-Réécris uniquement l'ouverture actuelle pour que le démarrage du fichier audio soit naturel.
-Il faut une transition pédagogique chaleureuse, puis une reformulation légère des premières idées.
+Crée une vraie amorce orale, puis reformule légèrement le début actuel.
+Le fichier ne doit pas reprendre brutalement à la phrase exacte où le cours s'était arrêté.
+Il faut relancer l'idée proprement, comme un formateur qui reprend le fil en direct.
 
 CONSIGNES STRICTES :
-- Ne résume pas le cours précédent.
+- Tu peux situer brièvement le fil, mais ne fais pas un résumé long du cours précédent.
 - Ne répète pas la conclusion, le Q&A ou la pause qui viennent déjà d'avoir lieu.
 - Si l'élément précédent est une pause, ne dis pas "la pause est terminée".
 - Ne spoile pas tout le bloc : ouvre seulement la porte du sujet.
-- Ne change pas le fond : conserve les idées de l'ouverture actuelle.
-- Garde un volume proche de l'ouverture actuelle pour ne pas décaler les slides.
-- Termine de façon à enchaîner naturellement avec la suite immédiate.
-- 45 à 95 mots.
+- Ne change pas le fond : conserve les idées du début actuel.
+- Ne recopie pas littéralement le début actuel : reformule sur le vif, naturellement.
+- L'amorce doit faire 25 à 55 mots.
+- Le début reformulé doit faire 35 à 85 mots.
+- Termine le début reformulé de façon à enchaîner naturellement avec la suite immédiate.
 - Pas d'horaires, pas de markdown, pas de guillemets.
 
 Réponds uniquement avec ce JSON valide :
-{{"opening": "nouvelle ouverture"}}"""
+{{
+  "opening": "amorce de transition",
+  "rewritten_start": "début actuel reformulé"
+}}"""
 
     try:
         raw = _llm_post(
@@ -2917,7 +3142,7 @@ Réponds uniquement avec ce JSON valide :
             model=model or CLAUDE_MODEL,
             timeout=90,
         )
-        rewritten = _parse_course_opening_json(raw)
+        opening_text, rewritten_start = _parse_course_handoff_json(raw)
     except Exception as e:
         logger.warning(
             "⚠️ Ouverture bloc %s fallback (%s: %s)",
@@ -2925,9 +3150,127 @@ Réponds uniquement avec ce JSON valide :
             type(e).__name__,
             str(e)[:160],
         )
-        rewritten = _fallback_course_opening(opening, previous_item_type)
+        opening_text, rewritten_start = _fallback_course_opening(opening, previous_item_type)
 
-    return f"{rewritten}\n\n{rest}".strip()
+    rewritten_text = "\n\n".join(
+        part.strip()
+        for part in (opening_text, rewritten_start, rest)
+        if part and part.strip()
+    ).strip()
+    return rewritten_text, {
+        "opening_text": opening_text,
+        "rewritten_start": rewritten_start,
+        "original_start": opening,
+    }
+
+
+def _rewrite_runtime_carryover_chunks(
+    prepended_chunks: list,
+    base_chunks: list,
+    *,
+    bloc_number: int,
+    model: str | None = None,
+) -> tuple[list, dict]:
+    """Amorce and lightly rewrites text carried from the previous audio block."""
+    if not prepended_chunks or not _course_opening_transitions_enabled():
+        return list(prepended_chunks or []), {}
+
+    chunks = [dict(chunk) for chunk in prepended_chunks]
+    first = chunks[0]
+    first_text = (first.get("text") or "").strip()
+    if not first_text:
+        return chunks, {}
+
+    opening, rest = _split_opening_for_rewrite(first_text)
+    if not opening:
+        return chunks, {}
+
+    carried_preview = "\n\n".join(
+        (chunk.get("text") or "").strip()
+        for chunk in chunks[:3]
+        if (chunk.get("text") or "").strip()
+    )
+    base_preview = "\n\n".join(
+        (chunk.get("text") or "").strip()
+        for chunk in (base_chunks or [])[:2]
+        if (chunk.get("text") or "").strip()
+    )
+
+    prompt = f"""Tu écris l'amorce d'un cours audio qui reprend un passage reporté
+depuis le fichier audio précédent.
+
+CONTEXTE :
+- Bloc cours actuel : {bloc_number}/7.
+- Le début ci-dessous n'est pas un nouveau texte indépendant : c'est un passage
+  qui n'a pas été lu dans le cours précédent, et qui doit maintenant être relancé
+  proprement.
+
+DÉBUT REPORTÉ À AMORCER ET REMANIER :
+---
+{_compact_words(opening, 140)}
+---
+
+PASSAGE REPORTÉ AUTOUR :
+---
+{_compact_words(carried_preview, 320)}
+---
+
+DÉBUT DU BLOC PRÉVU APRÈS LE REPORT :
+---
+{_compact_words(base_preview, 180) or "(indisponible)"}
+---
+
+MISSION :
+Crée une amorce orale puis reformule légèrement le début reporté.
+On ne doit pas reprendre brutalement à la phrase exacte où le cours précédent
+s'était arrêté. Il faut réinstaller l'idée, puis la lancer naturellement.
+
+CONSIGNES :
+- Ne fais pas semblant de répondre à des questions.
+- Ne parle pas de fichier audio, de découpage technique, de chunk ou de report.
+- Tu peux dire sobrement qu'on reprend le fil ou qu'on pose le point proprement.
+- Ne change pas le fond.
+- Ne recopie pas littéralement le début reporté.
+- "opening" : 25 à 55 mots.
+- "rewritten_start" : 35 à 85 mots.
+- Pas d'horaires, pas de markdown, pas de guillemets.
+
+Réponds uniquement avec ce JSON valide :
+{{
+  "opening": "amorce de reprise",
+  "rewritten_start": "début reporté reformulé"
+}}"""
+
+    try:
+        raw = _llm_post(
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=700,
+            model=model or CLAUDE_MODEL,
+            timeout=90,
+        )
+        opening_text, rewritten_start = _parse_course_handoff_json(raw)
+    except Exception as e:
+        logger.warning(
+            "⚠️ Amorce runtime carryover bloc %s fallback (%s: %s)",
+            bloc_number,
+            type(e).__name__,
+            str(e)[:160],
+        )
+        clean_opening = re.sub(r"\s+", " ", opening).strip()
+        opening_text = "On reprend maintenant le fil du point que nous avions gardé pour la suite."
+        rewritten_start = f"Pour le poser clairement, {clean_opening}"
+
+    first["text"] = "\n\n".join(
+        part.strip()
+        for part in (opening_text, rewritten_start, rest)
+        if part and part.strip()
+    ).strip()
+    chunks[0] = first
+    return chunks, {
+        "opening_text": opening_text,
+        "rewritten_start": rewritten_start,
+        "original_start": opening,
+    }
 
 
 def _build_contextual_break_audio(
@@ -3365,7 +3708,8 @@ def generate_audio_from_script(
 
     def _record_course_bloc(bloc, *, status, text=None, final_duration_sec=None,
                             skipped_reason=None, opening_rewritten=False,
-                            runtime_conclusions=None):
+                            opening_text="", opening_original_start="",
+                            runtime_conclusions=None, runtime_ai_decisions=None):
         course_script_plan.append(
             _serialize_course_bloc(
                 bloc,
@@ -3375,7 +3719,10 @@ def generate_audio_from_script(
                 final_duration_sec=final_duration_sec,
                 skipped_reason=skipped_reason,
                 opening_rewritten=opening_rewritten,
+                opening_text=opening_text,
+                opening_original_start=opening_original_start,
                 runtime_conclusions=runtime_conclusions,
+                runtime_ai_decisions=runtime_ai_decisions,
             )
         )
 
@@ -3548,30 +3895,71 @@ def generate_audio_from_script(
 
         audio_bloc = bloc
         opening_rewritten = False
+        opening_text = ""
+        opening_original_start = ""
         runtime_conclusions = []
-        if not mock and _course_opening_transitions_enabled() and int(bloc.get("bloc_number") or 0) > 1:
-            rewritten_text = _rewrite_course_opening_for_audio(
+        runtime_ai_decisions = []
+        if not mock and _course_opening_transitions_enabled():
+            from services.break_transition_service import nearest_course_bloc
+            prev_course = nearest_course_bloc(playlist_items, item_idx, -1)
+            prev_bloc_text = ""
+            if prev_course and prev_course in blocs_by_number:
+                prev_data = blocs_by_number.get(prev_course) or {}
+                prev_bloc_text = (
+                    prev_data.get("runtime_consumed_text")
+                    or prev_data.get("text")
+                    or ""
+                )
+            _progress(
+                step,
+                len(playlist_items),
+                f"Bloc {bloc['bloc_number']}/7 — rédaction intro/amorce IA...",
+            )
+            rewritten_text, opening_meta = _rewrite_course_opening_for_audio(
                 bloc,
                 playlist_items,
                 item_idx,
                 model=llm_model,
+                previous_excerpt=_tail_words(prev_bloc_text, 220),
             )
             if rewritten_text and rewritten_text != (bloc.get("text") or "").strip():
-                audio_bloc = dict(bloc)
-                audio_bloc["text"] = rewritten_text
-                audio_bloc["word_count"] = len(rewritten_text.split())
-                opening_rewritten = True
-                logger.info(
-                    "PIPELINE_AUDIO_COURSE_OPENING_REWRITTEN formation_job_id=%s "
-                    "content_job_id=%s folder_id=%s bloc=%s filename=%s words_before=%s words_after=%s",
-                    formation_job_id,
-                    job_id,
-                    folder_id,
-                    bloc["bloc_number"],
-                    filename,
-                    len((bloc.get("text") or "").split()),
-                    len(rewritten_text.split()),
-                )
+                rewritten_words = len(rewritten_text.split())
+                word_budget = int(bloc.get("word_budget") or 0)
+                if word_budget and rewritten_words > word_budget and not runtime_fit_enabled:
+                    logger.warning(
+                        "⚠️ Intro/amorce bloc %s ignorée : %s mots > budget %s",
+                        bloc["bloc_number"],
+                        rewritten_words,
+                        word_budget,
+                    )
+                    _progress(
+                        step,
+                        len(playlist_items),
+                        f"Bloc {bloc['bloc_number']}/7 — intro/amorce IA ignorée (budget TTS)",
+                    )
+                else:
+                    audio_bloc = dict(bloc)
+                    audio_bloc["text"] = rewritten_text
+                    audio_bloc["word_count"] = rewritten_words
+                    opening_rewritten = True
+                    opening_text = (opening_meta or {}).get("opening_text") or ""
+                    opening_original_start = (opening_meta or {}).get("original_start") or ""
+                    _progress(
+                        step,
+                        len(playlist_items),
+                        f"Bloc {bloc['bloc_number']}/7 — intro/amorce IA ajoutée avant TTS",
+                    )
+                    logger.info(
+                        "PIPELINE_AUDIO_COURSE_OPENING_REWRITTEN formation_job_id=%s "
+                        "content_job_id=%s folder_id=%s bloc=%s filename=%s words_before=%s words_after=%s",
+                        formation_job_id,
+                        job_id,
+                        folder_id,
+                        bloc["bloc_number"],
+                        filename,
+                        len((bloc.get("text") or "").split()),
+                        rewritten_words,
+                    )
 
         if sync_slides:
             mode_label = "MOCK" if mock else "BASIC edge-tts" if basic_tts else "Fish Audio"
@@ -3602,6 +3990,7 @@ def generate_audio_from_script(
                 prepended_chunks=prepended_for_call,
                 runtime_fit=runtime_fit_enabled,
                 fast_tts_pipeline=fast_tts_pipeline,
+                llm_model=llm_model,
             )
             runtime_conclusions = [
                 {
@@ -3615,6 +4004,19 @@ def generate_audio_from_script(
                     "conclusion_fallback",
                     "conclusion_ultra_fallback",
                 } and (a.get("text") or "").strip()
+            ]
+            runtime_ai_decisions = [
+                {
+                    "kind": a.get("kind"),
+                    "chunk": a.get("chunk"),
+                    "remaining_sec": a.get("remaining_sec"),
+                    "words": a.get("words"),
+                    "reason": a.get("reason") or "",
+                    "text": a.get("text") or "",
+                    "original_start": a.get("original_start") or "",
+                }
+                for a in attempts
+                if str(a.get("kind") or "").startswith("ai_")
             ]
             # Le tampon est consommé par cet appel ; le runtime peut en
             # produire un nouveau pour le prochain bloc cours.
@@ -3743,7 +4145,10 @@ def generate_audio_from_script(
             text=course_text_for_ui,
             final_duration_sec=round(float(final_duration), 3),
             opening_rewritten=opening_rewritten,
+            opening_text=opening_text,
+            opening_original_start=opening_original_start,
             runtime_conclusions=runtime_conclusions,
+            runtime_ai_decisions=runtime_ai_decisions,
         )
         generated.append(filename)
 
@@ -3880,13 +4285,17 @@ def _serialize_course_bloc(
     final_duration_sec: float | None = None,
     skipped_reason: str | None = None,
     opening_rewritten: bool = False,
+    opening_text: str = "",
+    opening_original_start: str = "",
     runtime_conclusions: list | None = None,
+    runtime_ai_decisions: list | None = None,
 ) -> dict:
     from services.playlist_tts_service import COURS_DURATIONS_MIN
 
     bloc_number = int(bloc.get("bloc_number") or 0)
     bloc_text = text if text is not None else (bloc.get("text") or "")
     runtime_conclusions = runtime_conclusions or []
+    runtime_ai_decisions = runtime_ai_decisions or []
     return {
         "bloc_number": bloc_number,
         "filename": bloc.get("filename") or _course_filename_for_bloc(playlist_spec, bloc_number),
@@ -3902,7 +4311,10 @@ def _serialize_course_bloc(
         "closing_text": bloc.get("closing_text") or "",
         "closing_words": int(bloc.get("closing_words") or 0),
         "runtime_conclusions": runtime_conclusions,
+        "runtime_ai_decisions": runtime_ai_decisions,
         "opening_rewritten": bool(opening_rewritten),
+        "opening_text": opening_text or "",
+        "opening_original_start": opening_original_start or "",
         "final_duration_sec": final_duration_sec,
         "skipped_reason": skipped_reason or "",
         "overflow_unresolved": bool(bloc.get("overflow_unresolved")),
@@ -4543,6 +4955,39 @@ def _apply_patches(text: str, patches: list) -> tuple:
     return text, applied, rejected
 
 
+def _snapshot_pre_review_for_content_job(job_id: int) -> int:
+    """Persist the exact text state before API review mutates segments."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            "ALTER TABLE content_generation_segments ADD COLUMN text_content_pre_review TEXT"
+        )
+        conn.commit()
+    except Exception:
+        pass
+    cursor.execute(
+        """
+        UPDATE content_generation_segments
+        SET text_content_pre_review = text_content
+        WHERE job_id = ?
+          AND status = 'completed'
+          AND text_content_pre_review IS NULL
+        """,
+        (job_id,),
+    )
+    snapshotted = cursor.rowcount or 0
+    conn.commit()
+    conn.close()
+    if snapshotted:
+        logger.info(
+            "PIPELINE_REVIEW_SNAPSHOT content_job_id=%s segments=%s",
+            job_id,
+            snapshotted,
+        )
+    return int(snapshotted)
+
+
 def run_content_review(folder_id, on_progress=None, model=None):
     """
     Révise la conformité des segments completed non encore reviewed pour un
@@ -4576,6 +5021,7 @@ def run_content_review(folder_id, on_progress=None, model=None):
         folder_id,
         model,
     )
+    _snapshot_pre_review_for_content_job(job_id)
     conn = get_db_connection()
     cursor = conn.cursor()
     # Sont éligibles à la révision : les segments completed dont reviewed=0.
