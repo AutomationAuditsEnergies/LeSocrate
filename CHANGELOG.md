@@ -2,6 +2,12 @@
 
 ## 2026-05-12
 
+### ui(formation-pipeline): tous les boutons « Relancer TTS » affichent désormais le nombre de journées
+
+Avant, seul « Lancer le TTS » (Fish Audio) précisait le périmètre (`(N journées)`). Les boutons Edge TTS et leurs variantes slides n'indiquaient pas qu'ils couvraient eux aussi **toutes les journées du job** (le backend `_run_all_audios_sequential` boucle sur `folder_ids` indépendamment du moteur TTS choisi). Conséquence : ambigüité visuelle qui faisait croire que le bouton Edge ne couvrirait peut-être qu'un seul dossier.
+
+Tous les boutons relance utilisent maintenant le même template : `« Relancer <mode> (N journées) »` où N = `contentFolders.length || job.nb_days`. Comportement backend inchangé.
+
 ### feat(content-review): revérif post-TTS + splice MP3 automatique sur règles apprises (Phase 3b)
 
 L'admin peut désormais déclencher une **revérification automatique** de tous les chunks audio d'un dossier contre le markdown des règles (Phase 3a). DeepSeek parcourt chaque chunk via `audio_sync.timings`, vérifie la conformité, propose une réécriture minimale si nécessaire, et **patche le MP3 ms-précis** via la même primitive que Phase B. Deux modes : **Simuler** (dry_run, n'écrit rien) et **Appliquer aux MP3** (modifie Azure en place).

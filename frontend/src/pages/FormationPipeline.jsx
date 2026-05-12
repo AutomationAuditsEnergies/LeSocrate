@@ -4022,7 +4022,7 @@ export default function FormationPipeline() {
                       disabled={audioBusy || !allContentCompleted}
                       title="Re-synthèse via Edge TTS (Microsoft Edge, gratuit, voix basique). Permet d'écouter le texte sans payer Fish Audio."
                     >
-                      <Icon name="graphic_eq" /> {audioBusy ? '…' : 'Relancer Edge TTS voix basique'}
+                      <Icon name="graphic_eq" /> {audioBusy ? '…' : `Relancer Edge TTS voix basique (${contentFolders.length || job.nb_days} journées)`}
                     </button>
                     <button
                       style={{ ...S.btn('ghost'), borderColor: 'rgba(167,139,250,0.4)', color: '#a78bfa' }}
@@ -4030,7 +4030,7 @@ export default function FormationPipeline() {
                       disabled={audioBusy || !allContentCompleted}
                       title="Re-synthèse gratuite via Edge TTS, découpée par slides, avec stockage des timings slide ↔ audio."
                     >
-                      <Icon name="slideshow" /> {audioBusy ? '…' : 'Relancer slides + Edge TTS'}
+                      <Icon name="slideshow" /> {audioBusy ? '…' : `Relancer slides + Edge TTS (${contentFolders.length || job.nb_days} journées)`}
                     </button>
                     <button
                       style={S.btn('success')}
@@ -4038,7 +4038,7 @@ export default function FormationPipeline() {
                       disabled={audioBusy || !allContentCompleted}
                       title="Re-synthèse payante Fish Audio S2-Pro (~9$/journée)."
                     >
-                      <Icon name="refresh" /> {audioBusy ? 'Lancement…' : 'Relancer TTS payant'}
+                      <Icon name="refresh" /> {audioBusy ? 'Lancement…' : `Relancer TTS payant (${contentFolders.length || job.nb_days} journées)`}
                     </button>
                     <button
                       style={S.btn('success')}
@@ -4046,7 +4046,7 @@ export default function FormationPipeline() {
                       disabled={audioBusy || !allContentCompleted}
                       title="Re-synthèse payante Fish Audio S2-Pro avec découpage par slides et timings synchronisés."
                     >
-                      <Icon name="slideshow" /> {audioBusy ? 'Lancement…' : 'Relancer TTS slides payant'}
+                      <Icon name="slideshow" /> {audioBusy ? 'Lancement…' : `Relancer TTS slides payant (${contentFolders.length || job.nb_days} journées)`}
                     </button>
                   </div>
                   {audioError && (
@@ -4075,7 +4075,7 @@ export default function FormationPipeline() {
                       disabled={audioBusy || !allContentCompleted}
                       title="Synthèse via Edge TTS (Microsoft Edge, gratuit, voix basique). Utile pour écouter le rendu sans payer Fish Audio."
                     >
-                      <Icon name="graphic_eq" /> {audioBusy ? '…' : 'Edge TTS voix basique'}
+                      <Icon name="graphic_eq" /> {audioBusy ? '…' : `Edge TTS voix basique (${contentFolders.length || job.nb_days} journées)`}
                     </button>
                     <button
                       style={{ ...S.btn('ghost'), borderColor: 'rgba(167,139,250,0.4)', color: '#a78bfa' }}
@@ -4083,7 +4083,7 @@ export default function FormationPipeline() {
                       disabled={audioBusy || !allContentCompleted}
                       title="Test complet sans Fish Audio : génère les slides si besoin, synthétise via Edge TTS, concatène par slide et stocke les timings."
                     >
-                      <Icon name="slideshow" /> {audioBusy ? '…' : 'Slides + Edge TTS'}
+                      <Icon name="slideshow" /> {audioBusy ? '…' : `Slides + Edge TTS (${contentFolders.length || job.nb_days} journées)`}
                     </button>
                     <button
                       style={{ ...S.btn('neutral'), border: '1px dashed #64748b' }}
