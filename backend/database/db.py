@@ -385,6 +385,32 @@ def init_database():
         # proposed_text = correction renvoyée par DeepSeek (paragraphe complet réécrit).
         # correction_status = pending | proposed | applied | rejected | error.
         # correction_error = message d'erreur quand l'appel DeepSeek a échoué.
+        # Règles transversales apprises depuis les annotations appliquées.
+        # Un markdown éditable par (folder_id, job_id) — alimente la Phase 3
+        # de revérif post-TTS qui patche les chunks non-conformes.
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS content_script_rules (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            folder_id INTEGER NOT NULL,
+            job_id INTEGER NOT NULL,
+            rules_markdown TEXT NOT NULL DEFAULT '',
+            rules_count INTEGER DEFAULT 0,
+            source_annotations_count INTEGER DEFAULT 0,
+            model TEXT,
+            markdown_path TEXT,
+            generated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(folder_id, job_id),
+            FOREIGN KEY (folder_id) REFERENCES cours_folders(id),
+            FOREIGN KEY (job_id) REFERENCES content_generation_jobs(id)
+        )
+        """)
+        cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_content_script_rules_folder_job
+        ON content_script_rules(folder_id, job_id)
+        """)
+        logger.info("✅ Table content_script_rules créée/vérifiée")
+
         for _col, _ddl in (
             ("original_paragraph", "ALTER TABLE content_script_annotations ADD COLUMN original_paragraph TEXT"),
             ("proposed_text", "ALTER TABLE content_script_annotations ADD COLUMN proposed_text TEXT"),

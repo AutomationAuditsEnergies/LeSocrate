@@ -2576,6 +2576,100 @@ def create_hr_blueprint(socketio):
             logger.error(f"❌ Erreur reject annotation script: {e}")
             return jsonify({"success": False, "error": str(e)}), 500
 
+    @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/content-job/rules", methods=["GET"])
+    def get_content_script_rules(folder_id):
+        """Retourne le markdown des règles apprises depuis les annotations."""
+        denied = _require_admin()
+        if denied:
+            return denied
+        try:
+            from services.script_rules_service import get_rules
+            data = get_rules(folder_id)
+            if not data["context"]:
+                return jsonify({"success": False, "error": "Aucun job pour ce dossier"}), 404
+            return jsonify({
+                "success": True,
+                "rules_markdown": data["rules_markdown"],
+                "rules_count": data["rules_count"],
+                "source_annotations_count": data["source_annotations_count"],
+                "model": data["model"],
+                "generated_at": data["generated_at"],
+                "updated_at": data["updated_at"],
+                "markdown_path": data["markdown_path"],
+            }), 200
+        except Exception as e:
+            logger.error(f"❌ Erreur get rules: {e}")
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/content-job/rules/extract", methods=["POST"])
+    def extract_content_script_rules(folder_id):
+        """Lance l'extraction DeepSeek des règles depuis les annotations appliquées."""
+        denied = _require_admin()
+        if denied:
+            return denied
+        try:
+            from services.script_rules_service import extract_rules_from_annotations
+            data = extract_rules_from_annotations(folder_id)
+            return jsonify({
+                "success": True,
+                "rules_markdown": data["rules_markdown"],
+                "rules_count": data["rules_count"],
+                "source_annotations_count": data["source_annotations_count"],
+                "model": data["model"],
+                "generated_at": data["generated_at"],
+                "updated_at": data["updated_at"],
+                "markdown_path": data["markdown_path"],
+            }), 200
+        except ValueError as e:
+            return jsonify({"success": False, "error": str(e)}), 400
+        except Exception as e:
+            logger.error(f"❌ Erreur extract rules: {e}")
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/content-job/rules", methods=["PUT"])
+    def update_content_script_rules(folder_id):
+        """Permet l'édition manuelle du markdown des règles par l'admin."""
+        denied = _require_admin()
+        if denied:
+            return denied
+        try:
+            from services.script_rules_service import update_rules_markdown
+            payload = request.get_json() or {}
+            data = update_rules_markdown(folder_id, payload.get("rules_markdown") or "")
+            return jsonify({
+                "success": True,
+                "rules_markdown": data["rules_markdown"],
+                "rules_count": data["rules_count"],
+                "updated_at": data["updated_at"],
+            }), 200
+        except ValueError as e:
+            return jsonify({"success": False, "error": str(e)}), 400
+        except Exception as e:
+            logger.error(f"❌ Erreur update rules: {e}")
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/content-job/rules/markdown", methods=["GET"])
+    def download_content_script_rules_markdown(folder_id):
+        """Télécharge le markdown des règles."""
+        denied = _require_admin()
+        if denied:
+            return denied
+        try:
+            from services.script_rules_service import get_rules
+            data = get_rules(folder_id)
+            if not data["context"]:
+                return jsonify({"success": False, "error": "Aucun job pour ce dossier"}), 404
+            markdown = data["rules_markdown"] or "_Aucune règle apprise pour ce dossier._\n"
+            filename = os.path.basename(data["markdown_path"])
+            return Response(
+                markdown,
+                mimetype="text/markdown; charset=utf-8",
+                headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+            )
+        except Exception as e:
+            logger.error(f"❌ Erreur download rules markdown: {e}")
+            return jsonify({"success": False, "error": str(e)}), 500
+
     @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/content-job/annotations/markdown", methods=["GET"])
     def download_content_script_annotations_markdown(folder_id):
         """Retourne le markdown de revue du script TTS."""

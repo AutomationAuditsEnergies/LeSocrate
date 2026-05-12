@@ -85,6 +85,10 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
   const [annotationComment, setAnnotationComment] = useState('')
   const [annotationError, setAnnotationError] = useState('')
   const [savingAnnotation, setSavingAnnotation] = useState(false)
+  const [scriptRules, setScriptRules] = useState(null)
+  const [rulesPanelOpen, setRulesPanelOpen] = useState(false)
+  const [extractingRules, setExtractingRules] = useState(false)
+  const [rulesError, setRulesError] = useState('')
   const [loadingContentScript, setLoadingContentScript] = useState(false)
   const [, setLoadingScript] = useState(false)
   const [contentScriptView, setContentScriptView] = useState('source') // 'source' | 'courses'
@@ -421,6 +425,9 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
         setScriptActiveCourse(data.course_blocs?.[0]?.bloc_number || 1)
         setScriptActiveBreak(null)
         setEditingSegment(null)
+        setRulesPanelOpen(false)
+        setRulesError('')
+        loadScriptRules()
       } else {
         alert(data.error || 'Script non disponible')
       }
@@ -538,6 +545,49 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
   const downloadAnnotationsMarkdown = () => {
     if (!selectedFolder) return
     window.open(apiUrl(`/api/hr/cours-folders/${selectedFolder.id}/content-job/annotations/markdown`), '_blank')
+  }
+
+  const loadScriptRules = async () => {
+    if (!selectedFolder) return
+    try {
+      const resp = await fetch(
+        apiUrl(`/api/hr/cours-folders/${selectedFolder.id}/content-job/rules`),
+        { credentials: 'include' }
+      )
+      const data = await resp.json()
+      if (data.success) setScriptRules(data)
+    } catch (e) {
+      console.error('Erreur chargement règles:', e)
+    }
+  }
+
+  const extractScriptRules = async () => {
+    if (!selectedFolder || extractingRules) return
+    setExtractingRules(true)
+    setRulesError('')
+    try {
+      const resp = await fetch(
+        apiUrl(`/api/hr/cours-folders/${selectedFolder.id}/content-job/rules/extract`),
+        { method: 'POST', credentials: 'include' }
+      )
+      const data = await resp.json()
+      if (data.success) {
+        setScriptRules(data)
+        setRulesPanelOpen(true)
+      } else {
+        setRulesError(data.error || 'Extraction impossible.')
+      }
+    } catch (e) {
+      console.error('Erreur extract rules:', e)
+      setRulesError('Erreur réseau pendant l\'extraction.')
+    } finally {
+      setExtractingRules(false)
+    }
+  }
+
+  const downloadRulesMarkdown = () => {
+    if (!selectedFolder) return
+    window.open(apiUrl(`/api/hr/cours-folders/${selectedFolder.id}/content-job/rules/markdown`), '_blank')
   }
 
   const applyAnnotationCorrection = async (annotationId) => {
@@ -2186,7 +2236,7 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
                 <button
                   type="button"
                   onClick={downloadAnnotationsMarkdown}
-                  className="mr-3 inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-semibold transition-colors"
+                  className="mr-2 inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-semibold transition-colors"
                   style={{ backgroundColor: 'rgba(255,255,255,0.14)', color: '#f5f3ff' }}
                   title={contentScriptModal.annotations_markdown_path || 'Télécharger le markdown de revue'}
                 >
@@ -2194,10 +2244,81 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
                   Markdown
                 </button>
               )}
+              <button
+                type="button"
+                onClick={() => setRulesPanelOpen(prev => !prev)}
+                className="mr-3 inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-semibold transition-colors"
+                style={{
+                  backgroundColor: rulesPanelOpen ? '#facc15' : 'rgba(255,255,255,0.14)',
+                  color: rulesPanelOpen ? '#1f2937' : '#f5f3ff',
+                }}
+                title="Règles apprises depuis tes annotations"
+              >
+                <Icon name="rule" style={{ fontSize: '15px' }} />
+                Règles {scriptRules?.rules_count ? `(${scriptRules.rules_count})` : ''}
+              </button>
               <button onClick={closeContentScriptModal} className="text-white hover:bg-white/20 rounded-full p-1">
                 <Icon name="close" className="text-2xl" />
               </button>
             </div>
+
+            {rulesPanelOpen && (
+              <div
+                className="border-b px-6 py-4"
+                style={{ backgroundColor: darkMode ? '#1a1332' : '#fefce8', borderColor: colors.border }}
+              >
+                <div className="mb-2 flex items-center justify-between gap-3">
+                  <div>
+                    <p className="text-sm font-bold" style={{ color: colors.text }}>
+                      Règles apprises depuis tes annotations
+                    </p>
+                    <p className="text-xs" style={{ color: colors.textMuted }}>
+                      {scriptRules?.source_annotations_count
+                        ? `Extraites de ${scriptRules.source_annotations_count} annotation${scriptRules.source_annotations_count > 1 ? 's' : ''} via ${scriptRules.model || 'DeepSeek'}. Généré le ${scriptRules.generated_at || '—'}.`
+                        : 'Aucune extraction encore — applique au moins une correction puis clique sur Extraire.'}
+                    </p>
+                  </div>
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={extractScriptRules}
+                      disabled={extractingRules || scriptAnnotations.length === 0}
+                      className="inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-60"
+                      style={{ backgroundColor: '#7c3aed', color: 'white' }}
+                    >
+                      <Icon name="auto_awesome" style={{ fontSize: '14px' }} />
+                      {extractingRules ? 'Extraction…' : (scriptRules?.rules_count ? 'Ré-extraire' : 'Extraire')}
+                    </button>
+                    {scriptRules?.rules_markdown && (
+                      <button
+                        type="button"
+                        onClick={downloadRulesMarkdown}
+                        className="inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-semibold transition-colors"
+                        style={{ backgroundColor: colors.innerBg, color: colors.text, border: `1px solid ${colors.border}` }}
+                      >
+                        <Icon name="download" style={{ fontSize: '14px' }} />
+                        Markdown
+                      </button>
+                    )}
+                  </div>
+                </div>
+                {rulesError && (
+                  <p className="mb-2 text-xs font-semibold" style={{ color: '#dc2626' }}>{rulesError}</p>
+                )}
+                {scriptRules?.rules_markdown ? (
+                  <pre
+                    className="max-h-72 overflow-auto rounded-md p-3 text-xs leading-relaxed"
+                    style={{ backgroundColor: colors.innerBg, color: colors.text, whiteSpace: 'pre-wrap' }}
+                  >
+                    {scriptRules.rules_markdown}
+                  </pre>
+                ) : (
+                  <p className="text-xs italic" style={{ color: colors.textMuted }}>
+                    Aucune règle apprise pour ce dossier. L'extraction lit toutes les annotations (appliquées et rejetées) pour produire un markdown de règles transversales.
+                  </p>
+                )}
+              </div>
+            )}
 
             {/* Corps : sidebar + contenu */}
             {contentScriptView === 'source' ? (

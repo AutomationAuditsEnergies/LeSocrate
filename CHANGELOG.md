@@ -2,6 +2,26 @@
 
 ## 2026-05-12
 
+### feat(content-review): extraction DeepSeek de règles transversales depuis les annotations (Phase 3a)
+
+À partir de toutes les annotations d'un dossier cours (applied + rejected + proposed), DeepSeek extrait un **markdown de règles transversales** qui décrit les patterns récurrents de corrections demandées par le formateur. Ce markdown alimente la Phase 3b à venir : un agent de revérification post-TTS qui patche automatiquement les chunks audio non-conformes via la primitive de splice MP3 ms-précis (Phase B).
+
+**Backend**
+- Nouvelle table `content_script_rules` (folder_id, job_id, rules_markdown, rules_count, source_annotations_count, model, markdown_path, generated_at, updated_at) avec UNIQUE(folder_id, job_id) + index (`backend/database/db.py`).
+- Nouveau service `backend/services/script_rules_service.py` :
+  - `_fetch_applied_annotations` récupère les annotations applied (corrections validées) + rejected (signal négatif : règle à NE PAS extraire) + proposed (en cours).
+  - `_build_llm_prompt` formate le contexte programme + N corrections (commentaire, extrait, avant/après, statut) pour DeepSeek. Le prompt explicite que les corrections rejetées sont un signal négatif à ne pas inclure dans le markdown.
+  - `extract_rules_from_annotations(folder_id)` appelle DeepSeek (modèle par défaut `DEEPSEEK_DEFAULT_MODEL`, override env `SCRIPT_RULES_MODEL`), parse le retour, persiste en DB (`ON CONFLICT DO UPDATE`) et sur disque (`tts_script_reviews/regles-folder-X-job-Y.md`).
+  - `get_rules(folder_id)` lecture, `update_rules_markdown(folder_id, markdown)` édition manuelle (l'admin peut éditer le markdown à la main pour ajouter/retirer/affiner des règles avant la Phase 3b).
+- 4 endpoints HR (`backend/routes/hr_routes.py`) : GET `/content-job/rules` (lecture), POST `/content-job/rules/extract` (déclenche extraction), PUT `/content-job/rules` (édition manuelle), GET `/content-job/rules/markdown` (download).
+
+**Frontend** (`frontend/src/components/CoursFolders.jsx`)
+- Nouveau bouton « Règles (N) » dans le header de la modal Script TTS, à côté du bouton Markdown.
+- Panneau collapsible (couleur jaune `#facc15`) qui affiche : nombre d'annotations source, modèle, date de génération, le markdown des règles dans un `<pre>` scrollable, et boutons « Extraire » / « Ré-extraire » + « Markdown » (download).
+- États : `scriptRules`, `rulesPanelOpen`, `extractingRules`, `rulesError`. Chargement auto via `loadScriptRules()` à l'ouverture de la modal.
+
+**Phase 3b (à venir)** — un agent de revérification post-TTS lit le markdown des règles + parcourt chaque chunk audio via `audio_sync.timings`, demande à DeepSeek si chaque chunk respecte les règles, et patche le MP3 chirurgicalement via la primitive Phase B sur les portions non-conformes.
+
 ### feat(content-review): splice MP3 chirurgical ms-précis au moment du Appliquer (Phase B)
 
 Quand l'admin clique « Appliquer » sur une annotation `source_type=course`, le backend ne se contente plus de marquer le bloc `dirty=1` — il **patche directement le MP3 en place sur Azure** au millisecond près. Plus besoin de régénérer 10 min de TTS pour corriger 30 secondes.
