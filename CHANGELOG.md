@@ -2,6 +2,17 @@
 
 ## 2026-05-12
 
+### ui(formation-pipeline): boutons « Relancer TTS » plus explicites sur le périmètre + coût + durée
+
+Suite à confusion utilisateur (pensait que le bouton relançait juste les segments dirty alors que le backend utilise `force_all=True` par défaut), les boutons et leur contexte sont maintenant auto-explicites :
+
+- **Note d'info violette** au-dessus des boutons : « Régénération **complète** par défaut » avec rappel que chaque clic réécrit **tous** les MP3 (19/jour × N jours) et que `course_script_plan.json` + `audio_sync.timings` sont réécrits alignés sur les nouveaux MP3.
+- **Labels enrichis** : `(N journées · 0€ · ~15 min)` pour Edge basique, `(N journées · ~18$ · ~150 min)` pour Fish payant, etc. Le coût Fish est calculé à 9$/journée.
+- **Tooltips étoffés** : commencent tous par « Régénération COMPLÈTE » (en majuscules), précisent moteur TTS, coût exact, fourchette de temps, et mention "ÉTAPE IRRÉVERSIBLE côté facturation" pour les variantes payantes.
+- Renommage `Relancer TTS test (gratuit)` → `Relancer TTS test silence (N journées · 0€)` pour clarifier que c'est juste du silence MP3, pas une vraie synthèse.
+
+Aucun changement de comportement backend.
+
 ### ui(formation-pipeline): tous les boutons « Relancer TTS » affichent désormais le nombre de journées
 
 Avant, seul « Lancer le TTS » (Fish Audio) précisait le périmètre (`(N journées)`). Les boutons Edge TTS et leurs variantes slides n'indiquaient pas qu'ils couvraient eux aussi **toutes les journées du job** (le backend `_run_all_audios_sequential` boucle sur `folder_ids` indépendamment du moteur TTS choisi). Conséquence : ambigüité visuelle qui faisait croire que le bouton Edge ne couvrirait peut-être qu'un seul dossier.

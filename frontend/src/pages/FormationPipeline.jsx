@@ -4004,49 +4004,68 @@ export default function FormationPipeline() {
                     </div>
                   )}
 
-                  {/* Bouton relancer : utile quand le précédent run a échoué (ex: force_all bug)
+                  {/* Bouton relancer : utile quand le précédent run a échoué
                       ou si on veut re-générer les MP3 suite à une édition de texte.
-                      3 voies : silence (0€), Edge TTS (0€, vraie voix basique), Fish Audio (payant). */}
+                      3 voies : silence (0€), Edge TTS (0€, vraie voix basique), Fish Audio (payant).
+                      Tous les boutons utilisent force_all=True côté backend (cf. launch-audio
+                      route, défaut True) → INTÉGRALITÉ des MP3 régénérée, pas juste les dirty. */}
+                  <div style={{
+                    fontSize: '13px',
+                    color: '#cbd5e1',
+                    backgroundColor: 'rgba(139, 92, 246, 0.08)',
+                    border: '1px solid rgba(139, 92, 246, 0.25)',
+                    borderRadius: '10px',
+                    padding: '12px 14px',
+                    marginBottom: '12px',
+                    lineHeight: 1.55,
+                  }}>
+                    <div style={{ fontWeight: 600, color: '#e2e8f0', marginBottom: '4px' }}>
+                      <Icon name="info" style={{ fontSize: '15px', color: '#a78bfa' }} />{' '}
+                      Régénération <strong>complète</strong> par défaut
+                    </div>
+                    Chaque clic réécrit <strong>tous</strong> les MP3 des {contentFolders.length || job.nb_days} journées (19 MP3/jour = {(contentFolders.length || job.nb_days) * 19} fichiers au total : cours + Q&amp;A + pauses), pas seulement les segments marqués <em>dirty</em>.
+                    Le <code style={{ color: '#a78bfa' }}>course_script_plan.json</code> et <code style={{ color: '#a78bfa' }}>audio_sync.timings</code> sont réécrits alignés sur les nouveaux MP3 — indispensable pour que les annotations Script TTS pointent au bon endroit.
+                  </div>
                   <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
                     <button
                       style={{ ...S.btn('neutral'), border: '1px dashed #64748b' }}
                       onClick={() => handleLaunchAudio(true, false)}
                       disabled={audioBusy || !allContentCompleted}
-                      title="Re-génère les 7 MP3 cours en mode mock (silence 1s). 0€."
+                      title={`Régénération COMPLÈTE en mode mock (silence 1s par MP3). 0€. ~1 min pour ${contentFolders.length || job.nb_days} journées. Utile pour valider le flux pipeline sans produire d'audio.`}
                     >
-                      <Icon name="refresh" /> {audioBusy ? '…' : 'Relancer TTS test (gratuit)'}
+                      <Icon name="refresh" /> {audioBusy ? '…' : `Relancer TTS test silence (${contentFolders.length || job.nb_days} journées · 0€)`}
                     </button>
                     <button
                       style={{ ...S.btn('ghost'), borderColor: 'rgba(251,146,60,0.35)', color: '#fb923c' }}
                       onClick={() => handleLaunchAudio(false, true)}
                       disabled={audioBusy || !allContentCompleted}
-                      title="Re-synthèse via Edge TTS (Microsoft Edge, gratuit, voix basique). Permet d'écouter le texte sans payer Fish Audio."
+                      title={`Régénération COMPLÈTE via Microsoft Edge TTS (voix basique, vraie voix synthétique). 0€. Estimer ~10-20 min pour ${contentFolders.length || job.nb_days} journées (cooldown 30s entre journées). Idéal pour tester sans payer Fish Audio.`}
                     >
-                      <Icon name="graphic_eq" /> {audioBusy ? '…' : `Relancer Edge TTS voix basique (${contentFolders.length || job.nb_days} journées)`}
+                      <Icon name="graphic_eq" /> {audioBusy ? '…' : `Relancer Edge TTS voix basique (${contentFolders.length || job.nb_days} journées · 0€ · ~15 min)`}
                     </button>
                     <button
                       style={{ ...S.btn('ghost'), borderColor: 'rgba(167,139,250,0.4)', color: '#a78bfa' }}
                       onClick={() => handleLaunchAudio(false, true, true, true)}
                       disabled={audioBusy || !allContentCompleted}
-                      title="Re-synthèse gratuite via Edge TTS, découpée par slides, avec stockage des timings slide ↔ audio."
+                      title={`Régénération COMPLÈTE Edge TTS avec génération de slides + timings slide↔audio. 0€. Plus long que Edge basique (~20-30 min pour ${contentFolders.length || job.nb_days} journées) à cause du découpage slide-par-slide.`}
                     >
-                      <Icon name="slideshow" /> {audioBusy ? '…' : `Relancer slides + Edge TTS (${contentFolders.length || job.nb_days} journées)`}
+                      <Icon name="slideshow" /> {audioBusy ? '…' : `Relancer slides + Edge TTS (${contentFolders.length || job.nb_days} journées · 0€ · ~25 min)`}
                     </button>
                     <button
                       style={S.btn('success')}
                       onClick={() => handleLaunchAudio(false, false)}
                       disabled={audioBusy || !allContentCompleted}
-                      title="Re-synthèse payante Fish Audio S2-Pro (~9$/journée)."
+                      title={`Régénération COMPLÈTE Fish Audio S2-Pro (voix studio production). ~9$/journée = ~${9 * (contentFolders.length || job.nb_days)}$ total. Estimer ~1h-1h30 par journée. ÉTAPE IRRÉVERSIBLE côté facturation.`}
                     >
-                      <Icon name="refresh" /> {audioBusy ? 'Lancement…' : `Relancer TTS payant (${contentFolders.length || job.nb_days} journées)`}
+                      <Icon name="refresh" /> {audioBusy ? 'Lancement…' : `Relancer TTS payant (${contentFolders.length || job.nb_days} journées · ~${9 * (contentFolders.length || job.nb_days)}$ · ~${(contentFolders.length || job.nb_days) * 75} min)`}
                     </button>
                     <button
                       style={S.btn('success')}
                       onClick={() => handleLaunchAudio(false, false, true, true)}
                       disabled={audioBusy || !allContentCompleted}
-                      title="Re-synthèse payante Fish Audio S2-Pro avec découpage par slides et timings synchronisés."
+                      title={`Régénération COMPLÈTE Fish Audio avec slides + timings. ~9$/journée + temps de découpage slide-par-slide. Pour ${contentFolders.length || job.nb_days} journées : ~${9 * (contentFolders.length || job.nb_days)}$ et ~${(contentFolders.length || job.nb_days) * 100} min.`}
                     >
-                      <Icon name="slideshow" /> {audioBusy ? 'Lancement…' : `Relancer TTS slides payant (${contentFolders.length || job.nb_days} journées)`}
+                      <Icon name="slideshow" /> {audioBusy ? 'Lancement…' : `Relancer TTS slides payant (${contentFolders.length || job.nb_days} journées · ~${9 * (contentFolders.length || job.nb_days)}$)`}
                     </button>
                   </div>
                   {audioError && (
