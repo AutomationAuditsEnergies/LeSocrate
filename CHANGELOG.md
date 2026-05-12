@@ -2,6 +2,19 @@
 
 ## 2026-05-12
 
+### ui(formation-pipeline): barre de progression audio temps réel par journée
+
+Pendant la synthèse audio (~10-15 min par journée), la barre « X/18 segments à jour » de chaque journée restait figée parce que le flag `dirty=0` n'est mis qu'à la **fin** de chaque bloc cours complet, pas pendant. Conséquence : l'utilisateur croyait la pipeline bloquée.
+
+Ajouté **sous la barre statique « X/N à jour »** une seconde barre cyan **« ⚡ Audio en cours · step/total · X% »** qui :
+- Lit le dernier event `audio_progress` filtré par `folder_id` (déjà émis par `_make_audio_progress_logger` à chaque chunk TTS).
+- Affiche `step/total` (ex. `5/19 fichiers · 26%`) avec une barre dégradée cyan animée (transition CSS 0.4s).
+- Apparaît uniquement quand `lastFolderEvent.status === 'running'` ou type `audio_folder_started`/`audio_progress`, et disparaît dès que le folder est `audio_folder_completed` ou `audio_folder_failed`.
+
+**Polling étoffé** (`useEffect` polling de FormationPipeline) : pendant `AUDIO_ACTIVE_STATUSES`, le tick toutes les 3s rappelle aussi `fetchPipelineDiagnostic(silent=true)` pour rafraîchir la liste d'events — sans ça, la barre cyan ne bougeait pas même avec les events backend qui arrivent.
+
+Résultat : pendant le run Edge TTS parallèle des 2 journées, chaque journée affiche sa propre barre cyan qui avance indépendamment de l'autre, sans avoir à F5.
+
 ### feat(formation-pipeline): parallélisation inter-folders pour Edge TTS (~40% plus rapide)
 
 Lancement audio en parallèle (1 greenlet par journée, GreenPool eventlet) activé **uniquement** pour Edge TTS et mock. Fish Audio reste séquentiel à cause du rate limit + coût.

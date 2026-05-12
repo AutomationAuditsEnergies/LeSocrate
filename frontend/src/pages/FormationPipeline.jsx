@@ -663,6 +663,20 @@ function PipelineDiagnosticPanel({ diagnostic, loading, error, onRefresh }) {
             const ready = Math.max(0, completed - pending)
             const pct = completed > 0 ? Math.round((ready / completed) * 100) : 0
             const statusColor = pending ? '#fbbf24' : '#34d399'
+            // Progression audio temps réel : dernier event "audio_progress" sur ce folder.
+            // Permet à la barre de bouger pendant la pipeline (dirty=0 n'est mis qu'à
+            // la fin d'un bloc complet, donc la barre statique "X/18 à jour" reste figée
+            // pendant les ~10 min de TTS d'un bloc).
+            const lastProgressForFolder = [...folderEvents].reverse().find(e => e.event_type === 'audio_progress')
+            const folderProgressData = eventData(lastProgressForFolder)
+            const folderProgStep = Number(folderProgressData.step || 0)
+            const folderProgTotal = Number(folderProgressData.total || 0)
+            const folderProgPct = folderProgTotal > 0 ? Math.min(100, Math.round((folderProgStep / folderProgTotal) * 100)) : null
+            const isAudioRunningForFolder = lastFolderEvent && (
+              lastFolderEvent.status === 'running' ||
+              lastFolderEvent.event_type === 'audio_folder_started' ||
+              lastFolderEvent.event_type === 'audio_progress'
+            ) && !['audio_folder_completed', 'audio_folder_failed'].includes(lastFolderEvent.event_type)
             return (
               <div key={folder.folder_id} style={{
                 display: 'grid',
@@ -695,6 +709,24 @@ function PipelineDiagnosticPanel({ diagnostic, loading, error, onRefresh }) {
                   <div style={{ height: '5px', borderRadius: '999px', background: 'rgba(148,163,184,0.12)', overflow: 'hidden' }}>
                     <div style={{ width: `${pct}%`, height: '100%', background: statusColor }} />
                   </div>
+                  {isAudioRunningForFolder && folderProgPct !== null && (
+                    <>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', gap: '10px', flexWrap: 'wrap', fontSize: '11px', marginTop: '6px', marginBottom: '4px' }}>
+                        <span style={{ color: '#22d3ee', fontWeight: 600 }}>
+                          <Icon name="bolt" style={{ fontSize: '11px', verticalAlign: 'middle' }} /> Audio en cours
+                        </span>
+                        <span style={{ color: '#22d3ee' }}>{folderProgStep}/{folderProgTotal} fichiers · {folderProgPct}%</span>
+                      </div>
+                      <div style={{ height: '5px', borderRadius: '999px', background: 'rgba(34,211,238,0.12)', overflow: 'hidden' }}>
+                        <div style={{
+                          width: `${folderProgPct}%`,
+                          height: '100%',
+                          background: 'linear-gradient(90deg, #22d3ee, #06b6d4)',
+                          transition: 'width 0.4s ease',
+                        }} />
+                      </div>
+                    </>
+                  )}
                 </div>
                 <div style={{ color: '#94a3b8', fontSize: '11px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                   {lastFolderEvent ? (
@@ -1928,6 +1960,12 @@ export default function FormationPipeline() {
           // Rafraîchir la KB pendant l'enrichissement
           if (data.status === 'kb_building' || data.status === 'kb_ready') {
             fetchKb(selectedJobId)
+          }
+          // Rafraîchir le diagnostic pendant la synthèse audio pour que la
+          // barre de progression temps réel par dossier reste vivante (events
+          // audio_progress se mettent à jour seulement si on re-fetch).
+          if (AUDIO_ACTIVE_STATUSES.has(data.status)) {
+            fetchPipelineDiagnostic(selectedJobId, { silent: true })
           }
           // Arrêter le polling quand le statut n'est plus "en cours"
           if (!POLLING_STATUSES.has(data.status)) {
