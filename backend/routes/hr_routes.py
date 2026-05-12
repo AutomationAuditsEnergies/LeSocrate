@@ -3,7 +3,7 @@ import os
 import time
 import requests as http_requests
 from datetime import datetime, timedelta, timezone
-from flask import Blueprint, request, session, jsonify
+from flask import Blueprint, request, session, jsonify, Response
 from azure.storage.blob import BlobServiceClient, generate_blob_sas, BlobSasPermissions
 from azure.core.exceptions import ResourceExistsError
 from config import FRANCE_TZ
@@ -2451,14 +2451,109 @@ def create_hr_blueprint(socketio):
         ]
 
         course_plan = get_course_script_plan_for_ui(folder_id, job=job)
+        from services.script_annotation_service import list_script_annotations
+        annotations_data = list_script_annotations(folder_id)
 
         return jsonify({
             "success": True,
             "program_title": job["program_title"],
             "total_words": job["total_words"],
             "sub_parts": sub_parts_list,
+            "annotations": annotations_data["annotations"],
+            "annotations_count": len(annotations_data["annotations"]),
+            "annotations_markdown_path": annotations_data["markdown_path"],
             **course_plan,
         }), 200
+
+    @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/content-job/annotations", methods=["GET"])
+    def list_content_script_annotations(folder_id):
+        """Retourne les annotations humaines du script TTS."""
+        denied = _require_admin()
+        if denied:
+            return denied
+
+        try:
+            from services.script_annotation_service import list_script_annotations
+            data = list_script_annotations(folder_id)
+            if not data["context"]:
+                return jsonify({"success": False, "error": "Aucun job pour ce dossier"}), 404
+            return jsonify({
+                "success": True,
+                "annotations": data["annotations"],
+                "annotations_count": len(data["annotations"]),
+                "markdown_path": data["markdown_path"],
+            }), 200
+        except Exception as e:
+            logger.error(f"❌ Erreur list annotations script: {e}")
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/content-job/annotations", methods=["POST"])
+    def create_content_script_annotation(folder_id):
+        """Cree une annotation sur une selection du script TTS et regenere le markdown."""
+        denied = _require_admin()
+        if denied:
+            return denied
+
+        try:
+            from services.script_annotation_service import create_script_annotation
+            result = create_script_annotation(folder_id, request.get_json() or {})
+            return jsonify({
+                "success": True,
+                "annotation": result["annotation"],
+                "annotations": result["annotations"],
+                "annotations_count": len(result["annotations"]),
+                "markdown_path": result["markdown_path"],
+            }), 201
+        except ValueError as e:
+            return jsonify({"success": False, "error": str(e)}), 400
+        except Exception as e:
+            logger.error(f"❌ Erreur create annotation script: {e}")
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/content-job/annotations/<int:annotation_id>", methods=["DELETE"])
+    def delete_content_script_annotation(folder_id, annotation_id):
+        """Supprime logiquement une annotation et regenere le markdown."""
+        denied = _require_admin()
+        if denied:
+            return denied
+
+        try:
+            from services.script_annotation_service import delete_script_annotation
+            result = delete_script_annotation(folder_id, annotation_id)
+            return jsonify({
+                "success": True,
+                "annotations": result["annotations"],
+                "annotations_count": len(result["annotations"]),
+                "markdown_path": result["markdown_path"],
+            }), 200
+        except ValueError as e:
+            return jsonify({"success": False, "error": str(e)}), 404
+        except Exception as e:
+            logger.error(f"❌ Erreur delete annotation script: {e}")
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/content-job/annotations/markdown", methods=["GET"])
+    def download_content_script_annotations_markdown(folder_id):
+        """Retourne le markdown de revue du script TTS."""
+        denied = _require_admin()
+        if denied:
+            return denied
+
+        try:
+            from services.script_annotation_service import build_script_annotations_markdown, write_script_annotations_markdown
+            markdown, path = build_script_annotations_markdown(folder_id)
+            write_script_annotations_markdown(folder_id)
+            filename = os.path.basename(path)
+            return Response(
+                markdown,
+                mimetype="text/markdown; charset=utf-8",
+                headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+            )
+        except ValueError as e:
+            return jsonify({"success": False, "error": str(e)}), 404
+        except Exception as e:
+            logger.error(f"❌ Erreur markdown annotations script: {e}")
+            return jsonify({"success": False, "error": str(e)}), 500
 
     @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/content-job/segment", methods=["PATCH"])
     def patch_content_segment(folder_id):

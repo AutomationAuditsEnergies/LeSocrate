@@ -80,6 +80,11 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
   const [showPromptPreview, setShowPromptPreview] = useState(false)
   const [promptPreview, setPromptPreview] = useState(null)
   const [contentScriptModal, setContentScriptModal] = useState(null)
+  const [scriptAnnotations, setScriptAnnotations] = useState([])
+  const [scriptSelection, setScriptSelection] = useState(null)
+  const [annotationComment, setAnnotationComment] = useState('')
+  const [annotationError, setAnnotationError] = useState('')
+  const [savingAnnotation, setSavingAnnotation] = useState(false)
   const [loadingContentScript, setLoadingContentScript] = useState(false)
   const [, setLoadingScript] = useState(false)
   const [contentScriptView, setContentScriptView] = useState('source') // 'source' | 'courses'
@@ -407,6 +412,10 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
       const data = await resp.json()
       if (data.success) {
         setContentScriptModal(data)
+        setScriptAnnotations(data.annotations || [])
+        setScriptSelection(null)
+        setAnnotationComment('')
+        setAnnotationError('')
         setContentScriptView('source')
         setScriptActiveSubPart(0)
         setScriptActiveCourse(data.course_blocs?.[0]?.bloc_number || 1)
@@ -417,6 +426,115 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
       }
     } catch (e) { console.error('Erreur script:', e) }
     finally { setLoadingContentScript(false) }
+  }
+
+  const resetScriptAnnotationDraft = () => {
+    setScriptSelection(null)
+    setAnnotationComment('')
+    setAnnotationError('')
+  }
+
+  const closeContentScriptModal = () => {
+    setContentScriptModal(null)
+    setEditingSegment(null)
+    resetScriptAnnotationDraft()
+    setScriptAnnotations([])
+  }
+
+  const captureScriptSelection = (event, context) => {
+    const selection = window.getSelection()
+    const rawText = selection?.toString() || ''
+    const selectedText = rawText.replace(/\s+/g, ' ').trim()
+
+    if (!selectedText || selectedText.length < 3) return
+    if (
+      selection?.anchorNode &&
+      selection?.focusNode &&
+      (!event.currentTarget.contains(selection.anchorNode) || !event.currentTarget.contains(selection.focusNode))
+    ) {
+      return
+    }
+
+    setScriptSelection({
+      ...context,
+      selected_text: selectedText.slice(0, 4000),
+    })
+    setAnnotationComment('')
+    setAnnotationError('')
+  }
+
+  const saveScriptAnnotation = async () => {
+    if (!selectedFolder || !scriptSelection || savingAnnotation) return
+    const comment = annotationComment.trim()
+    if (!comment) {
+      setAnnotationError('Ajoutez le commentaire de correction.')
+      return
+    }
+
+    setSavingAnnotation(true)
+    setAnnotationError('')
+    try {
+      const resp = await fetch(apiUrl(`/api/hr/cours-folders/${selectedFolder.id}/content-job/annotations`), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          source_type: scriptSelection.source_type,
+          sub_part_index: scriptSelection.sub_part_index,
+          passe: scriptSelection.passe,
+          bloc_number: scriptSelection.bloc_number,
+          filename: scriptSelection.filename,
+          selected_text: scriptSelection.selected_text,
+          comment,
+        }),
+        credentials: 'include',
+      })
+      const data = await resp.json()
+      if (data.success) {
+        setScriptAnnotations(data.annotations || [])
+        setContentScriptModal(prev => prev ? {
+          ...prev,
+          annotations: data.annotations || [],
+          annotations_count: data.annotations_count || 0,
+          annotations_markdown_path: data.markdown_path,
+        } : prev)
+        resetScriptAnnotationDraft()
+        window.getSelection()?.removeAllRanges()
+      } else {
+        setAnnotationError(data.error || 'Annotation impossible.')
+      }
+    } catch (e) {
+      console.error('Erreur annotation script:', e)
+      setAnnotationError('Erreur réseau pendant la sauvegarde.')
+    } finally {
+      setSavingAnnotation(false)
+    }
+  }
+
+  const deleteScriptAnnotation = async (annotationId) => {
+    if (!selectedFolder || !annotationId) return
+    try {
+      const resp = await fetch(apiUrl(`/api/hr/cours-folders/${selectedFolder.id}/content-job/annotations/${annotationId}`), {
+        method: 'DELETE',
+        credentials: 'include',
+      })
+      const data = await resp.json()
+      if (data.success) {
+        setScriptAnnotations(data.annotations || [])
+        setContentScriptModal(prev => prev ? {
+          ...prev,
+          annotations: data.annotations || [],
+          annotations_count: data.annotations_count || 0,
+          annotations_markdown_path: data.markdown_path,
+        } : prev)
+      }
+    } catch (e) {
+      console.error('Erreur suppression annotation:', e)
+    }
+  }
+
+  const downloadAnnotationsMarkdown = () => {
+    if (!selectedFolder) return
+    window.open(apiUrl(`/api/hr/cours-folders/${selectedFolder.id}/content-job/annotations/markdown`), '_blank')
   }
 
   const handleStartEdit = (subIdx, passe, currentText) => {
@@ -885,6 +1003,129 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
         />
         {config.label}
       </span>
+    )
+  }
+
+  const annotationMatchesContext = (annotation, context) => {
+    if (!annotation || !context || annotation.source_type !== context.source_type) return false
+    if (context.source_type === 'segment') {
+      return Number(annotation.sub_part_index) === Number(context.sub_part_index) &&
+        Number(annotation.passe) === Number(context.passe)
+    }
+    if (context.source_type === 'course') {
+      return Number(annotation.bloc_number) === Number(context.bloc_number)
+    }
+    return false
+  }
+
+  const annotationsForContext = (context) =>
+    scriptAnnotations.filter(annotation => annotationMatchesContext(annotation, context))
+
+  const formatAnnotationSource = (annotation) => {
+    if (annotation.source_type === 'segment') {
+      return `Sous-partie ${Number(annotation.sub_part_index) + 1} · passe ${annotation.passe}`
+    }
+    if (annotation.source_type === 'course') {
+      return `Cours ${annotation.bloc_number}${annotation.filename ? ` · ${annotation.filename}` : ''}`
+    }
+    return 'Script TTS'
+  }
+
+  const ScriptAnnotationComposer = ({ context }) => {
+    if (!scriptSelection || !annotationMatchesContext(scriptSelection, context)) return null
+    return (
+      <div
+        className="mb-3 rounded-xl p-3"
+        style={{
+          backgroundColor: darkMode ? '#211a3b' : '#f5f3ff',
+          border: `1px solid ${darkMode ? '#4c1d95' : '#c4b5fd'}`,
+        }}
+      >
+        <div className="mb-2 flex items-start gap-2">
+          <Icon name="rate_review" style={{ color: '#7c3aed', fontSize: '18px' }} />
+          <div className="min-w-0 flex-1">
+            <p className="text-xs font-semibold" style={{ color: darkMode ? '#ddd6fe' : '#5b21b6' }}>
+              Sélection à annoter
+            </p>
+            <p className="mt-1 line-clamp-3 text-xs leading-relaxed" style={{ color: colors.textSecondary }}>
+              “{scriptSelection.selected_text}”
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={resetScriptAnnotationDraft}
+            className="rounded-lg p-1 transition-colors"
+            style={{ color: colors.textMuted }}
+            title="Annuler l'annotation"
+          >
+            <Icon name="close" style={{ fontSize: '16px' }} />
+          </button>
+        </div>
+        <textarea
+          value={annotationComment}
+          onChange={(e) => setAnnotationComment(e.target.value)}
+          rows={3}
+          className="w-full rounded-lg px-3 py-2 text-xs outline-none"
+          placeholder="Ex. Ce passage ne va pas en introduction, le déplacer après le cadrage et reformuler l'accroche."
+          style={{
+            backgroundColor: colors.cardBg,
+            color: colors.text,
+            border: `1px solid ${annotationError ? '#dc2626' : colors.border}`,
+          }}
+        />
+        <div className="mt-2 flex items-center justify-between gap-3">
+          <p className="min-h-4 text-xs" style={{ color: annotationError ? '#dc2626' : colors.textMuted }}>
+            {annotationError || 'Le markdown de revue est régénéré à la sauvegarde.'}
+          </p>
+          <button
+            type="button"
+            onClick={saveScriptAnnotation}
+            disabled={savingAnnotation}
+            className="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-60"
+            style={{ backgroundColor: '#7c3aed', color: 'white' }}
+          >
+            <Icon name="save" style={{ fontSize: '14px' }} />
+            {savingAnnotation ? 'Sauvegarde...' : 'Noter'}
+          </button>
+        </div>
+      </div>
+    )
+  }
+
+  const ScriptAnnotationsList = ({ context }) => {
+    const items = annotationsForContext(context)
+    if (!items.length) return null
+    return (
+      <div className="mt-3 space-y-2">
+        {items.map(annotation => (
+          <div
+            key={annotation.id}
+            className="rounded-lg p-3"
+            style={{ backgroundColor: colors.innerBg, border: `1px solid ${colors.border}` }}
+          >
+            <div className="mb-1 flex items-start justify-between gap-3">
+              <p className="text-xs font-semibold" style={{ color: colors.textSecondary }}>
+                {formatAnnotationSource(annotation)}
+              </p>
+              <button
+                type="button"
+                onClick={() => deleteScriptAnnotation(annotation.id)}
+                className="rounded-md p-1 transition-colors"
+                style={{ color: colors.textMuted }}
+                title="Retirer cette annotation"
+              >
+                <Icon name="delete" style={{ fontSize: '15px' }} />
+              </button>
+            </div>
+            <p className="text-xs leading-relaxed" style={{ color: colors.text }}>
+              {annotation.comment}
+            </p>
+            <p className="mt-2 line-clamp-2 text-xs leading-relaxed" style={{ color: colors.textMuted }}>
+              “{annotation.selected_text}”
+            </p>
+          </div>
+        ))}
+      </div>
     )
   }
 
@@ -1754,7 +1995,7 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
         <div
           className="fixed inset-0 z-[60] flex items-center justify-center p-4"
           style={{ backgroundColor: 'rgba(0,0,0,0.75)' }}
-          onClick={() => { setContentScriptModal(null); setEditingSegment(null) }}
+          onClick={closeContentScriptModal}
         >
           <div
             className="w-full overflow-hidden rounded-2xl shadow-2xl flex flex-col"
@@ -1769,6 +2010,7 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
                   <h3 className="text-lg font-bold">Script TTS — {contentScriptModal.program_title}</h3>
                   <p className="text-xs" style={{ color: '#ddd6fe' }}>
                     {(contentScriptModal.total_words || 0).toLocaleString('fr-FR')} mots · {contentScriptModal.sub_parts?.length} sous-parties · {contentScriptModal.course_blocs?.length || 0} cours audio
+                    {scriptAnnotations.length > 0 && ` · ${scriptAnnotations.length} note${scriptAnnotations.length > 1 ? 's' : ''}`}
                   </p>
                 </div>
               </div>
@@ -1787,6 +2029,7 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
                         if (disabled) return
                         setContentScriptView(option.value)
                         setEditingSegment(null)
+                        resetScriptAnnotationDraft()
                       }}
                       disabled={disabled}
                       className="flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-40"
@@ -1801,7 +2044,19 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
                   )
                 })}
               </div>
-              <button onClick={() => { setContentScriptModal(null); setEditingSegment(null) }} className="text-white hover:bg-white/20 rounded-full p-1">
+              {scriptAnnotations.length > 0 && (
+                <button
+                  type="button"
+                  onClick={downloadAnnotationsMarkdown}
+                  className="mr-3 inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-semibold transition-colors"
+                  style={{ backgroundColor: 'rgba(255,255,255,0.14)', color: '#f5f3ff' }}
+                  title={contentScriptModal.annotations_markdown_path || 'Télécharger le markdown de revue'}
+                >
+                  <Icon name="download" style={{ fontSize: '15px' }} />
+                  Markdown
+                </button>
+              )}
+              <button onClick={closeContentScriptModal} className="text-white hover:bg-white/20 rounded-full p-1">
                 <Icon name="close" className="text-2xl" />
               </button>
             </div>
@@ -1823,7 +2078,7 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
                   return (
                     <button
                       key={sp.index}
-                      onClick={() => { setScriptActiveSubPart(sp.index); setEditingSegment(null) }}
+                      onClick={() => { setScriptActiveSubPart(sp.index); setEditingSegment(null); resetScriptAnnotationDraft() }}
                       className="w-full text-left px-4 py-2.5 transition-colors"
                       style={{
                         backgroundColor: isActive ? (darkMode ? '#3b0764' : '#ede9fe') : 'transparent',
@@ -1868,6 +2123,7 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
 
                       {sp.passes?.map((pass) => {
                         const isEditing = editingSegment?.sub_part_index === sp.index && editingSegment?.passe === pass.passe
+                        const annotationContext = { source_type: 'segment', sub_part_index: sp.index, passe: pass.passe }
                         return (
                           <div key={pass.passe} className="rounded-xl overflow-hidden" style={{ border: `1px solid ${colors.border}` }}>
                             {/* En-tête passe */}
@@ -1910,6 +2166,7 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
 
                             {/* Corps : texte ou textarea */}
                             <div className="px-4 py-3" style={{ backgroundColor: colors.cardBg }}>
+                              <ScriptAnnotationComposer context={annotationContext} />
                               {isEditing ? (
                                 <textarea
                                   value={editText}
@@ -1924,10 +2181,17 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
                                   }}
                                 />
                               ) : (
-                                <p className="text-xs leading-relaxed whitespace-pre-wrap" style={{ color: colors.text, fontFamily: 'monospace' }}>
+                                <p
+                                  className="text-xs leading-relaxed whitespace-pre-wrap"
+                                  tabIndex={0}
+                                  onMouseUp={(event) => captureScriptSelection(event, annotationContext)}
+                                  onKeyUp={(event) => captureScriptSelection(event, annotationContext)}
+                                  style={{ color: colors.text, fontFamily: 'monospace' }}
+                                >
                                   {pass.text}
                                 </p>
                               )}
+                              <ScriptAnnotationsList context={annotationContext} />
                             </div>
                           </div>
                         )
@@ -1958,7 +2222,7 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
                     <button
                       key={bloc.bloc_number}
                       type="button"
-                      onClick={() => { setScriptActiveCourse(bloc.bloc_number); setScriptActiveBreak(null) }}
+                      onClick={() => { setScriptActiveCourse(bloc.bloc_number); setScriptActiveBreak(null); resetScriptAnnotationDraft() }}
                       className="w-full text-left px-4 py-2.5 transition-colors"
                       style={{
                         backgroundColor: isActive ? (darkMode ? '#312e81' : '#ede9fe') : 'transparent',
@@ -2002,7 +2266,7 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
                         <button
                           key={br.filename}
                           type="button"
-                          onClick={() => setScriptActiveBreak(br.filename)}
+                          onClick={() => { setScriptActiveBreak(br.filename); resetScriptAnnotationDraft() }}
                           className="w-full text-left px-4 py-2.5 transition-colors"
                           style={{
                             backgroundColor: isActive ? (darkMode ? '#312e81' : '#ede9fe') : 'transparent',
@@ -2097,6 +2361,7 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
                       </div>
                     )
                   }
+                  const activeAnnotationContext = { source_type: 'course', bloc_number: active.bloc_number, filename: active.filename }
                   const sourceLabel = contentScriptModal.course_blocs_source === 'last_audio_generation'
                     ? 'Dernière génération TTS'
                     : 'Prévisualisation'
@@ -2190,9 +2455,17 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
                           </span>
                         </div>
                         <div className="px-4 py-3" style={{ backgroundColor: colors.cardBg }}>
-                          <p className="text-xs leading-relaxed whitespace-pre-wrap" style={{ color: colors.text, fontFamily: 'monospace' }}>
+                          <ScriptAnnotationComposer context={activeAnnotationContext} />
+                          <p
+                            className="text-xs leading-relaxed whitespace-pre-wrap"
+                            tabIndex={0}
+                            onMouseUp={(event) => captureScriptSelection(event, activeAnnotationContext)}
+                            onKeyUp={(event) => captureScriptSelection(event, activeAnnotationContext)}
+                            style={{ color: colors.text, fontFamily: 'monospace' }}
+                          >
                             {active.text || 'Aucun texte pour ce cours.'}
                           </p>
+                          <ScriptAnnotationsList context={activeAnnotationContext} />
                         </div>
                       </div>
                     </>

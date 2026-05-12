@@ -1,5 +1,28 @@
 # Changelog
 
+## 2026-05-12
+
+### feat(content-review): annotations humaines sur le script TTS + markdown de revue
+
+Nouveau flux de revue collaborative sur le script TTS d'un dossier cours : l'admin sélectionne du texte dans le modal Script TTS, ajoute un commentaire de correction, et l'ensemble est persisté + exporté en markdown pour réinjection dans l'agent de correction avant régénération audio.
+
+**Backend**
+- Nouvelle table SQLite `content_script_annotations` (folder_id, job_id, source_type, sub_part_index, passe, bloc_number, filename, selected_text, comment, status, markdown_path) + index `(folder_id, job_id, status)` (`backend/database/db.py`).
+- Nouveau service `backend/services/script_annotation_service.py` : CRUD annotations + génération du markdown de revue avec contexte (titre programme, type source, bloc, filename).
+- 4 nouveaux endpoints HR (`backend/routes/hr_routes.py`) :
+  - `GET    /api/hr/cours-folders/<id>/content-job/annotations` — liste
+  - `POST   /api/hr/cours-folders/<id>/content-job/annotations` — création
+  - `DELETE /api/hr/cours-folders/<id>/content-job/annotations/<aid>` — suppression logique
+  - `GET    /api/hr/cours-folders/<id>/content-job/annotations/markdown` — export markdown
+- L'endpoint `GET .../content-job/script` retourne désormais aussi `annotations`, `annotations_count`, `annotations_markdown_path` pour pré-remplir le modal.
+
+**Frontend** (`frontend/src/components/CoursFolders.jsx`)
+- Capture de la sélection texte dans le modal Script TTS (`captureScriptSelection`) avec context source (source_type, sub_part_index, passe, bloc_number, filename).
+- Panneau d'annotation : champ commentaire, save, liste des annotations existantes, suppression, état d'erreur.
+- Persistance synchronisée avec le modal (`scriptAnnotations`, `annotations_markdown_path`).
+
+**Pourquoi** — la régénération audio coûte cher (Fish Audio S2-Pro) et le script TTS est long. Avant cette feature, les corrections humaines transitaient par chat / capture d'écran et étaient perdues entre deux passes. Le markdown de revue centralise désormais toutes les corrections demandées, prêt à être consommé par l'agent de correction LLM avant la passe suivante.
+
 ## 2026-05-11
 
 ### feat(pipeline): robustesse auto-pilot — résolution canonique des dossiers cours + diagnostic UI

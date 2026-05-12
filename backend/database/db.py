@@ -351,6 +351,35 @@ def init_database():
         except Exception:
             pass
 
+        # Notes humaines sur le script TTS : chaque selection/commentaire est
+        # conservé pour produire un markdown de revue exploitable par l'agent de
+        # correction avant régénération audio.
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS content_script_annotations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            folder_id INTEGER NOT NULL,
+            job_id INTEGER NOT NULL,
+            source_type TEXT NOT NULL DEFAULT 'course',
+            sub_part_index INTEGER,
+            passe INTEGER,
+            bloc_number INTEGER,
+            filename TEXT,
+            selected_text TEXT NOT NULL,
+            comment TEXT NOT NULL,
+            status TEXT DEFAULT 'open',
+            markdown_path TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (folder_id) REFERENCES cours_folders(id),
+            FOREIGN KEY (job_id) REFERENCES content_generation_jobs(id)
+        )
+        """)
+        cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_content_script_annotations_folder_job
+        ON content_script_annotations(folder_id, job_id, status)
+        """)
+        logger.info("✅ Table content_script_annotations créée/vérifiée")
+
         # Migration : ajouter colonnes from_scratch + module_contents (pipeline formation)
         cursor.execute("PRAGMA table_info(content_generation_jobs)")
         cg_columns = [col[1] for col in cursor.fetchall()]
