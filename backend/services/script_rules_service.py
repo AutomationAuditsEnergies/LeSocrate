@@ -6,8 +6,10 @@ règles. Ce markdown alimente la Phase 3b (revérif post-TTS) qui patche les
 chunks non-conformes via la primitive de splice MP3.
 """
 
+import json
 import logging
 import os
+import re
 from datetime import datetime
 
 from config import DB_PATH, FRANCE_TZ
@@ -23,6 +25,7 @@ from utils.anthropic_client import (
 logger = logging.getLogger(__name__)
 
 RULES_MODEL = os.getenv("SCRIPT_RULES_MODEL", DEEPSEEK_DEFAULT_MODEL)
+REVIEW_MODEL = os.getenv("SCRIPT_RULES_REVIEW_MODEL", DEEPSEEK_DEFAULT_MODEL)
 MIN_ANNOTATIONS_FOR_EXTRACTION = 1
 
 
@@ -316,6 +319,267 @@ def get_rules(folder_id: int) -> dict:
         "generated_at": row[5] or "",
         "updated_at": row[6] or "",
     }
+
+
+def _word_slice(text: str, start: int, end: int) -> str:
+    words = (text or "").split()
+    start = max(0, min(len(words), start))
+    end = max(start, min(len(words), end))
+    return " ".join(words[start:end]).strip()
+
+
+def _build_review_prompt(rules_markdown: str, chunk_text: str) -> str:
+    return (
+        "Tu es un agent de revérification du script d'un cours audio. "
+        "Tu reçois (1) un markdown de règles éditoriales établies à partir de "
+        "corrections antérieures du formateur, et (2) un extrait du script (un "
+        "chunk audio lu en TTS). Ta tâche : déterminer si l'extrait respecte les "
+        "règles, et si non, le réécrire de façon minimale pour qu'il les respecte.\n\n"
+        "Contraintes pour la réécriture :\n"
+        "- Modifications strictement nécessaires pour la mise en conformité. "
+        "Ne refais pas tout l'extrait si quelques mots suffisent.\n"
+        "- Conserve la longueur approximative, le ton oral, le niveau RNCP, le sens pédagogique.\n"
+        "- Pas de balise, pas de markdown, pas de guillemets ouvrants/fermants.\n\n"
+        "Réponds EXCLUSIVEMENT par un JSON valide (rien avant, rien après), avec "
+        "exactement ces 3 champs :\n"
+        '{"conforme": <true|false>, '
+        '"violations": ["<règle violée 1>", ...], '
+        '"corrected_text": "<texte corrigé OU chaîne vide si conforme=true>"}\n\n'
+        f"=== Règles ===\n{rules_markdown}\n\n"
+        f"=== Extrait à vérifier ===\n{chunk_text}\n\n"
+        "JSON :"
+    )
+
+
+def _parse_review_response(raw: str) -> dict | None:
+    if not raw:
+        return None
+    raw = raw.strip()
+    # DeepSeek peut entourer le JSON de ```json ... ``` ; on l'extrait.
+    fenced = re.search(r"\{[\s\S]*\}", raw)
+    if not fenced:
+        return None
+    try:
+        return json.loads(fenced.group(0))
+    except Exception:
+        return None
+
+
+def review_chunks_with_rules(
+    folder_id: int,
+    *,
+    dry_run: bool = False,
+    bloc_numbers: list[int] | None = None,
+    max_chunks: int | None = None,
+) -> dict:
+    """Parcourt les chunks audio d'un dossier, demande à DeepSeek de vérifier la
+    conformité aux règles apprises, et splice les MP3 sur les chunks non-conformes.
+
+    Best-effort : les erreurs par chunk sont loggées dans `details` sans bloquer.
+    """
+    context = _fetch_context(folder_id)
+    if not context:
+        raise ValueError("Aucun job de contenu pour ce dossier")
+
+    rules = get_rules(folder_id)
+    rules_markdown = (rules.get("rules_markdown") or "").strip()
+    if not rules_markdown:
+        raise ValueError("Aucune règle apprise — lance d'abord l'extraction")
+
+    from services.script_slide_generation_service import get_latest_script_slide_deck
+    from services.script_annotation_service import splice_chunk_audio, _course_bloc_text
+    deck = get_latest_script_slide_deck(folder_id, context["job_id"])
+    if not deck:
+        raise ValueError("Aucun script_slide_deck pour ce dossier")
+    audio_sync = deck.get("audio_sync") or {}
+    timings = list(audio_sync.get("timings") or [])
+    if not timings:
+        raise ValueError("audio_sync.timings absent — la pipeline TTS n'a pas tourné")
+
+    summary = {
+        "dry_run": bool(dry_run),
+        "chunks_examined": 0,
+        "chunks_corrected": 0,
+        "chunks_skipped": 0,
+        "chunks_failed": 0,
+        "details": [],
+    }
+
+    timings_by_bloc: dict[int, list[dict]] = {}
+    for t in timings:
+        if t.get("patched"):
+            continue
+        afn = t.get("audio_filename") or ""
+        m = re.search(r"(\d+)", afn)
+        if not m:
+            continue
+        bloc_num = int(m.group(1))
+        if bloc_numbers and bloc_num not in bloc_numbers:
+            continue
+        timings_by_bloc.setdefault(bloc_num, []).append(t)
+
+    bloc_texts: dict[int, str] = {}
+    for bloc_num in timings_by_bloc:
+        text = _course_bloc_text(folder_id, bloc_num)
+        if text:
+            bloc_texts[bloc_num] = text
+
+    total_processed = 0
+    for bloc_num in sorted(timings_by_bloc.keys()):
+        bloc_text = bloc_texts.get(bloc_num)
+        if not bloc_text:
+            for t in timings_by_bloc[bloc_num]:
+                summary["chunks_skipped"] += 1
+                summary["details"].append({
+                    "bloc_number": bloc_num,
+                    "audio_filename": t.get("audio_filename"),
+                    "status": "skipped",
+                    "reason": f"texte bloc {bloc_num} introuvable",
+                })
+            continue
+
+        # Important : à chaque splice les timings suivants se décalent.
+        # On relit donc audio_sync entre chaque chunk pour rester cohérent.
+        for t in list(timings_by_bloc[bloc_num]):
+            if max_chunks is not None and total_processed >= max_chunks:
+                break
+
+            summary["chunks_examined"] += 1
+            total_processed += 1
+            try:
+                word_start = int(t.get("word_start") or 0)
+                word_end = int(t.get("word_end") or 0)
+            except (TypeError, ValueError):
+                summary["chunks_skipped"] += 1
+                summary["details"].append({
+                    "bloc_number": bloc_num,
+                    "audio_filename": t.get("audio_filename"),
+                    "status": "skipped",
+                    "reason": "word_start/word_end invalides",
+                })
+                continue
+            chunk_text = _word_slice(bloc_text, word_start, word_end)
+            if not chunk_text:
+                summary["chunks_skipped"] += 1
+                summary["details"].append({
+                    "bloc_number": bloc_num,
+                    "audio_filename": t.get("audio_filename"),
+                    "status": "skipped",
+                    "reason": "chunk_text vide",
+                })
+                continue
+
+            try:
+                raw = post_message(
+                    [{"role": "user", "content": _build_review_prompt(rules_markdown, chunk_text)}],
+                    max_tokens=2500,
+                    model=REVIEW_MODEL,
+                    timeout=180,
+                )
+            except (AnthropicAPIError, AnthropicRateLimitError) as exc:
+                summary["chunks_failed"] += 1
+                summary["details"].append({
+                    "bloc_number": bloc_num,
+                    "audio_filename": t.get("audio_filename"),
+                    "status": "failed",
+                    "reason": f"DeepSeek: {exc}",
+                })
+                continue
+
+            parsed = _parse_review_response(raw)
+            if not parsed:
+                summary["chunks_failed"] += 1
+                summary["details"].append({
+                    "bloc_number": bloc_num,
+                    "audio_filename": t.get("audio_filename"),
+                    "status": "failed",
+                    "reason": "JSON DeepSeek inparseable",
+                    "raw_preview": (raw or "")[:200],
+                })
+                continue
+
+            conforme = bool(parsed.get("conforme"))
+            corrected = (parsed.get("corrected_text") or "").strip()
+            violations = parsed.get("violations") or []
+
+            if conforme or not corrected or corrected == chunk_text.strip():
+                summary["details"].append({
+                    "bloc_number": bloc_num,
+                    "audio_filename": t.get("audio_filename"),
+                    "status": "conforme",
+                    "violations": [],
+                })
+                continue
+
+            entry = {
+                "bloc_number": bloc_num,
+                "audio_filename": t.get("audio_filename"),
+                "status": "would_correct" if dry_run else "pending",
+                "violations": violations,
+                "chunk_text": chunk_text,
+                "corrected_text": corrected,
+                "start_sec": float(t.get("start_time") or 0),
+                "end_sec": float(t.get("end_time") or 0),
+            }
+
+            if dry_run:
+                summary["chunks_corrected"] += 1
+                summary["details"].append(entry)
+                continue
+
+            # Re-lit l'audio_sync pour avoir les timings à jour (décalages
+            # accumulés par les splices précédents dans le même bloc).
+            deck = get_latest_script_slide_deck(folder_id, context["job_id"])
+            current_sync = deck.get("audio_sync") or {}
+            current_timings = current_sync.get("timings") or []
+            current_t = None
+            for ct in current_timings:
+                if (ct.get("audio_filename") == t.get("audio_filename")
+                        and int(ct.get("word_start") or -1) == word_start
+                        and int(ct.get("word_end") or -1) == word_end):
+                    current_t = ct
+                    break
+            if not current_t:
+                summary["chunks_failed"] += 1
+                entry["status"] = "failed"
+                entry["reason"] = "timing introuvable après décalage"
+                summary["details"].append(entry)
+                continue
+
+            new_word_end = word_start + len(corrected.split())
+            splice_result = splice_chunk_audio(
+                folder_id,
+                context["platform_id"],
+                deck=deck,
+                audio_sync=current_sync,
+                filename=t.get("audio_filename"),
+                splice_start_sec=float(current_t.get("start_time") or 0),
+                splice_end_sec=float(current_t.get("end_time") or 0),
+                new_text=corrected,
+                word_start=word_start,
+                word_end_target=new_word_end,
+                slide_id_for_patch=f"rules-review-bloc{bloc_num}-{word_start}",
+            )
+            entry["status"] = splice_result["status"]
+            entry["splice_error"] = splice_result.get("error") or ""
+            entry["new_duration_sec"] = splice_result.get("new_duration_sec") or 0.0
+            if splice_result["status"] == "done":
+                summary["chunks_corrected"] += 1
+            else:
+                summary["chunks_failed"] += 1
+            summary["details"].append(entry)
+
+        if max_chunks is not None and total_processed >= max_chunks:
+            break
+
+    logger.info(
+        f"📚 Revérif règles folder={folder_id} : "
+        f"{summary['chunks_examined']} examinés, "
+        f"{summary['chunks_corrected']} corrigés, "
+        f"{summary['chunks_skipped']} skip, "
+        f"{summary['chunks_failed']} fail (dry_run={dry_run})"
+    )
+    return summary
 
 
 def update_rules_markdown(folder_id: int, markdown: str) -> dict:

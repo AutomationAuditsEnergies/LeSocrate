@@ -2,6 +2,42 @@
 
 ## 2026-05-12
 
+### feat(content-review): revérif post-TTS + splice MP3 automatique sur règles apprises (Phase 3b)
+
+L'admin peut désormais déclencher une **revérification automatique** de tous les chunks audio d'un dossier contre le markdown des règles (Phase 3a). DeepSeek parcourt chaque chunk via `audio_sync.timings`, vérifie la conformité, propose une réécriture minimale si nécessaire, et **patche le MP3 ms-précis** via la même primitive que Phase B. Deux modes : **Simuler** (dry_run, n'écrit rien) et **Appliquer aux MP3** (modifie Azure en place).
+
+**Backend** (`backend/services/script_rules_service.py`)
+- `_word_slice(text, start, end)` : extrait le texte d'un chunk depuis les indices de mots.
+- `_build_review_prompt(rules_markdown, chunk_text)` : prompt DeepSeek qui demande un JSON strict `{conforme: bool, violations: [...], corrected_text: ...}`. Contrainte explicite : réécriture **minimale**, conserve longueur/ton/niveau RNCP.
+- `_parse_review_response(raw)` : extrait le premier JSON valide de la réponse (gère le fenced markdown ```json … ```).
+- `review_chunks_with_rules(folder_id, *, dry_run, bloc_numbers, max_chunks)` :
+  - Filtre les timings non-patchés du deck (`patched=True` ignoré).
+  - Groupe par bloc, charge le texte de chaque bloc via `_course_bloc_text`.
+  - Pour chaque chunk : DeepSeek → si non conforme → splice via `splice_chunk_audio` extrait de Phase B.
+  - **Important** : relit `audio_sync.timings` à chaque chunk pour gérer les décalages accumulés par les splices précédents dans le même bloc (sinon les bornes seraient fausses après le 1er splice).
+  - Retourne `{chunks_examined, chunks_corrected, chunks_skipped, chunks_failed, details: [...]}`.
+
+**Refactor** (`backend/services/script_annotation_service.py`)
+- Extraction de la primitive `splice_chunk_audio(folder_id, platform_id, *, deck, audio_sync, filename, splice_start_sec, splice_end_sec, new_text, word_start, word_end_target, slide_id_for_patch)` rendue **publique et réutilisable**.
+- `_attempt_audio_splice` (Phase B annotations) délègue désormais à cette primitive après avoir résolu word_range et chevauchement timings. Le comportement reste identique, juste DRY.
+
+**Endpoint HR**
+- `POST /api/hr/cours-folders/<id>/content-job/rules/review-post-tts` — accepte `{dry_run, bloc_numbers, max_chunks}` dans le body.
+
+**Frontend** (`frontend/src/components/CoursFolders.jsx`)
+- 2 nouveaux boutons dans le panneau Règles : **Simuler** (dry_run) et **Appliquer aux MP3** (avec `window.confirm` parce que l'action modifie les MP3 sur Azure).
+- Bloc de résumé affichant : examinés / corrigés (ou « à corriger » en simu) / skipped / échecs. Liste les 6 premières corrections avec filename, bloc, violations détectées, statut splice (done/error/would_correct).
+
+**Garanties**
+- Best-effort par chunk : un échec n'arrête pas la revérif des suivants.
+- Les chunks déjà patchés (par annotation ou revérif précédente) sont ignorés via le flag `patched: true` du timing.
+- Mode dry_run pour valider le prompt sans écrire sur Azure.
+
+**Workflow complet désormais possible**
+1. Tu surlignes + commentes dans la modal Script TTS (Phase A) → DeepSeek propose une correction → tu valides → MP3 splicé ms-précis (Phase B).
+2. Après quelques annotations, tu cliques « Extraire » dans le panneau Règles → DeepSeek produit un markdown de règles transversales (Phase 3a). Tu peux l'éditer à la main.
+3. Tu cliques « Simuler » → tu vois quels chunks DeepSeek voudrait corriger sans rien modifier. Si tu es d'accord, « Appliquer aux MP3 » → patch automatique de tous les chunks non conformes (Phase 3b).
+
 ### feat(content-review): extraction DeepSeek de règles transversales depuis les annotations (Phase 3a)
 
 À partir de toutes les annotations d'un dossier cours (applied + rejected + proposed), DeepSeek extrait un **markdown de règles transversales** qui décrit les patterns récurrents de corrections demandées par le formateur. Ce markdown alimente la Phase 3b à venir : un agent de revérification post-TTS qui patche automatiquement les chunks audio non-conformes via la primitive de splice MP3 ms-précis (Phase B).

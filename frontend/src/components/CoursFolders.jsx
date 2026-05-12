@@ -89,6 +89,8 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
   const [rulesPanelOpen, setRulesPanelOpen] = useState(false)
   const [extractingRules, setExtractingRules] = useState(false)
   const [rulesError, setRulesError] = useState('')
+  const [reviewingRules, setReviewingRules] = useState(false)
+  const [rulesReviewSummary, setRulesReviewSummary] = useState(null)
   const [loadingContentScript, setLoadingContentScript] = useState(false)
   const [, setLoadingScript] = useState(false)
   const [contentScriptView, setContentScriptView] = useState('source') // 'source' | 'courses'
@@ -588,6 +590,41 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
   const downloadRulesMarkdown = () => {
     if (!selectedFolder) return
     window.open(apiUrl(`/api/hr/cours-folders/${selectedFolder.id}/content-job/rules/markdown`), '_blank')
+  }
+
+  const runRulesReview = async (dryRun) => {
+    if (!selectedFolder || reviewingRules) return
+    if (!dryRun) {
+      const ok = window.confirm(
+        'Cette action va lire les MP3 du dossier, vérifier chaque chunk audio contre les règles, et patcher en place les portions non conformes. Continuer ?'
+      )
+      if (!ok) return
+    }
+    setReviewingRules(true)
+    setRulesError('')
+    setRulesReviewSummary(null)
+    try {
+      const resp = await fetch(
+        apiUrl(`/api/hr/cours-folders/${selectedFolder.id}/content-job/rules/review-post-tts`),
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ dry_run: !!dryRun }),
+          credentials: 'include',
+        }
+      )
+      const data = await resp.json()
+      if (data.success) {
+        setRulesReviewSummary(data)
+      } else {
+        setRulesError(data.error || 'Revérif impossible.')
+      }
+    } catch (e) {
+      console.error('Erreur review post-tts:', e)
+      setRulesError('Erreur réseau pendant la revérif.')
+    } finally {
+      setReviewingRules(false)
+    }
   }
 
   const applyAnnotationCorrection = async (annotationId) => {
@@ -2300,8 +2337,65 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
                         Markdown
                       </button>
                     )}
+                    {scriptRules?.rules_markdown && (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => runRulesReview(true)}
+                          disabled={reviewingRules}
+                          className="inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-60"
+                          style={{ backgroundColor: colors.innerBg, color: colors.text, border: `1px solid ${colors.border}` }}
+                          title="Simule la revérif sans toucher aux MP3"
+                        >
+                          <Icon name="visibility" style={{ fontSize: '14px' }} />
+                          {reviewingRules ? 'Analyse…' : 'Simuler'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => runRulesReview(false)}
+                          disabled={reviewingRules}
+                          className="inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-semibold text-white transition-colors disabled:cursor-not-allowed disabled:opacity-60"
+                          style={{ backgroundColor: '#16a34a' }}
+                          title="Patche les MP3 non conformes en place"
+                        >
+                          <Icon name="auto_fix_high" style={{ fontSize: '14px' }} />
+                          {reviewingRules ? 'Patch en cours…' : 'Appliquer aux MP3'}
+                        </button>
+                      </>
+                    )}
                   </div>
                 </div>
+
+                {rulesReviewSummary && (
+                  <div
+                    className="mb-2 rounded-md p-3 text-xs"
+                    style={{ backgroundColor: colors.innerBg, color: colors.text, border: `1px solid ${colors.border}` }}
+                  >
+                    <p className="mb-2 text-[11px] font-bold uppercase tracking-wide" style={{ color: '#7c3aed' }}>
+                      Résumé revérif{rulesReviewSummary.dry_run ? ' (simulation)' : ''}
+                    </p>
+                    <ul className="grid grid-cols-2 gap-x-4 gap-y-1 sm:grid-cols-4">
+                      <li>Examinés : <strong>{rulesReviewSummary.chunks_examined}</strong></li>
+                      <li style={{ color: '#16a34a' }}>{rulesReviewSummary.dry_run ? 'À corriger' : 'Corrigés'} : <strong>{rulesReviewSummary.chunks_corrected}</strong></li>
+                      <li style={{ color: colors.textMuted }}>Skipped : <strong>{rulesReviewSummary.chunks_skipped}</strong></li>
+                      <li style={{ color: '#dc2626' }}>Échecs : <strong>{rulesReviewSummary.chunks_failed}</strong></li>
+                    </ul>
+                    {(rulesReviewSummary.details || []).filter(d => d.status !== 'conforme').slice(0, 6).map((d, i) => (
+                      <div key={i} className="mt-2 rounded p-2 text-[11px]" style={{ backgroundColor: 'rgba(124,58,237,0.08)' }}>
+                        <p className="font-semibold">{d.audio_filename} · bloc {d.bloc_number} · <span style={{ color: d.status === 'done' || d.status === 'would_correct' ? '#16a34a' : '#dc2626' }}>{d.status}</span></p>
+                        {d.violations?.length > 0 && (
+                          <p style={{ color: colors.textMuted }}>{d.violations.join(' · ')}</p>
+                        )}
+                        {d.reason && <p style={{ color: '#dc2626' }}>{d.reason}</p>}
+                      </div>
+                    ))}
+                    {(rulesReviewSummary.details || []).filter(d => d.status !== 'conforme').length > 6 && (
+                      <p className="mt-2 text-[11px] italic" style={{ color: colors.textMuted }}>
+                        … et {(rulesReviewSummary.details || []).filter(d => d.status !== 'conforme').length - 6} autres
+                      </p>
+                    )}
+                  </div>
+                )}
                 {rulesError && (
                   <p className="mb-2 text-xs font-semibold" style={{ color: '#dc2626' }}>{rulesError}</p>
                 )}

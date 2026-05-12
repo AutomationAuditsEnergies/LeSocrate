@@ -2648,6 +2648,38 @@ def create_hr_blueprint(socketio):
             logger.error(f"❌ Erreur update rules: {e}")
             return jsonify({"success": False, "error": str(e)}), 500
 
+    @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/content-job/rules/review-post-tts", methods=["POST"])
+    def review_post_tts_with_rules(folder_id):
+        """Phase 3b : parcourt les chunks audio, applique les règles, splice les MP3 non-conformes."""
+        denied = _require_admin()
+        if denied:
+            return denied
+        try:
+            from services.script_rules_service import review_chunks_with_rules
+            payload = request.get_json() or {}
+            dry_run = bool(payload.get("dry_run") or False)
+            bloc_numbers = payload.get("bloc_numbers")
+            if bloc_numbers and not isinstance(bloc_numbers, list):
+                bloc_numbers = None
+            max_chunks = payload.get("max_chunks")
+            if max_chunks is not None:
+                try:
+                    max_chunks = int(max_chunks)
+                except (TypeError, ValueError):
+                    max_chunks = None
+            summary = review_chunks_with_rules(
+                folder_id,
+                dry_run=dry_run,
+                bloc_numbers=bloc_numbers,
+                max_chunks=max_chunks,
+            )
+            return jsonify({"success": True, **summary}), 200
+        except ValueError as e:
+            return jsonify({"success": False, "error": str(e)}), 400
+        except Exception as e:
+            logger.error(f"❌ Erreur review post-tts: {e}")
+            return jsonify({"success": False, "error": str(e)}), 500
+
     @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/content-job/rules/markdown", methods=["GET"])
     def download_content_script_rules_markdown(folder_id):
         """Télécharge le markdown des règles."""

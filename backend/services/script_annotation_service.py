@@ -699,80 +699,40 @@ def _splice_recompute_timings(timings: list, audio_filename: str, splice_start_s
     return out
 
 
-def _attempt_audio_splice(
+def splice_chunk_audio(
     folder_id: int,
-    job_id: int,
     platform_id: int,
-    annotation_id: int,
     *,
-    bloc_number: int | None,
+    deck: dict,
+    audio_sync: dict,
     filename: str,
-    original_paragraph: str,
-    proposed_text: str,
+    splice_start_sec: float,
+    splice_end_sec: float,
+    new_text: str,
+    word_start: int,
+    word_end_target: int,
+    slide_id_for_patch: str,
 ) -> dict:
-    """Tente le splice ms-précis du MP3 du bloc cours concerné.
+    """Primitive de splice ms-précis réutilisable.
 
-    Retourne {"status": done|skipped|error, "blob_path": str, "error": str}.
-    Best-effort : toute exception est captée et renvoyée en status=error.
+    Effectue : TTS(new_text) → download MP3 → splice pydub (crossfade 25ms) →
+    upload Azure → recompute timings → update audio_sync.
+
+    Retourne {"status": done|error, "blob_path": str, "error": str,
+              "new_duration_sec": float}.
     """
-    out = {"status": "skipped", "blob_path": "", "error": ""}
-    if not filename or not bloc_number or not original_paragraph or not proposed_text:
-        out["error"] = "données manquantes (filename/bloc_number/paragraph)"
-        return out
-
+    out = {"status": "error", "blob_path": "", "error": "", "new_duration_sec": 0.0}
     try:
-        from services.script_slide_generation_service import (
-            get_latest_script_slide_deck,
-            update_script_slide_deck_audio_sync,
-        )
-        deck = get_latest_script_slide_deck(folder_id, job_id)
-        if not deck:
-            out["error"] = "Aucun script_slide_deck pour ce job"
-            return out
-        audio_sync = deck.get("audio_sync") or {}
-        timings = audio_sync.get("timings") or []
-        if not timings:
-            out["error"] = "audio_sync.timings absent"
-            return out
-
-        bloc_text = _course_bloc_text(folder_id, int(bloc_number))
-        if not bloc_text:
-            out["error"] = f"texte bloc {bloc_number} introuvable"
-            return out
-
-        rng = _find_word_range(bloc_text, original_paragraph)
-        if not rng:
-            out["error"] = "paragraphe introuvable dans le texte du bloc"
-            return out
-        word_start, word_end = rng
-
-        overlapping = []
-        for t in timings:
-            if t.get("audio_filename") != filename:
-                continue
-            try:
-                w_s = int(t.get("word_start"))
-                w_e = int(t.get("word_end"))
-            except (TypeError, ValueError):
-                continue
-            if w_e <= word_start or w_s >= word_end:
-                continue
-            overlapping.append(t)
-        if not overlapping:
-            out["error"] = f"aucun timing ne couvre word_range=[{word_start},{word_end}] pour {filename}"
-            return out
-
-        splice_start_sec = min(float(t.get("start_time") or 0) for t in overlapping)
-        splice_end_sec = max(float(t.get("end_time") or 0) for t in overlapping)
-        splice_start_ms = max(0, int(splice_start_sec * 1000))
-        splice_end_ms = max(splice_start_ms + 1, int(splice_end_sec * 1000))
-
         from services.tts_service import convert_to_speech
         from services.azure_blob_service import download_blob, upload_blob, CONTAINER_AUDIOS
+        from services.script_slide_generation_service import update_script_slide_deck_audio_sync
         from pydub import AudioSegment
         import io
 
-        new_tts_bytes = convert_to_speech(proposed_text)
+        splice_start_ms = max(0, int(splice_start_sec * 1000))
+        splice_end_ms = max(splice_start_ms + 1, int(splice_end_sec * 1000))
+
+        new_tts_bytes = convert_to_speech(new_text)
         new_segment = AudioSegment.from_file(io.BytesIO(new_tts_bytes), format="mp3")
 
         blob_path = f"platform-{platform_id}/folder-{folder_id}/playlist/{filename}"
@@ -796,8 +756,7 @@ def _attempt_audio_splice(
         upload_blob(CONTAINER_AUDIOS, blob_path, buf.getvalue())
 
         new_dur_sec = len(new_segment) / 1000.0
-        new_word_end = word_start + len(" ".join(proposed_text.split()).split())
-        slide_id = f"patched-{annotation_id}"
+        timings = audio_sync.get("timings") or []
         new_timings = _splice_recompute_timings(
             timings,
             filename,
@@ -805,8 +764,8 @@ def _attempt_audio_splice(
             splice_end_sec,
             new_dur_sec,
             word_start,
-            new_word_end,
-            slide_id,
+            word_end_target,
+            slide_id_for_patch,
         )
         audio_sync_updated = dict(audio_sync)
         audio_sync_updated["timings"] = new_timings
@@ -814,11 +773,93 @@ def _attempt_audio_splice(
 
         out["status"] = "done"
         out["blob_path"] = blob_path
+        out["new_duration_sec"] = new_dur_sec
         logger.info(
-            f"✂️ Splice annotation {annotation_id} : {filename} "
-            f"[{splice_start_sec:.2f}s-{splice_end_sec:.2f}s] → {new_dur_sec:.2f}s "
-            f"(Δ={new_dur_sec - (splice_end_sec - splice_start_sec):+.2f}s)"
+            f"✂️ Splice {filename} [{splice_start_sec:.2f}s-{splice_end_sec:.2f}s] "
+            f"→ {new_dur_sec:.2f}s (Δ={new_dur_sec - (splice_end_sec - splice_start_sec):+.2f}s) "
+            f"via {slide_id_for_patch}"
         )
+    except Exception as exc:
+        out["error"] = str(exc)[:500]
+        logger.exception(f"❌ Splice {filename} échoué")
+    return out
+
+
+def _attempt_audio_splice(
+    folder_id: int,
+    job_id: int,
+    platform_id: int,
+    annotation_id: int,
+    *,
+    bloc_number: int | None,
+    filename: str,
+    original_paragraph: str,
+    proposed_text: str,
+) -> dict:
+    """Tente le splice ms-précis du MP3 du bloc cours concerné.
+
+    Retourne {"status": done|skipped|error, "blob_path": str, "error": str}.
+    Best-effort : toute exception est captée et renvoyée en status=error.
+    """
+    out = {"status": "skipped", "blob_path": "", "error": ""}
+    if not filename or not bloc_number or not original_paragraph or not proposed_text:
+        out["error"] = "données manquantes (filename/bloc_number/paragraph)"
+        return out
+
+    try:
+        from services.script_slide_generation_service import get_latest_script_slide_deck
+        deck = get_latest_script_slide_deck(folder_id, job_id)
+        if not deck:
+            out["error"] = "Aucun script_slide_deck pour ce job"
+            return out
+        audio_sync = deck.get("audio_sync") or {}
+        timings = audio_sync.get("timings") or []
+        if not timings:
+            out["error"] = "audio_sync.timings absent"
+            return out
+
+        bloc_text = _course_bloc_text(folder_id, int(bloc_number))
+        if not bloc_text:
+            out["error"] = f"texte bloc {bloc_number} introuvable"
+            return out
+
+        rng = _find_word_range(bloc_text, original_paragraph)
+        if not rng:
+            out["error"] = "paragraphe introuvable dans le texte du bloc"
+            return out
+        word_start, word_end = rng
+
+        overlapping = [
+            t for t in timings
+            if t.get("audio_filename") == filename
+            and (
+                (int(t.get("word_start") or -1) < word_end)
+                and (int(t.get("word_end") or -1) > word_start)
+            )
+        ]
+        if not overlapping:
+            out["error"] = f"aucun timing ne couvre word_range=[{word_start},{word_end}] pour {filename}"
+            return out
+
+        splice_start_sec = min(float(t.get("start_time") or 0) for t in overlapping)
+        splice_end_sec = max(float(t.get("end_time") or 0) for t in overlapping)
+        new_word_end = word_start + len(" ".join(proposed_text.split()).split())
+        result = splice_chunk_audio(
+            folder_id,
+            platform_id,
+            deck=deck,
+            audio_sync=audio_sync,
+            filename=filename,
+            splice_start_sec=splice_start_sec,
+            splice_end_sec=splice_end_sec,
+            new_text=proposed_text,
+            word_start=word_start,
+            word_end_target=new_word_end,
+            slide_id_for_patch=f"patched-{annotation_id}",
+        )
+        out["status"] = result["status"]
+        out["blob_path"] = result["blob_path"]
+        out["error"] = result["error"]
     except Exception as exc:
         out["status"] = "error"
         out["error"] = str(exc)[:500]
