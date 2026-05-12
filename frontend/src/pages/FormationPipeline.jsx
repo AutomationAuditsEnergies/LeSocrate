@@ -608,7 +608,7 @@ function PipelineDiagnosticPanel({ diagnostic, loading, error, onRefresh }) {
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '12px', marginBottom: '14px' }}>
         <div style={{ padding: '12px', borderRadius: '8px', background: 'rgba(15,23,42,0.45)', border: '1px solid rgba(148,163,184,0.12)' }}>
           <div style={{ fontSize: '11px', color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '6px' }}>
-            En cours maintenant
+            Étape en cours
           </div>
           <div style={{ fontSize: '13px', color: latestAudioEvent ? '#cbd5e1' : '#64748b', lineHeight: 1.45 }}>
             {latestAudioEvent ? (
@@ -622,32 +622,27 @@ function PipelineDiagnosticPanel({ diagnostic, loading, error, onRefresh }) {
               'Aucun événement audio reçu.'
             )}
           </div>
-          {playlistPct !== null && (
-            <div style={{ marginTop: '10px' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', color: '#94a3b8', marginBottom: '5px' }}>
-                <span>Fichiers playlist MP3</span>
-                <span>{latestStep}/{latestTotal} fichiers</span>
-              </div>
-              <div style={{ height: '6px', borderRadius: '999px', background: 'rgba(148,163,184,0.12)', overflow: 'hidden' }}>
-                <div style={{ width: `${playlistPct}%`, height: '100%', background: '#fbbf24' }} />
-              </div>
-            </div>
-          )}
+          <div style={{ fontSize: '11px', color: '#64748b', marginTop: '8px', lineHeight: 1.4 }}>
+            La progression détaillée <strong style={{ color: '#22d3ee' }}>par journée</strong> est affichée plus bas (barre cyan « ⚡ Audio en cours »).
+          </div>
         </div>
 
         {showGlobalAudioSummary && (
           <div style={{ padding: '12px', borderRadius: '8px', background: 'rgba(15,23,42,0.45)', border: '1px solid rgba(148,163,184,0.12)' }}>
             <div style={{ fontSize: '11px', color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '6px' }}>
-              Segments texte audio à jour
+              Segments validés (texte ↔ audio)
             </div>
             <div style={{ display: 'flex', alignItems: 'baseline', gap: '8px', marginBottom: '8px' }}>
               <strong style={{ color: totals.dirty ? '#fbbf24' : '#34d399', fontSize: '22px' }}>{audioPct}%</strong>
               <span style={{ color: '#94a3b8', fontSize: '12px' }}>
-                {audioReady}/{totals.segments || 0} à jour
+                {audioReady}/{totals.segments || 0} segments à jour
               </span>
             </div>
             <div style={{ height: '7px', borderRadius: '999px', background: 'rgba(148,163,184,0.12)', overflow: 'hidden' }}>
               <div style={{ width: `${audioPct}%`, height: '100%', background: totals.dirty ? '#fbbf24' : '#34d399' }} />
+            </div>
+            <div style={{ fontSize: '11px', color: '#64748b', marginTop: '6px', lineHeight: 1.4 }}>
+              Compteur figé pendant la régénération (mis à jour à la fin de chaque bloc TTS). Pour le live, voir la barre <strong style={{ color: '#22d3ee' }}>⚡ par journée</strong>.
             </div>
           </div>
         )}

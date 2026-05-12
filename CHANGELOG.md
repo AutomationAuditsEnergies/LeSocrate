@@ -2,6 +2,17 @@
 
 ## 2026-05-12
 
+### ui(formation-pipeline): suppression de la barre redondante « Fichiers playlist MP3 » du panneau global
+
+Avec l'ajout des barres cyan « ⚡ Audio en cours » par journée, la barre jaune « Fichiers playlist MP3 X/19 fichiers » dans le panneau « En cours maintenant » du haut affichait exactement la même donnée que la barre cyan du dernier dossier actif — sans dire de quel dossier elle parlait. L'utilisateur voyait deux barres identiques avec deux libellés différents, ce qui embrouillait.
+
+Changements :
+- **Suppression** de la sous-section barre + compteur « Fichiers playlist MP3 » du panneau « En cours maintenant ». Le panneau reste textuel : titre, étape en cours, folder, message.
+- **Renommage** du panneau « En cours maintenant » → « Étape en cours » + note de pointage vers les barres cyan par journée.
+- **Renommage** du panneau global « Segments texte audio à jour » → « Segments validés (texte ↔ audio) » + note explicative : « Compteur figé pendant la régénération (mis à jour à la fin de chaque bloc TTS). Pour le live, voir la barre ⚡ par journée. »
+
+Cohérence visuelle : maintenant 3 niveaux d'info distincts au lieu de 4 qui se recouvraient. (1) Étape en cours (texte seul). (2) % validation DB (statique, fin de bloc). (3) Progression live par journée (cyan, temps réel).
+
 ### ui(formation-pipeline): barre de progression audio temps réel par journée
 
 Pendant la synthèse audio (~10-15 min par journée), la barre « X/18 segments à jour » de chaque journée restait figée parce que le flag `dirty=0` n'est mis qu'à la **fin** de chaque bloc cours complet, pas pendant. Conséquence : l'utilisateur croyait la pipeline bloquée.
