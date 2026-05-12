@@ -380,6 +380,24 @@ def init_database():
         """)
         logger.info("✅ Table content_script_annotations créée/vérifiée")
 
+        # Migration : colonnes pour la correction DeepSeek immédiate.
+        # original_paragraph = paragraphe alentour extrait du script au moment de l'annotation.
+        # proposed_text = correction renvoyée par DeepSeek (paragraphe complet réécrit).
+        # correction_status = pending | proposed | applied | rejected | error.
+        # correction_error = message d'erreur quand l'appel DeepSeek a échoué.
+        for _col, _ddl in (
+            ("original_paragraph", "ALTER TABLE content_script_annotations ADD COLUMN original_paragraph TEXT"),
+            ("proposed_text", "ALTER TABLE content_script_annotations ADD COLUMN proposed_text TEXT"),
+            ("correction_status", "ALTER TABLE content_script_annotations ADD COLUMN correction_status TEXT DEFAULT 'pending'"),
+            ("correction_error", "ALTER TABLE content_script_annotations ADD COLUMN correction_error TEXT"),
+            ("applied_at", "ALTER TABLE content_script_annotations ADD COLUMN applied_at TIMESTAMP"),
+        ):
+            try:
+                cursor.execute(_ddl)
+                logger.info(f"✅ Colonne {_col} ajoutée à content_script_annotations")
+            except Exception:
+                pass
+
         # Migration : ajouter colonnes from_scratch + module_contents (pipeline formation)
         cursor.execute("PRAGMA table_info(content_generation_jobs)")
         cg_columns = [col[1] for col in cursor.fetchall()]

@@ -455,9 +455,11 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
       return
     }
 
+    const containerText = (event.currentTarget?.textContent || '').replace(/\s+/g, ' ').trim()
     setScriptSelection({
       ...context,
       selected_text: selectedText.slice(0, 4000),
+      paragraph_context: containerText.slice(0, 8000),
     })
     setAnnotationComment('')
     setAnnotationError('')
@@ -484,6 +486,7 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
           bloc_number: scriptSelection.bloc_number,
           filename: scriptSelection.filename,
           selected_text: scriptSelection.selected_text,
+          paragraph_context: scriptSelection.paragraph_context || '',
           comment,
         }),
         credentials: 'include',
@@ -535,6 +538,50 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
   const downloadAnnotationsMarkdown = () => {
     if (!selectedFolder) return
     window.open(apiUrl(`/api/hr/cours-folders/${selectedFolder.id}/content-job/annotations/markdown`), '_blank')
+  }
+
+  const applyAnnotationCorrection = async (annotationId) => {
+    if (!selectedFolder || !annotationId) return
+    try {
+      const resp = await fetch(
+        apiUrl(`/api/hr/cours-folders/${selectedFolder.id}/content-job/annotations/${annotationId}/apply`),
+        { method: 'POST', credentials: 'include' }
+      )
+      const data = await resp.json()
+      if (data.success) {
+        setScriptAnnotations(data.annotations || [])
+        setContentScriptModal(prev => prev ? {
+          ...prev,
+          annotations: data.annotations || [],
+          annotations_count: data.annotations_count || 0,
+          annotations_markdown_path: data.markdown_path,
+        } : prev)
+      }
+    } catch (e) {
+      console.error('Erreur apply annotation:', e)
+    }
+  }
+
+  const rejectAnnotationCorrection = async (annotationId) => {
+    if (!selectedFolder || !annotationId) return
+    try {
+      const resp = await fetch(
+        apiUrl(`/api/hr/cours-folders/${selectedFolder.id}/content-job/annotations/${annotationId}/reject`),
+        { method: 'POST', credentials: 'include' }
+      )
+      const data = await resp.json()
+      if (data.success) {
+        setScriptAnnotations(data.annotations || [])
+        setContentScriptModal(prev => prev ? {
+          ...prev,
+          annotations: data.annotations || [],
+          annotations_count: data.annotations_count || 0,
+          annotations_markdown_path: data.markdown_path,
+        } : prev)
+      }
+    } catch (e) {
+      console.error('Erreur reject annotation:', e)
+    }
   }
 
   const handleStartEdit = (subIdx, passe, currentText) => {
@@ -1092,39 +1139,113 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
     )
   }
 
+  const correctionBadge = (status) => {
+    const map = {
+      pending: { label: 'Correction en cours…', bg: '#fef3c7', color: '#92400e' },
+      proposed: { label: 'Proposition prête', bg: '#dbeafe', color: '#1e40af' },
+      applied: { label: 'Appliquée', bg: '#dcfce7', color: '#166534' },
+      rejected: { label: 'Rejetée', bg: '#fee2e2', color: '#991b1b' },
+      error: { label: 'Erreur DeepSeek', bg: '#fee2e2', color: '#991b1b' },
+    }
+    return map[status] || map.pending
+  }
+
   const ScriptAnnotationsList = ({ context }) => {
     const items = annotationsForContext(context)
     if (!items.length) return null
     return (
       <div className="mt-3 space-y-2">
-        {items.map(annotation => (
-          <div
-            key={annotation.id}
-            className="rounded-lg p-3"
-            style={{ backgroundColor: colors.innerBg, border: `1px solid ${colors.border}` }}
-          >
-            <div className="mb-1 flex items-start justify-between gap-3">
-              <p className="text-xs font-semibold" style={{ color: colors.textSecondary }}>
-                {formatAnnotationSource(annotation)}
+        {items.map(annotation => {
+          const status = annotation.correction_status || 'pending'
+          const badge = correctionBadge(status)
+          const canAct = status === 'proposed'
+          return (
+            <div
+              key={annotation.id}
+              className="rounded-lg p-3"
+              style={{ backgroundColor: colors.innerBg, border: `1px solid ${colors.border}` }}
+            >
+              <div className="mb-1 flex items-start justify-between gap-3">
+                <div className="flex items-center gap-2">
+                  <p className="text-xs font-semibold" style={{ color: colors.textSecondary }}>
+                    {formatAnnotationSource(annotation)}
+                  </p>
+                  <span
+                    className="rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide"
+                    style={{ backgroundColor: badge.bg, color: badge.color }}
+                  >
+                    {badge.label}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => deleteScriptAnnotation(annotation.id)}
+                  className="rounded-md p-1 transition-colors"
+                  style={{ color: colors.textMuted }}
+                  title="Retirer cette annotation"
+                >
+                  <Icon name="delete" style={{ fontSize: '15px' }} />
+                </button>
+              </div>
+              <p className="text-xs leading-relaxed" style={{ color: colors.text }}>
+                {annotation.comment}
               </p>
-              <button
-                type="button"
-                onClick={() => deleteScriptAnnotation(annotation.id)}
-                className="rounded-md p-1 transition-colors"
-                style={{ color: colors.textMuted }}
-                title="Retirer cette annotation"
-              >
-                <Icon name="delete" style={{ fontSize: '15px' }} />
-              </button>
+              <p className="mt-2 line-clamp-2 text-xs leading-relaxed" style={{ color: colors.textMuted }}>
+                “{annotation.selected_text}”
+              </p>
+
+              {(annotation.original_paragraph || annotation.proposed_text) && status !== 'pending' && (
+                <div className="mt-3 grid gap-2 md:grid-cols-2">
+                  <div
+                    className="rounded-md p-2 text-[11px] leading-relaxed"
+                    style={{ backgroundColor: '#fef9c3', color: '#713f12', border: '1px solid #fde047' }}
+                  >
+                    <p className="mb-1 text-[10px] font-bold uppercase tracking-wide">Avant</p>
+                    <p className="whitespace-pre-wrap">{annotation.original_paragraph || annotation.selected_text}</p>
+                  </div>
+                  <div
+                    className="rounded-md p-2 text-[11px] leading-relaxed"
+                    style={{
+                      backgroundColor: status === 'error' ? '#fee2e2' : '#dcfce7',
+                      color: status === 'error' ? '#991b1b' : '#166534',
+                      border: `1px solid ${status === 'error' ? '#fecaca' : '#86efac'}`,
+                    }}
+                  >
+                    <p className="mb-1 text-[10px] font-bold uppercase tracking-wide">
+                      {status === 'error' ? 'Erreur' : 'Après (DeepSeek)'}
+                    </p>
+                    <p className="whitespace-pre-wrap">
+                      {status === 'error'
+                        ? (annotation.correction_error || 'Correction indisponible.')
+                        : (annotation.proposed_text || '—')}
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              {canAct && (
+                <div className="mt-2 flex justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={() => rejectAnnotationCorrection(annotation.id)}
+                    className="inline-flex items-center gap-1 rounded-md px-2.5 py-1 text-[11px] font-semibold transition-colors"
+                    style={{ backgroundColor: colors.innerBg, color: colors.textSecondary, border: `1px solid ${colors.border}` }}
+                  >
+                    Rejeter
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => applyAnnotationCorrection(annotation.id)}
+                    className="inline-flex items-center gap-1 rounded-md px-2.5 py-1 text-[11px] font-semibold text-white transition-colors"
+                    style={{ backgroundColor: '#16a34a' }}
+                  >
+                    Appliquer
+                  </button>
+                </div>
+              )}
             </div>
-            <p className="text-xs leading-relaxed" style={{ color: colors.text }}>
-              {annotation.comment}
-            </p>
-            <p className="mt-2 line-clamp-2 text-xs leading-relaxed" style={{ color: colors.textMuted }}>
-              “{annotation.selected_text}”
-            </p>
-          </div>
-        ))}
+          )
+        })}
       </div>
     )
   }

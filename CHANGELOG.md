@@ -2,6 +2,29 @@
 
 ## 2026-05-12
 
+### feat(content-review): correction immédiate DeepSeek sur sélection — preview avant/après (Phase A)
+
+Quand l'admin surligne du texte dans la modal Script TTS et ajoute un commentaire, DeepSeek réécrit le paragraphe alentour en appliquant la consigne. La proposition apparaît côte-à-côte (Avant / Après) dans le panneau d'annotation, avec boutons Appliquer / Rejeter. Sur Appliquer, le texte du segment source est mis à jour en DB et le segment marqué `dirty=1 reviewed=0` — la prochaine régénération audio le re-fera. Étape suivante (Phase B) : splice MP3 chirurgical au moment de Appliquer, pour ne PAS re-générer tout le bloc de 10 min.
+
+**Backend**
+- Migration `content_script_annotations` (`backend/database/db.py` + `backend/services/script_annotation_service.py::_ensure_annotations_table`) : ajout colonnes `original_paragraph`, `proposed_text`, `correction_status` (`pending|proposed|applied|rejected|error`), `correction_error`, `applied_at`. ALTER TABLE défensif pour les bases déployées.
+- Nouveau service `correct_paragraph_with_llm(paragraph, selected_text, comment) -> str` via `post_message` du client Anthropic-compatible. Modèle par défaut : `DEEPSEEK_DEFAULT_MODEL` (override via env `SCRIPT_ANNOTATION_MODEL`). Prompt cadré : conservation niveau RNCP + ton oral + longueur, modification limitée à ce que le commentaire demande.
+- Helper `_extract_paragraph_around(full_text, selected_text)` : trouve le paragraphe contenant l'extrait (séparation `\n\n`), gère chevauchement multi-paragraphes par union.
+- `create_script_annotation` accepte `paragraph_context` (texte du conteneur affiché côté frontend). À la création, persiste l'annotation puis appelle DeepSeek en best-effort (`_attach_correction`) — sur erreur, `correction_status=error` mais l'annotation reste utilisable.
+- `apply_script_annotation(folder_id, annotation_id)` : pour `source_type=segment`, remplace `original_paragraph` par `proposed_text` dans `content_generation_segments.text_content`, recalcule `word_count`, met `dirty=1 reviewed=0 review_error=NULL`. Pour `source_type=course`, marque seulement l'annotation applied (Phase B prendra le splice MP3).
+- `reject_script_annotation(folder_id, annotation_id)` : marque `correction_status=rejected` sans toucher au texte.
+
+**Endpoints HR** (`backend/routes/hr_routes.py`)
+- `POST .../annotations/<aid>/apply` — applique la correction.
+- `POST .../annotations/<aid>/reject` — rejette la proposition (l'annotation reste tracée pour le markdown et l'apprentissage Phase 2).
+
+**Frontend** (`frontend/src/components/CoursFolders.jsx`)
+- `captureScriptSelection` envoie désormais `paragraph_context = event.currentTarget.textContent` (limité à 8000 chars).
+- `applyAnnotationCorrection` / `rejectAnnotationCorrection` : nouveaux handlers HTTP.
+- `ScriptAnnotationsList` : badge de statut, panneau Avant / Après côte-à-côte quand `correction_status != pending`, boutons Appliquer / Rejeter visibles uniquement quand `proposed`. Affichage erreur DeepSeek si `error`.
+
+**Limitations Phase A** — La régénération audio reste à la granularité bloc (1 MP3 ~10 min) via le flag `dirty`. La Phase B suivra avec splice chirurgical ms-précis utilisant `audio_sync.timings` déjà persistés par la pipeline.
+
 ### feat(content-review): annotations humaines sur le script TTS + markdown de revue
 
 Nouveau flux de revue collaborative sur le script TTS d'un dossier cours : l'admin sélectionne du texte dans le modal Script TTS, ajoute un commentaire de correction, et l'ensemble est persisté + exporté en markdown pour réinjection dans l'agent de correction avant régénération audio.

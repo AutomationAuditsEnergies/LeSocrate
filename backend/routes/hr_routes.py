@@ -2532,6 +2532,50 @@ def create_hr_blueprint(socketio):
             logger.error(f"❌ Erreur delete annotation script: {e}")
             return jsonify({"success": False, "error": str(e)}), 500
 
+    @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/content-job/annotations/<int:annotation_id>/apply", methods=["POST"])
+    def apply_content_script_annotation(folder_id, annotation_id):
+        """Applique la correction proposée par DeepSeek (Phase A : patch texte segment)."""
+        denied = _require_admin()
+        if denied:
+            return denied
+
+        try:
+            from services.script_annotation_service import apply_script_annotation
+            result = apply_script_annotation(folder_id, annotation_id)
+            return jsonify({
+                "success": True,
+                "annotations": result["annotations"],
+                "annotations_count": len(result["annotations"]),
+                "markdown_path": result["markdown_path"],
+            }), 200
+        except ValueError as e:
+            return jsonify({"success": False, "error": str(e)}), 400
+        except Exception as e:
+            logger.error(f"❌ Erreur apply annotation script: {e}")
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/content-job/annotations/<int:annotation_id>/reject", methods=["POST"])
+    def reject_content_script_annotation(folder_id, annotation_id):
+        """Rejette la correction proposée (l'annotation reste tracée pour le markdown)."""
+        denied = _require_admin()
+        if denied:
+            return denied
+
+        try:
+            from services.script_annotation_service import reject_script_annotation
+            result = reject_script_annotation(folder_id, annotation_id)
+            return jsonify({
+                "success": True,
+                "annotations": result["annotations"],
+                "annotations_count": len(result["annotations"]),
+                "markdown_path": result["markdown_path"],
+            }), 200
+        except ValueError as e:
+            return jsonify({"success": False, "error": str(e)}), 404
+        except Exception as e:
+            logger.error(f"❌ Erreur reject annotation script: {e}")
+            return jsonify({"success": False, "error": str(e)}), 500
+
     @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/content-job/annotations/markdown", methods=["GET"])
     def download_content_script_annotations_markdown(folder_id):
         """Retourne le markdown de revue du script TTS."""
