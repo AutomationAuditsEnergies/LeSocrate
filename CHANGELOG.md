@@ -23,6 +23,10 @@ Nouveau flux de revue collaborative sur le script TTS d'un dossier cours : l'adm
 
 **Pourquoi** — la régénération audio coûte cher (Fish Audio S2-Pro) et le script TTS est long. Avant cette feature, les corrections humaines transitaient par chat / capture d'écran et étaient perdues entre deux passes. Le markdown de revue centralise désormais toutes les corrections demandées, prêt à être consommé par l'agent de correction LLM avant la passe suivante.
 
+### fix(content-review): création paresseuse de `content_script_annotations` sur bases déployées
+
+Ajout de `_ensure_annotations_table()` dans `script_annotation_service.py`, appelé en tête des fonctions `list / create / delete / write_markdown`. Crée la table + index si absents (CREATE TABLE IF NOT EXISTS), pour les environnements P2/P3/P4 où `init_database()` n'a pas encore été rejoué depuis le déploiement de la feature annotations.
+
 ## 2026-05-11
 
 ### feat(pipeline): robustesse auto-pilot — résolution canonique des dossiers cours + diagnostic UI

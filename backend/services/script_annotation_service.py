@@ -11,6 +11,42 @@ MAX_SELECTED_TEXT_CHARS = 4000
 MAX_COMMENT_CHARS = 3000
 
 
+def _ensure_annotations_table() -> None:
+    """Create the annotation table lazily for already-deployed databases."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS content_script_annotations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            folder_id INTEGER NOT NULL,
+            job_id INTEGER NOT NULL,
+            source_type TEXT NOT NULL DEFAULT 'course',
+            sub_part_index INTEGER,
+            passe INTEGER,
+            bloc_number INTEGER,
+            filename TEXT,
+            selected_text TEXT NOT NULL,
+            comment TEXT NOT NULL,
+            status TEXT DEFAULT 'open',
+            markdown_path TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (folder_id) REFERENCES cours_folders(id),
+            FOREIGN KEY (job_id) REFERENCES content_generation_jobs(id)
+        )
+        """
+    )
+    cursor.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_content_script_annotations_folder_job
+        ON content_script_annotations(folder_id, job_id, status)
+        """
+    )
+    conn.commit()
+    conn.close()
+
+
 def _now_str() -> str:
     return datetime.now(FRANCE_TZ).strftime("%Y-%m-%d %H:%M:%S")
 
@@ -79,6 +115,8 @@ def list_script_annotations(folder_id: int, *, include_deleted: bool = False) ->
     context = _fetch_context(folder_id)
     if not context:
         return {"context": None, "annotations": [], "markdown_path": ""}
+
+    _ensure_annotations_table()
 
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -187,6 +225,7 @@ def write_script_annotations_markdown(folder_id: int) -> str:
     data = list_script_annotations(folder_id)
     context = data["context"]
     if context:
+        _ensure_annotations_table()
         conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute(
@@ -206,6 +245,8 @@ def create_script_annotation(folder_id: int, payload: dict) -> dict:
     context = _fetch_context(folder_id)
     if not context:
         raise ValueError("Aucun job de contenu pour ce dossier")
+
+    _ensure_annotations_table()
 
     source_type = (payload.get("source_type") or "").strip()
     if source_type not in {"segment", "course"}:
@@ -266,6 +307,8 @@ def delete_script_annotation(folder_id: int, annotation_id: int) -> dict:
     context = data["context"]
     if not context:
         raise ValueError("Aucun job de contenu pour ce dossier")
+
+    _ensure_annotations_table()
 
     conn = get_db_connection()
     cursor = conn.cursor()
