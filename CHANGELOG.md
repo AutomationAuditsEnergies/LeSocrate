@@ -2,6 +2,19 @@
 
 ## 2026-05-13
 
+### fix(content-review): correction strictement limitée à l'extrait surligné (plus de "paragraphe alentour" débordant)
+
+**Bug observé** : quand l'utilisateur surlignait ~3 paragraphes dans la modal Script TTS et cliquait « Noter », DeepSeek lui proposait de réécrire **tout le bloc** (~7000 mots) au lieu de juste son extrait.
+
+**Cause** : `create_script_annotation` appelait `_extract_paragraph_around(paragraph_context, selected_text)` pour deviner le « paragraphe alentour ». Or `event.currentTarget.textContent` côté frontend **collapse tous les sauts de ligne `\n\n` en espaces simples**. Conséquence : `text.split("\n\n")` retournait `[le_bloc_entier]` comme un unique paragraphe — donc DeepSeek recevait le bloc entier à réécrire.
+
+**Fix** :
+- `original_paragraph = selected_text` directement (plus de devinette). DeepSeek réécrit STRICTEMENT le périmètre de l'extrait surligné.
+- Prompt LLM ajusté : « réécris UNIQUEMENT cet extrait, pas plus, pas moins. Le nombre de mots produit doit rester proche de l'extrait (±20%). Conserve les tags audio entre crochets (`[pause]`, `[calm]`, `[emphasis]`) s'ils sont présents dans l'extrait. »
+- Suppression de `_extract_paragraph_around()` (dead code maintenant).
+
+**Effet de bord positif** : le splice MP3 chirurgical (Phase B) cherche désormais `selected_text` (= ce que tu as surligné) dans le bloc texte au lieu d'un paragraphe potentiellement plus large → splice plus précis.
+
 ### feat(content-review): DeepSeek Pro par défaut sur les 3 services LLM + édition manuelle du markdown des règles
 
 **Modèle LLM revu à la hausse** — les 3 services qui appellent DeepSeek passent du modèle Flash au modèle Pro :

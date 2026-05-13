@@ -304,8 +304,13 @@ def create_script_annotation(folder_id: int, payload: dict) -> dict:
     bloc_number = payload.get("bloc_number")
     filename = (payload.get("filename") or "").strip()[:255]
 
+    # Important : original_paragraph = selected_text. DeepSeek réécrit STRICTEMENT
+    # l'extrait surligné, pas un "paragraphe alentour" deviné. Avant : on tentait
+    # _extract_paragraph_around(paragraph_context, selected_text) mais comme
+    # `event.currentTarget.textContent` côté frontend collapse les sauts de ligne,
+    # le code prenait le bloc entier comme paragraphe et DeepSeek réécrivait tout.
     paragraph_context = (payload.get("paragraph_context") or "").strip()[:MAX_PARAGRAPH_CHARS]
-    original_paragraph = _extract_paragraph_around(paragraph_context, selected_text)
+    original_paragraph = selected_text
 
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -398,20 +403,19 @@ def correct_paragraph_with_llm(paragraph: str, selected_text: str, comment: str)
 
     prompt = (
         "Tu es un agent de correction du script d'un cours audio destiné à un public RNCP. "
-        "Tu reçois un paragraphe lu en TTS, un extrait précis surligné par le formateur, "
-        "et un commentaire qui indique ce qui ne va pas. Ta tâche : réécrire le paragraphe "
-        "complet en appliquant le commentaire sur l'extrait.\n\n"
+        "Tu reçois un extrait précis du script TTS et un commentaire qui indique ce qui ne va pas. "
+        "Ta tâche : réécrire UNIQUEMENT cet extrait en appliquant le commentaire — pas plus, pas moins.\n\n"
         "Contraintes :\n"
-        "- Conserve le sens pédagogique et le niveau RNCP du contenu.\n"
+        "- Réécris STRICTEMENT le périmètre de l'extrait. Ne déborde pas avant ni après.\n"
+        "- Le nombre de mots produit doit rester proche du nombre de mots de l'extrait (±20%).\n"
+        "- Conserve le sens pédagogique et le niveau RNCP.\n"
         "- Conserve un ton oral fluide adapté à un TTS (phrases pas trop longues, transitions naturelles).\n"
-        "- Conserve approximativement la longueur du paragraphe d'origine.\n"
-        "- Ne modifie pas ce qui n'est pas concerné par le commentaire.\n"
-        "- Réponds uniquement par le paragraphe corrigé en texte brut. "
-        "Pas de préambule, pas de balise, pas de guillemets, pas d'explication, pas de markdown.\n\n"
-        f"Paragraphe d'origine :\n{paragraph}\n\n"
-        f"Extrait surligné :\n{selected_text}\n\n"
-        f"Commentaire :\n{comment}\n\n"
-        "Paragraphe corrigé :"
+        "- Conserve les tags audio existants entre crochets (ex. [pause], [calm], [emphasis]) si présents dans l'extrait.\n"
+        "- Réponds uniquement par l'extrait corrigé en texte brut. "
+        "Pas de préambule, pas de balise de code, pas de guillemets ouvrants/fermants, pas d'explication, pas de markdown.\n\n"
+        f"Extrait à réécrire :\n{paragraph}\n\n"
+        f"Commentaire du formateur :\n{comment}\n\n"
+        "Extrait corrigé :"
     )
 
     output = post_message(
@@ -421,41 +425,6 @@ def correct_paragraph_with_llm(paragraph: str, selected_text: str, comment: str)
         timeout=180,
     )
     return (output or "").strip()
-
-
-def _extract_paragraph_around(full_text: str, selected_text: str) -> str:
-    """Trouve le paragraphe (séparé par lignes vides) contenant `selected_text`.
-
-    Si l'extrait chevauche plusieurs paragraphes, retourne leur union. Si rien
-    ne matche, retourne `selected_text` lui-même.
-    """
-    text = (full_text or "").strip()
-    needle = (selected_text or "").strip()
-    if not text or not needle:
-        return needle
-
-    paragraphs = [p for p in text.split("\n\n") if p.strip()]
-    if not paragraphs:
-        return needle
-
-    norm_needle = " ".join(needle.split())
-    hits = []
-    for idx, paragraph in enumerate(paragraphs):
-        norm = " ".join(paragraph.split())
-        if norm_needle in norm:
-            return paragraph.strip()
-        if norm and norm in norm_needle:
-            hits.append(idx)
-
-    if hits:
-        first, last = min(hits), max(hits)
-        return "\n\n".join(p.strip() for p in paragraphs[first : last + 1])
-
-    needle_lower = norm_needle.lower()
-    for paragraph in paragraphs:
-        if needle_lower in " ".join(paragraph.split()).lower():
-            return paragraph.strip()
-    return needle
 
 
 def _attach_correction(annotation_id: int, folder_id: int, job_id: int, *,
