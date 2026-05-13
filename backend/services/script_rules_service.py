@@ -710,7 +710,15 @@ def _append_task_log(task_id: str, line: str) -> None:
 
 def start_text_review_async(folder_id: int, *, dry_run: bool = False,
                             sub_part_indices: list[int] | None = None) -> str:
-    """Démarre la revérif texte dans un greenlet eventlet et retourne task_id."""
+    """Démarre la revérif texte dans un greenlet eventlet et retourne task_id.
+
+    Travaille au niveau **bloc cours** (les 7 MP3 d'une journée correspondant à
+    des cours de 45-55 min). Les règles éditoriales du formateur portent sur
+    la structure du cours (intro, corps, conclusion, transitions) — donc le LLM
+    voit le texte complet d'un cours, pas une découpe interne segments × passes.
+    Les patches identifiés sont ensuite remontés aux segments source pour les
+    écritures DB.
+    """
     context = _fetch_context(folder_id)
     if not context:
         raise ValueError("Aucun job de contenu pour ce dossier")
@@ -719,33 +727,25 @@ def start_text_review_async(folder_id: int, *, dry_run: bool = False,
     if not (rules.get("rules_markdown") or "").strip():
         raise ValueError("Aucune règle apprise — lance d'abord l'extraction")
 
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        """
-        SELECT COUNT(*) FROM content_generation_segments
-        WHERE job_id = ? AND status = 'completed'
-        """,
-        (context["job_id"],),
-    )
-    total = int(cursor.fetchone()[0] or 0)
-    conn.close()
-    if sub_part_indices:
-        total = min(total, len(sub_part_indices) * 3)  # 3 passes max par sous-partie
+    from services.content_generation_service import get_course_script_plan_for_ui
+    plan = get_course_script_plan_for_ui(folder_id)
+    blocs = [b for b in (plan.get("course_blocs") or []) if (b.get("text") or "").strip()]
+    if not blocs:
+        raise ValueError("Aucun bloc cours disponible pour ce dossier")
+    total = len(blocs)
 
     task_id = _new_text_review_task(folder_id, dry_run, total)
     _FOLDER_TO_LATEST_TASK[int(folder_id)] = task_id
     _append_task_log(task_id,
-        f"Lancement : {total} segments à examiner, "
+        f"Lancement : {total} bloc(s) cours à examiner, "
         f"dry_run={dry_run}, parallel={_TEXT_REVIEW_PARALLEL}")
 
     import eventlet
     def _runner():
         try:
-            summary = review_segments_with_rules(
+            summary = review_blocs_with_rules(
                 folder_id,
                 dry_run=dry_run,
-                sub_part_indices=sub_part_indices,
                 progress_task_id=task_id,
             )
             task = _TEXT_REVIEW_TASKS.get(task_id)
@@ -768,6 +768,326 @@ def start_text_review_async(folder_id: int, *, dry_run: bool = False,
             _append_task_log(task_id, f"❌ Échec : {exc}")
     eventlet.spawn(_runner)
     return task_id
+
+
+def _locate_patch_segment(find: str, segments_rows: list[tuple]) -> tuple[int, str] | None:
+    """Cherche `find` parmi les text_content des segments. Renvoie (segment_id,
+    text_content) si exactement 1 segment le contient une seule fois. Sinon
+    None (ambigu, introuvable, ou multi-segments → on n'applique pas)."""
+    needle = (find or "").strip()
+    if not needle:
+        return None
+    matches: list[tuple[int, str]] = []
+    for seg in segments_rows:
+        seg_id, sub_idx, sub_name, passe, text, wc = seg
+        if not text:
+            continue
+        if text.count(needle) == 1:
+            matches.append((seg_id, text))
+    if len(matches) == 1:
+        return matches[0]
+    return None
+
+
+def review_blocs_with_rules(
+    folder_id: int,
+    *,
+    dry_run: bool = False,
+    progress_task_id: str | None = None,
+) -> dict:
+    """Revérif au niveau BLOC COURS (1 bloc = 1 MP3 de 45-55 min).
+
+    Pour chaque bloc cours du folder :
+    1. Récupère son texte complet via `get_course_script_plan_for_ui`.
+    2. Appelle DeepSeek avec ce texte + règles.
+    3. Pour chaque patch proposé, retrouve le `content_generation_segments`
+       qui contient le `find` (recherche substring unique) et applique le
+       `replace` dans ce segment (dirty=1, reviewed=0).
+
+    Travaille en parallèle entre blocs via `_TEXT_REVIEW_PARALLEL`.
+    """
+    context = _fetch_context(folder_id)
+    if not context:
+        raise ValueError("Aucun job de contenu pour ce dossier")
+
+    rules = get_rules(folder_id)
+    rules_markdown = (rules.get("rules_markdown") or "").strip()
+    if not rules_markdown:
+        raise ValueError("Aucune règle apprise — lance d'abord l'extraction")
+
+    from services.content_generation_service import get_course_script_plan_for_ui
+    plan = get_course_script_plan_for_ui(folder_id)
+    blocs = [b for b in (plan.get("course_blocs") or []) if (b.get("text") or "").strip()]
+    if not blocs:
+        raise ValueError("Aucun bloc cours disponible — la pipeline a-t-elle généré le texte ?")
+
+    # Charge les segments source une fois (pour le mapping patches → segments)
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        SELECT id, sub_part_index, sub_part_name, passe, text_content, word_count
+        FROM content_generation_segments
+        WHERE job_id = ? AND status = 'completed'
+        ORDER BY sub_part_index ASC, passe ASC
+        """,
+        (context["job_id"],),
+    )
+    segments_rows = cursor.fetchall()
+    conn.close()
+
+    import eventlet
+    state_lock = eventlet.semaphore.Semaphore(1)
+    db_lock = eventlet.semaphore.Semaphore(1)
+
+    summary = {
+        "dry_run": bool(dry_run),
+        "blocs_examined": 0,
+        "blocs_modified": 0,
+        "blocs_conforme": 0,
+        "blocs_failed": 0,
+        # Compat ascendante avec le frontend qui utilise les noms segments_*
+        "segments_examined": 0,
+        "segments_modified": 0,
+        "segments_conforme": 0,
+        "segments_failed": 0,
+        "segments_skipped": 0,
+        "details": [],
+    }
+
+    def _update_task(**fields):
+        if not progress_task_id:
+            return
+        task = _TEXT_REVIEW_TASKS.get(progress_task_id)
+        if task:
+            task.update(fields)
+
+    with state_lock:
+        _update_task(segments_total=len(blocs))
+
+    pool_size = max(1, min(_TEXT_REVIEW_PARALLEL, len(blocs)))
+    if progress_task_id:
+        _append_task_log(progress_task_id,
+            f"Parallélisation : {len(blocs)} bloc(s) cours sur pool de {pool_size}")
+
+    def _process_bloc(bloc: dict):
+        bloc_num = int(bloc.get("bloc_number") or 0)
+        filename = bloc.get("filename") or f"bloc_{bloc_num}"
+        bloc_text = (bloc.get("text") or "").strip()
+        bloc_label = f"Cours {bloc_num}/7 ({filename})"
+
+        with state_lock:
+            summary["blocs_examined"] += 1
+            summary["segments_examined"] += 1  # compat frontend
+            done = summary["blocs_examined"]
+            _update_task(current_segment=bloc_label, current_step="lecture", segments_done=done)
+        if progress_task_id:
+            _append_task_log(progress_task_id,
+                f"→ {done}/{len(blocs)} : {bloc_label}")
+
+        if not bloc_text:
+            with state_lock:
+                summary["segments_skipped"] += 1
+            if progress_task_id:
+                _append_task_log(progress_task_id, f"   ⏭ {bloc_label} : texte vide")
+            return
+
+        # max_tokens dynamique sur la taille du bloc (typiquement 7000-10000 mots)
+        bloc_word_count = len(bloc_text.split())
+        llm_max_tokens = min(60000, max(8000, int(bloc_word_count * 1.15 * 1.6) + 800))
+        with state_lock:
+            _update_task(current_step=f"DeepSeek · {bloc_label}")
+        try:
+            raw = post_message(
+                [{"role": "user", "content": _build_review_prompt(rules_markdown, bloc_text)}],
+                max_tokens=llm_max_tokens,
+                model=REVIEW_MODEL,
+                timeout=600,
+            )
+        except (AnthropicAPIError, AnthropicRateLimitError) as exc:
+            with state_lock:
+                summary["blocs_failed"] += 1
+                summary["segments_failed"] += 1
+                summary["details"].append({
+                    "bloc_number": bloc_num,
+                    "filename": filename,
+                    "sub_part_name": bloc_label,  # compat frontend
+                    "passe": None,
+                    "status": "failed",
+                    "reason": f"DeepSeek : {exc}",
+                })
+            if progress_task_id:
+                _append_task_log(progress_task_id,
+                    f"   ❌ {bloc_label} · DeepSeek : {str(exc)[:120]}")
+            return
+
+        parsed = _parse_review_response(raw)
+        if not parsed:
+            # Retry une fois
+            if progress_task_id:
+                _append_task_log(progress_task_id, f"   ⟳ {bloc_label} · JSON inparseable, retry…")
+            try:
+                raw_retry = post_message(
+                    [{"role": "user", "content": _build_review_prompt(rules_markdown, bloc_text, retry=True)}],
+                    max_tokens=min(60000, int(llm_max_tokens * 1.5)),
+                    model=REVIEW_MODEL,
+                    timeout=600,
+                )
+                parsed = _parse_review_response(raw_retry)
+                if parsed and progress_task_id:
+                    _append_task_log(progress_task_id, f"   ✓ {bloc_label} · retry OK")
+            except Exception as exc2:
+                if progress_task_id:
+                    _append_task_log(progress_task_id,
+                        f"   ❌ {bloc_label} · retry : {str(exc2)[:120]}")
+        if not parsed:
+            with state_lock:
+                summary["blocs_failed"] += 1
+                summary["segments_failed"] += 1
+                summary["details"].append({
+                    "bloc_number": bloc_num,
+                    "filename": filename,
+                    "sub_part_name": bloc_label,
+                    "passe": None,
+                    "status": "failed",
+                    "reason": "JSON DeepSeek inparseable (après retry)",
+                    "raw_preview": (raw or "")[:500],
+                })
+            if progress_task_id:
+                _append_task_log(progress_task_id, f"   ❌ {bloc_label} · JSON inparseable")
+            return
+
+        conforme = bool(parsed.get("conforme"))
+        violations = parsed.get("violations") or []
+        patches_raw = parsed.get("patches") or []
+
+        # Compat ascendante (vieille forme corrected_text → 1 patch)
+        if not patches_raw and parsed.get("corrected_text"):
+            legacy = (parsed.get("corrected_text") or "").strip()
+            if legacy and legacy != bloc_text:
+                patches_raw = [{"find": bloc_text, "replace": legacy,
+                                "reason": "Réponse legacy"}]
+
+        # Map patches → segments
+        patches_summary = []
+        seg_updates: dict[int, list[tuple[str, str]]] = {}  # seg_id -> [(find, replace)]
+        for idx_p, p in enumerate(patches_raw or []):
+            if not isinstance(p, dict):
+                continue
+            find = (p.get("find") or "").strip()
+            replace = p.get("replace") or ""
+            reason = (p.get("reason") or "").strip()
+            target = _locate_patch_segment(find, segments_rows)
+            patches_summary.append({
+                "find": find,
+                "replace": replace,
+                "reason": reason,
+                "applied": bool(target),
+                "segment_id": target[0] if target else None,
+            })
+            if target:
+                seg_updates.setdefault(target[0], []).append((find, replace))
+
+        if conforme or not patches_raw or not seg_updates:
+            with state_lock:
+                summary["blocs_conforme"] += 1
+                summary["segments_conforme"] += 1
+                summary["details"].append({
+                    "bloc_number": bloc_num,
+                    "filename": filename,
+                    "sub_part_name": bloc_label,
+                    "passe": None,
+                    "status": "conforme",
+                    "violations": violations if not conforme else [],
+                    "patches": patches_summary,
+                })
+            if progress_task_id:
+                if patches_raw and not seg_updates:
+                    _append_task_log(progress_task_id,
+                        f"   ⚠ {bloc_label} : {len(patches_raw)} patch(s) proposés mais aucun applicable (find ambigu/introuvable)")
+                else:
+                    _append_task_log(progress_task_id, f"   ✓ {bloc_label} : conforme")
+            return
+
+        # Applique les modifications sur chaque segment concerné
+        words_before_bloc = bloc_word_count
+        if not dry_run:
+            with db_lock:
+                conn2 = get_db_connection()
+                cursor2 = conn2.cursor()
+                for seg_id, replacements in seg_updates.items():
+                    # Re-lecture du segment (peut avoir été modifié par un autre bloc en parallèle)
+                    cursor2.execute(
+                        "SELECT text_content FROM content_generation_segments WHERE id = ?",
+                        (seg_id,),
+                    )
+                    row = cursor2.fetchone()
+                    if not row:
+                        continue
+                    seg_text = row[0] or ""
+                    for find, replace in replacements:
+                        if seg_text.count(find) == 1:
+                            seg_text = seg_text.replace(find, replace, 1)
+                    cursor2.execute(
+                        """
+                        UPDATE content_generation_segments
+                        SET text_content = ?, word_count = ?, dirty = 1,
+                            reviewed = 0, review_error = NULL
+                        WHERE id = ?
+                        """,
+                        (seg_text, len(seg_text.split()), seg_id),
+                    )
+                conn2.commit()
+                conn2.close()
+
+        # Calcule un corrected_text du bloc pour affichage (somme des deltas)
+        bloc_corrected = bloc_text
+        for p in patches_summary:
+            if p["applied"] and p["find"] and bloc_corrected.count(p["find"]) == 1:
+                bloc_corrected = bloc_corrected.replace(p["find"], p["replace"], 1)
+
+        entry = {
+            "bloc_number": bloc_num,
+            "filename": filename,
+            "sub_part_name": bloc_label,
+            "passe": None,
+            "status": "would_modify" if dry_run else "modified",
+            "violations": violations,
+            "patches": patches_summary,
+            "patches_applied": sum(1 for p in patches_summary if p["applied"]),
+            "segments_touched": list(seg_updates.keys()),
+            "original_text": bloc_text,
+            "corrected_text": bloc_corrected,
+            "words_before": words_before_bloc,
+            "words_after": len(bloc_corrected.split()),
+        }
+        with state_lock:
+            summary["blocs_modified"] += 1
+            summary["segments_modified"] += 1
+            summary["details"].append(entry)
+            _update_task(segments_modified=summary["segments_modified"])
+        if progress_task_id:
+            _append_task_log(progress_task_id,
+                f"   ✏️ {bloc_label} · {'à modifier' if dry_run else 'modifié'} "
+                f"({entry['patches_applied']}/{len(patches_summary)} patch(s), "
+                f"{len(seg_updates)} segment(s) touché(s), "
+                f"{entry['words_before']} → {entry['words_after']} mots, "
+                f"{len(violations)} règle(s))")
+
+    pool = eventlet.GreenPool(size=pool_size)
+    pile = eventlet.GreenPile(pool)
+    for bloc in blocs:
+        pile.spawn(_process_bloc, bloc)
+    list(pile)
+
+    logger.info(
+        f"📝 Revérif blocs cours folder={folder_id} : "
+        f"{summary['blocs_examined']} examinés, "
+        f"{summary['blocs_modified']} {'à modifier' if dry_run else 'modifiés'}, "
+        f"{summary['blocs_conforme']} conformes, "
+        f"{summary['blocs_failed']} fail (dry_run={dry_run})"
+    )
+    return summary
 
 
 def review_segments_with_rules(

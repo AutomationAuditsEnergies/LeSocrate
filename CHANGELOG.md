@@ -2,6 +2,34 @@
 
 ## 2026-05-13
 
+### feat(content-review): revérif au niveau BLOC COURS (cours de 45-55 min), pas au niveau segment interne
+
+Remarque utilisateur déterminante : *« les règles que j'ai écrites portent sur les introductions, les conclusions et les transitions de mes cours de 45 ou 55 min. Donc il faut que tout ça soit fait par rapport aux cours, pas aux sous-parties × passes. »*
+
+Le mode précédent travaillait au niveau `content_generation_segments` (6 sous-parties × 3 passes = 18 segments par jour). Ce découpage est interne au système de génération, pas l'unité éditoriale du formateur. Conséquence : DeepSeek voyait des bouts de cours isolés et ne pouvait pas juger les règles structurelles (intro / corps / conclusion / transition).
+
+**Bascule au niveau bloc cours** : 1 bloc = 1 MP3 = un cours complet de 45-55 min = ~7000-10000 mots. Sur 2 journées × 7 blocs = 14 cours à analyser. DeepSeek voit le cours dans son entier et peut juger correctement.
+
+**Backend** (`backend/services/script_rules_service.py`)
+- Nouvelle fonction `review_blocs_with_rules(folder_id, *, dry_run, progress_task_id)` qui remplace conceptuellement l'ancienne `review_segments_with_rules` (cette dernière est conservée mais plus appelée par défaut).
+- Pour chaque bloc :
+  1. Récupère le texte complet via `get_course_script_plan_for_ui(...).course_blocs`.
+  2. Appel DeepSeek (max_tokens dynamique selon taille bloc, retry JSON).
+  3. Reçoit la liste de `patches` (find/replace/reason).
+  4. Pour chaque patch : `_locate_patch_segment(find, segments_rows)` cherche dans quel `content_generation_segments.text_content` le `find` apparaît exactement une fois.
+  5. Si trouvé → applique le replace dans **ce segment précis** (dirty=1 reviewed=0). Si introuvable ou ambigu → patch ignoré, erreur tracée.
+- `start_text_review_async` appelle maintenant `review_blocs_with_rules` par défaut. Le `task.segments_total` est désormais le **nombre de blocs** (pas de segments).
+- Le summary expose les compteurs sous 2 noms (compat ascendante) : `blocs_examined/modified/conforme/failed` ET `segments_examined/modified/conforme/failed`.
+- Chaque détail de bloc porte `bloc_number`, `filename`, `patches[]` avec `applied + segment_id` (lequel des segments DB a été touché), `segments_touched: [id, id, ...]`.
+
+**Frontend** (`frontend/src/components/CoursFolders.jsx`)
+- Titre du résumé : « Résumé revérif **cours** » (au lieu de « texte »).
+- Compteurs : « Cours examinés / Modifiés / Conformes / Échecs ».
+- Chaque détail affiche désormais « **Cours N/7** · <filename.mp3> · status · X/Y patch(s) appliqué(s) · Z segment(s) DB touché(s) ». Plus de référence aux sous-parties × passes (qui est une concrétion interne).
+- La liste des patches sous chaque cours reste affichée en diff `− <find>` / `+ <replace>` comme avant.
+
+Effet pratique : les règles « éviter les débuts trop brusques », « créer une vraie phase de conclusion », « donner l'impression d'une journée vécue » fonctionnent maintenant correctement parce que DeepSeek voit l'entrée + milieu + sortie d'un cours dans le même prompt.
+
 ### feat(content-review): revérif texte en mode PATCHES chirurgicaux (au lieu de réécriture complète)
 
 Remarque utilisateur cruciale : *« la feature est censée remplacer que les parties qu'elle juge à remplacer ... ajouter quelques choses, supprimer quelques choses, etc »*. Le mode précédent demandait un `corrected_text` complet au LLM, qui reformulait tout le segment même les phrases conformes. Bascule en mode **patches find/replace ciblés**.

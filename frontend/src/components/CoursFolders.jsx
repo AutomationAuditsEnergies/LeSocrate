@@ -2623,13 +2623,13 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
                     style={{ backgroundColor: colors.innerBg, color: colors.text, border: `1px solid ${colors.border}` }}
                   >
                     <p className="mb-2 text-[11px] font-bold uppercase tracking-wide" style={{ color: '#2563eb' }}>
-                      Résumé revérif texte{textReviewSummary.dry_run ? ' (simulation)' : ''}
+                      Résumé revérif cours{textReviewSummary.dry_run ? ' (simulation)' : ''}
                     </p>
                     <ul className="grid grid-cols-2 gap-x-4 gap-y-1 sm:grid-cols-4">
-                      <li>Examinés : <strong>{textReviewSummary.segments_examined}</strong></li>
-                      <li style={{ color: '#2563eb' }}>{textReviewSummary.dry_run ? 'À modifier' : 'Modifiés'} : <strong>{textReviewSummary.segments_modified}</strong></li>
-                      <li style={{ color: '#16a34a' }}>Conformes : <strong>{textReviewSummary.segments_conforme}</strong></li>
-                      <li style={{ color: '#dc2626' }}>Échecs : <strong>{textReviewSummary.segments_failed}</strong></li>
+                      <li>Cours examinés : <strong>{textReviewSummary.blocs_examined ?? textReviewSummary.segments_examined}</strong></li>
+                      <li style={{ color: '#2563eb' }}>{textReviewSummary.dry_run ? 'À modifier' : 'Modifiés'} : <strong>{textReviewSummary.blocs_modified ?? textReviewSummary.segments_modified}</strong></li>
+                      <li style={{ color: '#16a34a' }}>Conformes : <strong>{textReviewSummary.blocs_conforme ?? textReviewSummary.segments_conforme}</strong></li>
+                      <li style={{ color: '#dc2626' }}>Échecs : <strong>{textReviewSummary.blocs_failed ?? textReviewSummary.segments_failed}</strong></li>
                     </ul>
                     {!textReviewSummary.dry_run && textReviewSummary.segments_modified > 0 && (
                       <p className="mt-2 text-[11px] italic" style={{ color: '#facc15' }}>
@@ -2646,11 +2646,21 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
                             style={{ backgroundColor: 'rgba(37,99,235,0.08)', border: `1px solid ${colors.border}` }}
                           >
                             <p className="font-semibold mb-1">
-                              {d.sub_part_name} · passe {d.passe} ·{' '}
+                              {d.bloc_number ? (
+                                <>Cours {d.bloc_number}/7{d.filename ? <span style={{ color: colors.textMuted, fontWeight: 400 }}> · {d.filename}</span> : null}</>
+                              ) : (
+                                <>{d.sub_part_name}{d.passe ? ` · passe ${d.passe}` : ''}</>
+                              )}
+                              {' · '}
                               <span style={{ color: isModified ? '#16a34a' : '#dc2626' }}>{d.status}</span>
                               {typeof d.patches_applied === 'number' && d.patches?.length > 0 && (
                                 <span style={{ color: colors.textMuted, fontWeight: 400 }}>
                                   {' '}· {d.patches_applied}/{d.patches.length} patch(s) appliqué(s)
+                                </span>
+                              )}
+                              {Array.isArray(d.segments_touched) && d.segments_touched.length > 0 && (
+                                <span style={{ color: colors.textMuted, fontWeight: 400 }}>
+                                  {' '}· {d.segments_touched.length} segment(s) DB touché(s)
                                 </span>
                               )}
                             </p>
