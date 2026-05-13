@@ -2652,32 +2652,47 @@ def create_hr_blueprint(socketio):
     def review_text_with_rules(folder_id):
         """Phase 3b' : applique les règles au TEXTE des segments (pas aux MP3).
 
-        Travaille au niveau content_generation_segments (sub_part × passe),
-        marque dirty=1 les segments modifiés. Les MP3 seront régénérés depuis
-        ce nouveau texte à la prochaine relance TTS. Pas besoin de
-        script_slide_deck — utile quand le deck n'a pas été créé (ex. Edge TTS
-        voix basique sans slides).
+        Async : démarre un greenlet eventlet et retourne immédiatement un
+        task_id. Le frontend poll ensuite GET .../rules/review-text/status/<id>
+        pour suivre la progression (utile parce que la revérif prend 10-15 min
+        et dépasserait le timeout HTTP Azure App Service ~230s).
         """
         denied = _require_admin()
         if denied:
             return denied
         try:
-            from services.script_rules_service import review_segments_with_rules
+            from services.script_rules_service import start_text_review_async
             payload = request.get_json() or {}
             dry_run = bool(payload.get("dry_run") or False)
             sub_part_indices = payload.get("sub_part_indices")
             if sub_part_indices and not isinstance(sub_part_indices, list):
                 sub_part_indices = None
-            summary = review_segments_with_rules(
+            task_id = start_text_review_async(
                 folder_id,
                 dry_run=dry_run,
                 sub_part_indices=sub_part_indices,
             )
-            return jsonify({"success": True, **summary}), 200
+            return jsonify({"success": True, "task_id": task_id, "dry_run": dry_run}), 202
         except ValueError as e:
             return jsonify({"success": False, "error": str(e)}), 400
         except Exception as e:
             logger.error(f"❌ Erreur review text: {e}")
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/content-job/rules/review-text/status/<task_id>", methods=["GET"])
+    def review_text_status(folder_id, task_id):
+        """Renvoie la progression d'une revérif texte async."""
+        denied = _require_admin()
+        if denied:
+            return denied
+        try:
+            from services.script_rules_service import get_text_review_task
+            task = get_text_review_task(task_id)
+            if not task:
+                return jsonify({"success": False, "error": "Tâche introuvable (worker redémarré ?)"}), 404
+            return jsonify({"success": True, **task}), 200
+        except Exception as e:
+            logger.error(f"❌ Erreur status review text: {e}")
             return jsonify({"success": False, "error": str(e)}), 500
 
     @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/content-job/rules/review-post-tts", methods=["POST"])

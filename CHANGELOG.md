@@ -2,6 +2,37 @@
 
 ## 2026-05-13
 
+### feat(content-review): revérif texte en mode async + polling progression (logs live)
+
+Suite à la remarque utilisateur « rajoute des logs pour qu'on sache où on en est » sur la revérif texte (qui peut prendre 10-15 min), bascule en mode async :
+
+**Backend** (`backend/services/script_rules_service.py`)
+- État partagé en mémoire `_TEXT_REVIEW_TASKS: dict[task_id, state]` au niveau module (lifetime = process gunicorn worker). Volontairement non persistant.
+- `start_text_review_async(folder_id, dry_run, sub_part_indices)` :
+  - Valide les pré-requis (job + règles existent)
+  - Compte les segments totaux pour pré-remplir `segments_total`
+  - Génère un `task_id` UUID4
+  - Spawn un greenlet eventlet qui exécute `review_segments_with_rules(...)` et stocke le résultat dans `_TEXT_REVIEW_TASKS[task_id]`
+  - Retourne immédiatement (< 1s)
+- `review_segments_with_rules` accepte un nouveau paramètre `progress_task_id` qui, s'il est passé, met à jour l'état au fil du traitement : `current_segment`, `current_step` (lecture / appel DeepSeek / écriture DB), compteurs incrémentaux, et un buffer `log_lines` (50 dernières lignes max) avec timestamps.
+- `get_text_review_task(task_id)` : lookup par task_id.
+
+**Endpoints HR** (`backend/routes/hr_routes.py`)
+- `POST .../rules/review-text` retourne maintenant `202 Accepted` avec `{task_id, dry_run}` au lieu de bloquer la requête (évite les timeouts Azure App Service ~230s sur les longues revérif).
+- Nouveau `GET .../rules/review-text/status/<task_id>` qui retourne l'état complet de la tâche (status, progression, log_lines, result final si completed).
+
+**Frontend** (`frontend/src/components/CoursFolders.jsx`)
+- `runTextReview(dryRun)` : POST → reçoit task_id → démarre un polling toutes les 2s sur `/status/<task_id>`.
+- Le polling se termine automatiquement quand `status === 'completed'` ou `'failed'`.
+- Cleanup ref `textReviewPollRef` pour annuler le polling proprement entre runs.
+- Nouveau bloc bleu « ⏳ Revérif texte en cours » qui affiche tant que `status === 'running'` :
+  - Barre de progression `segments_done / segments_total` avec dégradé bleu animé (transition CSS 0.4s).
+  - Ligne « 📄 <segment courant> · <étape courante> » qui se met à jour à chaque tick.
+  - 4 compteurs live (à modifier / conformes / skipped / échecs).
+  - Console scrollable des 12 dernières `log_lines` avec timestamps (police monospace, max 32rem de haut).
+
+Bénéfice : tu vois en temps réel quelle sous-partie + passe DeepSeek est en train d'analyser, combien de segments restent, et lesquels ont planté/sont conformes — au lieu de rester 10-15 min devant un spinner muet.
+
 ### feat(content-review): revérif des règles au niveau TEXTE (avant les MP3) — Phase 3b'
 
 Nouveau mode de revérif qui modifie le **texte des segments en base** au lieu de splicer directement les MP3. Travaille au niveau `content_generation_segments` (sub_part × passe) au lieu des chunks audio. Avantages :

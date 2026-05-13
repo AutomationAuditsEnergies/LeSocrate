@@ -96,6 +96,8 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
   const [rulesReviewSummary, setRulesReviewSummary] = useState(null)
   const [reviewingText, setReviewingText] = useState(false)
   const [textReviewSummary, setTextReviewSummary] = useState(null)
+  const [textReviewProgress, setTextReviewProgress] = useState(null)
+  const textReviewPollRef = useRef(null)
   const [loadingContentScript, setLoadingContentScript] = useState(false)
   const [, setLoadingScript] = useState(false)
   const [contentScriptView, setContentScriptView] = useState('source') // 'source' | 'courses'
@@ -680,6 +682,39 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
     }
   }
 
+  const pollTextReviewStatus = (taskId) => {
+    if (!selectedFolder || !taskId) return
+    const tick = async () => {
+      try {
+        const resp = await fetch(
+          apiUrl(`/api/hr/cours-folders/${selectedFolder.id}/content-job/rules/review-text/status/${taskId}`),
+          { credentials: 'include' }
+        )
+        const data = await resp.json()
+        if (!data.success) {
+          setRulesError(data.error || 'Statut introuvable.')
+          if (textReviewPollRef.current) clearInterval(textReviewPollRef.current)
+          setReviewingText(false)
+          return
+        }
+        setTextReviewProgress(data)
+        if (data.status === 'completed') {
+          if (textReviewPollRef.current) clearInterval(textReviewPollRef.current)
+          setTextReviewSummary(data.result || null)
+          setReviewingText(false)
+        } else if (data.status === 'failed') {
+          if (textReviewPollRef.current) clearInterval(textReviewPollRef.current)
+          setRulesError(data.error || 'Revérif texte échouée.')
+          setReviewingText(false)
+        }
+      } catch (e) {
+        console.error('Erreur poll review text status:', e)
+      }
+    }
+    tick()
+    textReviewPollRef.current = setInterval(tick, 2000)
+  }
+
   const runTextReview = async (dryRun) => {
     if (!selectedFolder || reviewingText) return
     if (!dryRun) {
@@ -691,6 +726,8 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
     setReviewingText(true)
     setRulesError('')
     setTextReviewSummary(null)
+    setTextReviewProgress(null)
+    if (textReviewPollRef.current) clearInterval(textReviewPollRef.current)
     try {
       const resp = await fetch(
         apiUrl(`/api/hr/cours-folders/${selectedFolder.id}/content-job/rules/review-text`),
@@ -702,15 +739,15 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
         }
       )
       const data = await resp.json()
-      if (data.success) {
-        setTextReviewSummary(data)
+      if (data.success && data.task_id) {
+        pollTextReviewStatus(data.task_id)
       } else {
         setRulesError(data.error || 'Revérif texte impossible.')
+        setReviewingText(false)
       }
     } catch (e) {
       console.error('Erreur review text:', e)
       setRulesError('Erreur réseau pendant la revérif texte.')
-    } finally {
       setReviewingText(false)
     }
   }
@@ -2487,6 +2524,59 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
                     )}
                   </div>
                 </div>
+
+                {textReviewProgress && textReviewProgress.status === 'running' && (
+                  <div
+                    className="mb-2 rounded-md p-3 text-xs"
+                    style={{ backgroundColor: 'rgba(37,99,235,0.08)', color: colors.text, border: '1px solid rgba(37,99,235,0.35)' }}
+                  >
+                    <p className="mb-2 text-[11px] font-bold uppercase tracking-wide" style={{ color: '#2563eb' }}>
+                      ⏳ Revérif texte en cours
+                      {textReviewProgress.dry_run ? ' (simulation)' : ''}
+                      {' · '}
+                      <span style={{ color: colors.textMuted, fontWeight: 500, textTransform: 'none', letterSpacing: 0 }}>
+                        démarrée à {textReviewProgress.started_at}
+                      </span>
+                    </p>
+                    <div className="mb-2 flex items-center gap-2">
+                      <div className="flex-1 h-1.5 rounded-full overflow-hidden" style={{ backgroundColor: 'rgba(37,99,235,0.15)' }}>
+                        <div
+                          style={{
+                            height: '100%',
+                            width: textReviewProgress.segments_total > 0
+                              ? `${Math.min(100, Math.round((textReviewProgress.segments_done / textReviewProgress.segments_total) * 100))}%`
+                              : '0%',
+                            background: 'linear-gradient(90deg, #2563eb, #3b82f6)',
+                            transition: 'width 0.4s ease',
+                          }}
+                        />
+                      </div>
+                      <span className="text-[11px]" style={{ color: '#2563eb', fontWeight: 600 }}>
+                        {textReviewProgress.segments_done}/{textReviewProgress.segments_total}
+                      </span>
+                    </div>
+                    <p className="text-[11px]" style={{ color: colors.text }}>
+                      {textReviewProgress.current_segment ? <>📄 <strong>{textReviewProgress.current_segment}</strong></> : 'Initialisation…'}
+                      {textReviewProgress.current_step && (
+                        <span style={{ color: colors.textMuted }}> · {textReviewProgress.current_step}</span>
+                      )}
+                    </p>
+                    <ul className="mt-1 grid grid-cols-2 gap-x-4 gap-y-0 sm:grid-cols-4 text-[11px]">
+                      <li style={{ color: '#2563eb' }}>{textReviewProgress.dry_run ? 'À modifier' : 'Modifiés'} : <strong>{textReviewProgress.segments_modified}</strong></li>
+                      <li style={{ color: '#16a34a' }}>Conformes : <strong>{textReviewProgress.segments_conforme}</strong></li>
+                      <li style={{ color: colors.textMuted }}>Skipped : <strong>{textReviewProgress.segments_skipped}</strong></li>
+                      <li style={{ color: '#dc2626' }}>Échecs : <strong>{textReviewProgress.segments_failed}</strong></li>
+                    </ul>
+                    {Array.isArray(textReviewProgress.log_lines) && textReviewProgress.log_lines.length > 0 && (
+                      <pre
+                        className="mt-2 max-h-32 overflow-auto rounded p-2 text-[10px] leading-snug"
+                        style={{ backgroundColor: colors.innerBg, color: colors.textMuted, whiteSpace: 'pre-wrap' }}
+                      >
+                        {textReviewProgress.log_lines.slice(-12).join('\n')}
+                      </pre>
+                    )}
+                  </div>
+                )}
 
                 {textReviewSummary && (
                   <div

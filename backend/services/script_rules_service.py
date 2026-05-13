@@ -582,11 +582,115 @@ def review_chunks_with_rules(
     return summary
 
 
+# État partagé des tâches de revérif texte en cours. Clé = task_id, valeur =
+# dict avec progression + résultat. Lifetime : process gunicorn worker.
+# Volontairement non persistant : si le worker redémarre, les tâches en cours
+# sont perdues (mais on a déjà géré ce cas via détection "stale running" UI).
+_TEXT_REVIEW_TASKS: dict[str, dict] = {}
+
+
+def get_text_review_task(task_id: str) -> dict | None:
+    return _TEXT_REVIEW_TASKS.get(task_id)
+
+
+def _new_text_review_task(folder_id: int, dry_run: bool, total_segments: int) -> str:
+    import uuid
+    task_id = uuid.uuid4().hex
+    _TEXT_REVIEW_TASKS[task_id] = {
+        "task_id": task_id,
+        "folder_id": folder_id,
+        "dry_run": dry_run,
+        "status": "running",
+        "segments_total": total_segments,
+        "segments_done": 0,
+        "segments_modified": 0,
+        "segments_conforme": 0,
+        "segments_skipped": 0,
+        "segments_failed": 0,
+        "current_segment": "",
+        "current_step": "",
+        "started_at": _now_str(),
+        "ended_at": "",
+        "result": None,
+        "error": None,
+        "log_lines": [],
+    }
+    return task_id
+
+
+def _append_task_log(task_id: str, line: str) -> None:
+    task = _TEXT_REVIEW_TASKS.get(task_id)
+    if not task:
+        return
+    task["log_lines"].append(f"[{_now_str()}] {line}")
+    task["log_lines"] = task["log_lines"][-50:]  # cap pour ne pas grossir indéfiniment
+
+
+def start_text_review_async(folder_id: int, *, dry_run: bool = False,
+                            sub_part_indices: list[int] | None = None) -> str:
+    """Démarre la revérif texte dans un greenlet eventlet et retourne task_id."""
+    context = _fetch_context(folder_id)
+    if not context:
+        raise ValueError("Aucun job de contenu pour ce dossier")
+
+    rules = get_rules(folder_id)
+    if not (rules.get("rules_markdown") or "").strip():
+        raise ValueError("Aucune règle apprise — lance d'abord l'extraction")
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        SELECT COUNT(*) FROM content_generation_segments
+        WHERE job_id = ? AND status = 'completed'
+        """,
+        (context["job_id"],),
+    )
+    total = int(cursor.fetchone()[0] or 0)
+    conn.close()
+    if sub_part_indices:
+        total = min(total, len(sub_part_indices) * 3)  # 3 passes max par sous-partie
+
+    task_id = _new_text_review_task(folder_id, dry_run, total)
+    _append_task_log(task_id, f"Lancement : {total} segments à examiner, dry_run={dry_run}")
+
+    import eventlet
+    def _runner():
+        try:
+            summary = review_segments_with_rules(
+                folder_id,
+                dry_run=dry_run,
+                sub_part_indices=sub_part_indices,
+                progress_task_id=task_id,
+            )
+            task = _TEXT_REVIEW_TASKS.get(task_id)
+            if task:
+                task["status"] = "completed"
+                task["result"] = summary
+                task["ended_at"] = _now_str()
+                _append_task_log(task_id,
+                    f"Terminée : {summary['segments_modified']} "
+                    f"{'à modifier' if dry_run else 'modifiés'}, "
+                    f"{summary['segments_conforme']} conformes, "
+                    f"{summary['segments_failed']} échecs")
+        except Exception as exc:
+            task = _TEXT_REVIEW_TASKS.get(task_id)
+            if task:
+                task["status"] = "failed"
+                task["error"] = str(exc)[:500]
+                task["ended_at"] = _now_str()
+            logger.exception(f"❌ Revérif texte async folder={folder_id} échouée")
+            _append_task_log(task_id, f"❌ Échec : {exc}")
+    eventlet.spawn(_runner)
+    return task_id
+
+
 def review_segments_with_rules(
     folder_id: int,
     *,
     dry_run: bool = False,
     sub_part_indices: list[int] | None = None,
+    progress_task_id: str | None = None,
 ) -> dict:
     """Parcourt les segments completed du job, demande à DeepSeek de vérifier
     la conformité aux règles apprises, et corrige le texte si non conforme.
@@ -639,10 +743,23 @@ def review_segments_with_rules(
         "details": [],
     }
 
-    for seg in segments:
+    def _update_task(**fields):
+        if not progress_task_id:
+            return
+        task = _TEXT_REVIEW_TASKS.get(progress_task_id)
+        if task:
+            task.update(fields)
+
+    _update_task(segments_total=len(segments))
+
+    for seg_idx, seg in enumerate(segments):
         seg_id, sub_idx, sub_name, passe, text, wc = seg
         text = (text or "").strip()
         summary["segments_examined"] += 1
+        seg_label = f"{sub_name or f'Sous-partie {sub_idx + 1}'} · passe {passe}"
+        _update_task(current_segment=seg_label, current_step="lecture", segments_done=seg_idx)
+        if progress_task_id:
+            _append_task_log(progress_task_id, f"→ {seg_idx + 1}/{len(segments)} : {seg_label}")
 
         if not text:
             summary["segments_skipped"] += 1
@@ -653,8 +770,12 @@ def review_segments_with_rules(
                 "status": "skipped",
                 "reason": "text_content vide",
             })
+            _update_task(segments_skipped=summary["segments_skipped"])
+            if progress_task_id:
+                _append_task_log(progress_task_id, f"   ⏭ skipped (text vide)")
             continue
 
+        _update_task(current_step="appel DeepSeek")
         try:
             raw = post_message(
                 [{"role": "user", "content": _build_review_prompt(rules_markdown, text)}],
@@ -671,6 +792,9 @@ def review_segments_with_rules(
                 "status": "failed",
                 "reason": f"DeepSeek : {exc}",
             })
+            _update_task(segments_failed=summary["segments_failed"])
+            if progress_task_id:
+                _append_task_log(progress_task_id, f"   ❌ DeepSeek : {str(exc)[:120]}")
             continue
 
         parsed = _parse_review_response(raw)
@@ -684,6 +808,9 @@ def review_segments_with_rules(
                 "reason": "JSON DeepSeek inparseable",
                 "raw_preview": (raw or "")[:200],
             })
+            _update_task(segments_failed=summary["segments_failed"])
+            if progress_task_id:
+                _append_task_log(progress_task_id, f"   ❌ JSON inparseable")
             continue
 
         conforme = bool(parsed.get("conforme"))
@@ -699,6 +826,9 @@ def review_segments_with_rules(
                 "status": "conforme",
                 "violations": [],
             })
+            _update_task(segments_conforme=summary["segments_conforme"])
+            if progress_task_id:
+                _append_task_log(progress_task_id, f"   ✓ conforme")
             continue
 
         entry = {
@@ -715,6 +845,7 @@ def review_segments_with_rules(
         }
 
         if not dry_run:
+            _update_task(current_step="écriture DB")
             conn2 = get_db_connection()
             cursor2 = conn2.cursor()
             cursor2.execute(
@@ -731,6 +862,12 @@ def review_segments_with_rules(
 
         summary["segments_modified"] += 1
         summary["details"].append(entry)
+        _update_task(segments_modified=summary["segments_modified"])
+        if progress_task_id:
+            _append_task_log(progress_task_id,
+                f"   ✏️ {'à modifier' if dry_run else 'modifié'} "
+                f"({entry['words_before']} → {entry['words_after']} mots, "
+                f"{len(violations)} règle(s))")
 
     logger.info(
         f"📝 Revérif texte folder={folder_id} : "
