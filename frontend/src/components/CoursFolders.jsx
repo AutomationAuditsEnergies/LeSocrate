@@ -2461,8 +2461,12 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
 
             {rulesPanelOpen && (
               <div
-                className="border-b px-6 py-4"
-                style={{ backgroundColor: darkMode ? '#1a1332' : '#fefce8', borderColor: colors.border }}
+                className="border-b px-6 py-4 overflow-y-auto"
+                style={{
+                  backgroundColor: darkMode ? '#1a1332' : '#fefce8',
+                  borderColor: colors.border,
+                  maxHeight: '70vh',
+                }}
               >
                 <div className="mb-2 flex items-center justify-between gap-3">
                   <div>
@@ -2632,23 +2636,87 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
                         ⚠️ Segments marqués dirty=1. Les MP3 actuels ne reflètent pas encore ces changements — relance Edge TTS / Fish TTS pour les regénérer.
                       </p>
                     )}
-                    {(textReviewSummary.details || []).filter(d => d.status !== 'conforme').slice(0, 6).map((d, i) => (
-                      <div key={i} className="mt-2 rounded p-2 text-[11px]" style={{ backgroundColor: 'rgba(37,99,235,0.08)' }}>
-                        <p className="font-semibold">{d.sub_part_name} · passe {d.passe} · <span style={{ color: d.status === 'modified' || d.status === 'would_modify' ? '#16a34a' : '#dc2626' }}>{d.status}</span></p>
-                        {d.violations?.length > 0 && (
-                          <p style={{ color: colors.textMuted }}>{d.violations.join(' · ')}</p>
-                        )}
-                        {d.words_before !== undefined && d.words_after !== undefined && (
-                          <p style={{ color: colors.textMuted }}>{d.words_before} → {d.words_after} mots</p>
-                        )}
-                        {d.reason && <p style={{ color: '#dc2626' }}>{d.reason}</p>}
-                      </div>
-                    ))}
-                    {(textReviewSummary.details || []).filter(d => d.status !== 'conforme').length > 6 && (
-                      <p className="mt-2 text-[11px] italic" style={{ color: colors.textMuted }}>
-                        … et {(textReviewSummary.details || []).filter(d => d.status !== 'conforme').length - 6} autres
-                      </p>
-                    )}
+                    <div className="mt-2 max-h-[60vh] overflow-y-auto pr-1 space-y-2">
+                      {(textReviewSummary.details || []).filter(d => d.status !== 'conforme').map((d, i) => {
+                        const isModified = d.status === 'modified' || d.status === 'would_modify'
+                        return (
+                          <div
+                            key={i}
+                            className="rounded p-2 text-[11px]"
+                            style={{ backgroundColor: 'rgba(37,99,235,0.08)', border: `1px solid ${colors.border}` }}
+                          >
+                            <p className="font-semibold mb-1">
+                              {d.sub_part_name} · passe {d.passe} ·{' '}
+                              <span style={{ color: isModified ? '#16a34a' : '#dc2626' }}>{d.status}</span>
+                              {typeof d.patches_applied === 'number' && d.patches?.length > 0 && (
+                                <span style={{ color: colors.textMuted, fontWeight: 400 }}>
+                                  {' '}· {d.patches_applied}/{d.patches.length} patch(s) appliqué(s)
+                                </span>
+                              )}
+                            </p>
+                            {d.violations?.length > 0 && (
+                              <p className="mb-1" style={{ color: colors.textMuted }}>
+                                <strong>Règles violées :</strong> {d.violations.join(' · ')}
+                              </p>
+                            )}
+                            {d.words_before !== undefined && d.words_after !== undefined && (
+                              <p className="mb-2" style={{ color: colors.textMuted }}>
+                                {d.words_before} → {d.words_after} mots
+                              </p>
+                            )}
+                            {d.reason && <p style={{ color: '#dc2626' }}>{d.reason}</p>}
+                            {Array.isArray(d.patches) && d.patches.length > 0 && (
+                              <div className="space-y-2 mt-2">
+                                {d.patches.map((p, j) => (
+                                  <div
+                                    key={j}
+                                    className="rounded p-2"
+                                    style={{
+                                      backgroundColor: colors.innerBg,
+                                      border: `1px solid ${p.applied ? 'rgba(22,163,74,0.35)' : 'rgba(220,38,38,0.35)'}`,
+                                    }}
+                                  >
+                                    <p className="text-[10px] font-bold uppercase tracking-wide mb-1" style={{ color: p.applied ? '#16a34a' : '#dc2626' }}>
+                                      Patch {j + 1} · {p.applied ? 'appliqué' : 'ignoré (find ambigu/introuvable)'}
+                                    </p>
+                                    {p.reason && (
+                                      <p className="mb-1 italic" style={{ color: colors.textMuted }}>
+                                        → {p.reason}
+                                      </p>
+                                    )}
+                                    <div
+                                      className="rounded p-1.5 mb-1 whitespace-pre-wrap"
+                                      style={{ backgroundColor: 'rgba(220,38,38,0.10)', color: '#7f1d1d' }}
+                                    >
+                                      <span style={{ color: '#dc2626', fontWeight: 700 }}>−</span> {p.find}
+                                    </div>
+                                    <div
+                                      className="rounded p-1.5 whitespace-pre-wrap"
+                                      style={{ backgroundColor: 'rgba(22,163,74,0.10)', color: '#14532d' }}
+                                    >
+                                      <span style={{ color: '#16a34a', fontWeight: 700 }}>+</span> {p.replace}
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                            {Array.isArray(d.patch_errors) && d.patch_errors.length > 0 && (
+                              <div className="mt-2 p-2 rounded text-[10px]" style={{ backgroundColor: 'rgba(220,38,38,0.08)', color: '#7f1d1d' }}>
+                                <strong>Erreurs patches :</strong>
+                                <ul className="list-disc ml-4 mt-1">
+                                  {d.patch_errors.map((err, k) => <li key={k}>{err}</li>)}
+                                </ul>
+                              </div>
+                            )}
+                          </div>
+                        )
+                      })}
+                      {(textReviewSummary.details || []).filter(d => d.status !== 'conforme').length === 0 && (
+                        <p className="text-[11px] italic" style={{ color: colors.textMuted }}>
+                          Aucun segment non-conforme à afficher.
+                        </p>
+                      )}
+                    </div>
                   </div>
                 )}
 

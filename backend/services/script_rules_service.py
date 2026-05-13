@@ -330,46 +330,88 @@ def _word_slice(text: str, start: int, end: int) -> str:
 
 def _build_review_prompt(rules_markdown: str, chunk_text: str, *, retry: bool = False) -> str:
     word_count = len(chunk_text.split())
-    min_words = max(1, int(word_count * 0.85))
-    max_words = max(min_words + 1, int(word_count * 1.15))
     retry_preamble = (
         "⚠️ Tentative précédente : ta réponse n'était pas un JSON valide "
         "(probablement tronquée ou avec du texte parasite). Cette fois, "
         "réponds STRICTEMENT par un objet JSON valide commençant par { "
         "et finissant par }. Pas de fence ```, pas de préambule, pas de "
-        "commentaire après. Si le texte corrigé est long, mets-le tel quel "
-        "dans le champ `corrected_text` en échappant les guillemets internes "
-        "(\\\"), les retours à la ligne (\\n) et les antislashs (\\\\).\n\n"
+        "commentaire après. Échappe les guillemets internes (\\\"), "
+        "les retours à la ligne (\\n) et les antislashs (\\\\).\n\n"
         if retry else ""
     )
     return (
         retry_preamble +
-        "Tu es un agent de revérification du script d'un cours audio. "
+        "Tu es un agent de revérification CHIRURGICALE du script d'un cours audio. "
         "Tu reçois (1) un markdown de règles éditoriales établies à partir de "
-        "corrections antérieures du formateur, et (2) un extrait du script "
-        "lu en TTS. Ta tâche : déterminer si l'extrait respecte les règles, "
-        "et si non, le réécrire de façon minimale pour qu'il les respecte.\n\n"
-        "Contraintes pour la réécriture :\n"
-        "- Modifications strictement nécessaires pour la mise en conformité. "
-        "Ne refais pas tout l'extrait si quelques mots suffisent.\n"
-        f"- **IMPÉRATIF longueur** : le nombre de mots de `corrected_text` doit "
-        f"rester entre **{min_words} et {max_words}** (l'extrait original fait "
-        f"{word_count} mots, tolérance ±15 %). Si tu ne peux pas appliquer toutes "
-        f"les règles sans dépasser cette borne, applique-en moins mais respecte "
-        f"strictement la longueur. Couper le contenu de moitié est INTERDIT.\n"
-        "- Conserve le ton oral, le niveau RNCP, le sens pédagogique de chaque idée.\n"
-        "- Conserve tous les tags audio entre crochets (`[pause]`, `[calm]`, "
-        "`[emphasis]`, etc.) déjà présents dans l'extrait.\n"
-        "- Pas de balise markdown, pas de fence ```, pas de guillemets typographiques.\n\n"
-        "Réponds EXCLUSIVEMENT par un JSON valide (rien avant, rien après), avec "
-        "exactement ces 3 champs :\n"
+        "corrections du formateur, et (2) un extrait du script lu en TTS.\n\n"
+        "Ta tâche : identifier UNIQUEMENT les passages qui violent une règle et "
+        "proposer des **patches ciblés** (find / replace). Tu ne réécris JAMAIS "
+        "tout l'extrait. Tu ne touches PAS aux passages qui sont déjà conformes.\n\n"
+        "RÈGLES IMPÉRATIVES SUR LES PATCHES :\n"
+        "1. Un patch a 3 champs : `find` (texte exact à remplacer, copié mot pour "
+        "mot depuis l'extrait), `replace` (texte de remplacement), `reason` "
+        "(1 ligne, quelle règle s'applique et pourquoi).\n"
+        "2. `find` doit être **présent une seule fois** dans l'extrait — utilise "
+        "un contexte suffisamment précis pour que le remplacement soit "
+        "non-ambigu (5-15 mots typiquement, parfois plus si nécessaire).\n"
+        "3. `find` doit être **strictement identique** au texte de l'extrait, "
+        "y compris ponctuation, espaces, tags audio entre crochets ([pause], "
+        "[calm], etc.). Pas de paraphrase.\n"
+        "4. `replace` peut : modifier le contenu, ajouter une phrase, supprimer "
+        "une phrase, ajouter des tags audio, ralentir le rythme, etc. — selon "
+        "ce que demande la règle.\n"
+        "5. Préfère **plusieurs petits patches** à un seul gros. Si tu remplaces "
+        "un paragraphe entier alors qu'une seule phrase pose problème, c'est "
+        "incorrect.\n"
+        "6. Si l'extrait est globalement conforme : `\"patches\": []` et "
+        "`\"conforme\": true`.\n"
+        "7. Conserve toujours le ton oral, le niveau RNCP, le sens pédagogique.\n"
+        "8. Conserve tous les tags audio existants entre crochets sauf si une "
+        "règle demande explicitement d'en ajouter / retirer un.\n\n"
+        "Réponds EXCLUSIVEMENT par un JSON valide (rien avant, rien après) :\n"
         '{"conforme": <true|false>, '
-        '"violations": ["<règle violée 1>", ...], '
-        '"corrected_text": "<texte corrigé OU chaîne vide si conforme=true>"}\n\n'
-        f"=== Règles ===\n{rules_markdown}\n\n"
+        '"violations": ["<règle 1: courte description>", ...], '
+        '"patches": [{"find": "<extrait exact>", "replace": "<nouveau texte>", '
+        '"reason": "<règle X: motif>"}, ...]}\n\n'
+        f"=== Règles éditoriales à appliquer ===\n{rules_markdown}\n\n"
         f"=== Extrait à vérifier ({word_count} mots) ===\n{chunk_text}\n\n"
         "JSON :"
     )
+
+
+def _apply_patches(original_text: str, patches: list[dict]) -> tuple[str, int, list[str]]:
+    """Applique les patches find/replace sur le texte original.
+
+    Renvoie (texte_modifié, nb_patches_appliqués, list_d_erreurs).
+    Un patch est ignoré si :
+    - `find` est vide
+    - `find` est introuvable dans le texte
+    - `find` apparaît plusieurs fois (ambiguïté)
+    """
+    result = original_text
+    applied = 0
+    errors: list[str] = []
+    for idx, patch in enumerate(patches or [], start=1):
+        if not isinstance(patch, dict):
+            errors.append(f"Patch #{idx} ignoré : pas un objet")
+            continue
+        find = (patch.get("find") or "").strip()
+        replace = patch.get("replace") or ""
+        if not find:
+            errors.append(f"Patch #{idx} ignoré : `find` vide")
+            continue
+        occurrences = result.count(find)
+        if occurrences == 0:
+            preview = find[:80].replace("\n", " ")
+            errors.append(f"Patch #{idx} ignoré : `find` introuvable ('{preview}…')")
+            continue
+        if occurrences > 1:
+            preview = find[:80].replace("\n", " ")
+            errors.append(f"Patch #{idx} ignoré : `find` ambigu ({occurrences} occurrences, '{preview}…')")
+            continue
+        result = result.replace(find, replace, 1)
+        applied += 1
+    return result, applied, errors
 
 
 def _parse_review_response(raw: str) -> dict | None:
@@ -925,10 +967,34 @@ def review_segments_with_rules(
                 continue
 
             conforme = bool(parsed.get("conforme"))
-            corrected = (parsed.get("corrected_text") or "").strip()
             violations = parsed.get("violations") or []
+            patches_raw = parsed.get("patches") or []
+            # Compat ascendante : si DeepSeek renvoie encore l'ancien format
+            # `corrected_text`, on fabrique un patch unique pour ne pas casser.
+            if not patches_raw and parsed.get("corrected_text"):
+                legacy_corrected = (parsed.get("corrected_text") or "").strip()
+                if legacy_corrected and legacy_corrected != text:
+                    patches_raw = [{
+                        "find": text,
+                        "replace": legacy_corrected,
+                        "reason": "Réponse legacy (corrected_text complet)",
+                    }]
 
-            if conforme or not corrected or corrected == text:
+            corrected, applied_count, patch_errors = _apply_patches(text, patches_raw)
+            patches_summary = []
+            for idx, p in enumerate(patches_raw or []):
+                if not isinstance(p, dict):
+                    continue
+                find_str = (p.get("find") or "").strip()
+                applied_ok = bool(find_str) and find_str in text and text.count(find_str) == 1
+                patches_summary.append({
+                    "find": find_str,
+                    "replace": p.get("replace") or "",
+                    "reason": (p.get("reason") or "").strip(),
+                    "applied": applied_ok,
+                })
+
+            if conforme or not patches_raw or applied_count == 0:
                 with state_lock:
                     summary["segments_conforme"] += 1
                     summary["details"].append({
@@ -936,11 +1002,17 @@ def review_segments_with_rules(
                         "sub_part_name": sub_name or f"Sous-partie {sub_idx + 1}",
                         "passe": passe,
                         "status": "conforme",
-                        "violations": [],
+                        "violations": violations if not conforme else [],
+                        "patches": patches_summary,
+                        "patch_errors": patch_errors,
                     })
                     _update_task(segments_conforme=summary["segments_conforme"])
                 if progress_task_id:
-                    _append_task_log(progress_task_id, f"   ✓ {seg_label} : conforme")
+                    if patches_raw and applied_count == 0:
+                        _append_task_log(progress_task_id,
+                            f"   ⚠ {seg_label} : {len(patches_raw)} patch(s) proposés mais aucun applicable")
+                    else:
+                        _append_task_log(progress_task_id, f"   ✓ {seg_label} : conforme")
                 continue
 
             entry = {
@@ -952,6 +1024,9 @@ def review_segments_with_rules(
                 "violations": violations,
                 "original_text": text,
                 "corrected_text": corrected,
+                "patches": patches_summary,
+                "patches_applied": applied_count,
+                "patch_errors": patch_errors,
                 "words_before": int(wc or len(text.split())),
                 "words_after": len(corrected.split()),
             }
@@ -979,8 +1054,13 @@ def review_segments_with_rules(
             if progress_task_id:
                 _append_task_log(progress_task_id,
                     f"   ✏️ {seg_label} · {'à modifier' if dry_run else 'modifié'} "
-                    f"({entry['words_before']} → {entry['words_after']} mots, "
+                    f"({applied_count} patch(s), "
+                    f"{entry['words_before']} → {entry['words_after']} mots, "
                     f"{len(violations)} règle(s))")
+                if patch_errors:
+                    _append_task_log(progress_task_id,
+                        f"      ⚠ {len(patch_errors)} patch(s) ignoré(s) : "
+                        f"{patch_errors[0][:120]}")
 
         if progress_task_id:
             _append_task_log(progress_task_id, f"✓ {sub_idx_label} : terminé")

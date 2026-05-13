@@ -2,6 +2,50 @@
 
 ## 2026-05-13
 
+### feat(content-review): revérif texte en mode PATCHES chirurgicaux (au lieu de réécriture complète)
+
+Remarque utilisateur cruciale : *« la feature est censée remplacer que les parties qu'elle juge à remplacer ... ajouter quelques choses, supprimer quelques choses, etc »*. Le mode précédent demandait un `corrected_text` complet au LLM, qui reformulait tout le segment même les phrases conformes. Bascule en mode **patches find/replace ciblés**.
+
+**Backend** (`backend/services/script_rules_service.py`)
+
+- Nouveau format de réponse DeepSeek :
+  ```json
+  {
+    "conforme": false,
+    "violations": ["Règle 1 : ..."],
+    "patches": [
+      {"find": "<texte exact à modifier>", "replace": "<nouveau texte>", "reason": "Règle X : motif"}
+    ]
+  }
+  ```
+- `_build_review_prompt` réécrit avec 8 règles impératives sur les patches :
+  - `find` doit être présent **une seule fois** (sinon ambiguïté → ignoré).
+  - `find` doit être **strictement identique** au texte de l'extrait (ponctuation, espaces, tags audio).
+  - `replace` peut modifier / ajouter une phrase / supprimer une phrase / ajouter des tags audio, etc.
+  - Préférer **plusieurs petits patches** à un seul gros qui remplace un paragraphe entier.
+  - Conforme = `"patches": []`.
+- Nouvelle fonction `_apply_patches(original_text, patches) -> (corrected, applied_count, errors)` qui applique chaque patch en `str.replace(find, replace, 1)`. Renvoie aussi les erreurs (find introuvable ou ambigu).
+- Compat ascendante : si DeepSeek renvoie encore l'ancien `corrected_text`, on fabrique un patch unique pour ne pas casser.
+- Chaque détail du résumé porte maintenant `patches` (liste avec `find/replace/reason/applied`), `patches_applied` (int), `patch_errors` (list[str]).
+- Le segment est marqué `conforme` si `patches=[]` OU si aucun patch n'a pu être appliqué (find introuvable).
+
+**Frontend** (`frontend/src/components/CoursFolders.jsx`)
+
+- Le panneau Règles a maintenant `max-height: 70vh` + `overflow-y: auto` → **scrollable** quand le contenu dépasse.
+- Section résumé revérif texte : **plus de limite slice(0, 6)** — tous les segments non-conformes sont affichés dans un sous-conteneur `max-h-[60vh] overflow-y-auto`.
+- Chaque segment affiche :
+  - En-tête : sous-partie · passe · status · X/Y patch(s) appliqué(s)
+  - Liste des règles violées
+  - Compteur de mots (avant → après)
+  - **Pour chaque patch** : un bloc dédié avec :
+    - Bordure verte si appliqué, rouge si ignoré
+    - Raison (1 ligne)
+    - Bloc rouge `− <find>` (passage original)
+    - Bloc vert `+ <replace>` (nouveau texte)
+  - Bloc erreurs patches si certains ont été ignorés (find ambigu ou introuvable)
+
+Résultat : tu vois maintenant **exactement** quelle phrase a été remplacée par quelle phrase, avec la règle qui l'a justifié, sans avoir à comparer mentalement deux blocs de 5000 mots.
+
 ### fix(content-review): revérif texte — max_tokens dynamique, retry JSON, contrainte longueur stricte
 
 Suite au run 18/18 où 9 segments (les passes 1-2, les plus longues 5000-7000 mots) ont échoué en « JSON inparseable » à cause de la troncature DeepSeek + DeepSeek réduisait les textes de ~50 % au lieu de ±15 %. Trois corrections :
