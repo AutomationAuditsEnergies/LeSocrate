@@ -2,6 +2,36 @@
 
 ## 2026-05-13
 
+### feat(content-review): revérif des règles au niveau TEXTE (avant les MP3) — Phase 3b'
+
+Nouveau mode de revérif qui modifie le **texte des segments en base** au lieu de splicer directement les MP3. Travaille au niveau `content_generation_segments` (sub_part × passe) au lieu des chunks audio. Avantages :
+
+1. **Pas besoin de `script_slide_deck`** ni d'`audio_sync.timings` — fonctionne même quand la pipeline a tourné en mode « Edge TTS voix basique » sans slides, donc sans deck créé.
+2. **Plus sûr** : tu vois les modifs en texte avant qu'elles n'atteignent les MP3. Tu peux itérer sur tes règles sans coût TTS.
+3. **Moins d'appels DeepSeek** : ~36 segments vs ~150 chunks (4x moins de coût/temps que Phase 3b chunks).
+4. **Workflow naturel** : segments modifiés → marqués `dirty=1 reviewed=0` → à la prochaine relance TTS, les MP3 sont régénérés depuis le texte corrigé.
+
+**Backend** (`backend/services/script_rules_service.py`)
+- Nouvelle fonction `review_segments_with_rules(folder_id, *, dry_run, sub_part_indices)` qui boucle sur `content_generation_segments` (status='completed'), envoie chaque segment + règles à DeepSeek Pro, et applique les corrections en `UPDATE text_content, word_count, dirty=1, reviewed=0, review_error=NULL`.
+- Réutilise `_build_review_prompt` et `_parse_review_response` de Phase 3b chunks (mêmes contraintes JSON, max_tokens passé à 8000 pour les longs segments).
+- Best-effort par segment : un échec n'arrête pas les autres.
+- Filtre optionnel `sub_part_indices` pour cibler quelques sous-parties (utilité future : étape pipeline ciblée).
+
+**Endpoint HR** : `POST /api/hr/cours-folders/<id>/content-job/rules/review-text` accepte `{dry_run, sub_part_indices}`.
+
+**Frontend** (`frontend/src/components/CoursFolders.jsx`)
+- 4 boutons dans le panneau Règles maintenant, dans cet ordre logique :
+  - 📄 **Simuler texte** (gris) — dry_run au niveau segment, ne touche à rien
+  - ✏️ **Appliquer au texte** (bleu) — modifie segments en DB + dirty=1, avec confirmation
+  - 👁 **Simuler MP3** (gris) — dry_run au niveau chunk audio (Phase 3b chunks, nécessite deck)
+  - ✨ **Appliquer aux MP3** (vert) — splice MP3 ms-précis (Phase 3b chunks, nécessite deck)
+- Résumé revérif texte affiche : examinés / modifiés / conformes / échecs + détails sub_part/passe + words_before → words_after par segment.
+- Note jaune sous résumé non-dry-run rappelle que les MP3 actuels ne reflètent pas encore les changements.
+
+**Note design** — service conçu pour double usage :
+1. Manuel via UI (bouton « Appliquer au texte »).
+2. Pipeline (à venir) : étape automatique à incruster entre la review conformité et le TTS, pour appliquer les règles apprises directement dans le flux normal.
+
 ### fix(content-review): correction strictement limitée à l'extrait surligné (plus de "paragraphe alentour" débordant)
 
 **Bug observé** : quand l'utilisateur surlignait ~3 paragraphes dans la modal Script TTS et cliquait « Noter », DeepSeek lui proposait de réécrire **tout le bloc** (~7000 mots) au lieu de juste son extrait.

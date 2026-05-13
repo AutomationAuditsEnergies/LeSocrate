@@ -582,6 +582,167 @@ def review_chunks_with_rules(
     return summary
 
 
+def review_segments_with_rules(
+    folder_id: int,
+    *,
+    dry_run: bool = False,
+    sub_part_indices: list[int] | None = None,
+) -> dict:
+    """Parcourt les segments completed du job, demande à DeepSeek de vérifier
+    la conformité aux règles apprises, et corrige le texte si non conforme.
+
+    Travaille au niveau `content_generation_segments` (sub_part × passe), pas
+    au niveau chunk audio — donc ne nécessite PAS de `script_slide_deck` ni
+    d'`audio_sync.timings`. Les segments modifiés sont marqués `dirty=1
+    reviewed=0` : la prochaine régénération TTS les re-fera.
+
+    Conçu pour deux usages :
+    - manuel via UI : bouton « Simuler texte » / « Appliquer au texte »
+    - pipeline (à venir) : étape automatique entre review conformité et TTS
+
+    Best-effort : un segment qui plante n'arrête pas les autres.
+    """
+    context = _fetch_context(folder_id)
+    if not context:
+        raise ValueError("Aucun job de contenu pour ce dossier")
+
+    rules = get_rules(folder_id)
+    rules_markdown = (rules.get("rules_markdown") or "").strip()
+    if not rules_markdown:
+        raise ValueError("Aucune règle apprise — lance d'abord l'extraction")
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        SELECT id, sub_part_index, sub_part_name, passe, text_content, word_count
+        FROM content_generation_segments
+        WHERE job_id = ? AND status = 'completed'
+        ORDER BY sub_part_index ASC, passe ASC
+        """,
+        (context["job_id"],),
+    )
+    segments = cursor.fetchall()
+    conn.close()
+
+    if sub_part_indices:
+        wanted = {int(i) for i in sub_part_indices}
+        segments = [s for s in segments if int(s[1]) in wanted]
+
+    summary = {
+        "dry_run": bool(dry_run),
+        "segments_examined": 0,
+        "segments_modified": 0,
+        "segments_conforme": 0,
+        "segments_skipped": 0,
+        "segments_failed": 0,
+        "details": [],
+    }
+
+    for seg in segments:
+        seg_id, sub_idx, sub_name, passe, text, wc = seg
+        text = (text or "").strip()
+        summary["segments_examined"] += 1
+
+        if not text:
+            summary["segments_skipped"] += 1
+            summary["details"].append({
+                "segment_id": seg_id,
+                "sub_part_name": sub_name or f"Sous-partie {sub_idx + 1}",
+                "passe": passe,
+                "status": "skipped",
+                "reason": "text_content vide",
+            })
+            continue
+
+        try:
+            raw = post_message(
+                [{"role": "user", "content": _build_review_prompt(rules_markdown, text)}],
+                max_tokens=8000,
+                model=REVIEW_MODEL,
+                timeout=300,
+            )
+        except (AnthropicAPIError, AnthropicRateLimitError) as exc:
+            summary["segments_failed"] += 1
+            summary["details"].append({
+                "segment_id": seg_id,
+                "sub_part_name": sub_name or f"Sous-partie {sub_idx + 1}",
+                "passe": passe,
+                "status": "failed",
+                "reason": f"DeepSeek : {exc}",
+            })
+            continue
+
+        parsed = _parse_review_response(raw)
+        if not parsed:
+            summary["segments_failed"] += 1
+            summary["details"].append({
+                "segment_id": seg_id,
+                "sub_part_name": sub_name or f"Sous-partie {sub_idx + 1}",
+                "passe": passe,
+                "status": "failed",
+                "reason": "JSON DeepSeek inparseable",
+                "raw_preview": (raw or "")[:200],
+            })
+            continue
+
+        conforme = bool(parsed.get("conforme"))
+        corrected = (parsed.get("corrected_text") or "").strip()
+        violations = parsed.get("violations") or []
+
+        if conforme or not corrected or corrected == text:
+            summary["segments_conforme"] += 1
+            summary["details"].append({
+                "segment_id": seg_id,
+                "sub_part_name": sub_name or f"Sous-partie {sub_idx + 1}",
+                "passe": passe,
+                "status": "conforme",
+                "violations": [],
+            })
+            continue
+
+        entry = {
+            "segment_id": seg_id,
+            "sub_part_name": sub_name or f"Sous-partie {sub_idx + 1}",
+            "sub_part_index": sub_idx,
+            "passe": passe,
+            "status": "would_modify" if dry_run else "modified",
+            "violations": violations,
+            "original_text": text,
+            "corrected_text": corrected,
+            "words_before": int(wc or len(text.split())),
+            "words_after": len(corrected.split()),
+        }
+
+        if not dry_run:
+            conn2 = get_db_connection()
+            cursor2 = conn2.cursor()
+            cursor2.execute(
+                """
+                UPDATE content_generation_segments
+                SET text_content = ?, word_count = ?, dirty = 1, reviewed = 0,
+                    review_error = NULL
+                WHERE id = ?
+                """,
+                (corrected, len(corrected.split()), seg_id),
+            )
+            conn2.commit()
+            conn2.close()
+
+        summary["segments_modified"] += 1
+        summary["details"].append(entry)
+
+    logger.info(
+        f"📝 Revérif texte folder={folder_id} : "
+        f"{summary['segments_examined']} examinés, "
+        f"{summary['segments_modified']} {'à modifier' if dry_run else 'modifiés'}, "
+        f"{summary['segments_conforme']} conformes, "
+        f"{summary['segments_skipped']} skip, "
+        f"{summary['segments_failed']} fail (dry_run={dry_run})"
+    )
+    return summary
+
+
 def update_rules_markdown(folder_id: int, markdown: str) -> dict:
     """Permet l'édition manuelle du markdown des règles."""
     context = _fetch_context(folder_id)

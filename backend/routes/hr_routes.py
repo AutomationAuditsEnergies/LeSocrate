@@ -2648,6 +2648,38 @@ def create_hr_blueprint(socketio):
             logger.error(f"❌ Erreur update rules: {e}")
             return jsonify({"success": False, "error": str(e)}), 500
 
+    @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/content-job/rules/review-text", methods=["POST"])
+    def review_text_with_rules(folder_id):
+        """Phase 3b' : applique les règles au TEXTE des segments (pas aux MP3).
+
+        Travaille au niveau content_generation_segments (sub_part × passe),
+        marque dirty=1 les segments modifiés. Les MP3 seront régénérés depuis
+        ce nouveau texte à la prochaine relance TTS. Pas besoin de
+        script_slide_deck — utile quand le deck n'a pas été créé (ex. Edge TTS
+        voix basique sans slides).
+        """
+        denied = _require_admin()
+        if denied:
+            return denied
+        try:
+            from services.script_rules_service import review_segments_with_rules
+            payload = request.get_json() or {}
+            dry_run = bool(payload.get("dry_run") or False)
+            sub_part_indices = payload.get("sub_part_indices")
+            if sub_part_indices and not isinstance(sub_part_indices, list):
+                sub_part_indices = None
+            summary = review_segments_with_rules(
+                folder_id,
+                dry_run=dry_run,
+                sub_part_indices=sub_part_indices,
+            )
+            return jsonify({"success": True, **summary}), 200
+        except ValueError as e:
+            return jsonify({"success": False, "error": str(e)}), 400
+        except Exception as e:
+            logger.error(f"❌ Erreur review text: {e}")
+            return jsonify({"success": False, "error": str(e)}), 500
+
     @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/content-job/rules/review-post-tts", methods=["POST"])
     def review_post_tts_with_rules(folder_id):
         """Phase 3b : parcourt les chunks audio, applique les règles, splice les MP3 non-conformes."""

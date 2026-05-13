@@ -94,6 +94,8 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
   const [savingRules, setSavingRules] = useState(false)
   const [reviewingRules, setReviewingRules] = useState(false)
   const [rulesReviewSummary, setRulesReviewSummary] = useState(null)
+  const [reviewingText, setReviewingText] = useState(false)
+  const [textReviewSummary, setTextReviewSummary] = useState(null)
   const [loadingContentScript, setLoadingContentScript] = useState(false)
   const [, setLoadingScript] = useState(false)
   const [contentScriptView, setContentScriptView] = useState('source') // 'source' | 'courses'
@@ -675,6 +677,41 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
       setRulesError('Erreur réseau pendant la revérif.')
     } finally {
       setReviewingRules(false)
+    }
+  }
+
+  const runTextReview = async (dryRun) => {
+    if (!selectedFolder || reviewingText) return
+    if (!dryRun) {
+      const ok = window.confirm(
+        'Cette action va modifier le texte des segments en base de données et les marquer dirty=1. Les MP3 actuels ne changent pas, mais à la prochaine régénération TTS, ils seront refaits à partir du nouveau texte. Continuer ?'
+      )
+      if (!ok) return
+    }
+    setReviewingText(true)
+    setRulesError('')
+    setTextReviewSummary(null)
+    try {
+      const resp = await fetch(
+        apiUrl(`/api/hr/cours-folders/${selectedFolder.id}/content-job/rules/review-text`),
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ dry_run: !!dryRun }),
+          credentials: 'include',
+        }
+      )
+      const data = await resp.json()
+      if (data.success) {
+        setTextReviewSummary(data)
+      } else {
+        setRulesError(data.error || 'Revérif texte impossible.')
+      }
+    } catch (e) {
+      console.error('Erreur review text:', e)
+      setRulesError('Erreur réseau pendant la revérif texte.')
+    } finally {
+      setReviewingText(false)
     }
   }
 
@@ -2404,30 +2441,91 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
                       <>
                         <button
                           type="button"
-                          onClick={() => runRulesReview(true)}
-                          disabled={reviewingRules}
+                          onClick={() => runTextReview(true)}
+                          disabled={reviewingText || reviewingRules}
                           className="inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-60"
                           style={{ backgroundColor: colors.innerBg, color: colors.text, border: `1px solid ${colors.border}` }}
-                          title="Simule la revérif sans toucher aux MP3"
+                          title="Simule la revérif au niveau texte (sans toucher aux segments ni aux MP3). Ne nécessite pas de script_slide_deck."
+                        >
+                          <Icon name="article" style={{ fontSize: '14px' }} />
+                          {reviewingText ? 'Analyse texte…' : 'Simuler texte'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => runTextReview(false)}
+                          disabled={reviewingText || reviewingRules}
+                          className="inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-semibold text-white transition-colors disabled:cursor-not-allowed disabled:opacity-60"
+                          style={{ backgroundColor: '#2563eb' }}
+                          title="Modifie le texte des segments en DB + dirty=1. Les MP3 actuels ne changent pas — ils seront refaits à la prochaine relance TTS."
+                        >
+                          <Icon name="edit_note" style={{ fontSize: '14px' }} />
+                          {reviewingText ? 'Application…' : 'Appliquer au texte'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => runRulesReview(true)}
+                          disabled={reviewingRules || reviewingText}
+                          className="inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-60"
+                          style={{ backgroundColor: colors.innerBg, color: colors.text, border: `1px solid ${colors.border}` }}
+                          title="Simule la revérif niveau chunk audio. Nécessite script_slide_deck (sinon utilise les boutons texte ci-dessus)."
                         >
                           <Icon name="visibility" style={{ fontSize: '14px' }} />
-                          {reviewingRules ? 'Analyse…' : 'Simuler'}
+                          {reviewingRules ? 'Analyse MP3…' : 'Simuler MP3'}
                         </button>
                         <button
                           type="button"
                           onClick={() => runRulesReview(false)}
-                          disabled={reviewingRules}
+                          disabled={reviewingRules || reviewingText}
                           className="inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-semibold text-white transition-colors disabled:cursor-not-allowed disabled:opacity-60"
                           style={{ backgroundColor: '#16a34a' }}
-                          title="Patche les MP3 non conformes en place"
+                          title="Patche les MP3 non conformes en place via splice ms-précis. Nécessite script_slide_deck."
                         >
                           <Icon name="auto_fix_high" style={{ fontSize: '14px' }} />
-                          {reviewingRules ? 'Patch en cours…' : 'Appliquer aux MP3'}
+                          {reviewingRules ? 'Patch MP3…' : 'Appliquer aux MP3'}
                         </button>
                       </>
                     )}
                   </div>
                 </div>
+
+                {textReviewSummary && (
+                  <div
+                    className="mb-2 rounded-md p-3 text-xs"
+                    style={{ backgroundColor: colors.innerBg, color: colors.text, border: `1px solid ${colors.border}` }}
+                  >
+                    <p className="mb-2 text-[11px] font-bold uppercase tracking-wide" style={{ color: '#2563eb' }}>
+                      Résumé revérif texte{textReviewSummary.dry_run ? ' (simulation)' : ''}
+                    </p>
+                    <ul className="grid grid-cols-2 gap-x-4 gap-y-1 sm:grid-cols-4">
+                      <li>Examinés : <strong>{textReviewSummary.segments_examined}</strong></li>
+                      <li style={{ color: '#2563eb' }}>{textReviewSummary.dry_run ? 'À modifier' : 'Modifiés'} : <strong>{textReviewSummary.segments_modified}</strong></li>
+                      <li style={{ color: '#16a34a' }}>Conformes : <strong>{textReviewSummary.segments_conforme}</strong></li>
+                      <li style={{ color: '#dc2626' }}>Échecs : <strong>{textReviewSummary.segments_failed}</strong></li>
+                    </ul>
+                    {!textReviewSummary.dry_run && textReviewSummary.segments_modified > 0 && (
+                      <p className="mt-2 text-[11px] italic" style={{ color: '#facc15' }}>
+                        ⚠️ Segments marqués dirty=1. Les MP3 actuels ne reflètent pas encore ces changements — relance Edge TTS / Fish TTS pour les regénérer.
+                      </p>
+                    )}
+                    {(textReviewSummary.details || []).filter(d => d.status !== 'conforme').slice(0, 6).map((d, i) => (
+                      <div key={i} className="mt-2 rounded p-2 text-[11px]" style={{ backgroundColor: 'rgba(37,99,235,0.08)' }}>
+                        <p className="font-semibold">{d.sub_part_name} · passe {d.passe} · <span style={{ color: d.status === 'modified' || d.status === 'would_modify' ? '#16a34a' : '#dc2626' }}>{d.status}</span></p>
+                        {d.violations?.length > 0 && (
+                          <p style={{ color: colors.textMuted }}>{d.violations.join(' · ')}</p>
+                        )}
+                        {d.words_before !== undefined && d.words_after !== undefined && (
+                          <p style={{ color: colors.textMuted }}>{d.words_before} → {d.words_after} mots</p>
+                        )}
+                        {d.reason && <p style={{ color: '#dc2626' }}>{d.reason}</p>}
+                      </div>
+                    ))}
+                    {(textReviewSummary.details || []).filter(d => d.status !== 'conforme').length > 6 && (
+                      <p className="mt-2 text-[11px] italic" style={{ color: colors.textMuted }}>
+                        … et {(textReviewSummary.details || []).filter(d => d.status !== 'conforme').length - 6} autres
+                      </p>
+                    )}
+                  </div>
+                )}
 
                 {rulesReviewSummary && (
                   <div
@@ -2435,7 +2533,7 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
                     style={{ backgroundColor: colors.innerBg, color: colors.text, border: `1px solid ${colors.border}` }}
                   >
                     <p className="mb-2 text-[11px] font-bold uppercase tracking-wide" style={{ color: '#7c3aed' }}>
-                      Résumé revérif{rulesReviewSummary.dry_run ? ' (simulation)' : ''}
+                      Résumé revérif MP3{rulesReviewSummary.dry_run ? ' (simulation)' : ''}
                     </p>
                     <ul className="grid grid-cols-2 gap-x-4 gap-y-1 sm:grid-cols-4">
                       <li>Examinés : <strong>{rulesReviewSummary.chunks_examined}</strong></li>
