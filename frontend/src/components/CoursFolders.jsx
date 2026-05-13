@@ -2461,15 +2461,15 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
 
             {rulesPanelOpen && (
               <div
-                className="border-b px-6 py-4 overflow-y-auto"
+                className="border-b px-6 py-3 overflow-y-auto flex-shrink-0"
                 style={{
                   backgroundColor: darkMode ? '#1a1332' : '#fefce8',
                   borderColor: colors.border,
-                  maxHeight: '70vh',
+                  maxHeight: '50vh',
                 }}
               >
-                <div className="mb-2 flex items-center justify-between gap-3">
-                  <div>
+                <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                  <div className="min-w-0 flex-1">
                     <p className="text-sm font-bold" style={{ color: colors.text }}>
                       Règles apprises depuis tes annotations
                     </p>
@@ -2479,7 +2479,7 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
                         : 'Aucune extraction encore — applique au moins une correction puis clique sur Extraire.'}
                     </p>
                   </div>
-                  <div className="flex gap-2">
+                  <div className="flex flex-wrap items-center gap-2 sm:justify-end">
                     <button
                       type="button"
                       onClick={extractScriptRules}
@@ -2524,7 +2524,7 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
                           title="Simule la revérif au niveau texte (sans toucher aux segments ni aux MP3). Ne nécessite pas de script_slide_deck."
                         >
                           <Icon name="article" style={{ fontSize: '14px' }} />
-                          {reviewingText ? 'Analyse texte…' : 'Simuler texte'}
+                          {reviewingText ? 'Analyse…' : 'Simuler cours'}
                         </button>
                         <button
                           type="button"
@@ -2535,7 +2535,7 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
                           title="Modifie le texte des segments en DB + dirty=1. Les MP3 actuels ne changent pas — ils seront refaits à la prochaine relance TTS."
                         >
                           <Icon name="edit_note" style={{ fontSize: '14px' }} />
-                          {reviewingText ? 'Application…' : 'Appliquer au texte'}
+                          {reviewingText ? 'Application…' : 'Appliquer cours'}
                         </button>
                         <button
                           type="button"
