@@ -1,5 +1,28 @@
 # Changelog
 
+## 2026-05-13
+
+### feat(content-review): DeepSeek Pro par défaut sur les 3 services LLM + édition manuelle du markdown des règles
+
+**Modèle LLM revu à la hausse** — les 3 services qui appellent DeepSeek passent du modèle Flash au modèle Pro :
+- `script_annotation_service.py` : `CORRECTION_MODEL` (correction immédiate d'un paragraphe à l'annotation, Phase A)
+- `script_rules_service.py` : `RULES_MODEL` (extraction de règles transversales, Phase 3a) + `REVIEW_MODEL` (revérif post-TTS chunk par chunk, Phase 3b)
+
+Toutes les valeurs par défaut passent de `DEEPSEEK_DEFAULT_MODEL` (= `deepseek-v4-flash`) à `"deepseek-v4-pro"`. Les env vars (`SCRIPT_ANNOTATION_MODEL`, `SCRIPT_RULES_MODEL`, `SCRIPT_RULES_REVIEW_MODEL`) restent dispo pour override.
+
+Conséquence : qualité de correction / extraction / revérif nettement meilleure (modèle plus capable de raisonner sur du français technique RNCP). Coût par appel plus élevé mais latence acceptable, et les volumes sont modérés (1 appel par annotation, 1 appel par extraction, 1 appel par chunk audio en revérif).
+
+**Édition manuelle du markdown des règles** (`frontend/src/components/CoursFolders.jsx`) — l'admin peut désormais retoucher à la main le markdown produit par DeepSeek avant que Phase 3b ne l'applique aux MP3.
+
+- Nouveau bouton « Modifier » dans le panneau Règles (à côté de « Markdown » télécharger).
+- En mode édition : `<textarea>` plein largeur 14 lignes redimensionnable, police monospace, valeur initialisée avec le markdown actuel.
+- Boutons « Annuler » / « Enregistrer » en bas du textarea. Le bouton « Modifier » disparaît pendant l'édition.
+- L'enregistrement appelle `PUT /api/hr/cours-folders/<id>/content-job/rules` (endpoint déjà existant côté backend, branché à `update_rules_markdown`).
+- L'état local React est mis à jour avec la réponse du backend (rules_markdown, rules_count, updated_at, model='manual').
+- En cas d'erreur réseau ou backend, message d'erreur affiché sous les boutons.
+
+Workflow type : extraction DeepSeek → relecture par l'admin → édition manuelle (suppression de règles non pertinentes, reformulation, ajout de cas-limites observés) → enregistrement → revérif Phase 3b s'applique sur le markdown édité, pas sur la sortie brute LLM.
+
 ## 2026-05-12
 
 ### ui(formation-pipeline): suppression de la barre redondante « Fichiers playlist MP3 » du panneau global

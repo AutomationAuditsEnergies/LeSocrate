@@ -24,8 +24,8 @@ from utils.anthropic_client import (
 
 logger = logging.getLogger(__name__)
 
-RULES_MODEL = os.getenv("SCRIPT_RULES_MODEL", DEEPSEEK_DEFAULT_MODEL)
-REVIEW_MODEL = os.getenv("SCRIPT_RULES_REVIEW_MODEL", DEEPSEEK_DEFAULT_MODEL)
+RULES_MODEL = os.getenv("SCRIPT_RULES_MODEL", "deepseek-v4-pro")
+REVIEW_MODEL = os.getenv("SCRIPT_RULES_REVIEW_MODEL", "deepseek-v4-pro")
 MIN_ANNOTATIONS_FOR_EXTRACTION = 1
 
 

@@ -89,6 +89,9 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
   const [rulesPanelOpen, setRulesPanelOpen] = useState(false)
   const [extractingRules, setExtractingRules] = useState(false)
   const [rulesError, setRulesError] = useState('')
+  const [editingRules, setEditingRules] = useState(false)
+  const [rulesDraft, setRulesDraft] = useState('')
+  const [savingRules, setSavingRules] = useState(false)
   const [reviewingRules, setReviewingRules] = useState(false)
   const [rulesReviewSummary, setRulesReviewSummary] = useState(null)
   const [loadingContentScript, setLoadingContentScript] = useState(false)
@@ -590,6 +593,54 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
   const downloadRulesMarkdown = () => {
     if (!selectedFolder) return
     window.open(apiUrl(`/api/hr/cours-folders/${selectedFolder.id}/content-job/rules/markdown`), '_blank')
+  }
+
+  const startEditingRules = () => {
+    setRulesDraft(scriptRules?.rules_markdown || '')
+    setEditingRules(true)
+    setRulesError('')
+  }
+
+  const cancelEditingRules = () => {
+    setEditingRules(false)
+    setRulesDraft('')
+    setRulesError('')
+  }
+
+  const saveRulesMarkdown = async () => {
+    if (!selectedFolder || savingRules) return
+    setSavingRules(true)
+    setRulesError('')
+    try {
+      const resp = await fetch(
+        apiUrl(`/api/hr/cours-folders/${selectedFolder.id}/content-job/rules`),
+        {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ rules_markdown: rulesDraft }),
+          credentials: 'include',
+        }
+      )
+      const data = await resp.json()
+      if (data.success) {
+        setScriptRules(prev => ({
+          ...(prev || {}),
+          rules_markdown: data.rules_markdown,
+          rules_count: data.rules_count,
+          updated_at: data.updated_at,
+          model: 'manual',
+        }))
+        setEditingRules(false)
+        setRulesDraft('')
+      } else {
+        setRulesError(data.error || 'Sauvegarde impossible.')
+      }
+    } catch (e) {
+      console.error('Erreur save rules markdown:', e)
+      setRulesError('Erreur réseau pendant la sauvegarde.')
+    } finally {
+      setSavingRules(false)
+    }
   }
 
   const runRulesReview = async (dryRun) => {
@@ -2337,6 +2388,18 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
                         Markdown
                       </button>
                     )}
+                    {scriptRules?.rules_markdown && !editingRules && (
+                      <button
+                        type="button"
+                        onClick={startEditingRules}
+                        className="inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-semibold transition-colors"
+                        style={{ backgroundColor: colors.innerBg, color: colors.text, border: `1px solid ${colors.border}` }}
+                        title="Éditer le markdown des règles à la main (sauve via PUT /rules)"
+                      >
+                        <Icon name="edit" style={{ fontSize: '14px' }} />
+                        Modifier
+                      </button>
+                    )}
                     {scriptRules?.rules_markdown && (
                       <>
                         <button
@@ -2399,7 +2462,45 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
                 {rulesError && (
                   <p className="mb-2 text-xs font-semibold" style={{ color: '#dc2626' }}>{rulesError}</p>
                 )}
-                {scriptRules?.rules_markdown ? (
+                {editingRules ? (
+                  <div>
+                    <textarea
+                      value={rulesDraft}
+                      onChange={(e) => setRulesDraft(e.target.value)}
+                      rows={14}
+                      spellCheck={false}
+                      className="w-full rounded-md p-3 text-xs leading-relaxed font-mono"
+                      style={{
+                        backgroundColor: colors.innerBg,
+                        color: colors.text,
+                        border: `1px solid ${colors.border}`,
+                        resize: 'vertical',
+                      }}
+                      placeholder="# Règles de revérification — …"
+                    />
+                    <div className="mt-2 flex justify-end gap-2">
+                      <button
+                        type="button"
+                        onClick={cancelEditingRules}
+                        disabled={savingRules}
+                        className="inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-60"
+                        style={{ backgroundColor: colors.innerBg, color: colors.textSecondary, border: `1px solid ${colors.border}` }}
+                      >
+                        Annuler
+                      </button>
+                      <button
+                        type="button"
+                        onClick={saveRulesMarkdown}
+                        disabled={savingRules}
+                        className="inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-semibold text-white transition-colors disabled:cursor-not-allowed disabled:opacity-60"
+                        style={{ backgroundColor: '#16a34a' }}
+                      >
+                        <Icon name="save" style={{ fontSize: '14px' }} />
+                        {savingRules ? 'Sauvegarde…' : 'Enregistrer'}
+                      </button>
+                    </div>
+                  </div>
+                ) : scriptRules?.rules_markdown ? (
                   <pre
                     className="max-h-72 overflow-auto rounded-md p-3 text-xs leading-relaxed"
                     style={{ backgroundColor: colors.innerBg, color: colors.text, whiteSpace: 'pre-wrap' }}
