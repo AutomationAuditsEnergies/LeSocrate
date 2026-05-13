@@ -2,6 +2,31 @@
 
 ## 2026-05-13
 
+### feat(content-review): revérif texte parallélisée par sous-partie + persistance à travers la modale
+
+Deux améliorations sur la revérif texte (Phase 3b') basées sur retour utilisateur :
+
+**1. Parallélisation par sous-partie** (`backend/services/script_rules_service.py`)
+- Les segments sont regroupés par `sub_part_index` (1 « cours » par sous-partie).
+- Chaque sous-partie est traitée par un greenlet eventlet dédié — concrètement, sur un cours de 6 sous-parties × 3 passes, on a jusqu'à 6 greenlets actifs en parallèle qui traitent leurs 3 passes séquentiellement chacun.
+- Pool plafonné via env var `SCRIPT_RULES_TEXT_PARALLEL` (défaut **6**, override possible). Évite de saturer DeepSeek (rate limit) et SQLite (write-lock).
+- Deux `eventlet.semaphore.Semaphore(1)` pour synchroniser :
+  - `state_lock` : MAJ concurrentes du `summary` + `_TEXT_REVIEW_TASKS[task_id]`.
+  - `db_lock` : sérialise les `UPDATE content_generation_segments` pour éviter `database is locked` côté SQLite.
+- Gain attendu : 6 sous-parties parallèles × 3 passes séquentielles ≈ **~3x plus rapide** que la version 100% séquentielle (limité par la passe la plus lente de chaque sous-partie). Pour 36 segments × ~20s/segment, on passe d'environ 12 min à ~4 min.
+
+**2. Persistance à travers la fermeture de la modale**
+- Nouveau dict module `_FOLDER_TO_LATEST_TASK: dict[int, str]` qui mémorise le dernier `task_id` connu pour chaque `folder_id`.
+- `start_text_review_async` met à jour cette map au lancement.
+- Nouvelle fonction `get_active_text_review_for_folder(folder_id)` qui retourne la tâche (active ou récemment terminée) du folder.
+- Nouvel endpoint `GET /api/hr/cours-folders/<id>/content-job/rules/review-text/active` qui expose cette info au frontend.
+- Frontend (`CoursFolders.jsx`) :
+  - À l'ouverture de la modale Script TTS, `handleViewContentScript` appelle `resumeActiveTextReview()` :
+    - Si `task.status === 'running'` → réouvre le panneau Règles, réactive `reviewingText`, et redémarre le polling toutes les 2s.
+    - Si `task.status === 'completed'` → affiche directement le résumé final dans le panneau Règles.
+  - `closeContentScriptModal` ne stoppe que le polling local ; la tâche backend continue dans son greenlet.
+  - Conséquence : tu peux fermer la modale, naviguer ailleurs, et la rouvrir → la progression est restaurée comme si tu ne l'avais pas quittée.
+
 ### feat(content-review): revérif texte en mode async + polling progression (logs live)
 
 Suite à la remarque utilisateur « rajoute des logs pour qu'on sache où on en est » sur la revérif texte (qui peut prendre 10-15 min), bascule en mode async :

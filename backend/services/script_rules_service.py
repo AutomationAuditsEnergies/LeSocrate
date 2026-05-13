@@ -588,8 +588,27 @@ def review_chunks_with_rules(
 # sont perdues (mais on a déjà géré ce cas via détection "stale running" UI).
 _TEXT_REVIEW_TASKS: dict[str, dict] = {}
 
+# Map folder_id -> dernier task_id (active ou récemment terminée). Permet au
+# frontend de reprendre l'affichage de la progression à l'ouverture de la modale
+# Script TTS, même si on l'avait fermée pendant le run.
+_FOLDER_TO_LATEST_TASK: dict[int, str] = {}
+
+# Cap par défaut de parallélisme entre sous-parties. Évite de saturer DeepSeek
+# (rate limit) et SQLite (write-lock). Override via env.
+_TEXT_REVIEW_PARALLEL = max(1, int(os.getenv("SCRIPT_RULES_TEXT_PARALLEL", "6")))
+
 
 def get_text_review_task(task_id: str) -> dict | None:
+    return _TEXT_REVIEW_TASKS.get(task_id)
+
+
+def get_active_text_review_for_folder(folder_id: int) -> dict | None:
+    """Renvoie la dernière tâche de revérif texte connue pour ce folder
+    (peut être en cours ou terminée). Le frontend l'utilise à l'ouverture
+    de la modale pour reprendre le suivi si la tâche tourne encore."""
+    task_id = _FOLDER_TO_LATEST_TASK.get(int(folder_id))
+    if not task_id:
+        return None
     return _TEXT_REVIEW_TASKS.get(task_id)
 
 
@@ -652,7 +671,10 @@ def start_text_review_async(folder_id: int, *, dry_run: bool = False,
         total = min(total, len(sub_part_indices) * 3)  # 3 passes max par sous-partie
 
     task_id = _new_text_review_task(folder_id, dry_run, total)
-    _append_task_log(task_id, f"Lancement : {total} segments à examiner, dry_run={dry_run}")
+    _FOLDER_TO_LATEST_TASK[int(folder_id)] = task_id
+    _append_task_log(task_id,
+        f"Lancement : {total} segments à examiner, "
+        f"dry_run={dry_run}, parallel={_TEXT_REVIEW_PARALLEL}")
 
     import eventlet
     def _runner():
@@ -743,6 +765,13 @@ def review_segments_with_rules(
         "details": [],
     }
 
+    # Lock pour MAJ concurrentes du summary, du task state, des détails.
+    import eventlet
+    state_lock = eventlet.semaphore.Semaphore(1)
+    # Lock écriture DB SQLite : write-lock global, mieux vaut sérialiser
+    # les UPDATE pour éviter "database is locked".
+    db_lock = eventlet.semaphore.Semaphore(1)
+
     def _update_task(**fields):
         if not progress_task_id:
             return
@@ -750,124 +779,169 @@ def review_segments_with_rules(
         if task:
             task.update(fields)
 
-    _update_task(segments_total=len(segments))
+    with state_lock:
+        _update_task(segments_total=len(segments))
 
-    for seg_idx, seg in enumerate(segments):
-        seg_id, sub_idx, sub_name, passe, text, wc = seg
-        text = (text or "").strip()
-        summary["segments_examined"] += 1
-        seg_label = f"{sub_name or f'Sous-partie {sub_idx + 1}'} · passe {passe}"
-        _update_task(current_segment=seg_label, current_step="lecture", segments_done=seg_idx)
-        if progress_task_id:
-            _append_task_log(progress_task_id, f"→ {seg_idx + 1}/{len(segments)} : {seg_label}")
+    # Groupe les segments par sous-partie : 1 "agent" (greenlet) traite tous
+    # les passes d'une même sous-partie séquentiellement. Pool plafonné à
+    # _TEXT_REVIEW_PARALLEL pour ne pas saturer DeepSeek / SQLite.
+    from collections import defaultdict
+    groups: dict[int, list] = defaultdict(list)
+    for seg in segments:
+        groups[int(seg[1])].append(seg)
+    group_keys = sorted(groups.keys())
 
-        if not text:
-            summary["segments_skipped"] += 1
-            summary["details"].append({
-                "segment_id": seg_id,
-                "sub_part_name": sub_name or f"Sous-partie {sub_idx + 1}",
-                "passe": passe,
-                "status": "skipped",
-                "reason": "text_content vide",
-            })
-            _update_task(segments_skipped=summary["segments_skipped"])
-            if progress_task_id:
-                _append_task_log(progress_task_id, f"   ⏭ skipped (text vide)")
-            continue
+    pool_size = max(1, min(_TEXT_REVIEW_PARALLEL, len(group_keys)))
+    if progress_task_id:
+        _append_task_log(progress_task_id,
+            f"Parallélisation : {len(group_keys)} sous-partie(s) sur pool de {pool_size}")
 
-        _update_task(current_step="appel DeepSeek")
-        try:
-            raw = post_message(
-                [{"role": "user", "content": _build_review_prompt(rules_markdown, text)}],
-                max_tokens=8000,
-                model=REVIEW_MODEL,
-                timeout=300,
-            )
-        except (AnthropicAPIError, AnthropicRateLimitError) as exc:
-            summary["segments_failed"] += 1
-            summary["details"].append({
-                "segment_id": seg_id,
-                "sub_part_name": sub_name or f"Sous-partie {sub_idx + 1}",
-                "passe": passe,
-                "status": "failed",
-                "reason": f"DeepSeek : {exc}",
-            })
-            _update_task(segments_failed=summary["segments_failed"])
-            if progress_task_id:
-                _append_task_log(progress_task_id, f"   ❌ DeepSeek : {str(exc)[:120]}")
-            continue
-
-        parsed = _parse_review_response(raw)
-        if not parsed:
-            summary["segments_failed"] += 1
-            summary["details"].append({
-                "segment_id": seg_id,
-                "sub_part_name": sub_name or f"Sous-partie {sub_idx + 1}",
-                "passe": passe,
-                "status": "failed",
-                "reason": "JSON DeepSeek inparseable",
-                "raw_preview": (raw or "")[:200],
-            })
-            _update_task(segments_failed=summary["segments_failed"])
-            if progress_task_id:
-                _append_task_log(progress_task_id, f"   ❌ JSON inparseable")
-            continue
-
-        conforme = bool(parsed.get("conforme"))
-        corrected = (parsed.get("corrected_text") or "").strip()
-        violations = parsed.get("violations") or []
-
-        if conforme or not corrected or corrected == text:
-            summary["segments_conforme"] += 1
-            summary["details"].append({
-                "segment_id": seg_id,
-                "sub_part_name": sub_name or f"Sous-partie {sub_idx + 1}",
-                "passe": passe,
-                "status": "conforme",
-                "violations": [],
-            })
-            _update_task(segments_conforme=summary["segments_conforme"])
-            if progress_task_id:
-                _append_task_log(progress_task_id, f"   ✓ conforme")
-            continue
-
-        entry = {
-            "segment_id": seg_id,
-            "sub_part_name": sub_name or f"Sous-partie {sub_idx + 1}",
-            "sub_part_index": sub_idx,
-            "passe": passe,
-            "status": "would_modify" if dry_run else "modified",
-            "violations": violations,
-            "original_text": text,
-            "corrected_text": corrected,
-            "words_before": int(wc or len(text.split())),
-            "words_after": len(corrected.split()),
-        }
-
-        if not dry_run:
-            _update_task(current_step="écriture DB")
-            conn2 = get_db_connection()
-            cursor2 = conn2.cursor()
-            cursor2.execute(
-                """
-                UPDATE content_generation_segments
-                SET text_content = ?, word_count = ?, dirty = 1, reviewed = 0,
-                    review_error = NULL
-                WHERE id = ?
-                """,
-                (corrected, len(corrected.split()), seg_id),
-            )
-            conn2.commit()
-            conn2.close()
-
-        summary["segments_modified"] += 1
-        summary["details"].append(entry)
-        _update_task(segments_modified=summary["segments_modified"])
+    def _process_group(sub_idx_key: int):
+        group_segments = groups[sub_idx_key]
+        sub_idx_label = group_segments[0][2] or f"Sous-partie {sub_idx_key + 1}"
         if progress_task_id:
             _append_task_log(progress_task_id,
-                f"   ✏️ {'à modifier' if dry_run else 'modifié'} "
-                f"({entry['words_before']} → {entry['words_after']} mots, "
-                f"{len(violations)} règle(s))")
+                f"▶ {sub_idx_label} : démarrage ({len(group_segments)} passes)")
+
+        for seg in group_segments:
+            seg_id, sub_idx, sub_name, passe, text, wc = seg
+            text = (text or "").strip()
+            seg_label = f"{sub_name or f'Sous-partie {sub_idx + 1}'} · passe {passe}"
+
+            with state_lock:
+                summary["segments_examined"] += 1
+                done_so_far = summary["segments_examined"]
+                _update_task(current_segment=seg_label, current_step="lecture",
+                             segments_done=done_so_far)
+            if progress_task_id:
+                _append_task_log(progress_task_id,
+                    f"→ {done_so_far}/{len(segments)} : {seg_label}")
+
+            if not text:
+                with state_lock:
+                    summary["segments_skipped"] += 1
+                    summary["details"].append({
+                        "segment_id": seg_id,
+                        "sub_part_name": sub_name or f"Sous-partie {sub_idx + 1}",
+                        "passe": passe,
+                        "status": "skipped",
+                        "reason": "text_content vide",
+                    })
+                    _update_task(segments_skipped=summary["segments_skipped"])
+                if progress_task_id:
+                    _append_task_log(progress_task_id, f"   ⏭ {seg_label} : text vide")
+                continue
+
+            with state_lock:
+                _update_task(current_step=f"DeepSeek · {seg_label}")
+            try:
+                raw = post_message(
+                    [{"role": "user", "content": _build_review_prompt(rules_markdown, text)}],
+                    max_tokens=8000,
+                    model=REVIEW_MODEL,
+                    timeout=300,
+                )
+            except (AnthropicAPIError, AnthropicRateLimitError) as exc:
+                with state_lock:
+                    summary["segments_failed"] += 1
+                    summary["details"].append({
+                        "segment_id": seg_id,
+                        "sub_part_name": sub_name or f"Sous-partie {sub_idx + 1}",
+                        "passe": passe,
+                        "status": "failed",
+                        "reason": f"DeepSeek : {exc}",
+                    })
+                    _update_task(segments_failed=summary["segments_failed"])
+                if progress_task_id:
+                    _append_task_log(progress_task_id,
+                        f"   ❌ {seg_label} · DeepSeek : {str(exc)[:120]}")
+                continue
+
+            parsed = _parse_review_response(raw)
+            if not parsed:
+                with state_lock:
+                    summary["segments_failed"] += 1
+                    summary["details"].append({
+                        "segment_id": seg_id,
+                        "sub_part_name": sub_name or f"Sous-partie {sub_idx + 1}",
+                        "passe": passe,
+                        "status": "failed",
+                        "reason": "JSON DeepSeek inparseable",
+                        "raw_preview": (raw or "")[:200],
+                    })
+                    _update_task(segments_failed=summary["segments_failed"])
+                if progress_task_id:
+                    _append_task_log(progress_task_id,
+                        f"   ❌ {seg_label} · JSON inparseable")
+                continue
+
+            conforme = bool(parsed.get("conforme"))
+            corrected = (parsed.get("corrected_text") or "").strip()
+            violations = parsed.get("violations") or []
+
+            if conforme or not corrected or corrected == text:
+                with state_lock:
+                    summary["segments_conforme"] += 1
+                    summary["details"].append({
+                        "segment_id": seg_id,
+                        "sub_part_name": sub_name or f"Sous-partie {sub_idx + 1}",
+                        "passe": passe,
+                        "status": "conforme",
+                        "violations": [],
+                    })
+                    _update_task(segments_conforme=summary["segments_conforme"])
+                if progress_task_id:
+                    _append_task_log(progress_task_id, f"   ✓ {seg_label} : conforme")
+                continue
+
+            entry = {
+                "segment_id": seg_id,
+                "sub_part_name": sub_name or f"Sous-partie {sub_idx + 1}",
+                "sub_part_index": sub_idx,
+                "passe": passe,
+                "status": "would_modify" if dry_run else "modified",
+                "violations": violations,
+                "original_text": text,
+                "corrected_text": corrected,
+                "words_before": int(wc or len(text.split())),
+                "words_after": len(corrected.split()),
+            }
+
+            if not dry_run:
+                with db_lock:  # sérialise les UPDATE SQLite
+                    conn2 = get_db_connection()
+                    cursor2 = conn2.cursor()
+                    cursor2.execute(
+                        """
+                        UPDATE content_generation_segments
+                        SET text_content = ?, word_count = ?, dirty = 1, reviewed = 0,
+                            review_error = NULL
+                        WHERE id = ?
+                        """,
+                        (corrected, len(corrected.split()), seg_id),
+                    )
+                    conn2.commit()
+                    conn2.close()
+
+            with state_lock:
+                summary["segments_modified"] += 1
+                summary["details"].append(entry)
+                _update_task(segments_modified=summary["segments_modified"])
+            if progress_task_id:
+                _append_task_log(progress_task_id,
+                    f"   ✏️ {seg_label} · {'à modifier' if dry_run else 'modifié'} "
+                    f"({entry['words_before']} → {entry['words_after']} mots, "
+                    f"{len(violations)} règle(s))")
+
+        if progress_task_id:
+            _append_task_log(progress_task_id, f"✓ {sub_idx_label} : terminé")
+
+    # Lance le pool de greenlets
+    pool = eventlet.GreenPool(size=pool_size)
+    pile = eventlet.GreenPile(pool)
+    for sub_idx_key in group_keys:
+        pile.spawn(_process_group, sub_idx_key)
+    list(pile)  # bloque jusqu'à ce que tous les greenlets aient fini
 
     logger.info(
         f"📝 Revérif texte folder={folder_id} : "

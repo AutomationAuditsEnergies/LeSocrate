@@ -2695,6 +2695,27 @@ def create_hr_blueprint(socketio):
             logger.error(f"❌ Erreur status review text: {e}")
             return jsonify({"success": False, "error": str(e)}), 500
 
+    @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/content-job/rules/review-text/active", methods=["GET"])
+    def review_text_active(folder_id):
+        """Renvoie la dernière tâche de revérif texte connue pour ce dossier.
+
+        Permet au frontend de reprendre l'affichage de progression à
+        l'ouverture de la modale Script TTS (et donc de ne pas perdre le
+        suivi si on l'a fermée pendant le run).
+        """
+        denied = _require_admin()
+        if denied:
+            return denied
+        try:
+            from services.script_rules_service import get_active_text_review_for_folder
+            task = get_active_text_review_for_folder(folder_id)
+            if not task:
+                return jsonify({"success": True, "task": None}), 200
+            return jsonify({"success": True, "task": task}), 200
+        except Exception as e:
+            logger.error(f"❌ Erreur active review text: {e}")
+            return jsonify({"success": False, "error": str(e)}), 500
+
     @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/content-job/rules/review-post-tts", methods=["POST"])
     def review_post_tts_with_rules(folder_id):
         """Phase 3b : parcourt les chunks audio, applique les règles, splice les MP3 non-conformes."""

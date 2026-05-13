@@ -437,6 +437,9 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
         setRulesPanelOpen(false)
         setRulesError('')
         loadScriptRules()
+        // Reprend l'affichage d'une éventuelle revérif texte en cours pour
+        // ce folder (utile si on a fermé la modale pendant le run).
+        resumeActiveTextReview()
       } else {
         alert(data.error || 'Script non disponible')
       }
@@ -455,6 +458,12 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
     setEditingSegment(null)
     resetScriptAnnotationDraft()
     setScriptAnnotations([])
+    // Arrête le polling local mais la tâche backend continue (greenlet eventlet).
+    // À la prochaine ouverture, resumeActiveTextReview() reprendra le suivi.
+    if (textReviewPollRef.current) {
+      clearInterval(textReviewPollRef.current)
+      textReviewPollRef.current = null
+    }
   }
 
   const captureScriptSelection = (event, context) => {
@@ -567,6 +576,32 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
       if (data.success) setScriptRules(data)
     } catch (e) {
       console.error('Erreur chargement règles:', e)
+    }
+  }
+
+  const resumeActiveTextReview = async () => {
+    if (!selectedFolder) return
+    try {
+      const resp = await fetch(
+        apiUrl(`/api/hr/cours-folders/${selectedFolder.id}/content-job/rules/review-text/active`),
+        { credentials: 'include' }
+      )
+      const data = await resp.json()
+      if (!data.success || !data.task) return
+      const task = data.task
+      setTextReviewProgress(task)
+      if (task.status === 'running') {
+        // Tâche encore en cours côté backend → on reprend le polling.
+        setReviewingText(true)
+        setRulesPanelOpen(true)
+        pollTextReviewStatus(task.task_id)
+      } else if (task.status === 'completed' && task.result) {
+        // Tâche terminée pendant qu'on avait fermé la modale → on affiche le résumé.
+        setTextReviewSummary(task.result)
+        setRulesPanelOpen(true)
+      }
+    } catch (e) {
+      console.error('Erreur reprise revérif texte:', e)
     }
   }
 
