@@ -2,6 +2,31 @@
 
 ## 2026-05-13
 
+### fix(content-review): revérif texte — max_tokens dynamique, retry JSON, contrainte longueur stricte
+
+Suite au run 18/18 où 9 segments (les passes 1-2, les plus longues 5000-7000 mots) ont échoué en « JSON inparseable » à cause de la troncature DeepSeek + DeepSeek réduisait les textes de ~50 % au lieu de ±15 %. Trois corrections :
+
+**1. `max_tokens` calculé dynamiquement par segment** (`script_rules_service.py:_process_group`)
+- Avant : `max_tokens=8000` fixe. Pour un segment de 6000 mots, la réponse `corrected_text` peut faire ~9000-10000 tokens → tronquée → JSON cassé.
+- Maintenant : `llm_max_tokens = min(60000, max(8000, int(word_count × 1.15 × 1.6) + 800))`.
+  - `× 1.15` : tolérance de la contrainte de longueur (cf. point 3).
+  - `× 1.6` : ratio token/mot moyen en français.
+  - `+ 800` : marge pour le wrapper JSON (champs `conforme`, `violations`, etc.).
+  - Cap à 60000 pour rester dans les limites du provider.
+- Timeout passé de 300s à 600s pour les longs appels.
+
+**2. Retry automatique sur JSON inparseable** (`_process_group`)
+- Si la 1re réponse n'est pas du JSON valide : 2e tentative avec un **prompt renforcé** (préambule explicite « format JSON strict, pas de fence, échappe les caractères spéciaux ») et `max_tokens × 1.5`.
+- Si le retry réussit → le segment est traité normalement et un log `✓ retry OK` apparaît.
+- Si le retry échoue aussi → segment marqué `failed` avec raison `JSON DeepSeek inparseable (après retry)` et un `raw_preview` plus long (500 chars au lieu de 200) pour debug.
+
+**3. Contrainte de longueur stricte dans le prompt** (`_build_review_prompt`)
+- Avant : « Conserve la longueur approximative » → DeepSeek interprétait les règles « ralentir, ajouter pauses, casser les phrases » comme un mandat pour couper le texte de moitié.
+- Maintenant : **IMPÉRATIF longueur** annoncé en gras, avec borne min/max calculée explicitement (`min_words = wc × 0.85`, `max_words = wc × 1.15`).
+- Phrase ajoutée : *« Si tu ne peux pas appliquer toutes les règles sans dépasser cette borne, applique-en moins mais respecte strictement la longueur. Couper le contenu de moitié est INTERDIT. »*
+- Bonus : rappel de conserver tous les tags audio (`[pause]`, `[calm]`, etc.) déjà présents dans l'extrait.
+- Le nombre de mots de l'extrait est affiché dans le marqueur `=== Extrait à vérifier (X mots) ===` pour que le LLM en ait conscience.
+
 ### feat(content-review): revérif texte parallélisée par sous-partie + persistance à travers la modale
 
 Deux améliorations sur la revérif texte (Phase 3b') basées sur retour utilisateur :

@@ -328,25 +328,46 @@ def _word_slice(text: str, start: int, end: int) -> str:
     return " ".join(words[start:end]).strip()
 
 
-def _build_review_prompt(rules_markdown: str, chunk_text: str) -> str:
+def _build_review_prompt(rules_markdown: str, chunk_text: str, *, retry: bool = False) -> str:
+    word_count = len(chunk_text.split())
+    min_words = max(1, int(word_count * 0.85))
+    max_words = max(min_words + 1, int(word_count * 1.15))
+    retry_preamble = (
+        "⚠️ Tentative précédente : ta réponse n'était pas un JSON valide "
+        "(probablement tronquée ou avec du texte parasite). Cette fois, "
+        "réponds STRICTEMENT par un objet JSON valide commençant par { "
+        "et finissant par }. Pas de fence ```, pas de préambule, pas de "
+        "commentaire après. Si le texte corrigé est long, mets-le tel quel "
+        "dans le champ `corrected_text` en échappant les guillemets internes "
+        "(\\\"), les retours à la ligne (\\n) et les antislashs (\\\\).\n\n"
+        if retry else ""
+    )
     return (
+        retry_preamble +
         "Tu es un agent de revérification du script d'un cours audio. "
         "Tu reçois (1) un markdown de règles éditoriales établies à partir de "
-        "corrections antérieures du formateur, et (2) un extrait du script (un "
-        "chunk audio lu en TTS). Ta tâche : déterminer si l'extrait respecte les "
-        "règles, et si non, le réécrire de façon minimale pour qu'il les respecte.\n\n"
+        "corrections antérieures du formateur, et (2) un extrait du script "
+        "lu en TTS. Ta tâche : déterminer si l'extrait respecte les règles, "
+        "et si non, le réécrire de façon minimale pour qu'il les respecte.\n\n"
         "Contraintes pour la réécriture :\n"
         "- Modifications strictement nécessaires pour la mise en conformité. "
         "Ne refais pas tout l'extrait si quelques mots suffisent.\n"
-        "- Conserve la longueur approximative, le ton oral, le niveau RNCP, le sens pédagogique.\n"
-        "- Pas de balise, pas de markdown, pas de guillemets ouvrants/fermants.\n\n"
+        f"- **IMPÉRATIF longueur** : le nombre de mots de `corrected_text` doit "
+        f"rester entre **{min_words} et {max_words}** (l'extrait original fait "
+        f"{word_count} mots, tolérance ±15 %). Si tu ne peux pas appliquer toutes "
+        f"les règles sans dépasser cette borne, applique-en moins mais respecte "
+        f"strictement la longueur. Couper le contenu de moitié est INTERDIT.\n"
+        "- Conserve le ton oral, le niveau RNCP, le sens pédagogique de chaque idée.\n"
+        "- Conserve tous les tags audio entre crochets (`[pause]`, `[calm]`, "
+        "`[emphasis]`, etc.) déjà présents dans l'extrait.\n"
+        "- Pas de balise markdown, pas de fence ```, pas de guillemets typographiques.\n\n"
         "Réponds EXCLUSIVEMENT par un JSON valide (rien avant, rien après), avec "
         "exactement ces 3 champs :\n"
         '{"conforme": <true|false>, '
         '"violations": ["<règle violée 1>", ...], '
         '"corrected_text": "<texte corrigé OU chaîne vide si conforme=true>"}\n\n'
         f"=== Règles ===\n{rules_markdown}\n\n"
-        f"=== Extrait à vérifier ===\n{chunk_text}\n\n"
+        f"=== Extrait à vérifier ({word_count} mots) ===\n{chunk_text}\n\n"
         "JSON :"
     )
 
@@ -834,12 +855,17 @@ def review_segments_with_rules(
 
             with state_lock:
                 _update_task(current_step=f"DeepSeek · {seg_label}")
+            # max_tokens calculé pour laisser de la marge : corrected_text
+            # peut faire jusqu'à 1.15x le nb de mots original, ~1.5 token/mot
+            # côté français, + ~500 tokens pour wrapper JSON et violations.
+            seg_word_count = len(text.split())
+            llm_max_tokens = min(60000, max(8000, int(seg_word_count * 1.15 * 1.6) + 800))
             try:
                 raw = post_message(
                     [{"role": "user", "content": _build_review_prompt(rules_markdown, text)}],
-                    max_tokens=8000,
+                    max_tokens=llm_max_tokens,
                     model=REVIEW_MODEL,
-                    timeout=300,
+                    timeout=600,
                 )
             except (AnthropicAPIError, AnthropicRateLimitError) as exc:
                 with state_lock:
@@ -859,6 +885,29 @@ def review_segments_with_rules(
 
             parsed = _parse_review_response(raw)
             if not parsed:
+                # Retry une fois avec un prompt renforcé "format JSON strict"
+                # + max_tokens supplémentaire. Couvre les cas de troncature
+                # (réponse trop longue) ou de fence markdown intempestive.
+                if progress_task_id:
+                    _append_task_log(progress_task_id,
+                        f"   ⟳ {seg_label} · JSON inparseable, retry…")
+                with state_lock:
+                    _update_task(current_step=f"DeepSeek retry · {seg_label}")
+                try:
+                    raw_retry = post_message(
+                        [{"role": "user", "content": _build_review_prompt(rules_markdown, text, retry=True)}],
+                        max_tokens=min(60000, int(llm_max_tokens * 1.5)),
+                        model=REVIEW_MODEL,
+                        timeout=600,
+                    )
+                    parsed = _parse_review_response(raw_retry)
+                    if parsed and progress_task_id:
+                        _append_task_log(progress_task_id, f"   ✓ {seg_label} · retry OK")
+                except Exception as exc2:
+                    if progress_task_id:
+                        _append_task_log(progress_task_id,
+                            f"   ❌ {seg_label} · retry DeepSeek : {str(exc2)[:120]}")
+            if not parsed:
                 with state_lock:
                     summary["segments_failed"] += 1
                     summary["details"].append({
@@ -866,13 +915,13 @@ def review_segments_with_rules(
                         "sub_part_name": sub_name or f"Sous-partie {sub_idx + 1}",
                         "passe": passe,
                         "status": "failed",
-                        "reason": "JSON DeepSeek inparseable",
-                        "raw_preview": (raw or "")[:200],
+                        "reason": "JSON DeepSeek inparseable (après retry)",
+                        "raw_preview": (raw or "")[:500],
                     })
                     _update_task(segments_failed=summary["segments_failed"])
                 if progress_task_id:
                     _append_task_log(progress_task_id,
-                        f"   ❌ {seg_label} · JSON inparseable")
+                        f"   ❌ {seg_label} · JSON inparseable (retry échoué)")
                 continue
 
             conforme = bool(parsed.get("conforme"))
