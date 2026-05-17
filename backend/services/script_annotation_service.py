@@ -538,7 +538,8 @@ def apply_script_annotation(folder_id: int, annotation_id: int) -> dict:
                     """
                     UPDATE content_generation_segments
                     SET text_content = ?, word_count = ?, dirty = 1, reviewed = 0,
-                        review_error = NULL
+                        review_error = NULL, review_signature = NULL,
+                        humanized = 0, humanization_error = NULL, humanization_signature = NULL
                     WHERE id = ?
                     """,
                     (new_text, word_count, seg_id),

@@ -2824,7 +2824,9 @@ def create_hr_blueprint(socketio):
         # erreur reviewer devient obsolète sur un texte modifié).
         cursor.execute("""
             UPDATE content_generation_segments
-            SET text_content = ?, word_count = ?, dirty = 1, reviewed = 0, review_error = NULL
+            SET text_content = ?, word_count = ?, dirty = 1,
+                humanized = 0, humanization_error = NULL, humanization_signature = NULL,
+                reviewed = 0, review_error = NULL, review_signature = NULL
             WHERE job_id = ? AND sub_part_index = ? AND passe = ?
         """, (new_text, new_word_count, job["id"], sub_part_index, passe))
 

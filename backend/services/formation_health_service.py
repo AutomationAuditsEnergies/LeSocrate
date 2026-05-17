@@ -238,6 +238,10 @@ def compute_health(job_id: int) -> dict:
         }
 
     nb_days = job.get("nb_days") or 0
+    audio_deferred = (
+        job.get("status") == "text_ready"
+        or not bool(job.get("auto_pilot_generate_audio", 0))
+    )
     expected_segments_per_day = 6 * 3  # 6 sous-parties × 3 passes (modèle pédagogique)
     expected_total_segments = nb_days * expected_segments_per_day
 
@@ -370,7 +374,33 @@ def compute_health(job_id: int) -> dict:
     if not snap_ok:
         warnings.append("pre_review_snapshotted")
 
-    # 5. Review cohérent : tous les segments completed → reviewed=1 OU review_error
+    # 5. Humanisation cohérente : tous les segments completed → humanized=1 OU erreur.
+    n_unhumanized_no_error = 0
+    if folders:
+        cursor.execute(
+            f"""SELECT COUNT(*) FROM content_generation_segments s
+                JOIN content_generation_jobs cj ON cj.id = s.job_id
+                WHERE cj.folder_id IN ({placeholders})
+                AND s.status = 'completed'
+                AND COALESCE(s.humanized, 0) = 0
+                AND s.humanization_error IS NULL""",
+            tuple(folder_ids),
+        )
+        n_unhumanized_no_error = cursor.fetchone()[0]
+    humanization_ok = n_unhumanized_no_error == 0
+    checks["humanization_consistent"] = {
+        "ok": humanization_ok,
+        "detail": (
+            f"{n_unhumanized_no_error} segment(s) non passés en humanisation"
+            if not humanization_ok
+            else "tous les segments ont été tentés en humanisation"
+        ),
+        "unhumanized_segments": n_unhumanized_no_error,
+    }
+    if not humanization_ok:
+        blocking.append("humanization_consistent")
+
+    # 6. Review cohérent : tous les segments completed → reviewed=1 OU review_error
     n_unreviewed_no_error = 0
     if folders:
         cursor.execute(
@@ -397,7 +427,8 @@ def compute_health(job_id: int) -> dict:
     if not review_ok:
         blocking.append("review_consistent")
 
-    # 6. Audio TTS présent (dirty=0 sur tous les segments → audio régénéré)
+    # 7. Audio TTS présent si demandé. En pipeline texte, dirty=1 est normal :
+    # il signifie "texte prêt, audio à générer plus tard".
     n_dirty = 0
     if folders:
         cursor.execute(
@@ -408,20 +439,25 @@ def compute_health(job_id: int) -> dict:
             tuple(folder_ids),
         )
         n_dirty = cursor.fetchone()[0]
-    audio_ok = n_dirty == 0 and n_completed > 0
+    audio_ok = (n_dirty == 0 and n_completed > 0) or audio_deferred
     checks["audio_tts_files"] = {
         "ok": audio_ok,
         "detail": (
+            "audio différé : texte/Word/reviews prêts, MP3 à générer à la demande"
+            if audio_deferred and n_dirty > 0
+            else
             f"{n_dirty} segment(s) encore dirty=1 — audio non régénéré"
             if n_dirty > 0
             else "tous les segments ont leur audio à jour (dirty=0)"
         ),
         "n_dirty": n_dirty,
+        "deferred": audio_deferred,
     }
     if not audio_ok:
         blocking.append("audio_tts_files")
 
-    # 7. Module persistant créé
+    # 8. Module persistant créé. En pipeline texte-only, il sera finalisé après
+    # la génération audio de toutes les journées.
     cursor.execute(
         "SELECT id, version, status FROM formation_modules WHERE source_pipeline_job_id = ?",
         (job_id,),

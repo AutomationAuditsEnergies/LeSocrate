@@ -31,10 +31,12 @@ GAP_NEGLIGIBLE_SEC = 15
 GAP_SHORT_SEC = 45
 GAP_MEDIUM_SEC = 120
 
-# Coefficient de remplissage : on vise 80 % du gap (laisse un peu de silence en fin)
-GAP_FILL_RATIO = 0.80
-# wpm de référence à 0.90 (on dimensionne le closing pour cette vitesse)
-WPM_REFERENCE = 182
+# Coefficient de remplissage : le gap est déjà calculé jusqu'à la dernière
+# parole visée (T-1 min). On le remplit presque entièrement, en gardant une
+# petite marge de sécurité.
+GAP_FILL_RATIO = 0.92
+# wpm Fish Audio calibré pour la voix/vitesse de production.
+WPM_REFERENCE = 192
 # Cap absolu du closing : ~4 min audio max. Au-delà, le résidu reste silence
 # (un gap > 5 min signale un volume_safety insuffisant en amont, pas un closing à
 # rallonge pédagogiquement absurde).
@@ -82,6 +84,8 @@ CE QUI ARRIVE ENSUITE (début du bloc suivant) :
 CONSIGNES :
 - Vise environ {target_words} mots (±15%).
 - Ton clair, posé, comme un formateur adulte en classe virtuelle audio.
+- Applique les règles d'humanisation : respiration, phrases simples,
+  micro-interactions sobres, pas d'effet conférence ni accumulation de slogans.
 - Fais une mini-synthèse (2-3 idées clés DU BLOC qui vient de se terminer).
 - Termine par une petite phrase d'ouverture pédagogique vers la notion suivante,
   sans annoncer la logistique de la playlist.
@@ -132,6 +136,8 @@ STRUCTURE ATTENDUE (~{target_words} mots, ±15%) :
 
 TON :
 - Clair, posé, formateur adulte en classe virtuelle audio.
+- Humanisé : ralentis, rassure, laisse vivre les idées importantes, ajoute des
+  respirations naturelles quand c'est utile.
 - Pas de "Voilà pour cette partie" générique.
 - Pas d'énumération mécanique ("Premier point... Deuxième point...").
 - Pas de discours direct entre guillemets (TTS le lirait littéralement).
@@ -167,6 +173,8 @@ STRUCTURE ATTENDUE (~{target_words} mots, ±15%) :
 
 TON :
 - Clair, posé, formateur adulte qui clôt une journée de classe virtuelle audio.
+- Conclusion progressive : ralentissement, synthèse, valorisation du chemin
+  parcouru, projection vers la suite.
 - Pas mécanique ni grandiloquent.
 - Pas de discours direct entre guillemets.
 - Ne dis jamais "hier" ni "demain".

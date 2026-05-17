@@ -1127,6 +1127,7 @@ def update_job(job_id: int, **kwargs):
         # State machine auto-pilot persistée (résiste aux restarts Azure)
         "auto_pilot_enabled", "auto_pilot_step", "auto_pilot_model",
         "auto_pilot_tts_mode", "auto_pilot_use_cc", "auto_pilot_skip_vs",
+        "auto_pilot_generate_audio",
         "auto_pilot_volume_done", "auto_pilot_post_review_docs_done", "auto_pilot_error",
         "auto_pilot_locked_at", "auto_pilot_lock_owner",
     }
@@ -1163,6 +1164,7 @@ def get_job(job_id: int) -> dict | None:
                p.name AS platform_name,
                j.auto_pilot_enabled, j.auto_pilot_step, j.auto_pilot_model,
                j.auto_pilot_tts_mode, j.auto_pilot_use_cc, j.auto_pilot_skip_vs,
+               COALESCE(j.auto_pilot_generate_audio, 0),
                j.auto_pilot_volume_done, j.auto_pilot_post_review_docs_done,
                j.auto_pilot_error,
                j.auto_pilot_locked_at, j.auto_pilot_lock_owner
@@ -1197,11 +1199,12 @@ def get_job(job_id: int) -> dict | None:
         "auto_pilot_tts_mode": row[24],
         "auto_pilot_use_cc": bool(row[25]),
         "auto_pilot_skip_vs": bool(row[26]),
-        "auto_pilot_volume_done": bool(row[27]),
-        "auto_pilot_post_review_docs_done": bool(row[28]),
-        "auto_pilot_error": row[29],
-        "auto_pilot_locked_at": row[30],
-        "auto_pilot_lock_owner": row[31],
+        "auto_pilot_generate_audio": bool(row[27]),
+        "auto_pilot_volume_done": bool(row[28]),
+        "auto_pilot_post_review_docs_done": bool(row[29]),
+        "auto_pilot_error": row[30],
+        "auto_pilot_locked_at": row[31],
+        "auto_pilot_lock_owner": row[32],
     }
 
 

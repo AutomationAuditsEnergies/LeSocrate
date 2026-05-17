@@ -79,7 +79,7 @@ const STEP_LABELS = [
   { icon: 'auto_stories', label: 'Programme global' },
   { icon: 'calendar_view_week', label: 'Programmes journée' },
   { icon: 'edit_note', label: 'Génération cours' },
-  { icon: 'record_voice_over', label: 'Synthèse TTS' },
+  { icon: 'description', label: 'Textes prêts' },
 ]
 
 const AUTO_PILOT_STEP_LABELS = {
@@ -90,10 +90,11 @@ const AUTO_PILOT_STEP_LABELS = {
   daily: 'programmes journée',
   content: 'génération texte',
   volume_safety: 'sécurité volume',
+  humanization_review: 'humanisation',
   review: 'révision conformité',
-  post_review_docs: 'document final',
+  post_review_docs: 'Word 2',
   audio: 'synthèse audio',
-  done: 'terminé',
+  done: 'texte prêt',
   '?': '—',
 }
 
@@ -1363,15 +1364,24 @@ const CC_DEFAULT_MODEL_BY_STEP = {
   global: 'haiku',
   daily: 'haiku',
   content: 'sonnet',
+  humanization_review: 'sonnet',
   review: 'sonnet',
 }
-// Subprocess auto : global + daily + kb en mode mono-chunk, content + review
-// en mode chunked (boucle séquentielle de N appels CLI dans le backend, voir
+// Subprocess auto : global + daily + kb en mode mono-chunk,
+// content + humanization_review + review en mode chunked
+// (boucle séquentielle de N appels CLI dans le backend, voir
 // claude_code_mission_service.py:_execute_chunked).
 // kb : prompt borné à 1500-2500 mots/compétence × ~10 = ~25K mots ≈ 38K tokens
 // (largement sous la limite Sonnet 64K output). Parsing tolérant à la
 // troncature dans `_import_kb` via `_repair_truncated_json`.
-const CC_AUTO_EXEC_ENABLED = { global: true, kb: true, daily: true, content: true, review: true }
+const CC_AUTO_EXEC_ENABLED = {
+  global: true,
+  kb: true,
+  daily: true,
+  content: true,
+  humanization_review: true,
+  review: true,
+}
 
 function StepDualLayout({ apiContent, claudeCodeContent }) {
   // En mono-colonne (DUAL_COLUMN_ENABLED=false), on ne rend que le contenu
@@ -3989,6 +3999,22 @@ export default function FormationPipeline() {
                     )}
                   </div>
                 )}
+
+                <FlowArrowDown height={20} />
+                <div>
+                  <ClaudeCodeStepActions
+                    stepKey="humanization_review"
+                    stepLabel="Humanisation intros, transitions et rythme"
+                    jobId={selectedJobId}
+                    disabled={!['tts_launched', 'audio_running', 'audio_completed', 'audio_launched', 'audio_error'].includes(job.status)}
+                    disabledReason="En attente de la génération texte"
+                    onExport={handleExportMission}
+                    onExecute={handleExecuteMission}
+                    onImport={handleImportMission}
+                    pendingMission={pendingMissions.humanization_review}
+                    generatedVia={null}
+                  />
+                </div>
 
                 <FlowArrowDown height={20} />
                 <div>

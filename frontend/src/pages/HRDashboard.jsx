@@ -66,7 +66,8 @@ export default function HRDashboard() {
   const [newFormHours, setNewFormHours] = useState('')
   // Auto-pilot : si activé, une fois le job pipeline initié on appelle l'endpoint
   // /run-auto qui chaîne toutes les étapes (REAC → KB → global → daily → content
-  // → review → audio). Sinon, comportement historique : redirection vers
+  // → humanisation → review → Word 2). L'audio se lance ensuite à la demande.
+  // Sinon, comportement historique : redirection vers
   // /formation-pipeline pour validation manuelle étape par étape.
   const [autoPilot, setAutoPilot] = useState(false)
   const [autoPilotTts, setAutoPilotTts] = useState('gtts')  // 'fish_audio' | 'gtts' | 'mock'
@@ -75,7 +76,7 @@ export default function HRDashboard() {
   // - 'api_deepseek' : appels directs à l'API DeepSeek (consomme DEEPSEEK_API_KEY)
   // - 'claude_code'  : subprocess `claude` local (forfait Pro/Max via OAuth, gratuit côté API)
   // - 'test'         : skip KB/global/daily/content, injecte des DOCX/TXT pré-rédigés.
-  //                    La pipeline ne tourne que finalize + review + audio mock + health-check.
+  //                    La pipeline ne tourne que finalize + humanisation + review + Word 2.
   //                    Permet de valider les étapes en aval en ~5 min au lieu de 30-60.
   const [autoPilotMode, setAutoPilotMode] = useState('api')  // 'api' | 'api_deepseek' | 'claude_code' | 'test'
   const [testDocs, setTestDocs] = useState([])  // File[] uploadés pour le mode test
@@ -513,6 +514,7 @@ export default function HRDashboard() {
                   tts_mode: autoPilotTts,
                   use_claude_code: autoPilotMode === 'claude_code',
                   model: autoPilotMode === 'api_deepseek' ? 'pro' : 'sonnet',
+                  generate_audio: false,
                 }),
               },
             )
@@ -1717,7 +1719,7 @@ function CreatePlatformView({
                     Lancer en mode auto-pilot
                   </div>
                   <div className="mt-1 text-xs" style={{ color: darkMode ? '#94a3b8' : '#64748b' }}>
-                    Toutes les étapes s'enchaînent automatiquement (~30 min à 2 h selon le TTS). Sans cette option, les étapes restent à valider à la main dans l'onglet Formation Pipeline.
+                    Toutes les étapes texte s'enchaînent automatiquement jusqu'aux Word 2 et rapports. Les audios se génèrent ensuite à la demande, journée par journée.
                   </div>
                 </div>
               </label>
@@ -1726,7 +1728,7 @@ function CreatePlatformView({
                 <div className="ml-7 mt-3 space-y-3">
                   <div>
                     <label className="mb-1 block text-xs font-medium" style={{ color: darkMode ? '#94a3b8' : '#64748b' }}>
-                      Voix TTS pour l'étape audio
+                      Voix par défaut pour les audios ultérieurs
                       {autoPilotMode === 'test' && (
                         <span className="ml-2" style={{ color: '#a78bfa' }}>
                           (forcé en mock pour le mode test)
@@ -1769,7 +1771,7 @@ function CreatePlatformView({
                       {autoPilotMode === 'claude_code' && 'Le backend doit avoir LOCAL_DEV=true et le binaire `claude` dans son PATH.'}
                       {autoPilotMode === 'api' && 'Mode standard, aucune dépendance locale requise.'}
                       {autoPilotMode === 'api_deepseek' && 'Le backend doit avoir DEEPSEEK_API_KEY dans son .env. Endpoint compatible Anthropic, route automatique sur api.deepseek.com.'}
-                      {autoPilotMode === 'test' && 'Skip KB/global/daily/content + volume safety (tu fournis 1 DOCX/TXT par journée). Seule la révision conformité tourne (Claude Code Sonnet, ~15 min). Audio en mock. Pour itérer vite sur la qualité review.'}
+                      {autoPilotMode === 'test' && 'Skip KB/global/daily/content + volume safety (tu fournis 1 DOCX/TXT par journée). Humanisation + conformité tournent ensuite, puis Word 2.'}
                     </div>
                   </div>
 

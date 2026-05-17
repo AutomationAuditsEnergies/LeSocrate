@@ -474,7 +474,8 @@ def init_test_pipeline():
         # Sans use_claude_code=True, ces appels passent par l'API LLM configurée
         # (DeepSeek ou Anthropic). Avec True, ils utilisent le forfait Pro/Max
         # via subprocess `claude`.
-        # tts_mode=mock par défaut pour ne rien payer côté Fish Audio.
+        # L'audio est désormais découplé : l'auto-pilot prépare le texte/Word 2,
+        # puis la synthèse se lance séparément par journée/semaine.
         # Modèle SONNET (pas Haiku) : la review et le volume_safety demandent du
         # jugement linguistique fin (fusion de phrases avec "que", transformation
         # discours direct→indirect avec variation lexicale, etc.). Haiku produit
@@ -488,6 +489,7 @@ def init_test_pipeline():
                        auto_pilot_tts_mode=tts_mode,
                        auto_pilot_use_cc=1,
                        auto_pilot_skip_vs=1,   # volume safety skippée en mode TEST
+                       auto_pilot_generate_audio=0,
                        auto_pilot_volume_done=0,
                        auto_pilot_post_review_docs_done=0,
                        auto_pilot_error=None)
@@ -925,6 +927,12 @@ def list_content(job_id):
                 (cg_id,),
             )
             n_reviewed = cursor.fetchone()[0]
+            cursor.execute(
+                "SELECT COUNT(*) FROM content_generation_segments "
+                "WHERE job_id = ? AND status = 'completed' AND COALESCE(humanized, 0) = 1",
+                (cg_id,),
+            )
+            n_humanized = cursor.fetchone()[0]
             # Segments dont la tentative de review a échoué (reviewed=0 ET
             # review_error défini). Comptent comme "traités" pour arrêter
             # le polling frontend, sans mentir sur la conformité.
@@ -944,7 +952,7 @@ def list_content(job_id):
         else:
             cg_id = None
             cg_status, cg_words, cur_sub, cur_passe, cg_err = None, 0, 0, 1, None
-            n_completed, n_reviewed, n_review_errors, n_dirty = 0, 0, 0, 0
+            n_completed, n_reviewed, n_humanized, n_review_errors, n_dirty = 0, 0, 0, 0, 0
 
         result.append({
             "folder_id": fid,
@@ -960,6 +968,7 @@ def list_content(job_id):
             "total_words": cg_words or 0,
             "segments_completed": n_completed,
             "segments_total": 18,
+            "segments_humanized": n_humanized,
             "segments_reviewed": n_reviewed,
             "segments_review_errors": n_review_errors,
             "dirty_segments": n_dirty,
@@ -1197,6 +1206,8 @@ def _write_api_review_report(job_id: int, folder_id: int, result: dict, model: s
     if not row:
         return
     folder_name, position = row
+    review_kind = result.get("review_kind") or "compliance"
+    review_label = result.get("review_label") or "Révision conformité"
 
     by_rule = {}
     by_segment = []
@@ -1237,6 +1248,7 @@ def _write_api_review_report(job_id: int, folder_id: int, result: dict, model: s
             "sub_idx": detail.get("sub_idx"),
             "passe": detail.get("passe"),
             "segment_id_actual": detail.get("segment_id"),
+            "patches_proposed": detail.get("proposed", len(applied) + len(rejected)),
             "patches_applied": len(applied),
             "patches_rejected": len(rejected) + (1 if detail.get("error") else 0),
             "patches_detail": patches_detail,
@@ -1247,9 +1259,18 @@ def _write_api_review_report(job_id: int, folder_id: int, result: dict, model: s
         "folder_name": folder_name,
         "imported_at": datetime.utcnow().isoformat() + "Z",
         "generated_via": model or "api",
+        "review_kind": review_kind,
+        "review_label": review_label,
+        "review_signature": result.get("review_signature"),
+        "force": bool(result.get("force")),
         "summary": {
             "segments_reviewed": result.get("segments_reviewed", 0),
-            "patches_proposed": result.get("patches_applied", 0) + result.get("patches_rejected", 0),
+            "segments_already_current": result.get("segments_already_current", 0),
+            "segments_total_completed": result.get("segments_total_completed", 0),
+            "patches_proposed": result.get(
+                "patches_proposed",
+                result.get("patches_applied", 0) + result.get("patches_rejected", 0),
+            ),
             "patches_applied": result.get("patches_applied", 0),
             "patches_rejected": result.get("patches_rejected", 0),
             "segments_failed": result.get("segments_failed", 0),
@@ -1263,12 +1284,13 @@ def _write_api_review_report(job_id: int, folder_id: int, result: dict, model: s
         job_id,
         folder_id,
         report,
-        source="api",
+        source="api" if review_kind == "compliance" else f"{review_kind}_api",
         generated_via=model or "api",
     )
     report["persisted_report_id"] = report_id
 
-    chunk_id = f"day_{int(position or 0) + 1}_review_api"
+    suffix = "review_api" if review_kind == "compliance" else f"review_{review_kind}_api"
+    chunk_id = f"day_{int(position or 0) + 1}_{suffix}"
     chunk_dir = os.path.join(mission_dir(job_id, "review"), chunk_id)
     try:
         os.makedirs(chunk_dir, exist_ok=True)
@@ -1288,8 +1310,15 @@ def _review_chunk_ids_for_position(position: int) -> list[str]:
     day = int(position or 0) + 1
     return (
         [f"day_{day}_review_{g['id']}" for g in _REVIEW_RULE_GROUPS]
-        + [f"day_{day}_review_api", f"day_{day}_review"]
+        + [f"day_{day}_review_api", f"day_{day}_review_humanization_api", f"day_{day}_review"]
     )
+
+
+def _humanization_chunk_ids_for_position(position: int) -> list[str]:
+    from services.content_generation_service import _HUMANIZATION_REVIEW_RULE_GROUPS
+
+    day = int(position or 0) + 1
+    return [f"day_{day}_review_{g['id']}" for g in _HUMANIZATION_REVIEW_RULE_GROUPS]
 
 
 def _delete_active_review_artifacts(job_id: int, position: int) -> int:
@@ -1303,12 +1332,16 @@ def _delete_active_review_artifacts(job_id: int, position: int) -> int:
     from services.claude_code_mission_service import mission_dir
 
     deleted = 0
-    base_dir = mission_dir(job_id, "review")
-    for chunk_id in _review_chunk_ids_for_position(position):
-        path = os.path.join(base_dir, chunk_id)
-        if os.path.isdir(path):
-            shutil.rmtree(path)
-            deleted += 1
+    for step_key, chunk_ids in (
+        ("review", _review_chunk_ids_for_position(position)),
+        ("humanization_review", _humanization_chunk_ids_for_position(position)),
+    ):
+        base_dir = mission_dir(job_id, step_key)
+        for chunk_id in chunk_ids:
+            path = os.path.join(base_dir, chunk_id)
+            if os.path.isdir(path):
+                shutil.rmtree(path)
+                deleted += 1
     return deleted
 
 
@@ -2012,9 +2045,8 @@ def resume_content(job_id):
 def review_content(job_id, folder_id):
     """
     Lance la révision conformité du texte généré pour un dossier cours.
-    Boucle sur les segments `status='completed' AND reviewed=0`, appelle
-    Claude reviewer, applique les patches unique-match et marque `reviewed=1`.
-    Idempotent : relancer ne refait rien sur des segments déjà reviewed.
+    Relit les segments non validés ou validés avec une ancienne signature de
+    règles. `force=true` relance explicitement tous les segments completed.
     """
     if not _require_admin():
         return jsonify({"error": "Non autorisé"}), 403
@@ -2038,13 +2070,14 @@ def review_content(job_id, folder_id):
 
     data = request.get_json(silent=True) or {}
     model = _resolve_pipeline_api_model(job, data.get("model"))
+    force = bool(data.get("force") or data.get("force_review"))
 
     import eventlet
-    from services.content_generation_service import run_content_review
+    from services.content_generation_service import run_content_review, run_humanization_review
 
     def _run_review(_folder_id):
         import sys, traceback
-        logger.info(f"🚀 SPAWN review greenlet job={job_id} folder={_folder_id} model={model}")
+        logger.info(f"🚀 SPAWN review greenlet job={job_id} folder={_folder_id} model={model} force={force}")
         sys.stdout.flush()
         started_at = time.time()
         try:
@@ -2057,11 +2090,18 @@ def review_content(job_id, folder_id):
                 folder_id=_folder_id,
                 model=str(model) if model else None,
                 message="Révision conformité API démarrée",
+                data={"force": force},
             )
         except Exception:
             pass
         try:
-            result = run_content_review(_folder_id, model=model)
+            humanization_result = run_humanization_review(_folder_id, model=model, force=force)
+            _write_api_review_report(job_id, _folder_id, humanization_result, model)
+            if humanization_result.get("segments_failed", 0) > 0:
+                raise RuntimeError(
+                    f"Humanisation échouée sur {humanization_result['segments_failed']} segment(s)"
+                )
+            result = run_content_review(_folder_id, model=model, force=force)
             duration_ms = int((time.time() - started_at) * 1000)
             try:
                 _write_api_review_report(job_id, _folder_id, result, model)
@@ -2084,9 +2124,16 @@ def review_content(job_id, folder_id):
                     message="Révision conformité API terminée",
                     data={
                         "segments_reviewed": result.get("segments_reviewed", 0),
+                        "humanization_segments_reviewed": humanization_result.get("segments_reviewed", 0),
+                        "humanization_patches_proposed": humanization_result.get("patches_proposed", 0),
+                        "humanization_patches_applied": humanization_result.get("patches_applied", 0),
+                        "segments_already_current": result.get("segments_already_current", 0),
+                        "patches_proposed": result.get("patches_proposed", 0),
                         "patches_applied": result.get("patches_applied", 0),
                         "patches_rejected": result.get("patches_rejected", 0),
                         "segments_failed": result.get("segments_failed", 0),
+                        "review_signature": result.get("review_signature"),
+                        "force": result.get("force", force),
                     },
                 )
             except Exception:
@@ -2094,6 +2141,7 @@ def review_content(job_id, folder_id):
             logger.info(
                 f"✅ Review job={job_id} folder={_folder_id} : "
                 f"{result['segments_reviewed']} audités, "
+                f"{result.get('patches_proposed', 0)} proposés, "
                 f"{result['patches_applied']} appliqués, "
                 f"{result['patches_rejected']} rejetés"
             )
@@ -2125,6 +2173,7 @@ def review_content(job_id, folder_id):
         "message": "Révision conformité lancée en arrière-plan",
         "folder_id": folder_id,
         "model": model,
+        "force": force,
     }), 202
 
 
@@ -2453,6 +2502,213 @@ def _finalize_audio_ready_state(job_id: int, voice_type: str) -> dict:
         conn.close()
 
 
+def _count_dirty_segments_for_job(job_id: int) -> int:
+    from database.db import get_db_connection
+    from services.formation_pipeline_service import get_expected_course_folders
+
+    folder_ids = get_expected_course_folders(job_id).get("folder_ids") or []
+    if not folder_ids:
+        return 0
+    placeholders = ",".join("?" * len(folder_ids))
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        f"""
+        SELECT COUNT(*)
+        FROM content_generation_segments cgs
+        JOIN content_generation_jobs cgj ON cgj.id = cgs.job_id
+        WHERE cgj.folder_id IN ({placeholders})
+          AND cgs.status = 'completed'
+          AND COALESCE(cgs.dirty, 1) = 1
+        """,
+        tuple(folder_ids),
+    )
+    n_dirty = int(cursor.fetchone()[0] or 0)
+    conn.close()
+    return n_dirty
+
+
+def _folder_text_reviews_ready(job_id: int, folder_id: int) -> tuple[bool, dict]:
+    from database.db import get_db_connection
+    from services.content_generation_service import (
+        _current_compliance_review_signature,
+        _current_humanization_review_signature,
+    )
+
+    humanization_signature = _current_humanization_review_signature()
+    compliance_signature = _current_compliance_review_signature()
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        SELECT
+            COUNT(*),
+            SUM(CASE WHEN COALESCE(cgs.humanized, 0) = 1
+                      AND cgs.humanization_signature = ? THEN 1 ELSE 0 END),
+            SUM(CASE WHEN COALESCE(cgs.reviewed, 0) = 1
+                      AND cgs.review_signature = ? THEN 1 ELSE 0 END),
+            SUM(CASE WHEN cgs.humanization_error IS NOT NULL THEN 1 ELSE 0 END),
+            SUM(CASE WHEN cgs.review_error IS NOT NULL THEN 1 ELSE 0 END)
+        FROM content_generation_segments cgs
+        JOIN content_generation_jobs cgj ON cgj.id = cgs.job_id
+        JOIN cours_folders cf ON cf.id = cgj.folder_id
+        WHERE cf.id = ? AND cf.formation_job_id = ?
+          AND cgs.status = 'completed'
+        """,
+        (humanization_signature, compliance_signature, folder_id, job_id),
+    )
+    total, humanized, reviewed, humanization_errors, review_errors = cursor.fetchone()
+    conn.close()
+    total = int(total or 0)
+    detail = {
+        "segments_completed": total,
+        "humanized_current": int(humanized or 0),
+        "reviewed_current": int(reviewed or 0),
+        "humanization_errors": int(humanization_errors or 0),
+        "review_errors": int(review_errors or 0),
+    }
+    return total > 0 and detail["humanized_current"] >= total and detail["reviewed_current"] >= total, detail
+
+
+@formation_bp.route("/api/formation/<int:job_id>/content/<int:folder_id>/generate-audio", methods=["POST"])
+def generate_folder_audio(job_id, folder_id):
+    """Génère l'audio d'une seule journée/semaine, après pipeline texte complète."""
+    if not _require_admin():
+        return jsonify({"error": "Non autorisé"}), 403
+
+    job = get_job(job_id)
+    if not job:
+        return jsonify({"error": "Job introuvable"}), 404
+
+    try:
+        folder_id, folder_resolution = _resolve_continue_after_text_folder(job_id, int(folder_id))
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+
+    data = request.get_json(silent=True) or {}
+    reviews_ready, review_detail = _folder_text_reviews_ready(job_id, folder_id)
+    if not reviews_ready and not bool(data.get("allow_unreviewed")):
+        return jsonify({
+            "error": "Texte pas prêt pour l'audio : humanisation et conformité doivent être terminées.",
+            "review_detail": review_detail,
+        }), 400
+
+    tts_mode = (data.get("tts_mode") or job.get("auto_pilot_tts_mode") or "gtts").lower()
+    if tts_mode not in ("fish_audio", "gtts", "mock"):
+        return jsonify({"error": "tts_mode invalide (fish_audio | gtts | mock)"}), 400
+    mock = tts_mode == "mock"
+    basic_tts = tts_mode == "gtts"
+    voice_type = "mock" if mock else ("gtts" if basic_tts else "fish_audio")
+    force_all = bool(data.get("force_all", True))
+    sync_slides = bool(data.get("sync_slides", True))
+    auto_generate_slides = bool(data.get("auto_generate_slides", True))
+    max_slides = int(data.get("max_slides") or 60)
+    pace = data.get("pace") or "normal"
+    model = _resolve_pipeline_api_model(job, data.get("model"))
+
+    from services.formation_pipeline_service import get_expected_course_folders
+    folder_ids = get_expected_course_folders(job_id).get("folder_ids") or []
+    if folder_id not in folder_ids:
+        return jsonify({"error": "Folder hors journées attendues"}), 400
+    idx = folder_ids.index(folder_id)
+    next_folder_id = folder_ids[idx + 1] if idx + 1 < len(folder_ids) else None
+
+    import eventlet
+    from services.content_generation_service import generate_audio_from_script
+
+    def _run_one():
+        started_at = time.time()
+        try:
+            from services.formation_observability_service import log_pipeline_event
+            update_job(job_id, status="audio_running", error_message=None)
+            log_pipeline_event(
+                job_id,
+                "audio_folder_started",
+                step="audio",
+                status="running",
+                folder_id=folder_id,
+                model=str(model) if model else None,
+                message="Synthèse audio journée démarrée",
+                data={
+                    "voice_type": voice_type,
+                    "force_all": force_all,
+                    "sync_slides": sync_slides,
+                    "auto_generate_slides": auto_generate_slides,
+                    "single_folder": True,
+                },
+            )
+            generate_audio_from_script(
+                folder_id,
+                on_progress=_make_audio_progress_logger(job_id, folder_id, voice_type),
+                force_all=force_all,
+                mock=mock,
+                basic_tts=basic_tts,
+                next_folder_id=next_folder_id,
+                is_last_folder=next_folder_id is None,
+                sync_slides=sync_slides,
+                auto_generate_slides=auto_generate_slides,
+                slide_max_slides=max_slides,
+                slide_pace=pace,
+                slide_model=model,
+                llm_model=model,
+            )
+            n_dirty = _count_dirty_segments_for_job(job_id)
+            finalize_result = None
+            if n_dirty == 0:
+                finalize_result = _finalize_audio_ready_state(job_id, voice_type)
+                update_job(job_id, status="audio_completed", error_message=None)
+            else:
+                update_job(job_id, status="text_ready", error_message=None)
+            log_pipeline_event(
+                job_id,
+                "audio_folder_completed",
+                step="audio",
+                status="completed",
+                folder_id=folder_id,
+                model=str(model) if model else None,
+                duration_ms=int((time.time() - started_at) * 1000),
+                message="Synthèse audio journée terminée",
+                data={
+                    "voice_type": voice_type,
+                    "remaining_dirty_segments": n_dirty,
+                    "finalized": bool(finalize_result),
+                    "finalize_result": finalize_result,
+                },
+            )
+        except Exception as e:
+            update_job(job_id, status="audio_error", error_message=f"folder {folder_id}: {str(e)[:500]}")
+            try:
+                from services.formation_observability_service import log_pipeline_event
+                log_pipeline_event(
+                    job_id,
+                    "audio_folder_failed",
+                    step="audio",
+                    status="error",
+                    folder_id=folder_id,
+                    model=str(model) if model else None,
+                    duration_ms=int((time.time() - started_at) * 1000),
+                    message="Synthèse audio journée échouée",
+                    data={"voice_type": voice_type},
+                    error=str(e)[:500],
+                )
+            except Exception:
+                pass
+            logger.error("❌ Audio folder job=%s folder=%s : %s", job_id, folder_id, e, exc_info=True)
+
+    eventlet.spawn(_run_one)
+    return jsonify({
+        "message": "Synthèse audio lancée pour cette journée",
+        "job_id": job_id,
+        "folder_id": folder_id,
+        "resolved_folder_id": folder_id,
+        "folder_resolution": folder_resolution,
+        "next_folder_id": next_folder_id,
+        "tts_mode": tts_mode,
+        "voice_type": voice_type,
+        "status": "audio_running",
+    }), 202
+
+
 @formation_bp.route("/api/formation/<int:job_id>/launch-audio", methods=["POST"])
 def launch_audio(job_id):
     """
@@ -2499,6 +2755,17 @@ def launch_audio(job_id):
         return jsonify({
             "error": f"Textes pas encore prêts pour {len(missing)} dossier(s)",
             "missing_folder_ids": missing,
+        }), 400
+
+    not_review_ready = []
+    for fid in folder_ids:
+        ok, detail = _folder_text_reviews_ready(job_id, fid)
+        if not ok:
+            not_review_ready.append({"folder_id": fid, **detail})
+    if not_review_ready:
+        return jsonify({
+            "error": "Humanisation/conformité incomplète : audio bloqué tant que les textes ne sont pas validés.",
+            "folders": not_review_ready,
         }), 400
 
     data = request.get_json(silent=True) or {}
@@ -2864,7 +3131,8 @@ def _reset_folder_downstream_to_generated_text(job_id: int, folder_id: int) -> d
             """
             UPDATE content_generation_segments
             SET text_content = ?, word_count = ?, dirty = 1,
-                reviewed = 0, review_error = NULL
+                humanized = 0, humanization_error = NULL, humanization_signature = NULL,
+                reviewed = 0, review_error = NULL, review_signature = NULL
             WHERE id = ?
             """,
             (base_text, word_count, seg_id),
@@ -3358,6 +3626,7 @@ def continue_after_text(job_id, folder_id):
                 _update_job_db,
                 generate_audio_from_script,
                 run_content_review,
+                run_humanization_review,
             )
             from services.formation_observability_service import log_pipeline_event
 
@@ -3480,9 +3749,36 @@ def continue_after_text(job_id, folder_id):
                     job_id, folder_id, from_step,
                 )
 
-            # ── Étape 3 : RÉVISION CONFORMITÉ + Word 2 ──────────────────────
+            # ── Étape 3 : HUMANISATION → CONFORMITÉ + Word 2 ───────────────
             if from_step_idx <= 1:
                 step_started = time.time()
+                logger.info(
+                    "PIPELINE_RESUME_STEP_HUMANIZATION_START formation_job_id=%s folder_id=%s model=%s",
+                    job_id, folder_id, model,
+                )
+                humanization_result = run_humanization_review(folder_id, model=model)
+                _write_api_review_report(job_id, folder_id, humanization_result, model)
+                if humanization_result.get("segments_failed", 0) > 0:
+                    raise RuntimeError(
+                        f"Humanisation échouée sur {humanization_result['segments_failed']} segment(s)"
+                    )
+                log_pipeline_event(
+                    job_id,
+                    "continue_after_text_humanization_completed",
+                    step="humanization_review",
+                    status="completed",
+                    folder_id=folder_id,
+                    model=str(model) if model else None,
+                    message="Révision humanisation terminée",
+                    data={
+                        "segments_reviewed": humanization_result.get("segments_reviewed", 0),
+                        "segments_failed": humanization_result.get("segments_failed", 0),
+                        "patches_proposed": humanization_result.get("patches_proposed", 0),
+                        "patches_applied": humanization_result.get("patches_applied", 0),
+                        "patches_rejected": humanization_result.get("patches_rejected", 0),
+                        "review_signature": humanization_result.get("review_signature"),
+                    },
+                )
                 logger.info(
                     "PIPELINE_RESUME_STEP_REVIEW_START formation_job_id=%s folder_id=%s model=%s",
                     job_id, folder_id, model,
@@ -3529,7 +3825,11 @@ def continue_after_text(job_id, folder_id):
                     data={
                         "segments_reviewed": review_result.get("segments_reviewed", 0),
                         "segments_failed": review_result.get("segments_failed", 0),
+                        "segments_already_current": review_result.get("segments_already_current", 0),
+                        "patches_proposed": review_result.get("patches_proposed", 0),
                         "patches_applied": review_result.get("patches_applied", 0),
+                        "patches_rejected": review_result.get("patches_rejected", 0),
+                        "review_signature": review_result.get("review_signature"),
                         "doc_filename": filename,
                         "total_words": final_words,
                     },
@@ -3705,6 +4005,7 @@ def list_formations():
 #
 # DB columns : auto_pilot_enabled, auto_pilot_step, auto_pilot_model,
 #              auto_pilot_tts_mode, auto_pilot_use_cc, auto_pilot_skip_vs,
+#              auto_pilot_generate_audio,
 #              auto_pilot_volume_done, auto_pilot_post_review_docs_done,
 #              auto_pilot_error,
 #              auto_pilot_locked_at, auto_pilot_lock_owner
@@ -3795,7 +4096,7 @@ def _determine_next_ap_step(job_id: int) -> str | None:
     # 2. KB
     kb_done = j.get("status") in (
         "global_ready", "global_validated", "daily_ready",
-        "daily_validated", "tts_launched", "audio_running",
+        "daily_validated", "text_ready", "tts_launched", "audio_running",
         "audio_completed", "audio_launched",
     )
     if not kb_done:
@@ -3862,7 +4163,14 @@ def _determine_next_ap_step(job_id: int) -> str | None:
         if not j.get("auto_pilot_volume_done"):
             return "volume_safety"
 
-    # 6. Révision conformité
+    from services.content_generation_service import (
+        _current_compliance_review_signature,
+        _current_humanization_review_signature,
+    )
+    humanization_signature = _current_humanization_review_signature()
+    compliance_signature = _current_compliance_review_signature()
+
+    # 6. Révision humanisation : intros, transitions, respirations, rythme.
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute(f"""
@@ -3870,19 +4178,49 @@ def _determine_next_ap_step(job_id: int) -> str | None:
         JOIN content_generation_jobs cgj ON cgj.id = cgs.job_id
         JOIN cours_folders cf ON cf.id = cgj.folder_id
         WHERE cf.id IN ({placeholders}) AND cgs.status = 'completed'
-          AND COALESCE(cgs.reviewed, 0) = 0
-    """, tuple(folder_ids))
+          AND (
+                COALESCE(cgs.humanized, 0) = 0
+             OR cgs.humanization_signature IS NULL
+             OR cgs.humanization_signature != ?
+          )
+    """, tuple(folder_ids) + (humanization_signature,))
+    not_humanized = cursor.fetchone()[0]
+    conn.close()
+    if not_humanized > 0:
+        return "humanization_review"
+
+    # 7. Révision conformité stricte
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(f"""
+        SELECT COUNT(*) FROM content_generation_segments cgs
+        JOIN content_generation_jobs cgj ON cgj.id = cgs.job_id
+        JOIN cours_folders cf ON cf.id = cgj.folder_id
+        WHERE cf.id IN ({placeholders}) AND cgs.status = 'completed'
+          AND (
+                COALESCE(cgs.reviewed, 0) = 0
+             OR cgs.review_signature IS NULL
+             OR cgs.review_signature != ?
+          )
+    """, tuple(folder_ids) + (compliance_signature,))
     not_reviewed = cursor.fetchone()[0]
     conn.close()
     if not_reviewed > 0:
         return "review"
 
-    # 6.5. Document post-révision : ré-assemble le texte courant après volume
+    # 8. Document post-révision : ré-assemble le texte courant après volume
     # et conformité, avant d'autoriser la synthèse audio.
     if not j.get("auto_pilot_post_review_docs_done"):
         return "post_review_docs"
 
-    # 7. Audio TTS — on vérifie via dirty=0 sur tous les segments (pas le status qui
+    # 9. Audio TTS optionnel. Par défaut l'auto-pilot s'arrête texte prêt :
+    # les audios se génèrent ensuite à la demande, journée/semaine par journée/semaine.
+    if not j.get("auto_pilot_generate_audio"):
+        if j.get("status") != "text_ready":
+            update_job(job_id, status="text_ready", error_message=None)
+        return None
+
+    # Si l'audio auto est explicitement demandé, on vérifie via dirty=0 sur tous les segments (pas le status qui
     # est positionné au début du loop audio, donc non fiable en cas de restart)
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -3914,6 +4252,18 @@ def _execute_ap_step(job_id: int, step: str, job: dict) -> None:
 
     api_model = _PIPELINE_MODEL_ALIASES[model]
     cc_model = "haiku" if model == "haiku" else "sonnet"
+
+    def _assert_cc_result_complete(step_label: str, result: dict | None) -> None:
+        if isinstance(result, dict) and int(result.get("chunks_failed") or 0) > 0:
+            errors = result.get("errors") or []
+            first_error = ""
+            if errors:
+                first = errors[0]
+                first_error = f" — {first.get('chunk')}: {first.get('error')}"
+            raise RuntimeError(
+                f"{step_label} Claude Code incomplète : "
+                f"{result.get('chunks_failed')} chunk(s) en erreur{first_error}"
+            )
 
     def _wait_status(targets, max_wait=3600):
         elapsed = 0
@@ -4119,7 +4469,11 @@ def _execute_ap_step(job_id: int, step: str, job: dict) -> None:
             cursor.execute(
                 f"""
                 UPDATE content_generation_segments
-                SET review_error = NULL
+                SET review_error = NULL,
+                    humanization_error = CASE
+                        WHEN COALESCE(humanized, 0) = 0 THEN NULL
+                        ELSE humanization_error
+                    END
                 WHERE id IN (
                     SELECT cgs.id
                     FROM content_generation_segments cgs
@@ -4138,9 +4492,41 @@ def _execute_ap_step(job_id: int, step: str, job: dict) -> None:
         update_job(job_id, auto_pilot_volume_done=1, auto_pilot_post_review_docs_done=0)
         logger.info(f"🤖 ✓ Volume safety terminée job {job_id}")
 
+    elif step == "humanization_review":
+        from services.formation_pipeline_service import get_expected_course_folders
+        folder_ids = get_expected_course_folders(job_id).get("folder_ids") or []
+        if use_cc:
+            result = execute_mission_locally(job_id, "humanization_review", cc_model)
+            _assert_cc_result_complete("Humanisation", result)
+        else:
+            from services.content_generation_service import run_humanization_review
+            failed = []
+            reports_written = 0
+            for fid in folder_ids:
+                try:
+                    result = run_humanization_review(fid, model=api_model)
+                    _write_api_review_report(job_id, fid, result, api_model)
+                    reports_written += 1
+                    if result.get("segments_failed", 0) > 0:
+                        failed.append(f"{fid}({result['segments_failed']} segments échoués)")
+                except Exception as e:
+                    logger.warning(f"⚠️ Humanization review folder {fid} : {e}")
+                    failed.append(str(fid))
+            if failed:
+                raise RuntimeError(f"Humanisation échouée sur folders : {', '.join(failed)}")
+            logger.info(
+                "🤖 ✓ Rapports humanisation persistés job %s : %s/%s",
+                job_id,
+                reports_written,
+                len(folder_ids),
+            )
+        update_job(job_id, auto_pilot_post_review_docs_done=0)
+        logger.info(f"🤖 ✓ Révision humanisation terminée job {job_id}")
+
     elif step == "review":
         if use_cc:
-            execute_mission_locally(job_id, "review", cc_model)
+            result = execute_mission_locally(job_id, "review", cc_model)
+            _assert_cc_result_complete("Révision conformité", result)
         else:
             from services.content_generation_service import run_content_review
             from services.formation_pipeline_service import get_expected_course_folders
@@ -4199,8 +4585,9 @@ def _execute_ap_step(job_id: int, step: str, job: dict) -> None:
                 f"🤖   ✓ Document post-révision folder {fid} : "
                 f"{final_words} mots, {filename}"
             )
-        update_job(job_id, status="tts_launched", auto_pilot_post_review_docs_done=1)
-        logger.info(f"🤖 ✓ Documents post-révision générés job {job_id}")
+        next_status = "tts_launched" if job.get("auto_pilot_generate_audio") else "text_ready"
+        update_job(job_id, status=next_status, auto_pilot_post_review_docs_done=1)
+        logger.info(f"🤖 ✓ Documents post-révision générés job {job_id} (status={next_status})")
 
     elif step == "audio":
         from services.content_generation_service import generate_audio_from_script
@@ -4369,7 +4756,12 @@ def _tick_auto_pilot(job_id: int) -> None:
                     step="done",
                     status="completed",
                     model=j.get("auto_pilot_model"),
-                    message="Auto-pilot terminé",
+                    message=(
+                        "Auto-pilot texte terminé"
+                        if not j.get("auto_pilot_generate_audio")
+                        else "Auto-pilot terminé"
+                    ),
+                    data={"generate_audio": bool(j.get("auto_pilot_generate_audio"))},
                 )
             except Exception:
                 pass
@@ -4392,6 +4784,7 @@ def _tick_auto_pilot(job_id: int) -> None:
                 data={
                     "tts_mode": j.get("auto_pilot_tts_mode"),
                     "use_claude_code": bool(j.get("auto_pilot_use_cc")),
+                    "generate_audio": bool(j.get("auto_pilot_generate_audio")),
                 },
             )
         except Exception:
@@ -4496,12 +4889,13 @@ def start_auto_pilot_watchdog() -> None:
 
 @formation_bp.route("/api/formation/<int:job_id>/run-auto", methods=["POST"])
 def run_auto_pilot(job_id):
-    """Lance l'auto-pilot : REAC → KB → global → daily → content → volume → review → docs → audio.
+    """Lance l'auto-pilot texte : REAC → KB → global → daily → content → volume → humanisation → conformité → docs.
 
     Body (optionnel) :
       - tts_mode : 'fish_audio' | 'gtts' | 'mock' (défaut 'gtts')
       - model : 'sonnet' | 'haiku' (défaut 'sonnet')
       - use_claude_code : bool (défaut false)
+      - generate_audio : bool (défaut false) — legacy, enchaîne aussi l'audio
 
     Retourne 202 immédiatement. Suivre via GET /run-auto/status.
     """
@@ -4524,6 +4918,7 @@ def run_auto_pilot(job_id):
         return jsonify({
             "error": "use_claude_code=true est incompatible avec DeepSeek. Lance l'auto-pilot en mode API."
         }), 400
+    generate_audio = bool(payload.get("generate_audio") or payload.get("include_audio"))
 
     # Vérifie qu'un tick n'est pas déjà en cours (lock actif non-périmé)
     if job.get("auto_pilot_step") and job.get("auto_pilot_step") != "done":
@@ -4548,6 +4943,7 @@ def run_auto_pilot(job_id):
                auto_pilot_tts_mode=tts_mode,
                auto_pilot_use_cc=int(use_cc),
                auto_pilot_skip_vs=0,
+               auto_pilot_generate_audio=int(generate_audio),
                auto_pilot_volume_done=0,
                auto_pilot_post_review_docs_done=0,
                auto_pilot_error=None)
@@ -4560,7 +4956,7 @@ def run_auto_pilot(job_id):
             status="running",
             model=model,
             message="Auto-pilot lancé",
-            data={"tts_mode": tts_mode, "use_claude_code": use_cc},
+            data={"tts_mode": tts_mode, "use_claude_code": use_cc, "generate_audio": generate_audio},
         )
     except Exception:
         pass
@@ -4571,6 +4967,7 @@ def run_auto_pilot(job_id):
         "ok": True, "status": "auto_pilot_started",
         "tts_mode": tts_mode, "model": model,
         "use_claude_code": use_cc,
+        "generate_audio": generate_audio,
     }), 202
 
 
@@ -4588,13 +4985,14 @@ def auto_pilot_status(job_id):
     error = job.get("auto_pilot_error")
     model = job.get("auto_pilot_model")
     tts_mode = job.get("auto_pilot_tts_mode")
+    generate_audio = bool(job.get("auto_pilot_generate_audio"))
     if step == "done":
-        return jsonify({"status": "done", "step": "done", "model": model, "tts_mode": tts_mode}), 200
+        return jsonify({"status": "done", "step": "done", "model": model, "tts_mode": tts_mode, "generate_audio": generate_audio}), 200
     if error:
-        return jsonify({"status": "error", "step": step, "error": error, "model": model, "tts_mode": tts_mode}), 200
+        return jsonify({"status": "error", "step": step, "error": error, "model": model, "tts_mode": tts_mode, "generate_audio": generate_audio}), 200
     if step:
-        return jsonify({"status": "running", "step": step, "model": model, "tts_mode": tts_mode}), 200
-    return jsonify({"status": "starting", "model": model, "tts_mode": tts_mode}), 200
+        return jsonify({"status": "running", "step": step, "model": model, "tts_mode": tts_mode, "generate_audio": generate_audio}), 200
+    return jsonify({"status": "starting", "model": model, "tts_mode": tts_mode, "generate_audio": generate_audio}), 200
 
 
 @formation_bp.route("/api/formation/<int:job_id>/events", methods=["GET"])

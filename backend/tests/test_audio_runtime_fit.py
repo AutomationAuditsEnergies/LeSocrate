@@ -5,6 +5,9 @@ On mocke `convert_to_speech_basic`, `_mp3_duration_seconds_no_ffprobe` et
 durées et éviter les appels réseau Edge TTS pendant les tests.
 """
 
+import os
+import sqlite3
+import tempfile
 import unittest
 from unittest.mock import patch
 
@@ -82,6 +85,237 @@ class RuntimeFitStopsBeforeOverflowTest(unittest.TestCase):
             "Le runtime fit doit reporter le surplus quand on dépasse",
         )
         self.assertGreater(len(consumed), 0)
+
+
+class FishAudioWordBudgetCalibrationTest(unittest.TestCase):
+    def test_45_minute_budget_reserves_conclusion_and_final_silence(self):
+        # 192 mots/min, 17s de silence initial.
+        # Texte principal arrêté à T-4min, parole totale arrêtée à T-1min.
+        with patch.object(cgs, "_course_words_per_minute", return_value=192.0), patch.object(
+            cgs, "_course_preflight_safety", return_value=1.0
+        ):
+            main_budget = cgs._estimated_main_words_budget_for_course(2700, api_speed=0.95)
+            total_budget = cgs._estimated_words_budget_for_course(2700, api_speed=0.95)
+
+        self.assertEqual(main_budget, int(((2700 - 240 - 17) / 60) * 192))
+        self.assertEqual(total_budget, int(((2700 - 60 - 17) / 60) * 192))
+        self.assertGreater(total_budget - main_budget, 500)
+
+
+class HumanizationReviewRulesTest(unittest.TestCase):
+    def test_review_includes_humanization_rule_group(self):
+        group = next(
+            (g for g in cgs._HUMANIZATION_REVIEW_RULE_GROUPS if g["id"] == "humanisation_rythme"),
+            None,
+        )
+        self.assertIsNotNone(group)
+        self.assertIn(101, group["rules"])
+        self.assertIn(111, group["rules"])
+        self.assertIn("RÈGLE #101", cgs._HUMANIZATION_REVIEW_RULES)
+        self.assertIn("RÈGLE #111", cgs._HUMANIZATION_REVIEW_RULES)
+
+    def test_each_review_group_extracts_rules(self):
+        rules_text = cgs._load_review_rules()
+        for group in cgs._COMPLIANCE_REVIEW_RULE_GROUPS + cgs._HUMANIZATION_REVIEW_RULE_GROUPS:
+            with self.subTest(group=group["id"]):
+                extracted = cgs._extract_rules_for_group(rules_text, group["rules"])
+                self.assertIn(f"RÈGLE #{group['rules'][0]}", extracted)
+
+    def test_humanization_prompt_can_propose_rhythm_corrections(self):
+        prompt = cgs._build_review_prompt_focused(
+            "Bonjour à tous. On entre maintenant dans le vif du sujet.",
+            cgs._HUMANIZATION_REVIEW_RULES,
+            "Humanisation et rythme pédagogique",
+            "Intros plus douces, respirations et transitions",
+            [101, 102, 103],
+        )
+
+        self.assertIn("comptent comme des non-conformités", prompt)
+        self.assertIn("micro-interaction", prompt)
+        self.assertIn("Pas de réécriture complète", prompt)
+
+    def test_review_group_fails_when_rules_are_missing(self):
+        group = {
+            "id": "missing",
+            "label": "Règles absentes",
+            "rules": [999],
+            "description": "test",
+        }
+
+        with patch.object(cgs, "_review_chunk_with_retries") as reviewer:
+            updated, applied, rejected, error, proposed = cgs._review_group_chunks(
+                "Bonjour. On commence directement.",
+                "",
+                group,
+            )
+
+        self.assertEqual(updated, "Bonjour. On commence directement.")
+        self.assertEqual(applied, [])
+        self.assertEqual(rejected, [])
+        self.assertEqual(proposed, 0)
+        self.assertIn("Règles introuvables", error)
+        reviewer.assert_not_called()
+
+    def test_review_signature_depends_on_rules_text(self):
+        sig_a = cgs._review_rules_signature("RÈGLE #1")
+        sig_b = cgs._review_rules_signature("RÈGLE #1 modifiée")
+
+        self.assertNotEqual(sig_a, sig_b)
+        self.assertEqual(len(sig_a), 64)
+
+
+class ContentReviewSignatureSelectionTest(unittest.TestCase):
+    def _make_db(self, signature):
+        tmp = tempfile.NamedTemporaryFile(delete=False)
+        tmp.close()
+        conn = sqlite3.connect(tmp.name)
+        conn.execute(
+            """
+            CREATE TABLE content_generation_segments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                job_id INTEGER NOT NULL,
+                sub_part_index INTEGER NOT NULL,
+                sub_part_name TEXT NOT NULL,
+                passe INTEGER NOT NULL,
+                status TEXT DEFAULT 'completed',
+                text_content TEXT DEFAULT '',
+                word_count INTEGER DEFAULT 0,
+                dirty INTEGER DEFAULT 0,
+                reviewed INTEGER DEFAULT 0,
+                review_error TEXT,
+                review_signature TEXT,
+                humanized INTEGER DEFAULT 0,
+                humanization_error TEXT,
+                humanization_signature TEXT,
+                text_content_pre_review TEXT
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO content_generation_segments
+                (job_id, sub_part_index, sub_part_name, passe, status,
+                 text_content, word_count, dirty, reviewed, review_signature)
+            VALUES (1, 0, 'Intro', 1, 'completed',
+                    'Bonjour. On commence directement.', 4, 0, 1, ?)
+            """,
+            (signature,),
+        )
+        conn.commit()
+        conn.close()
+        return tmp.name
+
+    def _run_review_on_db(self, db_path, rules_text):
+        calls = []
+
+        def connect():
+            return sqlite3.connect(db_path)
+
+        def fake_group_review(current_text, _rules_text, group, model=None):
+            calls.append(group["id"])
+            return current_text, [], [], None, 0
+
+        with patch.object(cgs, "get_job_from_db", return_value={"id": 1, "formation_job_id": 9}), patch.object(
+            cgs, "get_db_connection", side_effect=connect
+        ), patch.object(cgs, "_load_review_rules", return_value=rules_text), patch.object(
+            cgs, "_ensure_review_signature_column"
+        ), patch.object(cgs, "_review_group_chunks", side_effect=fake_group_review):
+            result = cgs.run_content_review(123)
+
+        return result, calls
+
+    def test_stale_reviewed_segment_is_reprocessed_and_signed(self):
+        db_path = self._make_db("old-signature")
+        try:
+            result, calls = self._run_review_on_db(db_path, "RÈGLE #1 — test")
+
+            conn = sqlite3.connect(db_path)
+            reviewed, signature = conn.execute(
+                "SELECT reviewed, review_signature FROM content_generation_segments WHERE id = 1"
+            ).fetchone()
+            conn.close()
+
+            self.assertEqual(result["segments_reviewed"], 1)
+            self.assertEqual(calls, [g["id"] for g in cgs._COMPLIANCE_REVIEW_RULE_GROUPS])
+            self.assertEqual(reviewed, 1)
+            self.assertEqual(signature, result["review_signature"])
+        finally:
+            os.unlink(db_path)
+
+    def test_current_review_signature_skips_segment(self):
+        rules_text = "RÈGLE #1 — test"
+        current_signature = cgs._review_rules_signature(rules_text)
+        db_path = self._make_db(current_signature)
+        try:
+            result, calls = self._run_review_on_db(db_path, rules_text)
+
+            self.assertEqual(result["segments_reviewed"], 0)
+            self.assertEqual(result["segments_already_current"], 1)
+            self.assertEqual(calls, [])
+        finally:
+            os.unlink(db_path)
+
+    def test_humanization_patch_invalidates_compliance_review(self):
+        rules_text = "RÈGLE #101 — test"
+        current_compliance_signature = cgs._current_compliance_review_signature()
+        db_path = self._make_db(current_compliance_signature)
+        try:
+            conn = sqlite3.connect(db_path)
+            conn.execute(
+                """
+                UPDATE content_generation_segments
+                SET reviewed = 1, review_signature = ?
+                WHERE id = 1
+                """,
+                (current_compliance_signature,),
+            )
+            conn.commit()
+            conn.close()
+
+            def connect():
+                return sqlite3.connect(db_path)
+
+            def fake_group_review(current_text, _rules_text, group, model=None):
+                return (
+                    "Bonjour. [pause] On commence tranquillement.",
+                    [{
+                        "original": "Bonjour. On commence directement.",
+                        "replacement": "Bonjour. [pause] On commence tranquillement.",
+                        "rule_violated": "#101",
+                        "reason": "Début trop brusque.",
+                    }],
+                    [],
+                    None,
+                    1,
+                )
+
+            with patch.object(cgs, "get_job_from_db", return_value={"id": 1, "formation_job_id": 9}), patch.object(
+                cgs, "get_db_connection", side_effect=connect
+            ), patch.object(cgs, "_load_review_rules", return_value=rules_text), patch.object(
+                cgs, "_ensure_review_state_columns"
+            ), patch.object(cgs, "_review_group_chunks", side_effect=fake_group_review):
+                result = cgs.run_humanization_review(123)
+
+            conn = sqlite3.connect(db_path)
+            row = conn.execute(
+                """
+                SELECT humanized, humanization_signature, reviewed, review_signature,
+                       dirty, text_content
+                FROM content_generation_segments WHERE id = 1
+                """
+            ).fetchone()
+            conn.close()
+
+            self.assertEqual(result["review_kind"], "humanization")
+            self.assertEqual(result["patches_applied"], 1)
+            self.assertEqual(row[0], 1)
+            self.assertEqual(row[1], result["review_signature"])
+            self.assertEqual(row[2], 0)
+            self.assertIsNone(row[3])
+            self.assertEqual(row[4], 1)
+            self.assertIn("[pause]", row[5])
+        finally:
+            os.unlink(db_path)
 
 
 class ConclusionAppendedAfterStopTest(unittest.TestCase):
@@ -481,10 +715,13 @@ class CourseOpeningRewriteTest(unittest.TestCase):
                 '{"opening": "Très bien, on reprend tranquillement le fil. '
                 "Dans cette partie, on va installer une idée simple : la qualité "
                 "de prise en charge ne repose pas seulement sur une procédure, "
-                "elle repose aussi sur une posture professionnelle.\"}"
+                "elle repose aussi sur une posture professionnelle.\", "
+                "\"rewritten_start\": \"Pour entrer dans cette partie, on va "
+                "reprendre l'idée proprement : la qualité de prise en charge "
+                "est une vraie posture de service.\"}"
             ),
         ):
-            rewritten = cgs._rewrite_course_opening_for_audio(
+            rewritten, _meta = cgs._rewrite_course_opening_for_audio(
                 bloc,
                 [
                     ("cours_9h00_9h45.mp3", 2700, "cours", 1),
@@ -622,6 +859,136 @@ class FastTTSModeIsolationTest(unittest.TestCase):
         self.assertEqual(second[2], "slide_sync_edge_runtime_fit_fast")
         self.assertEqual(len(seen_workers), 1, "Le deuxième appel doit venir du cache exact")
         self.assertGreater(seen_workers[0], 1)
+
+
+class BasicTTSNoSlidesPipelineRuntimeFitTest(unittest.TestCase):
+    def _fake_conn(self):
+        class Cursor:
+            def execute(self, *_args, **_kwargs):
+                return None
+
+            def fetchall(self):
+                return [(0, 1, "texte source", 2, 1)]
+
+        class Conn:
+            def cursor(self):
+                return Cursor()
+
+            def close(self):
+                return None
+
+        return Conn()
+
+    def _patch_common(self, synth_result, uploaded):
+        bloc = {
+            "bloc_number": 1,
+            "target_sec": 2700,
+            "text": "texte du bloc",
+            "word_count": 3,
+            "start_w": 0,
+            "end_w": 3,
+            "dirty": True,
+            "contributing_seg_indices": {0},
+            "word_budget": 8000,
+            "filename": "cours_9h00_9h45.mp3",
+        }
+
+        def fake_upload(_container, blob_path, audio_bytes):
+            uploaded.append((blob_path, audio_bytes))
+
+        patches = [
+            patch.object(
+                cgs,
+                "get_job_from_db",
+                return_value={
+                    "id": 42,
+                    "platform_id": 7,
+                    "status": "completed",
+                    "formation_job_id": 99,
+                },
+            ),
+            patch.object(cgs, "get_db_connection", side_effect=self._fake_conn),
+            patch.object(
+                cgs,
+                "_build_course_blocs_from_segments",
+                return_value=([bloc], 3, ""),
+            ),
+            patch.object(
+                cgs,
+                "_playlist_items_for_platform",
+                return_value=[("cours_9h00_9h45.mp3", 2700, "cours", 1)],
+            ),
+            patch.object(cgs, "_course_opening_transitions_enabled", return_value=False),
+            patch.object(
+                cgs,
+                "_synthesize_course_audio_synced_to_slides",
+                return_value=synth_result,
+            ),
+            patch(
+                "services.azure_blob_service.upload_blob",
+                side_effect=fake_upload,
+            ),
+            patch.object(cgs, "_finalize_runtime_fit_carryover_and_clean", return_value=""),
+            patch.object(cgs, "_save_course_script_plan"),
+        ]
+        return patches
+
+    def test_basic_tts_without_slide_sync_uses_runtime_fit_before_upload(self):
+        uploaded = []
+        synth_result = (
+            _mp3_chunk("OK"),
+            2690.0,
+            "slide_sync_edge_runtime_fit",
+            [{"kind": "gtts", "duration": 2690.0}],
+            [],
+            [],
+            [{"text": "texte consomme"}],
+        )
+        patches = self._patch_common(synth_result, uploaded)
+
+        with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5] as synth, patches[6], patches[7], patches[8]:
+            result = cgs.generate_audio_from_script(
+                123,
+                force_all=True,
+                mock=False,
+                basic_tts=True,
+                sync_slides=False,
+                next_folder_id=124,
+                is_last_folder=False,
+            )
+
+        self.assertEqual(result["generated"], 1)
+        self.assertEqual(len(uploaded), 1)
+        synth.assert_called_once()
+        self.assertEqual(synth.call_args.kwargs["runtime_fit"], True)
+        self.assertEqual(synth.call_args.args[1], [], "Le mode non-sync doit utiliser des chunks sans slides")
+
+    def test_pre_upload_guard_rejects_overlong_basic_tts_audio(self):
+        uploaded = []
+        synth_result = (
+            _mp3_chunk("TOO_LONG"),
+            3095.0,
+            "slide_sync_edge_runtime_fit",
+            [{"kind": "gtts", "duration": 3095.0}],
+            [],
+            [],
+            [{"text": "texte consomme"}],
+        )
+        patches = self._patch_common(synth_result, uploaded)
+
+        with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6], patches[7], patches[8]:
+            with self.assertRaisesRegex(ValueError, "dépasse la durée autorisée"):
+                cgs.generate_audio_from_script(
+                    123,
+                    force_all=True,
+                    mock=False,
+                    basic_tts=True,
+                    sync_slides=False,
+                    next_folder_id=124,
+                    is_last_folder=False,
+                )
+
+        self.assertEqual(uploaded, [], "Un audio trop long ne doit pas être uploadé")
 
 
 if __name__ == "__main__":

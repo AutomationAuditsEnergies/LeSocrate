@@ -350,6 +350,26 @@ def init_database():
             logger.info("✅ Colonne text_content_pre_review ajoutée à content_generation_segments")
         except Exception:
             pass
+        try:
+            cursor.execute("ALTER TABLE content_generation_segments ADD COLUMN review_signature TEXT")
+            logger.info("✅ Colonne review_signature ajoutée à content_generation_segments")
+        except Exception:
+            pass
+        try:
+            cursor.execute("ALTER TABLE content_generation_segments ADD COLUMN humanized INTEGER DEFAULT 0")
+            logger.info("✅ Colonne humanized ajoutée à content_generation_segments")
+        except Exception:
+            pass
+        try:
+            cursor.execute("ALTER TABLE content_generation_segments ADD COLUMN humanization_error TEXT")
+            logger.info("✅ Colonne humanization_error ajoutée à content_generation_segments")
+        except Exception:
+            pass
+        try:
+            cursor.execute("ALTER TABLE content_generation_segments ADD COLUMN humanization_signature TEXT")
+            logger.info("✅ Colonne humanization_signature ajoutée à content_generation_segments")
+        except Exception:
+            pass
 
         # Notes humaines sur le script TTS : chaque selection/commentaire est
         # conservé pour produire un markdown de revue exploitable par l'agent de
@@ -495,6 +515,7 @@ def init_database():
             "auto_pilot_tts_mode": "TEXT",
             "auto_pilot_use_cc":  "INTEGER DEFAULT 0",
             "auto_pilot_skip_vs": "INTEGER DEFAULT 0",
+            "auto_pilot_generate_audio": "INTEGER DEFAULT 0",
             "auto_pilot_volume_done": "INTEGER DEFAULT 0",
             "auto_pilot_post_review_docs_done": "INTEGER DEFAULT 0",
             "auto_pilot_error":   "TEXT",

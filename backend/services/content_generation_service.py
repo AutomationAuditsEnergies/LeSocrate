@@ -33,10 +33,12 @@ logger = get_logger(__name__)
 CLAUDE_MODEL = default_model()
 NUM_SUB_PARTS = 6
 _COURSE_START_SILENCE_SECONDS = 17
-_TTS_REFERENCE_WPM_AT_095 = 192
+_DEFAULT_TTS_WORDS_PER_MINUTE = 192
+_COURSE_CONCLUSION_START_MARGIN_SECONDS = 240
+_COURSE_FINAL_SILENCE_SECONDS = 60
 _DEFAULT_TTS_SPEED = 0.90
 _DEFAULT_TTS_LOCAL_MAX_SPEEDUP = 1.0
-_DEFAULT_TTS_PREFLIGHT_SAFETY = 0.96
+_DEFAULT_TTS_PREFLIGHT_SAFETY = 1.0
 _SENTENCE_END_RE = re.compile(r"[.!?…][\"'»”’)\]]*$")
 _CARRYOVER_INTRO = (
     "Avant d'entrer dans la suite de ce cours, on reprend le point que nous "
@@ -184,10 +186,50 @@ def _course_preflight_safety():
     )
 
 
+def _course_words_per_minute():
+    """Fish Audio calibrated rate for the configured voice/speed."""
+    return _env_float(
+        "FORMATION_TTS_WORDS_PER_MINUTE",
+        _DEFAULT_TTS_WORDS_PER_MINUTE,
+        min_value=100,
+        max_value=260,
+    )
+
+
+def _course_conclusion_start_margin_sec():
+    return _env_float(
+        "FORMATION_TTS_CONCLUSION_START_MARGIN_SEC",
+        _COURSE_CONCLUSION_START_MARGIN_SECONDS,
+        min_value=60,
+        max_value=600,
+    )
+
+
+def _course_final_silence_sec():
+    return _env_float(
+        "FORMATION_TTS_FINAL_SILENCE_SEC",
+        _COURSE_FINAL_SILENCE_SECONDS,
+        min_value=10,
+        max_value=180,
+    )
+
+
+def _words_budget_for_speaking_window(target_sec: int, stop_before_end_sec: float) -> int:
+    voice_seconds = max(
+        0.0,
+        float(target_sec) - float(stop_before_end_sec) - _COURSE_START_SILENCE_SECONDS,
+    )
+    return int((voice_seconds / 60.0) * _course_words_per_minute() * _course_preflight_safety())
+
+
 def _estimated_words_budget_for_course(target_sec, api_speed):
-    voice_minutes = max(0, target_sec - _COURSE_START_SILENCE_SECONDS) / 60
-    estimated_wpm = _TTS_REFERENCE_WPM_AT_095 * (api_speed / 0.95)
-    return int(voice_minutes * estimated_wpm * _course_preflight_safety())
+    """Total words allowed for spoken content, stopping before final silence."""
+    return _words_budget_for_speaking_window(target_sec, _course_final_silence_sec())
+
+
+def _estimated_main_words_budget_for_course(target_sec, api_speed):
+    """Words allowed for source course text before the generated conclusion."""
+    return _words_budget_for_speaking_window(target_sec, _course_conclusion_start_margin_sec())
 
 
 def _estimated_audio_seconds_for_words(word_count, api_speed):
@@ -199,7 +241,7 @@ def _estimated_audio_seconds_for_words(word_count, api_speed):
     """
     if word_count <= 0:
         return _COURSE_START_SILENCE_SECONDS
-    estimated_wpm = _TTS_REFERENCE_WPM_AT_095 * (api_speed / 0.95)
+    estimated_wpm = _course_words_per_minute()
     voice_seconds = (word_count / estimated_wpm) * 60
     return voice_seconds + _COURSE_START_SILENCE_SECONDS
 
@@ -391,6 +433,7 @@ _BOOTSTRAP_WPM_EDGE_TTS = 170.0
 
 # Tolérance d'arrondi sur la durée mesurée (frames MP3 = ~26 ms).
 _TOLERANCE_OVERFLOW_SEC = 2.0
+_UPLOAD_DURATION_TOLERANCE_SEC = 0.5
 
 # Marge cible en fin de bloc pour une conclusion humaine et récapitulative.
 _DEFAULT_CONCLUSION_MARGIN_SEC = 150
@@ -513,6 +556,50 @@ def _smaller_runtime_fit_word_limit(chunk: dict, available_sec: float, observed_
     if fit_words >= words:
         fit_words = words - 1
     return max(8, min(words - 1, fit_words))
+
+
+def _assert_audio_duration_within_slot(filename: str, duration_sec: float, target_sec: int) -> None:
+    """Last safety gate before Azure upload: no generated MP3 may exceed its slot."""
+    if not target_sec or duration_sec is None:
+        return
+    if float(duration_sec) > float(target_sec) + _UPLOAD_DURATION_TOLERANCE_SEC:
+        raise ValueError(
+            f"{filename} dépasse la durée autorisée "
+            f"({float(duration_sec):.1f}s > {int(target_sec)}s). "
+            "Audio non uploadé pour éviter un débord de playlist."
+        )
+
+
+def _runtime_conclusions_from_attempts(attempts: list) -> list:
+    return [
+        {
+            "kind": a.get("kind"),
+            "duration": a.get("duration"),
+            "text": a.get("text") or "",
+        }
+        for a in (attempts or [])
+        if a.get("kind") in {
+            "conclusion",
+            "conclusion_fallback",
+            "conclusion_ultra_fallback",
+        } and (a.get("text") or "").strip()
+    ]
+
+
+def _runtime_ai_decisions_from_attempts(attempts: list) -> list:
+    return [
+        {
+            "kind": a.get("kind"),
+            "chunk": a.get("chunk"),
+            "remaining_sec": a.get("remaining_sec"),
+            "words": a.get("words"),
+            "reason": a.get("reason") or "",
+            "text": a.get("text") or "",
+            "original_start": a.get("original_start") or "",
+        }
+        for a in (attempts or [])
+        if str(a.get("kind") or "").startswith("ai_")
+    ]
 
 
 def _build_slide_audio_chunks(bloc: dict, slides: list) -> list:
@@ -780,11 +867,19 @@ def _build_runtime_conclusion_text(consumed_chunks: list, remaining_sec: float, 
         if (c.get("text") or "").strip()
     )
     anchors = _pick_conclusion_anchors(consumed_text, max_anchors=6)
-    target_words = int(max(180, min(480, max(45.0, remaining_sec) * 2.75)))
+    target_words = int(
+        max(
+            160,
+            min(
+                650,
+                (max(45.0, remaining_sec) / 60.0) * _course_words_per_minute() * 0.92,
+            ),
+        )
+    )
 
     lines = [
-        "Avant de s'arrêter, on prend vraiment le temps de refermer cette partie proprement.",
-        "Le cours a été dense, donc l'objectif n'est pas de rajouter une nouvelle idée, mais de remettre en ordre ce qui vient d'être travaillé et de le rendre plus facile à réutiliser.",
+        "[calm] Avant de s'arrêter, on prend vraiment le temps de refermer cette partie proprement. [pause]",
+        "Le cours a été dense, donc l'objectif n'est pas de rajouter une nouvelle idée. On va plutôt remettre en ordre ce qui vient d'être travaillé, tranquillement, pour que ce soit plus facile à réutiliser.",
     ]
 
     labels = [
@@ -806,9 +901,9 @@ def _build_runtime_conclusion_text(consumed_chunks: list, remaining_sec: float, 
         )
 
     lines.extend([
-        "À ce stade, ce qui compte, c'est de ne pas retenir ces points comme une liste isolée. Il faut les relier entre eux : chaque notion prépare la suivante, et c'est cette continuité qui permet de mieux agir dans une situation réelle.",
+        "À ce stade, ce qui compte, c'est de ne pas retenir ces points comme une liste isolée. [pause] Il faut les relier entre eux : chaque notion prépare la suivante, et c'est cette continuité qui permet de mieux agir dans une situation réelle.",
         "Si vous deviez retenir une méthode simple, ce serait celle-ci : observer d'abord, nommer clairement ce qui se passe, choisir une réponse adaptée, puis vérifier que cette réponse produit bien l'effet recherché.",
-        "On va donc s'arrêter ici sur cette base. Dans la suite, on pourra reprendre ce fil sans repartir de zéro : les repères sont posés, le vocabulaire est en place, et on pourra aller plus loin dans l'application.",
+        "On va donc s'arrêter ici sur cette base. [pause] Dans la suite, on pourra reprendre ce fil sans repartir de zéro : les repères sont posés, le vocabulaire est en place, et on pourra aller plus loin dans l'application.",
     ])
 
     return _limit_text_words_natural(" ".join(lines), target_words)
@@ -1527,7 +1622,7 @@ def _get_existing_carryover_out(source_folder_id: int, target_folder_id: int | N
 
 def _reduce_last_bloc_to_budget(bloc: dict, model=None) -> str:
     """Réduit le dernier bloc avant TTS si aucun jour suivant ne peut absorber le surplus."""
-    budget = int(bloc.get("word_budget") or 0)
+    budget = int(bloc.get("main_word_budget") or bloc.get("word_budget") or 0)
     if budget <= 0:
         raise ValueError("Budget TTS indisponible pour réduction du dernier bloc")
 
@@ -1725,10 +1820,10 @@ def _build_course_blocs_from_segments(
 ):
     """Découpe le script en 7 blocs en respectant les fins d'idées ET le budget TTS.
 
-    Chaque bloc reçoit un cap mots calé sur le budget TTS (`_estimated_words_budget_for_course`).
-    Tout paragraphe en surplus cascade automatiquement vers le bloc suivant — déterministe,
-    gratuit, sans appel LLM réactif. Si le bloc 7 finit malgré tout au-dessus de son cap,
-    c'est que le total mots/jour dépasse le budget TTS → ressort de l'ajustement audio en aval.
+    Chaque bloc reçoit deux budgets calibrés Fish Audio :
+    - `main_word_budget` : texte source lu avant la conclusion (arrêt visé T-4 min).
+    - `word_budget` : parole totale, conclusion incluse (arrêt visé T-1 min).
+    Tout paragraphe en surplus cascade automatiquement vers le bloc suivant.
     """
     full_words, word_to_seg_idx, units = _build_course_text_units(segments)
 
@@ -1748,6 +1843,7 @@ def _build_course_blocs_from_segments(
             (spec[1] for spec in playlist_spec if spec[3] == bloc_num and spec[2] == "cours"),
             duration * 60
         )
+        main_word_budget = _estimated_main_words_budget_for_course(target_sec, api_speed)
         word_budget = _estimated_words_budget_for_course(target_sec, api_speed)
 
         if bloc_num == 7:
@@ -1762,7 +1858,7 @@ def _build_course_blocs_from_segments(
                 remaining_blocks=7 - bloc_num,
                 paragraph_boundaries=paragraph_boundaries,
                 sentence_boundaries=sentence_boundaries,
-                word_budget_max=word_budget,
+                word_budget_max=main_word_budget,
             )
 
         if end_w <= cursor_w and cursor_w < total_words:
@@ -1781,14 +1877,18 @@ def _build_course_blocs_from_segments(
             "dirty": is_dirty,
             "target_sec": target_sec,
             "word_budget": word_budget,
+            "main_word_budget": main_word_budget,
             "filename": next(
                 (spec[0] for spec in playlist_spec if spec[3] == bloc_num and spec[2] == "cours"),
                 f"cours_bloc{bloc_num}.mp3"
             ),
         })
         block_words = end_w - cursor_w
-        budget_str = f"budget {word_budget}" if word_budget > 0 else "budget n/a"
-        if word_budget > 0 and block_words > word_budget and bloc_num != 7:
+        budget_str = (
+            f"budget principal {main_word_budget}, total {word_budget}"
+            if main_word_budget > 0 else "budget n/a"
+        )
+        if main_word_budget > 0 and block_words > main_word_budget and bloc_num != 7:
             logger.warning(
                 f"   ⚠️ Bloc {bloc_num}: {block_words} mots > {budget_str} (cascade attendue)"
             )
@@ -1871,7 +1971,8 @@ def _redistribute_undershoot_backward(
 
             # Le paragraphe rentre-t-il dans le budget de bloc ?
             new_word_count = bloc["word_count"] + additional_words
-            if bloc["word_budget"] > 0 and new_word_count > bloc["word_budget"]:
+            cap_words = int(bloc.get("main_word_budget") or bloc.get("word_budget") or 0)
+            if cap_words > 0 and new_word_count > cap_words:
                 break  # paragraphe trop gros pour le budget restant
 
             # Déplacer
@@ -1917,7 +2018,7 @@ def _handle_last_bloc_overflow(
         return ""
 
     last = blocs[-1]
-    budget = int(last.get("word_budget") or 0)
+    budget = int(last.get("main_word_budget") or last.get("word_budget") or 0)
     if budget <= 0 or last["word_count"] <= budget:
         if source_folder_id and not preview:
             _clear_cross_day_carryover_from_source(source_folder_id, next_folder_id)
@@ -2000,7 +2101,7 @@ def _apply_closing_transitions(blocs, api_speed, model=None):
     )
 
     last_bloc_num = max(b["bloc_number"] for b in blocs) if blocs else 7
-    estimated_wpm = _TTS_REFERENCE_WPM_AT_095 * (api_speed / 0.95)
+    estimated_wpm = _course_words_per_minute()
 
     for idx, bloc in enumerate(blocs):
         if not bloc.get("dirty"):
@@ -2008,7 +2109,8 @@ def _apply_closing_transitions(blocs, api_speed, model=None):
         if not (bloc.get("text") or "").strip():
             continue  # bloc vide : rien à clore
 
-        raw_gap_sec = bloc["target_sec"] - _estimated_audio_seconds_for_words(
+        voice_stop_sec = bloc["target_sec"] - _course_final_silence_sec()
+        raw_gap_sec = voice_stop_sec - _estimated_audio_seconds_for_words(
             bloc["word_count"], api_speed
         )
         remaining_budget_words = max(0, int(bloc.get("word_budget") or 0) - int(bloc["word_count"]))
@@ -2541,15 +2643,14 @@ def _save_segment_db(job_id, sub_idx, sub_part_name, passe, text):
     word_count = len(text.split())
     conn = get_db_connection()
     cursor = conn.cursor()
-    # Un texte nouveau/réécrit doit être repris par le TTS (dirty=1), re-passé
-    # par la révision conformité (reviewed=0) et invalider toute ancienne
-    # erreur reviewer (review_error=NULL). Règle centrale héritée de
-    # memoire/03-decisions/pipeline-dual-api-et-claude-code.md.
+    # Un texte nouveau/réécrit doit repasser par humanisation + conformité.
     cursor.execute("""
         INSERT OR REPLACE INTO content_generation_segments
             (job_id, sub_part_index, sub_part_name, passe, status,
-             text_content, word_count, dirty, reviewed, review_error)
-        VALUES (?, ?, ?, ?, 'completed', ?, ?, 1, 0, NULL)
+             text_content, word_count, dirty,
+             humanized, humanization_error, humanization_signature,
+             reviewed, review_error, review_signature)
+        VALUES (?, ?, ?, ?, 'completed', ?, ?, 1, 0, NULL, NULL, 0, NULL, NULL)
     """, (job_id, sub_idx, sub_part_name, passe, text, word_count))
     conn.commit()
     conn.close()
@@ -2559,8 +2660,8 @@ def _save_segment_db(job_id, sub_idx, sub_part_name, passe, text):
 def mark_segment_modified(job_id: int, sub_idx: int, passe: int) -> None:
     """
     Marque un segment comme modifié : doit être re-synthétisé par le TTS
-    (dirty=1), re-passé par la révision conformité (reviewed=0), et ses
-    anciennes erreurs reviewer invalidées (review_error=NULL).
+    (dirty=1), re-passé par humanisation + conformité, et ses anciennes erreurs
+    reviewer invalidées.
 
     À appeler depuis TOUS les endroits où `text_content` change :
     - _save_segment_db (génération/régénération) — déjà couvert via l'INSERT
@@ -2571,7 +2672,9 @@ def mark_segment_modified(job_id: int, sub_idx: int, passe: int) -> None:
     cursor = conn.cursor()
     cursor.execute("""
         UPDATE content_generation_segments
-        SET dirty = 1, reviewed = 0, review_error = NULL
+        SET dirty = 1,
+            humanized = 0, humanization_error = NULL, humanization_signature = NULL,
+            reviewed = 0, review_error = NULL, review_signature = NULL
         WHERE job_id = ? AND sub_part_index = ? AND passe = ?
     """, (job_id, sub_idx, passe))
     conn.commit()
@@ -3118,6 +3221,8 @@ Le fichier ne doit pas reprendre brutalement à la phrase exacte où le cours s'
 Il faut relancer l'idée proprement, comme un formateur qui reprend le fil en direct.
 
 CONSIGNES STRICTES :
+- Applique les règles d'humanisation : entrée douce, rythme calme, respiration
+  pédagogique, présence humaine, pas de ton conférence.
 - Tu peux situer brièvement le fil, mais ne fais pas un résumé long du cours précédent.
 - Ne répète pas la conclusion, le Q&A ou la pause qui viennent déjà d'avoir lieu.
 - Si l'élément précédent est une pause, ne dis pas "la pause est terminée".
@@ -3226,6 +3331,8 @@ On ne doit pas reprendre brutalement à la phrase exacte où le cours précéden
 s'était arrêté. Il faut réinstaller l'idée, puis la lancer naturellement.
 
 CONSIGNES :
+- Applique les règles d'humanisation : reprise douce, respiration, formateur
+  humain, pas de reprise sèche au milieu d'un exemple.
 - Ne fais pas semblant de répondre à des questions.
 - Ne parle pas de fichier audio, de découpage technique, de chunk ou de report.
 - Tu peux dire sobrement qu'on reprend le fil ou qu'on pose le point proprement.
@@ -3690,9 +3797,10 @@ def generate_audio_from_script(
 
     # Tampon intra-jour : chunks structurés non consommés par un bloc cours
     # précédent (runtime_fit a stoppé avant la fin) → préfixés au bloc suivant.
-    # Uniquement actif en mode `basic_tts + sync_slides` (Edge TTS runtime fit).
+    # Actif pour Edge TTS, avec ou sans sync slides : Edge est plus lent que le
+    # budget Fish Audio et doit être calé par durée réelle avant upload.
     intra_day_carryover_chunks = []
-    runtime_fit_enabled = bool(basic_tts and not mock and sync_slides)
+    runtime_fit_enabled = bool(basic_tts and not mock)
     fast_tts_pipeline = bool(fast_tts_pipeline and runtime_fit_enabled)
     if fast_tts_pipeline:
         logger.info(
@@ -3785,8 +3893,6 @@ def generate_audio_from_script(
                 on_progress=lambda msg: _progress(step, len(playlist_items), msg),
                 use_runtime_consumed_text=runtime_fit_enabled,
             )
-            _progress(step, len(playlist_items), f"{filename} — upload audio ({break_mode})...")
-            upload_blob(CONTAINER_AUDIOS, f"{azure_prefix}{filename}", final_bytes)
             try:
                 final_duration = _mp3_duration_seconds_no_ffprobe(final_bytes)
             except Exception:
@@ -3798,6 +3904,9 @@ def generate_audio_from_script(
                         if break_mode == "audioqapause_fallback"
                         else len(final_bytes) / 6000
                     )
+            _assert_audio_duration_within_slot(filename, final_duration, duration_sec)
+            _progress(step, len(playlist_items), f"{filename} — upload audio ({break_mode})...")
+            upload_blob(CONTAINER_AUDIOS, f"{azure_prefix}{filename}", final_bytes)
             logger.info(f"   ✅ {filename} : {final_duration:.1f}s uploadé ({break_mode})")
             _progress(step, len(playlist_items), f"{filename} — terminé ({break_mode}, {final_duration:.1f}s)")
             logger.info(
@@ -3924,7 +4033,7 @@ def generate_audio_from_script(
             )
             if rewritten_text and rewritten_text != (bloc.get("text") or "").strip():
                 rewritten_words = len(rewritten_text.split())
-                word_budget = int(bloc.get("word_budget") or 0)
+                word_budget = int(bloc.get("main_word_budget") or bloc.get("word_budget") or 0)
                 if word_budget and rewritten_words > word_budget and not runtime_fit_enabled:
                     logger.warning(
                         "⚠️ Intro/amorce bloc %s ignorée : %s mots > budget %s",
@@ -3992,32 +4101,8 @@ def generate_audio_from_script(
                 fast_tts_pipeline=fast_tts_pipeline,
                 llm_model=llm_model,
             )
-            runtime_conclusions = [
-                {
-                    "kind": a.get("kind"),
-                    "duration": a.get("duration"),
-                    "text": a.get("text") or "",
-                }
-                for a in attempts
-                if a.get("kind") in {
-                    "conclusion",
-                    "conclusion_fallback",
-                    "conclusion_ultra_fallback",
-                } and (a.get("text") or "").strip()
-            ]
-            runtime_ai_decisions = [
-                {
-                    "kind": a.get("kind"),
-                    "chunk": a.get("chunk"),
-                    "remaining_sec": a.get("remaining_sec"),
-                    "words": a.get("words"),
-                    "reason": a.get("reason") or "",
-                    "text": a.get("text") or "",
-                    "original_start": a.get("original_start") or "",
-                }
-                for a in attempts
-                if str(a.get("kind") or "").startswith("ai_")
-            ]
+            runtime_conclusions = _runtime_conclusions_from_attempts(attempts)
+            runtime_ai_decisions = _runtime_ai_decisions_from_attempts(attempts)
             # Le tampon est consommé par cet appel ; le runtime peut en
             # produire un nouveau pour le prochain bloc cours.
             if runtime_fit_enabled:
@@ -4057,22 +4142,67 @@ def generate_audio_from_script(
             from services.playlist_tts_service import _generate_silence_mp3
             final_bytes = _generate_silence_mp3(1)
         elif basic_tts:
-            _progress(step, len(playlist_items), f"[BASIC] Bloc {bloc['bloc_number']}/7 — edge-tts ({len(audio_bloc['text'].split())} mots)...")
-            logger.info(f"   🔊 [BASIC edge-tts] Bloc {bloc['bloc_number']} ({filename}) — génération via edge-tts…")
-            from services.basic_tts_service import convert_to_speech_basic
-            # Pas de padding : la durée gTTS ne matche pas les créneaux cours,
-            # mais acceptable pour des tests. L'audio est plus court que la
-            # playlist cible (ex: 33 min de gTTS vs 45 min de bloc cours) —
-            # le reste sera du silence côté playlist horodatée.
-            final_bytes = convert_to_speech_basic(
-                audio_bloc["text"],
-                progress_callback=lambda msg: _progress(
-                    step,
-                    len(playlist_items),
-                    f"Bloc {bloc['bloc_number']}/7 — {msg}",
-                ),
-                parallel_workers=_edge_tts_fast_workers() if fast_tts_pipeline else 1,
-                **_basic_tts_pipeline_retry_kwargs(),
+            _progress(
+                step,
+                len(playlist_items),
+                f"[BASIC] Bloc {bloc['bloc_number']}/7 — edge-tts runtime fit "
+                f"({len(audio_bloc['text'].split())} mots)...",
+            )
+            logger.info(
+                f"   🔊 [BASIC edge-tts] Bloc {bloc['bloc_number']} ({filename}) — "
+                "génération calée sur durée réelle…"
+            )
+            prepended_for_call = intra_day_carryover_chunks if runtime_fit_enabled else None
+            (
+                final_bytes,
+                voice_duration,
+                fit_method,
+                attempts,
+                _bloc_timings,
+                runtime_unconsumed_chunks,
+                runtime_consumed_chunks,
+            ) = _synthesize_course_audio_synced_to_slides(
+                audio_bloc,
+                [],
+                filename,
+                mock=False,
+                basic_tts=True,
+                progress_callback=lambda msg: _progress(step, len(playlist_items), msg),
+                prepended_chunks=prepended_for_call,
+                runtime_fit=runtime_fit_enabled,
+                fast_tts_pipeline=fast_tts_pipeline,
+                llm_model=llm_model,
+            )
+            runtime_conclusions = _runtime_conclusions_from_attempts(attempts)
+            runtime_ai_decisions = _runtime_ai_decisions_from_attempts(attempts)
+            if runtime_fit_enabled:
+                consumed_chunks = len(intra_day_carryover_chunks)
+                consumed_words = sum(
+                    len((c.get("text") or "").split()) for c in intra_day_carryover_chunks
+                )
+                bloc["runtime_consumed_text"] = "\n\n".join(
+                    (c.get("text") or "").strip()
+                    for c in (runtime_consumed_chunks or [])
+                    if (c.get("text") or "").strip()
+                )
+                intra_day_carryover_chunks = list(runtime_unconsumed_chunks or [])
+                unconsumed_words = sum(
+                    len((c.get("text") or "").split()) for c in intra_day_carryover_chunks
+                )
+                logger.info(
+                    "PIPELINE_AUDIO_BLOC_RUNTIME formation_job_id=%s content_job_id=%s "
+                    "folder_id=%s bloc=%s target_sec=%s voice_duration=%.1f "
+                    "chunks_generated=%s prepended_chunks=%s prepended_words=%s "
+                    "unconsumed_chunks=%s unconsumed_words=%s fit_method=%s",
+                    formation_job_id, job_id, folder_id, bloc["bloc_number"],
+                    target_sec, voice_duration, len(attempts),
+                    consumed_chunks, consumed_words,
+                    len(intra_day_carryover_chunks), unconsumed_words,
+                    fit_method,
+                )
+            logger.info(
+                f"   TTS Edge voix : {voice_duration:.1f}s "
+                f"({fit_method}, chunks={len(attempts)}, cible : {target_sec}s)"
             )
         else:
             _progress(step, len(playlist_items), f"Bloc {bloc['bloc_number']}/7 — génération TTS ({len(audio_bloc['text'].split())} mots)...")
@@ -4086,10 +4216,8 @@ def generate_audio_from_script(
             if len(attempts) > 1:
                 logger.info(f"   🔁 Bloc {bloc['bloc_number']} ajusté localement ({fit_method})")
             logger.info(f"   TTS voix : {voice_duration:.1f}s ({fit_method}, cible : {target_sec}s)")
-        blob_path = f"{azure_prefix}{filename}"
-        upload_blob(CONTAINER_AUDIOS, blob_path, final_bytes)
 
-        if sync_slides and basic_tts:
+        if basic_tts and runtime_fit_enabled:
             final_duration = voice_duration
         elif sync_slides:
             try:
@@ -4108,6 +4236,9 @@ def generate_audio_from_script(
                 final_duration = len(final_bytes) / 4000
         else:
             final_duration = _measure_duration_ms(final_bytes) / 1000
+        _assert_audio_duration_within_slot(filename, final_duration, target_sec)
+        blob_path = f"{azure_prefix}{filename}"
+        upload_blob(CONTAINER_AUDIOS, blob_path, final_bytes)
         logger.info(f"   ✅ {filename} : {final_duration:.1f}s uploadé")
         logger.info(
             "PIPELINE_AUDIO_ITEM_DONE formation_job_id=%s content_job_id=%s folder_id=%s filename=%s type=cours bloc=%s final_duration=%.1f "
@@ -4306,6 +4437,7 @@ def _serialize_course_bloc(
         "word_count": len((bloc_text or "").split()),
         "planned_word_count": int(bloc.get("word_count") or len((bloc.get("text") or "").split())),
         "word_budget": int(bloc.get("word_budget") or 0),
+        "main_word_budget": int(bloc.get("main_word_budget") or 0),
         "dirty": bool(bloc.get("dirty")),
         "closing_added": bool(bloc.get("closing_added") or runtime_conclusions),
         "closing_text": bloc.get("closing_text") or "",
@@ -4588,8 +4720,11 @@ def _env_int(name: str, default: int, min_value: int = 1) -> int:
 _REVIEW_CHUNK_WORDS = _env_int("FORMATION_REVIEW_CHUNK_WORDS", 1500, min_value=300)
 _REVIEW_CHUNK_CONCURRENCY = _env_int("FORMATION_REVIEW_CHUNK_CONCURRENCY", 2, min_value=1)
 _REVIEW_MAX_ATTEMPTS = 3
+_REVIEW_RULESET_VERSION = "2026-05-17-compliance-v3"
+_HUMANIZATION_RULESET_VERSION = "2026-05-17-humanisation-v1"
+_REVIEW_SIGNATURE_COLUMNS_READY = False
 
-_REVIEW_RULE_GROUPS = [
+_COMPLIANCE_REVIEW_RULE_GROUPS = [
     {
         "id": "ethique_culturelle",
         "label": "Éthique culturelle",
@@ -4622,7 +4757,74 @@ _REVIEW_RULE_GROUPS = [
     },
 ]
 
+_HUMANIZATION_REVIEW_RULE_GROUPS = [
+    {
+        "id": "humanisation_rythme",
+        "label": "Humanisation et rythme pédagogique",
+        "rules": [101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111],
+        "description": "Intros plus douces, respirations, micro-interactions, densité cognitive, transitions et continuité de journée",
+    },
+]
+
+_REVIEW_RULE_GROUPS = _COMPLIANCE_REVIEW_RULE_GROUPS
+
 _RULES_CACHE = {"mtime": 0, "text": ""}
+
+_HUMANIZATION_REVIEW_RULES = """
+RÈGLE #101 — Éviter les débuts trop brusques ou trop conférence
+Un début de cours doit accueillir, rassurer, ralentir et installer calmement
+l'apprenant. Corrige les ouvertures trop intenses, trop abruptes ou trop
+"grand discours". Préfère une entrée progressive avec une présence humaine.
+
+RÈGLE #102 — Créer des respirations pédagogiques
+Après une idée dense, une démonstration ou un exemple important, le texte doit
+laisser une respiration : reformulation simple, phrase tampon, [pause],
+mini-synthèse ou reconnexion terrain. Corrige les blocs d'information trop
+compacts qui ne laissent pas le temps d'assimiler.
+
+RÈGLE #103 — Laisser vivre les idées importantes
+Une phrase forte ne doit pas toujours être immédiatement sur-expliquée. Ajoute
+ou conserve une respiration courte, une reformulation calme ou une phrase
+émotionnelle simple après les idées importantes.
+
+RÈGLE #104 — Humaniser le formateur
+Le formateur doit sembler humain : il accompagne, rassure, réfléchit légèrement,
+normalise les difficultés et partage des repères terrain. Corrige les passages
+qui sonnent comme une conférence mécanique ou une démonstration permanente.
+
+RÈGLE #105 — Éviter l'accumulation de punchlines
+N'enchaîne pas les phrases très fortes comme des slogans. Alterne phrases
+fortes, phrases simples, phrases neutres et formulations conversationnelles.
+
+RÈGLE #106 — Ajouter des micro-interactions sobres
+Le cours doit régulièrement s'adresser aux apprenants : "vous voyez l'idée ?",
+"essayez de vous projeter", "retenez surtout ça", "vous me suivez ?". Corrige
+les longs passages qui oublient complètement l'apprenant.
+
+RÈGLE #107 — Varier le niveau d'énergie
+Le script doit alterner phases dynamiques, moments calmes, exemples terrain,
+synthèses lentes et transitions douces. Utilise les tags [pause], [calm],
+[speaking softly], [inhale], [warm and reassuring] uniquement quand ils servent
+une respiration, une transition ou une reformulation.
+
+RÈGLE #108 — Réduire la densité cognitive des longues phrases
+Corrige les phrases longues qui contiennent plusieurs concepts ou nuances.
+Sépare les idées, ajoute des pauses et préfère des phrases plus courtes.
+
+RÈGLE #109 — Créer de vraies transitions entre grandes idées
+Une transition ne doit pas être seulement logique et rapide. Elle doit ralentir,
+reconnecter à ce qui vient d'être vu et préparer la suite avec anticipation.
+
+RÈGLE #110 — Préparer des fins de blocs conclues
+Quand un passage ressemble à une fin de séquence, il doit redescendre
+progressivement : synthèse, valorisation du chemin parcouru, projection vers la
+suite. Évite les arrêts secs du type "on continue".
+
+RÈGLE #111 — Donner l'impression d'une journée vécue
+Le cours doit former une progression continue, pas une succession de fichiers
+indépendants. Corrige les transitions qui ignorent totalement ce qui précède ou
+qui cassent le fil émotionnel et pédagogique de la journée.
+""".strip()
 
 
 def _load_review_rules() -> str:
@@ -4643,9 +4845,74 @@ def _load_review_rules() -> str:
         _re.DOTALL,
     )
     rules_text = m.group(0) if m else content[:20000]
+    rules_text = rules_text.rstrip() + "\n\n" + _HUMANIZATION_REVIEW_RULES
     _RULES_CACHE["mtime"] = mtime
     _RULES_CACHE["text"] = rules_text
     return rules_text
+
+
+def _review_rules_signature(
+    rules_text: str,
+    groups: list | None = None,
+    version: str | None = None,
+) -> str:
+    payload = _json.dumps(
+        {
+            "version": version or _REVIEW_RULESET_VERSION,
+            "rules": rules_text or "",
+            "groups": groups or _REVIEW_RULE_GROUPS,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _current_compliance_review_signature() -> str:
+    return _review_rules_signature(
+        _load_review_rules(),
+        groups=_COMPLIANCE_REVIEW_RULE_GROUPS,
+        version=_REVIEW_RULESET_VERSION,
+    )
+
+
+def _current_humanization_review_signature() -> str:
+    return _review_rules_signature(
+        _load_review_rules(),
+        groups=_HUMANIZATION_REVIEW_RULE_GROUPS,
+        version=_HUMANIZATION_RULESET_VERSION,
+    )
+
+
+def _ensure_review_state_columns() -> None:
+    """Migrations légères pour tracer les deux passes de review."""
+    global _REVIEW_SIGNATURE_COLUMNS_READY
+    if _REVIEW_SIGNATURE_COLUMNS_READY:
+        return
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("ALTER TABLE content_generation_segments ADD COLUMN review_signature TEXT")
+        logger.info("✅ Colonne review_signature ajoutée à content_generation_segments")
+    except Exception:
+        pass
+    for sql, label in (
+        ("ALTER TABLE content_generation_segments ADD COLUMN humanized INTEGER DEFAULT 0", "humanized"),
+        ("ALTER TABLE content_generation_segments ADD COLUMN humanization_error TEXT", "humanization_error"),
+        ("ALTER TABLE content_generation_segments ADD COLUMN humanization_signature TEXT", "humanization_signature"),
+    ):
+        try:
+            cursor.execute(sql)
+            logger.info("✅ Colonne %s ajoutée à content_generation_segments", label)
+        except Exception:
+            pass
+    conn.commit()
+    conn.close()
+    _REVIEW_SIGNATURE_COLUMNS_READY = True
+
+
+def _ensure_review_signature_column() -> None:
+    _ensure_review_state_columns()
 
 
 def _extract_rules_for_group(full_rules_text: str, rule_numbers: list) -> str:
@@ -4664,6 +4931,29 @@ def _build_review_prompt_focused(
     chunk_index: int = 1, chunk_total: int = 1,
 ) -> str:
     rules_list = ", ".join(f"#{n}" for n in rule_numbers)
+    is_humanization_scope = any(int(n) >= 100 for n in (rule_numbers or []))
+    review_mode = (
+        "Pour les règles #101 à #111, une intro trop brusque, un bloc trop dense, "
+        "une transition mécanique, une fin sèche ou l'absence de respiration "
+        "pédagogique comptent comme des non-conformités. Tu dois proposer des "
+        "corrections concrètes quand le texte sonne trop récité, trop rapide ou "
+        "pas assez accompagné."
+        if is_humanization_scope
+        else "Tu renvoies un JSON avec uniquement les passages qui violent une règle de ton scope."
+    )
+    replacement_constraint = (
+        "- Pour #101 à #111, `replacement` peut ajouter une courte phrase orale, "
+        "une micro-interaction ou un tag comme [pause] si cela corrige vraiment "
+        "le rythme, sans changer le fond pédagogique."
+        if is_humanization_scope
+        else "- `replacement` corrige la violation sans reformuler le sens, sans ajouter de contenu."
+    )
+    preference_constraint = (
+        "- Ne corrige QUE les non-conformités de rythme/humanisation du scope. "
+        "Pas de réécriture complète, pas de préférence personnelle hors règles."
+        if is_humanization_scope
+        else f"- Ne corrige QUE les vraies violations de {rules_list}. Pas d'autres règles, pas de préférence stylistique."
+    )
     return f"""Tu es un reviewer éditorial SPÉCIALISÉ. Tu reçois un extrait de cours oral et un sous-ensemble de règles à vérifier.
 
 🎯 TON SCOPE EXCLUSIF : {group_label} — {group_desc}
@@ -4671,7 +4961,7 @@ Tu vérifies UNIQUEMENT les règles {rules_list}. Ignore toutes les autres règl
 
 Tu audites le CHUNK {chunk_index}/{chunk_total} d'un segment plus long. Ne juge que le texte fourni ci-dessous.
 
-TU NE RÉÉCRIS PAS LE TEXTE. Tu renvoies un JSON avec uniquement les passages qui violent une règle de ton scope.
+TU NE RÉÉCRIS PAS LE TEXTE EN ENTIER. {review_mode}
 Si le texte est conforme pour ces règles, renvoie {{"patches": []}}.
 
 Format de sortie strict (JSON valide, rien d'autre avant ou après) :
@@ -4690,8 +4980,8 @@ Format de sortie strict (JSON valide, rien d'autre avant ou après) :
 Contraintes impératives :
 - Maximum {_REVIEW_MAX_PATCHES} patches. Si tu vois plus de violations, garde les {_REVIEW_MAX_PATCHES} pires.
 - `original` doit être trouvable TEL QUEL dans le texte (copie mot pour mot, ponctuation comprise).
-- `replacement` corrige la violation sans reformuler le sens, sans ajouter de contenu.
-- Ne corrige QUE les vraies violations de {rules_list}. Pas d'autres règles, pas de préférence stylistique.
+{replacement_constraint}
+{preference_constraint}
 - `rule_violated` = numéro parmi {rules_list} (ex: "#1", "#9").
 
 ─── RÈGLES DE TON SCOPE ({group_label}) ───
@@ -4803,6 +5093,14 @@ def _review_group_chunks(current_text: str, rules_text: str, group: dict, model=
     group_rules = group["rules"]
     group_desc = group["description"]
     group_rules_text = _extract_rules_for_group(rules_text, group_rules)
+    if not group_rules_text.strip():
+        return (
+            current_text,
+            [],
+            [],
+            f"Règles introuvables pour la salve '{group_label}' ({group_rules})",
+            0,
+        )
     chunks = _chunk_text(current_text)
 
     logger.info(
@@ -4833,23 +5131,25 @@ def _review_group_chunks(current_text: str, rules_text: str, group: dict, model=
     updated_text = current_text
     group_applied = []
     group_rejected = []
+    group_proposed = 0
 
     for result in results:
         chunk = result["chunk"]
         if not result.get("ok"):
-            return updated_text, group_applied, group_rejected, result.get("error")
+            return updated_text, group_applied, group_rejected, result.get("error"), group_proposed
 
         patches = [
             {**p, "review_group": group["id"], "chunk_index": chunk["index"]}
             for p in (result.get("patches") or [])
         ]
+        group_proposed += len(patches)
         new_text, applied, rejected = _apply_patches(updated_text, patches)
 
         updated_text = new_text
         group_applied.extend(applied)
         group_rejected.extend(rejected)
 
-    return updated_text, group_applied, group_rejected, None
+    return updated_text, group_applied, group_rejected, None, group_proposed
 
 
 def _build_review_prompt(segment_text: str, rules_text: str) -> str:
@@ -4988,24 +5288,47 @@ def _snapshot_pre_review_for_content_job(job_id: int) -> int:
     return int(snapshotted)
 
 
-def run_content_review(folder_id, on_progress=None, model=None):
+def _run_content_review_pass(
+    folder_id,
+    *,
+    on_progress=None,
+    model=None,
+    force: bool = False,
+    groups: list,
+    signature_version: str,
+    reviewed_column: str,
+    error_column: str,
+    signature_column: str,
+    review_kind: str,
+    review_label: str,
+    invalidate_compliance_on_change: bool = False,
+):
     """
-    Révise la conformité des segments completed non encore reviewed pour un
-    dossier cours. Boucle : pour chaque segment, appel reviewer Claude,
-    application des patches uniques, log. Marque reviewed=1 à la fin quel
-    que soit le résultat (idempotent).
+    Révise les segments completed pour un dossier cours.
+    Les segments sont relus s'ils n'ont jamais été validés, si les règles ont
+    changé depuis leur dernière validation, ou si `force=True`.
 
     Règles :
-    - Skip les segments déjà reviewed=1 (idempotence).
+    - Skip les segments déjà reviewed=1 uniquement si leur signature de règles
+      correspond à la version actuelle.
     - Si patches appliqués : segment.text_content mis à jour, dirty=1 pour
       que le TTS régénère, reviewed=1.
     - Si aucun patch ou tout rejeté : juste reviewed=1, dirty inchangé.
 
-    Renvoie un dict résumé : {segments_reviewed, patches_applied, patches_rejected, details}.
+    Renvoie un dict résumé : {segments_reviewed, patches_proposed,
+    patches_applied, patches_rejected, details}.
     """
     def _progress(step, total, msg):
         if on_progress:
             on_progress(step, total, msg)
+
+    allowed_columns = {
+        "reviewed", "review_error", "review_signature",
+        "humanized", "humanization_error", "humanization_signature",
+    }
+    for col in (reviewed_column, error_column, signature_column):
+        if col not in allowed_columns:
+            raise ValueError(f"Colonne review non autorisée : {col}")
 
     job = get_job_from_db(folder_id)
     if not job:
@@ -5015,60 +5338,110 @@ def run_content_review(folder_id, on_progress=None, model=None):
     formation_job_id = job.get("formation_job_id")
     started_at = time.time()
     logger.info(
-        "PIPELINE_REVIEW_START formation_job_id=%s content_job_id=%s folder_id=%s model=%s",
+        "PIPELINE_REVIEW_START formation_job_id=%s content_job_id=%s folder_id=%s model=%s force=%s",
         formation_job_id,
         job_id,
         folder_id,
         model,
+        bool(force),
     )
+    rules_text = _load_review_rules()
+    review_signature = _review_rules_signature(
+        rules_text,
+        groups=groups,
+        version=signature_version,
+    )
+    _ensure_review_state_columns()
     _snapshot_pre_review_for_content_job(job_id)
     conn = get_db_connection()
     cursor = conn.cursor()
-    # Sont éligibles à la révision : les segments completed dont reviewed=0.
-    # Ça inclut naturellement les segments qui avaient échoué précédemment
-    # (review_error != NULL ET reviewed=0) — relancer la route = retry.
     cursor.execute(
-        """
-        SELECT id, sub_part_index, sub_part_name, passe, text_content
-        FROM content_generation_segments
-        WHERE job_id = ? AND status = 'completed' AND COALESCE(reviewed, 0) = 0
-        ORDER BY sub_part_index ASC, passe ASC
-        """,
+        "SELECT COUNT(*) FROM content_generation_segments WHERE job_id = ? AND status = 'completed'",
         (job_id,),
     )
+    total_completed = int(cursor.fetchone()[0] or 0)
+    if force:
+        cursor.execute(
+            """
+            SELECT id, sub_part_index, sub_part_name, passe, text_content
+            FROM content_generation_segments
+            WHERE job_id = ? AND status = 'completed'
+            ORDER BY sub_part_index ASC, passe ASC
+            """,
+            (job_id,),
+        )
+    else:
+        cursor.execute(
+            f"""
+            SELECT id, sub_part_index, sub_part_name, passe, text_content
+            FROM content_generation_segments
+            WHERE job_id = ? AND status = 'completed'
+              AND (
+                    COALESCE({reviewed_column}, 0) = 0
+                 OR {signature_column} IS NULL
+                 OR {signature_column} != ?
+              )
+            ORDER BY sub_part_index ASC, passe ASC
+            """,
+            (job_id, review_signature),
+        )
     rows = cursor.fetchall()
+    if rows:
+        placeholders = ",".join("?" * len(rows))
+        cursor.execute(
+            f"""
+            UPDATE content_generation_segments
+            SET {reviewed_column} = 0, {error_column} = NULL
+            WHERE id IN ({placeholders})
+            """,
+            tuple(row[0] for row in rows),
+        )
+        conn.commit()
     conn.close()
 
     total = len(rows)
+    total_already_current = max(0, total_completed - total) if not force else 0
     if total == 0:
-        _progress(0, 0, "Tous les segments déjà révisés — rien à faire.")
+        _progress(0, 0, "Tous les segments sont déjà révisés avec les règles actuelles — rien à faire.")
         logger.info(
-            "PIPELINE_REVIEW_DONE formation_job_id=%s content_job_id=%s folder_id=%s reviewed=0 failed=0 applied=0 rejected=0 duration_ms=%s reason=already_reviewed",
+            "PIPELINE_REVIEW_DONE formation_job_id=%s content_job_id=%s folder_id=%s reviewed=0 failed=0 proposed=0 applied=0 rejected=0 duration_ms=%s reason=already_current signature=%s",
             formation_job_id,
             job_id,
             folder_id,
             int((time.time() - started_at) * 1000),
+            review_signature[:12],
         )
         return {
             "segments_reviewed": 0,
             "segments_failed": 0,
+            "segments_total_completed": total_completed,
+            "segments_already_current": total_already_current,
+            "patches_proposed": 0,
             "patches_applied": 0,
             "patches_rejected": 0,
+            "review_signature": review_signature,
+            "review_kind": review_kind,
+            "review_label": review_label,
+            "force": bool(force),
             "details": [],
         }
 
     logger.info(
-        "PIPELINE_REVIEW_PLAN formation_job_id=%s content_job_id=%s folder_id=%s segments_to_review=%s groups=%s",
+        "PIPELINE_REVIEW_PLAN formation_job_id=%s content_job_id=%s folder_id=%s segments_to_review=%s completed=%s already_current=%s groups=%s signature=%s force=%s",
         formation_job_id,
         job_id,
         folder_id,
         total,
-        len(_REVIEW_RULE_GROUPS),
+        total_completed,
+        total_already_current,
+        len(groups),
+        review_signature[:12],
+        bool(force),
     )
-    rules_text = _load_review_rules()
 
     total_applied = 0
     total_rejected = 0
+    total_proposed = 0
     total_failed = 0
     details = []
 
@@ -5076,7 +5449,7 @@ def run_content_review(folder_id, on_progress=None, model=None):
         segment_started_at = time.time()
         seg_id, sub_idx, sub_part_name, passe, text_content = row
         label = f"sous-partie {sub_idx + 1} / passe {passe}"
-        _progress(step, total, f"Audit {label} (5 salves)…")
+        _progress(step, total, f"{review_label} {label} ({len(groups)} salves)…")
         logger.info(
             "PIPELINE_REVIEW_SEGMENT_START formation_job_id=%s content_job_id=%s folder_id=%s segment_id=%s step=%s/%s sub_part=%s passe=%s words=%s",
             formation_job_id,
@@ -5090,12 +5463,13 @@ def run_content_review(folder_id, on_progress=None, model=None):
             len((text_content or "").split()),
         )
 
-        current_text = text_content
+        current_text = text_content or ""
         all_applied = []
         all_rejected = []
+        all_proposed = 0
         segment_error = None  # None = toutes les salves ont réussi jusqu'ici
 
-        for group in _REVIEW_RULE_GROUPS:
+        for group in groups:
             group_started_at = time.time()
             group_label = group["label"]
             logger.info(
@@ -5107,9 +5481,10 @@ def run_content_review(folder_id, on_progress=None, model=None):
                 group_label,
                 ",".join(str(rule) for rule in (group.get("rules") or [])),
             )
-            new_text, applied, rejected, group_error = _review_group_chunks(
+            new_text, applied, rejected, group_error, proposed = _review_group_chunks(
                 current_text, rules_text, group, model=model
             )
+            all_proposed += int(proposed or 0)
             if group_error:
                 segment_error = group_error
                 logger.warning(
@@ -5130,35 +5505,38 @@ def run_content_review(folder_id, on_progress=None, model=None):
 
             if applied:
                 logger.info(
-                    "PIPELINE_REVIEW_GROUP_DONE formation_job_id=%s content_job_id=%s folder_id=%s segment_id=%s group=%s applied=%s rejected=%s duration_ms=%s",
+                    "PIPELINE_REVIEW_GROUP_DONE formation_job_id=%s content_job_id=%s folder_id=%s segment_id=%s group=%s proposed=%s applied=%s rejected=%s duration_ms=%s",
                     formation_job_id,
                     job_id,
                     folder_id,
                     seg_id,
                     group_label,
+                    proposed,
                     len(applied),
                     len(rejected),
                     int((time.time() - group_started_at) * 1000),
                 )
             elif rejected:
                 logger.info(
-                    "PIPELINE_REVIEW_GROUP_DONE formation_job_id=%s content_job_id=%s folder_id=%s segment_id=%s group=%s applied=0 rejected=%s duration_ms=%s",
+                    "PIPELINE_REVIEW_GROUP_DONE formation_job_id=%s content_job_id=%s folder_id=%s segment_id=%s group=%s proposed=%s applied=0 rejected=%s duration_ms=%s",
                     formation_job_id,
                     job_id,
                     folder_id,
                     seg_id,
                     group_label,
+                    proposed,
                     len(rejected),
                     int((time.time() - group_started_at) * 1000),
                 )
             else:
                 logger.info(
-                    "PIPELINE_REVIEW_GROUP_DONE formation_job_id=%s content_job_id=%s folder_id=%s segment_id=%s group=%s applied=0 rejected=0 duration_ms=%s",
+                    "PIPELINE_REVIEW_GROUP_DONE formation_job_id=%s content_job_id=%s folder_id=%s segment_id=%s group=%s proposed=%s applied=0 rejected=0 duration_ms=%s",
                     formation_job_id,
                     job_id,
                     folder_id,
                     seg_id,
                     group_label,
+                    proposed,
                     int((time.time() - group_started_at) * 1000),
                 )
 
@@ -5169,19 +5547,26 @@ def run_content_review(folder_id, on_progress=None, model=None):
         if segment_error:
             # Une salve a échoué : review_error, PAS reviewed=1
             cursor.execute(
-                "UPDATE content_generation_segments SET review_error = ? WHERE id = ?",
+                f"UPDATE content_generation_segments SET {error_column} = ? WHERE id = ?",
                 (segment_error[:500], seg_id),
             )
             conn.commit()
             conn.close()
             total_failed += 1
-            details.append({"segment_id": seg_id, "sub_idx": sub_idx, "passe": passe, "error": segment_error})
+            details.append({
+                "segment_id": seg_id,
+                "sub_idx": sub_idx,
+                "passe": passe,
+                "proposed": all_proposed,
+                "error": segment_error,
+            })
             logger.warning(
-                "PIPELINE_REVIEW_SEGMENT_FAILED formation_job_id=%s content_job_id=%s folder_id=%s segment_id=%s applied=%s rejected=%s duration_ms=%s error=%s",
+                "PIPELINE_REVIEW_SEGMENT_FAILED formation_job_id=%s content_job_id=%s folder_id=%s segment_id=%s proposed=%s applied=%s rejected=%s duration_ms=%s error=%s",
                 formation_job_id,
                 job_id,
                 folder_id,
                 seg_id,
+                all_proposed,
                 len(all_applied),
                 len(all_rejected),
                 int((time.time() - segment_started_at) * 1000),
@@ -5189,39 +5574,46 @@ def run_content_review(folder_id, on_progress=None, model=None):
             )
             continue
 
-        # Toutes les 5 salves ont réussi
+        # Toutes les salves ont réussi
         if all_applied:
             new_word_count = len(current_text.split())
             cursor.execute(
-                """
+                f"""
                 UPDATE content_generation_segments
                 SET text_content = ?, word_count = ?, dirty = 1,
-                    reviewed = 1, review_error = NULL
+                    {reviewed_column} = 1, {error_column} = NULL, {signature_column} = ?
+                    {", reviewed = 0, review_error = NULL, review_signature = NULL" if invalidate_compliance_on_change else ""}
                 WHERE id = ?
                 """,
-                (current_text, new_word_count, seg_id),
+                (current_text, new_word_count, review_signature, seg_id),
             )
             logger.info(
-                "PIPELINE_REVIEW_SEGMENT_PATCHED formation_job_id=%s content_job_id=%s folder_id=%s segment_id=%s applied=%s rejected=%s new_words=%s",
+                "PIPELINE_REVIEW_SEGMENT_PATCHED formation_job_id=%s content_job_id=%s folder_id=%s segment_id=%s proposed=%s applied=%s rejected=%s new_words=%s",
                 formation_job_id,
                 job_id,
                 folder_id,
                 seg_id,
+                all_proposed,
                 len(all_applied),
                 len(all_rejected),
                 new_word_count,
             )
         else:
             cursor.execute(
-                "UPDATE content_generation_segments SET reviewed = 1, review_error = NULL WHERE id = ?",
-                (seg_id,),
+                f"""
+                UPDATE content_generation_segments
+                SET {reviewed_column} = 1, {error_column} = NULL, {signature_column} = ?
+                WHERE id = ?
+                """,
+                (review_signature, seg_id),
             )
             logger.info(
-                "PIPELINE_REVIEW_SEGMENT_CLEAN formation_job_id=%s content_job_id=%s folder_id=%s segment_id=%s rejected=%s",
+                "PIPELINE_REVIEW_SEGMENT_CLEAN formation_job_id=%s content_job_id=%s folder_id=%s segment_id=%s proposed=%s rejected=%s",
                 formation_job_id,
                 job_id,
                 folder_id,
                 seg_id,
+                all_proposed,
                 len(all_rejected),
             )
         conn.commit()
@@ -5229,41 +5621,95 @@ def run_content_review(folder_id, on_progress=None, model=None):
 
         total_applied += len(all_applied)
         total_rejected += len(all_rejected)
+        total_proposed += all_proposed
         logger.info(
-            "PIPELINE_REVIEW_SEGMENT_DONE formation_job_id=%s content_job_id=%s folder_id=%s segment_id=%s applied=%s rejected=%s duration_ms=%s",
+            "PIPELINE_REVIEW_SEGMENT_DONE formation_job_id=%s content_job_id=%s folder_id=%s segment_id=%s proposed=%s applied=%s rejected=%s duration_ms=%s",
             formation_job_id,
             job_id,
             folder_id,
             seg_id,
+            all_proposed,
             len(all_applied),
             len(all_rejected),
             int((time.time() - segment_started_at) * 1000),
         )
         details.append(
-            {"segment_id": seg_id, "sub_idx": sub_idx, "passe": passe, "applied": all_applied, "rejected": all_rejected}
+            {
+                "segment_id": seg_id,
+                "sub_idx": sub_idx,
+                "passe": passe,
+                "proposed": all_proposed,
+                "applied": all_applied,
+                "rejected": all_rejected,
+            }
         )
 
     _progress(
         total,
         total,
-        f"Terminé : {total_applied} appliqués, {total_rejected} rejetés, {total_failed} en erreur",
+        f"Terminé : {total_proposed} proposés, {total_applied} appliqués, {total_rejected} rejetés, {total_failed} en erreur",
     )
     logger.info(
-        "PIPELINE_REVIEW_DONE formation_job_id=%s content_job_id=%s folder_id=%s reviewed=%s/%s applied=%s rejected=%s failed=%s duration_ms=%s",
+        "PIPELINE_REVIEW_DONE formation_job_id=%s content_job_id=%s folder_id=%s reviewed=%s/%s proposed=%s applied=%s rejected=%s failed=%s already_current=%s duration_ms=%s signature=%s",
         formation_job_id,
         job_id,
         folder_id,
         total - total_failed,
         total,
+        total_proposed,
         total_applied,
         total_rejected,
         total_failed,
+        total_already_current,
         int((time.time() - started_at) * 1000),
+        review_signature[:12],
     )
     return {
         "segments_reviewed": total - total_failed,
         "segments_failed": total_failed,
+        "segments_total_completed": total_completed,
+        "segments_already_current": total_already_current,
+        "patches_proposed": total_proposed,
         "patches_applied": total_applied,
         "patches_rejected": total_rejected,
+        "review_signature": review_signature,
+        "review_kind": review_kind,
+        "review_label": review_label,
+        "force": bool(force),
         "details": details,
     }
+
+
+def run_humanization_review(folder_id, on_progress=None, model=None, force: bool = False):
+    """Passe 1 : reformule les intros/transitions/respirations avant la conformité stricte."""
+    return _run_content_review_pass(
+        folder_id,
+        on_progress=on_progress,
+        model=model,
+        force=force,
+        groups=_HUMANIZATION_REVIEW_RULE_GROUPS,
+        signature_version=_HUMANIZATION_RULESET_VERSION,
+        reviewed_column="humanized",
+        error_column="humanization_error",
+        signature_column="humanization_signature",
+        review_kind="humanization",
+        review_label="Humanisation",
+        invalidate_compliance_on_change=True,
+    )
+
+
+def run_content_review(folder_id, on_progress=None, model=None, force: bool = False):
+    """Passe 2 : conformité stricte #1-#27 après la reformulation humanisation."""
+    return _run_content_review_pass(
+        folder_id,
+        on_progress=on_progress,
+        model=model,
+        force=force,
+        groups=_COMPLIANCE_REVIEW_RULE_GROUPS,
+        signature_version=_REVIEW_RULESET_VERSION,
+        reviewed_column="reviewed",
+        error_column="review_error",
+        signature_column="review_signature",
+        review_kind="compliance",
+        review_label="Conformité",
+    )

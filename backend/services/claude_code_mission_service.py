@@ -53,15 +53,17 @@ STEP_LABELS = {
     "global": "Programme global",
     "daily": "Programmes journée",
     "content": "Génération des cours (texte)",
+    "humanization_review": "Révision humanisation et rythme",
     "review": "Révision conformité (étape 6bis)",
     "post_review_docs": "Documents post-révision",
 }
 
 # Étapes dont l'output total dépasse la limite de 1 appel Claude (64k tokens
 # output Sonnet) : on découpe en N missions séquentielles, 1 subprocess `claude`
-# par chunk. content = 1 segment (~5000 mots, 18 par journée). review = 1
-# journée (~18 segments en input, patches courts en output).
-_CHUNKED_STEPS = {"content", "review"}
+# par chunk. content = 1 segment (~5000 mots, 18 par journée).
+# humanization_review/review = 1 journée × groupe de règles en input, patches
+# courts en output.
+_CHUNKED_STEPS = {"content", "humanization_review", "review"}
 
 # État partagé des exécutions subprocess en cours / terminées (par process backend).
 # Clé : (job_id, step_key) → {status, model, error, result}
@@ -141,6 +143,20 @@ def _load_rules_text() -> str:
         return "(règles indisponibles)"
 
 
+def _load_review_rules_text() -> str:
+    """Règles de review alignées sur la pipeline API.
+
+    Contrairement à `_load_rules_text`, ce bloc inclut aussi les règles
+    d'humanisation #101-#111 et sert au calcul des signatures API.
+    """
+    try:
+        from services.content_generation_service import _load_review_rules
+        return _load_review_rules()
+    except Exception as exc:
+        logger.warning(f"⚠️ Règles review API indisponibles, fallback prompt local : {exc}")
+        return _load_rules_text()
+
+
 # ─── Export de mission ────────────────────────────────────────────────────────
 
 def export_mission(job_id: int, step_key: str, model: str) -> dict:
@@ -168,6 +184,7 @@ def export_mission(job_id: int, step_key: str, model: str) -> dict:
         "global": _build_global_mission,
         "daily": _build_daily_mission,
         "content": _build_content_mission,
+        "humanization_review": _build_humanization_review_mission,
         "review": _build_review_mission,
     }
     builders[step_key](target, job, model)
@@ -363,6 +380,12 @@ Volume total ≈ {job['nb_days']} × 90 000 mots. Reste dense, mais ne gonfle pa
 
 def _build_review_mission(target, job, model):
     """Dump les segments completed non-reviewed du job pipeline."""
+    from services.content_generation_service import (
+        _current_compliance_review_signature,
+        _ensure_review_state_columns,
+    )
+    _ensure_review_state_columns()
+    review_signature = _current_compliance_review_signature()
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute(
@@ -372,10 +395,15 @@ def _build_review_mission(target, job, model):
         JOIN content_generation_jobs cj ON cj.id = s.job_id
         JOIN cours_folders cf ON cf.id = cj.folder_id
         WHERE cf.formation_job_id = ?
-        AND s.status = 'completed' AND COALESCE(s.reviewed, 0) = 0
+        AND s.status = 'completed'
+        AND (
+            COALESCE(s.reviewed, 0) = 0
+            OR s.review_signature IS NULL
+            OR s.review_signature != ?
+        )
         ORDER BY cf.position ASC, s.sub_part_index ASC, s.passe ASC
         """,
-        (job["id"],),
+        (job["id"], review_signature),
     )
     rows = cursor.fetchall()
     conn.close()
@@ -429,7 +457,94 @@ Tu **ne réécris pas** les textes. Tu proposes des **patches minimaux** au form
 """,
     )
     _write(target, "input.md", json.dumps(segs, ensure_ascii=False, indent=2))
-    _write(target, "rules.md", _load_rules_text())
+    _write(target, "rules.md", _load_review_rules_text())
+
+
+def _build_humanization_review_mission(target, job, model):
+    """Dump les segments completed à humaniser pour export/import manuel."""
+    from services.content_generation_service import (
+        _current_humanization_review_signature,
+        _ensure_review_state_columns,
+    )
+    _ensure_review_state_columns()
+    review_signature = _current_humanization_review_signature()
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        SELECT s.id, s.sub_part_index, s.passe, s.text_content, cf.name, cf.position
+        FROM content_generation_segments s
+        JOIN content_generation_jobs cj ON cj.id = s.job_id
+        JOIN cours_folders cf ON cf.id = cj.folder_id
+        WHERE cf.formation_job_id = ?
+        AND s.status = 'completed'
+        AND (
+            COALESCE(s.humanized, 0) = 0
+            OR s.humanization_signature IS NULL
+            OR s.humanization_signature != ?
+        )
+        ORDER BY cf.position ASC, s.sub_part_index ASC, s.passe ASC
+        """,
+        (job["id"], review_signature),
+    )
+    rows = cursor.fetchall()
+    conn.close()
+    segs = [
+        {
+            "segment_id": r[0],
+            "sub_idx": r[1],
+            "passe": r[2],
+            "folder_name": r[4],
+            "folder_position": r[5],
+            "text": r[3],
+        }
+        for r in rows
+    ]
+
+    _write(
+        target,
+        "task.md",
+        f"""# Mission : Révision humanisation et rythme pédagogique
+
+**TP** : {job['tp_name']} · **Modèle demandé** : {model}
+
+Tu lis `input.md` qui contient les segments à améliorer (JSON array). Pour chacun,
+vérifie uniquement les règles #101 à #111 dans `rules.md`.
+
+Une intro trop brusque, un bloc trop dense, une transition mécanique, une fin
+sèche ou l'absence de respiration pédagogique comptent comme des non-conformités.
+Tu proposes des corrections concrètes, mais **pas de réécriture complète**.
+
+Format attendu :
+
+```json
+{{
+  "reviews": [
+    {{
+      "segment_id": 42,
+      "patches": [
+        {{
+          "original": "phrase EXACTE à remplacer (copie verbatim, 3-40 mots)",
+          "replacement": "phrase corrigée, même fond pédagogique, plus orale",
+          "rule_violated": "#101",
+          "reason": "explication brève"
+        }}
+      ]
+    }}
+  ]
+}}
+```
+
+- Max 10 patches par segment.
+- `replacement` peut ajouter une courte phrase orale, une micro-interaction ou
+  un tag `[pause]` / `[calm]` si cela corrige vraiment le rythme.
+- Si un segment est conforme, renvoie `"patches": []` pour ce segment.
+
+Écris dans `output.md` le JSON brut (sans enrobage).
+""",
+    )
+    _write(target, "input.md", json.dumps(segs, ensure_ascii=False, indent=2))
+    _write(target, "rules.md", _load_review_rules_text())
 
 
 # ─── Import du résultat de mission ───────────────────────────────────────────
@@ -463,6 +578,7 @@ def import_mission_result(job_id: int, step_key: str) -> dict:
     importers = {
         "global": _import_global,
         "daily": _import_daily,
+        "humanization_review": _import_humanization_review,
         "review": _import_review,
         "kb": _import_kb,
         "content": _import_content,
@@ -619,6 +735,8 @@ def _import_review(job_id, output, generated_via):
     applied_total = 0
     rejected_total = 0
     failed_total = 0
+    from services.content_generation_service import _current_compliance_review_signature
+    review_signature = _current_compliance_review_signature()
 
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -682,15 +800,15 @@ def _import_review(job_id, output, generated_via):
             cursor.execute(
                 "UPDATE content_generation_segments "
                 "SET text_content = ?, word_count = ?, dirty = 1, "
-                "    reviewed = 1, review_error = NULL "
+                "    reviewed = 1, review_error = NULL, review_signature = ? "
                 "WHERE id = ?",
-                (text, len(text.split()), seg_id),
+                (text, len(text.split()), review_signature, seg_id),
             )
         else:
             cursor.execute(
                 "UPDATE content_generation_segments "
-                "SET reviewed = 1, review_error = NULL WHERE id = ?",
-                (seg_id,),
+                "SET reviewed = 1, review_error = NULL, review_signature = ? WHERE id = ?",
+                (review_signature, seg_id),
             )
     conn.commit()
     conn.close()
@@ -701,6 +819,111 @@ def _import_review(job_id, output, generated_via):
         "patches_rejected": rejected_total,
         "segments_failed": failed_total,
         "generated_via": generated_via,
+    }
+
+
+def _import_humanization_review(job_id, output, generated_via):
+    """Import manuel de la passe humanisation (#101-#111).
+
+    Même format que `_import_review`, mais les patches appliqués invalident la
+    conformité stricte pour forcer la passe #1-#27 ensuite.
+    """
+    try:
+        parsed = json.loads(_extract_json(output))
+        reviews = parsed.get("reviews", [])
+    except Exception as e:
+        raise ValueError(f"JSON invalide dans output.md : {e}")
+
+    applied_total = 0
+    rejected_total = 0
+    failed_total = 0
+    from services.content_generation_service import (
+        _current_humanization_review_signature,
+        _ensure_review_state_columns,
+    )
+    _ensure_review_state_columns()
+    review_signature = _current_humanization_review_signature()
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT id FROM formation_pipeline_jobs WHERE id = ?", (job_id,))
+    row = cursor.fetchone()
+    if not row:
+        conn.close()
+        raise ValueError(f"Job pipeline {job_id} introuvable")
+
+    for rev in reviews:
+        seg_id = rev.get("segment_id")
+        patches = rev.get("patches", []) or []
+        if seg_id is None:
+            continue
+        cursor.execute(
+            """
+            SELECT s.text_content
+            FROM content_generation_segments s
+            JOIN content_generation_jobs cj ON cj.id = s.job_id
+            JOIN cours_folders cf ON cf.id = cj.folder_id
+            WHERE s.id = ? AND cf.formation_job_id = ?
+            """,
+            (seg_id, job_id),
+        )
+        row = cursor.fetchone()
+        if not row:
+            logger.warning(
+                f"⚠️ Humanization import : segment_id={seg_id} ignoré "
+                f"(inexistant ou hors job {job_id})"
+            )
+            failed_total += 1
+            continue
+        text = row[0]
+        seg_applied = 0
+        seg_rejected = 0
+        for p in patches[:10]:
+            original = p.get("original")
+            replacement = p.get("replacement")
+            if not original or replacement is None:
+                continue
+            count = text.count(original)
+            if count == 1:
+                text = text.replace(original, replacement, 1)
+                seg_applied += 1
+            else:
+                seg_rejected += 1
+        applied_total += seg_applied
+        rejected_total += seg_rejected
+
+        if seg_applied > 0:
+            cursor.execute(
+                """
+                UPDATE content_generation_segments
+                SET text_content = ?, word_count = ?, dirty = 1,
+                    humanized = 1, humanization_error = NULL, humanization_signature = ?,
+                    reviewed = 0, review_error = NULL, review_signature = NULL
+                WHERE id = ?
+                """,
+                (text, len(text.split()), review_signature, seg_id),
+            )
+        else:
+            cursor.execute(
+                """
+                UPDATE content_generation_segments
+                SET humanized = 1, humanization_error = NULL, humanization_signature = ?
+                WHERE id = ?
+                """,
+                (review_signature, seg_id),
+            )
+    conn.commit()
+    conn.close()
+    return {
+        "ok": True,
+        "segments_reviewed": len(reviews),
+        "patches_applied": applied_total,
+        "patches_rejected": rejected_total,
+        "segments_failed": failed_total,
+        "generated_via": generated_via,
+        "review_kind": "humanization",
+        "review_label": "Humanisation",
+        "review_signature": review_signature,
     }
 
 
@@ -943,10 +1166,10 @@ def list_pending_missions(job_id: int) -> dict:
     return out
 
 
-# ─── Mode chunked (content + review) ─────────────────────────────────────────
+# ─── Mode chunked (content + humanization_review + review) ───────────────────
 #
-# `content` et `review` ne tiennent pas en 1 seul appel CLI : ~90 000 mots de
-# sortie pour content, jusqu'à 117k tokens d'input pour review × N journées.
+# `content` et les deux reviews ne tiennent pas en 1 seul appel CLI : ~90 000
+# mots de sortie pour content, jusqu'à 117k tokens d'input par review × N journées.
 # Stratégie = boucle de N subprocess `claude` séquentiels, 1 par chunk.
 # Chaque chunk a son propre dossier review_queue/job_X/step_Y/<chunk_id>/
 # avec task.md + input.md (+ rules.md). Le dossier parent contient meta.json,
@@ -1243,22 +1466,65 @@ def _list_content_chunks(job: dict) -> list:
     return chunks
 
 
-def _list_review_chunks(job: dict) -> list:
-    """Multi-agents review : pour chaque journée non encore complètement
-    reviewed, on retourne **N chunks** (1 par groupe de règles dans
-    `_REVIEW_RULE_GROUPS`). Chaque chunk fait sa propre passe Claude Code
-    sur l'intégralité du texte de la journée mais cible UNIQUEMENT son
-    sous-ensemble de règles.
+def _review_step_config(step_key: str) -> dict:
+    """Configuration des deux passes locales alignées sur la pipeline API."""
+    if step_key == "humanization_review":
+        from services.content_generation_service import (
+            _HUMANIZATION_REVIEW_RULE_GROUPS,
+            _current_humanization_review_signature,
+            _ensure_review_state_columns,
+        )
+        _ensure_review_state_columns()
+        return {
+            "step_key": "humanization_review",
+            "review_kind": "humanization",
+            "review_label": "Humanisation",
+            "reviewed_column": "humanized",
+            "error_column": "humanization_error",
+            "signature_column": "humanization_signature",
+            "signature": _current_humanization_review_signature(),
+            "groups": _HUMANIZATION_REVIEW_RULE_GROUPS,
+            "invalidate_compliance_on_change": True,
+            "report_source": "humanization_claude_code_aggregate",
+        }
 
-    Avantage vs single-agent : pas de favoritisme. Un agent unique tend à
-    saturer son budget de patches sur les règles qu'il voit le plus
-    (#22 guillemets, #26 énumérations) et oublie #1-#17. Avec N agents
-    spécialisés, chaque sous-ensemble de règles a son propre budget complet.
+    if step_key == "review":
+        from services.content_generation_service import (
+            _current_compliance_review_signature,
+            _ensure_review_state_columns,
+        )
+        _ensure_review_state_columns()
+        return {
+            "step_key": "review",
+            "review_kind": "compliance",
+            "review_label": "Conformité",
+            "reviewed_column": "reviewed",
+            "error_column": "review_error",
+            "signature_column": "review_signature",
+            "signature": _current_compliance_review_signature(),
+            "groups": _REVIEW_RULE_GROUPS,
+            "invalidate_compliance_on_change": False,
+            "report_source": "claude_code_aggregate",
+        }
 
-    Idempotence : skippe les journées dont tous les segments sont reviewed=1.
-    Si une journée a été partiellement reviewed (certains chunks OK, d'autres
-    pas), on relance tous les chunks restants.
+    raise ValueError(f"step review inconnu : {step_key}")
+
+
+def _list_review_like_chunks(job: dict, step_key: str) -> list:
+    """Liste les chunks pour une passe de review locale.
+
+    La sélection est pilotée par les mêmes colonnes/signatures que l'API :
+    `humanized + humanization_signature` pour la passe humanisation, puis
+    `reviewed + review_signature` pour la conformité stricte.
     """
+    cfg = _review_step_config(step_key)
+    reviewed_col = cfg["reviewed_column"]
+    signature_col = cfg["signature_column"]
+    if reviewed_col not in {"humanized", "reviewed"}:
+        raise ValueError(f"Colonne reviewed non autorisée : {reviewed_col}")
+    if signature_col not in {"humanization_signature", "review_signature"}:
+        raise ValueError(f"Colonne signature non autorisée : {signature_col}")
+
     conn = get_db_connection()
     cursor = conn.cursor()
     chunks = []
@@ -1271,15 +1537,19 @@ def _list_review_chunks(job: dict) -> list:
         folders = cursor.fetchall()
         for fid, fname, position in folders:
             cursor.execute(
-                """
+                f"""
                 SELECT s.id, s.sub_part_index, s.passe, s.text_content
                 FROM content_generation_segments s
                 JOIN content_generation_jobs cj ON cj.id = s.job_id
                 WHERE cj.folder_id = ? AND s.status = 'completed'
-                AND COALESCE(s.reviewed, 0) = 0
+                AND (
+                    COALESCE(s.{reviewed_col}, 0) = 0
+                    OR s.{signature_col} IS NULL
+                    OR s.{signature_col} != ?
+                )
                 ORDER BY s.sub_part_index ASC, s.passe ASC
                 """,
-                (fid,),
+                (fid, cfg["signature"]),
             )
             segs = [
                 {"segment_id": r[0], "sub_idx": r[1], "passe": r[2], "text": r[3]}
@@ -1289,7 +1559,7 @@ def _list_review_chunks(job: dict) -> list:
                 continue
             # Génère 1 chunk par groupe de règles. La réutilisation auto
             # d'output.md (cf. _execute_chunked) skippera les chunks déjà OK.
-            for group in _REVIEW_RULE_GROUPS:
+            for group in cfg["groups"]:
                 chunks.append({
                     "id": f"day_{position + 1}_review_{group['id']}",
                     "day_idx": position,
@@ -1297,10 +1567,37 @@ def _list_review_chunks(job: dict) -> list:
                     "folder_name": fname,
                     "segments": segs,
                     "rule_group": group,
+                    "review_step_key": step_key,
+                    "review_kind": cfg["review_kind"],
+                    "review_label": cfg["review_label"],
+                    "review_signature": cfg["signature"],
+                    "invalidate_compliance_on_change": cfg["invalidate_compliance_on_change"],
                 })
     finally:
         conn.close()
     return chunks
+
+
+def _list_humanization_chunks(job: dict) -> list:
+    return _list_review_like_chunks(job, "humanization_review")
+
+
+def _list_review_chunks(job: dict) -> list:
+    """Multi-agents review : pour chaque journée non encore complètement
+    reviewed, on retourne **N chunks** (1 par groupe de règles dans
+    `_REVIEW_RULE_GROUPS`). Chaque chunk fait sa propre passe Claude Code
+    sur l'intégralité du texte de la journée mais cible UNIQUEMENT son
+    sous-ensemble de règles.
+
+    Avantage vs single-agent : pas de favoritisme. Un agent unique tend à
+    saturer son budget de patches sur les règles qu'il voit le plus
+    (#22 guillemets, #26 énumérations) et oublie #1-#17. Avec N agents
+    spécialisés, chaque sous-ensemble de règles a son propre budget complet.
+
+    Idempotence : skippe les journées dont tous les segments sont reviewed=1
+    avec la signature de règles actuelle.
+    """
+    return _list_review_like_chunks(job, "review")
 
 
 # ─── Builders chunk ───────────────────────────────────────────────────────────
@@ -1566,40 +1863,75 @@ def _build_review_chunk(chunk_dir: str, job: dict, chunk: dict, model: str) -> N
     """
     n_segs = len(chunk["segments"])
     rule_group = chunk.get("rule_group")
+    review_kind = chunk.get("review_kind") or "compliance"
+    review_label = chunk.get("review_label") or "Conformité"
+    is_humanization = review_kind == "humanization"
 
     if rule_group:
         rules_list_str = ", ".join(f"#{r}" for r in rule_group["rules"])
+        if is_humanization:
+            scope_intro = (
+                "Tu vérifies UNIQUEMENT les règles d'humanisation et de rythme. "
+                "Une intro trop brusque, un bloc trop dense, une transition "
+                "mécanique, une fin sèche ou l'absence de respiration "
+                "pédagogique comptent comme des non-conformités."
+            )
+            out_of_scope = (
+                "Ignore les règles de conformité stricte #1-#27 : elles seront "
+                "traitées par la passe suivante."
+            )
+        else:
+            scope_intro = (
+                f"Tu vérifies UNIQUEMENT les **règles {rules_list_str}** "
+                f"({rule_group['description']})."
+            )
+            out_of_scope = (
+                "Si tu vois une violation hors de ton scope, ignore-la — un "
+                "autre agent s'en occupe."
+            )
         scope_block = f"""
 ═══════════════════════════════════════════════════════════════════
 🎯 TON SCOPE EXCLUSIF : {rule_group['label']}
 ═══════════════════════════════════════════════════════════════════
 
-Tu vérifies UNIQUEMENT les **règles {rules_list_str}** ({rule_group['description']}).
+{scope_intro}
 
 **Important** : NE PROPOSE AUCUN PATCH sur les autres règles. Elles sont
-vérifiées par d'autres agents en parallèle. Si tu vois une violation hors
-de ton scope, ignore-la — un autre agent s'en occupe.
+vérifiées par d'autres agents ou par une passe suivante. {out_of_scope}
 
 Lis le détail complet de chacune de tes règles dans `rules.md` (cherche
 "RÈGLE #{rule_group['rules'][0]}" et les suivantes dans le fichier).
 """
-        n_rules = len(rule_group["rules"])
-        cap_per_segment = max(5, min(15, n_rules + 3))
+        cap_per_segment = 10
     else:
         scope_block = (
             "\nTu vérifies la conformité aux **règles #1 à #27** "
             "détaillées dans `rules.md` (lis le fichier intégralement).\n"
         )
         cap_per_segment = 10
+    replacement_constraint = (
+        "- `replacement` peut ajouter une courte phrase orale, une micro-interaction "
+        "ou un tag comme `[pause]` / `[calm]` si cela corrige vraiment le rythme, "
+        "sans changer le fond pédagogique."
+        if is_humanization
+        else "- `replacement` corrige la violation sans changer le sens, sans ajouter/retirer de contenu."
+    )
+    patch_policy = (
+        "Tu ne réécris pas les textes — tu proposes des patches ciblés qui "
+        "rendent l'introduction, les respirations, les transitions et les fins "
+        "plus naturelles quand les règles #101-#111 sont violées."
+        if is_humanization
+        else "Tu **ne réécris pas** les textes — tu proposes des **patches minimaux**"
+    )
 
-    task = f"""# Mission : Révision conformité — Journée {chunk['day_idx'] + 1}
+    task = f"""# Mission : Révision {review_label.lower()} — Journée {chunk['day_idx'] + 1}
 
 **TP** : {job['tp_name']} · **Folder** : {chunk['folder_name']} · **Modèle** : {model}
 
 Tu lis `input.md` qui contient les **{n_segs} segments** completed de cette journée (JSON array : segment_id, sub_idx, passe, text).
 {scope_block}
 
-Tu **ne réécris pas** les textes — tu proposes des **patches minimaux** au format :
+{patch_policy} au format :
 
 ```json
 {{
@@ -1622,7 +1954,7 @@ Tu **ne réécris pas** les textes — tu proposes des **patches minimaux** au f
 Contraintes :
 - **Max {cap_per_segment} patches par segment** (les pires violations dans ton scope).
 - `original` doit être trouvable verbatim dans `text` du segment, et **non ambigu** (ne pas viser une phrase qui apparaît plusieurs fois dans le segment).
-- `replacement` corrige la violation sans changer le sens, sans ajouter/retirer de contenu.
+{replacement_constraint}
 - Si un segment est conforme **dans ton scope**, renvoie `"patches": []` pour ce segment.
 - **Tous les {n_segs} segments doivent figurer** dans le tableau `reviews` (même avec patches vides).
 
@@ -1630,7 +1962,7 @@ Contraintes :
 """
     _write(chunk_dir, "task.md", task)
     _write(chunk_dir, "input.md", json.dumps(chunk["segments"], ensure_ascii=False, indent=2))
-    _write(chunk_dir, "rules.md", _load_rules_text())
+    _write(chunk_dir, "rules.md", _load_review_rules_text())
 
 
 # ─── Importers chunk ──────────────────────────────────────────────────────────
@@ -1703,6 +2035,15 @@ def _import_review_chunk(job_id: int, chunk: dict, output: str, generated_via: s
 
     chunk_segments = chunk.get("segments", []) or []
     folder_id = chunk["folder_id"]
+    step_key = chunk.get("review_step_key") or "review"
+    review_kind = chunk.get("review_kind") or (
+        "humanization" if step_key == "humanization_review" else "compliance"
+    )
+    review_label = chunk.get("review_label") or (
+        "Humanisation" if review_kind == "humanization" else "Conformité"
+    )
+    cfg = _review_step_config("humanization_review" if review_kind == "humanization" else "review")
+    review_signature = cfg["signature"]
 
     # Mapping {segment_id_dans_chunk → index dans chunk_segments}
     by_chunk_id = {
@@ -1854,31 +2195,52 @@ def _import_review_chunk(job_id: int, chunk: dict, output: str, generated_via: s
             "patches_detail": seg_patches_detail,
         })
 
-        # Multi-agents : ne PAS marquer reviewed=1 ici. Si on le faisait, le
-        # `_list_review_chunks` filtre WHERE reviewed=0 ferait skipper tous
-        # les chunks suivants (autres groupes de règles). Le marquage final
-        # est fait par `_finalize_review_step` après que TOUS les agents
-        # ont passé. dirty=1 est mis dès qu'un patch est appliqué (le TTS
-        # devra régénérer ce bloc).
+        # Compliance multi-agents : ne PAS marquer reviewed=1 ici. Si on le
+        # faisait, `_list_review_chunks` ferait skipper les chunks suivants
+        # (autres groupes de règles). Le marquage final est fait par
+        # `_finalize_review_step`. Pour l'humanisation, il n'y a qu'une salve :
+        # on peut marquer le segment humanized tout de suite, comme l'API.
         if seg_applied > 0:
-            cursor.execute(
-                """
-                UPDATE content_generation_segments
-                SET text_content = ?, word_count = ?, dirty = 1,
-                    review_error = NULL
-                WHERE id = ?
-                """,
-                (text, len(text.split()), actual_segment_id),
-            )
+            if review_kind == "humanization":
+                cursor.execute(
+                    """
+                    UPDATE content_generation_segments
+                    SET text_content = ?, word_count = ?, dirty = 1,
+                        humanized = 1, humanization_error = NULL, humanization_signature = ?,
+                        reviewed = 0, review_error = NULL, review_signature = NULL
+                    WHERE id = ?
+                    """,
+                    (text, len(text.split()), review_signature, actual_segment_id),
+                )
+            else:
+                cursor.execute(
+                    """
+                    UPDATE content_generation_segments
+                    SET text_content = ?, word_count = ?, dirty = 1,
+                        review_error = NULL
+                    WHERE id = ?
+                    """,
+                    (text, len(text.split()), actual_segment_id),
+                )
         else:
-            cursor.execute(
-                """
-                UPDATE content_generation_segments
-                SET review_error = NULL
-                WHERE id = ?
-                """,
-                (actual_segment_id,),
-            )
+            if review_kind == "humanization":
+                cursor.execute(
+                    """
+                    UPDATE content_generation_segments
+                    SET humanized = 1, humanization_error = NULL, humanization_signature = ?
+                    WHERE id = ?
+                    """,
+                    (review_signature, actual_segment_id),
+                )
+            else:
+                cursor.execute(
+                    """
+                    UPDATE content_generation_segments
+                    SET review_error = NULL
+                    WHERE id = ?
+                    """,
+                    (actual_segment_id,),
+                )
 
     conn.commit()
     conn.close()
@@ -1887,13 +2249,16 @@ def _import_review_chunk(job_id: int, chunk: dict, output: str, generated_via: s
     # GET /api/formation/<job>/folders/<folder>/review-report (route ajoutée
     # dans formation_routes.py). Survit dans review_queue/_done/ après
     # archivage de la mission.
-    chunk_dir_for_report = os.path.join(mission_dir(job_id, "review"), chunk["id"])
+    chunk_dir_for_report = os.path.join(mission_dir(job_id, step_key), chunk["id"])
     if os.path.isdir(chunk_dir_for_report):
         report = {
             "folder_id": folder_id,
             "folder_name": chunk.get("folder_name"),
             "imported_at": datetime.utcnow().isoformat() + "Z",
             "generated_via": generated_via,
+            "review_kind": review_kind,
+            "review_label": review_label,
+            "review_signature": review_signature,
             "via_positional_fallback": use_positional,
             "summary": {
                 "segments_reviewed": len(reviews),
@@ -1909,12 +2274,12 @@ def _import_review_chunk(job_id: int, chunk: dict, output: str, generated_via: s
             with open(os.path.join(chunk_dir_for_report, "review_report.json"),
                       "w", encoding="utf-8") as f:
                 json.dump(report, f, ensure_ascii=False, indent=2)
-            logger.info(f"📋 Rapport review écrit : {chunk_dir_for_report}/review_report.json")
+            logger.info(f"📋 Rapport {review_label} écrit : {chunk_dir_for_report}/review_report.json")
         except Exception as e:
             logger.warning(f"⚠️ Échec écriture review_report.json : {e}")
 
     logger.info(
-        f"✅ Review chunk {chunk['id']} importé : {applied_total} appliqués, "
+        f"✅ {review_label} chunk {chunk['id']} importé : {applied_total} appliqués, "
         f"{rejected_total} rejetés, {failed_total} échoués sur {len(reviews)} reviews "
         f"(positional={use_positional})"
     )
@@ -1926,18 +2291,25 @@ def _import_review_chunk(job_id: int, chunk: dict, output: str, generated_via: s
         "patches_rejected": rejected_total,
         "segments_failed": failed_total,
         "generated_via": generated_via,
+        "review_kind": review_kind,
+        "review_label": review_label,
+        "review_signature": review_signature,
         "via_positional_fallback": use_positional,
     }
 
 
-def _persist_review_reports_from_active_files(job_id: int, generated_via: str) -> int:
+def _persist_review_reports_from_active_files(
+    job_id: int,
+    generated_via: str,
+    step_key: str = "review",
+) -> int:
     """Aggregate Claude Code chunk reports into durable DB reports.
 
     The chunk JSON files are useful for local debugging, but the UI must not
     depend on them after a deploy/restart. This persists one full report per
-    folder before `step_review` is archived.
+    folder before the local review step is archived.
     """
-    base_dir = mission_dir(job_id, "review")
+    base_dir = mission_dir(job_id, step_key)
     if not os.path.isdir(base_dir):
         return 0
 
@@ -1977,8 +2349,14 @@ def _persist_review_reports_from_active_files(job_id: int, generated_via: str) -
         any_positional = False
         agents_used = []
         folder_name = None
+        review_kind = None
+        review_label = None
+        review_signature = None
 
         for chunk_id, report in sub_reports:
+            review_kind = review_kind or report.get("review_kind")
+            review_label = review_label or report.get("review_label")
+            review_signature = review_signature or report.get("review_signature")
             summary = report.get("summary") or {}
             agg_summary["segments_reviewed"] = max(
                 agg_summary["segments_reviewed"],
@@ -2022,11 +2400,20 @@ def _persist_review_reports_from_active_files(job_id: int, generated_via: str) -
                 folder_name = report.get("folder_name")
             agents_used.append(chunk_id)
 
+        review_kind = review_kind or (
+            "humanization" if step_key == "humanization_review" else "compliance"
+        )
+        review_label = review_label or (
+            "Humanisation" if review_kind == "humanization" else "Conformité"
+        )
         aggregate = {
             "folder_id": folder_id,
             "folder_name": folder_name,
             "imported_at": latest_imported,
             "generated_via": generated_via,
+            "review_kind": review_kind,
+            "review_label": review_label,
+            "review_signature": review_signature,
             "via_positional_fallback": any_positional,
             "n_agents": len(sub_reports),
             "agents_used": agents_used,
@@ -2041,14 +2428,19 @@ def _persist_review_reports_from_active_files(job_id: int, generated_via: str) -
             job_id,
             folder_id,
             aggregate,
-            source="claude_code_aggregate",
+            source=(
+                "claude_code_aggregate"
+                if review_kind == "compliance"
+                else f"{review_kind}_claude_code_aggregate"
+            ),
             generated_via=generated_via,
         )
         persisted += 1
 
     logger.info(
-        "PIPELINE_REVIEW_REPORTS_AGGREGATED job_id=%s persisted=%s folders=%s",
+        "PIPELINE_REVIEW_REPORTS_AGGREGATED job_id=%s step=%s persisted=%s folders=%s",
         job_id,
+        step_key,
         persisted,
         sorted(reports_by_folder),
     )
@@ -2080,9 +2472,21 @@ def _execute_chunked(job_id: int, step_key: str, model: str) -> dict:
     with open(os.path.join(target, "meta.json"), "w", encoding="utf-8") as f:
         json.dump(meta, f, ensure_ascii=False, indent=2)
 
-    listers = {"content": _list_content_chunks, "review": _list_review_chunks}
-    builders = {"content": _build_content_chunk, "review": _build_review_chunk}
-    importers = {"content": _import_content_chunk, "review": _import_review_chunk}
+    listers = {
+        "content": _list_content_chunks,
+        "humanization_review": _list_humanization_chunks,
+        "review": _list_review_chunks,
+    }
+    builders = {
+        "content": _build_content_chunk,
+        "humanization_review": _build_review_chunk,
+        "review": _build_review_chunk,
+    }
+    importers = {
+        "content": _import_content_chunk,
+        "humanization_review": _import_review_chunk,
+        "review": _import_review_chunk,
+    }
 
     # Snapshot pre-review au plus tôt : si la review patche les segments avant
     # que _finalize_content_step ait pu snapshotter (ex: content terminé avec
@@ -2090,7 +2494,7 @@ def _execute_chunked(job_id: int, step_key: str, model: str) -> dict:
     # originale. On le fait ici en idempotent (n'écrase jamais un snapshot
     # existant) pour garantir l'invariant "Word original" toujours dispo.
     # Best-effort : un échec snapshot ne doit pas bloquer la review elle-même.
-    if step_key == "review":
+    if step_key in ("humanization_review", "review"):
         try:
             conn_pre = get_db_connection()
             cur_pre = conn_pre.cursor()
@@ -2267,11 +2671,41 @@ def _execute_chunked(job_id: int, step_key: str, model: str) -> dict:
         # terminées" même quand 95% du contenu est OK.
         _finalize_content_step(job_id, model)
 
+    if step_key == "humanization_review":
+        try:
+            persisted_reports = _persist_review_reports_from_active_files(
+                job_id,
+                f"claude_code_{model}",
+                step_key="humanization_review",
+            )
+            if chunks_done > 0 and persisted_reports == 0:
+                logger.warning(
+                    "⚠️ Aucun rapport humanisation agrégé persisté en DB "
+                    "job=%s chunks_done=%s",
+                    job_id,
+                    chunks_done,
+                )
+        except Exception as exc:
+            logger.warning(
+                "⚠️ Agrégation durable des rapports humanisation échouée job=%s : %s",
+                job_id,
+                exc,
+            )
+        if progress["errors"]:
+            logger.warning(
+                "⚠️ Humanisation non finalisée job=%s : %s chunk(s) en erreur",
+                job_id,
+                len(progress["errors"]),
+            )
+        else:
+            _finalize_humanization_review_step(job_id)
+
     if step_key == "review":
         try:
             persisted_reports = _persist_review_reports_from_active_files(
                 job_id,
                 f"claude_code_{model}",
+                step_key="review",
             )
             if chunks_done > 0 and persisted_reports == 0:
                 logger.warning(
@@ -2286,12 +2720,18 @@ def _execute_chunked(job_id: int, step_key: str, model: str) -> dict:
                 job_id,
                 exc,
             )
-        # Marquer reviewed=1 sur tous les segments touchés, après que TOUS les
-        # agents multi-rules ont passé. Pas conditionné aux erreurs : même si
-        # certains chunks ont raté (ex : 1 agent sur 4), les autres ont fait
-        # leur boulot et les segments ont été partiellement audités. Mieux
-        # vaut marquer reviewed que laisser bloqué pour toujours.
-        _finalize_review_step(job_id)
+        # Marquer reviewed=1 seulement quand tous les chunks ont terminé.
+        # Sinon la prochaine exécution reprend les chunks manquants et évite
+        # de produire un Word 2 présenté comme conforme alors qu'une salve a
+        # échoué.
+        if progress["errors"]:
+            logger.warning(
+                "⚠️ Review conformité non finalisée job=%s : %s chunk(s) en erreur",
+                job_id,
+                len(progress["errors"]),
+            )
+        else:
+            _finalize_review_step(job_id)
 
     return {
         "ok": True,
@@ -2300,6 +2740,50 @@ def _execute_chunked(job_id: int, step_key: str, model: str) -> dict:
         "chunks_failed": len(progress["errors"]),
         "errors": progress["errors"][:10],
     }
+
+
+def _finalize_humanization_review_step(job_id: int) -> None:
+    """Marque la passe humanisation comme à jour sur les segments restants.
+
+    Les segments patchés sont déjà marqués dans `_import_review_chunk`.
+    Cette finalisation couvre les segments conformes sans patch, avec la même
+    signature que `run_humanization_review` côté API.
+    """
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    from services.content_generation_service import (
+        _current_humanization_review_signature,
+        _ensure_review_state_columns,
+    )
+    _ensure_review_state_columns()
+    review_signature = _current_humanization_review_signature()
+    cursor.execute(
+        """
+        UPDATE content_generation_segments
+        SET humanized = 1, humanization_error = NULL, humanization_signature = ?
+        WHERE id IN (
+            SELECT s.id FROM content_generation_segments s
+            JOIN content_generation_jobs cj ON cj.id = s.job_id
+            JOIN cours_folders f ON f.id = cj.folder_id
+            WHERE f.formation_job_id = ? AND s.status = 'completed'
+            AND (
+                COALESCE(s.humanized, 0) = 0
+                OR s.humanization_signature IS NULL
+                OR s.humanization_signature != ?
+            )
+        )
+        """,
+        (review_signature, job_id, review_signature),
+    )
+    n = cursor.rowcount
+    conn.commit()
+    conn.close()
+    logger.info(
+        f"📋 Finalize humanisation : {n} segments marqués humanized=1 (job {job_id})"
+    )
+
+    _archive_mission(job_id, "humanization_review")
+    logger.info(f"📦 step_humanization_review archivé vers _done/ (job {job_id})")
 
 
 def _finalize_review_step(job_id: int) -> None:
@@ -2312,19 +2796,25 @@ def _finalize_review_step(job_id: int) -> None:
     """
     conn = get_db_connection()
     cursor = conn.cursor()
+    from services.content_generation_service import _current_compliance_review_signature
+    review_signature = _current_compliance_review_signature()
     cursor.execute(
         """
         UPDATE content_generation_segments
-        SET reviewed = 1
+        SET reviewed = 1, review_error = NULL, review_signature = ?
         WHERE id IN (
             SELECT s.id FROM content_generation_segments s
             JOIN content_generation_jobs cj ON cj.id = s.job_id
             JOIN cours_folders f ON f.id = cj.folder_id
             WHERE f.formation_job_id = ? AND s.status = 'completed'
-            AND COALESCE(s.reviewed, 0) = 0
+            AND (
+                COALESCE(s.reviewed, 0) = 0
+                OR s.review_signature IS NULL
+                OR s.review_signature != ?
+            )
         )
         """,
-        (job_id,),
+        (review_signature, job_id, review_signature),
     )
     n = cursor.rowcount
     conn.commit()
@@ -2857,7 +3347,8 @@ def run_volume_safety_api(job_id: int, folder_id: int, model: str = None) -> dic
                 cursor.execute(
                     """UPDATE content_generation_segments
                        SET text_content = ?, word_count = ?, dirty = 1,
-                           reviewed = 0, review_error = NULL
+                           humanized = 0, humanization_error = NULL, humanization_signature = NULL,
+                           reviewed = 0, review_error = NULL, review_signature = NULL
                        WHERE id = ?""",
                     (new_text, new_words, seg["segment_id"]),
                 )
@@ -3132,7 +3623,8 @@ def run_volume_safety(job_id: int, folder_id: int, model: str = "sonnet") -> dic
                 cursor.execute(
                     """UPDATE content_generation_segments
                        SET text_content = ?, word_count = ?, dirty = 1,
-                           reviewed = 0, review_error = NULL
+                           humanized = 0, humanization_error = NULL, humanization_signature = NULL,
+                           reviewed = 0, review_error = NULL, review_signature = NULL
                        WHERE id = ?""",
                     (new_text, new_words, seg["segment_id"]),
                 )
