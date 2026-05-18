@@ -1663,6 +1663,47 @@ Réponds uniquement avec le texte remanié, sans commentaire."""
     return reduced
 
 
+_HEADING_RE = re.compile(
+    r"""^(?:
+        \#{1,3}\s+                              # markdown ## Titre
+        |(?:[IVX]+|[A-Z])\.\s+                 # I. II. A. B.
+        |\d+(?:\.\d+)*\.\s+                    # 1. 2.1. 3.2.
+        |(?:[A-ZÀÂÆÇÉÈÊËÎÏÔŒÙÛÜ][^\n]{0,60}):?\s*$  # TITRE TOUT CAPS court
+    )""",
+    re.VERBOSE | re.UNICODE,
+)
+
+
+def _is_heading_paragraph(text: str) -> bool:
+    """True si le paragraphe ressemble à un titre/numérotation de section."""
+    stripped = text.strip()
+    if not stripped:
+        return False
+    first_line = stripped.split("\n")[0].strip()
+    if _HEADING_RE.match(first_line):
+        return True
+    # Ligne courte entièrement en majuscules (≤ 12 mots, sans ponctuation finale)
+    words = first_line.split()
+    if 1 <= len(words) <= 12 and first_line == first_line.upper() and not first_line[-1] in ".?!,;:":
+        return True
+    return False
+
+
+def _section_boundary_positions(units: list) -> list:
+    """Retourne les positions (en mots) des fins de section.
+
+    Une fin de section = position de fin du dernier paragraphe qui précède
+    un paragraphe-titre (heading). Ce sont les coupures sémantiques les plus
+    fortes : on ne coupe jamais entre un titre et son contenu.
+    """
+    positions = []
+    for i, unit in enumerate(units):
+        next_unit = units[i + 1] if i + 1 < len(units) else None
+        if next_unit and _is_heading_paragraph(next_unit["text"]):
+            positions.append(unit["end"])
+    return positions
+
+
 def _sentence_boundary_positions(words):
     """Retourne les positions de mots situées juste après une fin de phrase."""
     positions = []
@@ -1684,6 +1725,7 @@ def _choose_natural_boundary(
     paragraph_boundaries,
     sentence_boundaries,
     word_budget_max=None,
+    section_boundaries=None,
 ):
     """
     Choisit une coupure naturelle proche de la cible, en respectant le budget TTS.
@@ -1716,9 +1758,22 @@ def _choose_natural_boundary(
     target_w = min(max(target_w, cursor_w + 1), cap_w)
 
     span = max(1, target_w - cursor_w)
+    section_window = max(300, min(1200, int(span * 0.25)))
     paragraph_window = max(160, min(700, int(span * 0.15)))
     sentence_window = max(80, min(250, int(span * 0.08)))
 
+    # Priorité 1 : fin de section (juste avant un titre/numérotation)
+    if section_boundaries:
+        section_candidates = [
+            b for b in section_boundaries
+            if max(cursor_w + 1, target_w - section_window) <= b <= min(cap_w, target_w + section_window)
+        ]
+        if section_candidates:
+            chosen = _closest_boundary(section_candidates, target_w)
+            logger.info(f"   ✂️ Coupure fin de section: mot {chosen} (cible {target_w})")
+            return chosen
+
+    # Priorité 2 : fin de paragraphe
     paragraph_candidates = [
         b for b in paragraph_boundaries
         if max(cursor_w + 1, target_w - paragraph_window) <= b <= min(cap_w, target_w + paragraph_window)
@@ -1831,6 +1886,7 @@ def _build_course_blocs_from_segments(
     total_duration = sum(cours_durations_min.values())
     sentence_boundaries = _sentence_boundary_positions(full_words)
     paragraph_boundaries = [u["end"] for u in units if u["end"] < total_words]
+    section_boundaries = _section_boundary_positions(units)
     api_speed = _course_tts_speed()
     blocs = []
     cursor_w = 0
@@ -1859,6 +1915,7 @@ def _build_course_blocs_from_segments(
                 paragraph_boundaries=paragraph_boundaries,
                 sentence_boundaries=sentence_boundaries,
                 word_budget_max=main_word_budget,
+                section_boundaries=section_boundaries,
             )
 
         if end_w <= cursor_w and cursor_w < total_words:
@@ -1919,6 +1976,7 @@ def _build_course_blocs_from_segments(
         is_last_folder=is_last_folder,
         model=model,
         preview=preview,
+        section_boundaries=section_boundaries,
     )
 
     return blocs, total_words, carryover_out
@@ -2012,6 +2070,7 @@ def _handle_last_bloc_overflow(
     is_last_folder=False,
     model=None,
     preview=False,
+    section_boundaries=None,
 ):
     """Si le bloc 7 dépasse, reporte vers le cours suivant ou réduit le dernier jour."""
     if not blocs:
@@ -2035,6 +2094,7 @@ def _handle_last_bloc_overflow(
             paragraph_boundaries=paragraph_boundaries,
             sentence_boundaries=sentence_boundaries,
             word_budget_max=budget,
+            section_boundaries=section_boundaries,
         )
         cut_w = max(last["start_w"] + 1, min(cut_w, old_end))
         carryover_text = _render_course_slice(full_words, units, cut_w, old_end).strip()

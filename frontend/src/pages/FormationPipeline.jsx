@@ -13,6 +13,15 @@ const POLLING_STATUSES = new Set([
 
 const AUDIO_DONE_STATUSES = new Set(['audio_completed', 'audio_launched'])
 const AUDIO_ACTIVE_STATUSES = new Set(['audio_running'])
+const TEXT_AVAILABLE_STATUSES = new Set([
+  'text_ready',
+  'tts_launched',
+  'audio_running',
+  'audio_completed',
+  'audio_launched',
+  'audio_error',
+])
+const CONTENT_POLLING_STATUSES = new Set(['tts_launched', 'audio_running'])
 
 // ─── Mapping statut → étape active (0-indexed) ────────────────────────────────
 function statusToStep(status, job = null) {
@@ -36,6 +45,7 @@ function statusToStep(status, job = null) {
   // Étape 7 (synthèse TTS audio)
   if (AUDIO_DONE_STATUSES.has(status)) return 7
   if (AUDIO_ACTIVE_STATUSES.has(status)) return 6
+  if (status === 'text_ready') return 6
 
   // Étape 6 (génération texte cours). Une fois tous les textes complétés, le
   // calcul de `currentStep` plus bas avance explicitement à l'étape audio.
@@ -2067,19 +2077,30 @@ export default function FormationPipeline() {
     }
   }, [])
 
-  // Fetch dès que la génération texte a été lancée, puis poll pendant qu'elle tourne.
+  // Rehydrate les dossiers dès que le job peut avoir du texte. Important :
+  // après découplage audio, un job texte prêt est `text_ready`, donc un refresh
+  // ne doit pas retomber sur l'écran "Générer".
   useEffect(() => {
     if (!job || !selectedJobId) return
-    if (!['tts_launched', 'audio_running', 'audio_completed', 'audio_launched', 'audio_error'].includes(job.status)) return
+    const shouldLoadContent =
+      TEXT_AVAILABLE_STATUSES.has(job.status) ||
+      job.daily_programs_validated ||
+      contentFolders.length > 0
+    if (!shouldLoadContent) return
+
     fetchContentFolders(selectedJobId)
-    // Poll toutes les 3s tant qu'au moins un dossier n'a pas fini son texte
+    const shouldPollContent =
+      CONTENT_POLLING_STATUSES.has(job.status) ||
+      contentFolders.some(f => f.content_status && f.content_status !== 'completed')
+    if (!shouldPollContent) return
+
     const interval = setInterval(() => {
       const allDone = contentFolders.length > 0 &&
         contentFolders.every(f => f.content_status === 'completed')
       if (!allDone) fetchContentFolders(selectedJobId)
     }, 3000)
     return () => clearInterval(interval)
-  }, [selectedJobId, job?.status, contentFolders.length, fetchContentFolders])
+  }, [selectedJobId, job?.status, job?.daily_programs_validated, contentFolders.length, fetchContentFolders])
 
   const allContentCompleted = contentFolders.length > 0 &&
     contentFolders.every(f => f.content_status === 'completed')
@@ -2590,13 +2611,13 @@ export default function FormationPipeline() {
     }
   }
 
-  // Le statut backend reste 'tts_launched' tant que l'admin n'a pas cliqué
-  // "Lancer la synthèse TTS". Mais si tous les folders ont leur texte généré,
-  // l'étape 5 est en réalité terminée et l'étape 6 attend l'action utilisateur.
+  // `text_ready` est l'état normal après la pipeline texte. Les anciens jobs
+  // peuvent encore rester en `tts_launched`; dans les deux cas, si tous les
+  // dossiers sont complétés, l'étape texte est terminée.
   // On avance currentStep à 6 pour que l'UI reflète l'état réel : étape 5 OK,
   // étape 6 active (bouton "Lancer le TTS" disponible).
   let currentStep = job ? statusToStep(job.status, job) : -1
-  if (job?.status === 'tts_launched' && allContentCompleted) {
+  if (['text_ready', 'tts_launched'].includes(job?.status) && allContentCompleted) {
     currentStep = 6
   }
   // Détection "stale running" : Azure App Service peut redémarrer le backend
@@ -3410,7 +3431,7 @@ export default function FormationPipeline() {
 
             {/* ── Étape 6 : Génération des cours (texte) + relecture PDF ── */}
             <StepBlock stepIndex={5} currentStep={currentStep} status={job.status} title="Génération des cours (texte)" icon="edit_note">
-              {['tts_launched', 'audio_running', 'audio_completed', 'audio_launched', 'audio_error'].includes(job.status) || ttsResult || (contentFolders.length > 0 && contentFolders.some(f => f.content_status === 'completed')) ? (
+              {TEXT_AVAILABLE_STATUSES.has(job.status) || ttsResult || (contentFolders.length > 0 && contentFolders.some(f => f.content_status === 'completed')) ? (
                 <div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '10px', color: allContentCompleted ? '#34d399' : '#fbbf24', fontSize: '15px', fontWeight: 600, marginBottom: '12px', flexWrap: 'wrap' }}>
                     <Icon name={allContentCompleted ? 'check_circle' : 'hourglass_top'} />
@@ -4006,7 +4027,7 @@ export default function FormationPipeline() {
                     stepKey="humanization_review"
                     stepLabel="Humanisation intros, transitions et rythme"
                     jobId={selectedJobId}
-                    disabled={!['tts_launched', 'audio_running', 'audio_completed', 'audio_launched', 'audio_error'].includes(job.status)}
+                    disabled={!TEXT_AVAILABLE_STATUSES.has(job.status)}
                     disabledReason="En attente de la génération texte"
                     onExport={handleExportMission}
                     onExecute={handleExecuteMission}
@@ -4022,7 +4043,7 @@ export default function FormationPipeline() {
                     stepKey="review"
                     stepLabel="Révision conformité (étape 6bis)"
                     jobId={selectedJobId}
-                    disabled={!['tts_launched', 'audio_running', 'audio_completed', 'audio_launched', 'audio_error'].includes(job.status)}
+                    disabled={!TEXT_AVAILABLE_STATUSES.has(job.status)}
                     disabledReason="En attente de la génération texte"
                     onExport={handleExportMission}
                     onExecute={handleExecuteMission}

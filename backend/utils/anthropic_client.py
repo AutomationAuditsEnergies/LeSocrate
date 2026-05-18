@@ -13,6 +13,8 @@ avant de retenter (plutôt qu'un sleep aveugle qui cascade en 429).
 """
 
 import os
+import shutil
+import subprocess
 from datetime import datetime, timezone
 
 import requests as _http
@@ -161,6 +163,53 @@ def parse_retry_after(resp) -> float:
     return 60.0
 
 
+def _is_local_dev() -> bool:
+    return os.getenv("LOCAL_DEV", "").lower() == "true"
+
+
+def _messages_to_prompt(messages: list) -> str:
+    """Convertit le format messages Anthropic en prompt texte pour claude -p."""
+    parts = []
+    for msg in messages:
+        role = msg.get("role", "")
+        content = msg.get("content", "")
+        if isinstance(content, list):
+            content = "\n".join(
+                b.get("text", "") for b in content
+                if isinstance(b, dict) and b.get("type") == "text"
+            )
+        if role == "system":
+            parts.insert(0, content)
+        else:
+            parts.append(content)
+    return "\n\n".join(p for p in parts if p)
+
+
+def _call_via_claude_cli(messages: list, model: str, timeout: int = 600) -> str:
+    """Route l'appel vers le binaire `claude` (forfait OAuth) au lieu de l'API HTTP.
+
+    Strips ANTHROPIC_API_KEY du child_env pour forcer l'auth OAuth du forfait.
+    """
+    prompt = _messages_to_prompt(messages)
+    child_env = os.environ.copy()
+    for k in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"):
+        child_env.pop(k, None)
+
+    cmd = ["claude", "-p", prompt, "--model", model, "--dangerously-skip-permissions"]
+    try:
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=timeout, env=child_env
+        )
+        if result.returncode != 0:
+            err = (result.stderr or result.stdout or "")[:400]
+            raise AnthropicAPIError(500, "cli_error", err)
+        return result.stdout.strip()
+    except subprocess.TimeoutExpired:
+        raise AnthropicAPIError(500, "timeout", f"Claude CLI timeout après {timeout}s")
+    except FileNotFoundError:
+        raise AnthropicAPIError(500, "cli_not_found", "Binaire `claude` introuvable dans le PATH")
+
+
 def post_message(messages, max_tokens=8000, model=None, timeout=600) -> str:
     """
     Appelle POST /v1/messages et retourne le texte du premier bloc de la réponse.
@@ -174,6 +223,12 @@ def post_message(messages, max_tokens=8000, model=None, timeout=600) -> str:
         raise ValueError("post_message: 'model' est requis")
 
     model = _normalize_model_alias(model)
+
+    # LOCAL_DEV=true → forfait Claude Code (OAuth) au lieu de l'API à la carte
+    if _is_local_dev() and shutil.which("claude"):
+        logger.info(f"🖥️  LOCAL_DEV: routing via claude CLI (model={model})")
+        return _call_via_claude_cli(messages, model, timeout)
+
     config = _provider_config(model)
     if not config["api_key"]:
         raise ValueError(f"{config['missing_key']} non définie pour {config['provider']}")

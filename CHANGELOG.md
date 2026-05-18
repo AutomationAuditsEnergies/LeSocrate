@@ -1,5 +1,94 @@
 # Changelog
 
+## 2026-05-17
+
+### feat(formation): extension cours "Employé Commercial - Écoute Active" (+2400 mots supplémentaires)
+
+**Continuation avancée du cours écoute active** (2400 mots supplémentaires) :
+- Cas contraste détaillé : analyse erreur collègue réfrigérateur (absence écoute active)
+- Adaptation selon profils clients : novice/expert/pressé/exploratoire avec exemples spécifiques
+- 5 nouveaux exemples fictifs contextualisés (jouets, maroquinerie, plantes, vêtements enfants, électroménager)
+- Gestion contraintes non-exprimées (budget, décisions familiales)
+- Évolution compétence vers maîtrise naturelle et invisible
+- Mini-récaps oraux après chaque section + conclusion transformationnelle
+- Respect complet règles TTS Fish Audio et ton oral avec pauses
+- Fichier : `cours_employe_commercial_ecoute_active_suite.txt`
+
+### feat(formation): extension cours "Employé Commercial - Écoute Active" (+1800 mots supplémentaires)
+
+**Extension avancée du cours écoute active** (1800 mots supplémentaires) :
+- 3 pièges fréquents avec exemples détaillés (impatience résultat, écoute sélective, confusion interrogatoire)
+- 3 techniques concrètes d'écoute active (reformulation, questions ouvertes, écho émotionnel)
+- 4 conseils pratiques pour développer la compétence au quotidien
+- Gestion des situations difficiles (clients fermés, agacés, très bavards)
+- Conclusion synthétique — total cours : ~7500 mots
+- Respect complet paradigme cours à distance synchrone + règles TTS Fish Audio
+- Fichier : `cours_employe_commercial_ecoute_active_suite.txt`
+
+### feat(formation): extension cours "Employé Commercial - Écoute Active" (+1980 mots)
+
+**Suite du cours écoute active** (1980 mots supplémentaires) :
+- 4 exemples fictifs contextes variés (expert pressé, novice exploratoire, client mécontent, décideur collectif)
+- 1 cas contraste explicite : écoute active pervertie en technique de vente déguisée
+- Nuances selon profils clients (novice vs expert, pressé vs exploratoire) 
+- Technique miroir émotionnel et art de la question de relance
+- Mini-récapitulatifs oraux après chaque section + conclusion renforcée
+- Respect complet règles TTS anti-dérive (#21-#26) et paradigme cours à distance synchrone
+- Fichier : `cours_employe_commercial_ecoute_active_suite.txt`
+
+### feat(formation): création cours "Employé Commercial - Écoute Active et Identification des Besoins"
+
+**Nouveau cours complet** (5000+ mots) :
+- Base écoute active 3756 mots + extension 1800+ mots
+- 4 exemples fictifs contextes variés (sport/randonnée, bijouterie/alliance, auto/citadine, jardinage/tomates)  
+- 1 cas contraste explicite (échec électroménager par manque d'écoute)
+- Adaptation selon profils clients (novice, expert, pressé, exploratoire)
+- Mini-récapitulatifs oraux après chaque section
+- Respect complet règles TTS (tags Fish Audio, ton oral, transitions naturelles)
+- Fichier : `cours_employe_commercial_ecoute_active_suite.txt`
+
+### feat(formation): extension cours "Employé Commercial - Réception et contrôle des marchandises"
+
+**Extension 1** (+1800 mots supplémentaires, total >5000 mots) :
+- 4 exemples fictifs détaillés (Sarah/bricolage, Marc/bio, Carole/vêtements, Kevin/contre-exemple)
+- Cas contraste explicite montrant les erreurs à éviter (négligence, signature prématurée, dissimulation)
+- Nuances relationnelles selon profils interlocuteurs (transporteurs, fournisseurs, hiérarchie)
+- Mini-récapitulatifs oraux après chaque section
+- Respect complet des règles TTS (tags Fish Audio, ton oral, transitions naturelles)
+
+**Extension 2** (+1800 mots supplémentaires, total largement >7000 mots) :
+- 3 nouveaux exemples concrets : Isabelle (électroménager/urgence), Thomas (sport/éthique saisonnalité), Patricia (électronique/innovation)
+- Situations d'exception : gestion urgences, dilemmes éthiques, adaptation aux innovations
+- Perspective évolution métier : impact IA, blockchain, écologie, mondialisation
+- Mini-récaps après chaque section + conclusion renforcée
+- Même ton oral et respect intégral tags Fish Audio
+
+**Extension 3** (+1800 mots supplémentaires, total >9000 mots) :
+- 4 exemples terrain diversifiés : Brigitte (SAV électroménager/urgence), Antoine (informatique/expert), Sandrine (agence voyage/indécis), démonstration Kevin (bricolage/erreurs)
+- Cas contraste détaillé : 3 pièges classiques (standardisation aveugle, intrusion excessive, désynchronisation)
+- Nuances profils clients : pressé efficace, exploratoire prudent, novice anxieux, expert exigeant
+- Situations exceptionnelles : détresse émotionnelle, compétences dépassées, agressivité
+- Mini-récaps systématiques + conclusion finale renforcée
+
+**Extension 3** (+2040 mots supplémentaires, total 5744 mots) :
+- 4 nouveaux exemples détaillés : Julien (déco/fins de série), Caroline (pharmacie/multi-sites), Fabrice (luxe/authentification), Sandrine (électronique/retours)
+- Cas contraste catastrophique : Laurent (alimentaire/négligence grave menant à intoxication)
+- Nuances profil client approfondies : novice vs expert, pressé vs exploratoire
+- Situations ultra-spécialisées : coordination réseau, produits haut de gamme
+- Transition naturelle depuis fin existante + mini-récaps + conclusion enrichie
+- Maintien cohérence TTS (tags Fish Audio, ton oral, discours indirect)
+
+**Extension 3** (+1800 mots supplémentaires, total >9000 mots) :
+- 3 exemples fictifs variés dans contextes différents : épicerie de quartier (espace/temps limité), entrepôt informatique (valeur/fragilité), boulangerie (fraîcheur/rotation rapide)
+- Cas contraste explicite : 3 erreurs critiques à éviter (habitude vs logique, formation équipes temporaires, piège informatisation)
+- Nuances selon profil client : novice (simplicité), expert (optimisation), pressé (impact rapide), exploratoire (approfondissement)
+- Gestion fins de série et produits discontinuité : segmentation demande résiduelle, stratégies différenciées
+- Coordination transporteurs : créneaux négociés, solutions secours, communication contraintes
+- Mini-récaps oraux après chaque section majeure
+- Transition naturelle et maintien cohérence ton oral + tags Fish Audio
+
+Fichier final : `cours_employe_commercial_reception_marchandises_suite.txt`
+
 ## 2026-05-13
 
 ### feat(content-review): revérif au niveau BLOC COURS (cours de 45-55 min), pas au niveau segment interne
