@@ -3606,32 +3606,34 @@ export default function FormationPipeline() {
                                     </button>
                                   )}
                                   {(folder.segments_reviewed || 0) > 0 && (
-                                    <button
-                                      style={{
-                                        ...S.btn('ghost'),
-                                        padding: '6px 12px',
-                                        fontSize: '12px',
-                                        borderColor: 'rgba(52, 211, 153, 0.4)',
-                                        color: '#34d399',
-                                      }}
-                                      onClick={() => setReportFolder(folder)}
-                                      title="Voir le rapport détaillé de la révision conformité"
-                                    >
-                                      <Icon name="assessment" /> Rapport conformité
-                                    </button>
-                                    <button
-                                      style={{
-                                        ...S.btn('ghost'),
-                                        padding: '6px 12px',
-                                        fontSize: '12px',
-                                        borderColor: 'rgba(139, 92, 246, 0.4)',
-                                        color: '#a78bfa',
-                                      }}
-                                      onClick={() => setHumanizationReportFolder(folder)}
-                                      title="Voir le rapport de la passe humanisation (intros / transitions / rythme)"
-                                    >
-                                      <Icon name="auto_fix_high" /> Humanisation
-                                    </button>
+                                    <>
+                                      <button
+                                        style={{
+                                          ...S.btn('ghost'),
+                                          padding: '6px 12px',
+                                          fontSize: '12px',
+                                          borderColor: 'rgba(52, 211, 153, 0.4)',
+                                          color: '#34d399',
+                                        }}
+                                        onClick={() => setReportFolder(folder)}
+                                        title="Voir le rapport détaillé de la révision conformité"
+                                      >
+                                        <Icon name="assessment" /> Rapport conformité
+                                      </button>
+                                      <button
+                                        style={{
+                                          ...S.btn('ghost'),
+                                          padding: '6px 12px',
+                                          fontSize: '12px',
+                                          borderColor: 'rgba(139, 92, 246, 0.4)',
+                                          color: '#a78bfa',
+                                        }}
+                                        onClick={() => setHumanizationReportFolder(folder)}
+                                        title="Voir le rapport de la passe humanisation (intros / transitions / rythme)"
+                                      >
+                                        <Icon name="auto_fix_high" /> Humanisation
+                                      </button>
+                                    </>
                                   )}
                                 </div>
                               </div>
