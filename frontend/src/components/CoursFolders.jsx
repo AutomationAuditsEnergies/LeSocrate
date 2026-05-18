@@ -100,7 +100,7 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
   const textReviewPollRef = useRef(null)
   const [loadingContentScript, setLoadingContentScript] = useState(false)
   const [, setLoadingScript] = useState(false)
-  const [contentScriptView, setContentScriptView] = useState('source') // 'source' | 'courses'
+  const [contentScriptView, setContentScriptView] = useState('source') // 'source' | 'courses' | 'planned_courses'
   const [scriptActiveSubPart, setScriptActiveSubPart] = useState(0)
   const [scriptActiveCourse, setScriptActiveCourse] = useState(1)
   const [scriptActiveBreak, setScriptActiveBreak] = useState(null)
@@ -431,7 +431,7 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
         setAnnotationError('')
         setContentScriptView('source')
         setScriptActiveSubPart(0)
-        setScriptActiveCourse(data.course_blocs?.[0]?.bloc_number || 1)
+        setScriptActiveCourse((data.course_blocs?.[0] || data.planned_course_blocs?.[0])?.bloc_number || 1)
         setScriptActiveBreak(null)
         setEditingSegment(null)
         setRulesPanelOpen(false)
@@ -2394,7 +2394,7 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
                 <div>
                   <h3 className="text-lg font-bold">Script TTS — {contentScriptModal.program_title}</h3>
                   <p className="text-xs" style={{ color: '#ddd6fe' }}>
-                    {(contentScriptModal.total_words || 0).toLocaleString('fr-FR')} mots · {contentScriptModal.sub_parts?.length} sous-parties · {contentScriptModal.course_blocs?.length || 0} cours audio
+                    {(contentScriptModal.total_words || 0).toLocaleString('fr-FR')} mots · {contentScriptModal.sub_parts?.length} sous-parties · {(contentScriptModal.course_blocs?.length || contentScriptModal.planned_course_blocs?.length || 0)} cours audio
                     {scriptAnnotations.length > 0 && ` · ${scriptAnnotations.length} note${scriptAnnotations.length > 1 ? 's' : ''}`}
                   </p>
                 </div>
@@ -2403,9 +2403,12 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
                 {[
                   { value: 'source', label: 'Sous-parties', icon: 'segment' },
                   { value: 'courses', label: 'Cours audio', icon: 'record_voice_over' },
+                  { value: 'planned_courses', label: 'Cours audio prévu', icon: 'pending_actions' },
                 ].map(option => {
                   const active = contentScriptView === option.value
-                  const disabled = option.value === 'courses' && !(contentScriptModal.course_blocs?.length > 0)
+                  const disabled =
+                    (option.value === 'courses' && !(contentScriptModal.course_blocs?.length > 0)) ||
+                    (option.value === 'planned_courses' && !(contentScriptModal.planned_course_blocs?.length > 0))
                   return (
                     <button
                       key={option.value}
@@ -2956,21 +2959,28 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
                 })()}
               </div>
             </div>
-            ) : (
+            ) : (() => {
+              const isPlannedCoursesView = contentScriptView === 'planned_courses'
+              const visibleCourseBlocs = isPlannedCoursesView
+                ? (contentScriptModal.planned_course_blocs || [])
+                : (contentScriptModal.course_blocs || [])
+              const courseSectionLabel = isPlannedCoursesView ? 'Cours audio prévu' : 'Cours audio'
+              return (
             <div className="flex flex-1 min-h-0">
               <div
                 className="flex-shrink-0 overflow-y-auto border-r py-3"
                 style={{ width: '280px', borderColor: colors.border, backgroundColor: darkMode ? '#111827' : '#f8fafc' }}
               >
                 <p className="px-4 pb-2 text-xs font-semibold uppercase tracking-widest" style={{ color: '#7c3aed' }}>
-                  Cours audio
+                  {courseSectionLabel}
                 </p>
-                {contentScriptModal.course_blocs?.map((bloc) => {
+                {visibleCourseBlocs.map((bloc) => {
                   const isActive = !scriptActiveBreak && scriptActiveCourse === bloc.bloc_number
                   const statusLabel = {
                     generated: 'Généré',
                     preserved: 'Conservé',
                     preview: 'Prévu',
+                    planned: 'Prévu',
                     skipped: 'Ignoré',
                   }[bloc.status] || bloc.status
                   return (
@@ -3107,7 +3117,7 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
                       </>
                     )
                   }
-                  const blocs = contentScriptModal.course_blocs || []
+                  const blocs = visibleCourseBlocs
                   const active = blocs.find(b => b.bloc_number === scriptActiveCourse) || blocs[0]
                   if (!active) {
                     return (
@@ -3117,13 +3127,23 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
                     )
                   }
                   const activeAnnotationContext = { source_type: 'course', bloc_number: active.bloc_number, filename: active.filename }
-                  const sourceLabel = contentScriptModal.course_blocs_source === 'last_audio_generation'
-                    ? 'Dernière génération TTS'
-                    : 'Prévisualisation'
+                  const sourceKey = isPlannedCoursesView
+                    ? contentScriptModal.planned_course_blocs_source
+                    : contentScriptModal.course_blocs_source
+                  const sourceLabel = isPlannedCoursesView
+                    ? (sourceKey === 'last_audio_generation' ? 'Prévu lors de la dernière génération TTS' : 'Prévision actuelle')
+                    : (sourceKey === 'last_audio_generation' ? 'Dernière génération TTS' : 'Prévisualisation')
+                  const coursePlanNote = isPlannedCoursesView
+                    ? contentScriptModal.planned_course_blocs_note
+                    : contentScriptModal.course_blocs_note
+                  const coursePlanStale = isPlannedCoursesView
+                    ? contentScriptModal.planned_course_blocs_stale
+                    : contentScriptModal.course_blocs_stale
                   const statusLabel = {
                     generated: 'Généré',
                     preserved: 'Conservé',
                     preview: 'Prévu',
+                    planned: 'Prévu',
                     skipped: 'Ignoré',
                   }[active.status] || active.status
                   const conclusionBlocks = []
@@ -3154,10 +3174,10 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
                         )}
                       </div>
 
-                      {contentScriptModal.course_blocs_note && (
+                      {coursePlanNote && (
                         <div
                           className="rounded-xl px-4 py-3 text-xs leading-relaxed"
-                          style={contentScriptModal.course_blocs_stale ? {
+                          style={coursePlanStale ? {
                             backgroundColor: darkMode ? '#431407' : '#fff7ed',
                             border: `1px solid ${darkMode ? '#7c2d12' : '#fed7aa'}`,
                             color: darkMode ? '#fdba74' : '#c2410c',
@@ -3167,7 +3187,7 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
                             color: colors.textSecondary,
                           }}
                         >
-                          {contentScriptModal.course_blocs_note}
+                          {coursePlanNote}
                         </div>
                       )}
 
@@ -3204,23 +3224,25 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
 
                       <div className="rounded-xl overflow-hidden" style={{ border: `1px solid ${colors.border}` }}>
                         <div className="px-4 py-2 flex items-center justify-between" style={{ backgroundColor: darkMode ? '#0f172a' : '#f8fafc' }}>
-                          <span className="text-xs font-bold" style={{ color: colors.textSecondary }}>Texte complet du cours audio</span>
+                          <span className="text-xs font-bold" style={{ color: colors.textSecondary }}>
+                            {isPlannedCoursesView ? 'Texte prévu du cours audio' : 'Texte complet du cours audio'}
+                          </span>
                           <span className="text-xs" style={{ color: colors.textMuted }}>
                             budget {(active.word_budget || 0).toLocaleString('fr-FR')} mots
                           </span>
                         </div>
                         <div className="px-4 py-3" style={{ backgroundColor: colors.cardBg }}>
-                          <ScriptAnnotationComposer context={activeAnnotationContext} />
+                          {!isPlannedCoursesView && <ScriptAnnotationComposer context={activeAnnotationContext} />}
                           <p
                             className="text-xs leading-relaxed whitespace-pre-wrap"
-                            tabIndex={0}
-                            onMouseUp={(event) => captureScriptSelection(event, activeAnnotationContext)}
-                            onKeyUp={(event) => captureScriptSelection(event, activeAnnotationContext)}
+                            tabIndex={isPlannedCoursesView ? undefined : 0}
+                            onMouseUp={isPlannedCoursesView ? undefined : (event) => captureScriptSelection(event, activeAnnotationContext)}
+                            onKeyUp={isPlannedCoursesView ? undefined : (event) => captureScriptSelection(event, activeAnnotationContext)}
                             style={{ color: colors.text, fontFamily: 'monospace' }}
                           >
                             {active.text || 'Aucun texte pour ce cours.'}
                           </p>
-                          <ScriptAnnotationsList context={activeAnnotationContext} />
+                          {!isPlannedCoursesView && <ScriptAnnotationsList context={activeAnnotationContext} />}
                         </div>
                       </div>
                     </>
@@ -3228,7 +3250,8 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
                 })()}
               </div>
             </div>
-            )}
+              )
+            })()}
           </div>
         </div>
       )}

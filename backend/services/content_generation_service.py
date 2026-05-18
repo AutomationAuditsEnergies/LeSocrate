@@ -4241,12 +4241,15 @@ def generate_audio_from_script(
         )
     pending_clean_seg_keys = set()
     course_script_plan = []
+    planned_course_script_plan = []
 
     def _record_course_bloc(bloc, *, status, text=None, final_duration_sec=None,
                             skipped_reason=None, opening_rewritten=False,
                             opening_text="", opening_original_start="",
-                            runtime_conclusions=None, runtime_ai_decisions=None):
-        course_script_plan.append(
+                            runtime_conclusions=None, runtime_ai_decisions=None,
+                            target_plan=None):
+        target = course_script_plan if target_plan is None else target_plan
+        target.append(
             _serialize_course_bloc(
                 bloc,
                 playlist_items,
@@ -4363,6 +4366,17 @@ def generate_audio_from_script(
                 status="skipped",
                 skipped_reason="bloc_missing",
             )
+            _record_course_bloc(
+                {
+                    "bloc_number": bloc_num,
+                    "filename": filename,
+                    "target_sec": duration_sec,
+                    "text": "",
+                },
+                status="skipped",
+                skipped_reason="bloc_missing",
+                target_plan=planned_course_script_plan,
+            )
             logger.info(
                 "PIPELINE_AUDIO_ITEM_SKIP formation_job_id=%s content_job_id=%s folder_id=%s filename=%s reason=bloc_missing duration_ms=%s",
                 formation_job_id,
@@ -4398,6 +4412,13 @@ def generate_audio_from_script(
                 text=bloc.get("runtime_consumed_text") or bloc.get("text", ""),
                 skipped_reason="clean_bloc",
             )
+            _record_course_bloc(
+                bloc,
+                status="planned",
+                text=bloc.get("text", ""),
+                skipped_reason="clean_bloc",
+                target_plan=planned_course_script_plan,
+            )
             logger.info(
                 "PIPELINE_AUDIO_ITEM_SKIP formation_job_id=%s content_job_id=%s folder_id=%s filename=%s bloc=%s reason=clean_bloc duration_ms=%s",
                 formation_job_id,
@@ -4417,6 +4438,13 @@ def generate_audio_from_script(
                 status="skipped",
                 text="",
                 skipped_reason="empty_text",
+            )
+            _record_course_bloc(
+                bloc,
+                status="skipped",
+                text="",
+                skipped_reason="empty_text",
+                target_plan=planned_course_script_plan,
             )
             logger.info(
                 "PIPELINE_AUDIO_ITEM_SKIP formation_job_id=%s content_job_id=%s folder_id=%s filename=%s bloc=%s reason=empty_text duration_ms=%s",
@@ -4709,6 +4737,16 @@ def generate_audio_from_script(
                     + "\n\n".join(conclusion_texts)
                 ).strip()
         _record_course_bloc(
+            audio_bloc,
+            status="planned",
+            text=audio_bloc.get("text", ""),
+            final_duration_sec=round(float(final_duration), 3),
+            opening_rewritten=opening_rewritten,
+            opening_text=opening_text,
+            opening_original_start=opening_original_start,
+            target_plan=planned_course_script_plan,
+        )
+        _record_course_bloc(
             bloc,
             status="generated",
             text=course_text_for_ui,
@@ -4800,6 +4838,7 @@ def generate_audio_from_script(
             "basic_tts": bool(basic_tts),
             "mock": bool(mock),
             "course_blocs": course_script_plan,
+            "planned_course_blocs": planned_course_script_plan,
         },
     )
 
@@ -5064,6 +5103,9 @@ def get_course_script_plan_for_ui(folder_id: int, job: dict | None = None) -> di
             "course_blocs": [],
             "course_blocs_source": "none",
             "course_blocs_note": "Aucun job de contenu pour ce dossier.",
+            "planned_course_blocs": [],
+            "planned_course_blocs_source": "none",
+            "planned_course_blocs_note": "Aucun job de contenu pour ce dossier.",
             "breaks": [],
         }
 
@@ -5073,7 +5115,7 @@ def get_course_script_plan_for_ui(folder_id: int, job: dict | None = None) -> di
     dirty_blocs = int(dirty_info.get("dirty_blocs", 0) or 0)
     total_blocs = int(dirty_info.get("total_blocs", 7) or 7)
     saved = _load_saved_course_script_plan(job["platform_id"], folder_id)
-    if saved and saved.get("course_blocs"):
+    if saved and (saved.get("course_blocs") or saved.get("planned_course_blocs")):
         if dirty_blocs:
             note = (
                 f"Texte réellement lu lors de la dernière génération TTS. "
@@ -5082,13 +5124,39 @@ def get_course_script_plan_for_ui(folder_id: int, job: dict | None = None) -> di
             )
         else:
             note = "Texte réellement lu lors de la dernière génération TTS."
+
+        planned_course_blocs = saved.get("planned_course_blocs") or []
+        if planned_course_blocs:
+            planned_source = "last_audio_generation"
+            if dirty_blocs:
+                planned_note = (
+                    f"Texte prévu lors de la dernière génération TTS, avant ajustements runtime. "
+                    f"{dirty_blocs}/{total_blocs} bloc(s) à régénérer "
+                    f"(le script a été modifié depuis)."
+                )
+            else:
+                planned_note = "Texte prévu lors de la dernière génération TTS, avant ajustements runtime éventuels."
+        else:
+            planned_course_blocs = _build_course_blocs_preview(folder_id, job)
+            planned_source = "preview"
+            planned_note = (
+                "Prévision recalculée à partir du texte actuel. "
+                "L'ancienne génération TTS ne contient pas encore de plan prévu dédié."
+            )
+
         return {
-            "course_blocs": saved.get("course_blocs") or [],
+            "course_blocs": saved.get("course_blocs") or planned_course_blocs,
             "course_blocs_source": "last_audio_generation",
             "course_blocs_generated_at": saved.get("generated_at"),
             "course_blocs_mode": saved.get("mode"),
             "course_blocs_note": note,
             "course_blocs_stale": bool(dirty_blocs),
+            "planned_course_blocs": planned_course_blocs,
+            "planned_course_blocs_source": planned_source,
+            "planned_course_blocs_generated_at": saved.get("generated_at") if planned_source == "last_audio_generation" else None,
+            "planned_course_blocs_mode": saved.get("mode") if planned_source == "last_audio_generation" else None,
+            "planned_course_blocs_note": planned_note,
+            "planned_course_blocs_stale": bool(dirty_blocs),
             "dirty_blocs": dirty_blocs,
             "total_blocs": total_blocs,
             "breaks": breaks,
@@ -5102,6 +5170,12 @@ def get_course_script_plan_for_ui(folder_id: int, job: dict | None = None) -> di
         "course_blocs_mode": None,
         "course_blocs_note": "Prévisualisation du découpage actuel, avant génération audio.",
         "course_blocs_stale": False,
+        "planned_course_blocs": preview,
+        "planned_course_blocs_source": "preview",
+        "planned_course_blocs_generated_at": None,
+        "planned_course_blocs_mode": None,
+        "planned_course_blocs_note": "Prévision du texte qui serait envoyé au TTS si la génération démarrait maintenant.",
+        "planned_course_blocs_stale": False,
         "dirty_blocs": dirty_blocs,
         "total_blocs": total_blocs,
         "breaks": breaks,
