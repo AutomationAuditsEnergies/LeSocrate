@@ -43,7 +43,7 @@ jobs:
           api_location: ""
           output_location: "dist"
         env:
-          NODE_VERSION: 20.19.0
+          NODE_VERSION: 20.19.6
           VITE_API_URL: https://socrate1-fyhgbqh7ejeyb2f3.francecentral-01.azurewebsites.net
 
   deploy_staging_named_environment:
@@ -70,7 +70,7 @@ jobs:
           output_location: "dist"
           deployment_environment: "staging"
         env:
-          NODE_VERSION: 20.19.0
+          NODE_VERSION: 20.19.6
           VITE_API_URL: ${{ vars.SOCRATE1_STAGING_API_URL || 'https://socrate1-staging.azurewebsites.net' }}
 
   close_pull_request_job:
