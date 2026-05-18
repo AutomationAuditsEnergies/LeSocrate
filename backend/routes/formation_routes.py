@@ -1778,6 +1778,19 @@ def get_review_report(job_id, folder_id):
     return jsonify({"report": report, "source_path": chunk_dir_with_output, "lite": True}), 200
 
 
+@formation_bp.route(
+    "/api/formation/<int:job_id>/content/<int:folder_id>/humanization-report",
+    methods=["GET"],
+)
+def get_humanization_report(job_id, folder_id):
+    """Retourne le rapport JSON de la passe humanisation (intros/transitions/rythme)."""
+    from services.formation_observability_service import get_latest_review_report
+    report = get_latest_review_report(job_id, folder_id, kind="humanization")
+    if not report:
+        return jsonify({"error": "Aucun rapport d'humanisation disponible pour cette journée"}), 404
+    return jsonify({"report": report}), 200
+
+
 # ─── Étape 6.5 — Sécurité volume (audit + enrichissement à la demande) ───────
 
 @formation_bp.route("/api/formation/<int:job_id>/volume-audit", methods=["GET"])

@@ -1818,7 +1818,8 @@ export default function FormationPipeline() {
   const [ttsResult, setTtsResult] = useState(null)
   const [contentFolders, setContentFolders] = useState([])
   const [viewingFolder, setViewingFolder] = useState(null)    // folder object affiché en modal
-  const [reportFolder, setReportFolder] = useState(null)      // folder dont on affiche le rapport de révision
+  const [reportFolder, setReportFolder] = useState(null)           // rapport conformité stricte
+  const [humanizationReportFolder, setHumanizationReportFolder] = useState(null)  // rapport humanisation
 
   // États étape 6 — Synthèse audio Fish Audio
   const [launchingAudio, setLaunchingAudio] = useState(false)
@@ -3616,7 +3617,20 @@ export default function FormationPipeline() {
                                       onClick={() => setReportFolder(folder)}
                                       title="Voir le rapport détaillé de la révision conformité"
                                     >
-                                      <Icon name="assessment" /> Rapport
+                                      <Icon name="assessment" /> Rapport conformité
+                                    </button>
+                                    <button
+                                      style={{
+                                        ...S.btn('ghost'),
+                                        padding: '6px 12px',
+                                        fontSize: '12px',
+                                        borderColor: 'rgba(139, 92, 246, 0.4)',
+                                        color: '#a78bfa',
+                                      }}
+                                      onClick={() => setHumanizationReportFolder(folder)}
+                                      title="Voir le rapport de la passe humanisation (intros / transitions / rythme)"
+                                    >
+                                      <Icon name="auto_fix_high" /> Humanisation
                                     </button>
                                   )}
                                 </div>
@@ -4290,6 +4304,15 @@ export default function FormationPipeline() {
         />
       )}
 
+      {humanizationReportFolder && (
+        <ReviewReportModal
+          jobId={selectedJobId}
+          folder={humanizationReportFolder}
+          reportEndpoint="humanization-report"
+          onClose={() => setHumanizationReportFolder(null)}
+        />
+      )}
+
       {missionModal && (
         <ClaudeCodeMissionModal
           stepKey={missionModal.stepKey}
@@ -4486,7 +4509,7 @@ function ClaudeCodeMissionModal({ stepKey, mission, onClose, onImport }) {
 }
 
 // ─── Modal de lecture du texte d'une journée ──────────────────────────────────
-function ReviewReportModal({ jobId, folder, onClose }) {
+function ReviewReportModal({ jobId, folder, onClose, reportEndpoint = 'review-report' }) {
   const [report, setReport] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -4497,7 +4520,7 @@ function ReviewReportModal({ jobId, folder, onClose }) {
     async function load() {
       try {
         const resp = await fetch(
-          apiUrl(`/api/formation/${jobId}/content/${folder.folder_id}/review-report`),
+          apiUrl(`/api/formation/${jobId}/content/${folder.folder_id}/${reportEndpoint}`),
           { credentials: 'include' },
         )
         const data = await resp.json()
@@ -4545,8 +4568,8 @@ function ReviewReportModal({ jobId, folder, onClose }) {
           display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '12px',
         }}>
           <div>
-            <div style={{ fontSize: '13px', color: '#34d399', fontWeight: 600, marginBottom: '4px' }}>
-              <Icon name="assessment" style={{ fontSize: '14px' }} /> Rapport de révision conformité
+            <div style={{ fontSize: '13px', color: reportEndpoint === 'humanization-report' ? '#a78bfa' : '#34d399', fontWeight: 600, marginBottom: '4px' }}>
+              <Icon name={reportEndpoint === 'humanization-report' ? 'auto_fix_high' : 'assessment'} style={{ fontSize: '14px' }} /> {reportEndpoint === 'humanization-report' ? 'Rapport humanisation (intros / transitions / rythme)' : 'Rapport de révision conformité'}
             </div>
             <div style={{ fontSize: '15px', color: '#e2e8f0', fontWeight: 600 }}>
               {folder.folder_name || `Dossier ${folder.folder_id}`}

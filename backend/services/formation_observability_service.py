@@ -167,21 +167,37 @@ def persist_review_report(
     return int(report_id)
 
 
-def get_latest_review_report(job_id: int, folder_id: int) -> dict | None:
-    """Retourne le dernier rapport persisté pour une journée."""
+def get_latest_review_report(job_id: int, folder_id: int, kind: str = "compliance") -> dict | None:
+    """Retourne le dernier rapport persisté pour une journée.
+
+    `kind` : "compliance" (défaut) → source IN ('api', 'review_api', ...)
+             "humanization"        → source LIKE '%humanization%'
+    """
     ensure_observability_tables()
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute(
-        """
-        SELECT id, source, generated_via, report_json, created_at
-        FROM content_review_reports
-        WHERE job_id = ? AND folder_id = ?
-        ORDER BY created_at DESC, id DESC
-        LIMIT 1
-        """,
-        (job_id, folder_id),
-    )
+    if kind == "humanization":
+        cursor.execute(
+            """
+            SELECT id, source, generated_via, report_json, created_at
+            FROM content_review_reports
+            WHERE job_id = ? AND folder_id = ? AND source LIKE '%humanization%'
+            ORDER BY created_at DESC, id DESC
+            LIMIT 1
+            """,
+            (job_id, folder_id),
+        )
+    else:
+        cursor.execute(
+            """
+            SELECT id, source, generated_via, report_json, created_at
+            FROM content_review_reports
+            WHERE job_id = ? AND folder_id = ? AND source NOT LIKE '%humanization%'
+            ORDER BY created_at DESC, id DESC
+            LIMIT 1
+            """,
+            (job_id, folder_id),
+        )
     row = cursor.fetchone()
     conn.close()
     if not row:
