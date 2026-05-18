@@ -859,7 +859,66 @@ Réponds uniquement avec ce JSON valide :
         return False, ""
 
 
-def _build_runtime_conclusion_text(consumed_chunks: list, remaining_sec: float, bloc_number: int) -> str:
+def _playlist_item_type(item) -> str | None:
+    try:
+        return item[2]
+    except Exception:
+        return None
+
+
+def _playlist_item_duration(item) -> int:
+    try:
+        return int(item[1] or 0)
+    except Exception:
+        return 0
+
+
+def _next_playlist_item_after(playlist_items: list | None, item_idx: int):
+    if not playlist_items or item_idx + 1 >= len(playlist_items):
+        return None
+    return playlist_items[item_idx + 1]
+
+
+def _course_playlist_handoff_text(next_item) -> str:
+    """Phrase de transition portée par le fichier qui se termine."""
+    next_type = _playlist_item_type(next_item)
+    duration_sec = _playlist_item_duration(next_item)
+    if next_type == "qa":
+        return (
+            "On va maintenant prendre un temps pour vos questions. "
+            "Gardez simplement les points importants en tête, et posez ce que vous voulez clarifier."
+        )
+    if next_type in {"pause", "pause_midi"}:
+        try:
+            from services.break_transition_service import duration_label
+            label = duration_label(duration_sec, next_type)
+        except Exception:
+            label = ""
+        if next_type == "pause_midi" or label == "pause déjeuner":
+            return (
+                "On va maintenant marquer la pause déjeuner. "
+                "Prenez le temps de souffler, de vous reposer, et on reprendra ensuite calmement."
+            )
+        if label:
+            return (
+                f"On va maintenant prendre une pause de {label}. "
+                "Profitez-en pour souffler un peu avant la suite."
+            )
+        return (
+            "On va maintenant prendre une courte pause. "
+            "Profitez-en pour souffler un peu avant la suite."
+        )
+    if next_type == "cours":
+        return "On enchaînera ensuite avec la suite du parcours, en gardant cette base comme point d'appui."
+    return "On va donc s'arrêter ici pour ce moment, avec ces repères bien en tête."
+
+
+def _build_runtime_conclusion_text(
+    consumed_chunks: list,
+    remaining_sec: float,
+    bloc_number: int,
+    next_playlist_item=None,
+) -> str:
     """Conclusion humaine basée sur le contenu réellement enseigné dans le bloc."""
     consumed_text = "\n\n".join(
         (c.get("text") or "").strip()
@@ -904,6 +963,7 @@ def _build_runtime_conclusion_text(consumed_chunks: list, remaining_sec: float, 
         "À ce stade, ce qui compte, c'est de ne pas retenir ces points comme une liste isolée. [pause] Il faut les relier entre eux : chaque notion prépare la suivante, et c'est cette continuité qui permet de mieux agir dans une situation réelle.",
         "Si vous deviez retenir une méthode simple, ce serait celle-ci : observer d'abord, nommer clairement ce qui se passe, choisir une réponse adaptée, puis vérifier que cette réponse produit bien l'effet recherché.",
         "On va donc s'arrêter ici sur cette base. [pause] Dans la suite, on pourra reprendre ce fil sans repartir de zéro : les repères sont posés, le vocabulaire est en place, et on pourra aller plus loin dans l'application.",
+        _course_playlist_handoff_text(next_playlist_item),
     ])
 
     return _limit_text_words_natural(" ".join(lines), target_words)
@@ -966,6 +1026,7 @@ def _synthesize_course_audio_synced_to_slides(
     runtime_fit: bool = False,
     fast_tts_pipeline: bool = False,
     llm_model: str | None = None,
+    next_playlist_item=None,
 ):
     """Generate one course MP3 by slide-sized chunks and return slide timings.
 
@@ -1324,6 +1385,7 @@ def _synthesize_course_audio_synced_to_slides(
                 consumed_chunks,
                 remaining_sec=remaining_for_conclusion,
                 bloc_number=int(bloc.get("bloc_number") or 0),
+                next_playlist_item=next_playlist_item,
             )
 
         def _try_append_conclusion(kind: str, template: str | None = None) -> bool:
@@ -2147,7 +2209,7 @@ def _handle_last_bloc_overflow(
     return ""
 
 
-def _apply_closing_transitions(blocs, api_speed, model=None):
+def _apply_closing_transitions(blocs, api_speed, model=None, playlist_items=None):
     """Concatène à chaque bloc dirty un closing calibré sur le gap résiduel.
 
     Le closing comble (partiellement) le silence qui aurait été laissé en fin de bloc.
@@ -2162,6 +2224,11 @@ def _apply_closing_transitions(blocs, api_speed, model=None):
 
     last_bloc_num = max(b["bloc_number"] for b in blocs) if blocs else 7
     estimated_wpm = _course_words_per_minute()
+    course_item_index = {
+        int(item[3]): idx
+        for idx, item in enumerate(playlist_items or [])
+        if len(item) >= 4 and item[2] == "cours"
+    }
 
     for idx, bloc in enumerate(blocs):
         if not bloc.get("dirty"):
@@ -2198,6 +2265,10 @@ def _apply_closing_transitions(blocs, api_speed, model=None):
             is_last_bloc=is_last,
             model=model,
             max_words=remaining_budget_words,
+            next_item=_next_playlist_item_after(
+                playlist_items,
+                course_item_index.get(int(bloc["bloc_number"]), len(playlist_items or [])),
+            ),
         )
         if closing:
             closing_words = len(closing.split())
@@ -3597,11 +3668,41 @@ def _build_contextual_break_audio(
             _get_pause_text,
             _get_qa_text,
         )
+        from services.break_transition_service import (
+            break_intro_owned_by_previous,
+            duration_label,
+            is_schedule_neutral_break,
+            next_item_type,
+        )
         if file_type == "qa":
-            return _get_qa_text(bloc_num)
+            intro, outro = _get_qa_text(bloc_num)
+            ntype = next_item_type(playlist_items, item_idx)
+            if ntype in {"pause", "pause_midi"} and not is_schedule_neutral_break(filename):
+                next_item = _next_playlist_item_after(playlist_items, item_idx)
+                label = duration_label(_playlist_item_duration(next_item), ntype)
+                if ntype == "pause_midi" or label == "pause déjeuner":
+                    outro = (
+                        "Très bien, on clôt ce temps de questions. "
+                        "On va maintenant marquer la pause déjeuner, prenez le temps de souffler."
+                    )
+                elif label:
+                    outro = (
+                        f"Très bien, on clôt ce temps de questions. "
+                        f"On va maintenant prendre une pause de {label}."
+                    )
+                else:
+                    outro = (
+                        "Très bien, on clôt ce temps de questions. "
+                        "On va maintenant prendre une courte pause."
+                    )
+            return intro, outro
         if file_type == "pause_midi" or filename.startswith("pause_midi_"):
-            return _get_pause_midi_text()
-        return _get_pause_text(bloc_num)
+            intro, outro = _get_pause_midi_text()
+        else:
+            intro, outro = _get_pause_text(bloc_num)
+        if break_intro_owned_by_previous(playlist_items, item_idx, file_type):
+            intro = ""
+        return intro, outro
 
     def _generic_basic_tts_break():
         intro, outro = _generic_break_texts()
@@ -3931,17 +4032,23 @@ def generate_audio_from_script(
             f"vers folder {next_folder_id}"
         )
 
+    playlist_items = _playlist_items_for_platform(platform_id)
+
     # ── 3.5. Closings contextuels — texte de fin de bloc adaptatif au gap résiduel.
     # Désactivé en mock/basic_tts et en sync slides: les bornes slides doivent
     # rester alignées sur le texte qui a servi au deck.
     if not mock and not basic_tts and not sync_slides:
         try:
-            _apply_closing_transitions(blocs, _course_tts_speed(), model=llm_model)
+            _apply_closing_transitions(
+                blocs,
+                _course_tts_speed(),
+                model=llm_model,
+                playlist_items=playlist_items,
+            )
         except Exception as e:
             logger.warning(f"⚠️ Closings contextuels — erreur globale, on continue sans : {e}")
 
     blocs_by_number = {b["bloc_number"]: b for b in blocs}
-    playlist_items = _playlist_items_for_platform(platform_id)
     dirty_count = sum(1 for b in blocs if b["dirty"])
     clean_count = 7 - dirty_count
     logger.info(f"🎯 {dirty_count}/7 blocs à régénérer, {clean_count}/7 conservés")
@@ -4274,6 +4381,7 @@ def generate_audio_from_script(
                 runtime_fit=runtime_fit_enabled,
                 fast_tts_pipeline=fast_tts_pipeline,
                 llm_model=llm_model,
+                next_playlist_item=_next_playlist_item_after(playlist_items, item_idx),
             )
             runtime_conclusions = _runtime_conclusions_from_attempts(attempts)
             runtime_ai_decisions = _runtime_ai_decisions_from_attempts(attempts)
@@ -4346,6 +4454,7 @@ def generate_audio_from_script(
                 runtime_fit=runtime_fit_enabled,
                 fast_tts_pipeline=fast_tts_pipeline,
                 llm_model=llm_model,
+                next_playlist_item=_next_playlist_item_after(playlist_items, item_idx),
             )
             runtime_conclusions = _runtime_conclusions_from_attempts(attempts)
             runtime_ai_decisions = _runtime_ai_decisions_from_attempts(attempts)
@@ -4727,20 +4836,47 @@ def _build_breaks_for_ui(platform_id: int) -> list:
         _get_pause_text,
         _get_qa_text,
     )
+    from services.break_transition_service import (
+        break_intro_owned_by_previous,
+        duration_label,
+        is_schedule_neutral_break,
+        next_item_type,
+    )
 
     items = _playlist_items_for_platform(platform_id)
     breaks = []
-    for filename, duration, file_type, bloc_num in items:
+    for idx, (filename, duration, file_type, bloc_num) in enumerate(items):
         if file_type == "cours":
             continue
         if file_type == "qa":
             intro, outro = _get_qa_text(bloc_num)
+            ntype = next_item_type(items, idx)
+            if ntype in {"pause", "pause_midi"} and not is_schedule_neutral_break(filename):
+                next_item = _next_playlist_item_after(items, idx)
+                label = duration_label(_playlist_item_duration(next_item), ntype)
+                if ntype == "pause_midi" or label == "pause déjeuner":
+                    outro = (
+                        "Très bien, on clôt ce temps de questions. "
+                        "On va maintenant marquer la pause déjeuner, prenez le temps de souffler."
+                    )
+                elif label:
+                    outro = (
+                        f"Très bien, on clôt ce temps de questions. "
+                        f"On va maintenant prendre une pause de {label}."
+                    )
+                else:
+                    outro = (
+                        "Très bien, on clôt ce temps de questions. "
+                        "On va maintenant prendre une courte pause."
+                    )
         elif file_type == "pause_midi" or filename.startswith("pause_midi_"):
             intro, outro = _get_pause_midi_text()
         elif file_type == "pause":
             intro, outro = _get_pause_text(bloc_num)
         else:
             continue
+        if break_intro_owned_by_previous(items, idx, file_type):
+            intro = ""
         breaks.append({
             "filename": filename,
             "duration_sec": int(duration or 0),

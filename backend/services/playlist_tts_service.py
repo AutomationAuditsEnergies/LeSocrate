@@ -130,14 +130,21 @@ def _pad_audio_to_duration(audio_bytes, target_duration_seconds, truncate_overfl
 def _build_pause_audio(intro_text, outro_text, target_duration_seconds, convert_func=None):
     """
     Construit un audio de pause/Q&A :
-    intro TTS + silence + outro TTS, le tout padded à la durée cible.
+    intro TTS optionnelle + silence + outro TTS, le tout padded à la durée cible.
     """
     tts = convert_func or convert_to_speech
-    intro_bytes = tts(intro_text)
-    outro_bytes = tts(outro_text)
+    intro_text = (intro_text or "").strip()
+    outro_text = (outro_text or "").strip()
+    if not intro_text and not outro_text:
+        raise ValueError("Pause/Q&A vide")
 
-    intro_audio = AudioSegment.from_mp3(io.BytesIO(intro_bytes))
-    outro_audio = AudioSegment.from_mp3(io.BytesIO(outro_bytes))
+    intro_audio = AudioSegment.empty()
+    if intro_text:
+        intro_audio = AudioSegment.from_mp3(io.BytesIO(tts(intro_text)))
+
+    outro_audio = AudioSegment.empty()
+    if outro_text:
+        outro_audio = AudioSegment.from_mp3(io.BytesIO(tts(outro_text)))
 
     target_ms = target_duration_seconds * 1000
     silence_ms = target_ms - len(intro_audio) - len(outro_audio) - 17000  # 17s début

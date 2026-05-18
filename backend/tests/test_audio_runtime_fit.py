@@ -12,6 +12,7 @@ import unittest
 from unittest.mock import patch
 
 from services import basic_tts_service as bts
+from services import break_transition_service as bks
 from services import content_generation_service as cgs
 
 
@@ -645,6 +646,35 @@ class ContextualBreakUsesConsumedTextTest(unittest.TestCase):
         self.assertEqual(captured["next"], "prochain texte consomme")
 
 
+class BreakTransitionOwnershipTest(unittest.TestCase):
+    def test_pause_after_qa_has_no_intro_when_previous_file_owns_transition(self):
+        playlist_items = [
+            ("cours_9h00_9h45.mp3", 2700, "cours", 1),
+            ("qa_9h45_9h55.mp3", 600, "qa", 1),
+            ("pause_9h55_10h05.mp3", 600, "pause", 1),
+            ("cours_10h05_10h50.mp3", 2700, "cours", 2),
+        ]
+
+        with patch.object(
+            bks,
+            "_llm_post",
+            return_value='{"intro": "On fait une pause.", "outro": "La pause est terminée, on reprend calmement."}',
+        ):
+            intro, outro = bks.build_break_transition_texts(
+                filename="pause_9h55_10h05.mp3",
+                duration_sec=600,
+                break_type="pause",
+                bloc_num=1,
+                item_idx=2,
+                playlist_items=playlist_items,
+                get_bloc_text=lambda n: "texte du bloc",
+                model="test-model",
+            )
+
+        self.assertEqual(intro, "")
+        self.assertIn("pause est terminée", outro)
+
+
 class BasicTTSBreaksUseEdgeVoiceTest(unittest.TestCase):
     def test_basic_tts_generic_break_does_not_recycle_fish_audio(self):
         seen_texts = []
@@ -794,6 +824,16 @@ class RuntimeConclusionTextTest(unittest.TestCase):
         self.assertIn("écoute active", conclusion)
         self.assertIn("Avant de s'arrêter", conclusion)
         self.assertGreater(len(conclusion.split()), 160)
+
+    def test_runtime_conclusion_announces_next_pause_from_playlist(self):
+        conclusion = cgs._build_runtime_conclusion_text(
+            [{"text": "On a travaillé la posture professionnelle et la reformulation."}],
+            remaining_sec=150,
+            bloc_number=1,
+            next_playlist_item=("pause_11h00_11h05.mp3", 300, "pause", 1),
+        )
+
+        self.assertIn("pause de cinq minutes", conclusion)
 
 
 class BasicTTSParallelWorkersTest(unittest.TestCase):

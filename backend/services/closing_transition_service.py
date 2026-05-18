@@ -16,8 +16,8 @@ Calibration du closing selon la taille du gap résiduel :
 | 120–300 s       | Recap + respiration       | 360–900    | LLM          |
 | Bloc 7 final    | Conclusion de journée     | selon gap  | LLM          |
 
-Distinct des pauses dynamiques (qui auraient enrichi les fichiers de pause) :
-ici on agit sur le fichier cours, donc 1 seul appel TTS, pas de cache cross-fichier.
+La fin du cours tient aussi compte de l'élément suivant dans la playlist :
+si une Q&A ou une pause arrive, c'est le cours qui l'annonce sobrement.
 """
 
 import re
@@ -65,7 +65,72 @@ def _short_closing_for_bloc(bloc_num):
     return _SHORT_CLOSINGS[(bloc_num - 1) % len(_SHORT_CLOSINGS)]
 
 
-def _build_medium_prompt(prev_excerpt, next_excerpt, target_words):
+def _item_type(item) -> str | None:
+    try:
+        return item[2]
+    except Exception:
+        return None
+
+
+def _item_duration(item) -> int:
+    try:
+        return int(item[1] or 0)
+    except Exception:
+        return 0
+
+
+def _handoff_sentence(next_item) -> str:
+    next_type = _item_type(next_item)
+    duration_sec = _item_duration(next_item)
+    if next_type == "qa":
+        return (
+            "On va maintenant prendre un temps pour vos questions. "
+            "Gardez les points importants en tête, et posez ce que vous voulez clarifier."
+        )
+    if next_type in {"pause", "pause_midi"}:
+        try:
+            from services.break_transition_service import duration_label
+            label = duration_label(duration_sec, next_type)
+        except Exception:
+            label = ""
+        if next_type == "pause_midi" or label == "pause déjeuner":
+            return (
+                "On va maintenant marquer la pause déjeuner. "
+                "Prenez le temps de souffler, et on reprendra ensuite calmement."
+            )
+        if label:
+            return f"On va maintenant prendre une pause de {label}. Profitez-en pour souffler un peu."
+        return "On va maintenant prendre une courte pause. Profitez-en pour souffler un peu."
+    if next_type == "cours":
+        return "On enchaînera ensuite avec la suite du parcours, en gardant cette base comme appui."
+    return ""
+
+
+def _handoff_instruction(next_item) -> str:
+    sentence = _handoff_sentence(next_item)
+    if not sentence:
+        return (
+            "Termine sans annoncer de logistique particulière, simplement avec "
+            "une fermeture pédagogique naturelle."
+        )
+    return (
+        "Termine avec cette transition de playlist, reformulée naturellement si besoin : "
+        f"{sentence} "
+        "N'ajoute pas d'horaire absolu. Si c'est une pause, rappelle-toi que le "
+        "fichier pause suivant ne refera pas d'intro."
+    )
+
+
+def _append_handoff_if_missing(text: str, next_item) -> str:
+    handoff = _handoff_sentence(next_item)
+    if not handoff:
+        return text
+    if handoff.lower() in (text or "").lower():
+        return text
+    return f"{(text or '').rstrip()} {handoff}".strip()
+
+
+def _build_medium_prompt(prev_excerpt, next_excerpt, target_words, next_handoff_instruction):
     return f"""Tu es un formateur en classe virtuelle audio. Les apprenants sont
 des adultes en formation professionnelle, qui suivent un cours horodaté à
 distance. Le bloc actuel se termine. Génère une CLÔTURE PÉDAGOGIQUE douce
@@ -87,26 +152,24 @@ CONSIGNES :
 - Applique les règles d'humanisation : respiration, phrases simples,
   micro-interactions sobres, pas d'effet conférence ni accumulation de slogans.
 - Fais une mini-synthèse (2-3 idées clés DU BLOC qui vient de se terminer).
-- Termine par une petite phrase d'ouverture pédagogique vers la notion suivante,
-  sans annoncer la logistique de la playlist.
+- Termine par une petite phrase d'ouverture pédagogique vers la suite.
+- TRANSITION PLAYLIST : {next_handoff_instruction}
 - Ne présente jamais cette notion suivante comme l'audio immédiatement suivant :
   l'ordre des fichiers peut varier selon le mode été/hiver.
 - PAS de "Voilà pour cette partie" générique.
-- Termine sans sécheresse, mais sans dire qu'une Q&A ou une pause arrive.
+- Termine sans sécheresse, avec la transition playlist demandée si elle existe.
 - Pas de tag TTS spécifique, juste du texte oral fluide.
 - Ne dis jamais "hier" ni "demain" ; utilise "au cours dernier" ou
   "au prochain cours" si nécessaire.
 - N'invente jamais une échéance d'examen, un passage devant jury ou un contexte
   de certification daté qui n'apparaît pas explicitement dans l'extrait.
-- Ne dis jamais "questions", "questions-réponses", "pause", "chat",
-  "on reprend juste après", ni "on continue après la pause".
-- Les temps de questions dans le chat sont gérés par un autre fichier audio :
-  tu ne dois donc pas les annoncer ici.
+- Ne parle de "questions", "questions-réponses", "pause" ou "chat" QUE si la
+  TRANSITION PLAYLIST ci-dessus le demande.
 
 Réponds UNIQUEMENT par le texte de la transition, rien d'autre (ni intro, ni explication)."""
 
 
-def _build_long_prompt(prev_excerpt, next_excerpt, target_words, gap_sec):
+def _build_long_prompt(prev_excerpt, next_excerpt, target_words, gap_sec, next_handoff_instruction):
     return f"""Tu es un formateur en classe virtuelle audio. Les apprenants sont
 des adultes en formation professionnelle, qui suivent un cours horodaté à
 distance. Le bloc actuel se termine plus tôt que prévu — tu as
@@ -130,9 +193,10 @@ STRUCTURE ATTENDUE (~{target_words} mots, ±15%) :
 2. **Respiration pédagogique** : "C'est beaucoup d'informations d'un coup, prenez
    un instant pour digérer." Ou similaire — invite l'apprenant à intégrer.
 3. **Ouverture** : référence pédagogique à ce qui sera utile ensuite, sans
-   annoncer de Q&A, de pause ou de chat.
+   annoncer de Q&A, de pause ou de chat sauf si la transition playlist le demande.
    Ne présente jamais cette suite comme l'audio immédiatement suivant : l'ordre
    des fichiers peut varier selon le mode été/hiver.
+4. **Transition playlist** : {next_handoff_instruction}
 
 TON :
 - Clair, posé, formateur adulte en classe virtuelle audio.
@@ -145,15 +209,13 @@ TON :
   "au prochain cours" si nécessaire.
 - N'invente jamais une échéance d'examen, un passage devant jury ou un contexte
   de certification daté qui n'apparaît pas explicitement dans l'extrait.
-- Ne dis jamais "questions", "questions-réponses", "pause", "chat",
-  "on reprend juste après", ni "on continue après la pause".
-- Les temps de questions dans le chat sont gérés par un autre fichier audio :
-  tu ne dois donc pas les annoncer ici.
+- Ne parle de "questions", "questions-réponses", "pause" ou "chat" QUE si la
+  TRANSITION PLAYLIST ci-dessus le demande.
 
 Réponds UNIQUEMENT par le texte du recap, rien d'autre."""
 
 
-def _build_conclusion_prompt(prev_excerpt, target_words, gap_sec):
+def _build_conclusion_prompt(prev_excerpt, target_words, gap_sec, next_handoff_instruction):
     return f"""Tu es un formateur en classe virtuelle audio. Les apprenants sont
 des adultes en formation professionnelle, qui suivent un cours horodaté à
 distance. C'est le DERNIER BLOC de la journée et il finit ~{int(gap_sec)}
@@ -168,8 +230,9 @@ STRUCTURE ATTENDUE (~{target_words} mots, ±15%) :
 1. **Synthèse globale de la journée** (PAS seulement du dernier bloc — toute la
    journée). 3-4 grandes idées qu'on a couvertes, formulées en phrases liées.
 2. **Encouragement** : reconnaître l'effort fourni, valoriser les progrès.
-3. **Annonce de la suite** : "On se retrouve au prochain cours pour…" si applicable,
-   ou simplement "À bientôt". Ne dis jamais "demain" ni "hier".
+3. **Transition playlist** : {next_handoff_instruction}
+4. **Annonce de la suite pédagogique** : si utile, projette vers le prochain cours
+   sans dire "demain" ni "hier".
 
 TON :
 - Clair, posé, formateur adulte qui clôt une journée de classe virtuelle audio.
@@ -224,6 +287,7 @@ def generate_closing(
     is_last_bloc=False,
     model=None,
     max_words=None,
+    next_item=None,
 ):
     """
     Génère le texte de closing à concaténer au bloc cours.
@@ -236,6 +300,8 @@ def generate_closing(
         is_last_bloc: True pour le bloc 7 → conclusion de journée.
         model: identifiant du modèle LLM (None = défaut).
         max_words: cap optionnel pour rester sous le budget TTS prudent du bloc.
+        next_item: élément suivant de la playlist effective (filename, duration,
+            type, bloc_number), pour annoncer Q&A/pause au bon endroit.
 
     Returns:
         str — texte du closing (vide si gap < seuil négligeable).
@@ -252,21 +318,22 @@ def generate_closing(
 
     # Cas court : pas de LLM, template déterministe
     if gap_sec < GAP_SHORT_SEC and not is_last_bloc:
-        closing = _short_closing_for_bloc(bloc_num)
+        closing = _append_handoff_if_missing(_short_closing_for_bloc(bloc_num), next_item)
         if max_words is not None and len(closing.split()) > max_words:
             return ""
         logger.info(f"   📝 Closing bloc {bloc_num} (gap {gap_sec:.0f}s, court) : template")
         return closing
 
     # Cas moyen / long / conclusion : LLM
+    handoff_instruction = _handoff_instruction(next_item)
     if is_last_bloc:
-        prompt = _build_conclusion_prompt(prev_excerpt, target_words, gap_sec)
+        prompt = _build_conclusion_prompt(prev_excerpt, target_words, gap_sec, handoff_instruction)
         registre = "conclusion"
     elif gap_sec < GAP_MEDIUM_SEC:
-        prompt = _build_medium_prompt(prev_excerpt, next_excerpt, target_words)
+        prompt = _build_medium_prompt(prev_excerpt, next_excerpt, target_words, handoff_instruction)
         registre = "moyen"
     else:
-        prompt = _build_long_prompt(prev_excerpt, next_excerpt, target_words, gap_sec)
+        prompt = _build_long_prompt(prev_excerpt, next_excerpt, target_words, gap_sec, handoff_instruction)
         registre = "long"
 
     try:
@@ -280,6 +347,9 @@ def generate_closing(
             raise ValueError("LLM closing empty")
         if _has_forbidden_deictic_marker(text):
             raise ValueError("LLM closing contains forbidden temporal marker")
+        text = _append_handoff_if_missing(text, next_item)
+        if max_words is not None and len(text.split()) > max_words:
+            text = " ".join(text.split()[:max_words])
         logger.info(
             f"   📝 Closing bloc {bloc_num} (gap {gap_sec:.0f}s, {registre}) : "
             f"{len(text.split())} mots générés"
@@ -290,4 +360,10 @@ def generate_closing(
             f"   ⚠️ Closing bloc {bloc_num} (gap {gap_sec:.0f}s, {registre}) "
             f"échec LLM ({type(e).__name__}: {str(e)[:120]}), fallback"
         )
-        return _fallback_for_gap(gap_sec, is_last_bloc, bloc_num)
+        text = _append_handoff_if_missing(
+            _fallback_for_gap(gap_sec, is_last_bloc, bloc_num),
+            next_item,
+        )
+        if max_words is not None and len(text.split()) > max_words:
+            text = " ".join(text.split()[:max_words])
+        return text
