@@ -147,7 +147,7 @@ def _load_review_rules_text() -> str:
     """Règles de review alignées sur la pipeline API.
 
     Contrairement à `_load_rules_text`, ce bloc inclut aussi les règles
-    d'humanisation #101-#111 et sert au calcul des signatures API.
+    d'humanisation #101-#113 et sert au calcul des signatures API.
     """
     try:
         from services.content_generation_service import _load_review_rules
@@ -509,11 +509,17 @@ def _build_humanization_review_mission(target, job, model):
 **TP** : {job['tp_name']} · **Modèle demandé** : {model}
 
 Tu lis `input.md` qui contient les segments à améliorer (JSON array). Pour chacun,
-vérifie uniquement les règles #101 à #111 dans `rules.md`.
+vérifie uniquement les règles #101 à #113 dans `rules.md`.
 
-Une intro trop brusque, un bloc trop dense, une transition mécanique, une fin
-sèche ou l'absence de respiration pédagogique comptent comme des non-conformités.
+Une intro trop brusque, une ouverture annuelle absente, un début de journée
+mécanique, un bloc trop dense, une transition mécanique, une fin sèche ou
+l'absence de respiration pédagogique comptent comme des non-conformités.
 Tu proposes des corrections concrètes, mais **pas de réécriture complète**.
+
+Contexte positionnel :
+- `folder_position = 0`, `sub_idx = 0`, `passe = 1` = ouverture absolue de la formation : règle #112.
+- `sub_idx = 0`, `passe = 1` = début de journée : règle #113.
+- Interdire les démarrages du type "Bon, on va aborder une nouvelle partie".
 
 Format attendu :
 
@@ -823,7 +829,7 @@ def _import_review(job_id, output, generated_via):
 
 
 def _import_humanization_review(job_id, output, generated_via):
-    """Import manuel de la passe humanisation (#101-#111).
+    """Import manuel de la passe humanisation (#101-#113).
 
     Même format que `_import_review`, mais les patches appliqués invalident la
     conformité stricte pour forcer la passe #1-#27 ensuite.
@@ -1455,6 +1461,7 @@ def _list_content_chunks(job: dict) -> list:
                         "id": f"day_{day_num}_sub_{sub_idx}_passe_{passe}",
                         "day_num": day_num,
                         "day_idx": i,
+                        "folder_name": day_data.get("title") or day_data.get("name") or f"Jour {day_num}",
                         "cg_job_id": cg_job_id,
                         "sub_idx": sub_idx,
                         "sub_part_name": sub_part_name,
@@ -1766,7 +1773,10 @@ def _build_content_chunk(chunk_dir: str, job: dict, chunk: dict, model: str) -> 
 
     Pour passe 2/3, injecte les passes précédentes en DB pour la continuité
     narrative (mêmes consignes que le mode API)."""
-    from services.content_generation_service import _get_passe_prompts
+    from services.content_generation_service import (
+        _build_course_position_context,
+        _get_passe_prompts,
+    )
 
     prev_text = ""
     if chunk["passe"] >= 2:
@@ -1808,6 +1818,14 @@ def _build_content_chunk(chunk_dir: str, job: dict, chunk: dict, model: str) -> 
     prompt = prompt.replace(
         "{CONTENU_DU_MODULE}",
         (chunk["module_content"] or "")[:15000],
+    )
+    prompt += "\n\n" + _build_course_position_context(
+        folder_position=chunk.get("day_idx"),
+        nb_days=job.get("nb_days"),
+        total_hours=job.get("total_hours"),
+        folder_name=chunk.get("folder_name") or "",
+        sub_part_index=chunk.get("sub_idx"),
+        passe=chunk.get("passe"),
     )
 
     # Pour passe 2/3, ajouter le contexte des passes précédentes en fin de prompt
@@ -1872,7 +1890,8 @@ def _build_review_chunk(chunk_dir: str, job: dict, chunk: dict, model: str) -> N
         if is_humanization:
             scope_intro = (
                 "Tu vérifies UNIQUEMENT les règles d'humanisation et de rythme. "
-                "Une intro trop brusque, un bloc trop dense, une transition "
+                "Une intro trop brusque, une ouverture annuelle absente, un "
+                "début de journée mécanique, un bloc trop dense, une transition "
                 "mécanique, une fin sèche ou l'absence de respiration "
                 "pédagogique comptent comme des non-conformités."
             )
@@ -1919,7 +1938,7 @@ Lis le détail complet de chacune de tes règles dans `rules.md` (cherche
     patch_policy = (
         "Tu ne réécris pas les textes — tu proposes des patches ciblés qui "
         "rendent l'introduction, les respirations, les transitions et les fins "
-        "plus naturelles quand les règles #101-#111 sont violées."
+        "plus naturelles quand les règles #101-#113 sont violées."
         if is_humanization
         else "Tu **ne réécris pas** les textes — tu proposes des **patches minimaux**"
     )
@@ -1930,6 +1949,14 @@ Lis le détail complet de chacune de tes règles dans `rules.md` (cherche
 
 Tu lis `input.md` qui contient les **{n_segs} segments** completed de cette journée (JSON array : segment_id, sub_idx, passe, text).
 {scope_block}
+
+Contexte positionnel :
+- Journée {chunk['day_idx'] + 1}/{job.get('nb_days') or '?'} du parcours.
+- Le segment avec `sub_idx = 0` et `passe = 1` est le début de cette journée.
+- Si cette journée est la première du parcours, ce même segment est l'ouverture
+  absolue de la formation : applique strictement la règle #112.
+- Pour tous les débuts de journée, applique strictement la règle #113 : pas de
+  démarrage mécanique du type "Bon, on va aborder une nouvelle partie".
 
 {patch_policy} au format :
 

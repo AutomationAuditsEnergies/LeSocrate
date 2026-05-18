@@ -299,12 +299,17 @@ puis un [pause], puis 1-2 phrases, puis un [pause]. Varie.
 STRUCTURE DU SCRIPT ORAL
 ═══════════════════════════════════════════════════
 
-1. INTRO (2-3 phrases) — Annonce le sujet. Pas de "Bonjour", pas de
-   "Module 2", pas d'horaire. Exemples :
-   - "Alors, dans ce cours on va aborder une notion importante :
-     les familles de produits."
-   - "On va s'intéresser maintenant à quelque chose d'essentiel
-     dans votre métier."
+1. INTRO — Ouverture progressive, jamais mécanique.
+   - Si ce passage est le tout premier cours de l'année, commence par une
+     introduction générale : accueil, contexte du titre professionnel, durée
+     ou nombre de journées si disponible, logique du programme, puis seulement
+     transition vers le premier sujet.
+   - Si ce passage ouvre une journée, accueille et remets doucement les
+     apprenants dans le parcours avant de présenter le sujet.
+   - Si ce passage reprend au milieu du parcours, fais une amorce courte qui
+     reconnecte au fil pédagogique.
+   - Interdit : "Bon, on va aborder...", "nouvelle partie du cours",
+     "on entre dans le vif du sujet", "c'est absolument fondamental".
 
 2. CORPS — Déroule le contenu de façon linéaire et logique.
    Chaque sous-thème est introduit par une transition orale, pas un titre.
@@ -1253,12 +1258,17 @@ puis un [pause], puis 1-2 phrases, puis un [pause]. Varie.
 STRUCTURE DU SCRIPT ORAL
 ═══════════════════════════════════════════════════
 
-1. INTRO (2-3 phrases) — Annonce le sujet. Pas de "Bonjour", pas de
-   "Module 2", pas d'horaire. Exemples :
-   - "Alors, dans ce cours on va aborder une notion importante :
-     les familles de produits."
-   - "On va s'intéresser maintenant à quelque chose d'essentiel
-     dans votre métier."
+1. INTRO — Ouverture progressive, jamais mécanique.
+   - Si ce passage est le tout premier cours de l'année, commence par une
+     introduction générale : accueil, contexte du titre professionnel, durée
+     ou nombre de journées si disponible, logique du programme, puis seulement
+     transition vers le premier sujet.
+   - Si ce passage ouvre une journée, accueille et remets doucement les
+     apprenants dans le parcours avant de présenter le sujet.
+   - Si ce passage reprend au milieu du parcours, fais une amorce courte qui
+     reconnecte au fil pédagogique.
+   - Interdit : "Bon, on va aborder...", "nouvelle partie du cours",
+     "on entre dans le vif du sujet", "c'est absolument fondamental".
 
 2. CORPS — Déroule le contenu de façon linéaire et logique.
    Chaque sous-thème est introduit par une transition orale, pas un titre.
@@ -2209,12 +2219,17 @@ puis un [pause], puis 1-2 phrases, puis un [pause]. Varie.
 STRUCTURE DU SCRIPT ORAL
 ═══════════════════════════════════════════════════
 
-1. INTRO (2-3 phrases) — Annonce le sujet. Pas de "Bonjour", pas de
-   "Module 2", pas d'horaire. Exemples :
-   - "Alors, dans ce cours on va aborder une notion importante :
-     les familles de produits."
-   - "On va s'intéresser maintenant à quelque chose d'essentiel
-     dans votre métier."
+1. INTRO — Ouverture progressive, jamais mécanique.
+   - Si ce passage est le tout premier cours de l'année, commence par une
+     introduction générale : accueil, contexte du titre professionnel, durée
+     ou nombre de journées si disponible, logique du programme, puis seulement
+     transition vers le premier sujet.
+   - Si ce passage ouvre une journée, accueille et remets doucement les
+     apprenants dans le parcours avant de présenter le sujet.
+   - Si ce passage reprend au milieu du parcours, fais une amorce courte qui
+     reconnecte au fil pédagogique.
+   - Interdit : "Bon, on va aborder...", "nouvelle partie du cours",
+     "on entre dans le vif du sujet", "c'est absolument fondamental".
 
 2. CORPS — Déroule le contenu de façon linéaire et logique.
    Chaque sous-thème est introduit par une transition orale, pas un titre.

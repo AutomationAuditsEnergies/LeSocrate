@@ -2357,6 +2357,81 @@ def _get_passe_prompts(from_scratch=False):
     return prompts
 
 
+def _build_course_position_context(
+    *,
+    folder_position=None,
+    nb_days=None,
+    total_hours=None,
+    folder_name="",
+    sub_part_index=None,
+    passe=None,
+) -> str:
+    """Ajoute au prompt le contexte qui permet de traiter correctement les ouvertures."""
+    try:
+        day_number = int(folder_position) + 1 if folder_position is not None else None
+    except Exception:
+        day_number = None
+    try:
+        sub_number = int(sub_part_index) + 1 if sub_part_index is not None else None
+    except Exception:
+        sub_number = None
+    try:
+        passe_number = int(passe) if passe is not None else None
+    except Exception:
+        passe_number = None
+
+    is_first_annual_course = day_number == 1 and sub_number == 1 and passe_number == 1
+    is_day_opening = sub_number == 1 and passe_number == 1
+
+    lines = [
+        "═══════════════════════════════════════════════════════════════════",
+        "CONTEXTE POSITIONNEL — OUVERTURES À RESPECTER",
+        "═══════════════════════════════════════════════════════════════════",
+    ]
+    if day_number:
+        total_days_label = f"/{nb_days}" if nb_days else ""
+        lines.append(f"Journée : {day_number}{total_days_label}.")
+    if total_hours:
+        lines.append(f"Durée totale de la formation : {total_hours}h.")
+    if folder_name:
+        lines.append(f"Intitulé de journée : {folder_name}.")
+    if sub_number:
+        lines.append(f"Sous-partie : {sub_number}/6.")
+    if passe_number:
+        lines.append(f"Passe : {passe_number}/3.")
+
+    if is_first_annual_course:
+        lines.extend([
+            "",
+            "CETTE PASSE EST L'OUVERTURE ABSOLUE DE LA FORMATION.",
+            "Tu dois commencer par une introduction générale d'année : accueil,",
+            "mise en contexte du titre professionnel, présentation du parcours,",
+            "nombre de journées si disponible, logique globale du programme,",
+            "puis transition douce vers le premier sujet.",
+            "Interdiction de commencer par : \"Bon, on va aborder...\",",
+            "\"nouvelle partie\", \"on entre dans le vif du sujet\", ou une",
+            "affirmation intense du type \"c'est absolument fondamental\".",
+        ])
+    elif is_day_opening:
+        lines.extend([
+            "",
+            "CETTE PASSE EST LE DÉBUT D'UNE JOURNÉE DE FORMATION.",
+            "Tu dois commencer par une vraie amorce de journée : accueil,",
+            "remise en route, lien avec la progression globale, intention du jour,",
+            "puis transition progressive vers le premier sujet.",
+            "Interdiction de démarrer brutalement par \"Bon, on va aborder...\",",
+            "\"nouvelle partie du cours\" ou une phrase de conférence.",
+        ])
+    else:
+        lines.extend([
+            "",
+            "Ce passage n'est pas l'ouverture absolue de la formation. Si tu dois",
+            "introduire un sujet, fais-le avec une transition orale douce et jamais",
+            "avec une formule mécanique du type \"Bon, on va aborder une nouvelle partie\".",
+        ])
+    return "\n".join(lines)
+
+
 # ─── Extraction des sous-parties ─────────────────────────────────────────────
 
 _EXTRACT_PROMPT = """Tu analyses un programme de formation professionnelle.
@@ -2440,7 +2515,8 @@ def extract_sub_parts(program_text):
 # ─── Génération d'un segment (une passe) ─────────────────────────────────────
 
 def _generate_segment_text(passe, sub_part_name, program_title, program_text, prev_text,
-                           from_scratch=False, module_content="", model=None):
+                           from_scratch=False, module_content="", model=None,
+                           generation_context=None):
     """
     Génère le texte d'un segment via Claude.
     passe : 1, 2 ou 3
@@ -2480,6 +2556,9 @@ def _generate_segment_text(passe, sub_part_name, program_title, program_text, pr
             prompt = prompt.replace("{NOM_DU_TITRE_PROFESSIONNEL}", program_title)
             prompt = prompt.replace("{NOM_DE_LA_SOUS_PARTIE}", sub_part_name)
             prompt = prompt.replace("{COLLER_LE_TEXTE_COMPLET_PASSE_1_ET_2}", prev_text[:60000])
+
+    if generation_context:
+        prompt += "\n\n" + _build_course_position_context(**generation_context)
 
     mode_label = "from_scratch" if from_scratch else "expansion"
     logger.info(f"  📝 Génération passe {passe} [{mode_label}] pour '{sub_part_name}'...")
@@ -2628,9 +2707,11 @@ def get_job_from_db(folder_id):
                cgj.from_scratch, cgj.module_contents,
                cgj.carryover_in_text, cgj.carryover_in_source_folder_id,
                cgj.carryover_out_text, cgj.carryover_out_target_folder_id,
-               cf.formation_job_id, cf.name
+               cf.formation_job_id, cf.name, cf.position,
+               fpj.nb_days, fpj.total_hours
         FROM content_generation_jobs cgj
         LEFT JOIN cours_folders cf ON cf.id = cgj.folder_id
+        LEFT JOIN formation_pipeline_jobs fpj ON fpj.id = cf.formation_job_id
         WHERE cgj.folder_id = ?
     """, (folder_id,))
     row = cursor.fetchone()
@@ -2650,6 +2731,9 @@ def get_job_from_db(folder_id):
         "carryover_out_target_folder_id": row[15],
         "formation_job_id": row[16],
         "folder_name": row[17],
+        "folder_position": row[18],
+        "nb_days": row[19],
+        "total_hours": row[20],
     }
 
 
@@ -2965,10 +3049,29 @@ def run_content_generation(folder_id, on_progress=None, mode="normal", model=Non
                         passe, sub_part_name, program_title, program_text,
                         prev_text="", from_scratch=True, module_content=module_content,
                         model=model,
+                        generation_context={
+                            "folder_position": job.get("folder_position"),
+                            "nb_days": job.get("nb_days"),
+                            "total_hours": job.get("total_hours"),
+                            "folder_name": job.get("folder_name") or "",
+                            "sub_part_index": sub_idx,
+                            "passe": passe,
+                        },
                     )
                 else:
                     prev = "" if passe == 1 else (passe1_text if passe == 2 else passe1_2_text)
-                    text = _generate_segment_text(passe, sub_part_name, program_title, program_text, prev, model=model)
+                    text = _generate_segment_text(
+                        passe, sub_part_name, program_title, program_text, prev,
+                        model=model,
+                        generation_context={
+                            "folder_position": job.get("folder_position"),
+                            "nb_days": job.get("nb_days"),
+                            "total_hours": job.get("total_hours"),
+                            "folder_name": job.get("folder_name") or "",
+                            "sub_part_index": sub_idx,
+                            "passe": passe,
+                        },
+                    )
 
                 _save_segment_db(job_id, sub_idx, sub_part_name, passe, text)
                 words_added = len(text.split())
@@ -3221,6 +3324,8 @@ def _fallback_course_opening(opening: str, previous_item_type: str | None) -> tu
         lead = "Très bien, on se remet tranquillement dans le fil."
     elif previous_item_type == "qa":
         lead = "Très bien, on garde vos questions en tête et on avance dans la suite."
+    elif previous_item_type is None:
+        lead = "Bonjour à tous, j'espère que vous allez bien. Installez-vous tranquillement, on va prendre le temps d'entrer dans cette partie."
     else:
         lead = "Très bien, on continue avec la suite."
     opening = re.sub(r"\s+", " ", (opening or "").strip())
@@ -3283,6 +3388,10 @@ Il faut relancer l'idée proprement, comme un formateur qui reprend le fil en di
 CONSIGNES STRICTES :
 - Applique les règles d'humanisation : entrée douce, rythme calme, respiration
   pédagogique, présence humaine, pas de ton conférence.
+- Si ce fichier ouvre une journée ou démarre sans élément précédent, commence
+  par accueillir et installer le cadre avant de présenter le sujet.
+- Ne commence jamais par "Bon, on va aborder", "nouvelle partie du cours",
+  "on entre dans le vif du sujet" ou "c'est absolument fondamental".
 - Tu peux situer brièvement le fil, mais ne fais pas un résumé long du cours précédent.
 - Ne répète pas la conclusion, le Q&A ou la pause qui viennent déjà d'avoir lieu.
 - Si l'élément précédent est une pause, ne dis pas "la pause est terminée".
@@ -4781,7 +4890,7 @@ _REVIEW_CHUNK_WORDS = _env_int("FORMATION_REVIEW_CHUNK_WORDS", 1500, min_value=3
 _REVIEW_CHUNK_CONCURRENCY = _env_int("FORMATION_REVIEW_CHUNK_CONCURRENCY", 2, min_value=1)
 _REVIEW_MAX_ATTEMPTS = 3
 _REVIEW_RULESET_VERSION = "2026-05-17-compliance-v3"
-_HUMANIZATION_RULESET_VERSION = "2026-05-17-humanisation-v1"
+_HUMANIZATION_RULESET_VERSION = "2026-05-18-humanisation-v2"
 _REVIEW_SIGNATURE_COLUMNS_READY = False
 
 _COMPLIANCE_REVIEW_RULE_GROUPS = [
@@ -4821,8 +4930,8 @@ _HUMANIZATION_REVIEW_RULE_GROUPS = [
     {
         "id": "humanisation_rythme",
         "label": "Humanisation et rythme pédagogique",
-        "rules": [101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111],
-        "description": "Intros plus douces, respirations, micro-interactions, densité cognitive, transitions et continuité de journée",
+        "rules": [101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113],
+        "description": "Intros plus douces, intro annuelle, débuts de journée, respirations, transitions et continuité pédagogique",
     },
 ]
 
@@ -4884,6 +4993,22 @@ RÈGLE #111 — Donner l'impression d'une journée vécue
 Le cours doit former une progression continue, pas une succession de fichiers
 indépendants. Corrige les transitions qui ignorent totalement ce qui précède ou
 qui cassent le fil émotionnel et pédagogique de la journée.
+
+RÈGLE #112 — Premier cours de l'année : introduction générale obligatoire
+Quand le passage est l'ouverture absolue de la formation, il ne doit jamais
+démarrer directement par "bon, on va aborder", "on entre dans le vif du sujet",
+"nouvelle partie" ou une phrase intense. Il doit d'abord accueillir, installer
+le contexte de l'année, rappeler la durée ou le nombre de journées si disponible,
+présenter la logique globale du programme, puis seulement ouvrir le premier
+sujet. Cette introduction peut digresser légèrement pour donner du sens et
+rassurer l'apprenant avant le contenu métier.
+
+RÈGLE #113 — Début de journée ou de bloc : amorce progressive obligatoire
+Chaque début de journée, de reprise ou de bloc audio doit avoir une vraie
+amorce orale. Interdire les démarrages mécaniques du type "Bon, on va aborder
+une nouvelle partie du cours" ou "c'est une partie absolument fondamentale".
+Le formateur doit reconnecter calmement au parcours, poser l'intention du bloc,
+accueillir l'apprenant dans le rythme, puis introduire le sujet sans brusquerie.
 """.strip()
 
 
@@ -4988,12 +5113,13 @@ def _extract_rules_for_group(full_rules_text: str, rule_numbers: list) -> str:
 
 def _build_review_prompt_focused(
     segment_text: str, rules_text: str, group_label: str, group_desc: str, rule_numbers: list,
-    chunk_index: int = 1, chunk_total: int = 1,
+    chunk_index: int = 1, chunk_total: int = 1, review_context: str = "",
 ) -> str:
     rules_list = ", ".join(f"#{n}" for n in rule_numbers)
     is_humanization_scope = any(int(n) >= 100 for n in (rule_numbers or []))
     review_mode = (
-        "Pour les règles #101 à #111, une intro trop brusque, un bloc trop dense, "
+        "Pour les règles #101 à #113, une intro trop brusque, un premier cours "
+        "sans introduction annuelle, un début de journée mécanique, un bloc trop dense, "
         "une transition mécanique, une fin sèche ou l'absence de respiration "
         "pédagogique comptent comme des non-conformités. Tu dois proposer des "
         "corrections concrètes quand le texte sonne trop récité, trop rapide ou "
@@ -5002,7 +5128,7 @@ def _build_review_prompt_focused(
         else "Tu renvoies un JSON avec uniquement les passages qui violent une règle de ton scope."
     )
     replacement_constraint = (
-        "- Pour #101 à #111, `replacement` peut ajouter une courte phrase orale, "
+        "- Pour #101 à #113, `replacement` peut ajouter une courte phrase orale, "
         "une micro-interaction ou un tag comme [pause] si cela corrige vraiment "
         "le rythme, sans changer le fond pédagogique."
         if is_humanization_scope
@@ -5023,6 +5149,8 @@ Tu audites le CHUNK {chunk_index}/{chunk_total} d'un segment plus long. Ne juge 
 
 TU NE RÉÉCRIS PAS LE TEXTE EN ENTIER. {review_mode}
 Si le texte est conforme pour ces règles, renvoie {{"patches": []}}.
+
+{review_context}
 
 Format de sortie strict (JSON valide, rien d'autre avant ou après) :
 
@@ -5152,6 +5280,7 @@ def _review_group_chunks(current_text: str, rules_text: str, group: dict, model=
     group_label = group["label"]
     group_rules = group["rules"]
     group_desc = group["description"]
+    review_context = group.get("_review_context") or ""
     group_rules_text = _extract_rules_for_group(rules_text, group_rules)
     if not group_rules_text.strip():
         return (
@@ -5172,6 +5301,7 @@ def _review_group_chunks(current_text: str, rules_text: str, group: dict, model=
         prompt = _build_review_prompt_focused(
             chunk["text"], group_rules_text, group_label, group_desc, group_rules,
             chunk_index=chunk["index"], chunk_total=chunk["total"],
+            review_context=review_context,
         )
         result = _review_chunk_with_retries(prompt, group_label, chunk["index"], model=model)
         result["chunk"] = chunk
@@ -5524,6 +5654,14 @@ def _run_content_review_pass(
         )
 
         current_text = text_content or ""
+        review_context = _build_course_position_context(
+            folder_position=job.get("folder_position"),
+            nb_days=job.get("nb_days"),
+            total_hours=job.get("total_hours"),
+            folder_name=job.get("folder_name") or "",
+            sub_part_index=sub_idx,
+            passe=passe,
+        )
         all_applied = []
         all_rejected = []
         all_proposed = 0
@@ -5541,8 +5679,9 @@ def _run_content_review_pass(
                 group_label,
                 ",".join(str(rule) for rule in (group.get("rules") or [])),
             )
+            group_with_context = {**group, "_review_context": review_context}
             new_text, applied, rejected, group_error, proposed = _review_group_chunks(
-                current_text, rules_text, group, model=model
+                current_text, rules_text, group_with_context, model=model,
             )
             all_proposed += int(proposed or 0)
             if group_error:
