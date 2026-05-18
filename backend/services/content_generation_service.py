@@ -2404,10 +2404,15 @@ def _build_course_position_context(
         lines.extend([
             "",
             "CETTE PASSE EST L'OUVERTURE ABSOLUE DE LA FORMATION.",
-            "Tu dois commencer par une introduction générale d'année : accueil,",
-            "mise en contexte du titre professionnel, présentation du parcours,",
-            "nombre de journées si disponible, logique globale du programme,",
-            "puis transition douce vers le premier sujet.",
+            "Avant toute notion métier, écris une vraie introduction de formation",
+            "de 220 à 380 mots. Elle doit accueillir, raconter pourquoi cette",
+            "formation existe, expliquer en quoi elle sera utile concrètement",
+            "dans le métier, présenter le parcours global, annoncer les grandes",
+            "familles de compétences qui seront travaillées, donner envie de",
+            "s'engager, rassurer les apprenants sur le rythme, puis seulement",
+            "faire une transition douce vers le premier sujet.",
+            "Cette ouverture doit ressembler au début d'une année de formation,",
+            "pas au début d'un chapitre isolé.",
             "Interdiction de commencer par : \"Bon, on va aborder...\",",
             "\"nouvelle partie\", \"on entre dans le vif du sujet\", ou une",
             "affirmation intense du type \"c'est absolument fondamental\".",
@@ -4890,7 +4895,7 @@ _REVIEW_CHUNK_WORDS = _env_int("FORMATION_REVIEW_CHUNK_WORDS", 1500, min_value=3
 _REVIEW_CHUNK_CONCURRENCY = _env_int("FORMATION_REVIEW_CHUNK_CONCURRENCY", 2, min_value=1)
 _REVIEW_MAX_ATTEMPTS = 3
 _REVIEW_RULESET_VERSION = "2026-05-17-compliance-v3"
-_HUMANIZATION_RULESET_VERSION = "2026-05-18-humanisation-v2"
+_HUMANIZATION_RULESET_VERSION = "2026-05-18-humanisation-v3"
 _REVIEW_SIGNATURE_COLUMNS_READY = False
 
 _COMPLIANCE_REVIEW_RULE_GROUPS = [
@@ -4997,11 +5002,15 @@ qui cassent le fil émotionnel et pédagogique de la journée.
 RÈGLE #112 — Premier cours de l'année : introduction générale obligatoire
 Quand le passage est l'ouverture absolue de la formation, il ne doit jamais
 démarrer directement par "bon, on va aborder", "on entre dans le vif du sujet",
-"nouvelle partie" ou une phrase intense. Il doit d'abord accueillir, installer
-le contexte de l'année, rappeler la durée ou le nombre de journées si disponible,
-présenter la logique globale du programme, puis seulement ouvrir le premier
-sujet. Cette introduction peut digresser légèrement pour donner du sens et
-rassurer l'apprenant avant le contenu métier.
+"nouvelle partie" ou une phrase intense. Il doit d'abord faire une vraie
+introduction annuelle, développée et chaleureuse, avant toute notion métier.
+Cette ouverture doit raconter la formation : à quoi elle sert, dans quel
+contexte professionnel elle s'inscrit, ce que les apprenants vont construire,
+les grandes familles de compétences qui seront abordées, la progression sur les
+journées, la manière de travailler, et pourquoi ce parcours va leur être utile
+concrètement. Elle doit encourager les élèves, rassurer sur le rythme, donner
+envie d'avancer, puis seulement faire une transition douce vers le premier
+sujet. Une simple intro générique de quelques phrases est insuffisante.
 
 RÈGLE #113 — Début de journée ou de bloc : amorce progressive obligatoire
 Chaque début de journée, de reprise ou de bloc audio doit avoir une vraie
@@ -5128,9 +5137,13 @@ def _build_review_prompt_focused(
         else "Tu renvoies un JSON avec uniquement les passages qui violent une règle de ton scope."
     )
     replacement_constraint = (
-        "- Pour #101 à #113, `replacement` peut ajouter une courte phrase orale, "
+        "- Pour #101 à #113, `replacement` peut ajouter une phrase orale, "
         "une micro-interaction ou un tag comme [pause] si cela corrige vraiment "
-        "le rythme, sans changer le fond pédagogique."
+        "le rythme, sans changer le fond pédagogique. Pour une violation #112, "
+        "`replacement` doit remplacer l'ouverture trop courte par une vraie "
+        "introduction de formation développée : 180 à 320 mots, utilité de la "
+        "formation, contexte métier, grandes compétences abordées, progression, "
+        "encouragement et transition vers le premier sujet."
         if is_humanization_scope
         else "- `replacement` corrige la violation sans reformuler le sens, sans ajouter de contenu."
     )

@@ -520,6 +520,9 @@ Contexte positionnel :
 - `folder_position = 0`, `sub_idx = 0`, `passe = 1` = ouverture absolue de la formation : règle #112.
 - `sub_idx = 0`, `passe = 1` = début de journée : règle #113.
 - Interdire les démarrages du type "Bon, on va aborder une nouvelle partie".
+- Pour #112, une simple salutation générique ne suffit pas : il faut présenter
+  l'utilité concrète de la formation, le parcours, les compétences abordées,
+  la manière de progresser et encourager les apprenants avant le premier sujet.
 
 Format attendu :
 
@@ -1929,9 +1932,13 @@ Lis le détail complet de chacune de tes règles dans `rules.md` (cherche
         )
         cap_per_segment = 10
     replacement_constraint = (
-        "- `replacement` peut ajouter une courte phrase orale, une micro-interaction "
+        "- `replacement` peut ajouter une phrase orale, une micro-interaction "
         "ou un tag comme `[pause]` / `[calm]` si cela corrige vraiment le rythme, "
-        "sans changer le fond pédagogique."
+        "sans changer le fond pédagogique. Pour une violation #112, `replacement` "
+        "doit remplacer l'ouverture trop pauvre par une vraie introduction de "
+        "formation développée : utilité concrète, contexte métier, grandes "
+        "compétences abordées, progression du parcours, encouragement et "
+        "transition vers le premier sujet."
         if is_humanization
         else "- `replacement` corrige la violation sans changer le sens, sans ajouter/retirer de contenu."
     )

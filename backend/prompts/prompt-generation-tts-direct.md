@@ -303,9 +303,12 @@ STRUCTURE DU SCRIPT ORAL
 
 1. INTRO — Ouverture progressive, jamais mécanique.
    - Si ce passage est le tout premier cours de l'année, commence par une
-     introduction générale : accueil, contexte du titre professionnel, durée
-     ou nombre de journées si disponible, logique du programme, puis seulement
-     transition vers le premier sujet.
+     vraie introduction de formation, pas une simple annonce de sujet. Prends
+     le temps de parler de cette formation : pourquoi elle existe, en quoi elle
+     sera utile dans le métier, ce que les apprenants vont construire au fil
+     des journées, les grandes compétences qui seront abordées, la manière de
+     progresser, et l'état d'esprit attendu. Encourage les élèves, rassure-les,
+     puis fais seulement une transition vers le premier sujet.
    - Si ce passage ouvre une journée, accueille et remets doucement les
      apprenants dans le parcours avant de présenter le sujet.
    - Si ce passage reprend au milieu du parcours, fais une amorce courte qui
