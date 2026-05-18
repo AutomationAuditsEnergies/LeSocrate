@@ -82,7 +82,8 @@ jobs:
               --settings \
                 SCM_DO_BUILD_DURING_DEPLOYMENT=true \
                 ENABLE_ORYX_BUILD=true \
-                DB_PATH=/home/database-staging.db
+                DB_PATH=/home/database-staging.db \
+                PLATFORM_1_FRONTEND_URL=https://thankful-wave-043aa3b03-staging.4.azurestaticapps.net
 
             az webapp config set \
               --resource-group "${RESOURCE_GROUP}" \
@@ -95,7 +96,8 @@ jobs:
               --name socrate1 \
               --settings \
                 SCM_DO_BUILD_DURING_DEPLOYMENT=true \
-                ENABLE_ORYX_BUILD=true
+                ENABLE_ORYX_BUILD=true \
+                PLATFORM_1_FRONTEND_URL=https://thankful-wave-043aa3b03.4.azurestaticapps.net
 
             az webapp config set \
               --resource-group "${RESOURCE_GROUP}" \
