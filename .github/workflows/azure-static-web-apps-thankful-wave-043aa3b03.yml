@@ -42,6 +42,7 @@ jobs:
           app_location: "./frontend"
           api_location: ""
           output_location: "dist"
+          production_branch: ${{ github.event_name == 'workflow_dispatch' && 'staging' || 'main' }}
         env:
           NODE_VERSION: 20.19.6
           VITE_API_URL: https://socrate1-fyhgbqh7ejeyb2f3.francecentral-01.azurewebsites.net
