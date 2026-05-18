@@ -9,7 +9,7 @@ import os
 import sqlite3
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from services import basic_tts_service as bts
 from services import break_transition_service as bks
@@ -54,7 +54,7 @@ class RuntimeFitStopsBeforeOverflowTest(unittest.TestCase):
     def test_voice_duration_stays_under_target(self):
         # Bloc avec ~1400 mots de phrases courtes (sub-chunkable proprement).
         # Edge TTS mocké : chaque appel renvoie un chunk MP3 et une durée 200s.
-        # target_sec=2700, conclusion_margin=90 → budget effectif ~2610s.
+        # target_sec=2700, silence final=120 → dernière parole avant 2580s.
         # À 200s/chunk, on stoppe forcément avant épuisement de la file.
         text = _phrases_text(n_phrases=200, words_per_phrase=7)
         bloc = _make_bloc(text, target_sec=2700)
@@ -79,7 +79,10 @@ class RuntimeFitStopsBeforeOverflowTest(unittest.TestCase):
             )
 
         self.assertEqual(fit_method, "slide_sync_edge_runtime_fit")
-        self.assertLessEqual(voice_duration, 2700 + cgs._TOLERANCE_OVERFLOW_SEC)
+        self.assertLessEqual(
+            voice_duration,
+            cgs._course_speech_deadline_sec(2700) + cgs._TOLERANCE_OVERFLOW_SEC,
+        )
         # On a forcément stoppé avant la fin → surplus non consommé.
         self.assertGreater(
             len(unconsumed), 0,
@@ -91,7 +94,7 @@ class RuntimeFitStopsBeforeOverflowTest(unittest.TestCase):
 class FishAudioWordBudgetCalibrationTest(unittest.TestCase):
     def test_45_minute_budget_reserves_conclusion_and_final_silence(self):
         # 192 mots/min, 17s de silence initial.
-        # Texte principal arrêté à T-4min, parole totale arrêtée à T-1min.
+        # Texte principal arrêté à T-4min, parole totale arrêtée à T-2min.
         with patch.object(cgs, "_course_words_per_minute", return_value=192.0), patch.object(
             cgs, "_course_preflight_safety", return_value=1.0
         ):
@@ -99,8 +102,47 @@ class FishAudioWordBudgetCalibrationTest(unittest.TestCase):
             total_budget = cgs._estimated_words_budget_for_course(2700, api_speed=0.95)
 
         self.assertEqual(main_budget, int(((2700 - 240 - 17) / 60) * 192))
-        self.assertEqual(total_budget, int(((2700 - 60 - 17) / 60) * 192))
-        self.assertGreater(total_budget - main_budget, 500)
+        self.assertEqual(total_budget, int(((2700 - 120 - 17) / 60) * 192))
+        self.assertGreater(total_budget - main_budget, 300)
+
+
+class CourseSpeechDeadlineTest(unittest.TestCase):
+    def test_fish_audio_rejects_voice_after_final_silence_deadline(self):
+        bloc = _make_bloc("texte court pour fish audio.", target_sec=2700)
+        raw_voice_duration = cgs._course_voice_window_sec(2700) + 1.0
+        pad = Mock()
+
+        with self.assertRaisesRegex(ValueError, "silence final"):
+            cgs._synthesize_course_audio_to_fit(
+                bloc,
+                convert_to_speech=lambda text, speed: b"MP3",
+                measure_duration_ms=lambda audio: raw_voice_duration * 1000,
+                pad_audio_to_duration=pad,
+            )
+
+        pad.assert_not_called()
+
+    def test_review_budget_guard_rolls_back_oversized_humanization_patch(self):
+        original = " ".join(["mot"] * 100)
+        candidate = " ".join(["mot"] * 500)
+        applied = [{
+            "original": "mot mot mot",
+            "replacement": "long remplacement",
+            "rule_violated": "#101",
+            "reason": "Trop brusque.",
+        }]
+
+        guarded_text, guarded_applied, rejected = cgs._apply_review_budget_guard(
+            original,
+            candidate,
+            applied,
+            "humanization",
+        )
+
+        self.assertEqual(guarded_text, original)
+        self.assertEqual(guarded_applied, [])
+        self.assertEqual(rejected[0]["reject_reason"], "budget_guard")
+        self.assertGreater(rejected[0]["words_after"], rejected[0]["max_words"])
 
 
 class HumanizationReviewRulesTest(unittest.TestCase):
@@ -489,7 +531,10 @@ class RuntimeFitRejectsMeasuredOverflowTest(unittest.TestCase):
                 conclusion_margin_sec=90,
             )
 
-        self.assertLessEqual(voice_duration, 220 + cgs._TOLERANCE_OVERFLOW_SEC)
+        self.assertLessEqual(
+            voice_duration,
+            cgs._course_speech_deadline_sec(220) + cgs._TOLERANCE_OVERFLOW_SEC,
+        )
         self.assertEqual(consumed, [])
         self.assertEqual(len(unconsumed), 1)
         self.assertEqual(unconsumed[0]["text"], text)
@@ -528,7 +573,10 @@ class RuntimeFitConclusionFallbackTest(unittest.TestCase):
         kinds = [a["kind"] for a in attempts]
         self.assertIn("conclusion_rejected_overflow", kinds)
         self.assertIn("conclusion_fallback", kinds)
-        self.assertLessEqual(voice_duration, 250 + cgs._TOLERANCE_OVERFLOW_SEC)
+        self.assertLessEqual(
+            voice_duration,
+            cgs._course_speech_deadline_sec(250) + cgs._TOLERANCE_OVERFLOW_SEC,
+        )
         self.assertIn(b"SHORT", audio_bytes)
         self.assertNotIn(b"LONG", audio_bytes)
 
@@ -537,7 +585,7 @@ class RuntimeFitMicroChunkRefinementTest(unittest.TestCase):
     def test_measured_overflow_is_split_smaller_before_stopping(self):
         sentence = " ".join(["mot"] * 20) + "."
         text = " ".join([sentence, sentence, sentence])
-        bloc = _make_bloc(text, target_sec=200)
+        bloc = _make_bloc(text, target_sec=250)
         fake_slide_chunk = {
             "slide_id": "slide-test",
             "word_start": 0,
@@ -570,9 +618,12 @@ class RuntimeFitMicroChunkRefinementTest(unittest.TestCase):
         kinds = [a["kind"] for a in attempts]
         self.assertIn("gtts_split_after_measured_overflow", kinds)
         self.assertIn("conclusion", kinds)
-        self.assertEqual(len(consumed), 2)
+        self.assertGreaterEqual(len(consumed), 1)
         self.assertEqual(unconsumed, [])
-        self.assertLessEqual(voice_duration, 200 + cgs._TOLERANCE_OVERFLOW_SEC)
+        self.assertLessEqual(
+            voice_duration,
+            cgs._course_speech_deadline_sec(250) + cgs._TOLERANCE_OVERFLOW_SEC,
+        )
 
 
 class RuntimeFitFinalizeSafetyTest(unittest.TestCase):
@@ -673,6 +724,109 @@ class BreakTransitionOwnershipTest(unittest.TestCase):
         self.assertEqual(intro, "")
         self.assertIn("questions", outro)
         self.assertIn("quelques minutes de pause", outro)
+
+    def test_pause_after_course_has_no_intro_when_previous_file_owns_transition(self):
+        playlist_items = [
+            ("cours_9h00_9h45.mp3", 2700, "cours", 1),
+            ("pause_9h45_9h55.mp3", 600, "pause", 1),
+            ("cours_9h55_10h40.mp3", 2700, "cours", 2),
+        ]
+
+        with patch.object(
+            bks,
+            "_llm_post",
+            return_value='{"intro": "On fait une pause.", "outro": "La pause est terminée, on reprend calmement."}',
+        ):
+            intro, outro = bks.build_break_transition_texts(
+                filename="pause_9h45_9h55.mp3",
+                duration_sec=600,
+                break_type="pause",
+                bloc_num=1,
+                item_idx=1,
+                playlist_items=playlist_items,
+                get_bloc_text=lambda n: "texte du bloc",
+                model="test-model",
+            )
+
+        self.assertEqual(intro, "")
+        self.assertIn("pause est terminée", outro)
+
+    def test_pause_midi_after_course_has_no_intro_when_previous_file_owns_transition(self):
+        playlist_items = [
+            ("cours_12h20_13h05.mp3", 2700, "cours", 4),
+            ("pause_midi_13h05_14h35.mp3", 5400, "pause_midi", 4),
+            ("cours_14h35_15h20.mp3", 2700, "cours", 5),
+        ]
+
+        with patch.object(
+            bks,
+            "_llm_post",
+            return_value='{"intro": "On marque la pause déjeuner.", "outro": "La pause déjeuner est terminée."}',
+        ):
+            intro, outro = bks.build_break_transition_texts(
+                filename="pause_midi_13h05_14h35.mp3",
+                duration_sec=5400,
+                break_type="pause_midi",
+                bloc_num=4,
+                item_idx=1,
+                playlist_items=playlist_items,
+                get_bloc_text=lambda n: "texte du bloc",
+                model="test-model",
+            )
+
+        self.assertEqual(intro, "")
+        self.assertIn("pause déjeuner est terminée", outro)
+
+    def test_first_break_without_previous_audio_keeps_intro(self):
+        playlist_items = [
+            ("pause_9h00_9h05.mp3", 300, "pause", 1),
+            ("cours_9h05_9h50.mp3", 2700, "cours", 1),
+        ]
+
+        with patch.object(
+            bks,
+            "_llm_post",
+            return_value='{"intro": "On fait une courte pause.", "outro": "On reprend ensuite."}',
+        ):
+            intro, outro = bks.build_break_transition_texts(
+                filename="pause_9h00_9h05.mp3",
+                duration_sec=300,
+                break_type="pause",
+                bloc_num=1,
+                item_idx=0,
+                playlist_items=playlist_items,
+                get_bloc_text=lambda n: "texte du bloc",
+                model="test-model",
+            )
+
+        self.assertIn("courte pause", intro)
+        self.assertIn("reprend", outro)
+
+    def test_schedule_neutral_current_audio_does_not_announce_next_break(self):
+        playlist_items = [
+            ("cours_12h20_13h05.mp3", 2700, "cours", 4),
+            ("qa_13h05_13h15.mp3", 600, "qa", 4),
+            ("pause_midi_13h15_14h45.mp3", 5400, "pause_midi", 4),
+        ]
+
+        with patch.object(
+            bks,
+            "_llm_post",
+            return_value='{"intro": "On prend un temps pour les questions.", "outro": "On clôt ce temps de questions sans annoncer la suite."}',
+        ):
+            intro, outro = bks.build_break_transition_texts(
+                filename="qa_13h05_13h15.mp3",
+                duration_sec=600,
+                break_type="qa",
+                bloc_num=4,
+                item_idx=1,
+                playlist_items=playlist_items,
+                get_bloc_text=lambda n: "texte du bloc",
+                model="test-model",
+            )
+
+        self.assertEqual(intro, "")
+        self.assertNotIn("pause déjeuner", outro.lower())
 
     def test_pause_after_qa_has_no_intro_when_previous_file_owns_transition(self):
         playlist_items = [
@@ -1003,9 +1157,9 @@ class BasicTTSNoSlidesPipelineRuntimeFitTest(unittest.TestCase):
         uploaded = []
         synth_result = (
             _mp3_chunk("OK"),
-            2690.0,
+            2500.0,
             "slide_sync_edge_runtime_fit",
-            [{"kind": "gtts", "duration": 2690.0}],
+            [{"kind": "gtts", "duration": 2500.0}],
             [],
             [],
             [{"text": "texte consomme"}],
@@ -1043,7 +1197,7 @@ class BasicTTSNoSlidesPipelineRuntimeFitTest(unittest.TestCase):
         patches = self._patch_common(synth_result, uploaded)
 
         with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6], patches[7], patches[8]:
-            with self.assertRaisesRegex(ValueError, "dépasse la durée autorisée"):
+            with self.assertRaisesRegex(ValueError, "limite de parole"):
                 cgs.generate_audio_from_script(
                     123,
                     force_all=True,

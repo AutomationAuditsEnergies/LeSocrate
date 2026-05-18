@@ -277,6 +277,81 @@ def download_reac_text(rncp_code: str) -> str:
     return full_text
 
 
+def _cooperative_sleep(seconds: float) -> None:
+    try:
+        import eventlet
+        eventlet.sleep(seconds)
+    except Exception:
+        time.sleep(seconds)
+
+
+def _reac_retry_delays(attempts: int) -> list[float]:
+    raw = (os.getenv("FORMATION_REAC_RETRY_DELAYS_SEC") or "").strip()
+    if raw:
+        values = []
+        for part in raw.split(","):
+            try:
+                values.append(max(0.0, float(part.strip())))
+            except (TypeError, ValueError):
+                continue
+        if values:
+            return values[: max(0, attempts - 1)]
+    return [30.0, 90.0][: max(0, attempts - 1)]
+
+
+def download_reac_text_with_retry(
+    rncp_code: str,
+    *,
+    attempts: int = 3,
+    delays_sec: list[float] | None = None,
+    on_attempt=None,
+) -> str:
+    """Télécharge le REAC avec retries bornés et erreur finale explicite."""
+    attempts = max(1, int(attempts or 1))
+    delays = list(delays_sec) if delays_sec is not None else _reac_retry_delays(attempts)
+    last_error = None
+    for attempt in range(1, attempts + 1):
+        try:
+            if on_attempt:
+                on_attempt(attempt=attempt, total=attempts, status="running", wait_seconds=0, error=None)
+            text = download_reac_text(rncp_code)
+            if not (text or "").strip():
+                raise RuntimeError("REAC extrait vide")
+            if on_attempt:
+                on_attempt(attempt=attempt, total=attempts, status="success", wait_seconds=0, error=None)
+            return text
+        except Exception as e:
+            last_error = e
+            is_last = attempt >= attempts
+            wait = 0.0 if is_last else (delays[attempt - 1] if attempt - 1 < len(delays) else delays[-1] if delays else 0.0)
+            status = "failed" if is_last else "retrying"
+            logger.warning(
+                "REAC_DOWNLOAD_ATTEMPT rncp=%s attempt=%s/%s status=%s wait=%.1fs error=%s",
+                rncp_code,
+                attempt,
+                attempts,
+                status,
+                wait,
+                str(e)[:300],
+            )
+            if on_attempt:
+                on_attempt(
+                    attempt=attempt,
+                    total=attempts,
+                    status=status,
+                    wait_seconds=wait,
+                    error=str(e),
+                )
+            if is_last:
+                break
+            _cooperative_sleep(wait)
+
+    raise RuntimeError(
+        f"REAC indisponible après {attempts} tentatives pour RNCP {rncp_code}. "
+        f"Dernière erreur : {str(last_error)[:300]}"
+    ) from last_error
+
+
 # ─── Référentiel de Certification (RC) ───────────────────────────────────────
 
 def download_rc_text(rncp_code: str) -> str:

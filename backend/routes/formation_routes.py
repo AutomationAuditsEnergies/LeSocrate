@@ -26,7 +26,7 @@ from io import BytesIO
 
 from services.formation_pipeline_service import (
     search_rncp,
-    download_reac_text,
+    download_reac_text_with_retry,
     download_rc_text,
     fetch_rome_data,
     launch_global_program_generation,
@@ -580,9 +580,41 @@ def fetch_reac(job_id):
             results = {"reac": "", "rc": "", "rome": ""}
             errors = []
 
+            def _log_reac_attempt(**payload):
+                try:
+                    from services.formation_observability_service import log_pipeline_event
+                    status = payload.get("status") or "info"
+                    attempt = payload.get("attempt")
+                    total = payload.get("total")
+                    wait_seconds = payload.get("wait_seconds") or 0
+                    error = payload.get("error")
+                    message = f"REAC tentative {attempt}/{total} : {status}"
+                    if status == "retrying":
+                        message += f" — nouvelle tentative dans {wait_seconds:.0f}s"
+                    log_pipeline_event(
+                        job_id,
+                        "reac_download_attempt",
+                        step="reac",
+                        status="error" if status == "failed" else status,
+                        message=message,
+                        data={
+                            "attempt": attempt,
+                            "total": total,
+                            "wait_seconds": wait_seconds,
+                            "rncp_code": rncp_code,
+                        },
+                        error=error,
+                    )
+                except Exception:
+                    pass
+
             def _dl_reac():
                 try:
-                    results["reac"] = download_reac_text(rncp_code)
+                    results["reac"] = download_reac_text_with_retry(
+                        rncp_code,
+                        attempts=3,
+                        on_attempt=_log_reac_attempt,
+                    )
                 except Exception as e:
                     errors.append(f"REAC: {e}")
 
@@ -4300,7 +4332,41 @@ def _execute_ap_step(job_id: int, step: str, job: dict) -> None:
             raise RuntimeError(f"Pre-flight bloqué : {', '.join(preflight['blocking'])}")
         logger.info(f"🛂 Pre-flight OK job {job_id}")
         update_job(job_id, status="reac_fetching")
-        reac = download_reac_text(job["rncp_code"])
+
+        def _log_reac_attempt(**payload):
+            try:
+                from services.formation_observability_service import log_pipeline_event
+                status = payload.get("status") or "info"
+                attempt = payload.get("attempt")
+                total = payload.get("total")
+                wait_seconds = payload.get("wait_seconds") or 0
+                error = payload.get("error")
+                message = f"REAC tentative {attempt}/{total} : {status}"
+                if status == "retrying":
+                    message += f" — nouvelle tentative dans {wait_seconds:.0f}s"
+                log_pipeline_event(
+                    job_id,
+                    "reac_download_attempt",
+                    step="reac",
+                    status="error" if status == "failed" else status,
+                    message=message,
+                    model=api_model,
+                    data={
+                        "attempt": attempt,
+                        "total": total,
+                        "wait_seconds": wait_seconds,
+                        "rncp_code": job["rncp_code"],
+                    },
+                    error=error,
+                )
+            except Exception:
+                pass
+
+        reac = download_reac_text_with_retry(
+            job["rncp_code"],
+            attempts=3,
+            on_attempt=_log_reac_attempt,
+        )
         rc_text, rome_text = None, None
         try:
             rc_text = download_rc_text(job["rncp_code"]) or None

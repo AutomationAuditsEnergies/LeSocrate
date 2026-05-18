@@ -2078,6 +2078,7 @@ def _import_review_chunk(job_id: int, chunk: dict, output: str, generated_via: s
     )
     cfg = _review_step_config("humanization_review" if review_kind == "humanization" else "review")
     review_signature = cfg["signature"]
+    from services.content_generation_service import _apply_review_budget_guard
 
     # Mapping {segment_id_dans_chunk → index dans chunk_segments}
     by_chunk_id = {
@@ -2178,11 +2179,13 @@ def _import_review_chunk(job_id: int, chunk: dict, output: str, generated_via: s
             failed_total += 1
             continue
         actual_segment_id, text = row
+        original_text = text or ""
 
         # Application des patches (logique inchangée du legacy) +
         # collecte du détail pour le rapport modal frontend
         seg_applied = 0
         seg_rejected = 0
+        seg_applied_patches = []
         seg_patches_detail = []
         for p in patches[:10]:  # hard cap 10 patches / segment (éthiques + stylistiques)
             original = p.get("original")
@@ -2198,6 +2201,12 @@ def _import_review_chunk(job_id: int, chunk: dict, output: str, generated_via: s
                 text = text.replace(original, replacement, 1)
                 seg_applied += 1
                 rule_stat["applied"] += 1
+                seg_applied_patches.append({
+                    "original": original,
+                    "replacement": replacement,
+                    "rule_violated": rule,
+                    "reason": reason,
+                })
                 seg_patches_detail.append({
                     "rule": rule, "reason": reason,
                     "original": original[:200],
@@ -2217,6 +2226,44 @@ def _import_review_chunk(job_id: int, chunk: dict, output: str, generated_via: s
                         else f"ambiguë ({count} occurrences)"
                     ),
                 })
+        if seg_applied > 0:
+            guarded_text, guarded_applied, budget_rejected = _apply_review_budget_guard(
+                original_text,
+                text,
+                seg_applied_patches,
+                review_kind,
+            )
+            if budget_rejected:
+                text = guarded_text
+                words_before = budget_rejected[0].get("words_before")
+                words_after = budget_rejected[0].get("words_after")
+                max_words = budget_rejected[0].get("max_words")
+                for p in budget_rejected:
+                    rule = str(p.get("rule_violated") or "?")[:10]
+                    rule_stat = by_rule.setdefault(rule, {"proposed": 0, "applied": 0, "rejected": 0})
+                    rule_stat["applied"] = max(0, int(rule_stat.get("applied") or 0) - 1)
+                    rule_stat["rejected"] = int(rule_stat.get("rejected") or 0) + 1
+                for detail in seg_patches_detail:
+                    if detail.get("status") == "applied":
+                        detail["status"] = "rejected"
+                        detail["reject_reason"] = "budget_guard"
+                        detail["words_before"] = words_before
+                        detail["words_after"] = words_after
+                        detail["max_words"] = max_words
+                seg_rejected += len(budget_rejected)
+                seg_applied = len(guarded_applied)
+                logger.warning(
+                    "CLAUDE_CODE_REVIEW_BUDGET_GUARD job_id=%s folder_id=%s segment_id=%s "
+                    "review_kind=%s words_before=%s words_after=%s max_words=%s rejected=%s",
+                    job_id,
+                    folder_id,
+                    actual_segment_id,
+                    review_kind,
+                    words_before,
+                    words_after,
+                    max_words,
+                    len(budget_rejected),
+                )
         applied_total += seg_applied
         rejected_total += seg_rejected
 

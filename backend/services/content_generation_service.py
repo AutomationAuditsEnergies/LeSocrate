@@ -35,7 +35,7 @@ NUM_SUB_PARTS = 6
 _COURSE_START_SILENCE_SECONDS = 17
 _DEFAULT_TTS_WORDS_PER_MINUTE = 192
 _COURSE_CONCLUSION_START_MARGIN_SECONDS = 240
-_COURSE_FINAL_SILENCE_SECONDS = 60
+_COURSE_FINAL_SILENCE_SECONDS = 120
 _DEFAULT_TTS_SPEED = 0.90
 _DEFAULT_TTS_LOCAL_MAX_SPEEDUP = 1.0
 _DEFAULT_TTS_PREFLIGHT_SAFETY = 1.0
@@ -222,6 +222,16 @@ def _words_budget_for_speaking_window(target_sec: int, stop_before_end_sec: floa
     return int((voice_seconds / 60.0) * _course_words_per_minute() * _course_preflight_safety())
 
 
+def _course_speech_deadline_sec(target_sec: int | float) -> float:
+    """Dernière seconde autorisée pour la parole avant le silence final."""
+    return max(0.0, float(target_sec or 0) - _course_final_silence_sec())
+
+
+def _course_voice_window_sec(target_sec: int | float) -> float:
+    """Durée maximale de voix réelle, hors silence initial et silence final."""
+    return max(0.0, _course_speech_deadline_sec(target_sec) - _COURSE_START_SILENCE_SECONDS)
+
+
 def _estimated_words_budget_for_course(target_sec, api_speed):
     """Total words allowed for spoken content, stopping before final silence."""
     return _words_budget_for_speaking_window(target_sec, _course_final_silence_sec())
@@ -334,9 +344,15 @@ def _silent_mp3_approx_no_ffmpeg(duration_sec: float) -> tuple[bytes, float]:
     if duration_sec <= 0:
         return b"", 0.0
     one_sec = _generate_silence_mp3(1)
-    one_sec_duration = _mp3_duration_seconds_no_ffprobe(one_sec)
+    try:
+        one_sec_duration = _mp3_duration_seconds_no_ffprobe(one_sec)
+    except Exception:
+        one_sec_duration = 1.0
     repeat = max(1, int(round(duration_sec / one_sec_duration)))
-    return one_sec * repeat, one_sec_duration * repeat
+    if repeat == 1:
+        return one_sec, one_sec_duration
+    from services.basic_tts_service import concat_mp3_bytes
+    return concat_mp3_bytes([one_sec] * repeat), one_sec_duration * repeat
 
 
 def _word_slice(text: str, start: int, end: int) -> str:
@@ -567,6 +583,30 @@ def _assert_audio_duration_within_slot(filename: str, duration_sec: float, targe
             f"{filename} dépasse la durée autorisée "
             f"({float(duration_sec):.1f}s > {int(target_sec)}s). "
             "Audio non uploadé pour éviter un débord de playlist."
+        )
+
+
+def _assert_course_voice_duration_within_deadline(
+    filename: str,
+    voice_duration_sec: float,
+    target_sec: int,
+    *,
+    has_start_silence: bool,
+) -> None:
+    """Vérifie que la dernière parole du cours reste avant T-120s."""
+    if not target_sec or voice_duration_sec is None:
+        return
+    final_silence_sec = _course_final_silence_sec()
+    limit_sec = (
+        _course_voice_window_sec(target_sec)
+        if has_start_silence
+        else _course_speech_deadline_sec(target_sec)
+    )
+    if float(voice_duration_sec) > float(limit_sec) + _TOLERANCE_OVERFLOW_SEC:
+        raise ValueError(
+            f"{filename} dépasse la limite de parole T-{final_silence_sec:.0f}s "
+            f"({float(voice_duration_sec):.1f}s > {float(limit_sec):.1f}s). "
+            "Audio non uploadé pour garder les 2 minutes finales en silence."
         )
 
 
@@ -1061,7 +1101,8 @@ def _synthesize_course_audio_synced_to_slides(
           `_mp3_duration_seconds_no_ffprobe`, et calcule un `observed_wpm`
           à mesure (bootstrap _BOOTSTRAP_WPM_EDGE_TTS).
         - Sub-chunke adaptativement (paliers 600/300/150 mots) selon la
-          marge restante avant `target_sec - conclusion_margin_sec`.
+          marge restante avant la deadline parole (`target_sec - silence final`)
+          et la marge de conclusion.
         - Stoppe la génération avant dépassement et reporte les chunks
           non générés via le retour `unconsumed_chunks` (cascade vers le
           bloc suivant ou le carryover inter-jours).
@@ -1089,6 +1130,8 @@ def _synthesize_course_audio_synced_to_slides(
     from services.tts_service import convert_to_speech
 
     target_sec = int(bloc["target_sec"])
+    final_silence_sec = _course_final_silence_sec()
+    speech_deadline_sec = _course_speech_deadline_sec(target_sec)
     api_speed = _course_tts_speed()
     word_count = bloc.get("word_count") or len((bloc.get("text") or "").split())
     word_budget = _estimated_words_budget_for_course(target_sec, api_speed)
@@ -1112,6 +1155,12 @@ def _synthesize_course_audio_synced_to_slides(
     # Runtime fit n'est supporté qu'en basic_tts (Edge TTS). Sinon ignoré.
     use_runtime_fit = bool(runtime_fit and basic_tts)
 
+    try:
+        min_conclusion_room_sec = float(os.getenv("EDGE_TTS_MIN_CONCLUSION_ROOM_SEC", "25"))
+    except (TypeError, ValueError):
+        min_conclusion_room_sec = 25.0
+    min_conclusion_room_sec = max(0.0, min_conclusion_room_sec)
+
     if conclusion_margin_sec is None:
         conclusion_margin_sec = int(os.getenv(
             "EDGE_TTS_CONCLUSION_MARGIN_SEC",
@@ -1119,6 +1168,14 @@ def _synthesize_course_audio_synced_to_slides(
         ))
         min_conclusion_margin = int(os.getenv("EDGE_TTS_MIN_CONCLUSION_MARGIN_SEC", "120"))
         conclusion_margin_sec = max(conclusion_margin_sec, min_conclusion_margin)
+    # Règle dure : aucune parole dans les deux dernières minutes. En runtime
+    # fit, on réserve aussi un petit espace pour une conclusion avant cette
+    # deadline.
+    main_speech_deadline_sec = min(
+        float(target_sec) - float(conclusion_margin_sec),
+        speech_deadline_sec - min_conclusion_room_sec,
+    )
+    main_speech_deadline_sec = max(0.0, main_speech_deadline_sec)
 
     def _emit(message: str):
         if progress_callback:
@@ -1210,7 +1267,7 @@ def _synthesize_course_audio_synced_to_slides(
 
         # ── Runtime fit : décision de stop + sub-chunk JIT ──────────────────
         if use_runtime_fit:
-            remaining_sec = target_sec - conclusion_margin_sec - cursor_sec
+            remaining_sec = main_speech_deadline_sec - cursor_sec
             max_words = _max_chunk_words_for_remaining(remaining_sec)
 
             if max_words == 0:
@@ -1281,10 +1338,10 @@ def _synthesize_course_audio_synced_to_slides(
             # encore : on stoppe et on le reporte ENTIER (jamais de coupe
             # intra-phrase). Tolérance technique 2s pour arrondis frame MP3.
             if (cursor_sec + estimated_chunk_sec
-                    > (target_sec - conclusion_margin_sec) + _TOLERANCE_OVERFLOW_SEC):
+                    > main_speech_deadline_sec + _TOLERANCE_OVERFLOW_SEC):
                 smaller_max_words = _smaller_runtime_fit_word_limit(
                     chunk,
-                    available_sec=(target_sec - conclusion_margin_sec) - cursor_sec,
+                    available_sec=main_speech_deadline_sec - cursor_sec,
                     observed_wpm=observed_wpm,
                 )
                 if smaller_max_words > 0 and smaller_max_words < len(text.split()):
@@ -1324,13 +1381,13 @@ def _synthesize_course_audio_synced_to_slides(
         if (
             use_runtime_fit
             and cursor_sec + duration_sec
-            > (target_sec - conclusion_margin_sec) + _TOLERANCE_OVERFLOW_SEC
+            > main_speech_deadline_sec + _TOLERANCE_OVERFLOW_SEC
         ):
             chunk_words = len(text.split())
             measured_wpm = chunk_words * 60.0 / duration_sec if duration_sec > 0 else 0.0
             smaller_max_words = _smaller_runtime_fit_word_limit(
                 chunk,
-                available_sec=(target_sec - conclusion_margin_sec) - cursor_sec,
+                available_sec=main_speech_deadline_sec - cursor_sec,
                 observed_wpm=measured_wpm,
             )
             if smaller_max_words > 0 and smaller_max_words < chunk_words:
@@ -1356,13 +1413,33 @@ def _synthesize_course_audio_synced_to_slides(
                 "chunk": chunk_idx + 1,
                 "duration": duration_sec,
                 "words": len(text.split()),
-                "limit_sec": target_sec - conclusion_margin_sec,
+                "limit_sec": main_speech_deadline_sec,
+                "final_silence_sec": final_silence_sec,
             })
             _emit(
                 f"Bloc {bloc['bloc_number']}/7 — slide audio {chunk_idx + 1}/{len(chunks)} "
-                f"reportée ({duration_sec:.1f}s dépasserait la marge)"
+                f"reportée ({duration_sec:.1f}s dépasserait la marge T-{final_silence_sec:.0f}s)"
             )
             break
+
+        if (
+            not mock
+            and not use_runtime_fit
+            and cursor_sec + duration_sec > speech_deadline_sec + _TOLERANCE_OVERFLOW_SEC
+        ):
+            attempts.append({
+                "kind": f"{mode}_rejected_speech_deadline",
+                "chunk": chunk_idx + 1,
+                "duration": duration_sec,
+                "words": len(text.split()),
+                "limit_sec": speech_deadline_sec,
+                "final_silence_sec": final_silence_sec,
+            })
+            raise ValueError(
+                f"Bloc {bloc['bloc_number']} sync trop long : la parole finirait à "
+                f"{cursor_sec + duration_sec:.1f}s, après la limite T-{final_silence_sec:.0f}s "
+                f"({speech_deadline_sec:.1f}s). Audio non uploadé."
+            )
 
         start_sec = cursor_sec
         end_sec = start_sec + duration_sec
@@ -1396,17 +1473,19 @@ def _synthesize_course_audio_synced_to_slides(
 
     # ── Conclusion automatique : soit on a stoppé avec surplus, soit tout le
     # texte du bloc est consommé mais il reste une vraie marge à occuper.
-    min_conclusion_room_sec = float(os.getenv("EDGE_TTS_MIN_CONCLUSION_ROOM_SEC", "25"))
     should_append_runtime_conclusion = bool(
         use_runtime_fit
-        and (stopped_for_runtime_fit or (target_sec - cursor_sec) >= min_conclusion_room_sec)
+        and (
+            stopped_for_runtime_fit
+            or (speech_deadline_sec - cursor_sec) >= min_conclusion_room_sec
+        )
     )
     if should_append_runtime_conclusion:
         def _runtime_conclusion_template(scale: float = 1.0) -> str | None:
             env_template = (os.getenv("EDGE_TTS_CONCLUSION_TEMPLATE") or "").strip()
             if env_template:
                 return env_template
-            remaining_for_conclusion = max(0.0, target_sec - cursor_sec) * max(0.35, scale)
+            remaining_for_conclusion = max(0.0, speech_deadline_sec - cursor_sec) * max(0.35, scale)
             return _build_runtime_conclusion_text(
                 consumed_chunks,
                 remaining_sec=remaining_for_conclusion,
@@ -1422,17 +1501,18 @@ def _synthesize_course_audio_synced_to_slides(
                 template=template,
                 fast_tts_pipeline=fast_tts_pipeline,
             )
-            if cursor_sec + conclusion_dur > target_sec + _TOLERANCE_OVERFLOW_SEC:
+            if cursor_sec + conclusion_dur > speech_deadline_sec + _TOLERANCE_OVERFLOW_SEC:
                 attempts.append({
                     "kind": f"{kind}_rejected_overflow",
                     "chunk": "end",
                     "duration": conclusion_dur,
-                    "limit_sec": target_sec,
+                    "limit_sec": speech_deadline_sec,
+                    "final_silence_sec": final_silence_sec,
                     "text": template or "",
                 })
                 _emit(
                     f"Bloc {bloc['bloc_number']}/7 — conclusion {kind} ignorée "
-                    f"({conclusion_dur:.1f}s dépasserait la cible)"
+                    f"({conclusion_dur:.1f}s dépasserait la limite T-{final_silence_sec:.0f}s)"
                 )
                 return False
 
@@ -1487,9 +1567,25 @@ def _synthesize_course_audio_synced_to_slides(
                 "avant le report du texte."
             )
         final_duration = cursor_sec
+        if target_sec > final_duration:
+            silence_bytes, silence_duration = _silent_mp3_approx_no_ffmpeg(target_sec - final_duration)
+            if silence_bytes:
+                audio_parts.append(silence_bytes)
+                attempts.append({
+                    "kind": "final_silence_padding",
+                    "chunk": "end",
+                    "duration": silence_duration,
+                    "target_sec": target_sec,
+                })
         output_bytes = concat_mp3_bytes(audio_parts) if audio_parts else b""
     else:
         final_duration = len(full_audio) / 1000
+        if final_duration > speech_deadline_sec + _TOLERANCE_OVERFLOW_SEC and not mock:
+            raise ValueError(
+                f"Bloc {bloc['bloc_number']} sync trop long "
+                f"({final_duration:.1f}s > limite parole {speech_deadline_sec:.1f}s, "
+                f"silence final {final_silence_sec:.0f}s)."
+            )
         if final_duration < target_sec:
             full_audio += AudioSegment.silent(duration=int((target_sec - final_duration) * 1000))
         elif final_duration > target_sec and not mock:
@@ -1501,6 +1597,13 @@ def _synthesize_course_audio_synced_to_slides(
         output = io.BytesIO()
         full_audio.export(output, format="mp3", bitrate="128k")
         output_bytes = output.getvalue()
+
+    if not mock and final_duration > speech_deadline_sec + _TOLERANCE_OVERFLOW_SEC:
+        raise ValueError(
+            f"Bloc {bloc['bloc_number']} trop long : la parole finirait à "
+            f"{final_duration:.1f}s, après la limite T-{final_silence_sec:.0f}s "
+            f"({speech_deadline_sec:.1f}s)."
+        )
 
     fit_method = (
         "slide_sync_mock"
@@ -2319,8 +2422,14 @@ def _synthesize_course_audio_to_fit(bloc, convert_to_speech, measure_duration_ms
     long, on échoue avant l'appel Fish Audio pour éviter de payer un TTS inutilisable.
     Un speedup local reste possible seulement si FORMATION_TTS_LOCAL_MAX_SPEEDUP > 1.
     """
-    target_sec = bloc["target_sec"]
-    max_voice_sec = target_sec - _COURSE_START_SILENCE_SECONDS
+    target_sec = int(bloc["target_sec"])
+    final_silence_sec = _course_final_silence_sec()
+    max_voice_sec = _course_voice_window_sec(target_sec)
+    if max_voice_sec <= 0:
+        raise ValueError(
+            f"Bloc {bloc['bloc_number']} impossible à synthétiser : cible {target_sec}s "
+            f"trop courte pour garder {final_silence_sec:.0f}s de silence final."
+        )
     api_speed = _course_tts_speed()
     attempts = []
     word_count = bloc.get("word_count") or len(bloc["text"].split())
@@ -2351,7 +2460,8 @@ def _synthesize_course_audio_to_fit(bloc, convert_to_speech, measure_duration_ms
     if max_speedup <= 1.0:
         raise ValueError(
             f"Bloc {bloc['bloc_number']} trop long pour {target_sec}s "
-            f"(voix {raw_duration:.1f}s > max {max_voice_sec:.1f}s à speed={api_speed}). "
+            f"(voix {raw_duration:.1f}s > max {max_voice_sec:.1f}s à speed={api_speed}, "
+            f"silence final {final_silence_sec:.0f}s). "
             "Speedup local désactivé par défaut pour préserver la voix. "
             "Audio non uploadé pour éviter une coupure en pleine phrase."
         )
@@ -2360,7 +2470,8 @@ def _synthesize_course_audio_to_fit(bloc, convert_to_speech, measure_duration_ms
         raise ValueError(
             f"Bloc {bloc['bloc_number']} trop long pour {target_sec}s "
             f"(voix {raw_duration:.1f}s > max {max_voice_sec:.1f}s, "
-            f"speedup requis x{required_speedup:.3f} > limite x{max_speedup:.3f}). "
+            f"speedup requis x{required_speedup:.3f} > limite x{max_speedup:.3f}, "
+            f"silence final {final_silence_sec:.0f}s). "
             "Audio non uploadé pour éviter une coupure en pleine phrase."
         )
 
@@ -2400,7 +2511,8 @@ def _synthesize_course_audio_to_fit(bloc, convert_to_speech, measure_duration_ms
     )
     raise ValueError(
         f"Bloc {bloc['bloc_number']} trop long pour {target_sec}s "
-        f"(max voix {max_voice_sec:.1f}s). Tentatives locales: {attempts_str}. "
+        f"(max voix {max_voice_sec:.1f}s, silence final {final_silence_sec:.0f}s). "
+        f"Tentatives locales: {attempts_str}. "
         "Audio non uploadé pour éviter une coupure en pleine phrase."
     )
 
@@ -4535,8 +4647,16 @@ def generate_audio_from_script(
                 logger.info(f"   🔁 Bloc {bloc['bloc_number']} ajusté localement ({fit_method})")
             logger.info(f"   TTS voix : {voice_duration:.1f}s ({fit_method}, cible : {target_sec}s)")
 
+        if not mock:
+            _assert_course_voice_duration_within_deadline(
+                filename,
+                voice_duration,
+                target_sec,
+                has_start_silence=not basic_tts,
+            )
+
         if basic_tts and runtime_fit_enabled:
-            final_duration = voice_duration
+            final_duration = target_sec
         elif sync_slides:
             try:
                 final_duration = _measure_duration_ms(final_bytes) / 1000
@@ -5321,7 +5441,9 @@ def _build_review_prompt_focused(
         "`replacement` doit remplacer l'ouverture trop courte par une vraie "
         "introduction de formation développée : 180 à 320 mots, utilité de la "
         "formation, contexte métier, grandes compétences abordées, progression, "
-        "encouragement et transition vers le premier sujet."
+        "encouragement et transition vers le premier sujet. Dans tous les cas, "
+        "respecte le budget audio déjà calculé : substitue et condense autant "
+        "que possible, ne gonfle pas le segment hors budget mots."
         if is_humanization_scope
         else "- `replacement` corrige la violation sans reformuler le sens, sans ajouter de contenu."
     )
@@ -5361,6 +5483,7 @@ Contraintes impératives :
 - `original` doit être trouvable TEL QUEL dans le texte (copie mot pour mot, ponctuation comprise).
 {replacement_constraint}
 {preference_constraint}
+- Ne gonfle pas le texte : les cours sont calibrés au mot près pour la synthèse audio. Toute correction trop longue sera rejetée par `budget_guard`.
 - `rule_violated` = numéro parmi {rules_list} (ex: "#1", "#9").
 
 ─── RÈGLES DE TON SCOPE ({group_label}) ───
@@ -5636,6 +5759,53 @@ def _apply_patches(text: str, patches: list) -> tuple:
     return text, applied, rejected
 
 
+def _review_budget_guard_limit(original_word_count: int, review_kind: str) -> int:
+    """Cap de croissance mots après une passe review.
+
+    La review peut corriger une intro ou ajouter une respiration, mais elle ne
+    doit pas casser le calibrage TTS calculé avant audio. On autorise une petite
+    marge, puis on rejette toute salve qui gonfle trop le segment.
+    """
+    original_word_count = max(0, int(original_word_count or 0))
+    is_humanization = (review_kind or "").strip().lower() == "humanization"
+    if is_humanization:
+        ratio = _env_float("FORMATION_HUMANIZATION_MAX_WORD_GROWTH_RATIO", 0.08, min_value=0.0, max_value=0.50)
+        absolute = _env_int("FORMATION_HUMANIZATION_MAX_WORD_GROWTH_WORDS", 320, min_value=1)
+    else:
+        ratio = _env_float("FORMATION_COMPLIANCE_MAX_WORD_GROWTH_RATIO", 0.04, min_value=0.0, max_value=0.25)
+        absolute = _env_int("FORMATION_COMPLIANCE_MAX_WORD_GROWTH_WORDS", 160, min_value=1)
+    allowed_extra = max(absolute, int(original_word_count * ratio))
+    return original_word_count + allowed_extra
+
+
+def _apply_review_budget_guard(
+    original_text: str,
+    candidate_text: str,
+    applied: list,
+    review_kind: str,
+) -> tuple[str, list, list]:
+    """Rollback des patches appliqués si la review dépasse le budget mots."""
+    if not applied:
+        return candidate_text, applied, []
+    original_words = len((original_text or "").split())
+    candidate_words = len((candidate_text or "").split())
+    max_words = _review_budget_guard_limit(original_words, review_kind)
+    if candidate_words <= max_words:
+        return candidate_text, applied, []
+    rejected = [
+        {
+            **p,
+            "reject_reason": "budget_guard",
+            "words_before": original_words,
+            "words_after": candidate_words,
+            "max_words": max_words,
+            "review_kind": review_kind,
+        }
+        for p in applied
+    ]
+    return original_text or "", [], rejected
+
+
 def _snapshot_pre_review_for_content_job(job_id: int) -> int:
     """Persist the exact text state before API review mutates segments."""
     conn = get_db_connection()
@@ -5844,7 +6014,8 @@ def _run_content_review_pass(
             len((text_content or "").split()),
         )
 
-        current_text = text_content or ""
+        original_text = text_content or ""
+        current_text = original_text
         review_context = _build_course_position_context(
             folder_position=job.get("folder_position"),
             nb_days=job.get("nb_days"),
@@ -5929,6 +6100,35 @@ def _run_content_review_pass(
                     proposed,
                     int((time.time() - group_started_at) * 1000),
                 )
+
+        if not segment_error and all_applied:
+            guarded_text, guarded_applied, budget_rejected = _apply_review_budget_guard(
+                original_text,
+                current_text,
+                all_applied,
+                review_kind,
+            )
+            if budget_rejected:
+                words_before = budget_rejected[0].get("words_before")
+                words_after = budget_rejected[0].get("words_after")
+                max_words = budget_rejected[0].get("max_words")
+                logger.warning(
+                    "PIPELINE_REVIEW_BUDGET_GUARD formation_job_id=%s content_job_id=%s "
+                    "folder_id=%s segment_id=%s review_kind=%s words_before=%s "
+                    "words_after=%s max_words=%s rejected=%s",
+                    formation_job_id,
+                    job_id,
+                    folder_id,
+                    seg_id,
+                    review_kind,
+                    words_before,
+                    words_after,
+                    max_words,
+                    len(budget_rejected),
+                )
+                current_text = guarded_text
+                all_applied = guarded_applied
+                all_rejected.extend(budget_rejected)
 
         # Écriture finale en DB (une seule transaction par segment)
         conn = get_db_connection()
