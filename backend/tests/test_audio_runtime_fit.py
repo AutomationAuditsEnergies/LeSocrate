@@ -647,6 +647,33 @@ class ContextualBreakUsesConsumedTextTest(unittest.TestCase):
 
 
 class BreakTransitionOwnershipTest(unittest.TestCase):
+    def test_qa_after_course_has_no_intro_when_previous_file_owns_transition(self):
+        playlist_items = [
+            ("cours_9h00_9h45.mp3", 2700, "cours", 1),
+            ("qa_9h45_9h55.mp3", 600, "qa", 1),
+            ("pause_9h55_10h05.mp3", 600, "pause", 1),
+        ]
+
+        with patch.object(
+            bks,
+            "_llm_post",
+            return_value='{"intro": "Ceci devrait être déplacé.", "outro": "On clôt ce temps de questions."}',
+        ):
+            intro, outro = bks.build_break_transition_texts(
+                filename="qa_9h45_9h55.mp3",
+                duration_sec=600,
+                break_type="qa",
+                bloc_num=1,
+                item_idx=1,
+                playlist_items=playlist_items,
+                get_bloc_text=lambda n: "texte du bloc",
+                model="test-model",
+            )
+
+        self.assertEqual(intro, "")
+        self.assertIn("questions", outro)
+        self.assertIn("quelques minutes de pause", outro)
+
     def test_pause_after_qa_has_no_intro_when_previous_file_owns_transition(self):
         playlist_items = [
             ("cours_9h00_9h45.mp3", 2700, "cours", 1),
@@ -690,7 +717,7 @@ class BasicTTSBreaksUseEdgeVoiceTest(unittest.TestCase):
             side_effect=fake_tts,
         ), patch.object(
             cgs, "_mp3_duration_seconds_no_ffprobe",
-            side_effect=[4.0, 3.0, 1.0, 1.0],
+            side_effect=[4.0, 3.0, 1.0],
         ), patch(
             "services.playlist_tts_service._get_recycled_qa_pause",
             side_effect=AssertionError("ne doit pas recycler audioqapause en mode Edge"),
@@ -712,18 +739,17 @@ class BasicTTSBreaksUseEdgeVoiceTest(unittest.TestCase):
             )
 
         self.assertEqual(mode, "generic_edge_timed")
-        self.assertEqual(len(seen_texts), 4)
-        self.assertEqual(seen_volumes, ["-100%", "+0%", "+0%", "-100%"])
-        self.assertIn("clôt", seen_texts[2].lower())
-        self.assertNotIn("reprend", seen_texts[2].lower())
+        self.assertEqual(len(seen_texts), 3)
+        self.assertEqual(seen_volumes, ["-100%", "+0%", "-100%"])
+        self.assertIn("clôt", seen_texts[1].lower())
+        self.assertIn("pause", seen_texts[1].lower())
+        self.assertNotIn("c'est le moment", " ".join(seen_texts).lower())
         self.assertEqual(audio_bytes.count(b"ID3"), 1)
         self.assertIn(b"EDGE1", audio_bytes)
         self.assertIn(b"EDGE2", audio_bytes)
         self.assertIn(b"EDGE3", audio_bytes)
-        self.assertIn(b"EDGE4", audio_bytes)
-        self.assertLess(audio_bytes.index(b"EDGE1"), audio_bytes.index(b"EDGE2"))
-        self.assertLess(audio_bytes.index(b"EDGE2"), audio_bytes.index(b"EDGE4"))
-        self.assertLess(audio_bytes.index(b"EDGE4"), audio_bytes.rindex(b"EDGE3"))
+        self.assertLess(audio_bytes.index(b"EDGE1"), audio_bytes.index(b"EDGE3"))
+        self.assertLess(audio_bytes.index(b"EDGE3"), audio_bytes.rindex(b"EDGE2"))
 
 
 class CourseOpeningRewriteTest(unittest.TestCase):
@@ -833,7 +859,7 @@ class RuntimeConclusionTextTest(unittest.TestCase):
             next_playlist_item=("pause_11h00_11h05.mp3", 300, "pause", 1),
         )
 
-        self.assertIn("pause de cinq minutes", conclusion)
+        self.assertIn("quelques minutes de pause", conclusion)
 
 
 class BasicTTSParallelWorkersTest(unittest.TestCase):

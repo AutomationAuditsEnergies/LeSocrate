@@ -879,21 +879,47 @@ def _next_playlist_item_after(playlist_items: list | None, item_idx: int):
     return playlist_items[item_idx + 1]
 
 
+def _break_intro_text_for_playlist_item(item) -> str:
+    """Retourne l'intro prévue du break, à porter par l'audio précédent."""
+    next_type = _playlist_item_type(item)
+    if next_type not in {"qa", "pause", "pause_midi"}:
+        return ""
+    try:
+        from services.playlist_tts_service import (
+            _get_pause_midi_text,
+            _get_pause_text,
+            _get_qa_text,
+        )
+        bloc_num = int(item[3] or 1)
+        if next_type == "qa":
+            intro, _outro = _get_qa_text(bloc_num)
+        elif next_type == "pause_midi":
+            intro, _outro = _get_pause_midi_text()
+        else:
+            intro, _outro = _get_pause_text(bloc_num)
+        return re.sub(r"\s+", " ", (intro or "").strip())
+    except Exception:
+        return ""
+
+
 def _course_playlist_handoff_text(next_item) -> str:
     """Phrase de transition portée par le fichier qui se termine."""
     next_type = _playlist_item_type(next_item)
     duration_sec = _playlist_item_duration(next_item)
-    if next_type == "qa":
-        return (
-            "On va maintenant prendre un temps pour vos questions. "
-            "Gardez simplement les points importants en tête, et posez ce que vous voulez clarifier."
-        )
-    if next_type in {"pause", "pause_midi"}:
+    planned_intro = _break_intro_text_for_playlist_item(next_item)
+    if planned_intro:
+        return planned_intro
+    if next_type in {"qa", "pause", "pause_midi"}:
         try:
             from services.break_transition_service import duration_label
             label = duration_label(duration_sec, next_type)
         except Exception:
             label = ""
+        if next_type == "qa":
+            return (
+                "On va maintenant prendre un temps pour vos questions. "
+                "Gardez simplement les points importants en tête, et posez ce que vous voulez clarifier."
+            )
         if next_type == "pause_midi" or label == "pause déjeuner":
             return (
                 "On va maintenant marquer la pause déjeuner. "
@@ -3674,13 +3700,20 @@ def _build_contextual_break_audio(
             is_schedule_neutral_break,
             next_item_type,
         )
+        intro_owned = break_intro_owned_by_previous(playlist_items, item_idx, file_type)
         if file_type == "qa":
             intro, outro = _get_qa_text(bloc_num)
             ntype = next_item_type(playlist_items, item_idx)
             if ntype in {"pause", "pause_midi"} and not is_schedule_neutral_break(filename):
                 next_item = _next_playlist_item_after(playlist_items, item_idx)
+                next_intro = _break_intro_text_for_playlist_item(next_item)
                 label = duration_label(_playlist_item_duration(next_item), ntype)
-                if ntype == "pause_midi" or label == "pause déjeuner":
+                if next_intro:
+                    outro = (
+                        "Très bien, on clôt ce temps de questions. "
+                        f"{next_intro}"
+                    )
+                elif ntype == "pause_midi" or label == "pause déjeuner":
                     outro = (
                         "Très bien, on clôt ce temps de questions. "
                         "On va maintenant marquer la pause déjeuner, prenez le temps de souffler."
@@ -3695,12 +3728,14 @@ def _build_contextual_break_audio(
                         "Très bien, on clôt ce temps de questions. "
                         "On va maintenant prendre une courte pause."
                     )
+            if intro_owned:
+                intro = ""
             return intro, outro
         if file_type == "pause_midi" or filename.startswith("pause_midi_"):
             intro, outro = _get_pause_midi_text()
         else:
             intro, outro = _get_pause_text(bloc_num)
-        if break_intro_owned_by_previous(playlist_items, item_idx, file_type):
+        if intro_owned:
             intro = ""
         return intro, outro
 
@@ -4848,13 +4883,20 @@ def _build_breaks_for_ui(platform_id: int) -> list:
     for idx, (filename, duration, file_type, bloc_num) in enumerate(items):
         if file_type == "cours":
             continue
+        intro_owned = break_intro_owned_by_previous(items, idx, file_type)
         if file_type == "qa":
             intro, outro = _get_qa_text(bloc_num)
             ntype = next_item_type(items, idx)
             if ntype in {"pause", "pause_midi"} and not is_schedule_neutral_break(filename):
                 next_item = _next_playlist_item_after(items, idx)
+                next_intro = _break_intro_text_for_playlist_item(next_item)
                 label = duration_label(_playlist_item_duration(next_item), ntype)
-                if ntype == "pause_midi" or label == "pause déjeuner":
+                if next_intro:
+                    outro = (
+                        "Très bien, on clôt ce temps de questions. "
+                        f"{next_intro}"
+                    )
+                elif ntype == "pause_midi" or label == "pause déjeuner":
                     outro = (
                         "Très bien, on clôt ce temps de questions. "
                         "On va maintenant marquer la pause déjeuner, prenez le temps de souffler."
@@ -4875,7 +4917,7 @@ def _build_breaks_for_ui(platform_id: int) -> list:
             intro, outro = _get_pause_text(bloc_num)
         else:
             continue
-        if break_intro_owned_by_previous(items, idx, file_type):
+        if intro_owned:
             intro = ""
         breaks.append({
             "filename": filename,

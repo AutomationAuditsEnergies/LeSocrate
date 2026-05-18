@@ -161,20 +161,47 @@ def _item_filename(playlist_items: list, idx: int) -> str:
     return str(playlist_items[idx][0] or "")
 
 
+def _planned_break_intro(break_type: str, bloc_num: int) -> str:
+    """Intro statique prévue pour un break, réutilisable par l'audio précédent."""
+    try:
+        from services.playlist_tts_service import (
+            _get_pause_midi_text,
+            _get_pause_text,
+            _get_qa_text,
+        )
+        if break_type == "qa":
+            intro, _outro = _get_qa_text(bloc_num)
+        elif break_type == "pause_midi":
+            intro, _outro = _get_pause_midi_text()
+        elif break_type == "pause":
+            intro, _outro = _get_pause_text(bloc_num)
+        else:
+            return ""
+        return re.sub(r"\s+", " ", (intro or "").strip())
+    except Exception:
+        return ""
+
+
+def _planned_intro_for_next_item(playlist_items: list, item_idx: int) -> str:
+    if item_idx + 1 >= len(playlist_items):
+        return ""
+    _filename, _duration, next_type, next_bloc = playlist_items[item_idx + 1]
+    return _planned_break_intro(str(next_type or ""), int(next_bloc or 1))
+
+
 def break_intro_owned_by_previous(
     playlist_items: list,
     start_idx: int,
     break_type: str,
 ) -> bool:
-    """Vrai si la pause doit commencer sans intro.
+    """Vrai si le break doit commencer sans intro.
 
     Les fichiers sensibles été/hiver restent neutres : si le fichier précédent
-    est lui-même sensible, on ne suppose pas qu'il a annoncé la pause.
+    est lui-même sensible, on ne suppose pas qu'il a annoncé ce break.
     """
-    if break_type not in {"pause", "pause_midi"}:
+    if break_type not in {"qa", "pause", "pause_midi"}:
         return False
-    prev_type = previous_item_type(playlist_items, start_idx)
-    if prev_type not in {"cours", "qa"}:
+    if previous_item_type(playlist_items, start_idx) not in {"cours", "qa"}:
         return False
     prev_filename = _item_filename(playlist_items, start_idx - 1)
     return not is_schedule_neutral_break(prev_filename)
@@ -185,8 +212,8 @@ def should_announce_next_break_in_outro(
     current_type: str,
     next_type: str | None,
 ) -> bool:
-    """Vrai si l'audio courant doit annoncer la pause qui arrive ensuite."""
-    if next_type not in {"pause", "pause_midi"}:
+    """Vrai si l'audio courant doit annoncer le break qui arrive ensuite."""
+    if next_type not in {"qa", "pause", "pause_midi"}:
         return False
     if current_type not in {"cours", "qa"}:
         return False
@@ -209,7 +236,7 @@ def fallback_break_transition(
     variants = _QA_FALLBACKS if break_type == "qa" else _PAUSE_FALLBACKS
     intro, outro = variants[(max(1, int(bloc_num or 1)) - 1) % len(variants)]
     label = duration_label(duration_sec, break_type)
-    if break_type == "pause" and intro_owned_by_previous:
+    if intro_owned_by_previous:
         intro = ""
     elif break_type == "pause" and label:
         intro = f"On fait maintenant une pause de {label}. Prenez le temps de souffler."
@@ -217,9 +244,12 @@ def fallback_break_transition(
         pause_sentence = f"On va maintenant prendre une pause de {label}."
     else:
         pause_sentence = "On va maintenant prendre une courte pause."
-    if break_type == "qa" and label:
+    if break_type == "qa" and label and not intro_owned_by_previous:
         intro = f"On prend maintenant {label} pour vos questions sur la partie que l'on vient de travailler. Vous pouvez les poser dans le chat."
     if break_type == "qa" and next_item_type in {"pause", "pause_midi"}:
+        next_intro = _planned_break_intro(next_item_type, bloc_num)
+        if next_intro:
+            pause_sentence = next_intro
         outro = (
             "Très bien, on clôt ce temps de questions. Merci pour vos retours, "
             f"gardez simplement ces repères en tête. {pause_sentence}"
@@ -250,10 +280,10 @@ def _build_prompt(
         else "Ne mentionne pas de durée précise."
     )
 
-    if intro_owned_by_previous and break_type in {"pause", "pause_midi"}:
+    if intro_owned_by_previous and break_type in {"qa", "pause", "pause_midi"}:
         role = (
-            "INTRO : chaîne vide obligatoire, car le fichier précédent annonce déjà la pause.\n"
-            "OUTRO : annonce seulement que la pause est terminée. Si ce n'est pas une "
+            "INTRO : chaîne vide obligatoire, car le fichier précédent annonce déjà ce moment.\n"
+            "OUTRO : clôture seulement ce moment. Si ce n'est pas une "
             "transition sensible été/hiver, raccorde sobrement vers la suite."
         )
         target = "intro 0 mot, outro 25-65 mots"
@@ -467,7 +497,7 @@ def build_break_transition_texts(
     next_text = get_bloc_text(next_bloc) if next_bloc else ""
     intro_owned = break_intro_owned_by_previous(playlist_items, item_idx, break_type)
 
-    return generate_break_transition(
+    intro, outro = generate_break_transition(
         break_type=break_type,
         bloc_num=prev_bloc or bloc_num,
         prev_excerpt=_tail_words_for_context(prev_text, 150),
@@ -479,3 +509,9 @@ def build_break_transition_texts(
         schedule_neutral=is_schedule_neutral_break(filename),
         intro_owned_by_previous=intro_owned,
     )
+    ntype = next_item_type(playlist_items, item_idx)
+    if should_announce_next_break_in_outro(filename, break_type, ntype):
+        next_intro = _planned_intro_for_next_item(playlist_items, item_idx)
+        if next_intro and next_intro.lower() not in (outro or "").lower():
+            outro = f"{(outro or '').rstrip()} {next_intro}".strip()
+    return intro, outro

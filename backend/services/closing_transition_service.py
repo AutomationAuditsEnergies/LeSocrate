@@ -82,17 +82,24 @@ def _item_duration(item) -> int:
 def _handoff_sentence(next_item) -> str:
     next_type = _item_type(next_item)
     duration_sec = _item_duration(next_item)
-    if next_type == "qa":
-        return (
-            "On va maintenant prendre un temps pour vos questions. "
-            "Gardez les points importants en tête, et posez ce que vous voulez clarifier."
-        )
-    if next_type in {"pause", "pause_midi"}:
+    if next_type in {"qa", "pause", "pause_midi"}:
+        try:
+            from services.content_generation_service import _break_intro_text_for_playlist_item
+            planned_intro = _break_intro_text_for_playlist_item(next_item)
+        except Exception:
+            planned_intro = ""
+        if planned_intro:
+            return planned_intro
         try:
             from services.break_transition_service import duration_label
             label = duration_label(duration_sec, next_type)
         except Exception:
             label = ""
+        if next_type == "qa":
+            return (
+                "On va maintenant prendre un temps pour vos questions. "
+                "Gardez les points importants en tête, et posez ce que vous voulez clarifier."
+            )
         if next_type == "pause_midi" or label == "pause déjeuner":
             return (
                 "On va maintenant marquer la pause déjeuner. "
