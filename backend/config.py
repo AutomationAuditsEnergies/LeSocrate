@@ -13,8 +13,12 @@ RAG_SERVICE_URL = os.getenv(
     "RAG_SERVICE_URL", "https://rag-b0fndpa9fycaafcr.francecentral-01.azurewebsites.net"
 )
 
-# Base de données - /home est persistant sur Azure App Service, /tmp ne l'est pas
-if os.getenv("WEBSITE_SITE_NAME"):
+# Base de données - /home est persistant sur Azure App Service, /tmp ne l'est pas.
+# DB_PATH peut être surchargé par environnement Azure. Indispensable pour un
+# slot staging : prod=/home/database.db, staging=/home/database-staging.db.
+if os.getenv("DB_PATH"):
+    DB_PATH = os.getenv("DB_PATH")
+elif os.getenv("WEBSITE_SITE_NAME"):
     # Azure App Service → /home est persistant entre les restarts
     DB_PATH = "/home/database.db"
 else:
