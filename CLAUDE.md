@@ -79,7 +79,7 @@ Avant de refactorer/étendre un service ou de prendre une décision d'archi, con
 
 - **Vue d'ensemble projet** → `wiki/Context/projet-le-socrate.md`
 - **Multi-tenant (P1–P4)** → `wiki/Context/architecture-multi-tenant.md`
-- **Pipeline TTS 19 MP3** (flux complet, tags Fish Audio, calibration 192 mots/min, playlist blocs) → `wiki/Intelligence/pipeline-tts-19-mp3.md`
+- **Pipeline TTS 19 MP3** (flux complet, tags Fish Audio, calibration 165,7 mots/min, playlist blocs) → `wiki/Intelligence/pipeline-tts-19-mp3.md`
 - **Infra Azure 3 comptes Blob** (piège des connection strings) → `wiki/Intelligence/infra-azure-3-comptes-blob.md`
 - **Décisions persistance SQLite** → `wiki/Intelligence/decisions-persistance-sqlite.md`
 - **Conventions repo** → `wiki/Resources/conventions-repo.md`

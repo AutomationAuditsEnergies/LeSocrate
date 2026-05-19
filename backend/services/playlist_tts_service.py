@@ -3,7 +3,7 @@ Pipeline TTS complète : PDFs d'un dossier → 19 fichiers MP3 conformes à la p
 
 Étapes :
 1. Télécharger et concaténer tous les PDFs du dossier
-2. Appeler Claude pour reformuler en 7 blocs cours (calibration 192 mots/min)
+2. Appeler Claude pour reformuler en 7 blocs cours (calibration 165,7 mots/min)
 3. Générer les textes Q&A et pauses
 4. TTS fish.audio pour chaque fichier
 5. Ajuster la durée avec pydub (silence padding)
@@ -27,7 +27,7 @@ LLM_MODEL = default_model()
 
 # ─── Constantes ──────────────────────────────────────────────────────────────
 
-WORDS_PER_MINUTE = 192  # Calibré : 18473 mots = 1h36m19s à speed=0.95
+WORDS_PER_MINUTE = 165.7  # Fish Audio mesuré : 11 959 mots = 72,2 min à speed=0.90
 
 # Les 19 fichiers de la playlist avec leurs durées en secondes
 PLAYLIST_SPEC = [
@@ -75,7 +75,7 @@ COURS_DURATIONS_MIN = {
 MARGIN_SECONDS = 30
 
 # Mots nécessaires pour remplir une journée complète (7 blocs cours)
-WORDS_NEEDED_PER_DAY = WORDS_PER_MINUTE * sum(COURS_DURATIONS_MIN.values())  # 192 * 360 = 69 120
+WORDS_NEEDED_PER_DAY = int(round(WORDS_PER_MINUTE * sum(COURS_DURATIONS_MIN.values())))  # 165.7 * 360 ≈ 59 652
 
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────

@@ -17,8 +17,9 @@
 
 ## Calculs de reference
 
-- 14h de cours audio a 192 mots/min = **161 280 mots**
-- Avec silences, pauses, transitions : **~170 000 mots** necessaires
+- Cours audio calibré à **165,7 mots/min** sur Fish Audio speed=0.90.
+- Les Q&A et pauses ne comptent pas dans le texte de cours.
+- La pipeline retire aussi 17 s de silence initial et 120 s de silence final.
 - Claude web genere ~4 000-6 000 mots par appel en mode oral
 - Donc il faut **~30-45 appels** au total
 
@@ -31,11 +32,11 @@ Chaque passe genere DIRECTEMENT du texte oral TTS-ready.
 
 | Passe | Objectif | Volume oral | Cumul |
 |-------|----------|-------------|-------|
-| **Passe 1 — Fondation** | Cours oral complet | ~5 000 mots | 5 000 |
-| **Passe 2 — Expansion** | Exemples, cas d'ecole, approfondissement | ~5 000 mots | 10 000 |
-| **Passe 3 — Enrichissement** | Notions inedites, anecdotes, perspectives | ~5 000 mots | 15 000 |
+| **Passe 1 — Fondation** | Cours oral complet | budget injecté | budget injecté |
+| **Passe 2 — Expansion** | Exemples, cas d'ecole, approfondissement | budget injecté | budget injecté |
+| **Passe 3 — Enrichissement** | Notions inedites, anecdotes, perspectives | budget injecté | budget injecté |
 
-Avec ~12 sous-parties : 12 x 15 000 = **180 000 mots** → objectif atteint.
+Le total dépend du budget audio réel : 165,7 mots/min, hors Q&A et pauses.
 
 ---
 
@@ -116,7 +117,7 @@ Je suis un centre de formation. Mes élèves préparent le titre professionnel
 suivant : {NOM_DU_TITRE_PROFESSIONNEL}.
 
 CONSIGNE :
-Génère un cours ORAL d'environ 5 000 mots utiles sur la sous-partie suivante :
+Génère un cours ORAL respectant le budget mots injecté sur la sous-partie suivante :
 "{NOM_DE_LA_SOUS_PARTIE}"
 
 Le cours oral doit couvrir ces aspects (dans l'ordre que tu juges naturel) :
@@ -369,19 +370,20 @@ NON NÉGOCIABLE.
 CALIBRATION (MOTS / DURÉE)
 ═══════════════════════════════════════════════════
 
-Vitesse de référence : 192 mots/minute (speed TTS = 0.95)
+Vitesse de référence : 165,7 mots/minute (Fish Audio speed=0.90 mesuré sur 72,2 min)
 
 | Durée cible | Nombre de mots (hors tags) |
 |-------------|---------------------------|
-| 5 minutes   | ~910 mots                 |
-| 10 minutes  | ~1 820 mots               |
-| 15 minutes  | ~2 730 mots               |
-| 30 minutes  | ~5 460 mots               |
-| 45 minutes  | ~8 190 mots               |
-| 60 minutes  | ~10 920 mots              |
+| 5 minutes   | ~830 mots                 |
+| 10 minutes  | ~1 660 mots               |
+| 15 minutes  | ~2 490 mots               |
+| 30 minutes  | ~4 970 mots               |
+| 45 minutes  | ~7 460 mots               |
+| 60 minutes  | ~9 940 mots               |
 
 Les tags entre crochets ne comptent PAS dans le décompte.
-Vise 30 secondes de MOINS que la durée cible.
+Le budget exact injecté par le système garde 17 s de silence initial et 120 s de silence final.
+Ne dépasse jamais la cible injectée.
 
 
 ═══════════════════════════════════════════════════
@@ -922,7 +924,7 @@ dans le cadre de la préparation au titre professionnel
 {NOM_DU_TITRE_PROFESSIONNEL}.
 
 CONSIGNE :
-Génère environ 5 000 mots SUPPLÉMENTAIRES de cours oral qui viennent compléter
+Génère un volume SUPPLÉMENTAIRE conforme au budget injecté, qui vient compléter
 et enrichir ce cours. Le texte produit sera envoyé DIRECTEMENT à un
 système TTS (Fish Audio S2-Pro). Il doit être prêt à être lu tel quel.
 
@@ -1010,7 +1012,7 @@ le cadre de la préparation au titre professionnel
 {NOM_DU_TITRE_PROFESSIONNEL}.
 
 CONSIGNE :
-Génère environ 5 000 mots SUPPLÉMENTAIRES de cours oral avec du contenu INÉDIT.
+Génère un volume SUPPLÉMENTAIRE conforme au budget injecté avec du contenu INÉDIT.
 Le texte produit sera envoyé DIRECTEMENT à un système TTS (Fish Audio
 S2-Pro). Il doit être prêt à être lu tel quel.
 
@@ -1097,11 +1099,11 @@ COURS EXISTANT À NE PAS RÉPÉTER :
 ### Pour chaque sous-partie du programme :
 
 ```
-1. Exécuter PASSE 1 sur Claude web → obtenir ~5 000 mots oral (texte_A)
-2. Exécuter PASSE 2 en fournissant texte_A → obtenir ~5 000 mots oral (texte_B)
+1. Exécuter PASSE 1 sur Claude web → obtenir le budget injecté (texte_A)
+2. Exécuter PASSE 2 en fournissant texte_A → obtenir le budget injecté (texte_B)
 3. Concaténer : texte_AB = texte_A + texte_B
-4. Exécuter PASSE 3 en fournissant texte_AB → obtenir ~5 000 mots oral (texte_C)
-5. Concaténer : texte_final = texte_A + texte_B + texte_C (~15 000 mots)
+4. Exécuter PASSE 3 en fournissant texte_AB → obtenir le budget injecté (texte_C)
+5. Concaténer : texte_final = texte_A + texte_B + texte_C (volume calibré)
 6. Envoyer DIRECTEMENT à pipeline_tts_v2.py (SANS reformulation)
 ```
 
@@ -1111,12 +1113,12 @@ COURS EXISTANT À NE PAS RÉPÉTER :
 Programme → identifier ~12 sous-parties
 
 Pour chaque sous-partie (12×) :
-    Passe 1 → 5 000 mots oral TTS-ready
-    Passe 2 → 5 000 mots oral TTS-ready
-    Passe 3 → 5 000 mots oral TTS-ready
-    Total sous-partie : ~15 000 mots oral
+    Passe 1 → budget injecté oral TTS-ready
+    Passe 2 → budget injecté oral TTS-ready
+    Passe 3 → budget injecté oral TTS-ready
+    Total sous-partie : volume calibré
 
-Total brut : 12 × 15 000 = ~180 000 mots ✅
+Total brut : calculé par la pipeline selon les créneaux cours ✅
 
 Ensuite :
     → Pipeline TTS (pipeline_tts_v2.py) DIRECTEMENT
@@ -1155,7 +1157,7 @@ PAS D'ÉTAPE DE REFORMULATION — le texte est déjà oral.
 | | Jour 1 | Jour 2 |
 |---|--------|--------|
 | Sous-parties | 1 à 6 | 7 à 12 |
-| Mots oraux bruts | ~90 000 | ~90 000 |
+| Mots oraux bruts | budget cours audio | budget cours audio |
 | Blocs cours | 7 (45-60 min chacun) | 7 (45-60 min chacun) |
 | Q&A | 7 fichiers | 7 fichiers |
 | Pauses | 5 fichiers | 5 fichiers |

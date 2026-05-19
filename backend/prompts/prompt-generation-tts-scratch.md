@@ -16,8 +16,10 @@
 
 ## Calculs de référence
 
-- 7h de cours audio à 192 mots/min = **80 640 mots par journée**
-- 6 sous-parties par journée × 3 passes × ~5 000 mots = **~90 000 mots** → cible pédagogique haute, contrôlée ensuite par l'étape audio horodatée
+- Créneaux cours uniquement : budget calculé par la pipeline à **165,7 mots/min**,
+  hors Q&A et pauses, avec 17 s de silence initial et 120 s de silence final.
+- Les anciennes cibles fixes **5 000 mots/passe** et **90 000 mots/journée** sont
+  remplacées par le budget exact injecté par le système à chaque génération.
 
 ---
 
@@ -27,9 +29,9 @@ Chaque passe génère TTS-ready, depuis le MÊME contenu de programme, sous un a
 
 | Passe                   | Angle                                         | Volume      |
 | ----------------------- | --------------------------------------------- | ----------- |
-| **Passe 1 — Fondation** | Introduction + concepts de base + définitions | ~5 000 mots |
-| **Passe 2 — Pratique**  | Techniques + procédures + situations terrain  | ~5 000 mots |
-| **Passe 3 — Maîtrise**  | Synthèse + nuances + liens + prépa examen     | ~5 000 mots |
+| **Passe 1 — Fondation** | Introduction + concepts de base + définitions | budget injecté |
+| **Passe 2 — Pratique**  | Techniques + procédures + situations terrain  | budget injecté |
+| **Passe 3 — Maîtrise**  | Synthèse + nuances + liens + prépa examen     | budget injecté |
 
 ---
 
@@ -39,19 +41,18 @@ Chaque passe génère TTS-ready, depuis le MÊME contenu de programme, sous un a
 ╔══════════════════════════════════════════════════════════════════════╗
 ║ 🎯  VOLUME EXIGÉ — NON NÉGOCIABLE                                     ║
 ╠══════════════════════════════════════════════════════════════════════╣
-║ Cette passe DOIT faire ENVIRON 5 000 mots (hors tags Fish Audio).    ║
+║ Respecte le budget mots injecté par le système (hors tags).          ║
 ║                                                                       ║
-║ Tout contenu sous 4 500 mots déclenchera une boucle de continuation  ║
-║ automatique côté système — autant le faire bien du premier coup.     ║
+║ Sous le minimum injecté, une continuation automatique se lance.       ║
 ║                                                                       ║
-║ Si ta structure tient en 4 500 mots, DÉVELOPPE :                     ║
+║ Si tu arrives sous ce minimum, DÉVELOPPE :                            ║
 ║   • 2-3 exemples fictifs supplémentaires (contextes variés)          ║
 ║   • 1 cas contraste : ce qu'il ne FAUT PAS faire + pourquoi          ║
 ║   • Nuances terrain selon le profil client / la situation            ║
 ║   • Mini-récap oral en fin de chaque sous-section                    ║
 ║   • Reformulations avec angles différents                            ║
 ║                                                                       ║
-║ Ne conclus PAS trop tôt. Vise 5 000 mots denses et utiles,           ║
+║ Ne conclus PAS trop tôt. Vise la cible injectée : contenu dense,      ║
 ║ avec des exemples variés et des angles clairs, pas de la redite.     ║
 ╚══════════════════════════════════════════════════════════════════════╝
 
@@ -367,19 +368,20 @@ NON NÉGOCIABLE.
 CALIBRATION (MOTS / DURÉE)
 ═══════════════════════════════════════════════════
 
-Vitesse de référence : 192 mots/minute (speed TTS = 0.95)
+Vitesse de référence : 165,7 mots/minute (Fish Audio speed=0.90 mesuré sur 72,2 min)
 
 | Durée cible | Nombre de mots (hors tags) |
 |-------------|---------------------------|
-| 5 minutes   | ~910 mots                 |
-| 10 minutes  | ~1 820 mots               |
-| 15 minutes  | ~2 730 mots               |
-| 30 minutes  | ~5 460 mots               |
-| 45 minutes  | ~8 190 mots               |
-| 60 minutes  | ~10 920 mots              |
+| 5 minutes   | ~830 mots                 |
+| 10 minutes  | ~1 660 mots               |
+| 15 minutes  | ~2 490 mots               |
+| 30 minutes  | ~4 970 mots               |
+| 45 minutes  | ~7 460 mots               |
+| 60 minutes  | ~9 940 mots               |
 
 Les tags entre crochets ne comptent PAS dans le décompte.
-Vise 30 secondes de MOINS que la durée cible.
+Le budget exact injecté par le système garde 17 s de silence initial et 120 s de silence final.
+Ne dépasse jamais la cible injectée.
 
 
 ═══════════════════════════════════════════════════
@@ -784,8 +786,12 @@ Ce qui EST autorisé par le format cours-à-distance en direct :
   ✅ Adresse collective : "bonjour à tous", "vous qui m'écoutez"
   ✅ Repères horaires de la journée-cours : "ce matin",
      "plus tôt dans la journée", "tout à l'heure", "dans le prochain bloc"
-  ✅ Référence à la progression pédagogique : "hier on a vu…",
-     "dans la séance précédente…" (si position du module cohérente)
+  ✅ Référence VAGUE à la progression pédagogique : "la dernière fois
+     on a vu…", "lors du dernier cours…", "dans la séance précédente…"
+     (si position du module cohérente)
+  ❌ JAMAIS "hier" ni "demain" : les cours ne s'enchaînent PAS au jour
+     le jour (un cours par semaine, et ce rythme peut changer). Toute
+     référence à un cours passé ou futur reste vague et non datée.
 
 Ce qui EST INTERDIT par le format (3 familles) :
 
@@ -977,10 +983,10 @@ Réponds UNIQUEMENT avec le script oral.
 - Pas de métadonnées (nombre de mots, durée estimée, etc.)
 - Juste le texte prêt à être envoyé à Fish Audio S2-Pro
 
-⚠️  RAPPEL VOLUME : vise environ 5 000 mots utiles. Si tu atteins la
-conclusion naturelle avant 4 500 mots, REMONTE dans le cours et
+⚠️  RAPPEL VOLUME : respecte la cible mots injectée par le système. Si tu atteins la
+conclusion naturelle avant le minimum injecté, REMONTE dans le cours et
 développe davantage (exemples fictifs supplémentaires, contrastes,
-nuances terrain, mini-récaps). Ne force pas le remplissage au-delà de 5 000 mots.
+nuances terrain, mini-récaps). Ne force pas le remplissage au-delà du maximum injecté.
 
 
 PROGRAMME DE FORMATION :
@@ -995,19 +1001,18 @@ PROGRAMME DE FORMATION :
 ╔══════════════════════════════════════════════════════════════════════╗
 ║ 🎯  VOLUME EXIGÉ — NON NÉGOCIABLE                                     ║
 ╠══════════════════════════════════════════════════════════════════════╣
-║ Cette passe DOIT faire ENVIRON 5 000 mots (hors tags Fish Audio).    ║
+║ Respecte le budget mots injecté par le système (hors tags).          ║
 ║                                                                       ║
-║ Tout contenu sous 4 500 mots déclenchera une boucle de continuation  ║
-║ automatique côté système — autant le faire bien du premier coup.     ║
+║ Sous le minimum injecté, une continuation automatique se lance.       ║
 ║                                                                       ║
-║ Si ta structure tient en 4 500 mots, DÉVELOPPE :                     ║
+║ Si tu arrives sous ce minimum, DÉVELOPPE :                            ║
 ║   • 2-3 exemples fictifs supplémentaires (contextes variés)          ║
 ║   • 1 cas contraste : ce qu'il ne FAUT PAS faire + pourquoi          ║
 ║   • Nuances terrain selon le profil client / la situation            ║
 ║   • Mini-récap oral en fin de chaque sous-section                    ║
 ║   • Reformulations avec angles différents                            ║
 ║                                                                       ║
-║ Ne conclus PAS trop tôt. Vise 5 000 mots denses et utiles,           ║
+║ Ne conclus PAS trop tôt. Vise la cible injectée : contenu dense,      ║
 ║ avec des exemples variés et des angles clairs, pas de la redite.     ║
 ╚══════════════════════════════════════════════════════════════════════╝
 
@@ -1027,10 +1032,14 @@ Tu peux donc :
   ✅ Utiliser les repères horaires de la journée-cours :
      "ce matin", "tout à l'heure", "plus tôt dans la journée",
      "cet après-midi", "dans le bloc précédent"
-  ✅ Référencer la progression pédagogique :
-     "hier on a vu que...", "dans la séance précédente..."
-     (UNIQUEMENT si c'est cohérent avec la position du module dans
-     la formation — ne pas inventer une séance précédente qui n'existe pas)
+  ✅ Référencer la progression pédagogique de façon VAGUE :
+     "la dernière fois on a vu que...", "lors du dernier cours...",
+     "dans la séance précédente..." (UNIQUEMENT si c'est cohérent avec
+     la position du module dans la formation — ne pas inventer une
+     séance précédente qui n'existe pas)
+  ❌ Ne JAMAIS dire "hier" ni "demain" : les cours ne se suivent pas
+     au jour le jour (un cours par semaine, rythme variable). Toute
+     référence temporelle entre cours reste vague et non datée.
   ✅ Parler avec chaleur et présence comme si tu étais VRAIMENT en
      direct face à la classe virtuelle
 
@@ -1329,19 +1338,20 @@ NON NÉGOCIABLE.
 CALIBRATION (MOTS / DURÉE)
 ═══════════════════════════════════════════════════
 
-Vitesse de référence : 192 mots/minute (speed TTS = 0.95)
+Vitesse de référence : 165,7 mots/minute (Fish Audio speed=0.90 mesuré sur 72,2 min)
 
 | Durée cible | Nombre de mots (hors tags) |
 |-------------|---------------------------|
-| 5 minutes   | ~910 mots                 |
-| 10 minutes  | ~1 820 mots               |
-| 15 minutes  | ~2 730 mots               |
-| 30 minutes  | ~5 460 mots               |
-| 45 minutes  | ~8 190 mots               |
-| 60 minutes  | ~10 920 mots              |
+| 5 minutes   | ~830 mots                 |
+| 10 minutes  | ~1 660 mots               |
+| 15 minutes  | ~2 490 mots               |
+| 30 minutes  | ~4 970 mots               |
+| 45 minutes  | ~7 460 mots               |
+| 60 minutes  | ~9 940 mots               |
 
 Les tags entre crochets ne comptent PAS dans le décompte.
-Vise 30 secondes de MOINS que la durée cible.
+Le budget exact injecté par le système garde 17 s de silence initial et 120 s de silence final.
+Ne dépasse jamais la cible injectée.
 
 
 ═══════════════════════════════════════════════════
@@ -1746,8 +1756,12 @@ Ce qui EST autorisé par le format cours-à-distance en direct :
   ✅ Adresse collective : "bonjour à tous", "vous qui m'écoutez"
   ✅ Repères horaires de la journée-cours : "ce matin",
      "plus tôt dans la journée", "tout à l'heure", "dans le prochain bloc"
-  ✅ Référence à la progression pédagogique : "hier on a vu…",
-     "dans la séance précédente…" (si position du module cohérente)
+  ✅ Référence VAGUE à la progression pédagogique : "la dernière fois
+     on a vu…", "lors du dernier cours…", "dans la séance précédente…"
+     (si position du module cohérente)
+  ❌ JAMAIS "hier" ni "demain" : les cours ne s'enchaînent PAS au jour
+     le jour (un cours par semaine, et ce rythme peut changer). Toute
+     référence à un cours passé ou futur reste vague et non datée.
 
 Ce qui EST INTERDIT par le format (3 familles) :
 
@@ -1939,10 +1953,10 @@ Réponds UNIQUEMENT avec le script oral.
 - Pas de métadonnées (nombre de mots, durée estimée, etc.)
 - Juste le texte prêt à être envoyé à Fish Audio S2-Pro
 
-⚠️  RAPPEL VOLUME : vise environ 5 000 mots utiles. Si tu atteins la
-conclusion naturelle avant 4 500 mots, REMONTE dans le cours et
+⚠️  RAPPEL VOLUME : respecte la cible mots injectée par le système. Si tu atteins la
+conclusion naturelle avant le minimum injecté, REMONTE dans le cours et
 développe davantage (exemples fictifs supplémentaires, contrastes,
-nuances terrain, mini-récaps). Ne force pas le remplissage au-delà de 5 000 mots.
+nuances terrain, mini-récaps). Ne force pas le remplissage au-delà du maximum injecté.
 
 
 PROGRAMME DE FORMATION :
@@ -1957,19 +1971,18 @@ PROGRAMME DE FORMATION :
 ╔══════════════════════════════════════════════════════════════════════╗
 ║ 🎯  VOLUME EXIGÉ — NON NÉGOCIABLE                                     ║
 ╠══════════════════════════════════════════════════════════════════════╣
-║ Cette passe DOIT faire ENVIRON 5 000 mots (hors tags Fish Audio).    ║
+║ Respecte le budget mots injecté par le système (hors tags).          ║
 ║                                                                       ║
-║ Tout contenu sous 4 500 mots déclenchera une boucle de continuation  ║
-║ automatique côté système — autant le faire bien du premier coup.     ║
+║ Sous le minimum injecté, une continuation automatique se lance.       ║
 ║                                                                       ║
-║ Si ta structure tient en 4 500 mots, DÉVELOPPE :                     ║
+║ Si tu arrives sous ce minimum, DÉVELOPPE :                            ║
 ║   • 2-3 exemples fictifs supplémentaires (contextes variés)          ║
 ║   • 1 cas contraste : ce qu'il ne FAUT PAS faire + pourquoi          ║
 ║   • Nuances terrain selon le profil client / la situation            ║
 ║   • Mini-récap oral en fin de chaque sous-section                    ║
 ║   • Reformulations avec angles différents                            ║
 ║                                                                       ║
-║ Ne conclus PAS trop tôt. Vise 5 000 mots denses et utiles,           ║
+║ Ne conclus PAS trop tôt. Vise la cible injectée : contenu dense,      ║
 ║ avec des exemples variés et des angles clairs, pas de la redite.     ║
 ╚══════════════════════════════════════════════════════════════════════╝
 
@@ -1989,10 +2002,14 @@ Tu peux donc :
   ✅ Utiliser les repères horaires de la journée-cours :
      "ce matin", "tout à l'heure", "plus tôt dans la journée",
      "cet après-midi", "dans le bloc précédent"
-  ✅ Référencer la progression pédagogique :
-     "hier on a vu que...", "dans la séance précédente..."
-     (UNIQUEMENT si c'est cohérent avec la position du module dans
-     la formation — ne pas inventer une séance précédente qui n'existe pas)
+  ✅ Référencer la progression pédagogique de façon VAGUE :
+     "la dernière fois on a vu que...", "lors du dernier cours...",
+     "dans la séance précédente..." (UNIQUEMENT si c'est cohérent avec
+     la position du module dans la formation — ne pas inventer une
+     séance précédente qui n'existe pas)
+  ❌ Ne JAMAIS dire "hier" ni "demain" : les cours ne se suivent pas
+     au jour le jour (un cours par semaine, rythme variable). Toute
+     référence temporelle entre cours reste vague et non datée.
   ✅ Parler avec chaleur et présence comme si tu étais VRAIMENT en
      direct face à la classe virtuelle
 
@@ -2293,19 +2310,20 @@ NON NÉGOCIABLE.
 CALIBRATION (MOTS / DURÉE)
 ═══════════════════════════════════════════════════
 
-Vitesse de référence : 192 mots/minute (speed TTS = 0.95)
+Vitesse de référence : 165,7 mots/minute (Fish Audio speed=0.90 mesuré sur 72,2 min)
 
 | Durée cible | Nombre de mots (hors tags) |
 |-------------|---------------------------|
-| 5 minutes   | ~910 mots                 |
-| 10 minutes  | ~1 820 mots               |
-| 15 minutes  | ~2 730 mots               |
-| 30 minutes  | ~5 460 mots               |
-| 45 minutes  | ~8 190 mots               |
-| 60 minutes  | ~10 920 mots              |
+| 5 minutes   | ~830 mots                 |
+| 10 minutes  | ~1 660 mots               |
+| 15 minutes  | ~2 490 mots               |
+| 30 minutes  | ~4 970 mots               |
+| 45 minutes  | ~7 460 mots               |
+| 60 minutes  | ~9 940 mots               |
 
 Les tags entre crochets ne comptent PAS dans le décompte.
-Vise 30 secondes de MOINS que la durée cible.
+Le budget exact injecté par le système garde 17 s de silence initial et 120 s de silence final.
+Ne dépasse jamais la cible injectée.
 
 
 ═══════════════════════════════════════════════════
@@ -2712,8 +2730,12 @@ Ce qui EST autorisé par le format cours-à-distance en direct :
   ✅ Adresse collective : "bonjour à tous", "vous qui m'écoutez"
   ✅ Repères horaires de la journée-cours : "ce matin",
      "plus tôt dans la journée", "tout à l'heure", "dans le prochain bloc"
-  ✅ Référence à la progression pédagogique : "hier on a vu…",
-     "dans la séance précédente…" (si position du module cohérente)
+  ✅ Référence VAGUE à la progression pédagogique : "la dernière fois
+     on a vu…", "lors du dernier cours…", "dans la séance précédente…"
+     (si position du module cohérente)
+  ❌ JAMAIS "hier" ni "demain" : les cours ne s'enchaînent PAS au jour
+     le jour (un cours par semaine, et ce rythme peut changer). Toute
+     référence à un cours passé ou futur reste vague et non datée.
 
 Ce qui EST INTERDIT par le format (3 familles) :
 
@@ -2905,10 +2927,10 @@ Réponds UNIQUEMENT avec le script oral.
 - Pas de métadonnées (nombre de mots, durée estimée, etc.)
 - Juste le texte prêt à être envoyé à Fish Audio S2-Pro
 
-⚠️  RAPPEL VOLUME : vise environ 5 000 mots utiles. Si tu atteins la
-conclusion naturelle avant 4 500 mots, REMONTE dans le cours et
+⚠️  RAPPEL VOLUME : respecte la cible mots injectée par le système. Si tu atteins la
+conclusion naturelle avant le minimum injecté, REMONTE dans le cours et
 développe davantage (exemples fictifs supplémentaires, contrastes,
-nuances terrain, mini-récaps). Ne force pas le remplissage au-delà de 5 000 mots.
+nuances terrain, mini-récaps). Ne force pas le remplissage au-delà du maximum injecté.
 
 
 PROGRAMME DE FORMATION :

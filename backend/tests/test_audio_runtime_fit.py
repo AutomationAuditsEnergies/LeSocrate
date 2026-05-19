@@ -92,6 +92,65 @@ class RuntimeFitStopsBeforeOverflowTest(unittest.TestCase):
 
 
 class FishAudioWordBudgetCalibrationTest(unittest.TestCase):
+    def test_default_fish_audio_wpm_uses_measured_aggregate(self):
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertAlmostEqual(cgs._course_words_per_minute(), 165.7)
+
+    def test_audio_block_markers_are_not_counted_as_spoken_words(self):
+        text = "<<<BLOC_AUDIO_1>>>\n\nBonjour [pause] à tous."
+
+        self.assertEqual(cgs.count_tts_spoken_words(text), 3)
+
+    def test_marked_audio_blocks_bypass_proportional_split(self):
+        segments = [
+            {
+                "sub_idx": i,
+                "passe": 1,
+                "text": f"<<<BLOC_AUDIO_{i + 1}>>>\n\ntexte bloc {i + 1}",
+                "word_count": 3,
+                "dirty": i == 0,
+            }
+            for i in range(7)
+        ]
+        playlist = [
+            (f"cours_{i}.mp3", 2700, "cours", i)
+            for i in range(1, 8)
+        ]
+        durations = {i: 45 for i in range(1, 8)}
+
+        blocs, total_words, carryover = cgs._build_course_blocs_from_segments(
+            segments,
+            durations,
+            playlist,
+            preview=True,
+        )
+
+        self.assertEqual(len(blocs), 7)
+        self.assertEqual(total_words, 21)
+        self.assertEqual(carryover, "")
+        self.assertEqual(blocs[0]["text"], "texte bloc 1")
+        self.assertNotIn("<<<BLOC_AUDIO_", blocs[0]["text"])
+        self.assertTrue(blocs[0]["audio_block_marked"])
+
+    def test_deterministic_block_calibration_fallback_hits_budget(self):
+        overlong = " ".join(["mot"] * 120) + "."
+        block = {
+            "bloc_number": 1,
+            "filename": "cours.mp3",
+            "min_words": 40,
+            "max_words": 80,
+            "target_words": 80,
+            "duration_min": 45,
+            "role": "test",
+        }
+
+        trimmed = cgs._trim_text_to_max_spoken_words(overlong, 50)
+        self.assertLessEqual(cgs.count_tts_spoken_words(trimmed), 50)
+
+        expanded = cgs._expand_text_to_min_spoken_words("texte court.", 40, 80)
+        status = cgs._audio_block_word_status(expanded, block)
+        self.assertTrue(status["ok"])
+
     def test_45_minute_budget_reserves_conclusion_and_final_silence(self):
         # 192 mots/min, 17s de silence initial.
         # Texte principal arrêté à T-4min, parole totale arrêtée à T-2min.
@@ -104,6 +163,84 @@ class FishAudioWordBudgetCalibrationTest(unittest.TestCase):
         self.assertEqual(main_budget, int(((2700 - 240 - 17) / 60) * 192))
         self.assertEqual(total_budget, int(((2700 - 120 - 17) / 60) * 192))
         self.assertGreater(total_budget - main_budget, 300)
+
+    def test_day_budget_uses_only_course_playlist_items(self):
+        playlist = [
+            ("cours_1.mp3", 2700, "cours", 1),
+            ("qa_1.mp3", 900, "qa", 1),
+            ("pause_1.mp3", 600, "pause", 1),
+        ]
+
+        with patch.object(cgs, "_course_words_per_minute", return_value=192.0), patch.object(
+            cgs, "_course_preflight_safety", return_value=1.0
+        ), patch.object(cgs, "_course_final_silence_sec", return_value=120.0):
+            budget = cgs.get_course_day_word_budget(playlist)
+
+        expected = int(((2700 - 120 - 17) / 60) * 192)
+        self.assertEqual(budget["target_words"], expected)
+        self.assertEqual(budget["course_seconds"], 2700)
+        self.assertEqual(len(budget["course_items"]), 1)
+
+    def test_final_day_word_budget_guard_rejects_overflow(self):
+        tmp = tempfile.NamedTemporaryFile(delete=False)
+        tmp.close()
+        conn = sqlite3.connect(tmp.name)
+        conn.execute(
+            """
+            CREATE TABLE content_generation_segments (
+                id INTEGER PRIMARY KEY,
+                job_id INTEGER NOT NULL,
+                sub_part_index INTEGER NOT NULL,
+                passe INTEGER NOT NULL,
+                status TEXT NOT NULL,
+                text_content TEXT,
+                word_count INTEGER
+            )
+            """
+        )
+        text = " ".join(["mot"] * 112)
+        conn.execute(
+            """
+            INSERT INTO content_generation_segments
+                (id, job_id, sub_part_index, passe, status, text_content, word_count)
+            VALUES (1, 20, 0, 1, 'completed', ?, ?)
+            """,
+            (text, len(text.split())),
+        )
+        conn.commit()
+        conn.close()
+
+        def connect():
+            return sqlite3.connect(tmp.name)
+
+        small_budget = {
+            "target_words": 100,
+            "min_words": 90,
+            "max_words": 110,
+            "words_per_minute": 192.0,
+            "course_seconds": 60,
+            "speakable_seconds": 50,
+            "start_silence_sec": 17,
+            "final_silence_sec": 120,
+            "course_items": [],
+        }
+
+        try:
+            with patch.object(cgs, "get_db_connection", side_effect=connect), patch.object(
+                cgs, "get_job_from_db", return_value={"id": 20, "carryover_in_text": ""}
+            ), patch.object(
+                cgs, "get_course_day_word_budget", return_value=small_budget
+            ):
+                audit = cgs.compute_course_day_word_budget_audit(
+                    10,
+                    job={"id": 20, "carryover_in_text": ""},
+                )
+                self.assertFalse(audit["ok"])
+                self.assertEqual(audit["status"], "over_budget")
+                with self.assertRaisesRegex(ValueError, "dépasse"):
+                    cgs.assert_course_day_word_budget(10, context="test")
+        finally:
+            os.unlink(tmp.name)
 
 
 class CourseSpeechDeadlineTest(unittest.TestCase):
@@ -1150,6 +1287,7 @@ class BasicTTSNoSlidesPipelineRuntimeFitTest(unittest.TestCase):
             ),
             patch.object(cgs, "_finalize_runtime_fit_carryover_and_clean", return_value=""),
             patch.object(cgs, "_save_course_script_plan"),
+            patch.object(cgs, "assert_course_day_word_budget", return_value={"ok": True}),
         ]
         return patches
 
@@ -1166,7 +1304,7 @@ class BasicTTSNoSlidesPipelineRuntimeFitTest(unittest.TestCase):
         )
         patches = self._patch_common(synth_result, uploaded)
 
-        with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5] as synth, patches[6], patches[7], patches[8]:
+        with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5] as synth, patches[6], patches[7], patches[8], patches[9]:
             result = cgs.generate_audio_from_script(
                 123,
                 force_all=True,
@@ -1196,7 +1334,7 @@ class BasicTTSNoSlidesPipelineRuntimeFitTest(unittest.TestCase):
         )
         patches = self._patch_common(synth_result, uploaded)
 
-        with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6], patches[7], patches[8]:
+        with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6], patches[7], patches[8], patches[9]:
             with self.assertRaisesRegex(ValueError, "limite de parole"):
                 cgs.generate_audio_from_script(
                     123,

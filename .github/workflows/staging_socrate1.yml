@@ -83,6 +83,8 @@ jobs:
                 SCM_DO_BUILD_DURING_DEPLOYMENT=true \
                 ENABLE_ORYX_BUILD=true \
                 DB_PATH=/home/database-staging.db \
+                FORMATION_TTS_WORDS_PER_MINUTE=165.7 \
+                BASIC_TTS_SPEED=1.15 \
                 PLATFORM_1_FRONTEND_URL=https://thankful-wave-043aa3b03-staging.4.azurestaticapps.net
 
             az webapp config set \
@@ -97,6 +99,8 @@ jobs:
               --settings \
                 SCM_DO_BUILD_DURING_DEPLOYMENT=true \
                 ENABLE_ORYX_BUILD=true \
+                FORMATION_TTS_WORDS_PER_MINUTE=165.7 \
+                BASIC_TTS_SPEED=1.15 \
                 PLATFORM_1_FRONTEND_URL=https://thankful-wave-043aa3b03.4.azurestaticapps.net
 
             az webapp config set \

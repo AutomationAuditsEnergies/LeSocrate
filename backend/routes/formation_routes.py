@@ -469,7 +469,7 @@ def init_test_pipeline():
         # 4. Si auto_pilot demandé, lancer l'auto-pilot en mode Claude Code.
         # Important : même si KB/global/daily/content sont skippés (segments déjà
         # en DB), les étapes en aval CONSOMMENT de l'IA et donc du crédit :
-        #   - Volume safety : enrichit les journées < 90 000 mots (Claude)
+        #   - Volume safety : enrichit les journées sous budget audio (Claude)
         #   - Review conformité : audit règles #1-#27 par 4 agents multi-rules (Claude)
         # Sans use_claude_code=True, ces appels passent par l'API LLM configurée
         # (DeepSeek ou Anthropic). Avec True, ils utilisent le forfait Pro/Max
@@ -1830,8 +1830,8 @@ def volume_audit(job_id):
     """Retourne l'audit volume par-folder pour un job.
 
     Pour chaque folder du job, calcule :
-      - total_words : SUM(word_count) des segments completed
-      - deficit : max(0, 90000 - total_words)
+      - total_words : mots parlés des segments completed, tags TTS exclus
+      - deficit : mots manquants sous le budget minimal audio
       - shortest_segments : top N (5) des segments les plus courts (pour
         l'affichage UI et le ciblage de l'enrichissement)
 
@@ -1859,7 +1859,7 @@ def volume_audit(job_id):
 )
 def launch_volume_safety(job_id, folder_id):
     """Lance l'enrichissement des segments les plus courts d'un folder pour
-    atteindre le seuil de 90 000 mots/journée.
+    atteindre le budget mots audio de la journée.
 
     Body JSON :
       - "model": "sonnet"|"haiku" — défaut "sonnet"
@@ -3669,7 +3669,9 @@ def continue_after_text(job_id, folder_id):
             from services.content_generation_service import (
                 _assemble_and_upload,
                 _update_job_db,
+                assert_course_day_word_budget,
                 generate_audio_from_script,
+                run_audio_block_word_calibration,
                 run_content_review,
                 run_humanization_review,
             )
@@ -3824,6 +3826,27 @@ def continue_after_text(job_id, folder_id):
                         "review_signature": humanization_result.get("review_signature"),
                     },
                 )
+
+                calibration_result = run_audio_block_word_calibration(
+                    folder_id,
+                    model=model,
+                    stage="manual_after_humanization",
+                )
+                log_pipeline_event(
+                    job_id,
+                    "continue_after_text_audio_block_calibration_completed",
+                    step="audio_word_calibration",
+                    status="completed",
+                    folder_id=folder_id,
+                    model=str(model) if model else None,
+                    message="Blocs audio calibrés au nombre de mots prévu",
+                    data={
+                        "changed": bool(calibration_result.get("changed")),
+                        "total_words": calibration_result.get("total_words"),
+                        "day_audit": calibration_result.get("day_audit"),
+                        "blocks": calibration_result.get("blocks"),
+                    },
+                )
                 logger.info(
                     "PIPELINE_RESUME_STEP_REVIEW_START formation_job_id=%s folder_id=%s model=%s",
                     job_id, folder_id, model,
@@ -3841,9 +3864,78 @@ def continue_after_text(job_id, folder_id):
                     review_result.get("patches_rejected", 0),
                 )
                 _write_api_review_report(job_id, folder_id, review_result, model)
+                if review_result.get("segments_failed", 0) > 0:
+                    raise RuntimeError(
+                        f"Révision conformité échouée sur {review_result['segments_failed']} segment(s)"
+                    )
                 logger.info(
                     "PIPELINE_RESUME_STEP_REVIEW_REPORT_WRITTEN formation_job_id=%s folder_id=%s",
                     job_id, folder_id,
+                )
+
+                for guard_round in range(1, 4):
+                    post_review_calibration = run_audio_block_word_calibration(
+                        folder_id,
+                        model=model,
+                        stage=f"manual_after_compliance_round_{guard_round}",
+                    )
+                    log_pipeline_event(
+                        job_id,
+                        "continue_after_text_audio_block_calibration_after_review",
+                        step="audio_word_calibration",
+                        status="completed",
+                        folder_id=folder_id,
+                        model=str(model) if model else None,
+                        message="Vérification mots post-conformité terminée",
+                        data={
+                            "round": guard_round,
+                            "changed": bool(post_review_calibration.get("changed")),
+                            "total_words": post_review_calibration.get("total_words"),
+                            "day_audit": post_review_calibration.get("day_audit"),
+                            "blocks": post_review_calibration.get("blocks"),
+                        },
+                    )
+                    if not post_review_calibration.get("changed"):
+                        break
+                    logger.info(
+                        "PIPELINE_RESUME_STEP_REVIEW_RERUN_AFTER_CALIBRATION "
+                        "formation_job_id=%s folder_id=%s round=%s",
+                        job_id, folder_id, guard_round,
+                    )
+                    review_result = run_content_review(folder_id, model=model, force=True)
+                    _write_api_review_report(job_id, folder_id, review_result, model)
+                    if review_result.get("segments_failed", 0) > 0:
+                        raise RuntimeError(
+                            f"Révision conformité échouée après calibrage sur "
+                            f"{review_result['segments_failed']} segment(s)"
+                        )
+
+                budget_audit = assert_course_day_word_budget(
+                    folder_id,
+                    context="continue_after_text_before_word2",
+                )
+                log_pipeline_event(
+                    job_id,
+                    "continue_after_text_word_budget_verified",
+                    step="word_budget_review",
+                    status="completed",
+                    folder_id=folder_id,
+                    model=str(model) if model else None,
+                    message="Budget mots journée vérifié avant Word 2",
+                    data={
+                        "spoken_words": budget_audit.get("spoken_words"),
+                        "raw_words": budget_audit.get("raw_words"),
+                        "deficit": budget_audit.get("deficit"),
+                        "overflow": budget_audit.get("overflow"),
+                        "budget": {
+                            "target_words": budget_audit.get("budget", {}).get("target_words"),
+                            "min_words": budget_audit.get("budget", {}).get("min_words"),
+                            "max_words": budget_audit.get("budget", {}).get("max_words"),
+                            "words_per_minute": budget_audit.get("budget", {}).get("words_per_minute"),
+                            "course_seconds": budget_audit.get("budget", {}).get("course_seconds"),
+                            "speakable_seconds": budget_audit.get("budget", {}).get("speakable_seconds"),
+                        },
+                    },
                 )
 
                 final_words, filename = _assemble_and_upload(
@@ -4190,8 +4282,8 @@ def _determine_next_ap_step(job_id: int) -> str | None:
         return "content"
 
     # 5.5. Volume safety : l'audit réel est prioritaire sur le flag DB.
-    # Un job ancien peut avoir auto_pilot_volume_done=1 avec l'ancienne cible
-    # 60k ; si l'audit 90k voit encore un déficit, on repasse obligatoirement
+    # Un job ancien peut avoir auto_pilot_volume_done=1 avec une ancienne cible ;
+    # si l'audit calibré audio voit encore un déficit, on repasse obligatoirement
     # par l'étape volume avant toute révision conformité.
     if not j.get("auto_pilot_skip_vs"):
         from services.claude_code_mission_service import compute_volume_audit
@@ -4324,6 +4416,28 @@ def _execute_ap_step(job_id: int, step: str, job: dict) -> None:
             eventlet.sleep(3)
             elapsed += 3
         raise TimeoutError(f"Timeout {max_wait}s en attendant {targets}")
+
+    def _log_audio_block_calibration(fid: int, result: dict, *, stage: str) -> None:
+        try:
+            from services.formation_observability_service import log_pipeline_event
+            log_pipeline_event(
+                job_id,
+                "audio_block_word_calibration_completed",
+                step="audio_word_calibration",
+                status="completed",
+                folder_id=fid,
+                model=api_model,
+                message="Blocs audio calibrés au nombre de mots prévu",
+                data={
+                    "stage": stage,
+                    "changed": bool(result.get("changed")),
+                    "total_words": result.get("total_words"),
+                    "day_audit": result.get("day_audit"),
+                    "blocks": result.get("blocks"),
+                },
+            )
+        except Exception:
+            pass
 
     if step == "reac":
         from services.formation_health_service import compute_preflight
@@ -4599,17 +4713,35 @@ def _execute_ap_step(job_id: int, step: str, job: dict) -> None:
                 reports_written,
                 len(folder_ids),
             )
+        from services.content_generation_service import run_audio_block_word_calibration
+        calibration_failed = []
+        for fid in folder_ids:
+            try:
+                calibration = run_audio_block_word_calibration(
+                    fid,
+                    model=api_model,
+                    stage="auto_after_humanization",
+                )
+                _log_audio_block_calibration(fid, calibration, stage="auto_after_humanization")
+            except Exception as e:
+                logger.warning(f"⚠️ Calibrage mots audio folder {fid} : {e}")
+                calibration_failed.append(f"{fid}({str(e)[:120]})")
+        if calibration_failed:
+            raise RuntimeError(
+                "Calibrage mots audio échoué sur folders : "
+                + ", ".join(calibration_failed)
+            )
         update_job(job_id, auto_pilot_post_review_docs_done=0)
         logger.info(f"🤖 ✓ Révision humanisation terminée job {job_id}")
 
     elif step == "review":
+        from services.formation_pipeline_service import get_expected_course_folders
+        folder_ids = get_expected_course_folders(job_id).get("folder_ids") or []
         if use_cc:
             result = execute_mission_locally(job_id, "review", cc_model)
             _assert_cc_result_complete("Révision conformité", result)
         else:
             from services.content_generation_service import run_content_review
-            from services.formation_pipeline_service import get_expected_course_folders
-            folder_ids = get_expected_course_folders(job_id).get("folder_ids") or []
             failed = []
             reports_written = 0
             for fid in folder_ids:
@@ -4630,11 +4762,62 @@ def _execute_ap_step(job_id: int, step: str, job: dict) -> None:
                 reports_written,
                 len(folder_ids),
             )
+
+        from services.content_generation_service import (
+            run_audio_block_word_calibration,
+            run_content_review,
+        )
+        changed_after_review = []
+        calibration_failed = []
+        for fid in folder_ids:
+            try:
+                calibration = run_audio_block_word_calibration(
+                    fid,
+                    model=api_model,
+                    stage="auto_after_compliance",
+                )
+                _log_audio_block_calibration(fid, calibration, stage="auto_after_compliance")
+                if calibration.get("changed"):
+                    changed_after_review.append(fid)
+            except Exception as e:
+                logger.warning(f"⚠️ Calibrage mots post-review folder {fid} : {e}")
+                calibration_failed.append(f"{fid}({str(e)[:120]})")
+        if calibration_failed:
+            raise RuntimeError(
+                "Calibrage mots post-conformité échoué sur folders : "
+                + ", ".join(calibration_failed)
+            )
+        if changed_after_review:
+            if use_cc:
+                result = execute_mission_locally(job_id, "review", cc_model)
+                _assert_cc_result_complete("Révision conformité après calibrage", result)
+            else:
+                failed = []
+                for fid in changed_after_review:
+                    try:
+                        result = run_content_review(fid, model=api_model, force=True)
+                        _write_api_review_report(job_id, fid, result, api_model)
+                        if result.get("segments_failed", 0) > 0:
+                            failed.append(f"{fid}({result['segments_failed']} segments échoués)")
+                    except Exception as e:
+                        logger.warning(f"⚠️ Review post-calibrage folder {fid} : {e}")
+                        failed.append(str(fid))
+                if failed:
+                    raise RuntimeError(
+                        "Review post-calibrage échouée sur folders : "
+                        + ", ".join(failed)
+                    )
         update_job(job_id, auto_pilot_post_review_docs_done=0)
         logger.info(f"🤖 ✓ Révision conformité terminée job {job_id}")
 
     elif step == "post_review_docs":
-        from services.content_generation_service import _assemble_and_upload, _update_job_db
+        from services.content_generation_service import (
+            _assemble_and_upload,
+            _update_job_db,
+            assert_course_day_word_budget,
+            run_audio_block_word_calibration,
+            run_content_review,
+        )
         from services.formation_pipeline_service import get_expected_course_folders
         folder_ids = get_expected_course_folders(job_id).get("folder_ids") or []
         if not folder_ids:
@@ -4658,6 +4841,58 @@ def _execute_ap_step(job_id: int, step: str, job: dict) -> None:
             raise RuntimeError("Aucun texte complété à assembler après révision")
 
         for fid, cg_job_id in rows:
+            for guard_round in range(1, 4):
+                calibration = run_audio_block_word_calibration(
+                    fid,
+                    model=api_model,
+                    stage=f"auto_pre_word2_round_{guard_round}",
+                )
+                _log_audio_block_calibration(
+                    fid,
+                    calibration,
+                    stage=f"auto_pre_word2_round_{guard_round}",
+                )
+                if not calibration.get("changed"):
+                    break
+                review_result = run_content_review(fid, model=api_model, force=True)
+                _write_api_review_report(job_id, fid, review_result, api_model)
+                if review_result.get("segments_failed", 0) > 0:
+                    raise RuntimeError(
+                        f"Révision conformité échouée après calibrage Word 2 "
+                        f"sur folder {fid}: {review_result['segments_failed']} segment(s)"
+                    )
+
+            budget_audit = assert_course_day_word_budget(
+                fid,
+                context="auto_pilot_post_review_docs",
+            )
+            try:
+                from services.formation_observability_service import log_pipeline_event
+                log_pipeline_event(
+                    job_id,
+                    "day_word_budget_verified",
+                    step="word_budget_review",
+                    status="completed",
+                    folder_id=fid,
+                    model=api_model,
+                    message="Budget mots journée vérifié avant Word 2",
+                    data={
+                        "spoken_words": budget_audit.get("spoken_words"),
+                        "raw_words": budget_audit.get("raw_words"),
+                        "deficit": budget_audit.get("deficit"),
+                        "overflow": budget_audit.get("overflow"),
+                        "budget": {
+                            "target_words": budget_audit.get("budget", {}).get("target_words"),
+                            "min_words": budget_audit.get("budget", {}).get("min_words"),
+                            "max_words": budget_audit.get("budget", {}).get("max_words"),
+                            "words_per_minute": budget_audit.get("budget", {}).get("words_per_minute"),
+                            "course_seconds": budget_audit.get("budget", {}).get("course_seconds"),
+                            "speakable_seconds": budget_audit.get("budget", {}).get("speakable_seconds"),
+                        },
+                    },
+                )
+            except Exception:
+                pass
             final_words, filename = _assemble_and_upload(fid, platform_id, cg_job_id)
             _update_job_db(cg_job_id, total_words=final_words)
             logger.info(

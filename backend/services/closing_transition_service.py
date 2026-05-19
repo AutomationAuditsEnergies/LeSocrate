@@ -32,11 +32,11 @@ GAP_SHORT_SEC = 45
 GAP_MEDIUM_SEC = 120
 
 # Coefficient de remplissage : le gap est déjà calculé jusqu'à la dernière
-# parole visée (T-1 min). On le remplit presque entièrement, en gardant une
+# parole visée. On le remplit presque entièrement, en gardant une
 # petite marge de sécurité.
 GAP_FILL_RATIO = 0.92
 # wpm Fish Audio calibré pour la voix/vitesse de production.
-WPM_REFERENCE = 192
+WPM_REFERENCE = 165.7
 # Cap absolu du closing : ~4 min audio max. Au-delà, le résidu reste silence
 # (un gap > 5 min signale un volume_safety insuffisant en amont, pas un closing à
 # rallonge pédagogiquement absurde).
@@ -166,8 +166,8 @@ CONSIGNES :
 - PAS de "Voilà pour cette partie" générique.
 - Termine sans sécheresse, avec la transition playlist demandée si elle existe.
 - Pas de tag TTS spécifique, juste du texte oral fluide.
-- Ne dis jamais "hier" ni "demain" ; utilise "au cours dernier" ou
-  "au prochain cours" si nécessaire.
+- Ne dis jamais "hier" ni "demain" ; utilise "la dernière fois", "lors du
+  dernier cours" ou "au prochain cours" si nécessaire.
 - N'invente jamais une échéance d'examen, un passage devant jury ou un contexte
   de certification daté qui n'apparaît pas explicitement dans l'extrait.
 - Ne parle de "questions", "questions-réponses", "pause" ou "chat" QUE si la
@@ -212,8 +212,8 @@ TON :
 - Pas de "Voilà pour cette partie" générique.
 - Pas d'énumération mécanique ("Premier point... Deuxième point...").
 - Pas de discours direct entre guillemets (TTS le lirait littéralement).
-- Ne dis jamais "hier" ni "demain" ; utilise "au cours dernier" ou
-  "au prochain cours" si nécessaire.
+- Ne dis jamais "hier" ni "demain" ; utilise "la dernière fois", "lors du
+  dernier cours" ou "au prochain cours" si nécessaire.
 - N'invente jamais une échéance d'examen, un passage devant jury ou un contexte
   de certification daté qui n'apparaît pas explicitement dans l'extrait.
 - Ne parle de "questions", "questions-réponses", "pause" ou "chat" QUE si la

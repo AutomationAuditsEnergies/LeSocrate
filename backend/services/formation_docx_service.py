@@ -35,16 +35,35 @@ logger = get_logger(__name__)
 # ─── Helpers texte ────────────────────────────────────────────────────────────
 
 _FISHAUDIO_TAG_RE = re.compile(r"\[[^\[\]\n]{1,50}\]")
+_AUDIO_BLOCK_MARKER_RE = re.compile(r"^\s*<<<BLOC_AUDIO_\d+>>>\s*$", re.MULTILINE)
 
 
 def _strip_tts_tags(text: str) -> str:
     """Retire les tags Fish Audio type `[pause]`, `[warm]`, `[long pause]`, etc."""
     if not text:
         return ""
-    cleaned = _FISHAUDIO_TAG_RE.sub("", text)
+    cleaned = _AUDIO_BLOCK_MARKER_RE.sub("", text)
+    cleaned = _FISHAUDIO_TAG_RE.sub("", cleaned)
     cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
     cleaned = re.sub(r"\n[ \t]+", "\n", cleaned)
     return cleaned.strip()
+
+
+def _extract_marked_audio_blocks(rows: list) -> list:
+    """Si le texte a été calibré par blocs audio, restitue des sections cohérentes."""
+    full_text = "\n\n".join((row[2] or "") for row in rows)
+    matches = list(_AUDIO_BLOCK_MARKER_RE.finditer(full_text))
+    if not matches:
+        return []
+    blocks = []
+    for idx, match in enumerate(matches):
+        bloc_num = int(re.search(r"\d+", match.group(0)).group(0))
+        start = match.end()
+        end = matches[idx + 1].start() if idx + 1 < len(matches) else len(full_text)
+        body = _strip_tts_tags(full_text[start:end])
+        if body:
+            blocks.append({"name": f"Cours audio prévu {bloc_num}", "body": body})
+    return blocks
 
 
 def _split_paragraphs(text: str) -> list:
@@ -137,6 +156,10 @@ def _get_segments_for_folder(folder_id: int, version: str = "current") -> list:
     )
     rows = cursor.fetchall()
     conn.close()
+
+    marked_blocks = _extract_marked_audio_blocks(rows)
+    if marked_blocks:
+        return marked_blocks
 
     grouped = {}
     for sub_idx, passe, text in rows:

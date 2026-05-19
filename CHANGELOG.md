@@ -1,5 +1,72 @@
 # Changelog
 
+## 2026-05-19
+
+### measure(tts): débit réel Fish Audio mesuré + calibration Edge TTS
+
+**Mesure Fish Audio S2-Pro** via le nouvel endpoint `with-timestamp`, sur
+72 min d'audio (~12 000 mots du script TTS-ready `Module1_accueil_boulangerie`),
+au rythme exact de la formation (speed=0.90) :
+
+- **wpm réel = 165,7** (mots/heure ≈ 9 942) — alors que la pipeline supposait
+  **192** (`_DEFAULT_TTS_WORDS_PER_MINUTE`). Sur-estimation de ~16 % : la
+  pipeline budgète trop de mots par créneau cours.
+- wpm par batch : 161 / 174 / 162 — la mesure par minute est bruitée (±8 %),
+  seul l'agrégat sur ~1h est fiable.
+- Scripts : `measure_fish_wpm.py`, sortie `fish_wpm_report.json` +
+  `fish_1h_audio.mp3`.
+
+**Calibration Edge TTS** (voix de synthèse gratuite, `fr-FR-DeniseNeural`) pour
+servir de remplaçant fidèle au rythme :
+
+- Edge natif (speed 1.0) = 144,6 wpm.
+- Pour atteindre 165,7 wpm → `BASIC_TTS_SPEED=1.15` (rate edge-tts +15 %).
+  Vérifié : régénération à +15 % → 166,3 wpm (écart +0,3 %).
+- `BASIC_TTS_SPEED=1.15` ajouté à `backend/.env`.
+- Script : `calibrate_edge_speed.py`, sortie `edge_calibration_report.json`.
+
+**Correction appliquée** : la calibration pipeline par défaut passe de `192` à
+`165,7` mots/min (`FORMATION_TTS_WORDS_PER_MINUTE` reste surchargeable). Les
+budgets génération, sécurité volume, closings contextuels et garde-fous Word 2 /
+audio utilisent désormais cette cadence.
+Noté aussi : la pipeline `basic_tts` envoie le texte avec ses tags `[pause]`
+bruts à Edge TTS (qui les vocaliserait) — à vérifier séparément.
+
+### fix(prompts): interdire "hier"/"demain" dans les références inter-cours
+
+**Problème** : le contenu généré (visible dans le cours 2 de la formation
+Employé Commercial) disait "depuis hier" et "hier, on a posé les fondations".
+Or les cours ne s'enchaînent PAS au jour le jour — un cours par semaine, et ce
+rythme peut changer. "hier" est donc factuellement faux.
+
+**Cause racine** : `prompt-generation-tts-scratch.md` autorisait explicitement
+"hier on a vu…" dans la RÈGLE #25 (cours à distance) et dans les blocs "Référencer
+la progression pédagogique" — sur les 3 passes de génération. De plus, le ruleset
+de la passe **Humanisation** (#101-#113) — qui ignore volontairement #1-#27 — ne
+contenait AUCUNE règle interdisant "hier" : la passe Humanisation ne corrigeait
+donc jamais ces occurrences.
+
+**Correction** :
+- RÈGLE #25 (×3 passes) : "hier"/"demain" passent d'autorisés à INTERDITS ;
+  références imposées vagues et non datées ("la dernière fois", "lors du dernier
+  cours", "dans la séance précédente").
+- Blocs "Référencer la progression pédagogique" (×2) : même correction.
+- **Nouvelle RÈGLE #114** dans le ruleset Humanisation (`_HUMANIZATION_REVIEW_RULES`)
+  : "Références entre cours toujours vagues, jamais datées". Ajoutée au groupe
+  `humanisation_rythme` (#101-#114), version du ruleset bumpée en
+  `2026-05-19-humanisation-v4`. Mentions hardcodées "#101 à #113" mises à jour
+  dans `claude_code_mission_service.py` et `content_generation_service.py`.
+- `closing_transition_service.py` : wording des prompts aligné ("la dernière
+  fois" / "lors du dernier cours" au lieu de "au cours dernier").
+- `content_generation_service.py` : `_CARRYOVER_INTRO` et prompt de réduction
+  du dernier bloc alignés sur les mêmes formulations vagues.
+
+Impact : la génération ne produira plus "hier" (RÈGLE #25), et les passes
+**Conformité** (#25) ET **Humanisation** (#114) patcheront désormais les
+occurrences existantes. Le bump de version du ruleset humanisation force la
+re-revue des segments. Les cours déjà générés doivent être repassés en relecture
+pour être corrigés.
+
 ## 2026-05-17
 
 ### feat(formation): extension cours "Employé Commercial - Écoute Active" (+2400 mots supplémentaires)

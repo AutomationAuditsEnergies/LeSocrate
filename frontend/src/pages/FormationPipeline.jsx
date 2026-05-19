@@ -2252,8 +2252,8 @@ export default function FormationPipeline() {
   }, [contentFolders])
 
   // ─── Étape 6.5 — Sécurité volume (audit + enrichissement à la demande) ────
-  // Filet de sécurité POST-génération : si une journée totalise <90 000 mots,
-  // l'utilisateur peut lancer un agent Claude Code qui enrichit (append-only)
+  // Filet de sécurité POST-génération : si une journée est sous le budget audio
+  // calibré, l'utilisateur peut lancer un agent qui enrichit (append-only)
   // les segments les plus courts en respectant les règles #1-#27.
   const [volumeAudit, setVolumeAudit] = useState(null)              // { target, folders[] }
   const [safetyRunning, setSafetyRunning] = useState({})            // { [folderId]: true }
@@ -3876,7 +3876,7 @@ export default function FormationPipeline() {
                     Crée <strong style={{ color: '#a78bfa' }}>{job.nb_days} dossiers cours</strong> et génère le texte complet de chaque journée (6 modules × 3 passes avec {selectedPipelineModel}).
                   </p>
                   <p style={{ fontSize: '13px', color: '#475569', marginBottom: '16px' }}>
-                    ~90 000 mots par journée. Cette étape ne fait pas encore la synthèse audio — vous pourrez relire les textes et les télécharger en PDF avant de lancer le TTS.
+                    Volume calibré selon les créneaux cours audio. Cette étape ne fait pas encore la synthèse audio — vous pourrez relire les textes et les télécharger en PDF avant de lancer le TTS.
                   </p>
                   <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
                     <button
@@ -3918,9 +3918,9 @@ export default function FormationPipeline() {
                   generatedVia={null}
                 />
 
-                {/* ── Étape intermédiaire : Sécurité volume (90 000 mots/journée) ──
+                {/* ── Étape intermédiaire : Sécurité volume (budget cours audio) ──
                     Entre la génération texte et la révision conformité. Audite
-                    le total_words par folder ; si <90k, propose un enrichissement
+                    le total_words par folder ; si sous budget, propose un enrichissement
                     Claude Code (append-only, règles #1-#27). */}
                 {volumeAudit && volumeAudit.folders && volumeAudit.folders.length > 0 && (
                   <FlowArrowDown height={20} />
@@ -3939,7 +3939,7 @@ export default function FormationPipeline() {
                   >
                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
                       <span style={{ fontSize: '13px', color: '#fbbf24', fontWeight: 600, flex: 1, minWidth: 0 }}>
-                        Sécurité volume — {volumeAudit.target.toLocaleString('fr-FR')} mots / journée
+                        Sécurité volume — cible {volumeAudit.target.toLocaleString('fr-FR')} mots / journée
                       </span>
                       <select
                         value={safetyModel}
@@ -3961,18 +3961,21 @@ export default function FormationPipeline() {
                     </div>
 
                     <div style={{ fontSize: '11px', color: '#94a3b8' }}>
-                      Audit après génération · si une journée fait moins de 90 000 mots, un agent
-                      Claude Code enrichit (append-only) les segments les plus courts en respectant
-                      les règles #1-#27.
+                      Audit après génération · les Q&A et pauses ne comptent pas. Plage acceptée :
+                      {' '}{(volumeAudit.min_target || volumeAudit.target).toLocaleString('fr-FR')} à{' '}
+                      {(volumeAudit.max_target || volumeAudit.target).toLocaleString('fr-FR')} mots parlés.
                     </div>
 
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                       {volumeAudit.folders.map(fa => {
                         const total = fa.total_words || 0
-                        const target = volumeAudit.target
+                        const target = fa.target_words || volumeAudit.target || 1
+                        const minTarget = fa.min_words || volumeAudit.min_target || target
+                        const maxTarget = fa.max_words || volumeAudit.max_target || target
                         const pct = Math.min(100, Math.round((total / target) * 100))
-                        const isOk = total >= target
-                        const isLow = total < 80000
+                        const isOk = total >= minTarget && total <= maxTarget
+                        const isLow = total < minTarget
+                        const isHigh = total > maxTarget
                         const color = isOk ? '#34d399' : isLow ? '#f87171' : '#fbbf24'
                         const running = !!safetyRunning[fa.folder_id]
                         return (
@@ -4006,6 +4009,10 @@ export default function FormationPipeline() {
                               {isOk ? (
                                 <span style={{ fontSize: '11px', color: '#34d399', fontWeight: 600 }}>
                                   <Icon name="check_circle" style={{ fontSize: '13px' }} /> OK
+                                </span>
+                              ) : isHigh ? (
+                                <span style={{ fontSize: '11px', color: '#fbbf24', fontWeight: 600 }}>
+                                  <Icon name="warning" style={{ fontSize: '13px' }} /> Trop long
                                 </span>
                               ) : (
                                 <button

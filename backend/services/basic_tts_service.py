@@ -160,7 +160,7 @@ def convert_to_speech_basic(
         lang: code de langue (conservé pour compat — la voix par défaut
             est fr-FR-DeniseNeural, override via EDGE_TTS_VOICE).
         speed: facteur d'accélération multiplicatif. Si absent, lit
-            BASIC_TTS_SPEED, défaut 1.0 (voix neurales naturelles).
+            BASIC_TTS_SPEED, défaut 1.15 pour matcher le débit Fish Audio mesuré.
         parallel_workers: nombre de chunks Edge TTS à synthétiser en parallèle.
             Par défaut, reste séquentiel. À utiliser uniquement pour les
             pipelines de test, car Edge TTS peut throttler si on monte trop haut.
@@ -181,7 +181,7 @@ def convert_to_speech_basic(
         max_429_retries = int(os.getenv("BASIC_TTS_MAX_429_RETRIES", "3"))
     if retry_base_wait_sec is None:
         retry_base_wait_sec = float(os.getenv("BASIC_TTS_429_BASE_WAIT_SEC", "5"))
-    speed = float(speed if speed is not None else os.getenv("BASIC_TTS_SPEED", "1.0"))
+    speed = float(speed if speed is not None else os.getenv("BASIC_TTS_SPEED", "1.15"))
     try:
         parallel_workers = int(parallel_workers or 1)
     except (TypeError, ValueError):

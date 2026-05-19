@@ -3,8 +3,8 @@ Service de génération de contenu TTS-direct.
 
 Pipeline par dossier (= 1 journée de formation) :
   1. Extraction automatique de 6 sous-parties depuis le programme (1 appel Claude)
-  2. Pour chaque sous-partie : Passe 1 → Passe 2 → Passe 3 (~5 000 mots chacune)
-  3. Total ~90 000 mots TTS-ready → sauvegardé comme document .txt dans le dossier
+  2. Pour chaque sous-partie : Passe 1 → Passe 2 → Passe 3 (volume calibré audio)
+  3. Total TTS-ready calibré sur les créneaux cours Fish Audio → document .txt
 
 Checkpointing : chaque segment complété est sauvegardé en DB immédiatement.
 En cas d'interruption, la génération reprend au segment suivant non complété.
@@ -33,7 +33,8 @@ logger = get_logger(__name__)
 CLAUDE_MODEL = default_model()
 NUM_SUB_PARTS = 6
 _COURSE_START_SILENCE_SECONDS = 17
-_DEFAULT_TTS_WORDS_PER_MINUTE = 192
+# Fish Audio S2-Pro mesuré sur 72,2 min / 11 959 mots à speed=0.90.
+_DEFAULT_TTS_WORDS_PER_MINUTE = 165.7
 _COURSE_CONCLUSION_START_MARGIN_SECONDS = 240
 _COURSE_FINAL_SILENCE_SECONDS = 120
 _DEFAULT_TTS_SPEED = 0.90
@@ -42,11 +43,12 @@ _DEFAULT_TTS_PREFLIGHT_SAFETY = 1.0
 _SENTENCE_END_RE = re.compile(r"[.!?…][\"'»”’)\]]*$")
 _CARRYOVER_INTRO = (
     "Avant d'entrer dans la suite de ce cours, on reprend le point que nous "
-    "n'avons pas terminé au cours dernier. On le pose proprement, puis on "
+    "n'avons pas terminé la dernière fois. On le pose proprement, puis on "
     "enchaînera naturellement avec le programme prévu."
 )
 _CARRYOVER_COLUMNS_READY = False
 _FISHAUDIO_TAG_RE = re.compile(r"\[[^\[\]\n]{1,50}\]")
+_AUDIO_BLOCK_MARKER_RE = re.compile(r"^\s*<<<BLOC_AUDIO_(\d+)>>>\s*$", re.MULTILINE)
 _EDGE_TTS_FAST_CACHE = {}
 _EDGE_TTS_FAST_CACHE_LOCK = threading.Lock()
 
@@ -105,7 +107,7 @@ def _edge_tts_fast_cache_key(text: str) -> str:
         {
             "text": text,
             "voice": os.getenv("EDGE_TTS_VOICE", "fr-FR-DeniseNeural"),
-            "speed": os.getenv("BASIC_TTS_SPEED", "1.0"),
+            "speed": os.getenv("BASIC_TTS_SPEED", "1.15"),
         },
         ensure_ascii=False,
         sort_keys=True,
@@ -240,6 +242,344 @@ def _estimated_words_budget_for_course(target_sec, api_speed):
 def _estimated_main_words_budget_for_course(target_sec, api_speed):
     """Words allowed for source course text before the generated conclusion."""
     return _words_budget_for_speaking_window(target_sec, _course_conclusion_start_margin_sec())
+
+
+def count_tts_spoken_words(text: str | None) -> int:
+    """Compte les mots réellement parlés en ignorant les tags TTS `[pause]`."""
+    cleaned = _strip_audio_block_markers(text or "")
+    cleaned = _FISHAUDIO_TAG_RE.sub(" ", cleaned)
+    return len(cleaned.split())
+
+
+def _strip_audio_block_markers(text: str | None) -> str:
+    """Retire les marqueurs internes de structuration audio du texte utilisateur/TTS."""
+    return _AUDIO_BLOCK_MARKER_RE.sub("", text or "").strip()
+
+
+def get_course_day_word_budget(playlist_spec=None) -> dict:
+    """Budget mots quotidien dérivé des seuls créneaux `cours`.
+
+    Les Q&A/pauses ne sont pas intégrées au texte de cours et ne doivent donc
+    pas gonfler la cible. Pour chaque créneau cours, on retire le silence de
+    début et le silence final de sécurité avant d'appliquer la cadence calibrée
+    Fish Audio.
+    """
+    if playlist_spec is None:
+        from services.playlist_tts_service import PLAYLIST_SPEC as playlist_spec
+
+    course_items = [
+        (filename, int(duration or 0), int(bloc_num or 0))
+        for filename, duration, file_type, bloc_num in playlist_spec
+        if file_type == "cours"
+    ]
+    per_course = []
+    target_words = 0
+    speakable_seconds = 0.0
+    for filename, duration_sec, bloc_num in course_items:
+        voice_window = _course_voice_window_sec(duration_sec)
+        words = _estimated_words_budget_for_course(duration_sec, _DEFAULT_TTS_SPEED)
+        target_words += words
+        speakable_seconds += voice_window
+        per_course.append({
+            "filename": filename,
+            "bloc_number": bloc_num,
+            "duration_sec": duration_sec,
+            "speakable_sec": round(voice_window, 3),
+            "target_words": words,
+        })
+
+    min_ratio = _env_float("FORMATION_TTS_DAY_WORD_MIN_RATIO", 0.94, min_value=0.70, max_value=1.0)
+    max_ratio = _env_float("FORMATION_TTS_DAY_WORD_MAX_RATIO", 1.02, min_value=1.0, max_value=1.20)
+    try:
+        max_extra = int(os.getenv("FORMATION_TTS_DAY_WORD_MAX_EXTRA", "350"))
+    except (TypeError, ValueError):
+        max_extra = 350
+
+    min_words = int(target_words * min_ratio)
+    max_words = max(int(target_words * max_ratio), target_words + max(0, max_extra))
+    return {
+        "target_words": int(target_words),
+        "min_words": int(min_words),
+        "max_words": int(max_words),
+        "words_per_minute": float(_course_words_per_minute()),
+        "course_seconds": int(sum(item[1] for item in course_items)),
+        "speakable_seconds": round(speakable_seconds, 3),
+        "start_silence_sec": int(_COURSE_START_SILENCE_SECONDS),
+        "final_silence_sec": float(_course_final_silence_sec()),
+        "course_items": per_course,
+    }
+
+
+def get_course_segment_generation_budget(segment_count: int = NUM_SUB_PARTS * 3) -> dict:
+    """Budget indicatif par segment pour que la journée tombe juste après review."""
+    day_budget = get_course_day_word_budget()
+    segment_count = max(1, int(segment_count or 1))
+    reserve_ratio = _env_float(
+        "FORMATION_TTS_GENERATION_REVIEW_RESERVE_RATIO",
+        0.97,
+        min_value=0.80,
+        max_value=1.0,
+    )
+    target = max(800, int(day_budget["target_words"] * reserve_ratio / segment_count))
+    minimum = max(700, int(day_budget["min_words"] / segment_count))
+    maximum = max(target, int(day_budget["max_words"] / segment_count))
+    return {
+        "target_words": target,
+        "min_words": minimum,
+        "max_words": maximum,
+        "day_budget": day_budget,
+        "segment_count": segment_count,
+    }
+
+
+def _build_generation_volume_context() -> str:
+    budget = get_course_segment_generation_budget()
+    day = budget["day_budget"]
+    return f"""
+═══════════════════════════════════════════════════════════════════
+CONTRAINTE VOLUME AUDIO PRIORITAIRE — FISH AUDIO
+═══════════════════════════════════════════════════════════════════
+La journée est maintenant calculée au mot près sur les créneaux cours,
+hors Q&A et hors pauses.
+
+Cadence calibrée : {day['words_per_minute']:.0f} mots/minute.
+Budget journée cours uniquement : cible {day['target_words']} mots parlés,
+tolérance {day['min_words']} à {day['max_words']} mots.
+
+Cette passe doit viser environ {budget['target_words']} mots utiles,
+avec une plage acceptable de {budget['min_words']} à {budget['max_words']}
+mots. Cette consigne remplace toutes les anciennes consignes qui parlaient
+de 5 000 mots ou de 90 000 mots par journée.
+
+N'allonge pas artificiellement le texte. Ne cherche pas à remplir les Q&A
+ou les pauses : ils ont leurs propres fichiers et ne comptent pas ici.
+"""
+
+
+def _next_playlist_item_after_index(playlist_spec, idx: int):
+    try:
+        return playlist_spec[idx + 1] if idx + 1 < len(playlist_spec) else None
+    except Exception:
+        return None
+
+
+def _course_block_role(bloc_number: int, *, folder_position=None, next_item=None) -> str:
+    """Direction artistique du bloc audio selon sa position dans la journée."""
+    day_number = None
+    try:
+        day_number = int(folder_position) + 1 if folder_position is not None else None
+    except Exception:
+        day_number = None
+
+    parts = []
+    if bloc_number == 1 and day_number == 1:
+        parts.append(
+            "Ouverture absolue de la formation : accueil calme, contexte général, "
+            "utilité concrète de la formation, programme global, encouragement, "
+            "puis lancement progressif du premier sujet."
+        )
+    elif bloc_number == 1:
+        parts.append(
+            "Ouverture de journée : reprise douce, rappel vague de la progression, "
+            "objectifs de la journée, puis transition naturelle vers le premier sujet."
+        )
+    else:
+        parts.append(
+            "Bloc de continuité : reprendre le fil sans rupture, avancer dans la notion, "
+            "insérer respirations pédagogiques, exemples terrain et mini-synthèses."
+        )
+
+    if bloc_number == 7:
+        parts.append(
+            "Fin de journée : conclusion progressive, synthèse des idées essentielles, "
+            "valorisation du chemin parcouru et projection sobre vers la suite."
+        )
+
+    next_type = next_item[2] if next_item and len(next_item) >= 3 else None
+    next_duration = int(next_item[1] or 0) if next_item and len(next_item) >= 2 else 0
+    if next_type in {"qa", "pause", "pause_midi"}:
+        if next_type == "qa":
+            parts.append(
+                "Outro : annoncer que l'on va passer au temps de questions-réponses. "
+                "Le Q&A suivant démarre sans introduction propre."
+            )
+        elif next_type == "pause_midi":
+            parts.append(
+                "Outro : annoncer naturellement la pause déjeuner. "
+                "Le fichier pause suivant démarre sans introduction propre."
+            )
+        else:
+            minutes = max(1, round(next_duration / 60)) if next_duration else None
+            pause_label = f" de {minutes} minutes" if minutes else ""
+            parts.append(
+                f"Outro : annoncer naturellement une pause{pause_label}. "
+                "Le fichier pause suivant démarre sans introduction propre."
+            )
+
+    return " ".join(parts)
+
+
+def _block_min_words(word_budget: int) -> int:
+    ratio = _env_float("FORMATION_TTS_BLOCK_WORD_MIN_RATIO", 0.97, min_value=0.80, max_value=1.0)
+    return max(0, int(int(word_budget or 0) * ratio))
+
+
+def _course_audio_block_plan(playlist_spec=None, *, folder_position=None) -> list[dict]:
+    if playlist_spec is None:
+        from services.playlist_tts_service import PLAYLIST_SPEC as playlist_spec
+    api_speed = _course_tts_speed()
+    blocks = []
+    for idx, item in enumerate(playlist_spec):
+        filename, duration_sec, file_type, bloc_num = item
+        if file_type != "cours":
+            continue
+        target_sec = int(duration_sec or 0)
+        word_budget = _estimated_words_budget_for_course(target_sec, api_speed)
+        min_words = _block_min_words(word_budget)
+        next_item = _next_playlist_item_after_index(playlist_spec, idx)
+        blocks.append({
+            "bloc_number": int(bloc_num or 0),
+            "filename": filename,
+            "duration_sec": target_sec,
+            "duration_min": round(target_sec / 60, 1),
+            "min_words": min_words,
+            "target_words": word_budget,
+            "max_words": word_budget,
+            "role": _course_block_role(int(bloc_num or 0), folder_position=folder_position, next_item=next_item),
+            "next_item_type": next_item[2] if next_item and len(next_item) >= 3 else None,
+        })
+    return blocks
+
+
+def _build_audio_day_plan_context(generation_context=None) -> str:
+    """Injecte la direction artistique par blocs playlist dans le prompt initial."""
+    folder_position = (generation_context or {}).get("folder_position")
+    blocks = _course_audio_block_plan(folder_position=folder_position)
+    lines = [
+        "═══════════════════════════════════════════════════════════════════",
+        "DIRECTION ARTISTIQUE AUDIO — STRUCTURE PAR BLOCS PLAYLIST",
+        "═══════════════════════════════════════════════════════════════════",
+        "Le texte final sera lu en plusieurs fichiers cours selon la playlist réelle.",
+        "Écris donc une journée vécue, fluide, avec des paragraphes qui peuvent se",
+        "répartir naturellement dans les blocs ci-dessous. Ne mets pas de marqueurs",
+        "techniques dans ta réponse : le système s'en charge.",
+        "",
+    ]
+    for block in blocks:
+        lines.append(
+            f"- Bloc cours {block['bloc_number']} · {block['duration_min']} min · "
+            f"budget parole {block['min_words']}–{block['max_words']} mots : {block['role']}"
+        )
+    lines.extend([
+        "",
+        "Règles impératives :",
+        "- Le premier bloc ne démarre jamais brutalement.",
+        "- Chaque bloc se ferme proprement : mini-synthèse, transition, ou annonce pause/Q&A si nécessaire.",
+        "- Si un Q&A ou une pause suit, son introduction est portée par l'outro du cours précédent.",
+        "- Les Q&A et pauses ne comptent pas dans le texte de cours.",
+        "- Les références entre cours restent vagues : jamais \"hier\" ni \"demain\".",
+    ])
+    return "\n".join(lines)
+
+
+def compute_course_day_word_budget_audit(folder_id: int, job: dict | None = None) -> dict:
+    """Audit final du nombre de mots réellement parlés pour une journée."""
+    job = job or get_job_from_db(folder_id)
+    budget = get_course_day_word_budget()
+    if not job:
+        return {
+            "ok": False,
+            "status": "content_job_missing",
+            "folder_id": folder_id,
+            "reason": "content_job_missing",
+            "budget": budget,
+            "spoken_words": 0,
+            "raw_words": 0,
+            "deficit": budget["min_words"],
+            "overflow": 0,
+        }
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        SELECT COALESCE(text_content, ''), COALESCE(word_count, 0)
+        FROM content_generation_segments
+        WHERE job_id = ? AND status = 'completed'
+        ORDER BY sub_part_index ASC, passe ASC
+        """,
+        (job["id"],),
+    )
+    rows = cursor.fetchall()
+    conn.close()
+
+    raw_words = 0
+    spoken_words = 0
+    for row in rows:
+        if len(row) >= 4 and not isinstance(row[0], str):
+            text, wc = row[2], row[3]
+        else:
+            text, wc = row[0], row[1]
+        raw_words += int(wc or len((text or "").split()))
+        spoken_words += count_tts_spoken_words(text)
+
+    carryover_in = (job.get("carryover_in_text") or "").strip()
+    if carryover_in:
+        raw_words += len(carryover_in.split())
+        spoken_words += count_tts_spoken_words(carryover_in)
+
+    deficit = max(0, int(budget["min_words"]) - spoken_words)
+    overflow = max(0, spoken_words - int(budget["max_words"]))
+    status = "ok"
+    if deficit:
+        status = "under_budget"
+    elif overflow:
+        status = "over_budget"
+
+    return {
+        "ok": status == "ok",
+        "status": status,
+        "folder_id": folder_id,
+        "content_job_id": job["id"],
+        "budget": budget,
+        "spoken_words": int(spoken_words),
+        "raw_words": int(raw_words),
+        "deficit": int(deficit),
+        "overflow": int(overflow),
+        "segments_count": len(rows),
+        "includes_carryover_in": bool(carryover_in),
+    }
+
+
+def assert_course_day_word_budget(folder_id: int, *, context: str = "") -> dict:
+    """Bloque la pipeline si le texte final n'est pas dans le budget audio."""
+    audit = compute_course_day_word_budget_audit(folder_id)
+    if audit.get("ok"):
+        logger.info(
+            "PIPELINE_DAY_WORD_BUDGET_OK folder_id=%s context=%s spoken=%s target=%s range=%s-%s",
+            folder_id,
+            context,
+            audit["spoken_words"],
+            audit["budget"]["target_words"],
+            audit["budget"]["min_words"],
+            audit["budget"]["max_words"],
+        )
+        return audit
+
+    budget = audit["budget"]
+    if audit["status"] == "under_budget":
+        detail = f"manque {audit['deficit']} mots"
+    elif audit["status"] == "over_budget":
+        detail = f"dépasse de {audit['overflow']} mots"
+    else:
+        detail = audit.get("reason") or audit["status"]
+    raise ValueError(
+        "Budget mots journée invalide "
+        f"({context or 'pipeline'}): {audit['spoken_words']} mots parlés, "
+        f"cible {budget['target_words']} mots, plage autorisée "
+        f"{budget['min_words']}–{budget['max_words']} mots, {detail}. "
+        "Corrige le texte avant Word 2 / audio pour préserver le calcul au mot près."
+    )
 
 
 def _estimated_audio_seconds_for_words(word_count, api_speed):
@@ -443,9 +783,9 @@ _REMAINING_MID_SEC = 5 * 60
 _REMAINING_LOW_SEC = 2 * 60
 _REMAINING_TINY_SEC = 25
 
-# Edge TTS lit autour de 170 mots/min en français rate=+0%. Bootstrap pour
-# l'estimation runtime, ensuite on calcule un wpm réel observé.
-_BOOTSTRAP_WPM_EDGE_TTS = 170.0
+# Edge TTS calibré à BASIC_TTS_SPEED=1.15 pour matcher Fish Audio (~166 wpm).
+# Ensuite on recalcule un wpm réel observé pendant le run.
+_BOOTSTRAP_WPM_EDGE_TTS = 166.0
 
 # Tolérance d'arrondi sur la durée mesurée (frames MP3 = ~26 ms).
 _TOLERANCE_OVERFLOW_SEC = 2.0
@@ -1827,8 +2167,8 @@ OBJECTIF :
 - Ne supprime pas l'idée générale : condense, fusionne les exemples redondants,
   garde les notions utiles.
 - N'ajoute AUCUNE nouvelle idée.
-- Ne dis jamais "hier". Si tu fais référence à la séance précédente, dis
-  "au cours dernier".
+- Ne dis jamais "hier" ni "demain". Si tu fais référence à la séance
+  précédente, dis "la dernière fois" ou "lors du dernier cours".
 - Termine par une vraie conclusion de cours.
 - Texte oral fluide, naturel, prêt pour TTS.
 
@@ -2053,6 +2393,72 @@ def _render_course_slice(full_words, units, start_w, end_w):
     return "\n\n".join(p.strip() for p in parts if p.strip())
 
 
+def _extract_marked_audio_blocks_from_segments(segments) -> dict[int, str]:
+    """Lit les blocs persistés sous forme `<<<BLOC_AUDIO_N>>>`.
+
+    Cette représentation sert après la calibration mots par bloc : elle évite
+    de redécouper proportionnellement un texte déjà organisé exactement selon
+    la playlist.
+    """
+    full_text = "\n\n".join((seg.get("text") or "") for seg in segments)
+    matches = list(_AUDIO_BLOCK_MARKER_RE.finditer(full_text))
+    if not matches:
+        return {}
+    blocks = {}
+    for idx, match in enumerate(matches):
+        bloc_num = int(match.group(1))
+        start = match.end()
+        end = matches[idx + 1].start() if idx + 1 < len(matches) else len(full_text)
+        text = _strip_audio_block_markers(full_text[start:end]).strip()
+        if text:
+            blocks[bloc_num] = text
+    return blocks
+
+
+def _build_course_blocs_from_marked_blocks(
+    marked_blocks: dict[int, str],
+    playlist_spec,
+    *,
+    segments,
+    force_all=False,
+    folder_position=None,
+):
+    api_speed = _course_tts_speed()
+    any_dirty = force_all or any(bool(seg.get("dirty")) for seg in segments)
+    blocs = []
+    cursor_w = 0
+    for item_idx, (filename, duration_sec, file_type, bloc_num) in enumerate(playlist_spec):
+        if file_type != "cours":
+            continue
+        bloc_num = int(bloc_num or 0)
+        target_sec = int(duration_sec or 0)
+        text = marked_blocks.get(bloc_num, "").strip()
+        words = count_tts_spoken_words(text)
+        word_budget = _estimated_words_budget_for_course(target_sec, api_speed)
+        main_word_budget = _estimated_main_words_budget_for_course(target_sec, api_speed)
+        blocs.append({
+            "bloc_number": bloc_num,
+            "text": text,
+            "start_w": cursor_w,
+            "end_w": cursor_w + words,
+            "word_count": words,
+            "contributing_seg_indices": set(range(len(segments))),
+            "dirty": any_dirty,
+            "target_sec": target_sec,
+            "word_budget": word_budget,
+            "main_word_budget": main_word_budget,
+            "filename": filename,
+            "role": _course_block_role(
+                bloc_num,
+                folder_position=folder_position,
+                next_item=_next_playlist_item_after_index(playlist_spec, item_idx),
+            ),
+            "audio_block_marked": True,
+        })
+        cursor_w += words
+    return blocs, cursor_w
+
+
 def _build_course_blocs_from_segments(
     segments,
     cours_durations_min,
@@ -2068,9 +2474,20 @@ def _build_course_blocs_from_segments(
 
     Chaque bloc reçoit deux budgets calibrés Fish Audio :
     - `main_word_budget` : texte source lu avant la conclusion (arrêt visé T-4 min).
-    - `word_budget` : parole totale, conclusion incluse (arrêt visé T-1 min).
+    - `word_budget` : parole totale, conclusion incluse (arrêt visé T-2 min).
     Tout paragraphe en surplus cascade automatiquement vers le bloc suivant.
     """
+    marked_blocks = _extract_marked_audio_blocks_from_segments(segments)
+    if marked_blocks and all(i in marked_blocks for i in range(1, 8)):
+        blocs, total_marked_words = _build_course_blocs_from_marked_blocks(
+            marked_blocks,
+            playlist_spec,
+            segments=segments,
+            force_all=force_all,
+        )
+        logger.info("   🎚️ Découpage blocs audio persisté détecté (%s mots)", total_marked_words)
+        return blocs, total_marked_words, ""
+
     full_words, word_to_seg_idx, units = _build_course_text_units(segments)
 
     total_words = len(full_words)
@@ -2171,6 +2588,512 @@ def _build_course_blocs_from_segments(
     )
 
     return blocs, total_words, carryover_out
+
+
+def _course_durations_min_from_playlist(playlist_spec) -> dict[int, float]:
+    """Durées cours en minutes depuis la playlist effective, fallback statique."""
+    from services.playlist_tts_service import COURS_DURATIONS_MIN
+
+    durations = {int(k): float(v) for k, v in COURS_DURATIONS_MIN.items()}
+    for filename, duration_sec, file_type, bloc_num in playlist_spec or []:
+        if file_type != "cours":
+            continue
+        try:
+            durations[int(bloc_num)] = max(1.0, float(duration_sec or 0) / 60.0)
+        except Exception:
+            logger.warning("⚠️ Durée playlist invalide pour %s bloc=%s", filename, bloc_num)
+    return durations
+
+
+def _audio_block_word_status(text: str, block: dict) -> dict:
+    words = count_tts_spoken_words(text)
+    min_words = int(block.get("min_words") or _block_min_words(block.get("word_budget") or 0))
+    max_words = int(block.get("max_words") or block.get("word_budget") or 0)
+    target_words = int(block.get("target_words") or max_words)
+    if max_words <= 0:
+        return {
+            "ok": True,
+            "status": "no_budget",
+            "words": words,
+            "min_words": 0,
+            "max_words": 0,
+            "target_words": 0,
+            "delta": 0,
+        }
+    if words < min_words:
+        return {
+            "ok": False,
+            "status": "under_budget",
+            "words": words,
+            "min_words": min_words,
+            "max_words": max_words,
+            "target_words": target_words,
+            "delta": min_words - words,
+        }
+    if words > max_words:
+        return {
+            "ok": False,
+            "status": "over_budget",
+            "words": words,
+            "min_words": min_words,
+            "max_words": max_words,
+            "target_words": target_words,
+            "delta": words - max_words,
+        }
+    return {
+        "ok": True,
+        "status": "ok",
+        "words": words,
+        "min_words": min_words,
+        "max_words": max_words,
+        "target_words": target_words,
+        "delta": 0,
+    }
+
+
+def _clean_audio_block_rewrite(raw: str) -> str:
+    """Nettoie une réponse IA de calibrage bloc sans supprimer les tags TTS."""
+    text = (raw or "").strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```[a-zA-Z0-9_-]*\s*", "", text)
+        text = re.sub(r"\s*```$", "", text).strip()
+    text = _strip_audio_block_markers(text)
+    text = re.sub(r"^\s*(texte\s+(?:réécrit|calibré)\s*:)\s*", "", text, flags=re.I)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
+
+
+def _trim_text_to_max_spoken_words(text: str, max_words: int) -> str:
+    """Raccourcit proprement en visant une frontière de paragraphe/phrase."""
+    text = (text or "").strip()
+    max_words = max(0, int(max_words or 0))
+    if max_words <= 0 or count_tts_spoken_words(text) <= max_words:
+        return text
+
+    kept = []
+    kept_words = 0
+    paragraphs = [p.strip() for p in re.split(r"\n{2,}", text) if p.strip()]
+    for paragraph in paragraphs:
+        para_words = count_tts_spoken_words(paragraph)
+        if kept_words + para_words <= max_words:
+            kept.append(paragraph)
+            kept_words += para_words
+            continue
+
+        sentences = [
+            s.strip()
+            for s in re.split(r"(?<=[.!?…])\s+", paragraph)
+            if s.strip()
+        ]
+        sentence_added = False
+        for sentence in sentences:
+            sent_words = count_tts_spoken_words(sentence)
+            if kept_words + sent_words <= max_words:
+                kept.append(sentence)
+                kept_words += sent_words
+                sentence_added = True
+            else:
+                break
+        if sentence_added or kept_words >= max_words:
+            break
+
+        # Dernier recours : coupe au mot si aucune phrase complète ne rentre.
+        remaining = max_words - kept_words
+        if remaining > 0:
+            raw_tokens = paragraph.split()
+            candidate = []
+            for token in raw_tokens:
+                candidate.append(token)
+                if count_tts_spoken_words(" ".join(candidate)) >= remaining:
+                    break
+            if candidate:
+                fragment = " ".join(candidate).strip()
+                if fragment and fragment[-1] not in ".!?…":
+                    fragment += "."
+                kept.append(fragment)
+        break
+
+    trimmed = "\n\n".join(kept).strip()
+    return trimmed or " ".join(text.split()[:max_words]).strip()
+
+
+_AUDIO_BLOCK_FILLERS = [
+    (
+        "Prenons quelques secondes pour ancrer cette idée. [pause]\n\n"
+        "Dans une situation réelle, ce point ne reste jamais théorique. Il se voit "
+        "dans la manière d'accueillir, de questionner, de reformuler et de sécuriser "
+        "l'échange. L'objectif, ici, c'est de transformer une notion en réflexe simple, "
+        "utilisable sans avoir besoin d'y réfléchir longtemps. [pause]\n\n"
+        "Retenez surtout ceci : une posture professionnelle se construit par petites "
+        "décisions répétées. On écoute mieux, on clarifie plus tôt, et on évite de "
+        "laisser l'autre dans le flou."
+    ),
+    (
+        "On peut aussi le voir avec un exemple très courant. [pause]\n\n"
+        "Un client arrive avec une demande qui paraît simple, mais derrière cette demande, "
+        "il y a souvent une attente implicite : être compris, être orienté et sentir que "
+        "quelqu'un tient le fil. Le rôle professionnel consiste donc à ralentir juste assez "
+        "pour vérifier la demande, puis à proposer une suite claire. [pause]\n\n"
+        "Ce n'est pas spectaculaire, mais c'est précisément ce qui rend l'échange fiable."
+    ),
+    (
+        "Avant d'avancer, faisons une mini-synthèse. [pause]\n\n"
+        "Ce qu'il faut garder en tête, c'est que la compétence ne se limite pas à connaître "
+        "une procédure. Il faut aussi savoir quand l'appliquer, comment l'expliquer, et comment "
+        "adapter son rythme à la personne en face. [pause]\n\n"
+        "C'est cette combinaison entre méthode et présence qui donne de la qualité au travail."
+    ),
+]
+
+
+def _expand_text_to_min_spoken_words(text: str, min_words: int, max_words: int) -> str:
+    """Ajoute des respirations pédagogiques déterministes si l'IA reste trop courte."""
+    result = (text or "").strip()
+    min_words = max(0, int(min_words or 0))
+    max_words = max(min_words, int(max_words or min_words))
+    idx = 0
+    while count_tts_spoken_words(result) < min_words and idx < 80:
+        filler = _AUDIO_BLOCK_FILLERS[idx % len(_AUDIO_BLOCK_FILLERS)]
+        result = (result + "\n\n" + filler).strip() if result else filler
+        idx += 1
+    if count_tts_spoken_words(result) > max_words:
+        result = _trim_text_to_max_spoken_words(result, max_words)
+    return result.strip()
+
+
+def _build_audio_block_calibration_prompt(
+    *,
+    block: dict,
+    current_text: str,
+    status: dict,
+    direction: str,
+    day_context: str,
+) -> str:
+    target_words = min(
+        int(status.get("max_words") or 0),
+        max(int(status.get("min_words") or 0), int(status.get("target_words") or 0) - 40),
+    )
+    action = (
+        "raccourcir sans perdre les idées essentielles"
+        if direction == "shorten"
+        else "enrichir avec des exemples, respirations, transitions et mini-synthèses utiles"
+    )
+    return f"""Tu es directeur éditorial d'un cours audio TTS Fish Audio.
+
+Objectif : réécrire UN bloc de cours pour qu'il tombe dans son budget de mots parlé.
+Ce texte sera lu tel quel. Il ne faut PAS répondre en JSON, PAS ajouter de titre,
+PAS ajouter de markdown, PAS ajouter de marqueur technique.
+
+Contexte journée :
+{day_context}
+
+Bloc audio :
+- Bloc cours {block.get('bloc_number')} · fichier {block.get('filename')}
+- Durée slot : {block.get('duration_min')} min
+- Budget accepté : {status.get('min_words')} à {status.get('max_words')} mots parlés
+- Cible pratique : environ {target_words} mots parlés
+- Texte actuel : {status.get('words')} mots
+- Direction artistique : {block.get('role') or 'continuité pédagogique orale'}
+
+Mission :
+- Tu dois {action}.
+- Le texte final doit rester oral, fluide, humain, TTS-ready.
+- Garde les tags TTS utiles comme [pause] ou [calm], mais n'en abuse pas.
+- Ne change pas le niveau RNCP, ne rajoute pas de promesse ou contenu sensible.
+- Respecte la logique playlist : si ce bloc annonce une pause ou un Q&A, cette annonce
+  reste dans l'outro du bloc précédent, pas dans le fichier pause/Q&A.
+- Ne gonfle pas hors budget : le résultat doit finir entre {status.get('min_words')}
+  et {status.get('max_words')} mots parlés.
+
+Texte actuel à réécrire :
+{current_text}
+"""
+
+
+def _calibrate_single_audio_block(
+    *,
+    block: dict,
+    text: str,
+    model=None,
+    max_iterations: int = 4,
+    day_context: str = "",
+) -> tuple[str, dict]:
+    """Ajuste un bloc par IA puis fallback déterministe pour garantir le budget."""
+    current_text = (text or "").strip()
+    history = []
+    changed = False
+
+    for iteration in range(1, max(1, int(max_iterations or 1)) + 1):
+        status = _audio_block_word_status(current_text, block)
+        history.append({
+            "iteration": iteration,
+            "status": status["status"],
+            "words": status["words"],
+            "delta": status["delta"],
+        })
+        if status["ok"]:
+            return current_text, {
+                **status,
+                "changed": changed,
+                "iterations": iteration - 1,
+                "fallback": None,
+                "history": history,
+            }
+
+        direction = "shorten" if status["status"] == "over_budget" else "expand"
+        prompt = _build_audio_block_calibration_prompt(
+            block=block,
+            current_text=current_text,
+            status=status,
+            direction=direction,
+            day_context=day_context,
+        )
+        try:
+            raw = _anthropic_post(
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=16000,
+                model=model,
+            )
+            candidate = _clean_audio_block_rewrite(raw)
+            candidate_words = count_tts_spoken_words(candidate)
+            if candidate and candidate_words > 0 and candidate.strip() != current_text.strip():
+                current_text = candidate
+                changed = True
+                logger.info(
+                    "PIPELINE_AUDIO_BLOCK_CALIBRATION_ITER bloc=%s iteration=%s direction=%s words=%s",
+                    block.get("bloc_number"),
+                    iteration,
+                    direction,
+                    candidate_words,
+                )
+                continue
+            logger.warning(
+                "PIPELINE_AUDIO_BLOCK_CALIBRATION_EMPTY bloc=%s iteration=%s direction=%s",
+                block.get("bloc_number"),
+                iteration,
+                direction,
+            )
+            break
+        except Exception as e:
+            logger.warning(
+                "PIPELINE_AUDIO_BLOCK_CALIBRATION_LLM_FAILED bloc=%s iteration=%s error=%s",
+                block.get("bloc_number"),
+                iteration,
+                str(e)[:300],
+            )
+            break
+
+    final_status = _audio_block_word_status(current_text, block)
+    fallback = None
+    if final_status["status"] == "over_budget":
+        current_text = _trim_text_to_max_spoken_words(current_text, final_status["max_words"])
+        changed = True
+        fallback = "trim_to_max_words"
+    elif final_status["status"] == "under_budget":
+        current_text = _expand_text_to_min_spoken_words(
+            current_text,
+            final_status["min_words"],
+            final_status["max_words"],
+        )
+        changed = True
+        fallback = "expand_to_min_words"
+
+    final_status = _audio_block_word_status(current_text, block)
+    return current_text, {
+        **final_status,
+        "changed": changed,
+        "iterations": len(history),
+        "fallback": fallback,
+        "history": history,
+    }
+
+
+def _persist_calibrated_audio_blocks(job: dict, calibrated_blocks: list[dict]) -> int:
+    """Persiste les 7 blocs audio comme source canonique du script TTS prévu."""
+    if not calibrated_blocks:
+        return 0
+
+    review_signature = _current_humanization_review_signature()
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        SELECT id, sub_part_index, sub_part_name, passe
+        FROM content_generation_segments
+        WHERE job_id = ? AND status = 'completed'
+        ORDER BY sub_part_index ASC, passe ASC
+        """,
+        (job["id"],),
+    )
+    rows = cursor.fetchall()
+    if len(rows) < len(calibrated_blocks):
+        conn.close()
+        raise ValueError(
+            f"Calibrage blocs impossible : {len(rows)} segment(s) disponibles "
+            f"pour {len(calibrated_blocks)} bloc(s) audio"
+        )
+
+    total_words = 0
+    for idx, block in enumerate(calibrated_blocks):
+        seg_id = rows[idx][0]
+        bloc_num = int(block["bloc_number"])
+        text = (block.get("text") or "").strip()
+        stored_text = f"<<<BLOC_AUDIO_{bloc_num}>>>\n\n{text}".strip()
+        words = count_tts_spoken_words(text)
+        total_words += words
+        cursor.execute(
+            """
+            UPDATE content_generation_segments
+            SET text_content = ?, word_count = ?, dirty = 1,
+                humanized = 1, humanization_error = NULL, humanization_signature = ?,
+                reviewed = 0, review_error = NULL, review_signature = NULL
+            WHERE id = ?
+            """,
+            (stored_text, words, review_signature, seg_id),
+        )
+
+    for row in rows[len(calibrated_blocks):]:
+        cursor.execute(
+            """
+            UPDATE content_generation_segments
+            SET text_content = '', word_count = 0, dirty = 1,
+                humanized = 1, humanization_error = NULL, humanization_signature = ?,
+                reviewed = 0, review_error = NULL, review_signature = NULL
+            WHERE id = ?
+            """,
+            (review_signature, row[0]),
+        )
+
+    cursor.execute(
+        """
+        UPDATE content_generation_jobs
+        SET total_words = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+        """,
+        (total_words, job["id"]),
+    )
+    conn.commit()
+    conn.close()
+    return total_words
+
+
+def run_audio_block_word_calibration(
+    folder_id: int,
+    *,
+    on_progress=None,
+    model=None,
+    max_iterations: int | None = None,
+    force: bool = False,
+    stage: str = "",
+) -> dict:
+    """Calibre les 7 blocs audio au nombre de mots prévu au lieu de bloquer.
+
+    Cette passe est volontairement entre humanisation et conformité stricte :
+    elle peut modifier le texte, donc elle invalide ensuite la conformité.
+    """
+    from services.playlist_tts_service import PLAYLIST_SPEC
+
+    job = get_job_from_db(folder_id)
+    if not job:
+        raise ValueError(f"Aucun content_generation_job pour folder {folder_id}")
+    if max_iterations is None:
+        max_iterations = int(os.getenv("FORMATION_TTS_BLOCK_CALIBRATION_MAX_ITERATIONS", "4") or "4")
+
+    playlist_spec = _playlist_items_for_platform(job["platform_id"]) or list(PLAYLIST_SPEC)
+    cours_durations_min = _course_durations_min_from_playlist(playlist_spec)
+    plan = _course_audio_block_plan(playlist_spec, folder_position=job.get("folder_position"))
+    plan_by_bloc = {int(block["bloc_number"]): block for block in plan}
+    day_context = _build_audio_day_plan_context({"folder_position": job.get("folder_position")})
+
+    segments = _load_segments_for_course_plan(job, sync_slides=False)
+    if not segments:
+        raise ValueError(f"Aucun segment complété pour calibrer folder {folder_id}")
+
+    next_folder_id = _find_next_folder_id(job["platform_id"], folder_id)
+    blocs, _total_words, _carryover_out = _build_course_blocs_from_segments(
+        segments,
+        cours_durations_min,
+        playlist_spec,
+        force_all=False,
+        source_folder_id=None,
+        next_folder_id=next_folder_id,
+        is_last_folder=next_folder_id is None,
+        model=model,
+        preview=True,
+    )
+
+    total = len(blocs)
+    calibrated_blocks = []
+    block_results = []
+    changed = False
+
+    for idx, bloc in enumerate(blocs, start=1):
+        bloc_num = int(bloc.get("bloc_number") or idx)
+        budget_block = {**bloc, **plan_by_bloc.get(bloc_num, {})}
+        current_text = (bloc.get("text") or "").strip()
+        initial_status = _audio_block_word_status(current_text, budget_block)
+        if on_progress:
+            on_progress(idx, total, f"Calibrage mots bloc {bloc_num} ({initial_status['words']} mots)…")
+
+        if initial_status["ok"] and not force:
+            calibrated_text = current_text
+            result = {**initial_status, "changed": False, "iterations": 0, "fallback": None, "history": []}
+        else:
+            calibrated_text, result = _calibrate_single_audio_block(
+                block=budget_block,
+                text=current_text,
+                model=model,
+                max_iterations=max_iterations,
+                day_context=day_context,
+            )
+        if calibrated_text.strip() != current_text.strip() or result.get("changed"):
+            changed = True
+        calibrated_blocks.append({
+            "bloc_number": bloc_num,
+            "text": calibrated_text,
+        })
+        block_results.append({
+            "bloc_number": bloc_num,
+            "filename": budget_block.get("filename"),
+            "initial_words": initial_status["words"],
+            "final_words": count_tts_spoken_words(calibrated_text),
+            "min_words": result.get("min_words"),
+            "max_words": result.get("max_words"),
+            "target_words": result.get("target_words"),
+            "status": result.get("status"),
+            "changed": bool(calibrated_text.strip() != current_text.strip() or result.get("changed")),
+            "iterations": result.get("iterations", 0),
+            "fallback": result.get("fallback"),
+        })
+
+    if changed:
+        total_words = _persist_calibrated_audio_blocks(job, calibrated_blocks)
+    else:
+        total_words = sum(count_tts_spoken_words(block["text"]) for block in calibrated_blocks)
+
+    day_audit = compute_course_day_word_budget_audit(folder_id)
+    logger.info(
+        "PIPELINE_AUDIO_BLOCK_CALIBRATION_DONE formation_job_id=%s content_job_id=%s folder_id=%s "
+        "stage=%s changed=%s total_words=%s day_status=%s spoken=%s",
+        job.get("formation_job_id"),
+        job["id"],
+        folder_id,
+        stage,
+        bool(changed),
+        total_words,
+        day_audit.get("status"),
+        day_audit.get("spoken_words"),
+    )
+    return {
+        "folder_id": folder_id,
+        "content_job_id": job["id"],
+        "changed": bool(changed),
+        "stage": stage,
+        "total_words": int(total_words),
+        "blocks": block_results,
+        "day_audit": day_audit,
+        "max_iterations": int(max_iterations),
+    }
 
 
 _BACKWARD_UNDERSHOOT_THRESHOLD_SEC = 30  # gap > 30s déclenche la redistribution
@@ -2666,7 +3589,7 @@ Réponds UNIQUEMENT en JSON valide, sans aucun texte avant ou après :
 
 Règles :
 - Exactement 6 sous-parties (ni plus ni moins)
-- Chaque nom doit être suffisamment précis pour orienter la génération d'environ 15 000 mots de cours oral
+- Chaque nom doit être suffisamment précis pour orienter la génération au budget audio injecté
 - Couvrir l'essentiel du programme sans répétition entre sous-parties
 - Si le programme couvre 2 journées, prendre uniquement les sous-parties de la première moitié
 
@@ -2742,7 +3665,7 @@ def _generate_segment_text(passe, sub_part_name, program_title, program_text, pr
       - Chaque passe génère depuis module_content (pas du texte précédent)
       - Passe 1 = Fondation, Passe 2 = Pratique, Passe 3 = Maîtrise
 
-    Retourne le texte généré (~5 000 mots).
+    Retourne le texte généré avec un volume calibré sur les créneaux cours.
     """
     prompts = _get_passe_prompts(from_scratch=from_scratch)
     template = prompts[passe - 1]
@@ -2773,6 +3696,8 @@ def _generate_segment_text(passe, sub_part_name, program_title, program_text, pr
 
     if generation_context:
         prompt += "\n\n" + _build_course_position_context(**generation_context)
+    prompt += "\n\n" + _build_generation_volume_context()
+    prompt += "\n\n" + _build_audio_day_plan_context(generation_context)
 
     mode_label = "from_scratch" if from_scratch else "expansion"
     logger.info(f"  📝 Génération passe {passe} [{mode_label}] pour '{sub_part_name}'...")
@@ -2794,12 +3719,13 @@ def _generate_segment_text(passe, sub_part_name, program_title, program_text, pr
             else:
                 raise
 
-    # Couche 2 — Boucle de continuation si volume insuffisant
-    # La cible par passe est ~5 000 mots. Si Claude rend moins de 4 500,
-    # on relance une continuation pour compléter. Max 2 continuations pour
-    # éviter une boucle infinie + coût maîtrisé.
-    MIN_WORDS = 4500
-    TARGET_WORDS = 5000
+    # Couche 2 — Boucle de continuation si volume insuffisant.
+    # Le volume est dérivé des créneaux `cours` uniquement, à la cadence TTS
+    # calibrée, pour éviter les anciennes journées artificiellement à 90k mots.
+    volume_budget = get_course_segment_generation_budget()
+    MIN_WORDS = int(volume_budget["min_words"])
+    TARGET_WORDS = int(volume_budget["target_words"])
+    MAX_WORDS = int(volume_budget["max_words"])
     MAX_CONTINUATIONS = 2
 
     words = len(generated.split())
@@ -2814,11 +3740,13 @@ def _generate_segment_text(passe, sub_part_name, program_title, program_text, pr
         # déjà écrit, on demande de poursuivre SANS reprendre le début.
         # Les règles éthiques/style sont héritées du premier prompt (même conversation).
         continuation_prompt = (
-            f"Tu as écrit {words} mots sur un minimum exigé de {TARGET_WORDS}. "
+            f"Tu as écrit {words} mots sur une cible de {TARGET_WORDS} mots "
+            f"(minimum acceptable {MIN_WORDS}, maximum prudent {MAX_WORDS}). "
             f"Continue le cours là où tu t'es arrêté, avec le même ton oral, "
             f"les mêmes règles TTS (tags Fish Audio, pas de musique/alcool/fêtes, "
             f"discours indirect, pas de visuel), et la même voix narrative.\n\n"
-            f"CONSIGNE DE DÉVELOPPEMENT (minimum 1 800 mots supplémentaires) :\n"
+            f"CONSIGNE DE DÉVELOPPEMENT (environ {max(350, TARGET_WORDS - words)} "
+            f"mots supplémentaires, sans dépasser {MAX_WORDS} mots au total si possible) :\n"
             f"- 2 à 4 exemples fictifs supplémentaires dans des contextes variés\n"
             f"- 1 cas contraste explicite : ce qu'il ne FAUT PAS faire + pourquoi\n"
             f"- Nuances selon le profil client (novice vs expert, pressé vs exploratoire)\n"
@@ -3082,8 +4010,8 @@ def _assemble_and_upload(folder_id, platform_id, job_id):
         for passe in sorted(parts_by_idx[sub_idx].keys()):
             final_parts.append(parts_by_idx[sub_idx][passe])
 
-    full_text = "\n\n".join(final_parts)
-    total_words = len(full_text.split())
+    full_text = _strip_audio_block_markers("\n\n".join(final_parts))
+    total_words = count_tts_spoken_words(full_text)
 
     # Chemin blob unique
     file_uuid = uuid_mod.uuid4()
@@ -3116,7 +4044,7 @@ def run_content_generation(folder_id, on_progress=None, mode="normal", model=Non
     on_progress(sub_idx, total_sub_parts, passe, total_words, message) — callback optionnel.
 
     mode :
-      "normal" — génération complète via Claude (~90 000 mots)
+      "normal" — génération complète via Claude (volume calibré audio)
       "mock"   — texte factice instantané, 0 appel Claude (pour tests)
       "mini"   — 1 seule sous-partie × 1 seule passe, max_tokens 300 (~0.02€)
     """
@@ -4054,6 +4982,7 @@ def generate_audio_from_script(
     platform_id = job["platform_id"]
     job_id = job["id"]
     formation_job_id = job.get("formation_job_id")
+    assert_course_day_word_budget(folder_id, context="audio_generation")
     started_at = time.time()
     logger.info(
         "PIPELINE_AUDIO_START formation_job_id=%s content_job_id=%s folder_id=%s platform_id=%s force_all=%s mock=%s basic_tts=%s "
@@ -5267,7 +6196,7 @@ _REVIEW_CHUNK_WORDS = _env_int("FORMATION_REVIEW_CHUNK_WORDS", 1500, min_value=3
 _REVIEW_CHUNK_CONCURRENCY = _env_int("FORMATION_REVIEW_CHUNK_CONCURRENCY", 2, min_value=1)
 _REVIEW_MAX_ATTEMPTS = 3
 _REVIEW_RULESET_VERSION = "2026-05-17-compliance-v3"
-_HUMANIZATION_RULESET_VERSION = "2026-05-18-humanisation-v3"
+_HUMANIZATION_RULESET_VERSION = "2026-05-19-humanisation-v4"
 _REVIEW_SIGNATURE_COLUMNS_READY = False
 
 _COMPLIANCE_REVIEW_RULE_GROUPS = [
@@ -5307,8 +6236,8 @@ _HUMANIZATION_REVIEW_RULE_GROUPS = [
     {
         "id": "humanisation_rythme",
         "label": "Humanisation et rythme pédagogique",
-        "rules": [101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113],
-        "description": "Intros plus douces, intro annuelle, débuts de journée, respirations, transitions et continuité pédagogique",
+        "rules": [101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114],
+        "description": "Intros plus douces, intro annuelle, débuts de journée, respirations, transitions, continuité pédagogique et références inter-cours non datées",
     },
 ]
 
@@ -5390,6 +6319,17 @@ amorce orale. Interdire les démarrages mécaniques du type "Bon, on va aborder
 une nouvelle partie du cours" ou "c'est une partie absolument fondamentale".
 Le formateur doit reconnecter calmement au parcours, poser l'intention du bloc,
 accueillir l'apprenant dans le rythme, puis introduire le sujet sans brusquerie.
+
+RÈGLE #114 — Références entre cours toujours vagues, jamais datées
+Les cours ne s'enchaînent PAS au jour le jour : il y a en général un cours par
+semaine, et ce rythme peut changer. Toute référence à un cours passé ou à venir
+doit donc rester VAGUE et NON datée. Corrige systématiquement "hier", "demain",
+"la semaine dernière", "la semaine prochaine" et toute mention calendaire
+précise — y compris dans les intros de reprise ("depuis hier", "la pause
+d'hier", "hier on a vu"). Remplace par des formulations vagues : "la dernière
+fois", "lors du dernier cours", "dans la séance précédente", "au prochain
+cours", "la prochaine fois". Une intro de début de journée ne doit jamais
+supposer que le cours précédent était la veille.
 """.strip()
 
 
@@ -5499,17 +6439,18 @@ def _build_review_prompt_focused(
     rules_list = ", ".join(f"#{n}" for n in rule_numbers)
     is_humanization_scope = any(int(n) >= 100 for n in (rule_numbers or []))
     review_mode = (
-        "Pour les règles #101 à #113, une intro trop brusque, un premier cours "
+        "Pour les règles #101 à #114, une intro trop brusque, un premier cours "
         "sans introduction annuelle, un début de journée mécanique, un bloc trop dense, "
-        "une transition mécanique, une fin sèche ou l'absence de respiration "
-        "pédagogique comptent comme des non-conformités. Tu dois proposer des "
+        "une transition mécanique, une fin sèche, l'absence de respiration "
+        "pédagogique ou une référence datée entre cours (\"hier\", \"demain\") "
+        "comptent comme des non-conformités. Tu dois proposer des "
         "corrections concrètes quand le texte sonne trop récité, trop rapide ou "
         "pas assez accompagné."
         if is_humanization_scope
         else "Tu renvoies un JSON avec uniquement les passages qui violent une règle de ton scope."
     )
     replacement_constraint = (
-        "- Pour #101 à #113, `replacement` peut ajouter une phrase orale, "
+        "- Pour #101 à #114, `replacement` peut ajouter une phrase orale, "
         "une micro-interaction ou un tag comme [pause] si cela corrige vraiment "
         "le rythme, sans changer le fond pédagogique. Pour une violation #112, "
         "`replacement` doit remplacer l'ouverture trop courte par une vraie "

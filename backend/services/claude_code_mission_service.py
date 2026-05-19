@@ -60,7 +60,7 @@ STEP_LABELS = {
 
 # Étapes dont l'output total dépasse la limite de 1 appel Claude (64k tokens
 # output Sonnet) : on découpe en N missions séquentielles, 1 subprocess `claude`
-# par chunk. content = 1 segment (~5000 mots, 18 par journée).
+# par chunk. content = 1 segment calibré sur les créneaux cours, 18 par journée.
 # humanization_review/review = 1 journée × groupe de règles en input, patches
 # courts en output.
 _CHUNKED_STEPS = {"content", "humanization_review", "review"}
@@ -147,7 +147,7 @@ def _load_review_rules_text() -> str:
     """Règles de review alignées sur la pipeline API.
 
     Contrairement à `_load_rules_text`, ce bloc inclut aussi les règles
-    d'humanisation #101-#113 et sert au calcul des signatures API.
+    d'humanisation #101-#114 et sert au calcul des signatures API.
     """
     try:
         from services.content_generation_service import _load_review_rules
@@ -337,6 +337,8 @@ Produis un **JSON array** avec une entrée par journée :
 
 
 def _build_content_mission(target, job, model):
+    budget = _content_segment_word_budget()
+    target_words = budget["target_words"]
     _write(
         target,
         "task.md",
@@ -347,7 +349,7 @@ def _build_content_mission(target, job, model):
 Tu lis `input.md` qui contient les {job['nb_days']} programmes journée (JSON).
 
 Pour chaque journée × chaque sous-partie × chaque passe (3 passes par sous-partie :
-Fondation / Pratique / Maîtrise), génère ~5 000 mots de texte oral TTS-ready.
+Fondation / Pratique / Maîtrise), génère environ {target_words} mots de texte oral TTS-ready.
 
 **Applique strictement les règles #1 à #27** contenues dans `rules.md` (saturation
 sandwich, pas de mensonge, pas d'énumérations mécaniques, registre oral, etc.).
@@ -360,9 +362,9 @@ Sortie attendue dans `output.md` : un **JSON** de la forme :
     {{
       "day_number": 1,
       "segments": [
-        {{ "sub_part_index": 0, "passe": 1, "text": "... ~5000 mots ..." }},
-        {{ "sub_part_index": 0, "passe": 2, "text": "... ~5000 mots ..." }},
-        {{ "sub_part_index": 0, "passe": 3, "text": "... ~5000 mots ..." }},
+        {{ "sub_part_index": 0, "passe": 1, "text": "... ~{target_words} mots ..." }},
+        {{ "sub_part_index": 0, "passe": 2, "text": "... ~{target_words} mots ..." }},
+        {{ "sub_part_index": 0, "passe": 3, "text": "... ~{target_words} mots ..." }},
         ... 18 segments par journée
       ]
     }},
@@ -371,7 +373,8 @@ Sortie attendue dans `output.md` : un **JSON** de la forme :
 }}
 ```
 
-Volume total ≈ {job['nb_days']} × 90 000 mots. Reste dense, mais ne gonfle pas artificiellement.
+Volume total calibré sur les créneaux cours uniquement. Les Q&A et pauses ne
+comptent pas dans ce texte. Reste dense, mais ne gonfle pas artificiellement.
 """,
     )
     _write(target, "input.md", job.get("daily_programs") or "(daily_programs absents)")
@@ -509,16 +512,17 @@ def _build_humanization_review_mission(target, job, model):
 **TP** : {job['tp_name']} · **Modèle demandé** : {model}
 
 Tu lis `input.md` qui contient les segments à améliorer (JSON array). Pour chacun,
-vérifie uniquement les règles #101 à #113 dans `rules.md`.
+vérifie uniquement les règles #101 à #114 dans `rules.md`.
 
 Une intro trop brusque, une ouverture annuelle absente, un début de journée
-mécanique, un bloc trop dense, une transition mécanique, une fin sèche ou
-l'absence de respiration pédagogique comptent comme des non-conformités.
+mécanique, un bloc trop dense, une transition mécanique, une fin sèche,
+l'absence de respiration pédagogique ou une référence datée entre cours
+("hier", "demain") comptent comme des non-conformités.
 Tu proposes des corrections concrètes, mais **pas de réécriture complète**.
 
 Contexte positionnel :
 - `folder_position = 0`, `sub_idx = 0`, `passe = 1` = ouverture absolue de la formation : règle #112.
-- `sub_idx = 0`, `passe = 1` = début de journée : règle #113.
+- `sub_idx = 0`, `passe = 1` = début de journée : règle #113 (et #114 : pas de "hier" dans l'intro de reprise).
 - Interdire les démarrages du type "Bon, on va aborder une nouvelle partie".
 - Pour #112, une simple salutation générique ne suffit pas : il faut présenter
   l'utilité concrète de la formation, le parcours, les compétences abordées,
@@ -832,7 +836,7 @@ def _import_review(job_id, output, generated_via):
 
 
 def _import_humanization_review(job_id, output, generated_via):
-    """Import manuel de la passe humanisation (#101-#113).
+    """Import manuel de la passe humanisation (#101-#114).
 
     Même format que `_import_review`, mais les patches appliqués invalident la
     conformité stricte pour forcer la passe #1-#27 ensuite.
@@ -1177,7 +1181,8 @@ def list_pending_missions(job_id: int) -> dict:
 
 # ─── Mode chunked (content + humanization_review + review) ───────────────────
 #
-# `content` et les deux reviews ne tiennent pas en 1 seul appel CLI : ~90 000
+# `content` et les deux reviews ne tiennent pas en 1 seul appel CLI : une
+# journée complète calibrée audio dépasse largement le contexte utile.
 # mots de sortie pour content, jusqu'à 117k tokens d'input par review × N journées.
 # Stratégie = boucle de N subprocess `claude` séquentiels, 1 par chunk.
 # Chaque chunk a son propre dossier review_queue/job_X/step_Y/<chunk_id>/
@@ -1666,33 +1671,60 @@ _REVIEW_RULE_GROUPS = [
 ]
 
 # Seuils continuation loop content (alignés sur _generate_segment_text mode API)
-_CONTENT_MIN_WORDS = 4500
-_CONTENT_TARGET_WORDS = 5000
+_CONTENT_FALLBACK_MIN_WORDS = 3200
+_CONTENT_FALLBACK_TARGET_WORDS = 3600
+_CONTENT_FALLBACK_MAX_WORDS = 4100
 _CONTENT_MAX_CONTINUATIONS = 2
+
+
+def _content_segment_word_budget() -> dict:
+    """Budget segment Claude Code, dérivé du même calibrage que le mode API."""
+    try:
+        from services.content_generation_service import get_course_segment_generation_budget
+        budget = get_course_segment_generation_budget()
+        return {
+            "min_words": int(budget["min_words"]),
+            "target_words": int(budget["target_words"]),
+            "max_words": int(budget["max_words"]),
+            "day_budget": budget.get("day_budget") or {},
+        }
+    except Exception:
+        logger.warning("Fallback budget segment content Claude Code", exc_info=True)
+        return {
+            "min_words": _CONTENT_FALLBACK_MIN_WORDS,
+            "target_words": _CONTENT_FALLBACK_TARGET_WORDS,
+            "max_words": _CONTENT_FALLBACK_MAX_WORDS,
+            "day_budget": {},
+        }
 
 
 def _continue_content_until_volume(
     chunk_dir: str, job: dict, chunk: dict, model: str,
     log_path: str, current_text: str,
 ) -> str:
-    """Si le segment fait <4500 mots, lance 1-2 continuations CLI pour atteindre
-    la cible 5000+. Aligné sur la continuation loop du mode API
-    (`_generate_segment_text`, content_generation_service.py:277).
+    """Si le segment est sous budget, lance 1-2 continuations CLI.
+
+    Aligné sur la continuation loop du mode API
+    (`_generate_segment_text`, content_generation_service.py).
 
     Sur 429 ou erreur de continuation : on garde le texte en l'état
     (pas de fail-fast, le mode API a la même politique)."""
+    budget = _content_segment_word_budget()
+    min_words = int(budget["min_words"])
+    target_words = int(budget["target_words"])
+    max_words = int(budget["max_words"])
     word_count = len(current_text.split())
-    if word_count >= _CONTENT_MIN_WORDS:
+    if word_count >= min_words:
         return current_text
 
     logger.info(
-        f"📏 Chunk {chunk['id']} : {word_count} mots (<{_CONTENT_MIN_WORDS}) — "
-        f"continuation(s) requise(s) pour atteindre {_CONTENT_TARGET_WORDS}"
+        f"📏 Chunk {chunk['id']} : {word_count} mots (<{min_words}) — "
+        f"continuation(s) requise(s) pour viser {target_words}"
     )
     with open(log_path, "a", encoding="utf-8") as lf:
         lf.write(
             f"\n📏 Volume insuffisant : {word_count} mots — lancement "
-            f"continuation(s) (cible {_CONTENT_TARGET_WORDS})\n"
+            f"continuation(s) (cible {target_words}, max prudent {max_words})\n"
         )
 
     text = current_text
@@ -1700,7 +1732,7 @@ def _continue_content_until_volume(
 
     for n in range(1, _CONTENT_MAX_CONTINUATIONS + 1):
         words = len(text.split())
-        if words >= _CONTENT_MIN_WORDS:
+        if words >= min_words:
             break
 
         cont_dir = os.path.join(chunk_dir, f"_cont_{n}")
@@ -1708,12 +1740,12 @@ def _continue_content_until_volume(
 
         task = f"""# Mission : CONTINUATION du segment de cours
 
-Tu as écrit **{words} mots** sur une cible de **{_CONTENT_TARGET_WORDS} mots**. Tu dois continuer le cours là où tu t'es arrêté, avec :
+Tu as écrit **{words} mots** sur une cible de **{target_words} mots** (minimum {min_words}, maximum prudent {max_words}). Tu dois continuer le cours là où tu t'es arrêté, avec :
 - Le même ton oral et la même voix narrative
 - Les mêmes règles TTS (cf. `rules.md` — règles #1 à #27)
 - **Sans RÉPÉTER ce qui a déjà été dit**
 
-**Volume cible pour cette continuation : environ 1800 mots supplémentaires.**
+**Volume cible pour cette continuation : environ {max(350, target_words - words)} mots supplémentaires, sans dépasser {max_words} mots au total si possible.**
 
 CONSIGNE DE DÉVELOPPEMENT :
 - 2 à 4 exemples fictifs supplémentaires dans des contextes variés
@@ -1770,16 +1802,18 @@ def _build_content_chunk(chunk_dir: str, job: dict, chunk: dict, model: str) -> 
 
     Réutilise le **vrai template du mode API** (`prompt-generation-tts-scratch.md`,
     extrait via `_get_passe_prompts(from_scratch=True)`). Sans ça, Claude Code
-    rendait systématiquement ~3000 mots/segment au lieu de 5000 — le prompt
-    minimaliste précédent ne contenait pas le bloc 'VOLUME EXIGÉ —
-    NON NÉGOCIABLE' qui force Claude à viser la cible.
+    rendait systématiquement des segments trop courts — le prompt minimaliste
+    précédent ne contenait pas le bloc de volume audio calibré.
 
     Pour passe 2/3, injecte les passes précédentes en DB pour la continuité
     narrative (mêmes consignes que le mode API)."""
     from services.content_generation_service import (
+        _build_audio_day_plan_context,
         _build_course_position_context,
+        _build_generation_volume_context,
         _get_passe_prompts,
     )
+    budget = _content_segment_word_budget()
 
     prev_text = ""
     if chunk["passe"] >= 2:
@@ -1808,7 +1842,7 @@ def _build_content_chunk(chunk_dir: str, job: dict, chunk: dict, model: str) -> 
     except Exception as e:
         logger.error(f"Impossible de charger les prompts par passe : {e} — fallback minimal")
         template = (
-            "Génère un cours oral TTS-ready d'environ **5000 mots utiles** "
+            "Génère un cours oral TTS-ready d'environ **{TARGET_WORDS} mots utiles** "
             "sur la sous-partie {NOM_DE_LA_SOUS_PARTIE} du TP "
             "{NOM_DU_TITRE_PROFESSIONNEL}. Module à couvrir :\n\n"
             "{CONTENU_DU_MODULE}"
@@ -1818,18 +1852,24 @@ def _build_content_chunk(chunk_dir: str, job: dict, chunk: dict, model: str) -> 
     prompt = template
     prompt = prompt.replace("{NOM_DU_TITRE_PROFESSIONNEL}", job["tp_name"])
     prompt = prompt.replace("{NOM_DE_LA_SOUS_PARTIE}", chunk["sub_part_name"])
+    prompt = prompt.replace("{TARGET_WORDS}", str(budget["target_words"]))
     prompt = prompt.replace(
         "{CONTENU_DU_MODULE}",
         (chunk["module_content"] or "")[:15000],
     )
+    generation_context = {
+        "folder_position": chunk.get("day_idx"),
+        "nb_days": job.get("nb_days"),
+        "total_hours": job.get("total_hours"),
+        "folder_name": chunk.get("folder_name") or "",
+        "sub_part_index": chunk.get("sub_idx"),
+        "passe": chunk.get("passe"),
+    }
     prompt += "\n\n" + _build_course_position_context(
-        folder_position=chunk.get("day_idx"),
-        nb_days=job.get("nb_days"),
-        total_hours=job.get("total_hours"),
-        folder_name=chunk.get("folder_name") or "",
-        sub_part_index=chunk.get("sub_idx"),
-        passe=chunk.get("passe"),
+        **generation_context,
     )
+    prompt += "\n\n" + _build_generation_volume_context()
+    prompt += "\n\n" + _build_audio_day_plan_context(generation_context)
 
     # Pour passe 2/3, ajouter le contexte des passes précédentes en fin de prompt
     if prev_text:
@@ -1861,7 +1901,8 @@ angle…"). Ne répète pas les exemples ou définitions déjà donnés.
     # ne réponde dans la conversation au lieu d'écrire le fichier.
     prompt += (
         "\n\n═══ CONSIGNE TECHNIQUE FINALE ═══\n"
-        "Écris ta réponse complète (texte oral TTS-ready, environ 5000 mots utiles) "
+        f"Écris ta réponse complète (texte oral TTS-ready, environ {budget['target_words']} mots utiles, "
+        f"maximum prudent {budget['max_words']} mots) "
         "dans `output.md`. **Aucun autre fichier**, aucun autre format, "
         "aucune réponse dans le chat — uniquement le texte du cours dans "
         "`output.md`."
@@ -1945,7 +1986,7 @@ Lis le détail complet de chacune de tes règles dans `rules.md` (cherche
     patch_policy = (
         "Tu ne réécris pas les textes — tu proposes des patches ciblés qui "
         "rendent l'introduction, les respirations, les transitions et les fins "
-        "plus naturelles quand les règles #101-#113 sont violées."
+        "plus naturelles quand les règles #101-#114 sont violées."
         if is_humanization
         else "Tu **ne réécris pas** les textes — tu proposes des **patches minimaux**"
     )
@@ -2015,10 +2056,11 @@ def _import_content_chunk(job_id: int, chunk: dict, output: str, generated_via: 
         raise ValueError("output.md vide pour ce chunk content")
 
     word_count = len(text.split())
+    budget = _content_segment_word_budget()
     if word_count < 1000:
         logger.warning(
             f"⚠️ Chunk content {chunk['id']} : seulement {word_count} mots "
-                f"(cible ~5000). Enregistré quand même mais qualité douteuse."
+            f"(cible ~{budget['target_words']}). Enregistré quand même mais qualité douteuse."
         )
 
     from services.content_generation_service import _save_segment_db
@@ -2674,8 +2716,8 @@ def _execute_chunked(job_id: int, step_key: str, model: str) -> dict:
                 _run_subprocess(chunk_dir, model, log_path=log_path, log_mode="a")
                 with open(os.path.join(chunk_dir, "output.md"), "r", encoding="utf-8") as f:
                     output = f.read()
-                # Continuation loop pour content : si <4500 mots, lance 1-2
-                # appels CLI supplémentaires pour atteindre la cible 5000+
+                # Continuation loop pour content : si le segment est sous
+                # budget, lance 1-2 appels CLI supplémentaires.
                 # (aligné sur _generate_segment_text mode API).
                 if step_key == "content":
                     output = _continue_content_until_volume(
@@ -3043,34 +3085,81 @@ def _finalize_content_step(job_id: int, model: str) -> None:
 
 # ─── Étape 6.5 — Sécurité volume ──────────────────────────────────────────────
 #
-# Audit par-journée du total_words puis enrichissement à la demande des segments
-# les plus courts. Sécurité supplémentaire au floor par-segment de
-# `_continue_content_until_volume` (qui s'exécute pendant la génération à
-# l'étape 6 avec un seuil de 4500 mots/segment) :
+# Audit par-journée du total_words parlé puis enrichissement à la demande des
+# segments les plus courts. Sécurité supplémentaire au floor par-segment de
+# `_continue_content_until_volume` :
 #   - L'étape 6 garantit qu'aucun segment n'est sous-développé.
-#   - L'étape 6.5 garantit qu'aucune journée n'est sous le seuil de 90 000 mots
-#     au total — un déficit qui peut survenir si plusieurs segments sont
-#     juste au-dessus du floor mais pas généreux.
+#   - L'étape 6.5 garantit qu'aucune journée n'est sous le budget calculé
+#     depuis les créneaux cours, hors Q&A/pauses.
 #
 # Pattern : append-only. Le texte original n'est jamais réécrit, on concatène
 # simplement le nouveau contenu. Le snapshot text_content_pre_review (pris au
 # finalize content) reste valide : il représente toujours la version brute
 # pré-révision, et le bouton "Word" continue de l'utiliser.
 
-_TARGET_WORDS_PER_DAY = 90000
+_LEGACY_TARGET_WORDS_PER_DAY = 90000
 _VOLUME_SAFETY_TOP_N = 5
 _VOLUME_SAFETY_MIN_ADDITION = 1500
+
+
+def _volume_safety_addition_words(segment_data: dict) -> int:
+    """Addition visée sans dépasser brutalement le budget journalier."""
+    try:
+        deficit = int(segment_data.get("deficit_remaining") or 0)
+    except Exception:
+        deficit = 0
+    try:
+        candidates = max(1, int(segment_data.get("candidates_count") or 1))
+    except Exception:
+        candidates = 1
+    if deficit > 0:
+        return max(250, min(_VOLUME_SAFETY_MIN_ADDITION, int(deficit / candidates) + 150))
+    return _VOLUME_SAFETY_MIN_ADDITION
+
+
+def _course_day_budget_for_volume() -> dict:
+    try:
+        from services.content_generation_service import get_course_day_word_budget
+        budget = get_course_day_word_budget()
+        return {
+            "target_words": int(budget["target_words"]),
+            "min_words": int(budget["min_words"]),
+            "max_words": int(budget["max_words"]),
+            "words_per_minute": budget.get("words_per_minute"),
+            "course_seconds": budget.get("course_seconds"),
+            "speakable_seconds": budget.get("speakable_seconds"),
+            "final_silence_sec": budget.get("final_silence_sec"),
+        }
+    except Exception:
+        logger.warning("Fallback budget journée volume safety", exc_info=True)
+        return {
+            "target_words": _LEGACY_TARGET_WORDS_PER_DAY,
+            "min_words": int(_LEGACY_TARGET_WORDS_PER_DAY * 0.94),
+            "max_words": int(_LEGACY_TARGET_WORDS_PER_DAY * 1.02),
+            "words_per_minute": None,
+            "course_seconds": None,
+            "speakable_seconds": None,
+            "final_silence_sec": None,
+        }
 
 
 def compute_volume_audit(job_id: int) -> dict:
     """Calcule total_words par folder + déficit + N segments les plus courts.
 
-    Retourne un dict avec target=90000 et folders=[{folder_id, folder_name,
-    day_number, total_words, deficit, segments_count, shortest_segments[]}].
+    Retourne un dict avec target dynamique et folders=[{folder_id,
+    folder_name, day_number, total_words, deficit, overflow,
+    segments_count, shortest_segments[]}].
     """
+    budget = _course_day_budget_for_volume()
     job = _get_job_row(job_id)
     if not job:
-        return {"target": _TARGET_WORDS_PER_DAY, "folders": []}
+        return {
+            "target": budget["target_words"],
+            "min_target": budget["min_words"],
+            "max_target": budget["max_words"],
+            "budget": budget,
+            "folders": [],
+        }
 
     try:
         from services.formation_pipeline_service import get_expected_course_folders
@@ -3097,38 +3186,63 @@ def compute_volume_audit(job_id: int) -> dict:
     for fid, fname, pos in folders:
         cursor.execute(
             """SELECT s.id, s.sub_part_index, s.sub_part_name, s.passe,
+                      COALESCE(s.text_content, '') AS text_content,
                       COALESCE(s.word_count, 0) AS wc
                FROM content_generation_segments s
                JOIN content_generation_jobs cj ON cj.id = s.job_id
                WHERE cj.folder_id = ? AND s.status = 'completed'
-               ORDER BY wc ASC""",
+               ORDER BY s.sub_part_index ASC, s.passe ASC""",
             (fid,),
         )
         segs = cursor.fetchall()
         if not segs:
             continue
-        total = sum(int(s[4] or 0) for s in segs)
-        deficit = max(0, _TARGET_WORDS_PER_DAY - total)
+        try:
+            from services.content_generation_service import count_tts_spoken_words
+        except Exception:
+            count_tts_spoken_words = lambda text: len((text or "").split())
+
+        normalized_segments = []
+        total = 0
+        raw_total = 0
+        for s in segs:
+            spoken_wc = count_tts_spoken_words(s[4] or "")
+            raw_wc = int(s[5] or len((s[4] or "").split()))
+            total += spoken_wc
+            raw_total += raw_wc
+            normalized_segments.append({
+                "segment_id": s[0],
+                "sub_idx": s[1],
+                "sub_part_name": s[2],
+                "passe": s[3],
+                "word_count": int(spoken_wc),
+                "raw_word_count": int(raw_wc),
+            })
+        normalized_segments.sort(key=lambda s: s["word_count"])
+        deficit = max(0, int(budget["min_words"]) - total)
+        overflow = max(0, total - int(budget["max_words"]))
         out.append({
             "folder_id": fid,
             "folder_name": fname,
             "day_number": (pos or 0) + 1,
             "total_words": total,
+            "raw_words": raw_total,
             "deficit": deficit,
+            "overflow": overflow,
+            "target_words": budget["target_words"],
+            "min_words": budget["min_words"],
+            "max_words": budget["max_words"],
             "segments_count": len(segs),
-            "shortest_segments": [
-                {
-                    "segment_id": s[0],
-                    "sub_idx": s[1],
-                    "sub_part_name": s[2],
-                    "passe": s[3],
-                    "word_count": int(s[4] or 0),
-                }
-                for s in segs[:_VOLUME_SAFETY_TOP_N]
-            ],
+            "shortest_segments": normalized_segments[:_VOLUME_SAFETY_TOP_N],
         })
     conn.close()
-    return {"target": _TARGET_WORDS_PER_DAY, "folders": out}
+    return {
+        "target": budget["target_words"],
+        "min_target": budget["min_words"],
+        "max_target": budget["max_words"],
+        "budget": budget,
+        "folders": out,
+    }
 
 
 def _build_volume_safety_chunk(chunk_dir: str, job: dict, segment_data: dict, model: str) -> None:
@@ -3137,6 +3251,8 @@ def _build_volume_safety_chunk(chunk_dir: str, job: dict, segment_data: dict, mo
     passe = segment_data["passe"]
     word_count_now = segment_data["word_count"]
     passe_name = _PASSE_DESCRIPTIONS.get(passe, (f"Passe {passe}", ""))[0]
+    budget = _course_day_budget_for_volume()
+    addition_words = _volume_safety_addition_words(segment_data)
 
     task = f"""# Mission : ENRICHISSEMENT segment de cours (sécurité volume)
 
@@ -3147,7 +3263,8 @@ def _build_volume_safety_chunk(chunk_dir: str, job: dict, segment_data: dict, mo
 
 ## Contexte
 
-Cette journée totalise moins de **{_TARGET_WORDS_PER_DAY} mots** sur l'objectif fixé.
+Cette journée est sous le budget audio minimal de **{budget['min_words']} mots parlés**
+pour une cible de **{budget['target_words']} mots**.
 Tu participes à une opération de sécurité volume : enrichir les segments les plus
 courts avec **du contenu nouveau**, sans réécrire l'existant.
 
@@ -3157,7 +3274,7 @@ Tu lis `input.md` qui contient le **texte actuel complet** de ce segment (texte
 oral TTS-ready, déjà validé en passe précédente).
 
 Tu écris dans `output.md` UNIQUEMENT du **contenu additionnel** à concaténer en
-fin du texte existant. Volume cible : minimum **{_VOLUME_SAFETY_MIN_ADDITION} mots
+fin du texte existant. Volume cible : environ **{addition_words} mots
 supplémentaires**.
 
 Le contenu additionnel DOIT :
@@ -3191,8 +3308,8 @@ Ce que ton contenu doit contenir (au choix selon ce qui manque dans input.md) :
 ## Format de sortie
 
 Écris dans `output.md` le texte oral additionnel **brut** (pas de fenced code
-block ```, pas de JSON, pas d'enrobage). Minimum {_VOLUME_SAFETY_MIN_ADDITION}
-mots, maximum 4000 mots.
+block ```, pas de JSON, pas d'enrobage). Environ {addition_words} mots,
+maximum 2500 mots.
 """
     _write(chunk_dir, "task.md", task)
     _write(chunk_dir, "input.md", segment_data.get("text_content", "") or "")
@@ -3211,6 +3328,8 @@ def _build_volume_safety_prompt_api(job: dict, segment: dict) -> str:
     passe_name = _PASSE_DESCRIPTIONS.get(passe, (f"Passe {passe}", ""))[0]
     text_content = segment.get("text_content", "") or ""
     rules = _load_rules_text()
+    budget = _course_day_budget_for_volume()
+    addition_words = _volume_safety_addition_words(segment)
 
     return f"""# Mission : ENRICHISSEMENT segment de cours (sécurité volume)
 
@@ -3221,7 +3340,8 @@ def _build_volume_safety_prompt_api(job: dict, segment: dict) -> str:
 
 ## Contexte
 
-Cette journée totalise moins de **{_TARGET_WORDS_PER_DAY} mots** sur l'objectif fixé.
+Cette journée est sous le budget audio minimal de **{budget['min_words']} mots parlés**
+pour une cible de **{budget['target_words']} mots**.
 Tu participes à une opération de sécurité volume : enrichir les segments les plus
 courts avec **du contenu nouveau**, sans réécrire l'existant.
 
@@ -3229,7 +3349,7 @@ courts avec **du contenu nouveau**, sans réécrire l'existant.
 
 Le **TEXTE ACTUEL** du segment (texte oral TTS-ready, déjà validé en passe précédente)
 est fourni plus bas. Tu dois retourner UNIQUEMENT du **contenu additionnel** à
-concaténer en fin du texte existant. Volume cible : minimum **{_VOLUME_SAFETY_MIN_ADDITION} mots
+concaténer en fin du texte existant. Volume cible : environ **{addition_words} mots
 supplémentaires**.
 
 Le contenu additionnel DOIT :
@@ -3261,7 +3381,7 @@ Ce que ton contenu doit contenir (au choix selon ce qui manque) :
 
 Réponds avec le texte oral additionnel **brut** (pas de fenced code block ```,
 pas de JSON, pas d'enrobage, pas d'introduction du type "Voici le contenu
-additionnel :"). Minimum {_VOLUME_SAFETY_MIN_ADDITION} mots, maximum 4000 mots.
+additionnel :"). Environ {addition_words} mots, maximum 2500 mots.
 
 ═══ TEXTE ACTUEL DU SEGMENT (à enrichir, NE PAS répéter) ═══
 
@@ -3378,6 +3498,8 @@ def run_volume_safety_api(job_id: int, folder_id: int, model: str = None) -> dic
                 "passe": r[3],
                 "text_content": r[4] or "",
                 "word_count": int(r[5] or 0),
+                "deficit_remaining": int(folder_audit.get("deficit") or 0),
+                "candidates_count": len(short_ids),
             }
             for r in cursor.fetchall()
         ]
@@ -3564,7 +3686,7 @@ def run_volume_safety_api(job_id: int, folder_id: int, model: str = None) -> dic
 def run_volume_safety(job_id: int, folder_id: int, model: str = "sonnet") -> dict:
     """Étape 6.5 — sécurité volume pour un folder donné.
 
-    Pour chaque folder dont total_words < TARGET (90 000) :
+    Pour chaque folder dont total_words parlé < budget minimal :
       1. Identifier les N segments les plus courts (par word_count ASC).
       2. Pour chaque segment : lancer 1 subprocess `claude` qui produit un
          texte additionnel (≥1500 mots) respectant les règles #1-#27.
@@ -3664,6 +3786,8 @@ def run_volume_safety(job_id: int, folder_id: int, model: str = "sonnet") -> dic
                 "passe": r[3],
                 "text_content": r[4] or "",
                 "word_count": int(r[5] or 0),
+                "deficit_remaining": int(folder_audit.get("deficit") or 0),
+                "candidates_count": len(short_ids),
             }
             for r in cursor.fetchall()
         ]
