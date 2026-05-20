@@ -46,6 +46,11 @@ const AUDIO_TYPE_META = {
   pause: { label: 'Pause', icon: 'free_breakfast', color: '#f59e0b', lightBg: '#fffbeb', darkBg: '#92400e22', lightBorder: '#fde68a', darkBorder: '#b45309' },
 }
 
+const PLAYLIST_VOICE_OPTIONS = [
+  { value: 'gtts', label: 'gTTS / Edge', icon: 'bolt', hint: 'rapide, économique' },
+  { value: 'fish_audio', label: 'Fish Audio', icon: 'graphic_eq', hint: 'voix premium payante' },
+]
+
 // ─── Component ───────────────────────────────────────────────────────────────
 export default function CoursFoldersModal({ platformId, platformName, onClose }) {
   const [view, setView] = useState('folders') // 'folders' | 'documents'
@@ -66,6 +71,7 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
   const [deleteError, setDeleteError] = useState('')
   const [deletingItem, setDeletingItem] = useState(false)
   const [playlistJob, setPlaylistJob] = useState(null) // {status, step, total_steps, message}
+  const [playlistVoiceType, setPlaylistVoiceType] = useState('gtts') // 'gtts' | 'fish_audio'
   const playlistPollingRef = useRef(null)
   const [scriptModal, setScriptModal] = useState(null) // {blocs: [...]}
   const [wordAnalysis, setWordAnalysis] = useState(null) // résultat analyse mots
@@ -1140,18 +1146,29 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
     }
   }
 
-  const handleGeneratePlaylist = async ({ mock = false, scriptMock = false, forceAll = false } = {}) => {
+  const handleGeneratePlaylist = async ({ mock = false, scriptMock = false, forceAll = false, voiceType = playlistVoiceType } = {}) => {
     if (!selectedFolder) return
+    const effectiveVoiceType = mock || scriptMock ? 'mock' : voiceType
+    if (effectiveVoiceType === 'fish_audio') {
+      const confirmed = window.confirm("Fish Audio consomme des crédits API. Lancer la génération audio de ce dossier avec Fish Audio ?")
+      if (!confirmed) return
+    }
     try {
       const resp = await fetch(apiUrl(`/api/hr/cours-folders/${selectedFolder.id}/generate-playlist`), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ mock, script_mock: scriptMock, force_all: forceAll }),
+        body: JSON.stringify({
+          mock,
+          script_mock: scriptMock,
+          force_all: forceAll,
+          voice_type: effectiveVoiceType,
+        }),
         credentials: 'include',
       })
       const data = await resp.json()
       if (data.success) {
-        setPlaylistJob({ status: 'running', step: 0, total_steps: 24, message: 'Démarrage...' })
+        setPlaylistJob({ status: 'running', step: 0, total_steps: 24, message: 'Démarrage...', voice_type: effectiveVoiceType })
+        if (playlistPollingRef.current) clearInterval(playlistPollingRef.current)
         playlistPollingRef.current = setInterval(() => fetchPlaylistStatus(selectedFolder.id), 2000)
       } else {
         alert(data.error || 'Erreur lors du lancement')
@@ -1513,6 +1530,15 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
       </div>
     )
   }
+
+  const playlistRunning = playlistJob?.status === 'running'
+  const selectedPlaylistVoice = PLAYLIST_VOICE_OPTIONS.find(option => option.value === playlistVoiceType) || PLAYLIST_VOICE_OPTIONS[0]
+  const canGeneratePlaylistAudio = Boolean(dirtyBlocs?.has_script)
+  const playlistActionLabel = playlistRunning
+    ? 'Pipeline audio en cours...'
+    : canGeneratePlaylistAudio
+      ? 'Générer les 7 cours du dossier'
+      : 'Script texte requis'
 
   return (
     <div
@@ -2243,26 +2269,72 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
               {/* ── Zone d'actions ── */}
 
               {/* Bouton générer */}
-              {documents.length > 0 && (
-                <div className="mb-4 flex flex-col gap-2">
+              {(documents.length > 0 || canGeneratePlaylistAudio) && (
+                <div className="mb-4 rounded-2xl p-4 space-y-3" style={{ backgroundColor: colors.innerBg, border: `1px solid ${colors.border}` }}>
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <p className="text-sm font-bold" style={{ color: colors.text }}>Audios du dossier</p>
+                      <p className="text-xs mt-0.5" style={{ color: colors.textMuted }}>
+                        {canGeneratePlaylistAudio
+                          ? dirtyBlocs?.dirty_blocs > 0
+                            ? `${dirtyBlocs.dirty_blocs}/7 cours modifié${dirtyBlocs.dirty_blocs > 1 ? 's' : ''}, relance complète pour garder une voix homogène.`
+                            : 'Script prêt, génération complète des cours MP3.'
+                          : 'Le script texte doit être finalisé avant de lancer les MP3.'}
+                      </p>
+                    </div>
+                    <span
+                      className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-[11px] font-semibold"
+                      style={{
+                        backgroundColor: playlistVoiceType === 'fish_audio' ? (darkMode ? '#064e3b' : '#d1fae5') : (darkMode ? '#312e81' : '#ede9fe'),
+                        color: playlistVoiceType === 'fish_audio' ? (darkMode ? '#a7f3d0' : '#047857') : (darkMode ? '#c4b5fd' : '#6d28d9'),
+                      }}
+                    >
+                      <Icon name={selectedPlaylistVoice.icon} style={{ fontSize: '14px' }} />
+                      {selectedPlaylistVoice.label}
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2">
+                    {PLAYLIST_VOICE_OPTIONS.map(option => {
+                      const active = playlistVoiceType === option.value
+                      const accent = option.value === 'fish_audio' ? '#059669' : '#8B5CF6'
+                      return (
+                        <button
+                          key={option.value}
+                          type="button"
+                          onClick={() => setPlaylistVoiceType(option.value)}
+                          disabled={playlistRunning}
+                          className="flex min-h-[58px] items-center gap-2 rounded-xl px-3 py-2 text-left transition-all disabled:cursor-not-allowed disabled:opacity-60"
+                          style={{
+                            backgroundColor: active ? (darkMode ? `${accent}22` : option.value === 'fish_audio' ? '#ecfdf5' : '#f3e8ff') : colors.cardBg,
+                            border: `1px solid ${active ? accent : colors.border}`,
+                            color: active ? accent : colors.textSecondary,
+                          }}
+                        >
+                          <Icon name={option.icon} style={{ fontSize: '20px', flexShrink: 0 }} />
+                          <span className="min-w-0">
+                            <span className="block text-sm font-bold leading-tight">{option.label}</span>
+                            <span className="block text-[11px] leading-tight opacity-80">{option.hint}</span>
+                          </span>
+                        </button>
+                      )
+                    })}
+                  </div>
+
                   <button
-                    onClick={() => handleGeneratePlaylist({})}
-                    disabled={playlistJob?.status === 'running'}
+                    onClick={() => handleGeneratePlaylist({ voiceType: playlistVoiceType, forceAll: true })}
+                    disabled={playlistRunning || !canGeneratePlaylistAudio}
                     className="w-full flex items-center justify-center gap-2 rounded-xl px-4 py-3 text-sm font-bold transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-                    style={{ backgroundColor: '#8B5CF6', color: 'white' }}
-                    onMouseEnter={(e) => { if (playlistJob?.status !== 'running') e.currentTarget.style.backgroundColor = '#7c3aed' }}
-                    onMouseLeave={(e) => e.currentTarget.style.backgroundColor = '#8B5CF6'}
+                    style={{ backgroundColor: playlistVoiceType === 'fish_audio' ? '#059669' : '#8B5CF6', color: 'white' }}
+                    onMouseEnter={(e) => {
+                      if (!playlistRunning && canGeneratePlaylistAudio) e.currentTarget.style.backgroundColor = playlistVoiceType === 'fish_audio' ? '#047857' : '#7c3aed'
+                    }}
+                    onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = playlistVoiceType === 'fish_audio' ? '#059669' : '#8B5CF6' }}
                   >
-                    <Icon name="auto_awesome" className="text-lg" />
-                    {playlistJob?.status === 'running'
-                      ? 'Pipeline en cours...'
-                      : dirtyBlocs?.has_script
-                        ? dirtyBlocs.dirty_blocs > 0
-                          ? `Régénérer ${dirtyBlocs.dirty_blocs}/7 bloc${dirtyBlocs.dirty_blocs > 1 ? 's' : ''} modifié${dirtyBlocs.dirty_blocs > 1 ? 's' : ''}`
-                          : 'Générer les 7 cours MP3 (script)'
-                        : 'Générer les 7 cours MP3'
-                    }
+                    <Icon name={selectedPlaylistVoice.icon} className="text-lg" />
+                    {playlistActionLabel}
                   </button>
+
                   {import.meta.env.DEV && (
                     <>
                       {dirtyBlocs?.has_script && (

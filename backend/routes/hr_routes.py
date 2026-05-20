@@ -2879,25 +2879,73 @@ def create_hr_blueprint(socketio):
                     "error": "Une génération est déjà en cours pour ce dossier"
                 }), 409
 
-            # Initialiser le job
-            _playlist_jobs[folder_id] = {
-                "status": "running",
-                "step": 0,
-                "total_steps": 24,
-                "message": "Démarrage de la pipeline...",
-                "result": None,
-            }
-
             req_body = request.get_json(silent=True) or {}
             playlist_mock = req_body.get("mock", False)   # mock mode classique (sans script)
             script_mock = req_body.get("script_mock", False)  # mock mode script (silence au lieu TTS)
             force_all = req_body.get("force_all", False)
             sync_slides = bool(req_body.get("sync_slides", False))
             auto_generate_slides = bool(req_body.get("auto_generate_slides", False))
+            requested_voice_type_raw = str(req_body.get("voice_type") or req_body.get("tts_mode") or "").strip().lower()
+            voice_aliases = {
+                "gtts": "gtts",
+                "edge": "gtts",
+                "edge_tts": "gtts",
+                "basic": "gtts",
+                "basic_tts": "gtts",
+                "fish": "fish_audio",
+                "fish_audio": "fish_audio",
+                "fishaudio": "fish_audio",
+                "mock": "mock",
+            }
+            requested_voice_type = voice_aliases.get(requested_voice_type_raw) if requested_voice_type_raw else None
+
+            if requested_voice_type_raw and not requested_voice_type:
+                return jsonify({
+                    "success": False,
+                    "error": "Moteur audio inconnu. Utilise 'gtts' ou 'fish_audio'."
+                }), 400
 
             # Vérifier si un script TTS existe pour ce dossier
             from services.content_generation_service import get_job_from_db as _get_cjob
-            has_script = bool(_get_cjob(folder_id) and _get_cjob(folder_id).get("status") == "completed")
+            content_job = _get_cjob(folder_id)
+            has_script = bool(content_job and content_job.get("status") == "completed")
+
+            if requested_voice_type == "mock" and not script_mock and not playlist_mock:
+                script_mock = has_script
+                playlist_mock = not has_script
+
+            if script_mock and not has_script:
+                return jsonify({
+                    "success": False,
+                    "error": "Le mock script nécessite un script texte déjà généré pour ce dossier."
+                }), 400
+
+            if requested_voice_type and requested_voice_type != "mock" and not playlist_mock and not has_script:
+                return jsonify({
+                    "success": False,
+                    "error": "Génère d'abord le script texte du dossier avant de lancer l'audio gTTS ou Fish Audio."
+                }), 400
+
+            if script_mock or playlist_mock:
+                voice_type = "mock"
+            elif requested_voice_type:
+                voice_type = requested_voice_type
+            else:
+                # Compatibilité ancienne UI/API : sans choix explicite, l'ancien comportement reste Fish Audio.
+                voice_type = "fish_audio"
+
+            use_basic_tts = voice_type == "gtts"
+            voice_label = "gTTS / Edge" if voice_type == "gtts" else "Fish Audio" if voice_type == "fish_audio" else "Mock"
+
+            # Initialiser le job après validation pour éviter les jobs bloqués en cas de 400.
+            _playlist_jobs[folder_id] = {
+                "status": "running",
+                "step": 0,
+                "total_steps": 24,
+                "message": f"Démarrage audio {voice_label}...",
+                "result": None,
+                "voice_type": voice_type,
+            }
 
             def _run_playlist_pipeline(platform_id, folder_id):
                 try:
@@ -2914,6 +2962,7 @@ def create_hr_blueprint(socketio):
                         result_audio = generate_audio_from_script(
                             folder_id, on_progress=on_progress, force_all=force_all,
                             mock=script_mock,
+                            basic_tts=use_basic_tts,
                             sync_slides=sync_slides,
                             auto_generate_slides=auto_generate_slides,
                         )
@@ -2922,6 +2971,7 @@ def create_hr_blueprint(socketio):
                             "generated": result_audio["generated"],
                             "skipped": result_audio["skipped"],
                             "source": "script",
+                            "voice_type": voice_type,
                         }
                     else:
                         # Pipeline classique : reformulation Claude → TTS
@@ -2930,10 +2980,11 @@ def create_hr_blueprint(socketio):
                             platform_id, folder_id, progress_callback=on_progress,
                             mock=playlist_mock,
                         )
+                        result["voice_type"] = voice_type
                     if has_script and not playlist_mock:
-                        done_msg = f"✅ Terminé : {result['generated']} bloc(s) régénéré(s), {result.get('skipped', 0)} conservé(s)"
+                        done_msg = f"✅ Terminé ({voice_label}) : {result['generated']} bloc(s) régénéré(s), {result.get('skipped', 0)} conservé(s)"
                     else:
-                        done_msg = f"✅ Terminé : {result.get('generated', '?')} fichiers générés"
+                        done_msg = f"✅ Terminé ({voice_label}) : {result.get('generated', '?')} fichiers générés"
                     _playlist_jobs[folder_id].update({
                         "status": "completed",
                         "result": result,
