@@ -1,6 +1,47 @@
 # Changelog
 
+## 2026-05-20
+
+### fix(audio-editor): seek arbitraire cassé sur la waveform
+
+L'endpoint `GET /api/hr/cours-folders/<id>/audio-stream/<filename>`
+annonçait `Accept-Ranges: bytes` mais ignorait le header `Range` envoyé par
+le navigateur : il renvoyait toujours le MP3 complet avec `200 OK`. Quand
+l'utilisateur cliquait vers la fin de la waveform (`AudioEditor.jsx`), le
+`<audio>` HTML5 sous WaveSurfer demandait un range partiel, recevait `200`
+au lieu de `206 Partial Content`, et le seek échouait silencieusement —
+seule la lecture depuis le début fonctionnait.
+
+Correctif : `stream_audio_file` parse maintenant `Range: bytes=START-END`
+(et `bytes=-SUFFIX`), renvoie `206 Partial Content` avec `Content-Range`
+et `Content-Length` corrects, ou `416 Range Not Satisfiable` si la plage
+est invalide. Aucune modification frontend nécessaire — le bug était
+100 % côté backend.
+
 ## 2026-05-19
+
+### feat(slides): deck de référence 12 templates de slides visio
+
+Import du deck de design Claude (bundle `pyVNROKZYR8pVON75b4TNw`) dans
+`frontend/public/slide-templates/` :
+
+- `deck.html` — 12 templates 16:9 (1920×1080) pour formation en visio, un
+  par type du storyboard : `intro_formation`, `big_statement`, `definition`,
+  `diagnostic`, `mistake`, `case_study`, `process`, `checklist`, `recap`,
+  `transition`, `pause`, `qa`.
+- `deck-stage.js` — web component `<deck-stage>` (navigation clavier,
+  thumbnails, auto-scale, print → PDF).
+- Identité visuelle : bleu profond (`#050a26`→`#1a37d6`) + accent corail
+  (`#ff5d6c`), typo Archivo Black display + Manrope body + JetBrains Mono
+  labels + Caveat manuscrit ; grille subtile + grain pour un rendu
+  « studio de formation » plutôt que « PDF projeté ».
+
+Visualisation locale : `http://localhost:5173/slide-templates/deck.html`
+(une fois `npm run dev` lancé sur frontend).
+
+**Suite prévue** : porter les 12 templates en composants React dans
+`frontend/src/components/slides/` pour les brancher sur le storyboard JSON
+généré par l'IA à partir du texte de chaque bloc cours.
 
 ### measure(tts): débit réel Fish Audio mesuré + calibration Edge TTS
 

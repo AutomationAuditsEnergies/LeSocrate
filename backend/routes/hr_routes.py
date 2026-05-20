@@ -3096,7 +3096,12 @@ def create_hr_blueprint(socketio):
 
     @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/audio-stream/<path:filename>", methods=["GET"])
     def stream_audio_file(folder_id, filename):
-        """Proxy l'audio depuis Azure audiostts vers le frontend (fallback si SAS non dispo)."""
+        """Proxy l'audio depuis Azure audiostts vers le frontend.
+
+        Supporte les Range requests (206 Partial Content) pour permettre au
+        navigateur de seek dans la piste audio — sans ça, cliquer vers la fin
+        de la waveform échoue silencieusement.
+        """
         denied = _require_admin()
         if denied:
             return denied
@@ -3105,16 +3110,61 @@ def create_hr_blueprint(socketio):
             blob_path = _get_audio_blob_path(platform_id, folder_id, filename)
             from services.azure_blob_service import download_blob, CONTAINER_AUDIOS
             audio_bytes = download_blob(CONTAINER_AUDIOS, blob_path)
-            from flask import Response
+            total_size = len(audio_bytes)
+            content_disposition = f'inline; filename="{os.path.basename(filename)}"'
+
+            range_header = request.headers.get("Range")
+            if not range_header:
+                return Response(
+                    audio_bytes,
+                    mimetype="audio/mpeg",
+                    headers={
+                        "Content-Disposition": content_disposition,
+                        "Accept-Ranges": "bytes",
+                        "Content-Length": str(total_size),
+                        "Cache-Control": "no-store",
+                    },
+                )
+
+            # Format attendu : "bytes=START-END" (END optionnel) ou "bytes=-SUFFIX"
+            try:
+                units, _, rng = range_header.partition("=")
+                if units.strip().lower() != "bytes":
+                    raise ValueError("unit non supportée")
+                start_s, _, end_s = rng.partition("-")
+                start_s, end_s = start_s.strip(), end_s.strip()
+                if start_s == "":
+                    suffix = int(end_s)
+                    start = max(0, total_size - suffix)
+                    end = total_size - 1
+                else:
+                    start = int(start_s)
+                    end = int(end_s) if end_s else total_size - 1
+            except (ValueError, TypeError):
+                return Response(
+                    status=416,
+                    headers={"Content-Range": f"bytes */{total_size}"},
+                )
+
+            end = min(end, total_size - 1)
+            if start < 0 or start > end or start >= total_size:
+                return Response(
+                    status=416,
+                    headers={"Content-Range": f"bytes */{total_size}"},
+                )
+
+            chunk = audio_bytes[start:end + 1]
             return Response(
-                audio_bytes,
+                chunk,
+                status=206,
                 mimetype="audio/mpeg",
                 headers={
-                    "Content-Disposition": f'inline; filename="{os.path.basename(filename)}"',
+                    "Content-Disposition": content_disposition,
                     "Accept-Ranges": "bytes",
-                    "Content-Length": str(len(audio_bytes)),
+                    "Content-Range": f"bytes {start}-{end}/{total_size}",
+                    "Content-Length": str(len(chunk)),
                     "Cache-Control": "no-store",
-                }
+                },
             )
         except Exception as e:
             logger.error(f"❌ stream_audio_file: {e}")
