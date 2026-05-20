@@ -35,8 +35,8 @@ NUM_SUB_PARTS = 6
 _COURSE_START_SILENCE_SECONDS = 17
 # Fish Audio S2-Pro mesuré sur 72,2 min / 11 959 mots à speed=0.90.
 _DEFAULT_TTS_WORDS_PER_MINUTE = 165.7
-_COURSE_CONCLUSION_START_MARGIN_SECONDS = 240
-_COURSE_FINAL_SILENCE_SECONDS = 120
+_COURSE_CONCLUSION_START_MARGIN_SECONDS = 0
+_COURSE_FINAL_SILENCE_SECONDS = 60
 _DEFAULT_TTS_SPEED = 0.90
 _DEFAULT_TTS_LOCAL_MAX_SPEEDUP = 1.0
 _DEFAULT_TTS_PREFLIGHT_SAFETY = 1.0
@@ -202,7 +202,7 @@ def _course_conclusion_start_margin_sec():
     return _env_float(
         "FORMATION_TTS_CONCLUSION_START_MARGIN_SEC",
         _COURSE_CONCLUSION_START_MARGIN_SECONDS,
-        min_value=60,
+        min_value=0,
         max_value=600,
     )
 
@@ -240,8 +240,12 @@ def _estimated_words_budget_for_course(target_sec, api_speed):
 
 
 def _estimated_main_words_budget_for_course(target_sec, api_speed):
-    """Words allowed for source course text before the generated conclusion."""
-    return _words_budget_for_speaking_window(target_sec, _course_conclusion_start_margin_sec())
+    """Words allowed for the canonical course block text.
+
+    Conclusions and transitions are now part of the generated/calibrated block
+    itself, so there is no separate runtime conclusion reserve.
+    """
+    return _estimated_words_budget_for_course(target_sec, api_speed)
 
 
 def count_tts_spoken_words(text: str | None) -> int:
@@ -695,6 +699,13 @@ def _silent_mp3_approx_no_ffmpeg(duration_sec: float) -> tuple[bytes, float]:
     return concat_mp3_bytes([one_sec] * repeat), one_sec_duration * repeat
 
 
+def _edge_muted_padding_audio(duration_sec: float, on_progress=None) -> tuple[bytes, float]:
+    """Return Edge-compatible muted padding for course MP3 concatenation."""
+    if duration_sec <= 0:
+        return b"", 0.0
+    return _build_edge_muted_filler_audio(duration_sec, on_progress=on_progress)
+
+
 def _word_slice(text: str, start: int, end: int) -> str:
     words = (text or "").split()
     start = max(0, min(len(words), start))
@@ -926,6 +937,18 @@ def _assert_audio_duration_within_slot(filename: str, duration_sec: float, targe
         )
 
 
+def _assert_audio_duration_fills_slot(filename: str, duration_sec: float, target_sec: int) -> None:
+    """Runtime-fit course files must include real browser-readable padding."""
+    if not target_sec or duration_sec is None:
+        return
+    if float(duration_sec) < float(target_sec) - _TOLERANCE_OVERFLOW_SEC:
+        raise ValueError(
+            f"{filename} est trop court après padding "
+            f"({float(duration_sec):.1f}s < {int(target_sec)}s). "
+            "Audio non uploadé pour éviter une fin de créneau trop précoce."
+        )
+
+
 def _assert_course_voice_duration_within_deadline(
     filename: str,
     voice_duration_sec: float,
@@ -933,7 +956,7 @@ def _assert_course_voice_duration_within_deadline(
     *,
     has_start_silence: bool,
 ) -> None:
-    """Vérifie que la dernière parole du cours reste avant T-120s."""
+    """Vérifie que la dernière parole du cours respecte le silence final configuré."""
     if not target_sec or voice_duration_sec is None:
         return
     final_silence_sec = _course_final_silence_sec()
@@ -946,7 +969,7 @@ def _assert_course_voice_duration_within_deadline(
         raise ValueError(
             f"{filename} dépasse la limite de parole T-{final_silence_sec:.0f}s "
             f"({float(voice_duration_sec):.1f}s > {float(limit_sec):.1f}s). "
-            "Audio non uploadé pour garder les 2 minutes finales en silence."
+            "Audio non uploadé pour garder le silence final prévu."
         )
 
 
@@ -1441,16 +1464,14 @@ def _synthesize_course_audio_synced_to_slides(
           `_mp3_duration_seconds_no_ffprobe`, et calcule un `observed_wpm`
           à mesure (bootstrap _BOOTSTRAP_WPM_EDGE_TTS).
         - Sub-chunke adaptativement (paliers 600/300/150 mots) selon la
-          marge restante avant la deadline parole (`target_sec - silence final`)
-          et la marge de conclusion.
+          marge restante avant la deadline parole (`target_sec - silence final`).
         - Stoppe la génération avant dépassement et reporte les chunks
           non générés via le retour `unconsumed_chunks` (cascade vers le
           bloc suivant ou le carryover inter-jours).
         - Préfixe `prepended_chunks` (carryover intra-jour des blocs
           précédents) en tête de la file.
-        - Ajoute une conclusion courte juste avant la fin si stop volontaire,
-          en étendant le `end_time` du dernier timing slide pour que le
-          frontend continue d'afficher la slide pendant la transition.
+        - N'ajoute plus de conclusion runtime : la fin du cours appartient au
+          texte calibré en amont, puis à l'humanisation/review.
 
     Mode classique (Fish Audio sync slides, ou basic_tts sans runtime_fit) :
         - Comportement d'origine inchangé : génère tous les chunks slide.
@@ -1495,26 +1516,9 @@ def _synthesize_course_audio_synced_to_slides(
     # Runtime fit n'est supporté qu'en basic_tts (Edge TTS). Sinon ignoré.
     use_runtime_fit = bool(runtime_fit and basic_tts)
 
-    try:
-        min_conclusion_room_sec = float(os.getenv("EDGE_TTS_MIN_CONCLUSION_ROOM_SEC", "25"))
-    except (TypeError, ValueError):
-        min_conclusion_room_sec = 25.0
-    min_conclusion_room_sec = max(0.0, min_conclusion_room_sec)
-
-    if conclusion_margin_sec is None:
-        conclusion_margin_sec = int(os.getenv(
-            "EDGE_TTS_CONCLUSION_MARGIN_SEC",
-            _DEFAULT_CONCLUSION_MARGIN_SEC,
-        ))
-        min_conclusion_margin = int(os.getenv("EDGE_TTS_MIN_CONCLUSION_MARGIN_SEC", "120"))
-        conclusion_margin_sec = max(conclusion_margin_sec, min_conclusion_margin)
-    # Règle dure : aucune parole dans les deux dernières minutes. En runtime
-    # fit, on réserve aussi un petit espace pour une conclusion avant cette
-    # deadline.
-    main_speech_deadline_sec = min(
-        float(target_sec) - float(conclusion_margin_sec),
-        speech_deadline_sec - min_conclusion_room_sec,
-    )
+    # Le bloc audio est déjà généré/calibré avec sa conclusion. Runtime fit ne
+    # réserve donc plus de marge pour fabriquer une conclusion après coup.
+    main_speech_deadline_sec = speech_deadline_sec
     main_speech_deadline_sec = max(0.0, main_speech_deadline_sec)
 
     def _emit(message: str):
@@ -1811,94 +1815,6 @@ def _synthesize_course_audio_synced_to_slides(
 
         chunk_idx += 1
 
-    # ── Conclusion automatique : soit on a stoppé avec surplus, soit tout le
-    # texte du bloc est consommé mais il reste une vraie marge à occuper.
-    should_append_runtime_conclusion = bool(
-        use_runtime_fit
-        and (
-            stopped_for_runtime_fit
-            or (speech_deadline_sec - cursor_sec) >= min_conclusion_room_sec
-        )
-    )
-    if should_append_runtime_conclusion:
-        def _runtime_conclusion_template(scale: float = 1.0) -> str | None:
-            env_template = (os.getenv("EDGE_TTS_CONCLUSION_TEMPLATE") or "").strip()
-            if env_template:
-                return env_template
-            remaining_for_conclusion = max(0.0, speech_deadline_sec - cursor_sec) * max(0.35, scale)
-            return _build_runtime_conclusion_text(
-                consumed_chunks,
-                remaining_sec=remaining_for_conclusion,
-                bloc_number=int(bloc.get("bloc_number") or 0),
-                next_playlist_item=next_playlist_item,
-            )
-
-        def _try_append_conclusion(kind: str, template: str | None = None) -> bool:
-            nonlocal cursor_sec
-            conclusion_bytes, conclusion_dur = _synthesize_short_conclusion_audio(
-                basic_tts=True,
-                progress_callback=_emit,
-                template=template,
-                fast_tts_pipeline=fast_tts_pipeline,
-            )
-            if cursor_sec + conclusion_dur > speech_deadline_sec + _TOLERANCE_OVERFLOW_SEC:
-                attempts.append({
-                    "kind": f"{kind}_rejected_overflow",
-                    "chunk": "end",
-                    "duration": conclusion_dur,
-                    "limit_sec": speech_deadline_sec,
-                    "final_silence_sec": final_silence_sec,
-                    "text": template or "",
-                })
-                _emit(
-                    f"Bloc {bloc['bloc_number']}/7 — conclusion {kind} ignorée "
-                    f"({conclusion_dur:.1f}s dépasserait la limite T-{final_silence_sec:.0f}s)"
-                )
-                return False
-
-            audio_parts.append(conclusion_bytes)
-            attempts.append({
-                "kind": kind,
-                "chunk": "end",
-                "duration": conclusion_dur,
-                "text": template or "",
-            })
-            if timings:
-                last = timings[-1]
-                last["end_time"] = round(float(last["end_time"]) + conclusion_dur, 3)
-                last["duration"] = round(float(last["duration"]) + conclusion_dur, 3)
-            cursor_sec += conclusion_dur
-            _emit(
-                f"Bloc {bloc['bloc_number']}/7 — conclusion ajoutée ({conclusion_dur:.1f}s)"
-            )
-            return True
-
-        try:
-            appended = _try_append_conclusion(
-                "conclusion",
-                template=_runtime_conclusion_template(scale=1.0),
-            )
-            if not appended:
-                appended = _try_append_conclusion(
-                    "conclusion_fallback",
-                    template=_runtime_conclusion_template(scale=0.55),
-                )
-            if not appended:
-                appended = _try_append_conclusion(
-                    "conclusion_ultra_fallback",
-                    template=_FALLBACK_CONCLUSION_TEMPLATE,
-                )
-            if not appended:
-                logger.warning(
-                    f"⚠️ Bloc {bloc['bloc_number']} — aucune conclusion ajoutée "
-                    "(elles dépassaient la cible)"
-                )
-        except Exception as e:
-            logger.warning(
-                f"⚠️ Bloc {bloc['bloc_number']} — génération conclusion échouée : "
-                f"{e} (on continue sans)"
-            )
-
     # ── Assemblage final ────────────────────────────────────────────────────
     if basic_tts:
         if use_runtime_fit and stopped_for_runtime_fit and not audio_parts:
@@ -1906,10 +1822,18 @@ def _synthesize_course_audio_synced_to_slides(
                 f"Bloc {bloc['bloc_number']} runtime fit : aucun audio généré "
                 "avant le report du texte."
             )
-        final_duration = cursor_sec
-        if target_sec > final_duration:
-            silence_bytes, silence_duration = _silent_mp3_approx_no_ffmpeg(target_sec - final_duration)
-            if silence_bytes:
+        voice_stop_duration = cursor_sec
+        if target_sec > voice_stop_duration:
+            if use_runtime_fit:
+                silence_bytes, silence_duration = _edge_muted_padding_audio(
+                    target_sec - voice_stop_duration,
+                    on_progress=_emit,
+                )
+            else:
+                silence_bytes, silence_duration = _silent_mp3_approx_no_ffmpeg(
+                    target_sec - voice_stop_duration
+                )
+            if silence_bytes and silence_duration > 0:
                 audio_parts.append(silence_bytes)
                 attempts.append({
                     "kind": "final_silence_padding",
@@ -1918,6 +1842,7 @@ def _synthesize_course_audio_synced_to_slides(
                     "target_sec": target_sec,
                 })
         output_bytes = concat_mp3_bytes(audio_parts) if audio_parts else b""
+        final_duration = voice_stop_duration
     else:
         final_duration = len(full_audio) / 1000
         if final_duration > speech_deadline_sec + _TOLERANCE_OVERFLOW_SEC and not mock:
@@ -2472,9 +2397,10 @@ def _build_course_blocs_from_segments(
 ):
     """Découpe le script en 7 blocs en respectant les fins d'idées ET le budget TTS.
 
-    Chaque bloc reçoit deux budgets calibrés Fish Audio :
-    - `main_word_budget` : texte source lu avant la conclusion (arrêt visé T-4 min).
-    - `word_budget` : parole totale, conclusion incluse (arrêt visé T-2 min).
+    Chaque bloc reçoit un budget calibré Fish Audio. `main_word_budget` et
+    `word_budget` restent deux champs pour compatibilité interne, mais ils
+    portent désormais la même cible : le texte canonique du bloc, conclusion
+    comprise.
     Tout paragraphe en surplus cascade automatiquement vers le bloc suivant.
     """
     marked_blocks = _extract_marked_audio_blocks_from_segments(segments)
@@ -4342,7 +4268,16 @@ def _build_edge_muted_filler_audio(duration_sec: float, on_progress=None) -> tup
 
     repeat = int(duration_sec // seed_duration)
     if repeat <= 0:
-        return b"", 0.0
+        if seed_duration <= duration_sec + _UPLOAD_DURATION_TOLERANCE_SEC:
+            repeat = 1
+        else:
+            return b"", 0.0
+    remainder = duration_sec - (repeat * seed_duration)
+    if (
+        remainder > _UPLOAD_DURATION_TOLERANCE_SEC
+        and ((repeat + 1) * seed_duration) <= duration_sec + _UPLOAD_DURATION_TOLERANCE_SEC
+    ):
+        repeat += 1
 
     filler = concat_mp3_bytes([seed] * repeat)
     return filler, seed_duration * repeat
@@ -5110,19 +5045,8 @@ def generate_audio_from_script(
 
     playlist_items = _playlist_items_for_platform(platform_id)
 
-    # ── 3.5. Closings contextuels — texte de fin de bloc adaptatif au gap résiduel.
-    # Désactivé en mock/basic_tts et en sync slides: les bornes slides doivent
-    # rester alignées sur le texte qui a servi au deck.
-    if not mock and not basic_tts and not sync_slides:
-        try:
-            _apply_closing_transitions(
-                blocs,
-                _course_tts_speed(),
-                model=llm_model,
-                playlist_items=playlist_items,
-            )
-        except Exception as e:
-            logger.warning(f"⚠️ Closings contextuels — erreur globale, on continue sans : {e}")
+    # Les fins de blocs sont désormais portées par le texte calibré en amont.
+    # On n'ajoute plus de closing au moment de l'audio.
 
     blocs_by_number = {b["bloc_number"]: b for b in blocs}
     dirty_count = sum(1 for b in blocs if b["dirty"])
@@ -5613,7 +5537,8 @@ def generate_audio_from_script(
             )
 
         if basic_tts and runtime_fit_enabled:
-            final_duration = target_sec
+            final_duration = _mp3_duration_seconds_no_ffprobe(final_bytes)
+            _assert_audio_duration_fills_slot(filename, final_duration, target_sec)
         elif sync_slides:
             try:
                 final_duration = _measure_duration_ms(final_bytes) / 1000

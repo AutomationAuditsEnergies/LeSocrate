@@ -213,8 +213,31 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
     })
   }, [mode])
 
-  const togglePlay = () => {
-    wsRef.current?.playPause()
+  const togglePlay = async () => {
+    const ws = wsRef.current
+    if (!ws) return
+
+    if (ws.isPlaying()) {
+      ws.pause()
+      return
+    }
+
+    // Si le navigateur est encore en train de chercher la position (seek en cours
+    // après un clic sur la waveform), on attend la fin avant de lancer la lecture.
+    // Sinon media.play() est appelé pendant le seeking et produit du silence.
+    const media = ws.getMediaElement?.()
+    if (media?.seeking) {
+      await new Promise(resolve => {
+        const onSeeked = () => { media.removeEventListener('seeked', onSeeked); resolve() }
+        media.addEventListener('seeked', onSeeked)
+      })
+    }
+
+    try {
+      await ws.play()
+    } catch (_) {
+      // Autoplay policy du navigateur — ignoré silencieusement
+    }
   }
 
   const clearRegion = () => {
