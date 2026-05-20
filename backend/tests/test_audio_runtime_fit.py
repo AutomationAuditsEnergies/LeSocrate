@@ -67,6 +67,9 @@ class RuntimeFitStopsBeforeOverflowTest(unittest.TestCase):
         ), patch.object(
             cgs, "_synthesize_short_conclusion_audio",
             return_value=(_mp3_chunk("CONCL"), 5.0),
+        ), patch.object(
+            cgs, "_edge_muted_padding_audio",
+            return_value=(_mp3_chunk("PAD"), 80.0),
         ):
             (
                 audio_bytes, voice_duration, fit_method,
@@ -151,18 +154,18 @@ class FishAudioWordBudgetCalibrationTest(unittest.TestCase):
         status = cgs._audio_block_word_status(expanded, block)
         self.assertTrue(status["ok"])
 
-    def test_45_minute_budget_reserves_conclusion_and_final_silence(self):
+    def test_45_minute_budget_uses_single_canonical_block_budget(self):
         # 192 mots/min, 17s de silence initial.
-        # Texte principal arrêté à T-4min, parole totale arrêtée à T-2min.
+        # Plus de réserve conclusion runtime : budget principal = budget total.
         with patch.object(cgs, "_course_words_per_minute", return_value=192.0), patch.object(
             cgs, "_course_preflight_safety", return_value=1.0
         ):
             main_budget = cgs._estimated_main_words_budget_for_course(2700, api_speed=0.95)
             total_budget = cgs._estimated_words_budget_for_course(2700, api_speed=0.95)
 
-        self.assertEqual(main_budget, int(((2700 - 240 - 17) / 60) * 192))
-        self.assertEqual(total_budget, int(((2700 - 120 - 17) / 60) * 192))
-        self.assertGreater(total_budget - main_budget, 300)
+        expected = int(((2700 - 60 - 17) / 60) * 192)
+        self.assertEqual(main_budget, expected)
+        self.assertEqual(total_budget, expected)
 
     def test_day_budget_uses_only_course_playlist_items(self):
         playlist = [
@@ -499,7 +502,7 @@ class ContentReviewSignatureSelectionTest(unittest.TestCase):
 
 
 class ConclusionAppendedAfterStopTest(unittest.TestCase):
-    def test_attempts_contain_conclusion_and_last_timing_extended(self):
+    def test_runtime_fit_does_not_append_conclusion_or_extend_timing(self):
         text = _phrases_text(n_phrases=200, words_per_phrase=7)
         bloc = _make_bloc(text, target_sec=2700)
         # Chunk slide explicite avec slide_id pour exercer l'extension du
@@ -522,7 +525,7 @@ class ConclusionAppendedAfterStopTest(unittest.TestCase):
         ), patch.object(
             cgs, "_synthesize_short_conclusion_audio",
             return_value=(_mp3_chunk("CONCL"), 7.5),
-        ):
+        ) as conclusion:
             (
                 audio_bytes, voice_duration, fit_method,
                 attempts, timings, unconsumed, consumed,
@@ -533,17 +536,13 @@ class ConclusionAppendedAfterStopTest(unittest.TestCase):
                 conclusion_margin_sec=90,
             )
 
-        # Une entrée "conclusion" doit avoir été ajoutée dans attempts.
         kinds = [a.get("kind") for a in attempts]
-        self.assertIn("conclusion", kinds, f"attempts kinds={kinds}")
-        conclusion_attempt = next(a for a in attempts if a["kind"] == "conclusion")
-        self.assertEqual(conclusion_attempt["duration"], 7.5)
+        self.assertNotIn("conclusion", kinds, f"attempts kinds={kinds}")
+        conclusion.assert_not_called()
 
-        # Le dernier timing slide doit être étendu pour couvrir la conclusion.
         self.assertTrue(timings, "Au moins un timing slide attendu")
         last = timings[-1]
-        # Duration = chunk_duration (1500s) + conclusion (7.5s).
-        self.assertAlmostEqual(last["duration"], 1500.0 + 7.5, places=2)
+        self.assertAlmostEqual(last["duration"], 1500.0, places=2)
 
 
 class PrependedChunksConsumedFirstTest(unittest.TestCase):
@@ -645,9 +644,9 @@ class ConcatMp3BytesUsedSingleId3Test(unittest.TestCase):
 
 
 class RuntimeFitRejectsMeasuredOverflowTest(unittest.TestCase):
-    def test_measured_overflow_chunk_is_not_concatenated(self):
+    def test_measured_overflow_without_prior_audio_raises(self):
         text = " ".join(["mot"] * 100) + "."
-        bloc = _make_bloc(text, target_sec=220)
+        bloc = _make_bloc(text, target_sec=150)
 
         with patch(
             "services.basic_tts_service.convert_to_speech_basic",
@@ -657,31 +656,21 @@ class RuntimeFitRejectsMeasuredOverflowTest(unittest.TestCase):
         ), patch.object(
             cgs, "_synthesize_short_conclusion_audio",
             return_value=(_mp3_chunk("CONCL"), 5.0),
+        ), patch.object(
+            cgs, "_edge_muted_padding_audio",
+            return_value=(_mp3_chunk("PAD"), 80.0),
         ):
-            (
-                audio_bytes, voice_duration, fit_method,
-                attempts, timings, unconsumed, consumed,
-            ) = cgs._synthesize_course_audio_synced_to_slides(
-                bloc, [], "cours.mp3",
-                mock=False, basic_tts=True,
-                runtime_fit=True,
-                conclusion_margin_sec=90,
-            )
-
-        self.assertLessEqual(
-            voice_duration,
-            cgs._course_speech_deadline_sec(220) + cgs._TOLERANCE_OVERFLOW_SEC,
-        )
-        self.assertEqual(consumed, [])
-        self.assertEqual(len(unconsumed), 1)
-        self.assertEqual(unconsumed[0]["text"], text)
-        self.assertIn("gtts_rejected_overflow", [a["kind"] for a in attempts])
-        self.assertNotIn(b"VOICE", audio_bytes)
-        self.assertIn(b"CONCL", audio_bytes)
+            with self.assertRaisesRegex(ValueError, "aucun audio généré"):
+                cgs._synthesize_course_audio_synced_to_slides(
+                    bloc, [], "cours.mp3",
+                    mock=False, basic_tts=True,
+                    runtime_fit=True,
+                    conclusion_margin_sec=90,
+                )
 
 
 class RuntimeFitConclusionFallbackTest(unittest.TestCase):
-    def test_too_long_conclusion_uses_short_fallback(self):
+    def test_runtime_fit_does_not_use_conclusion_fallback(self):
         text = _phrases_text(n_phrases=80, words_per_phrase=7)
         bloc = _make_bloc(text, target_sec=250)
 
@@ -696,7 +685,7 @@ class RuntimeFitConclusionFallbackTest(unittest.TestCase):
                 (_mp3_chunk("LONG"), 200.0),
                 (_mp3_chunk("SHORT"), 5.0),
             ],
-        ):
+        ) as conclusion:
             (
                 audio_bytes, voice_duration, fit_method,
                 attempts, timings, unconsumed, consumed,
@@ -708,13 +697,14 @@ class RuntimeFitConclusionFallbackTest(unittest.TestCase):
             )
 
         kinds = [a["kind"] for a in attempts]
-        self.assertIn("conclusion_rejected_overflow", kinds)
-        self.assertIn("conclusion_fallback", kinds)
+        self.assertNotIn("conclusion_rejected_overflow", kinds)
+        self.assertNotIn("conclusion_fallback", kinds)
+        conclusion.assert_not_called()
         self.assertLessEqual(
             voice_duration,
             cgs._course_speech_deadline_sec(250) + cgs._TOLERANCE_OVERFLOW_SEC,
         )
-        self.assertIn(b"SHORT", audio_bytes)
+        self.assertNotIn(b"SHORT", audio_bytes)
         self.assertNotIn(b"LONG", audio_bytes)
 
 
@@ -722,7 +712,7 @@ class RuntimeFitMicroChunkRefinementTest(unittest.TestCase):
     def test_measured_overflow_is_split_smaller_before_stopping(self):
         sentence = " ".join(["mot"] * 20) + "."
         text = " ".join([sentence, sentence, sentence])
-        bloc = _make_bloc(text, target_sec=250)
+        bloc = _make_bloc(text, target_sec=170)
         fake_slide_chunk = {
             "slide_id": "slide-test",
             "word_start": 0,
@@ -741,6 +731,9 @@ class RuntimeFitMicroChunkRefinementTest(unittest.TestCase):
         ), patch.object(
             cgs, "_synthesize_short_conclusion_audio",
             return_value=(_mp3_chunk("CONCL"), 20.0),
+        ), patch.object(
+            cgs, "_edge_muted_padding_audio",
+            return_value=(_mp3_chunk("PAD"), 90.0),
         ):
             (
                 audio_bytes, voice_duration, fit_method,
@@ -754,7 +747,7 @@ class RuntimeFitMicroChunkRefinementTest(unittest.TestCase):
 
         kinds = [a["kind"] for a in attempts]
         self.assertIn("gtts_split_after_measured_overflow", kinds)
-        self.assertIn("conclusion", kinds)
+        self.assertNotIn("conclusion", kinds)
         self.assertGreaterEqual(len(consumed), 1)
         self.assertEqual(unconsumed, [])
         self.assertLessEqual(
@@ -1194,6 +1187,9 @@ class FastTTSModeIsolationTest(unittest.TestCase):
             ), patch.object(
                 cgs, "_synthesize_short_conclusion_audio",
                 return_value=(_mp3_chunk("CONCL"), 3.0),
+            ), patch.object(
+                cgs, "_edge_muted_padding_audio",
+                return_value=(_mp3_chunk("PAD"), 2694.0),
             ):
                 first = cgs._synthesize_course_audio_synced_to_slides(
                     bloc, [], "cours.mp3",
@@ -1304,7 +1300,7 @@ class BasicTTSNoSlidesPipelineRuntimeFitTest(unittest.TestCase):
         )
         patches = self._patch_common(synth_result, uploaded)
 
-        with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5] as synth, patches[6], patches[7], patches[8], patches[9]:
+        with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5] as synth, patches[6], patches[7], patches[8], patches[9], patch.object(cgs, "_mp3_duration_seconds_no_ffprobe", return_value=2700.0):
             result = cgs.generate_audio_from_script(
                 123,
                 force_all=True,

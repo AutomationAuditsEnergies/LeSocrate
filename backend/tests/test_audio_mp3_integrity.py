@@ -72,6 +72,54 @@ class AudioMp3IntegrityTest(unittest.TestCase):
         self.assertEqual(consumed, [])
         self.assertNotIn(b"meta-two", audio_bytes)
 
+    def test_runtime_fit_edge_tts_uses_measured_muted_padding(self):
+        bloc = {
+            "bloc_number": 1,
+            "target_sec": 300,
+            "text": "un deux trois quatre",
+            "word_count": 4,
+            "start_w": 0,
+            "end_w": 4,
+        }
+        voice = _id3_header(b"edge-voice") + b"\xff\xfbVOICE"
+        conclusion = _id3_header(b"edge-concl") + b"\xff\xfbCONCL"
+        padding = _id3_header(b"edge-pad") + b"\xff\xfbPAD"
+
+        with patch(
+            "services.basic_tts_service.convert_to_speech_basic",
+            return_value=voice,
+        ), patch.object(
+            cgs,
+            "_synthesize_short_conclusion_audio",
+            return_value=(conclusion, 10.0),
+        ), patch.object(
+            cgs,
+            "_edge_muted_padding_audio",
+            return_value=(padding, 260.0),
+        ) as muted_padding, patch.object(
+            cgs,
+            "_mp3_duration_seconds_no_ffprobe",
+            side_effect=[30.0, 300.0],
+        ):
+            audio_bytes, voice_duration, fit_method, attempts, _timings, _unconsumed, _consumed = (
+                cgs._synthesize_course_audio_synced_to_slides(
+                    bloc,
+                    [],
+                    "cours_9h00_9h45.mp3",
+                    mock=False,
+                    basic_tts=True,
+                    runtime_fit=True,
+                )
+            )
+
+        self.assertEqual(fit_method, "slide_sync_edge_runtime_fit")
+        self.assertEqual(voice_duration, 30.0)
+        muted_padding.assert_called_once()
+        self.assertTrue(any(a["kind"] == "final_silence_padding" for a in attempts))
+        self.assertIn(b"VOICE", audio_bytes)
+        self.assertNotIn(b"CONCL", audio_bytes)
+        self.assertIn(b"PAD", audio_bytes)
+
 
 if __name__ == "__main__":
     unittest.main()
