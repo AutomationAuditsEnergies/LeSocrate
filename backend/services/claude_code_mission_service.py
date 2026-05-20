@@ -3316,7 +3316,7 @@ maximum 2500 mots.
     _write(chunk_dir, "rules.md", _load_rules_text())
 
 
-_VOLUME_SAFETY_MAX_PASSES = 5  # Boucle anti-déficit : assez pour combler un écart 60k → 90k
+_VOLUME_SAFETY_MAX_PASSES = 5  # Boucle anti-déficit bornée sur la cible audio dynamique.
 
 
 def _build_volume_safety_prompt_api(job: dict, segment: dict) -> str:
@@ -3394,7 +3394,7 @@ additionnel :"). Environ {addition_words} mots, maximum 2500 mots.
 
 
 def run_volume_safety_api(job_id: int, folder_id: int, model: str = None) -> dict:
-    """Version API de `run_volume_safety` : même invariant (90k mots/jour),
+    """Version API de `run_volume_safety` : même invariant de budget audio dynamique,
     même algorithme multi-passes, mais via `_anthropic_post` au lieu de
     subprocess `claude`. Consomme du crédit Anthropic — choisi par le mode
     auto-pilot quand `use_claude_code=False`.

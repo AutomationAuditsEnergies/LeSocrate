@@ -88,6 +88,7 @@ def _strip_tts_tags(text: str) -> str:
     cleaned = _FISHAUDIO_TAG_RE.sub("", cleaned)
     # Nettoyer les doubles espaces créés par la suppression
     cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
+    cleaned = re.sub(r"\s+([,.;:!?…])", r"\1", cleaned)
     cleaned = re.sub(r"\n[ \t]+", "\n", cleaned)
     return cleaned.strip()
 

@@ -15,6 +15,19 @@ azure-function/local.settings.json
 
 # Claude Code
 .claude/
+.agents/
+.mcp.json
 
 # Missions Claude Code exportées / importées (dev local)
 review_queue/
+
+# Environnements / caches locaux
+venv/
+frontend/.vite/
+
+# Artefacts audio locaux
+*.mp3
+output_jour1/
+output_jour2/
+output_qa_pauses/
+test_tags_output/

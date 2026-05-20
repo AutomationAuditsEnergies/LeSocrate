@@ -3538,7 +3538,7 @@ export default function FormationPipeline() {
                             </div>
                             {/* ─── 3 sous-zones du flux d'une journée ──────────
                                  1. Texte généré (lecture / téléchargements / rapport)
-                                 2. Sécurité volume (enrichissement si <90k mots)
+                                 2. Sécurité volume (enrichissement si sous budget audio)
                                  3. Révision conformité (audit règles #1-#27)
                                  Séparées par des FlowArrowDown pour matérialiser
                                  l'ordre du flux : génération → volume → révision. */}
@@ -3750,11 +3750,13 @@ export default function FormationPipeline() {
                                   alignItems: 'center',
                                   gap: '5px',
                                 }}>
-                                  <Icon name="auto_fix_high" style={{ fontSize: '12px' }} /> Sécurité volume <span style={{ fontWeight: 400, opacity: 0.7, textTransform: 'none', letterSpacing: 'normal' }}>· cible 90k mots</span>
+                                  <Icon name="auto_fix_high" style={{ fontSize: '12px' }} /> Sécurité volume <span style={{ fontWeight: 400, opacity: 0.7, textTransform: 'none', letterSpacing: 'normal' }}>· cible {volumeAudit?.target ? `${volumeAudit.target.toLocaleString('fr-FR')} mots` : 'playlist'}</span>
                                 </div>
                                 {(() => {
                                   const folderAudit = (volumeAudit?.folders || []).find(f => f.folder_id === folder.folder_id)
                                   const deficit = folderAudit?.deficit || 0
+                                  const minTarget = folderAudit?.min_words || volumeAudit?.min_target || folderAudit?.target_words || volumeAudit?.target || 0
+                                  const minTargetLabel = minTarget ? `${minTarget.toLocaleString('fr-FR')} mots` : 'la cible'
                                   const running = !!safetyRunning[folder.folder_id]
                                   const atTarget = isDone && deficit === 0 && folderAudit
                                   const disabled = !canUseFolder || running || atTarget
@@ -3771,8 +3773,8 @@ export default function FormationPipeline() {
                                           : running
                                             ? 'Enrichissement en cours'
                                             : atTarget
-                                              ? `Volume OK (${folderAudit.total_words.toLocaleString('fr-FR')} mots ≥ 90k)`
-                                              : `Compléter via API jusqu'à 90k (déficit ${deficit.toLocaleString('fr-FR')} mots)`
+                                              ? `Volume OK (${folderAudit.total_words.toLocaleString('fr-FR')} mots ≥ ${minTargetLabel})`
+                                              : `Compléter via API jusqu'à ${minTargetLabel} minimum (déficit ${deficit.toLocaleString('fr-FR')} mots)`
                                       }
                                     >
                                       <Icon name={running ? 'hourglass_empty' : (atTarget ? 'check_circle' : 'auto_fix_high')} />{' '}
@@ -4610,6 +4612,17 @@ function ReviewReportModal({ jobId, folder, onClose, reportEndpoint = 'review-re
               }}>
                 <Icon name="info" style={{ fontSize: '12px' }} /> <strong>Rapport reconstruit depuis la base</strong>
                 {' — '}{report.reconstruction_note}
+              </div>
+            )}
+            {reportEndpoint === 'humanization-report' && (
+              <div style={{
+                fontSize: '11px', color: '#c4b5fd', marginTop: '6px',
+                padding: '6px 10px', background: 'rgba(124, 58, 237, 0.10)',
+                border: '1px solid rgba(167, 139, 250, 0.28)', borderRadius: '4px',
+                lineHeight: 1.4,
+              }}>
+                <Icon name="info" style={{ fontSize: '12px' }} /> Le diff affiche la version TTS brute avec tags audio.
+                Les exports Word, Word 2 et l'aperçu texte retirent automatiquement ces tags.
               </div>
             )}
           </div>

@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import WaveSurfer from 'wavesurfer.js'
 import RegionsPlugin from 'wavesurfer.js/dist/plugins/regions.js'
-import { apiUrl } from '../api'
+import { apiUrl, getPlatformId } from '../api'
 
 const Icon = ({ name, style, className = '' }) => (
   <span className={`material-icons ${className}`} style={style}>{name}</span>
@@ -52,13 +52,44 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
 
   const audioUrlRef = useRef(null)   // URL audio courante (mise à jour après cut/replace)
 
-  // URL backend same-API pour éviter les échecs CORS du Blob Azure direct.
-  const buildAudioUrl = useCallback(() => {
-    const url = apiUrl(
-      `/api/hr/cours-folders/${folderId}/audio-stream/${filename}?v=${Date.now()}`
+  const revokeAudioObjectUrl = useCallback(() => {
+    if (audioUrlRef.current?.startsWith('blob:')) {
+      URL.revokeObjectURL(audioUrlRef.current)
+    }
+    audioUrlRef.current = null
+  }, [])
+
+  // Charge l'audio via un fetch authentifié explicite. Sur Azure SWA, le player
+  // ne renvoie pas toujours les cookies/headers attendus, ce qui remonte en
+  // "Failed to fetch" sans message utile.
+  const loadAudioObjectUrl = useCallback(async () => {
+    revokeAudioObjectUrl()
+    const token = localStorage.getItem('auth_token')
+    const platformId = getPlatformId()
+    const resp = await fetch(
+      apiUrl(`/api/hr/cours-folders/${folderId}/audio-stream/${filename}?v=${Date.now()}`),
+      {
+        credentials: 'include',
+        headers: {
+          ...(token ? { 'X-Auth-Token': token } : {}),
+          'X-Platform-Id': platformId,
+        },
+      }
     )
-    audioUrlRef.current = url
-    return url
+    if (!resp.ok) {
+      let detail = `HTTP ${resp.status}`
+      try {
+        const data = await resp.json()
+        detail = data?.error || detail
+      } catch (_) {
+        // ignore: réponse non-JSON
+      }
+      throw new Error(detail)
+    }
+    const blob = await resp.blob()
+    const objectUrl = URL.createObjectURL(blob)
+    audioUrlRef.current = objectUrl
+    return objectUrl
   }, [folderId, filename])
 
   // ── Init WaveSurfer ──
@@ -86,7 +117,6 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
       autoScroll: true,
       fillParent: true,
       blobMimeType: 'audio/mpeg',
-      fetchParams: { credentials: 'include' },
       plugins: [regions],
     })
     wsRef.current = ws
@@ -124,7 +154,7 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
 
     // Charger via le backend : le Blob Azure direct peut répondre 200 tout en
     // échouant côté JS si CORS n'est pas configuré sur le compte Storage.
-    Promise.resolve(buildAudioUrl())
+    Promise.resolve(loadAudioObjectUrl())
       .then(url => { if (!cancelled) return ws.load(url) })
       .catch(e => {
         if (cancelled) return
@@ -169,9 +199,10 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
       waveEl?.removeEventListener('wheel', handleWheel)
       ws.destroy()
       stopStitchedPlayback()
+      revokeAudioObjectUrl()
       bugRegionRefsRef.current = []
     }
-  }, [darkMode, buildAudioUrl])
+  }, [darkMode, loadAudioObjectUrl, revokeAudioObjectUrl])
 
   // Changer la couleur de la région selon le mode
   useEffect(() => {
@@ -355,7 +386,7 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
         // Recharger depuis une nouvelle SAS URL (le blob a changé)
         setTimeout(async () => {
           try {
-            const freshUrl = buildAudioUrl()
+            const freshUrl = await loadAudioObjectUrl()
             setLoading(true)
             wsRef.current?.load(freshUrl)
           } catch (e) { /* ignore */ }
@@ -438,7 +469,7 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
         setReplaceText('')
         setTimeout(async () => {
           try {
-            const freshUrl = buildAudioUrl()
+            const freshUrl = await loadAudioObjectUrl()
             setLoading(true)
             wsRef.current?.load(freshUrl)
           } catch (e) { /* ignore */ }

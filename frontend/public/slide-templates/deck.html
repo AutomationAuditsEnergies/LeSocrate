@@ -1,0 +1,1053 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8" />
+<title>Système de slides — Formation en visio</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo+Black&family=Archivo:wght@400;500;600;700;800;900&family=Manrope:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&family=Caveat:wght@600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg-0: #050a26;
+    --bg-1: #0c1a5e;
+    --bg-2: #1a37d6;
+    --ink: #ffffff;
+    --ink-dim: rgba(255,255,255,0.55);
+    --ink-mute: rgba(255,255,255,0.35);
+    --ink-line: rgba(255,255,255,0.14);
+    --coral: #ff5d6c;
+    --coral-deep: #ff3d51;
+    --pale: #f6f2eb;
+    --green: #58e2a4;
+
+    --f-display: 'Archivo Black', 'Archivo', sans-serif;
+    --f-head: 'Archivo', sans-serif;
+    --f-body: 'Manrope', sans-serif;
+    --f-mono: 'JetBrains Mono', ui-monospace, monospace;
+    --f-script: 'Caveat', cursive;
+  }
+
+  html, body { margin: 0; padding: 0; background: #000; color: var(--ink); font-family: var(--f-body); }
+
+  deck-stage { background: #000; }
+
+  /* === SLIDE BASE === */
+  section.slide {
+    position: relative;
+    width: 1920px; height: 1080px;
+    background:
+      radial-gradient(ellipse 1400px 900px at 70% -10%, #2a4af5 0%, transparent 60%),
+      radial-gradient(ellipse 1100px 800px at 10% 100%, #0a1556 0%, transparent 55%),
+      linear-gradient(180deg, #0a1351 0%, #0e1d8a 50%, #0a1351 100%);
+    overflow: hidden;
+    color: var(--ink);
+    font-family: var(--f-body);
+    isolation: isolate;
+  }
+  /* subtle grid texture on every slide */
+  section.slide::before {
+    content: ""; position: absolute; inset: 0; pointer-events: none;
+    background-image:
+      linear-gradient(rgba(255,255,255,0.045) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255,255,255,0.045) 1px, transparent 1px);
+    background-size: 64px 64px;
+    mask-image: radial-gradient(ellipse at center, rgba(0,0,0,0.9) 0%, rgba(0,0,0,0.2) 80%);
+    z-index: 0;
+  }
+  /* grain */
+  section.slide::after {
+    content: ""; position: absolute; inset: 0; pointer-events: none; z-index: 1;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='240' height='240'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' seed='5'/><feColorMatrix values='0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  0 0 0 0.16 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
+    opacity: 0.22; mix-blend-mode: overlay;
+  }
+  .slide > * { position: relative; z-index: 2; }
+
+  /* ========== CHROME ========== */
+  .chrome { position: absolute; inset: 0; pointer-events: none; z-index: 5; }
+  .chrome .brand {
+    position: absolute; top: 56px; left: 80px;
+    display: flex; align-items: flex-end; gap: 10px;
+  }
+  .chrome .brand .mark {
+    font-family: var(--f-display); font-size: 30px; letter-spacing: -0.01em;
+    color: #fff; line-height: 0.9;
+  }
+  .chrome .brand .tag {
+    font-family: var(--f-script); font-size: 32px; color: var(--coral);
+    transform: translateY(-2px) rotate(-6deg); line-height: 1;
+  }
+  .chrome .rec {
+    position: absolute; top: 56px; right: 80px;
+    display: inline-flex; align-items: center; gap: 10px;
+    font-family: var(--f-mono); font-size: 13px; color: var(--ink-dim);
+    letter-spacing: 0.18em;
+  }
+  .chrome .rec .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--coral); box-shadow: 0 0 0 4px rgba(255,93,108,0.18); }
+
+  .chrome .pages {
+    position: absolute; bottom: 36px; left: 50%; transform: translateX(-50%);
+    font-family: var(--f-mono); font-size: 13px; letter-spacing: 0.22em; color: var(--ink-mute);
+  }
+  .chrome .pages b { color: var(--ink); font-weight: 500; }
+  .chrome .section-label {
+    position: absolute; bottom: 36px; right: 80px;
+    font-family: var(--f-mono); font-size: 12px; letter-spacing: 0.28em; color: var(--ink-mute);
+  }
+
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+
+  /* ========== UTILITIES ========== */
+  .eyebrow {
+    font-family: var(--f-mono); font-size: 14px; letter-spacing: 0.32em;
+    color: var(--coral); text-transform: uppercase; font-weight: 500;
+  }
+  .eyebrow.dim { color: var(--ink-mute); }
+  .underline-coral {
+    background-image: linear-gradient(var(--coral), var(--coral));
+    background-repeat: no-repeat;
+    background-position: 0 100%;
+    background-size: 100% 8px;
+    padding-bottom: 2px;
+  }
+  .display {
+    font-family: var(--f-display); font-weight: 900; line-height: 0.92;
+    letter-spacing: -0.02em; text-transform: uppercase;
+  }
+  .display-outline {
+    -webkit-text-stroke: 2px rgba(255,255,255,0.45);
+    color: transparent;
+  }
+  .pill {
+    display: inline-flex; align-items: center; gap: 8px;
+    background: var(--pale); color: #111a4a;
+    border-radius: 999px; padding: 10px 18px;
+    font-family: var(--f-head); font-weight: 700; font-size: 14px;
+    letter-spacing: 0.16em; text-transform: uppercase;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.25);
+  }
+  .arrow-btn {
+    width: 78px; height: 78px; border-radius: 50%;
+    background: var(--coral); color: #fff;
+    display: inline-flex; align-items: center; justify-content: center;
+    box-shadow: 0 10px 30px rgba(255,93,108,0.5), inset 0 -3px 0 rgba(0,0,0,0.2);
+    border: 3px solid #0d1b6e;
+  }
+
+  /* ============================================================ */
+  /* 01 — INTRO FORMATION                                          */
+  /* ============================================================ */
+  .s-intro { display: grid; grid-template-columns: 1fr; align-items: center; padding: 0 140px; }
+  .s-intro .wrap { max-width: 1500px; margin: 0 auto; padding-top: 40px; }
+  .s-intro .meta-row {
+    display: flex; align-items: center; gap: 28px; margin-bottom: 40px;
+  }
+  .s-intro .module-num {
+    font-family: var(--f-mono); color: var(--coral);
+    font-size: 15px; letter-spacing: 0.32em;
+  }
+  .s-intro .module-bar { flex: 1; height: 1px; background: rgba(255,255,255,0.2); }
+  .s-intro .module-dur {
+    font-family: var(--f-mono); color: var(--ink-dim);
+    font-size: 14px; letter-spacing: 0.2em;
+  }
+  .s-intro h1 {
+    font-family: var(--f-display); font-weight: 900;
+    font-size: 168px; line-height: 0.86;
+    letter-spacing: -0.025em; text-transform: uppercase;
+    margin: 0 0 28px;
+  }
+  .s-intro h1 .crl { color: var(--coral); display: block; }
+  .s-intro .sub {
+    font-family: var(--f-head); font-weight: 400; font-size: 32px;
+    color: rgba(255,255,255,0.78); max-width: 1100px; line-height: 1.35;
+  }
+  .s-intro .sub b { font-weight: 700; color: var(--ink); }
+  .s-intro .chips { margin-top: 56px; display: flex; gap: 14px; flex-wrap: wrap; }
+  .s-intro .chip {
+    border: 1px solid rgba(255,255,255,0.25);
+    border-radius: 999px; padding: 12px 22px;
+    font-family: var(--f-mono); font-size: 14px; letter-spacing: 0.18em;
+    color: var(--ink-dim); text-transform: uppercase;
+  }
+  .s-intro .chip.active { background: var(--coral); color: #fff; border-color: var(--coral); }
+
+  /* ============================================================ */
+  /* 02 — BIG STATEMENT                                            */
+  /* ============================================================ */
+  .s-big { display: grid; place-items: center; padding: 0 200px; }
+  .s-big .wrap { text-align: center; max-width: 1500px; }
+  .s-big .eyebrow { margin-bottom: 44px; display: block; }
+  .s-big h1 {
+    font-family: var(--f-display); font-size: 124px;
+    line-height: 0.95; letter-spacing: -0.025em;
+    text-transform: uppercase; margin: 0;
+  }
+  .s-big h1 .strike {
+    color: rgba(255,255,255,0.32);
+    text-decoration: line-through;
+    text-decoration-color: var(--coral);
+    text-decoration-thickness: 8px;
+  }
+  .s-big h1 .accent { color: var(--coral); display: block; }
+  .s-big .attrib {
+    margin-top: 48px;
+    font-family: var(--f-script); font-size: 38px; color: rgba(255,255,255,0.7);
+    transform: rotate(-2deg); display: inline-block;
+  }
+
+  /* ============================================================ */
+  /* 03 — DEFINITION                                               */
+  /* ============================================================ */
+  .s-def { display: grid; grid-template-columns: 1.05fr 1fr; padding: 0 0 0 140px; align-items: center; }
+  .s-def .left { padding-right: 60px; }
+  .s-def .left .eyebrow { margin-bottom: 28px; }
+  .s-def .word {
+    font-family: var(--f-display); font-size: 220px; line-height: 0.85;
+    letter-spacing: -0.03em; text-transform: uppercase;
+    margin: 0 0 28px;
+  }
+  .s-def .pron {
+    font-family: var(--f-mono); color: var(--ink-dim);
+    font-size: 22px; letter-spacing: 0.04em;
+  }
+  .s-def .pron em { color: var(--coral); font-style: normal; }
+  .s-def .right {
+    background: rgba(255,255,255,0.04);
+    border-left: 1px solid rgba(255,255,255,0.18);
+    height: 100%;
+    display: flex; flex-direction: column; justify-content: center;
+    padding: 0 120px 0 80px;
+  }
+  .s-def .right .label {
+    font-family: var(--f-mono); font-size: 14px; letter-spacing: 0.3em;
+    color: var(--coral); margin-bottom: 28px;
+  }
+  .s-def .right .body {
+    font-family: var(--f-head); font-size: 40px; font-weight: 400;
+    line-height: 1.3; color: var(--ink);
+    margin: 0 0 36px;
+  }
+  .s-def .right .body b { font-weight: 800; color: var(--coral); }
+  .s-def .right .tag-row { display: flex; gap: 12px; flex-wrap: wrap; }
+  .s-def .right .tag-row span {
+    border: 1px solid rgba(255,255,255,0.22);
+    padding: 8px 16px; border-radius: 6px;
+    font-family: var(--f-mono); font-size: 13px; letter-spacing: 0.16em;
+    color: var(--ink-dim); text-transform: uppercase;
+  }
+
+  /* ============================================================ */
+  /* 04 — DIAGNOSTIC (split)                                       */
+  /* ============================================================ */
+  .s-diag { display: grid; grid-template-columns: 1fr 1fr; padding: 0; align-items: center; }
+  .s-diag .col { padding: 0 120px; height: 100%; display: flex; flex-direction: column; justify-content: center; }
+  .s-diag .col.l { background: linear-gradient(135deg, #060b2c 0%, #0c1660 100%); }
+  .s-diag .col.r { background: linear-gradient(135deg, #1632e8 0%, #2042ff 100%); }
+  .s-diag .col .eyebrow { margin-bottom: 28px; font-size: 13px; }
+  .s-diag .col.l .eyebrow { color: var(--ink-dim); }
+  .s-diag .col.r .eyebrow { color: rgba(255,255,255,0.85); }
+  .s-diag .col h2 {
+    font-family: var(--f-display); font-size: 130px; line-height: 0.86;
+    letter-spacing: -0.02em; text-transform: uppercase;
+    margin: 0 0 50px;
+  }
+  .s-diag .col.l h2 { color: rgba(255,255,255,0.55); }
+  .s-diag .col.l h2 .b { display: block; color: rgba(255,255,255,0.85); }
+  .s-diag .col.r h2 { color: #fff; }
+  .s-diag .col.r h2 .accent { display: block; color: var(--coral); position: relative; }
+  .s-diag .col.r h2 .accent::after {
+    content: ""; position: absolute; left: 0; right: 12%; bottom: -8px;
+    height: 6px; background: var(--coral); border-radius: 3px;
+  }
+  .s-diag ul { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 22px; }
+  .s-diag ul li {
+    display: flex; align-items: center; gap: 18px;
+    font-family: var(--f-head); font-size: 28px;
+  }
+  .s-diag .col.l ul li { color: rgba(255,255,255,0.7); font-weight: 400; }
+  .s-diag .col.l ul li .ic { width: 28px; height: 28px; border-radius: 50%; border: 2px solid rgba(255,255,255,0.4); display:inline-flex; align-items:center; justify-content:center; color: rgba(255,255,255,0.4); font-size: 22px; line-height: 1; }
+  .s-diag .col.r ul li { color: #fff; font-weight: 600; }
+  .s-diag .col.r ul li .ic { color: var(--green); font-size: 32px; font-weight: 700; }
+  .s-diag .divider {
+    position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+    z-index: 6; display: flex; flex-direction: column; align-items: center; gap: 18px;
+  }
+  .s-diag .divider .pill { background: #fff; color: #0e1d8a; }
+  .s-diag .divider .arrow-btn { font-size: 28px; }
+
+  /* ============================================================ */
+  /* 05 — MISTAKE                                                   */
+  /* ============================================================ */
+  .s-mistake { padding: 0 140px; display: flex; flex-direction: column; justify-content: center; }
+  .s-mistake .top {
+    display: flex; align-items: baseline; gap: 32px; margin-bottom: 40px;
+  }
+  .s-mistake .num {
+    font-family: var(--f-display); font-size: 220px; line-height: 0.85;
+    color: var(--coral); letter-spacing: -0.04em;
+    text-shadow: 6px 6px 0 rgba(0,0,0,0.25);
+  }
+  .s-mistake .top-r .eyebrow { display:block; margin-bottom: 18px; }
+  .s-mistake .top-r .stamp {
+    display: inline-flex; align-items: center; gap: 10px;
+    font-family: var(--f-mono); font-size: 13px; letter-spacing: 0.26em;
+    color: #fff; background: var(--coral);
+    padding: 8px 16px; border-radius: 4px;
+    transform: rotate(-2deg);
+    box-shadow: 0 6px 18px rgba(255,93,108,0.45);
+  }
+  .s-mistake h1 {
+    font-family: var(--f-display); font-size: 124px; line-height: 0.92;
+    letter-spacing: -0.02em; text-transform: uppercase; margin: 0 0 36px;
+    max-width: 1500px;
+  }
+  .s-mistake h1 .crl { color: var(--coral); }
+  .s-mistake .why {
+    display: grid; grid-template-columns: auto 1fr; gap: 32px; align-items: start;
+    border-top: 1px solid rgba(255,255,255,0.18);
+    padding-top: 36px; max-width: 1400px;
+  }
+  .s-mistake .why .lbl {
+    font-family: var(--f-mono); font-size: 14px; letter-spacing: 0.3em;
+    color: var(--ink-mute); padding-top: 8px;
+  }
+  .s-mistake .why p {
+    font-family: var(--f-head); font-size: 30px; line-height: 1.4; margin: 0;
+    color: rgba(255,255,255,0.88);
+  }
+  .s-mistake .why p b { color: #fff; font-weight: 800; }
+
+  /* ============================================================ */
+  /* 06 — CASE STUDY (stats + quote)                                */
+  /* ============================================================ */
+  .s-case { padding: 140px 140px 0; display: flex; flex-direction: column; }
+  .s-case .header {
+    display: flex; justify-content: space-between; align-items: baseline;
+    margin-bottom: 60px;
+  }
+  .s-case .header .name {
+    font-family: var(--f-display); font-size: 48px; line-height: 1; letter-spacing: -0.01em;
+  }
+  .s-case .header .name small {
+    display: block; font-family: var(--f-mono); font-size: 14px;
+    letter-spacing: 0.22em; color: var(--ink-dim); font-weight: 400;
+    margin-top: 8px; text-transform: uppercase;
+  }
+  .s-case .header .industry {
+    font-family: var(--f-mono); font-size: 14px; letter-spacing: 0.26em;
+    color: var(--ink-mute); text-align: right; text-transform: uppercase;
+  }
+  .s-case .stats {
+    display: grid; grid-template-columns: repeat(3, 1fr); gap: 60px;
+    margin: 20px 0 80px;
+  }
+  .s-case .stat { text-align: left; }
+  .s-case .stat .v {
+    font-family: var(--f-display); font-size: 168px; line-height: 0.85;
+    letter-spacing: -0.04em; color: #fff;
+    display: flex; align-items: baseline; gap: 12px;
+  }
+  .s-case .stat .v .u {
+    font-size: 56px; color: rgba(255,255,255,0.55);
+  }
+  .s-case .stat .v .plus { color: var(--coral); font-size: 110px; }
+  .s-case .stat .bar { height: 1px; background: var(--coral); width: 70%; margin: 16px 0 12px; }
+  .s-case .stat .l {
+    font-family: var(--f-mono); font-size: 14px; letter-spacing: 0.24em;
+    color: rgba(255,255,255,0.6); text-transform: uppercase;
+  }
+  .s-case .quote {
+    background: rgba(255,255,255,0.04);
+    border-left: 4px solid var(--coral);
+    padding: 32px 44px;
+    max-width: 1300px; margin-left: 200px;
+    position: relative;
+  }
+  .s-case .quote::before {
+    content: "“"; position: absolute; top: -50px; left: 24px;
+    font-family: 'Georgia', serif; font-size: 180px; color: var(--coral);
+    line-height: 1; opacity: 0.85;
+  }
+  .s-case .quote p {
+    font-family: var(--f-head); font-style: italic; font-size: 30px;
+    line-height: 1.35; margin: 0; color: #fff; font-weight: 400;
+  }
+  .s-case .quote cite {
+    display: block; margin-top: 14px;
+    font-family: var(--f-mono); font-size: 13px; letter-spacing: 0.2em;
+    color: var(--ink-dim); font-style: normal; text-transform: uppercase;
+  }
+
+  /* ============================================================ */
+  /* 07 — PROCESS                                                   */
+  /* ============================================================ */
+  .s-process { padding: 130px 140px 0; }
+  .s-process .head { margin-bottom: 80px; max-width: 1500px; }
+  .s-process .head .eyebrow { margin-bottom: 22px; display: block; }
+  .s-process .head h1 {
+    font-family: var(--f-display); font-size: 96px; line-height: 0.9;
+    letter-spacing: -0.02em; text-transform: uppercase; margin: 0;
+  }
+  .s-process .head h1 .crl { color: var(--coral); }
+  .s-process .steps {
+    display: grid; grid-template-columns: repeat(4, 1fr); gap: 24px;
+    position: relative;
+  }
+  .s-process .steps::before {
+    content: ""; position: absolute; left: 40px; right: 40px;
+    top: 50px; height: 2px;
+    background-image: linear-gradient(90deg, var(--coral) 50%, transparent 50%);
+    background-size: 14px 2px;
+    z-index: 0;
+  }
+  .s-process .step { position: relative; z-index: 1; }
+  .s-process .step .dot {
+    width: 100px; height: 100px; border-radius: 50%;
+    background: #0a1351;
+    border: 3px solid var(--coral);
+    display: flex; align-items: center; justify-content: center;
+    font-family: var(--f-display); font-size: 44px; color: #fff;
+    margin-bottom: 28px;
+    box-shadow: 0 0 0 8px rgba(10,19,81,1);
+  }
+  .s-process .step .t {
+    font-family: var(--f-display); font-size: 38px; line-height: 0.95;
+    text-transform: uppercase; letter-spacing: -0.01em;
+    margin-bottom: 16px;
+  }
+  .s-process .step .d {
+    font-family: var(--f-body); font-size: 20px; line-height: 1.4;
+    color: rgba(255,255,255,0.7); max-width: 360px;
+  }
+  .s-process .step.active .dot { background: var(--coral); }
+
+  /* ============================================================ */
+  /* 08 — CHECKLIST                                                 */
+  /* ============================================================ */
+  .s-check { padding: 130px 140px 0; display: grid; grid-template-columns: 1fr 1fr; gap: 90px; align-items: start; }
+  .s-check .left .eyebrow { display: block; margin-bottom: 24px; }
+  .s-check .left h1 {
+    font-family: var(--f-display); font-size: 116px; line-height: 0.88;
+    letter-spacing: -0.02em; text-transform: uppercase; margin: 0 0 36px;
+  }
+  .s-check .left h1 .crl { color: var(--coral); }
+  .s-check .left p {
+    font-family: var(--f-head); font-size: 26px; line-height: 1.45;
+    color: rgba(255,255,255,0.7); max-width: 540px;
+  }
+  .s-check .left .seal {
+    margin-top: 50px;
+    width: 180px; height: 180px; border-radius: 50%;
+    border: 2px dashed rgba(255,255,255,0.3);
+    display: flex; align-items: center; justify-content: center; flex-direction: column;
+    transform: rotate(-8deg);
+  }
+  .s-check .left .seal .n {
+    font-family: var(--f-display); font-size: 64px; color: var(--coral); line-height: 1;
+  }
+  .s-check .left .seal .l {
+    font-family: var(--f-mono); font-size: 11px; letter-spacing: 0.26em;
+    color: var(--ink-dim); margin-top: 4px; text-transform: uppercase;
+  }
+  .s-check ul.list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 18px; }
+  .s-check ul.list li {
+    display: grid; grid-template-columns: 56px 1fr; gap: 22px; align-items: center;
+    padding: 22px 26px;
+    background: rgba(255,255,255,0.04);
+    border-left: 3px solid var(--coral);
+    border-radius: 0 12px 12px 0;
+  }
+  .s-check ul.list li .box {
+    width: 40px; height: 40px; border-radius: 8px;
+    border: 2px solid rgba(255,255,255,0.4);
+    display: flex; align-items: center; justify-content: center;
+  }
+  .s-check ul.list li.done .box {
+    background: var(--coral); border-color: var(--coral);
+  }
+  .s-check ul.list li.done .box::after {
+    content: ""; width: 20px; height: 10px;
+    border-left: 3px solid #fff; border-bottom: 3px solid #fff;
+    transform: rotate(-45deg) translate(2px, -2px);
+  }
+  .s-check ul.list li .t {
+    font-family: var(--f-head); font-weight: 600; font-size: 26px; color: #fff;
+  }
+  .s-check ul.list li.done .t { color: rgba(255,255,255,0.5); text-decoration: line-through; text-decoration-color: var(--coral); }
+  .s-check ul.list li .t small {
+    display: block; font-family: var(--f-mono); font-weight: 400; font-size: 12px;
+    letter-spacing: 0.22em; color: var(--ink-mute); margin-top: 4px; text-transform: uppercase;
+  }
+
+  /* ============================================================ */
+  /* 09 — RECAP                                                     */
+  /* ============================================================ */
+  .s-recap { padding: 130px 140px 0; }
+  .s-recap .head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 70px; }
+  .s-recap .head h1 {
+    font-family: var(--f-display); font-size: 140px; line-height: 0.88;
+    letter-spacing: -0.025em; text-transform: uppercase; margin: 0;
+  }
+  .s-recap .head h1 .o {
+    -webkit-text-stroke: 3px rgba(255,255,255,0.55);
+    color: transparent;
+  }
+  .s-recap .head .meta {
+    font-family: var(--f-mono); font-size: 14px; letter-spacing: 0.26em; color: var(--ink-mute);
+    text-align: right; text-transform: uppercase;
+  }
+  .s-recap .head .meta b { color: var(--coral); display: block; font-weight: 500; font-size: 16px; }
+  .s-recap .grid {
+    display: grid; grid-template-columns: repeat(3, 1fr); gap: 28px;
+  }
+  .s-recap .card {
+    border: 1px solid rgba(255,255,255,0.18);
+    background: rgba(255,255,255,0.03);
+    border-radius: 4px;
+    padding: 38px 36px 36px;
+    position: relative;
+    min-height: 380px;
+    display: flex; flex-direction: column;
+  }
+  .s-recap .card .n {
+    font-family: var(--f-display); font-size: 24px;
+    color: var(--coral); letter-spacing: 0.04em;
+    margin-bottom: 28px;
+  }
+  .s-recap .card .t {
+    font-family: var(--f-display); font-size: 44px; line-height: 0.95;
+    text-transform: uppercase; letter-spacing: -0.01em;
+    margin-bottom: 18px;
+  }
+  .s-recap .card .d {
+    font-family: var(--f-body); font-size: 19px; line-height: 1.45;
+    color: rgba(255,255,255,0.72);
+  }
+  .s-recap .card .ft {
+    margin-top: auto;
+    font-family: var(--f-mono); font-size: 12px; letter-spacing: 0.22em;
+    color: var(--ink-mute); padding-top: 24px;
+    border-top: 1px solid rgba(255,255,255,0.12); text-transform: uppercase;
+  }
+
+  /* ============================================================ */
+  /* 10 — TRANSITION                                                */
+  /* ============================================================ */
+  .s-trans { display: grid; place-items: center; padding: 0 200px; }
+  .s-trans .wrap { text-align: center; }
+  .s-trans .top-bar {
+    display: inline-flex; align-items: center; gap: 18px;
+    font-family: var(--f-mono); font-size: 14px; letter-spacing: 0.3em;
+    color: rgba(255,255,255,0.55); margin-bottom: 48px; text-transform: uppercase;
+  }
+  .s-trans .top-bar .line { width: 90px; height: 1px; background: rgba(255,255,255,0.4); }
+  .s-trans .next-num {
+    font-family: var(--f-display); font-size: 280px; line-height: 0.85;
+    letter-spacing: -0.04em; color: transparent;
+    -webkit-text-stroke: 3px rgba(255,255,255,0.5);
+    margin-bottom: -40px;
+  }
+  .s-trans h1 {
+    font-family: var(--f-display); font-size: 144px; line-height: 0.9;
+    letter-spacing: -0.025em; text-transform: uppercase; margin: 0;
+  }
+  .s-trans h1 .crl { color: var(--coral); }
+  .s-trans .cta {
+    margin-top: 56px;
+    display: inline-flex; align-items: center; gap: 22px;
+  }
+  .s-trans .cta .pill { background: #fff; color: #0e1d8a; }
+
+  /* ============================================================ */
+  /* 11 — PAUSE                                                     */
+  /* ============================================================ */
+  .s-pause { display: grid; place-items: center; padding: 0; background: linear-gradient(180deg, #050a26 0%, #0a1351 100%); }
+  .s-pause::before { opacity: 0.5; }
+  .s-pause .wrap { text-align: center; position: relative; }
+  .s-pause .ring {
+    width: 540px; height: 540px; border-radius: 50%;
+    border: 1px solid rgba(255,255,255,0.18);
+    position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+    animation: breathe 6s ease-in-out infinite;
+  }
+  .s-pause .ring.r2 { width: 700px; height: 700px; opacity: 0.5; animation-delay: 0.5s; }
+  .s-pause .ring.r3 { width: 860px; height: 860px; opacity: 0.25; animation-delay: 1s; }
+  @keyframes breathe { 0%,100%{transform:translate(-50%,-50%) scale(1)} 50%{transform:translate(-50%,-50%) scale(1.06)} }
+  .s-pause .eyebrow { margin-bottom: 28px; display: block; }
+  .s-pause h1 {
+    font-family: var(--f-display); font-size: 240px; line-height: 0.88;
+    letter-spacing: -0.03em; text-transform: uppercase; margin: 0 0 22px;
+  }
+  .s-pause h1 .o {
+    -webkit-text-stroke: 3px var(--coral);
+    color: transparent;
+  }
+  .s-pause .timer {
+    margin-top: 38px;
+    display: inline-flex; align-items: center; gap: 16px;
+    font-family: var(--f-mono); font-size: 22px; letter-spacing: 0.24em;
+    color: var(--coral); padding: 14px 28px;
+    border: 1px solid rgba(255,93,108,0.45); border-radius: 999px;
+    background: rgba(255,93,108,0.08);
+  }
+  .s-pause .timer .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--coral); animation: pulse 1.4s infinite; }
+  .s-pause .sub {
+    margin-top: 40px;
+    font-family: var(--f-script); font-size: 56px; color: rgba(255,255,255,0.7);
+  }
+
+  /* ============================================================ */
+  /* 12 — Q&A                                                       */
+  /* ============================================================ */
+  .s-qa { padding: 130px 140px 0; display: grid; grid-template-columns: 1.05fr 1fr; gap: 80px; align-items: center; }
+  .s-qa .left .eyebrow { display: block; margin-bottom: 28px; }
+  .s-qa .left .qmark {
+    font-family: var(--f-display); font-size: 460px; line-height: 0.8;
+    color: var(--coral); letter-spacing: -0.06em;
+    text-shadow: 12px 12px 0 rgba(0,0,0,0.3);
+    margin-bottom: 12px;
+  }
+  .s-qa .left h1 {
+    font-family: var(--f-display); font-size: 96px; line-height: 0.9;
+    letter-spacing: -0.02em; text-transform: uppercase; margin: 0;
+  }
+  .s-qa .right { display: flex; flex-direction: column; gap: 18px; }
+  .s-qa .right .qcard {
+    background: rgba(255,255,255,0.05);
+    border: 1px solid rgba(255,255,255,0.15);
+    border-radius: 4px;
+    padding: 26px 30px;
+    display: grid; grid-template-columns: 60px 1fr auto; gap: 22px; align-items: center;
+  }
+  .s-qa .right .qcard .av {
+    width: 52px; height: 52px; border-radius: 50%;
+    background: linear-gradient(135deg, var(--coral), var(--coral-deep));
+    color: #fff; display: flex; align-items: center; justify-content: center;
+    font-family: var(--f-display); font-size: 22px;
+  }
+  .s-qa .right .qcard .av.b2 { background: linear-gradient(135deg, #2a4af5, #1a37d6); }
+  .s-qa .right .qcard .av.b3 { background: linear-gradient(135deg, #58e2a4, #2db579); }
+  .s-qa .right .qcard .txt {
+    font-family: var(--f-head); font-size: 22px; line-height: 1.35; color: #fff; font-weight: 500;
+  }
+  .s-qa .right .qcard .txt small {
+    display: block; font-family: var(--f-mono); font-size: 11px; letter-spacing: 0.2em;
+    color: var(--ink-mute); margin-top: 6px; text-transform: uppercase; font-weight: 400;
+  }
+  .s-qa .right .qcard .time {
+    font-family: var(--f-mono); font-size: 12px; letter-spacing: 0.18em;
+    color: var(--ink-mute); text-transform: uppercase;
+  }
+  .s-qa .right .input {
+    margin-top: 12px;
+    display: flex; align-items: center; gap: 14px;
+    background: #fff; border-radius: 999px; padding: 16px 24px;
+  }
+  .s-qa .right .input .ph {
+    flex: 1; font-family: var(--f-head); font-size: 20px; color: #5a5a7a;
+  }
+  .s-qa .right .input .btn {
+    background: var(--coral); color: #fff;
+    font-family: var(--f-head); font-weight: 700; font-size: 14px;
+    letter-spacing: 0.16em; text-transform: uppercase;
+    padding: 10px 22px; border-radius: 999px;
+  }
+
+</style>
+</head>
+<body>
+
+<script type="application/json" id="speaker-notes">
+["", "", "", "", "", "", "", "", "", "", "", ""]
+</script>
+
+<deck-stage>
+
+  <!-- ===================================================== -->
+  <!-- 01 — INTRO FORMATION                                    -->
+  <!-- ===================================================== -->
+  <section class="slide s-intro" data-screen-label="01 Intro formation">
+    <div class="chrome">
+      <div class="brand"><span class="mark">Sales</span><span class="tag">Hacking</span></div>
+      <div class="rec"><span class="dot"></span>EN DIRECT · MODULE 03</div>
+      <div class="pages"><b>01</b> / 12</div>
+      <div class="section-label">TYPE · INTRO_FORMATION</div>
+    </div>
+
+    <div class="wrap">
+      <div class="meta-row">
+        <span class="module-num">MODULE 03 — CHAPITRE 01</span>
+        <span class="module-bar"></span>
+        <span class="module-dur">⏱ 42 MIN · 12 SLIDES</span>
+      </div>
+      <h1>L'IA dans vos<br><span class="crl">opérations.</span></h1>
+      <p class="sub">Sept séances pour transformer vos process internes en <b>machines reproductibles</b> — sans recruter, sans tout casser, sans devenir développeur.</p>
+      <div class="chips">
+        <span class="chip active">PRATIQUE</span>
+        <span class="chip">SANS CODE</span>
+        <span class="chip">EN ÉQUIPE</span>
+        <span class="chip">3 LIVRABLES</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================================================== -->
+  <!-- 02 — BIG STATEMENT                                      -->
+  <!-- ===================================================== -->
+  <section class="slide s-big" data-screen-label="02 Big statement">
+    <div class="chrome">
+      <div class="brand"><span class="mark">Sales</span><span class="tag">Hacking</span></div>
+      <div class="rec"><span class="dot"></span>EN DIRECT · MODULE 03</div>
+      <div class="pages"><b>02</b> / 12</div>
+      <div class="section-label">TYPE · BIG_STATEMENT</div>
+    </div>
+
+    <div class="wrap">
+      <span class="eyebrow">— Postulat de départ</span>
+      <h1>
+        Vous n'avez pas un<br>
+        <span class="strike">problème d'outils.</span><br>
+        <span class="accent">Vous avez un problème<br>de processus.</span>
+      </h1>
+      <div class="attrib">— et c'est une bonne nouvelle.</div>
+    </div>
+  </section>
+
+  <!-- ===================================================== -->
+  <!-- 03 — DEFINITION                                         -->
+  <!-- ===================================================== -->
+  <section class="slide s-def" data-screen-label="03 Definition">
+    <div class="chrome">
+      <div class="brand"><span class="mark">Sales</span><span class="tag">Hacking</span></div>
+      <div class="rec"><span class="dot"></span>EN DIRECT · MODULE 03</div>
+      <div class="pages"><b>03</b> / 12</div>
+      <div class="section-label">TYPE · DEFINITION</div>
+    </div>
+
+    <div class="left">
+      <span class="eyebrow">— Vocabulaire #01</span>
+      <h2 class="word">Opéra·<br>tion.</h2>
+      <div class="pron"><em>ɔ.pe.ʁa.sjɔ̃</em> · nom féminin · du latin <em>operatio</em></div>
+    </div>
+    <div class="right">
+      <div class="label">DÉFINITION DE TRAVAIL</div>
+      <p class="body">Un <b>système répétable</b> qui produit un résultat prévisible — sans dépendre d'une personne en particulier.</p>
+      <div class="tag-row">
+        <span>RÉPÉTABLE</span>
+        <span>MESURABLE</span>
+        <span>DÉLÉGABLE</span>
+        <span>DOCUMENTÉ</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================================================== -->
+  <!-- 04 — DIAGNOSTIC                                         -->
+  <!-- ===================================================== -->
+  <section class="slide s-diag" data-screen-label="04 Diagnostic">
+    <div class="chrome">
+      <div class="brand"><span class="mark">Sales</span><span class="tag">Hacking</span></div>
+      <div class="rec"><span class="dot"></span>EN DIRECT · MODULE 03</div>
+      <div class="pages"><b>04</b> / 12</div>
+      <div class="section-label">TYPE · DIAGNOSTIC</div>
+    </div>
+
+    <div class="col l">
+      <span class="eyebrow">— État actuel</span>
+      <h2>Équipe<br><span class="b">épuisée.</span></h2>
+      <ul>
+        <li><span class="ic">−</span>Tout passe par 2 personnes</li>
+        <li><span class="ic">−</span>Aucun process écrit</li>
+        <li><span class="ic">−</span>3h/jour en Slack</li>
+        <li><span class="ic">−</span>Erreurs qui se répètent</li>
+      </ul>
+    </div>
+    <div class="col r">
+      <span class="eyebrow">— Objectif 7 semaines</span>
+      <h2>Équipe<br><span class="accent">autonome.</span></h2>
+      <ul>
+        <li><span class="ic">✓</span>Décisions distribuées</li>
+        <li><span class="ic">✓</span>12 SOPs documentées</li>
+        <li><span class="ic">✓</span>Slack divisé par 4</li>
+        <li><span class="ic">✓</span>Erreurs trackées + résolues</li>
+      </ul>
+    </div>
+    <div class="divider">
+      <span class="pill">7 semaines</span>
+      <span class="arrow-btn">→</span>
+    </div>
+  </section>
+
+  <!-- ===================================================== -->
+  <!-- 05 — MISTAKE                                            -->
+  <!-- ===================================================== -->
+  <section class="slide s-mistake" data-screen-label="05 Mistake">
+    <div class="chrome">
+      <div class="brand"><span class="mark">Sales</span><span class="tag">Hacking</span></div>
+      <div class="rec"><span class="dot"></span>EN DIRECT · MODULE 03</div>
+      <div class="pages"><b>05</b> / 12</div>
+      <div class="section-label">TYPE · MISTAKE</div>
+    </div>
+
+    <div class="top">
+      <div class="num">03.</div>
+      <div class="top-r">
+        <span class="eyebrow">— Piège classique</span>
+        <span class="stamp">⚠ À ÉVITER ABSOLUMENT</span>
+      </div>
+    </div>
+    <h1>Automatiser<br>le <span class="crl">chaos.</span></h1>
+    <div class="why">
+      <div class="lbl">POURQUOI<br>C'EST GRAVE ↳</div>
+      <p>Brancher une IA sur un process bancal multiplie le désordre à la vitesse de la machine. <b>Documentez d'abord, automatisez ensuite</b> — sinon vous achetez juste des bugs plus rapides.</p>
+    </div>
+  </section>
+
+  <!-- ===================================================== -->
+  <!-- 06 — CASE STUDY                                         -->
+  <!-- ===================================================== -->
+  <section class="slide s-case" data-screen-label="06 Case study">
+    <div class="chrome">
+      <div class="brand"><span class="mark">Sales</span><span class="tag">Hacking</span></div>
+      <div class="rec"><span class="dot"></span>EN DIRECT · MODULE 03</div>
+      <div class="pages"><b>06</b> / 12</div>
+      <div class="section-label">TYPE · CASE_STUDY</div>
+    </div>
+
+    <div class="header">
+      <div class="name">Atelier Mirabel<small>— Studio de design · 24 personnes · Paris</small></div>
+      <div class="industry">Cas client · 2024<br>SECTEUR · CRÉATIF</div>
+    </div>
+    <div class="stats">
+      <div class="stat">
+        <div class="v">−72<span class="u">%</span></div>
+        <div class="bar"></div>
+        <div class="l">Heures admin/mois</div>
+      </div>
+      <div class="stat">
+        <div class="v">4,8<span class="u">k€</span></div>
+        <div class="bar"></div>
+        <div class="l">Économisés en T1</div>
+      </div>
+      <div class="stat">
+        <div class="v">12<span class="u">sem.</span></div>
+        <div class="bar"></div>
+        <div class="l">Avant retour sur invest.</div>
+      </div>
+    </div>
+    <div class="quote">
+      <p>On a arrêté de demander à l'équipe d'être plus rapide. On a juste arrêté de leur demander des trucs débiles.</p>
+      <cite>— Léa, Directrice de production · Atelier Mirabel</cite>
+    </div>
+  </section>
+
+  <!-- ===================================================== -->
+  <!-- 07 — PROCESS                                            -->
+  <!-- ===================================================== -->
+  <section class="slide s-process" data-screen-label="07 Process">
+    <div class="chrome">
+      <div class="brand"><span class="mark">Sales</span><span class="tag">Hacking</span></div>
+      <div class="rec"><span class="dot"></span>EN DIRECT · MODULE 03</div>
+      <div class="pages"><b>07</b> / 12</div>
+      <div class="section-label">TYPE · PROCESS</div>
+    </div>
+
+    <div class="head">
+      <span class="eyebrow">— Méthode O.D.A.M.</span>
+      <h1>4 étapes pour rendre<br>un process <span class="crl">délégable.</span></h1>
+    </div>
+    <div class="steps">
+      <div class="step active">
+        <div class="dot">01</div>
+        <div class="t">Observer</div>
+        <div class="d">Filmer 5 fois la tâche réelle. Pas la version idéale — la version qui se passe vraiment.</div>
+      </div>
+      <div class="step">
+        <div class="dot">02</div>
+        <div class="t">Découper</div>
+        <div class="d">Identifier les décisions, les actions répétables et les exceptions cachées.</div>
+      </div>
+      <div class="step">
+        <div class="dot">03</div>
+        <div class="t">Automatiser</div>
+        <div class="d">Brancher l'IA uniquement sur les segments stables et mesurables.</div>
+      </div>
+      <div class="step">
+        <div class="dot">04</div>
+        <div class="t">Mesurer</div>
+        <div class="d">Définir 1 KPI par étape. Si on ne mesure pas, on ne pilote pas.</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================================================== -->
+  <!-- 08 — CHECKLIST                                          -->
+  <!-- ===================================================== -->
+  <section class="slide s-check" data-screen-label="08 Checklist">
+    <div class="chrome">
+      <div class="brand"><span class="mark">Sales</span><span class="tag">Hacking</span></div>
+      <div class="rec"><span class="dot"></span>EN DIRECT · MODULE 03</div>
+      <div class="pages"><b>08</b> / 12</div>
+      <div class="section-label">TYPE · CHECKLIST</div>
+    </div>
+
+    <div class="left">
+      <span class="eyebrow">— Avant la prochaine séance</span>
+      <h1>Votre<br>devoir<br><span class="crl">maison.</span></h1>
+      <p>Cochez les 5 cases avant mardi 22h. On démarre le module 04 directement sur ces livrables — pas de retour en arrière.</p>
+      <div class="seal">
+        <div class="n">5</div>
+        <div class="l">ACTIONS</div>
+      </div>
+    </div>
+    <ul class="list">
+      <li class="done">
+        <div class="box"></div>
+        <div class="t">Identifier 1 process qui prend &gt; 4h/semaine<small>EFFORT · 15 MIN</small></div>
+      </li>
+      <li class="done">
+        <div class="box"></div>
+        <div class="t">Filmer la tâche en conditions réelles<small>EFFORT · 1 H</small></div>
+      </li>
+      <li>
+        <div class="box"></div>
+        <div class="t">Découper en 5–8 étapes nommées au verbe<small>EFFORT · 30 MIN</small></div>
+      </li>
+      <li>
+        <div class="box"></div>
+        <div class="t">Trouver les 2 décisions critiques cachées<small>EFFORT · 20 MIN</small></div>
+      </li>
+      <li>
+        <div class="box"></div>
+        <div class="t">Poster le tout dans le canal #devoirs<small>EFFORT · 5 MIN</small></div>
+      </li>
+    </ul>
+  </section>
+
+  <!-- ===================================================== -->
+  <!-- 09 — RECAP                                              -->
+  <!-- ===================================================== -->
+  <section class="slide s-recap" data-screen-label="09 Recap">
+    <div class="chrome">
+      <div class="brand"><span class="mark">Sales</span><span class="tag">Hacking</span></div>
+      <div class="rec"><span class="dot"></span>EN DIRECT · MODULE 03</div>
+      <div class="pages"><b>09</b> / 12</div>
+      <div class="section-label">TYPE · RECAP</div>
+    </div>
+
+    <div class="head">
+      <h1>Ce qu'on retient.<br><span class="o">3 idées clés.</span></h1>
+      <div class="meta">FIN MODULE 03<br><b>● PROCHAINE ÉTAPE — MODULE 04</b></div>
+    </div>
+    <div class="grid">
+      <div class="card">
+        <div class="n">01 / IDÉE</div>
+        <div class="t">Process<br>avant outils.</div>
+        <div class="d">L'outil n'est jamais la solution. Le process documenté l'est. L'outil ne fait que l'amplifier — pour le meilleur ou le pire.</div>
+        <div class="ft">Voir slide 02 · Big statement</div>
+      </div>
+      <div class="card">
+        <div class="n">02 / IDÉE</div>
+        <div class="t">Filmer<br>la réalité.</div>
+        <div class="d">L'écart entre le process officiel et le process réel est où se cache 80% des gains. Observer avant de prescrire.</div>
+        <div class="ft">Voir slide 07 · O.D.A.M.</div>
+      </div>
+      <div class="card">
+        <div class="n">03 / IDÉE</div>
+        <div class="t">Mesurer<br>ou tâtonner.</div>
+        <div class="d">Un process sans KPI, c'est de l'intuition déguisée. 1 chiffre par étape, mis à jour chaque semaine. Non-négociable.</div>
+        <div class="ft">Voir slide 07 · Étape 04</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================================================== -->
+  <!-- 10 — TRANSITION                                         -->
+  <!-- ===================================================== -->
+  <section class="slide s-trans" data-screen-label="10 Transition">
+    <div class="chrome">
+      <div class="brand"><span class="mark">Sales</span><span class="tag">Hacking</span></div>
+      <div class="rec"><span class="dot"></span>EN DIRECT · MODULE 03</div>
+      <div class="pages"><b>10</b> / 12</div>
+      <div class="section-label">TYPE · TRANSITION</div>
+    </div>
+
+    <div class="wrap">
+      <div class="top-bar"><span class="line"></span>FIN DE CHAPITRE<span class="line"></span></div>
+      <div class="next-num">04</div>
+      <h1>On passe<br>à la <span class="crl">pratique.</span></h1>
+      <div class="cta">
+        <span class="pill">Module 04 · Mardi 21h</span>
+        <span class="arrow-btn">→</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================================================== -->
+  <!-- 11 — PAUSE                                              -->
+  <!-- ===================================================== -->
+  <section class="slide s-pause" data-screen-label="11 Pause">
+    <div class="chrome">
+      <div class="brand"><span class="mark">Sales</span><span class="tag">Hacking</span></div>
+      <div class="rec"><span class="dot"></span>EN DIRECT · MODULE 03</div>
+      <div class="pages"><b>11</b> / 12</div>
+      <div class="section-label">TYPE · PAUSE</div>
+    </div>
+
+    <div class="ring r3"></div>
+    <div class="ring r2"></div>
+    <div class="ring"></div>
+
+    <div class="wrap">
+      <span class="eyebrow">— On respire</span>
+      <h1>Pause.<br><span class="o">5 minutes.</span></h1>
+      <div class="timer"><span class="dot"></span>04:32 RESTANTES</div>
+      <div class="sub">notez ce qui vous a marqué jusqu'ici.</div>
+    </div>
+  </section>
+
+  <!-- ===================================================== -->
+  <!-- 12 — Q&A                                                -->
+  <!-- ===================================================== -->
+  <section class="slide s-qa" data-screen-label="12 Q&amp;A">
+    <div class="chrome">
+      <div class="brand"><span class="mark">Sales</span><span class="tag">Hacking</span></div>
+      <div class="rec"><span class="dot"></span>EN DIRECT · MODULE 03</div>
+      <div class="pages"><b>12</b> / 12</div>
+      <div class="section-label">TYPE · QA</div>
+    </div>
+
+    <div class="left">
+      <span class="eyebrow">— Vos questions, en direct</span>
+      <div class="qmark">?</div>
+      <h1>On répond<br>à tout.</h1>
+    </div>
+    <div class="right">
+      <div class="qcard">
+        <div class="av">MA</div>
+        <div class="txt">Comment on filme un process qui ne se passe jamais pareil deux fois ?<small>MARION · ASSISTANTE OPS</small></div>
+        <div class="time">il y a 12s</div>
+      </div>
+      <div class="qcard">
+        <div class="av b2">YK</div>
+        <div class="txt">Outil recommandé pour stocker les SOPs en équipe distribuée ?<small>YANIS · COO</small></div>
+        <div class="time">il y a 38s</div>
+      </div>
+      <div class="qcard">
+        <div class="av b3">CL</div>
+        <div class="txt">L'IA peut-elle écrire la première version d'un SOP depuis un Loom ?<small>CLARA · FOUNDER</small></div>
+        <div class="time">il y a 1m</div>
+      </div>
+      <div class="input">
+        <span class="ph">Posez votre question…</span>
+        <span class="btn">ENVOYER</span>
+      </div>
+    </div>
+  </section>
+
+</deck-stage>
+
+<script src="deck-stage.js"></script>
+
+</body>
+</html>
