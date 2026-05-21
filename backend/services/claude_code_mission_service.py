@@ -1861,6 +1861,7 @@ def _build_content_chunk(chunk_dir: str, job: dict, chunk: dict, model: str) -> 
     from services.content_generation_service import (
         _build_audio_day_plan_context,
         _build_course_position_context,
+        _build_course_slot_generation_context,
         _build_generation_volume_context,
         _get_passe_prompts,
     )
@@ -1918,6 +1919,12 @@ def _build_content_chunk(chunk_dir: str, job: dict, chunk: dict, model: str) -> 
     }
     prompt += "\n\n" + _build_course_position_context(
         **generation_context,
+    )
+    prompt += "\n\n" + _build_course_slot_generation_context(
+        generation_context,
+        sub_part_name=chunk["sub_part_name"],
+        module_content=chunk["module_content"],
+        program_text=job.get("daily_programs") or "",
     )
     prompt += "\n\n" + _build_generation_volume_context(generation_context)
     prompt += "\n\n" + _build_audio_day_plan_context(generation_context)

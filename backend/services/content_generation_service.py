@@ -525,6 +525,44 @@ def _build_audio_day_plan_context(generation_context=None) -> str:
     return "\n".join(lines)
 
 
+def _build_course_slot_generation_context(
+    generation_context=None,
+    *,
+    sub_part_name: str = "",
+    module_content: str = "",
+    program_text: str = "",
+) -> str:
+    """Ajoute le cadrage précis du créneau courant au prompt de génération."""
+    block = _course_block_for_generation_context(generation_context)
+    if not block:
+        return ""
+
+    slot_label = (
+        f"Bloc cours {block['bloc_number']} · {block['filename']} · "
+        f"{block['duration_min']} min"
+    )
+    return f"""
+═══════════════════════════════════════════════════════════════════
+CADRAGE DU CRÉNEAU COURANT — À RESPECTER STRICTEMENT
+═══════════════════════════════════════════════════════════════════
+Tu écris uniquement ce créneau : {slot_label}.
+Titre du créneau : {sub_part_name}
+Rôle oral du créneau : {block.get('role') or 'continuité pédagogique'}
+
+Contenu prioritaire à développer dans CE créneau :
+{(module_content or '').strip()[:7000] or '(contenu spécifique non fourni)'}
+
+Contexte journée complet, seulement pour éviter les doublons et assurer la continuité :
+{(program_text or '').strip()[:9000] or '(contexte journée non fourni)'}
+
+Règles de périmètre :
+- Ne traite pas les autres créneaux comme s'ils appartenaient à celui-ci.
+- Ne recommence pas toute la journée à chaque passe.
+- Si une notion appartient plutôt à un autre horaire, garde-la en transition courte.
+- La fin du créneau doit être propre : synthèse, chute ou transition naturelle.
+"""
+
+
 def compute_course_day_word_budget_audit(folder_id: int, job: dict | None = None) -> dict:
     """Audit final du nombre de mots réellement parlés pour une journée."""
     job = job or get_job_from_db(folder_id)
@@ -3662,6 +3700,12 @@ def _generate_segment_text(passe, sub_part_name, program_title, program_text, pr
 
     if generation_context:
         prompt += "\n\n" + _build_course_position_context(**generation_context)
+    prompt += "\n\n" + _build_course_slot_generation_context(
+        generation_context,
+        sub_part_name=sub_part_name,
+        module_content=module_content,
+        program_text=program_text,
+    )
     prompt += "\n\n" + _build_generation_volume_context(generation_context)
     prompt += "\n\n" + _build_audio_day_plan_context(generation_context)
 
@@ -6058,11 +6102,11 @@ def get_course_script_plan_for_ui(folder_id: int, job: dict | None = None) -> di
 
     preview = _build_course_blocs_preview(folder_id, job)
     return {
-        "course_blocs": preview,
-        "course_blocs_source": "preview",
+        "course_blocs": [],
+        "course_blocs_source": "none",
         "course_blocs_generated_at": None,
         "course_blocs_mode": None,
-        "course_blocs_note": "Prévisualisation du découpage actuel, avant génération audio.",
+        "course_blocs_note": "Aucune génération audio n'a encore été lancée pour ce dossier.",
         "course_blocs_stale": False,
         "planned_course_blocs": preview,
         "planned_course_blocs_source": "preview",
