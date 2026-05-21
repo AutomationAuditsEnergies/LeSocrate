@@ -3700,6 +3700,7 @@ export default function FormationPipeline() {
                                         </div>
                                         <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
                                           {[
+                                            { step: 'content', label: 'Génération texte', icon: 'text_fields', title: 'Purge les segments et régénère le texte depuis zéro, puis enchaîne volume + conformité + slides + TTS' },
                                             { step: 'volume', label: 'Volume', icon: 'auto_fix_high', title: 'Reset + volume + conformité + Word 2 + slides + TTS' },
                                             { step: 'review', label: 'Conformité', icon: 'rule', title: 'Saute le volume — lance conformité + Word 2 + slides + TTS' },
                                             { step: 'slides', label: 'Slides', icon: 'slideshow', title: 'Saute volume et conformité — supprime le deck slides existant, régénère les slides puis lance le TTS' },

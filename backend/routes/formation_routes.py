@@ -3663,6 +3663,7 @@ def continue_after_text(job_id, folder_id):
     _STEP_ORDER = ["volume", "review", "slides", "tts"]
     raw_from_step = data.get("from_step", "volume")
     fast_tts_pipeline = bool(raw_from_step == "tts_fast" or data.get("fast_tts_pipeline"))
+    restart_from_content = (raw_from_step == "content")
     from_step = "tts" if raw_from_step == "tts_fast" else raw_from_step
     from_step = from_step if from_step in _STEP_ORDER else "volume"
     if from_step != "tts":
@@ -3779,6 +3780,7 @@ def continue_after_text(job_id, folder_id):
                 assert_course_day_word_budget,
                 generate_audio_from_script,
                 run_audio_block_word_calibration,
+                run_content_generation,
                 run_content_review,
                 run_humanization_review,
             )
@@ -3818,6 +3820,37 @@ def continue_after_text(job_id, folder_id):
                     "fast_tts_pipeline": fast_tts_pipeline,
                 },
             )
+
+            # ── Étape 0 : GÉNÉRATION TEXTE (si restart_from_content) ────────
+            if restart_from_content:
+                step_started = time.time()
+                logger.info(
+                    "PIPELINE_RESUME_STEP_CONTENT_START formation_job_id=%s folder_id=%s",
+                    job_id, folder_id,
+                )
+                from database.db import get_db_connection
+                conn = get_db_connection()
+                cj = conn.execute(
+                    "SELECT id FROM content_generation_jobs WHERE folder_id = ?", (folder_id,)
+                ).fetchone()
+                conn.close()
+                if cj:
+                    conn = get_db_connection()
+                    conn.execute(
+                        "DELETE FROM content_generation_segments WHERE job_id = ?", (cj[0],)
+                    )
+                    conn.execute(
+                        "UPDATE content_generation_jobs SET status='pending', total_words=0, "
+                        "current_sub_part=0, current_passe=1 WHERE id = ?",
+                        (cj[0],),
+                    )
+                    conn.commit()
+                    conn.close()
+                run_content_generation(folder_id, model=model)
+                logger.info(
+                    "PIPELINE_RESUME_STEP_CONTENT_DONE formation_job_id=%s folder_id=%s duration_ms=%s",
+                    job_id, folder_id, int((time.time() - step_started) * 1000),
+                )
 
             # ── Étape 1 : RESET (uniquement si from_step == volume) ─────────
             if from_step_idx == 0:
