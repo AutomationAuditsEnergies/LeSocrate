@@ -464,60 +464,193 @@ def _course_block_role(bloc_number: int, *, folder_position=None, next_item=None
 
 _COURSE_SLOT_PROMPT_PROFILES = {
     1: {
-        "moment": "début de matinée",
-        "mission": "installer le cadre, lancer la progression et poser les premières bases sans surcharge",
-        "tone": "accueillant, clair, progressif",
-        "development": "définitions, contexte métier, enjeux concrets, premiers repères opérationnels",
-        "closing": "fermer sur une synthèse courte puis ouvrir vers le Q&A ou la suite",
-        "avoid": "démarrage brutal, liste exhaustive, conclusion de journée prématurée",
+        "label": "Cours 1 — lancement de matinée",
+        "moment": "début de matinée, premier contact avec le sujet du jour",
+        "intention": (
+            "installer la journée, remettre l'apprenant dans le parcours, poser le cadre "
+            "du thème et rendre immédiatement utile ce qui va suivre"
+        ),
+        "rhythm": (
+            "progressif et accueillant : phrases d'installation, définitions nettes, "
+            "exemples courts, montée en précision sans accélérer trop vite"
+        ),
+        "structure": [
+            "ouvrir avec une vraie amorce orale, jamais avec une attaque technique",
+            "situer le sujet dans le métier et dans la journée",
+            "poser les deux ou trois notions socles nécessaires",
+            "donner un premier exemple simple qui servira de repère",
+            "finir par une mini-synthèse et une ouverture vers le Q&A ou la suite",
+        ],
+        "examples": "exemples simples, scènes d'accueil, première demande client, situation facile à visualiser",
+        "avoid": [
+            "démarrage brutal du type nouvelle partie ou on va aborder",
+            "liste exhaustive dès les premières minutes",
+            "conclusion de journée ou synthèse trop globale",
+            "cas complexe avant que les bases soient posées",
+        ],
+        "handoff": "annoncer naturellement le Q&A ou le prochain temps sans refaire tout le plan",
     },
     2: {
-        "moment": "reprise après premier Q&A/pause",
-        "mission": "approfondir la première compétence et passer du cadre aux gestes professionnels",
-        "tone": "plus direct, méthodique, rassurant",
-        "development": "méthodes, étapes, erreurs fréquentes, exemple guidé",
-        "closing": "stabiliser la méthode et préparer le changement de sujet suivant",
-        "avoid": "réexpliquer tout le créneau 1, ouvrir un nouveau bloc sans transition",
+        "label": "Cours 2 — première mise en méthode",
+        "moment": "reprise après le premier temps de questions ou une courte pause",
+        "intention": (
+            "transformer les bases du cours 1 en méthode de travail : étapes, réflexes, "
+            "ordre des actions, premières erreurs à éviter"
+        ),
+        "rhythm": (
+            "plus méthodique : on avance par séquences claires, avec des formulations "
+            "pratiques et des points de contrôle réguliers"
+        ),
+        "structure": [
+            "reprendre le fil en une ou deux phrases seulement",
+            "présenter une méthode ou une grille de lecture utilisable",
+            "décomposer les étapes dans l'ordre d'une vraie situation professionnelle",
+            "illustrer par un exemple guidé du début à la fin",
+            "fermer sur ce que l'apprenant doit commencer à faire automatiquement",
+        ],
+        "examples": "exemple guidé, procédure appliquée, erreur fréquente corrigée, mini-dialogue professionnel",
+        "avoid": [
+            "réexpliquer longuement le cours 1",
+            "changer de thème sans transition",
+            "accumuler des conseils non hiérarchisés",
+            "donner une méthode sans exemple complet",
+        ],
+        "handoff": "stabiliser la méthode avant d'ouvrir vers un approfondissement ou un cas plus dense",
     },
     3: {
-        "moment": "fin de matinée",
-        "mission": "traiter un point dense avec exemples et cas pratiques avant la coupure du midi",
-        "tone": "soutenu mais respirable",
-        "development": "cas complexes, arbitrages, diagnostic, points de vigilance",
-        "closing": "conclure franchement la séquence du matin et annoncer la respiration qui suit",
-        "avoid": "laisser une idée majeure en suspens juste avant midi",
+        "label": "Cours 3 — densité de fin de matinée",
+        "moment": "fin de matinée, juste avant une respiration plus longue",
+        "intention": (
+            "traiter le point le plus dense de la matinée, pousser le raisonnement, "
+            "faire travailler les arbitrages et refermer proprement la séquence matinale"
+        ),
+        "rhythm": (
+            "soutenu mais respirable : blocs d'explication plus longs, pauses pédagogiques, "
+            "synthèses intermédiaires pour ne pas saturer"
+        ),
+        "structure": [
+            "rappeler en une phrase où on en est dans la matinée",
+            "entrer dans une situation plus exigeante ou un cas plus complet",
+            "montrer les décisions successives à prendre",
+            "insister sur les pièges, limites et critères de qualité",
+            "conclure clairement la matinée avant le Q&A ou la pause",
+        ],
+        "examples": "cas complexe, diagnostic, arbitrage, client difficile, erreur de procédure, correction commentée",
+        "avoid": [
+            "ouvrir un gros sujet qui ne pourra pas être refermé",
+            "finir sur une phrase suspendue",
+            "enchaîner trop de notions nouvelles sans respiration",
+            "annoncer la pause comme une coupure administrative froide",
+        ],
+        "handoff": "faire sentir que la matinée a une vraie conclusion avant la pause ou le déjeuner",
     },
     4: {
-        "moment": "reprise après déjeuner",
-        "mission": "relancer l'attention, reconnecter au fil de la journée et aborder une séquence autonome",
-        "tone": "calme, relance douce, concret",
-        "development": "application pratique, exemple simple, remise en mouvement",
-        "closing": "terminer proprement sans effet tunnel après repas",
-        "avoid": "reprendre trop vite, supposer une attention maximale dès la première phrase",
+        "label": "Cours 4 — reprise après déjeuner",
+        "moment": "début d'après-midi, reprise après déjeuner",
+        "intention": (
+            "remettre l'apprenant en mouvement sans brutalité, reconnecter au fil de la journée "
+            "et ouvrir une séquence autonome plus concrète"
+        ),
+        "rhythm": (
+            "calme et relance douce : phrases plus courtes au départ, exemples accessibles, "
+            "puis montée progressive vers l'application"
+        ),
+        "structure": [
+            "reprendre avec une amorce de relance, pas avec un rappel lourd",
+            "rattacher la matinée au sujet de l'après-midi",
+            "lancer une application pratique ou un nouveau terrain d'exemple",
+            "faire alterner explication et mise en situation",
+            "finir sur un point clair pour éviter l'effet tunnel",
+        ],
+        "examples": "cas simple de reprise, application terrain, situation de service, comparaison avant/après",
+        "avoid": [
+            "supposer une attention maximale dès la première phrase",
+            "reprendre toute la matinée en détail",
+            "démarrer par une abstraction lourde",
+            "finir sans signal de clôture",
+        ],
+        "handoff": "préparer la montée en profondeur des cours longs d'après-midi",
     },
     5: {
-        "moment": "début d'après-midi avancé",
-        "mission": "développer le bloc long le plus substantiel, avec démonstration et variations",
-        "tone": "expert, posé, pédagogique",
-        "development": "explications profondes, contre-exemples, scénarios professionnels, consolidation",
-        "closing": "faire une vraie mini-synthèse et créer une transition claire",
-        "avoid": "remplissage générique, redite des créneaux précédents",
+        "label": "Cours 5 — grand développement de l'après-midi",
+        "moment": "milieu d'après-midi, premier long créneau de 60 minutes",
+        "intention": (
+            "développer le bloc le plus substantiel : approfondissement, démonstration, variations, "
+            "contre-exemples et consolidation"
+        ),
+        "rhythm": (
+            "ample et maîtrisé : accepter des développements longs, mais avec des jalons fréquents "
+            "pour garder le fil oral"
+        ),
+        "structure": [
+            "annoncer clairement la compétence travaillée",
+            "déployer l'explication en plusieurs sous-situations",
+            "alterner principe, exemple, piège, correction",
+            "montrer des variantes du même problème pour éviter l'apprentissage superficiel",
+            "faire une vraie mini-synthèse avant la transition",
+        ],
+        "examples": "scénarios professionnels complets, contre-exemples, analyse d'une mauvaise réponse, amélioration progressive",
+        "avoid": [
+            "remplissage générique pour tenir la durée",
+            "redite des créneaux 1 à 4",
+            "enchaînement de listes sans narration pédagogique",
+            "absence de jalons dans un long passage",
+        ],
+        "handoff": "donner le sentiment d'un gros bloc maîtrisé, puis préparer la mise en maîtrise",
     },
     6: {
-        "moment": "dernière grande séquence de l'après-midi",
-        "mission": "amener vers la maîtrise, relier les compétences et traiter les situations plus fines",
-        "tone": "assuré, nuancé, orienté pratique",
-        "development": "combinaisons de compétences, cas limites, décisions à prendre, posture professionnelle",
-        "closing": "préparer la dernière ligne droite sans conclure toute la journée trop tôt",
-        "avoid": "ouvrir trop de nouveaux sujets qui ne pourront pas être refermés",
+        "label": "Cours 6 — mise en maîtrise",
+        "moment": "dernière grande séquence de 60 minutes avant la fin de journée",
+        "intention": (
+            "passer de la compréhension à la maîtrise : relier les compétences, traiter les cas limites "
+            "et montrer comment décider dans une vraie situation"
+        ),
+        "rhythm": (
+            "assuré, nuancé, orienté pratique : moins de définitions, plus de décisions, "
+            "de comparaisons et de posture professionnelle"
+        ),
+        "structure": [
+            "reprendre le résultat du cours 5 sans le répéter",
+            "mettre les notions en tension dans un cas plus réaliste",
+            "montrer les critères de décision et les arbitrages",
+            "faire verbaliser la posture attendue",
+            "préparer la dernière ligne droite sans conclure toute la journée",
+        ],
+        "examples": "cas limites, conflit de priorités, décision à prendre, posture professionnelle, reformulation experte",
+        "avoid": [
+            "revenir à des bases déjà acquises",
+            "ouvrir trop de nouveaux sujets",
+            "faire une conclusion finale trop tôt",
+            "traiter le cas pratique comme une simple illustration décorative",
+        ],
+        "handoff": "ouvrir naturellement vers la consolidation finale du cours 7",
     },
     7: {
-        "moment": "fin de journée",
-        "mission": "terminer la progression du jour, consolider, synthétiser et projeter sobrement",
-        "tone": "posé, conclusif, valorisant sans emphase",
-        "development": "derniers exemples, intégration des notions, points clés à retenir",
-        "closing": "vraie conclusion de journée puis transition vers la prochaine séance si nécessaire",
-        "avoid": "démarrer un gros sujet neuf, finir abruptement, refaire tout le programme",
+        "label": "Cours 7 — consolidation et clôture",
+        "moment": "fin de journée, dernier créneau avant le Q&A final",
+        "intention": (
+            "terminer la progression du jour, consolider les apprentissages, faire une synthèse utile "
+            "et projeter sobrement vers la suite"
+        ),
+        "rhythm": (
+            "posé, conclusif, valorisant sans emphase : on ralentit légèrement, on relie, "
+            "on donne de la lisibilité et on évite d'ouvrir un chantier neuf"
+        ),
+        "structure": [
+            "réactiver le fil de la journée en quelques phrases",
+            "terminer le dernier point prévu ou le dernier exemple utile",
+            "relier les notions principales sans refaire tout le cours",
+            "donner les points clés à retenir pour la pratique",
+            "conclure la journée et ouvrir vers la prochaine séance si le programme le demande",
+        ],
+        "examples": "dernier cas d'intégration, synthèse appliquée, checklist mentale, situation de transfert au poste",
+        "avoid": [
+            "démarrer un gros sujet neuf",
+            "faire un résumé exhaustif de plusieurs heures",
+            "finir abruptement",
+            "survaloriser artificiellement ou faire une conclusion trop solennelle",
+        ],
+        "handoff": "annoncer le Q&A final ou la suite de formation avec sobriété",
     },
 }
 
@@ -543,15 +676,24 @@ def _course_slot_prompt_profile(bloc_number: int | str | None, passe: int | str 
         3: "Passe 3 : consolider, nuancer, relier les idées et finir le créneau proprement.",
     }.get(passe_num, "Passe : respecter la progression Fondation / Pratique / Maîtrise.")
 
-    return "\n".join([
+    lines = [
+        f"- Profil : {profile.get('label', f'Cours {bloc}')}.",
         f"- Moment : {profile['moment']}.",
-        f"- Mission du créneau : {profile['mission']}.",
-        f"- Ton attendu : {profile['tone']}.",
-        f"- Développement privilégié : {profile['development']}.",
-        f"- Fin attendue : {profile['closing']}.",
-        f"- À éviter : {profile['avoid']}.",
+        f"- Intention pédagogique : {profile['intention']}.",
+        f"- Rythme et voix : {profile['rhythm']}.",
+        "- Structure interne attendue :",
+    ]
+    lines.extend(f"  {idx}. {item}" for idx, item in enumerate(profile.get("structure", []), 1))
+    lines.extend([
+        f"- Exemples à privilégier : {profile['examples']}.",
+        "- À éviter :",
+    ])
+    lines.extend(f"  - {item}" for item in profile.get("avoid", []))
+    lines.extend([
+        f"- Sortie du créneau : {profile['handoff']}.",
         f"- Focus de cette passe : {passe_focus}",
     ])
+    return "\n".join(lines)
 
 
 def _block_min_words(word_budget: int) -> int:
