@@ -91,6 +91,35 @@ def _normalize_day_audio_slots(day_data: dict) -> dict:
     day_data["hours"] = HOURS_PER_DAY
     return day_data
 
+
+def _format_slot_generation_source(slot_data: dict) -> str:
+    """Texte source injecté dans le prompt TTS pour un créneau."""
+    brief = slot_data.get("generation_brief") or {}
+    lines = [
+        f"CRÉNEAU AUDIO : {slot_data.get('audio_slot')} · "
+        f"{slot_data.get('start_time')}-{slot_data.get('end_time')} · "
+        f"{slot_data.get('duration_min')} min · fichier {slot_data.get('filename')}",
+        f"OBJECTIF DU CRÉNEAU : {slot_data.get('name') or ''}",
+        "",
+        "CONTENU PRIORITAIRE :",
+        slot_data.get("module_content", "") or "",
+    ]
+    if isinstance(brief, dict) and brief:
+        lines.extend(["", "BRIEF DE GÉNÉRATION DU CRÉNEAU :"])
+        for key, label in (
+            ("must_cover", "À couvrir"),
+            ("examples", "Exemples à intégrer"),
+            ("finish", "Fin attendue"),
+            ("avoid", "À éviter / ne pas répéter"),
+            ("handoff", "Transition"),
+        ):
+            value = brief.get(key)
+            if isinstance(value, list):
+                value = "; ".join(str(item).strip() for item in value if str(item).strip())
+            if value:
+                lines.append(f"- {label} : {value}")
+    return "\n".join(lines).strip()
+
 # ─── Prompts Claude ───────────────────────────────────────────────────────────
 
 _GLOBAL_PROGRAM_PROMPT = """Tu es un expert en ingénierie pédagogique spécialisé dans les titres professionnels du Ministère du Travail.
@@ -177,6 +206,7 @@ RÈGLES :
 - "day_recap" : commence par "Lors de la dernière séance, nous avons vu…" (sauf jour 1)
 - "day_transition" : commence par "À la prochaine séance, nous aborderons…" (jamais "demain" ni "la semaine prochaine")
 - "module_content" : 5-8 phrases détaillées : compétences visées, notions clés, exemples concrets, points de vigilance, progression interne du créneau. Ce contenu sera la base directe de la génération TTS.
+- "generation_brief" : objet opérationnel qui servira au prompt TTS du créneau. Il doit dire quoi couvrir, quels exemples intégrer, comment finir, quoi éviter pour ne pas répéter les autres créneaux.
 - La durée du créneau sert ensuite au budget mots : 45 min reçoit moins de contenu qu'un créneau de 60 min.
 
 CRÉNEAUX AUDIO À RESPECTER STRICTEMENT :
@@ -200,7 +230,14 @@ FORMAT DE SORTIE : JSON valide uniquement, sans texte avant ni après.
           "duration_min": 45,
           "filename": "cours_9h00_9h45.mp3",
           "name": "Cours 1 — 9h00-9h45 — Nom précis du créneau",
-          "module_content": "Contenu condensé et structuré de ce créneau, calibré pour sa durée."
+          "module_content": "Contenu condensé et structuré de ce créneau, calibré pour sa durée.",
+          "generation_brief": {{
+            "must_cover": ["notion prioritaire 1", "notion prioritaire 2"],
+            "examples": ["exemple métier à développer"],
+            "finish": "Type de chute ou synthèse attendue à la fin du créneau",
+            "avoid": ["notion réservée à un autre créneau", "redite à éviter"],
+            "handoff": "Lien naturel avec le Q&A, la pause ou le créneau suivant"
+          }}
         }}
       ],
       "day_recap": "Rappel de la veille (vide pour le jour 1)",
@@ -1097,12 +1134,7 @@ def launch_tts_for_all_days(job_id: int, platform_id: int, model: str = None):
         sub_parts = [sp["name"] for sp in day_data.get("sub_parts", [])]
         module_contents = {}
         for sp in day_data.get("sub_parts", []):
-            slot_header = (
-                f"CRÉNEAU AUDIO : {sp.get('audio_slot')} · "
-                f"{sp.get('start_time')}-{sp.get('end_time')} · "
-                f"{sp.get('duration_min')} min · fichier {sp.get('filename')}\n"
-            )
-            module_contents[sp["name"]] = slot_header + (sp.get("module_content", "") or "")
+            module_contents[sp["name"]] = _format_slot_generation_source(sp)
 
         existing_job = get_job_from_db(folder_id)
         if existing_job:
@@ -1235,13 +1267,7 @@ def _format_day_program_text(day_data: dict, tp_name: str) -> str:
         lines.append("")
 
     for sp in day_data.get("sub_parts", []):
-        lines.append(
-            f"CRÉNEAU AUDIO : {sp.get('audio_slot')} · "
-            f"{sp.get('start_time')}-{sp.get('end_time')} · "
-            f"{sp.get('duration_min')} min · {sp.get('filename')}"
-        )
-        lines.append(f"MODULE / OBJECTIF : {sp['name']}")
-        lines.append(sp.get("module_content", ""))
+        lines.append(_format_slot_generation_source(sp))
         lines.append("")
 
     if day_data.get("day_transition"):

@@ -462,6 +462,98 @@ def _course_block_role(bloc_number: int, *, folder_position=None, next_item=None
     return " ".join(parts)
 
 
+_COURSE_SLOT_PROMPT_PROFILES = {
+    1: {
+        "moment": "début de matinée",
+        "mission": "installer le cadre, lancer la progression et poser les premières bases sans surcharge",
+        "tone": "accueillant, clair, progressif",
+        "development": "définitions, contexte métier, enjeux concrets, premiers repères opérationnels",
+        "closing": "fermer sur une synthèse courte puis ouvrir vers le Q&A ou la suite",
+        "avoid": "démarrage brutal, liste exhaustive, conclusion de journée prématurée",
+    },
+    2: {
+        "moment": "reprise après premier Q&A/pause",
+        "mission": "approfondir la première compétence et passer du cadre aux gestes professionnels",
+        "tone": "plus direct, méthodique, rassurant",
+        "development": "méthodes, étapes, erreurs fréquentes, exemple guidé",
+        "closing": "stabiliser la méthode et préparer le changement de sujet suivant",
+        "avoid": "réexpliquer tout le créneau 1, ouvrir un nouveau bloc sans transition",
+    },
+    3: {
+        "moment": "fin de matinée",
+        "mission": "traiter un point dense avec exemples et cas pratiques avant la coupure du midi",
+        "tone": "soutenu mais respirable",
+        "development": "cas complexes, arbitrages, diagnostic, points de vigilance",
+        "closing": "conclure franchement la séquence du matin et annoncer la respiration qui suit",
+        "avoid": "laisser une idée majeure en suspens juste avant midi",
+    },
+    4: {
+        "moment": "reprise après déjeuner",
+        "mission": "relancer l'attention, reconnecter au fil de la journée et aborder une séquence autonome",
+        "tone": "calme, relance douce, concret",
+        "development": "application pratique, exemple simple, remise en mouvement",
+        "closing": "terminer proprement sans effet tunnel après repas",
+        "avoid": "reprendre trop vite, supposer une attention maximale dès la première phrase",
+    },
+    5: {
+        "moment": "début d'après-midi avancé",
+        "mission": "développer le bloc long le plus substantiel, avec démonstration et variations",
+        "tone": "expert, posé, pédagogique",
+        "development": "explications profondes, contre-exemples, scénarios professionnels, consolidation",
+        "closing": "faire une vraie mini-synthèse et créer une transition claire",
+        "avoid": "remplissage générique, redite des créneaux précédents",
+    },
+    6: {
+        "moment": "dernière grande séquence de l'après-midi",
+        "mission": "amener vers la maîtrise, relier les compétences et traiter les situations plus fines",
+        "tone": "assuré, nuancé, orienté pratique",
+        "development": "combinaisons de compétences, cas limites, décisions à prendre, posture professionnelle",
+        "closing": "préparer la dernière ligne droite sans conclure toute la journée trop tôt",
+        "avoid": "ouvrir trop de nouveaux sujets qui ne pourront pas être refermés",
+    },
+    7: {
+        "moment": "fin de journée",
+        "mission": "terminer la progression du jour, consolider, synthétiser et projeter sobrement",
+        "tone": "posé, conclusif, valorisant sans emphase",
+        "development": "derniers exemples, intégration des notions, points clés à retenir",
+        "closing": "vraie conclusion de journée puis transition vers la prochaine séance si nécessaire",
+        "avoid": "démarrer un gros sujet neuf, finir abruptement, refaire tout le programme",
+    },
+}
+
+
+def _course_slot_prompt_profile(bloc_number: int | str | None, passe: int | str | None = None) -> str:
+    """Profil éditorial stable par créneau audio."""
+    try:
+        bloc = int(bloc_number or 0)
+    except (TypeError, ValueError):
+        bloc = 0
+    try:
+        passe_num = int(passe or 0)
+    except (TypeError, ValueError):
+        passe_num = 0
+
+    profile = _COURSE_SLOT_PROMPT_PROFILES.get(bloc)
+    if not profile:
+        return ""
+
+    passe_focus = {
+        1: "Passe 1 : poser les bases du créneau, clarifier les notions et préparer l'écoute.",
+        2: "Passe 2 : développer la pratique, les exemples, les gestes professionnels et les cas terrain.",
+        3: "Passe 3 : consolider, nuancer, relier les idées et finir le créneau proprement.",
+    }.get(passe_num, "Passe : respecter la progression Fondation / Pratique / Maîtrise.")
+
+    return "\n".join([
+        f"- Moment : {profile['moment']}.",
+        f"- Mission du créneau : {profile['mission']}.",
+        f"- Ton attendu : {profile['tone']}.",
+        f"- Développement privilégié : {profile['development']}.",
+        f"- Fin attendue : {profile['closing']}.",
+        f"- À éviter : {profile['avoid']}.",
+        f"- Focus de cette passe : {passe_focus}",
+    ])
+
+
 def _block_min_words(word_budget: int) -> int:
     ratio = _env_float("FORMATION_TTS_BLOCK_WORD_MIN_RATIO", 0.97, min_value=0.80, max_value=1.0)
     return max(0, int(int(word_budget or 0) * ratio))
@@ -541,6 +633,10 @@ def _build_course_slot_generation_context(
         f"Bloc cours {block['bloc_number']} · {block['filename']} · "
         f"{block['duration_min']} min"
     )
+    slot_profile = _course_slot_prompt_profile(
+        block.get("bloc_number"),
+        (generation_context or {}).get("passe"),
+    )
     return f"""
 ═══════════════════════════════════════════════════════════════════
 CADRAGE DU CRÉNEAU COURANT — À RESPECTER STRICTEMENT
@@ -548,6 +644,9 @@ CADRAGE DU CRÉNEAU COURANT — À RESPECTER STRICTEMENT
 Tu écris uniquement ce créneau : {slot_label}.
 Titre du créneau : {sub_part_name}
 Rôle oral du créneau : {block.get('role') or 'continuité pédagogique'}
+
+Profil éditorial propre à ce créneau :
+{slot_profile or '(profil spécifique indisponible)'}
 
 Contenu prioritaire à développer dans CE créneau :
 {(module_content or '').strip()[:7000] or '(contenu spécifique non fourni)'}

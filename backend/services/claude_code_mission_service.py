@@ -353,7 +353,14 @@ Produis un **JSON array** avec une entrée par journée :
         "duration_min": 45,
         "filename": "cours_9h00_9h45.mp3",
         "name": "Cours 1 — 9h00-9h45 — titre précis",
-        "module_content": "~contenu condensé tiré du programme global, adapté à la durée du créneau"
+        "module_content": "~contenu condensé tiré du programme global, adapté à la durée du créneau",
+        "generation_brief": {{
+          "must_cover": ["notion prioritaire"],
+          "examples": ["exemple métier à développer"],
+          "finish": "chute, synthèse ou transition attendue",
+          "avoid": ["redite ou sujet réservé à un autre créneau"],
+          "handoff": "lien naturel avec le Q&A, la pause ou le créneau suivant"
+        }}
       }},
       ... 7 créneaux au total
     ]
@@ -1377,16 +1384,12 @@ def _format_day_program_text_minimal(day_data: dict, tp_name: str) -> str:
     """Format minimal du programme texte d'1 journée (stocké dans cg_jobs.program_text).
     Pas le format LaTeX complet — juste de quoi alimenter le contexte des passes."""
     day_data = _normalize_day_audio_slots(day_data)
+    from services.formation_pipeline_service import _format_slot_generation_source
     title = day_data.get("title", "Journée")
     parts = [f"# {tp_name} — {title}\n"]
     for sp in day_data.get("sub_parts", []):
-        parts.append(
-            f"\nCRÉNEAU AUDIO : {sp.get('audio_slot')} · "
-            f"{sp.get('start_time')}-{sp.get('end_time')} · "
-            f"{sp.get('duration_min')} min · {sp.get('filename')}\n"
-        )
         parts.append(f"\n## {sp.get('name', '?')}\n")
-        parts.append(sp.get("module_content", "") + "\n")
+        parts.append(_format_slot_generation_source(sp) + "\n")
     return "\n".join(parts)
 
 
@@ -1410,6 +1413,7 @@ def _ensure_content_pipeline_structure(job: dict) -> list:
 
     try:
         normalized_daily_programs = [_normalize_day_audio_slots(day) for day in daily_programs]
+        from services.formation_pipeline_service import _format_slot_generation_source
         for i, day_data in enumerate(normalized_daily_programs):
             day_num = day_data.get("day_number", i + 1)
             day_title = day_data.get("title", f"Jour {day_num}")
@@ -1417,12 +1421,7 @@ def _ensure_content_pipeline_structure(job: dict) -> list:
             sub_parts = [sp["name"] for sp in day_data.get("sub_parts", [])]
             module_contents = {}
             for sp in day_data.get("sub_parts", []):
-                slot_header = (
-                    f"CRÉNEAU AUDIO : {sp.get('audio_slot')} · "
-                    f"{sp.get('start_time')}-{sp.get('end_time')} · "
-                    f"{sp.get('duration_min')} min · fichier {sp.get('filename')}\n"
-                )
-                module_contents[sp["name"]] = slot_header + (sp.get("module_content", "") or "")
+                module_contents[sp["name"]] = _format_slot_generation_source(sp)
 
             cursor.execute(
                 "SELECT id FROM cours_folders WHERE formation_job_id = ? AND name = ?",
@@ -1490,6 +1489,7 @@ def _list_content_chunks(job: dict) -> list:
         return []
 
     cg_job_ids = _ensure_content_pipeline_structure(job)
+    from services.formation_pipeline_service import _format_slot_generation_source
 
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -1507,12 +1507,7 @@ def _list_content_chunks(job: dict) -> list:
 
             for sub_idx, sp in enumerate(day_data.get("sub_parts", [])):
                 sub_part_name = sp.get("name", f"Sous-partie {sub_idx + 1}")
-                module_content = (
-                    f"CRÉNEAU AUDIO : {sp.get('audio_slot')} · "
-                    f"{sp.get('start_time')}-{sp.get('end_time')} · "
-                    f"{sp.get('duration_min')} min · fichier {sp.get('filename')}\n"
-                    + (sp.get("module_content", "") or "")
-                )
+                module_content = _format_slot_generation_source(sp)
                 for passe in (1, 2, 3):
                     if (sub_idx, passe) in done:
                         continue

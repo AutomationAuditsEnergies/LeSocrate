@@ -39,6 +39,7 @@ from services.formation_pipeline_service import (
     HOURS_PER_DAY,
     COURSE_AUDIO_SLOTS,
     _normalize_day_audio_slots,
+    _format_slot_generation_source,
 )
 from services.knowledge_base_service import (
     launch_kb_building,
@@ -4714,12 +4715,7 @@ def _execute_ap_step(job_id: int, step: str, job: dict) -> None:
                     sub_parts = [sp["name"] for sp in day_data.get("sub_parts", [])]
                     module_contents = {}
                     for sp in day_data.get("sub_parts", []):
-                        slot_header = (
-                            f"CRÉNEAU AUDIO : {sp.get('audio_slot')} · "
-                            f"{sp.get('start_time')}-{sp.get('end_time')} · "
-                            f"{sp.get('duration_min')} min · fichier {sp.get('filename')}\n"
-                        )
-                        module_contents[sp["name"]] = slot_header + (sp.get("module_content", "") or "")
+                        module_contents[sp["name"]] = _format_slot_generation_source(sp)
                     conn = get_db_connection()
                     cursor = conn.cursor()
                     cursor.execute("""
