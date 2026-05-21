@@ -300,6 +300,27 @@ def create_hr_blueprint(socketio):
             conn = get_db_connection()
             cursor = conn.cursor()
 
+            # Backfill : les plateformes créées par /api/formation/init avaient
+            # déjà un job pipeline lié par platform_id, mais pas toujours
+            # source_formation_id. Sans ce lien, le dashboard sait moins bien
+            # expliquer/diagnostiquer l'état de la carte.
+            cursor.execute("""
+                UPDATE platform_config
+                SET source_formation_id = (
+                    SELECT j.id
+                    FROM formation_pipeline_jobs j
+                    WHERE j.platform_id = platform_config.id
+                    ORDER BY j.id DESC
+                    LIMIT 1
+                )
+                WHERE source_formation_id IS NULL
+                  AND EXISTS (
+                    SELECT 1
+                    FROM formation_pipeline_jobs j
+                    WHERE j.platform_id = platform_config.id
+                  )
+            """)
+
             # Auto-repair lazy : plateformes coincées en 'pending' alors que leur
             # job pipeline a atteint le texte prêt (ou une étape audio ultérieure)
             # → les promouvoir automatiquement en 'ready'. Depuis le découplage
@@ -310,20 +331,39 @@ def create_hr_blueprint(socketio):
                 SET status = 'ready'
                 WHERE status = 'pending'
                   AND id IN (
-                    SELECT platform_id FROM formation_pipeline_jobs
-                    WHERE status IN (
-                        'text_ready',
-                        'tts_launched',
-                        'audio_running',
-                        'audio_launched',
-                        'audio_completed',
-                        'completed'
-                    )
+                    SELECT j.platform_id
+                    FROM formation_pipeline_jobs j
+                    WHERE j.status IN (
+                            'text_ready',
+                            'tts_launched',
+                            'audio_running',
+                            'audio_launched',
+                            'audio_completed',
+                            'completed'
+                        )
+                       OR (
+                            EXISTS (
+                                SELECT 1
+                                FROM cours_folders cf
+                                JOIN content_generation_jobs cgj ON cgj.folder_id = cf.id
+                                WHERE cf.formation_job_id = j.id
+                                  AND cgj.status = 'completed'
+                            )
+                        AND NOT EXISTS (
+                                SELECT 1
+                                FROM cours_folders cf
+                                LEFT JOIN content_generation_jobs cgj ON cgj.folder_id = cf.id
+                                WHERE cf.formation_job_id = j.id
+                                  AND COALESCE(cgj.status, '') != 'completed'
+                            )
+                       )
                   )
             """)
             if cursor.rowcount > 0:
-                conn.commit()
                 logger.info(f"🔧 Auto-repair : {cursor.rowcount} plateforme(s) stuck pending → ready")
+
+            if conn.total_changes > 0:
+                conn.commit()
 
             cursor.execute("""
                 SELECT

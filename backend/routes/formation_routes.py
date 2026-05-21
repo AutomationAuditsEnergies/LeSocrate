@@ -265,6 +265,14 @@ def init_formation():
             total_hours=total_hours,
             nb_days=nb_days,
         )
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE platform_config SET source_formation_id = ? WHERE id = ? AND source_formation_id IS NULL",
+            (job_id, new_platform_id),
+        )
+        conn.commit()
+        conn.close()
         if model_choice:
             update_job(job_id, auto_pilot_model=model_choice)
         logger.info(f"✅ Job formation créé : {job_id} ({tp_name}, {total_hours}h, {nb_days} jours, plateforme {new_platform_id})")
@@ -369,6 +377,14 @@ def init_test_pipeline():
             platform_id=platform_id, tp_name=tp_name, rncp_code=rncp_code,
             total_hours=total_hours, nb_days=nb_days,
         )
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE platform_config SET source_formation_id = ? WHERE id = ? AND source_formation_id IS NULL",
+            (job_id, platform_id),
+        )
+        conn.commit()
+        conn.close()
 
         daily_programs_stub = [
             {
