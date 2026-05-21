@@ -198,6 +198,15 @@ def _course_words_per_minute():
     )
 
 
+def _content_parallel_subpart_workers(default: int = 7) -> int:
+    """Nombre de créneaux cours générés en parallèle."""
+    try:
+        workers = int(os.getenv("FORMATION_CONTENT_PARALLEL_SUBPART_WORKERS", str(default)))
+    except (TypeError, ValueError):
+        workers = default
+    return max(1, min(16, workers))
+
+
 def _course_conclusion_start_margin_sec():
     return _env_float(
         "FORMATION_TTS_CONCLUSION_START_MARGIN_SEC",
@@ -4382,8 +4391,27 @@ def run_content_generation(folder_id, on_progress=None, mode="normal", model=Non
         # En mode mini : seulement la première sous-partie, passe 1
         sub_parts_to_run = [sub_parts[0]] if is_mini else sub_parts
         passes_to_run = [1] if is_mini else [1, 2, 3]
+        parallel_workers = (
+            1 if is_mini
+            else min(len(sub_parts_to_run), _content_parallel_subpart_workers())
+        )
+        logger.info(
+            "PIPELINE_CONTENT_PARALLEL_CONFIG formation_job_id=%s content_job_id=%s folder_id=%s workers=%s sub_parts=%s passes=%s",
+            formation_job_id,
+            job_id,
+            folder_id,
+            parallel_workers,
+            len(sub_parts_to_run),
+            len(passes_to_run),
+        )
 
-        for sub_idx, sub_part_name in enumerate(sub_parts_to_run):
+        import concurrent.futures
+        import threading
+
+        total_words_lock = threading.Lock()
+
+        def _generate_sub_part(sub_idx, sub_part_name):
+            nonlocal total_words
             logger.info(
                 "PIPELINE_CONTENT_SUBPART_START formation_job_id=%s content_job_id=%s folder_id=%s sub_part=%s/%s name=%s",
                 formation_job_id,
@@ -4398,6 +4426,7 @@ def run_content_generation(folder_id, on_progress=None, mode="normal", model=Non
                 passe1_text + "\n\n" + _get_segment_text(job_id, sub_idx, 2)
                 if (sub_idx, 2) in done_set else ""
             )
+            subpart_words = 0
 
             for passe in passes_to_run:
                 if (sub_idx, passe) in done_set:
@@ -4414,7 +4443,9 @@ def run_content_generation(folder_id, on_progress=None, mode="normal", model=Non
                 msg = f"Sous-partie {sub_idx + 1}/{NUM_SUB_PARTS} · Passe {passe}/3 — {sub_part_name}"
                 if is_mock:
                     msg = f"[MOCK] {msg}"
-                _progress(sub_idx, passe, total_words, msg)
+                with total_words_lock:
+                    current_total_words = total_words
+                _progress(sub_idx, passe, current_total_words, msg)
                 _update_job_db(job_id, current_sub_part=sub_idx, current_passe=passe)
                 segment_started_at = time.time()
                 logger.info(
@@ -4427,7 +4458,7 @@ def run_content_generation(folder_id, on_progress=None, mode="normal", model=Non
                     passe,
                     len(passes_to_run),
                     mode,
-                    total_words,
+                    current_total_words,
                 )
 
                 if is_mock:
@@ -4468,8 +4499,11 @@ def run_content_generation(folder_id, on_progress=None, mode="normal", model=Non
 
                 _save_segment_db(job_id, sub_idx, sub_part_name, passe, text)
                 words_added = len(text.split())
-                total_words += words_added
-                _update_job_db(job_id, total_words=total_words)
+                with total_words_lock:
+                    total_words += words_added
+                    current_total_words = total_words
+                subpart_words += words_added
+                _update_job_db(job_id, total_words=current_total_words)
                 logger.info(
                     "PIPELINE_CONTENT_SEGMENT_DONE formation_job_id=%s content_job_id=%s folder_id=%s sub_part=%s passe=%s "
                     "words_added=%s total_words=%s duration_ms=%s",
@@ -4479,7 +4513,7 @@ def run_content_generation(folder_id, on_progress=None, mode="normal", model=Non
                     sub_idx + 1,
                     passe,
                     words_added,
-                    total_words,
+                    current_total_words,
                     int((time.time() - segment_started_at) * 1000),
                 )
 
@@ -4487,6 +4521,28 @@ def run_content_generation(folder_id, on_progress=None, mode="normal", model=Non
                     passe1_text = text
                 elif passe == 2:
                     passe1_2_text = passe1_text + "\n\n" + text
+            logger.info(
+                "PIPELINE_CONTENT_SUBPART_DONE formation_job_id=%s content_job_id=%s folder_id=%s sub_part=%s/%s words=%s",
+                formation_job_id,
+                job_id,
+                folder_id,
+                sub_idx + 1,
+                len(sub_parts_to_run),
+                subpart_words,
+            )
+            return subpart_words
+
+        if parallel_workers <= 1:
+            for sub_idx, sub_part_name in enumerate(sub_parts_to_run):
+                _generate_sub_part(sub_idx, sub_part_name)
+        else:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=parallel_workers) as executor:
+                futures = [
+                    executor.submit(_generate_sub_part, sub_idx, sub_part_name)
+                    for sub_idx, sub_part_name in enumerate(sub_parts_to_run)
+                ]
+                for future in concurrent.futures.as_completed(futures):
+                    future.result()
 
         # En mode mini : marquer completed sans upload (pas de texte complet)
         if is_mini:
