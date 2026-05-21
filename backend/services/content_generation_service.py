@@ -4405,7 +4405,6 @@ def run_content_generation(folder_id, on_progress=None, mode="normal", model=Non
             len(passes_to_run),
         )
 
-        import concurrent.futures
         import threading
 
         total_words_lock = threading.Lock()
@@ -4536,13 +4535,14 @@ def run_content_generation(folder_id, on_progress=None, mode="normal", model=Non
             for sub_idx, sub_part_name in enumerate(sub_parts_to_run):
                 _generate_sub_part(sub_idx, sub_part_name)
         else:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=parallel_workers) as executor:
-                futures = [
-                    executor.submit(_generate_sub_part, sub_idx, sub_part_name)
-                    for sub_idx, sub_part_name in enumerate(sub_parts_to_run)
-                ]
-                for future in concurrent.futures.as_completed(futures):
-                    future.result()
+            import eventlet
+            pool = eventlet.GreenPool(size=parallel_workers)
+            greenlets = [
+                pool.spawn(_generate_sub_part, sub_idx, sub_part_name)
+                for sub_idx, sub_part_name in enumerate(sub_parts_to_run)
+            ]
+            for g in greenlets:
+                g.wait()
 
         # En mode mini : marquer completed sans upload (pas de texte complet)
         if is_mini:
