@@ -2547,6 +2547,88 @@ def _finalize_audio_ready_state(job_id: int, voice_type: str) -> dict:
         conn.close()
 
 
+def _finalize_text_ready_state(job_id: int) -> dict:
+    """Rend la plateforme consultable dès que les textes sont prêts.
+
+    L'audio est désormais lancé séparément. Donc la fin de la pipeline texte
+    doit déjà enlever l'overlay "Module en construction" et créer l'enveloppe
+    module qui pointe vers les dossiers de cours, sans marquer le module comme
+    validé audio.
+    """
+    from datetime import datetime as _dt
+    from config import FRANCE_TZ as _tz
+    from database.db import get_db_connection
+
+    job = get_job(job_id)
+    if not job:
+        raise ValueError(f"Job {job_id} introuvable pour finalisation texte")
+
+    platform_id = job.get("platform_id")
+    rncp = job.get("rncp_code") or ""
+    tp_name = job.get("tp_name") or f"Job {job_id}"
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            "UPDATE platform_config SET status = 'ready' WHERE id = ? AND status = 'pending'",
+            (platform_id,),
+        )
+        platform_ready_updated = cursor.rowcount or 0
+
+        cursor.execute(
+            "SELECT id, version, status FROM formation_modules WHERE source_pipeline_job_id = ?",
+            (job_id,),
+        )
+        existing = cursor.fetchone()
+
+        if existing:
+            module_id, version, status = existing[0], existing[1], existing[2]
+            cursor.execute(
+                """UPDATE formation_modules
+                   SET source_platform_id = COALESCE(source_platform_id, ?),
+                       status = CASE WHEN status = 'validated' THEN status ELSE 'draft' END
+                   WHERE id = ?""",
+                (platform_id, module_id),
+            )
+            module_created = False
+            module_status = status if status == "validated" else "draft"
+        else:
+            cursor.execute("SELECT COUNT(*) FROM formation_modules WHERE rncp_code = ?", (rncp,))
+            n = cursor.fetchone()[0] + 1
+            version = f"{_dt.now(_tz).year}-v{n}"
+            cursor.execute(
+                """
+                INSERT INTO formation_modules
+                (rncp_code, tp_name, version, status, source_pipeline_job_id,
+                 source_platform_id, voice_type, voice_updated_at, validated_at)
+                VALUES (?, ?, ?, 'draft', ?, ?, NULL, NULL, NULL)
+                """,
+                (rncp, tp_name, version, job_id, platform_id),
+            )
+            module_id = cursor.lastrowid
+            module_created = True
+            module_status = "draft"
+
+        conn.commit()
+        result = {
+            "platform_id": platform_id,
+            "platform_ready_updated": int(platform_ready_updated),
+            "module_id": module_id,
+            "module_created": module_created,
+            "module_version": version,
+            "module_status": module_status,
+        }
+        logger.info(
+            "PIPELINE_TEXT_FINALIZED formation_job_id=%s platform_id=%s "
+            "module_id=%s module_created=%s status=%s ready_updated=%s",
+            job_id, platform_id, module_id, module_created, module_status, platform_ready_updated,
+        )
+        return result
+    finally:
+        conn.close()
+
+
 def _count_dirty_segments_for_job(job_id: int) -> int:
     from database.db import get_db_connection
     from services.formation_pipeline_service import get_expected_course_folders
@@ -3096,9 +3178,13 @@ def launch_audio(job_id):
             # différente. On UPDATE voice_type pour refléter les MP3 actuels.
             _cur2.execute(
                 """UPDATE formation_modules
-                   SET voice_type = ?, voice_updated_at = CURRENT_TIMESTAMP
+                   SET voice_type = ?,
+                       voice_updated_at = CURRENT_TIMESTAMP,
+                       source_platform_id = COALESCE(source_platform_id, ?),
+                       status = 'validated',
+                       validated_at = COALESCE(validated_at, CURRENT_TIMESTAMP)
                    WHERE source_pipeline_job_id = ?""",
-                (voice_type, job_id),
+                (voice_type, job["platform_id"], job_id),
             )
             logger.info(
                 f"♻️ Module mis à jour pour job {job_id} : voix={voice_type} "
@@ -4353,6 +4439,10 @@ def _determine_next_ap_step(job_id: int) -> str | None:
     # 9. Audio TTS optionnel. Par défaut l'auto-pilot s'arrête texte prêt :
     # les audios se génèrent ensuite à la demande, journée/semaine par journée/semaine.
     if not j.get("auto_pilot_generate_audio"):
+        try:
+            _finalize_text_ready_state(job_id)
+        except Exception as e:
+            logger.warning(f"⚠️ Finalisation texte job {job_id} ignorée : {e}")
         if j.get("status") != "text_ready":
             update_job(job_id, status="text_ready", error_message=None)
         return None
@@ -4900,6 +4990,8 @@ def _execute_ap_step(job_id: int, step: str, job: dict) -> None:
                 f"{final_words} mots, {filename}"
             )
         next_status = "tts_launched" if job.get("auto_pilot_generate_audio") else "text_ready"
+        if next_status == "text_ready":
+            _finalize_text_ready_state(job_id)
         update_job(job_id, status=next_status, auto_pilot_post_review_docs_done=1)
         logger.info(f"🤖 ✓ Documents post-révision générés job {job_id} (status={next_status})")
 

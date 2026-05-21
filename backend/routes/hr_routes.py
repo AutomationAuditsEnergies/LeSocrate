@@ -301,16 +301,24 @@ def create_hr_blueprint(socketio):
             cursor = conn.cursor()
 
             # Auto-repair lazy : plateformes coincées en 'pending' alors que leur
-            # job pipeline a atteint audio_launched (ou étape ultérieure) → les
-            # promouvoir automatiquement en 'ready'. Rattrape les cas où la
-            # transition n'a pas eu lieu (pre-fix, ou exception silencieuse).
+            # job pipeline a atteint le texte prêt (ou une étape audio ultérieure)
+            # → les promouvoir automatiquement en 'ready'. Depuis le découplage
+            # texte/audio, `text_ready` signifie déjà que les dossiers de cours
+            # sont exploitables et que l'audio peut être lancé à la demande.
             cursor.execute("""
                 UPDATE platform_config
                 SET status = 'ready'
                 WHERE status = 'pending'
                   AND id IN (
                     SELECT platform_id FROM formation_pipeline_jobs
-                    WHERE status IN ('audio_launched', 'completed')
+                    WHERE status IN (
+                        'text_ready',
+                        'tts_launched',
+                        'audio_running',
+                        'audio_launched',
+                        'audio_completed',
+                        'completed'
+                    )
                   )
             """)
             if cursor.rowcount > 0:
@@ -2852,6 +2860,128 @@ def create_hr_blueprint(socketio):
     # État global de la pipeline playlist (par folder_id)
     _playlist_jobs = {}
 
+    def _finalize_pipeline_module_if_all_course_audios_ready(folder_id, voice_type):
+        """Valide le module pipeline quand tous ses dossiers ont leurs cours MP3.
+
+        Utilisé par la génération audio depuis un dossier HR, pour que le chemin
+        "dossiers" produise le même état final que le bouton audio de la pipeline.
+        """
+        if voice_type in (None, "", "mock"):
+            return None
+
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        try:
+            cursor.execute(
+                """
+                SELECT cf.platform_id, cf.formation_job_id, j.tp_name, j.rncp_code
+                FROM cours_folders cf
+                LEFT JOIN formation_pipeline_jobs j ON j.id = cf.formation_job_id
+                WHERE cf.id = ?
+                """,
+                (folder_id,),
+            )
+            row = cursor.fetchone()
+            if not row:
+                return None
+
+            platform_id, formation_job_id, tp_name, rncp = row[0], row[1], row[2], row[3]
+            if not formation_job_id:
+                return None
+
+            cursor.execute(
+                """
+                SELECT id
+                FROM cours_folders
+                WHERE formation_job_id = ?
+                ORDER BY position ASC, id ASC
+                """,
+                (formation_job_id,),
+            )
+            folder_ids = [int(r[0]) for r in cursor.fetchall()]
+            if not folder_ids:
+                return None
+        finally:
+            conn.close()
+
+        tts_conn = os.environ.get("AZURE_TTS_STORAGE_CONNECTION_STRING")
+        if not tts_conn:
+            return {"ready": False, "reason": "AZURE_TTS_STORAGE_CONNECTION_STRING manquant"}
+
+        bsc = BlobServiceClient.from_connection_string(tts_conn)
+        cc = bsc.get_container_client("audiostts")
+        missing = []
+        for fid in folder_ids:
+            prefix = f"platform-{platform_id}/folder-{fid}/playlist/"
+            course_count = 0
+            for blob in cc.list_blobs(name_starts_with=prefix):
+                filename = os.path.basename(blob.name)
+                if filename.startswith("cours_") and filename.endswith(".mp3"):
+                    course_count += 1
+            if course_count < 7:
+                missing.append({"folder_id": fid, "course_mp3": course_count})
+
+        if missing:
+            return {"ready": False, "missing": missing}
+
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        try:
+            cursor.execute(
+                "UPDATE platform_config SET status = 'ready' WHERE id = ? AND status = 'pending'",
+                (platform_id,),
+            )
+            cursor.execute(
+                "SELECT id, version FROM formation_modules WHERE source_pipeline_job_id = ?",
+                (formation_job_id,),
+            )
+            existing = cursor.fetchone()
+            if existing:
+                module_id, version = existing[0], existing[1]
+                cursor.execute(
+                    """
+                    UPDATE formation_modules
+                    SET source_platform_id = COALESCE(source_platform_id, ?),
+                        voice_type = ?,
+                        voice_updated_at = CURRENT_TIMESTAMP,
+                        status = 'validated',
+                        validated_at = COALESCE(validated_at, CURRENT_TIMESTAMP)
+                    WHERE id = ?
+                    """,
+                    (platform_id, voice_type, module_id),
+                )
+                module_created = False
+            else:
+                cursor.execute("SELECT COUNT(*) FROM formation_modules WHERE rncp_code = ?", (rncp or "",))
+                n = cursor.fetchone()[0] + 1
+                version = f"{datetime.now(FRANCE_TZ).year}-v{n}"
+                cursor.execute(
+                    """
+                    INSERT INTO formation_modules
+                    (rncp_code, tp_name, version, status, source_pipeline_job_id,
+                     source_platform_id, voice_type, voice_updated_at, validated_at)
+                    VALUES (?, ?, ?, 'validated', ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                    """,
+                    (rncp or "", tp_name or f"Job {formation_job_id}", version, formation_job_id, platform_id, voice_type),
+                )
+                module_id = cursor.lastrowid
+                module_created = True
+            conn.commit()
+            logger.info(
+                "PIPELINE_MODULE_FINALIZED_FROM_FOLDER_AUDIO job=%s platform=%s module=%s created=%s voice=%s",
+                formation_job_id, platform_id, module_id, module_created, voice_type,
+            )
+            return {
+                "ready": True,
+                "formation_job_id": formation_job_id,
+                "module_id": module_id,
+                "module_created": module_created,
+                "module_version": version,
+                "voice_type": voice_type,
+            }
+        finally:
+            conn.close()
+
     @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/generate-playlist", methods=["POST"])
     def generate_playlist(folder_id):
         """Lance la génération des 19 fichiers MP3 de la playlist pour un dossier."""
@@ -2973,6 +3103,9 @@ def create_hr_blueprint(socketio):
                             "source": "script",
                             "voice_type": voice_type,
                         }
+                        module_finalize = _finalize_pipeline_module_if_all_course_audios_ready(folder_id, voice_type)
+                        if module_finalize:
+                            result["module_finalize"] = module_finalize
                     else:
                         # Pipeline classique : reformulation Claude → TTS
                         from services.playlist_tts_service import generate_playlist_for_folder
