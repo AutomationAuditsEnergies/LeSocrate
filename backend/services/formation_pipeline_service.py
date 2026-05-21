@@ -36,6 +36,61 @@ logger = get_logger(__name__)
 CLAUDE_MODEL = default_model()
 HOURS_PER_DAY = 7
 
+COURSE_AUDIO_SLOTS = [
+    {"index": 0, "label": "Cours 1", "start": "9h00", "end": "9h45", "duration_min": 45, "filename": "cours_9h00_9h45.mp3"},
+    {"index": 1, "label": "Cours 2", "start": "10h05", "end": "10h50", "duration_min": 45, "filename": "cours_10h05_10h50.mp3"},
+    {"index": 2, "label": "Cours 3", "start": "11h05", "end": "12h00", "duration_min": 55, "filename": "cours_11h05_12h00.mp3"},
+    {"index": 3, "label": "Cours 4", "start": "12h20", "end": "13h05", "duration_min": 45, "filename": "cours_12h20_13h05.mp3"},
+    {"index": 4, "label": "Cours 5", "start": "14h45", "end": "15h45", "duration_min": 60, "filename": "cours_14h45_15h45.mp3"},
+    {"index": 5, "label": "Cours 6", "start": "16h00", "end": "17h00", "duration_min": 60, "filename": "cours_16h00_17h00.mp3"},
+    {"index": 6, "label": "Cours 7", "start": "17h25", "end": "18h15", "duration_min": 50, "filename": "cours_17h25_18h15.mp3"},
+]
+
+
+def _course_audio_slots_prompt() -> str:
+    return "\n".join(
+        f"- {slot['label']} · {slot['start']}-{slot['end']} · "
+        f"{slot['duration_min']} min · fichier {slot['filename']}"
+        for slot in COURSE_AUDIO_SLOTS
+    )
+
+
+def _normalize_day_audio_slots(day_data: dict) -> dict:
+    """Garantit que daily_programs expose 7 créneaux audio cours."""
+    sub_parts = list(day_data.get("sub_parts") or [])
+    normalized = []
+    for idx, slot in enumerate(COURSE_AUDIO_SLOTS):
+        raw = sub_parts[idx] if idx < len(sub_parts) else {}
+        src = raw if isinstance(raw, dict) else {}
+        name = (src.get("name") or "").strip()
+        if not name and isinstance(raw, str):
+            name = raw.strip()
+        if not name:
+            name = f"{slot['label']} — {slot['start']}-{slot['end']}"
+        elif not name.lower().startswith("cours"):
+            name = f"{slot['label']} — {slot['start']}-{slot['end']} — {name}"
+        module_content = (src.get("module_content") or "").strip()
+        if not module_content:
+            module_content = (
+                f"Créneau audio de {slot['duration_min']} minutes. Développer le contenu "
+                "prévu pour cette partie de la journée en respectant le budget de mots du cours."
+            )
+        normalized.append({
+            **src,
+            "index": idx,
+            "audio_slot": slot["label"],
+            "start_time": slot["start"],
+            "end_time": slot["end"],
+            "duration_min": slot["duration_min"],
+            "filename": slot["filename"],
+            "name": name,
+            "module_content": module_content,
+        })
+    day_data["sub_parts"] = normalized
+    day_data["audio_slots"] = COURSE_AUDIO_SLOTS
+    day_data["hours"] = HOURS_PER_DAY
+    return day_data
+
 # ─── Prompts Claude ───────────────────────────────────────────────────────────
 
 _GLOBAL_PROGRAM_PROMPT = """Tu es un expert en ingénierie pédagogique spécialisé dans les titres professionnels du Ministère du Travail.
@@ -114,12 +169,18 @@ Génère uniquement les journées {DAY_START} à {DAY_END}, en répartissant le 
 
 RÈGLES :
 - Chaque journée = exactement 7 heures de contenu
-- Chaque journée a EXACTEMENT 6 sous-parties dans "sub_parts"
-- Ne coupe pas un module au milieu sauf si sa durée dépasse 7h
+- Chaque journée a EXACTEMENT 7 créneaux cours dans "sub_parts", alignés sur la playlist audio réelle ci-dessous.
+- Les durées pédagogiques du programme global doivent être redistribuées sur ces créneaux exacts.
+- Un module peut occuper plusieurs créneaux, ou plusieurs petits modules peuvent partager un créneau si c'est pédagogiquement cohérent.
+- Ne coupe jamais une idée au hasard : chaque créneau doit avoir une fin propre, avec chute, synthèse ou transition naturelle.
 - Jour 1 : pas de rappel. Autres jours : bref rappel de la séance précédente.
 - "day_recap" : commence par "Lors de la dernière séance, nous avons vu…" (sauf jour 1)
 - "day_transition" : commence par "À la prochaine séance, nous aborderons…" (jamais "demain" ni "la semaine prochaine")
-- "module_content" : 5-6 phrases détaillées (100-150 mots) : compétences visées, notions clés, exemples concrets, points de vigilance. Ce contenu sera la base directe de la génération TTS.
+- "module_content" : 5-8 phrases détaillées : compétences visées, notions clés, exemples concrets, points de vigilance, progression interne du créneau. Ce contenu sera la base directe de la génération TTS.
+- La durée du créneau sert ensuite au budget mots : 45 min reçoit moins de contenu qu'un créneau de 60 min.
+
+CRÉNEAUX AUDIO À RESPECTER STRICTEMENT :
+{COURSE_AUDIO_SLOTS}
 
 FORMAT DE SORTIE : JSON valide uniquement, sans texte avant ni après.
 
@@ -132,8 +193,14 @@ FORMAT DE SORTIE : JSON valide uniquement, sans texte avant ni après.
       "modules_covered": ["MODULE 1.1 : Nom"],
       "sub_parts": [
         {{
-          "name": "Nom précis de la sous-partie",
-          "module_content": "2-3 phrases décrivant les compétences et contenus clés de cette sous-partie."
+          "index": 0,
+          "audio_slot": "Cours 1",
+          "start_time": "9h00",
+          "end_time": "9h45",
+          "duration_min": 45,
+          "filename": "cours_9h00_9h45.mp3",
+          "name": "Cours 1 — 9h00-9h45 — Nom précis du créneau",
+          "module_content": "Contenu condensé et structuré de ce créneau, calibré pour sa durée."
         }}
       ],
       "day_recap": "Rappel de la veille (vide pour le jour 1)",
@@ -666,6 +733,7 @@ def _split_batch(tp_name: str, nb_days: int, global_program: str,
         .replace("{NB_DAYS}", str(nb_days))
         .replace("{DAY_START}", str(day_start))
         .replace("{DAY_END}", str(day_end))
+        .replace("{COURSE_AUDIO_SLOTS}", _course_audio_slots_prompt())
         .replace("{GLOBAL_PROGRAM}", global_program[:20000] + enrichment)
     )
     for attempt in range(5):
@@ -751,6 +819,7 @@ def _split_daily_programs_thread(job_id: int, model: str = None):
         for batch_days in results:
             all_days.extend(batch_days or [])
         all_days.sort(key=lambda d: d.get("day_number", 0))
+        all_days = [_normalize_day_audio_slots(day) for day in all_days]
 
         logger.info(f"✅ Job {job_id} : {len(all_days)} journées générées au total")
         update_job(job_id, status="daily_ready",
@@ -1018,6 +1087,7 @@ def launch_tts_for_all_days(job_id: int, platform_id: int, model: str = None):
 
     # Lancer génération TTS pour chaque journée
     for i, day_data in enumerate(daily_programs):
+        day_data = _normalize_day_audio_slots(day_data)
         folder_name = expected_course_folder_name(day_data, i + 1)
         folder_info = folders_by_name.get(folder_name)
         if not folder_info:
@@ -1025,10 +1095,14 @@ def launch_tts_for_all_days(job_id: int, platform_id: int, model: str = None):
         folder_id = folder_info["folder_id"]
         day_program_text = _format_day_program_text(day_data, job["tp_name"])
         sub_parts = [sp["name"] for sp in day_data.get("sub_parts", [])]
-        module_contents = {
-            sp["name"]: sp.get("module_content", "")
-            for sp in day_data.get("sub_parts", [])
-        }
+        module_contents = {}
+        for sp in day_data.get("sub_parts", []):
+            slot_header = (
+                f"CRÉNEAU AUDIO : {sp.get('audio_slot')} · "
+                f"{sp.get('start_time')}-{sp.get('end_time')} · "
+                f"{sp.get('duration_min')} min · fichier {sp.get('filename')}\n"
+            )
+            module_contents[sp["name"]] = slot_header + (sp.get("module_content", "") or "")
 
         existing_job = get_job_from_db(folder_id)
         if existing_job:
@@ -1150,6 +1224,7 @@ def repair_orphan_content_folders(job_id: int) -> dict:
 
 def _format_day_program_text(day_data: dict, tp_name: str) -> str:
     """Formate le programme d'une journée en texte pour le job TTS."""
+    day_data = _normalize_day_audio_slots(day_data)
     lines = [
         f"TITRE PROFESSIONNEL : {tp_name}",
         f"JOURNÉE {day_data.get('day_number', '?')} : {day_data.get('title', '')}",
@@ -1160,7 +1235,12 @@ def _format_day_program_text(day_data: dict, tp_name: str) -> str:
         lines.append("")
 
     for sp in day_data.get("sub_parts", []):
-        lines.append(f"MODULE : {sp['name']}")
+        lines.append(
+            f"CRÉNEAU AUDIO : {sp.get('audio_slot')} · "
+            f"{sp.get('start_time')}-{sp.get('end_time')} · "
+            f"{sp.get('duration_min')} min · {sp.get('filename')}"
+        )
+        lines.append(f"MODULE / OBJECTIF : {sp['name']}")
         lines.append(sp.get("module_content", ""))
         lines.append("")
 

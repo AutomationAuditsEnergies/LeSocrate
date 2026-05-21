@@ -37,6 +37,8 @@ from services.formation_pipeline_service import (
     get_job,
     list_jobs,
     HOURS_PER_DAY,
+    COURSE_AUDIO_SLOTS,
+    _normalize_day_audio_slots,
 )
 from services.knowledge_base_service import (
     launch_kb_building,
@@ -141,15 +143,11 @@ def search_rncp_route():
 
 # ─── Helpers parsing DOCX/TXT pour le mode test ──────────────────────────────
 
-# Sous-parties standard par défaut (6) pour les jobs de test où on n'a pas de
-# vrai daily split. Aligné sur le modèle pédagogique 6 sub × 3 passes = 18 segments.
+# Sous-parties standard par défaut pour les jobs de test où on n'a pas de
+# vrai daily split. Aligné sur la playlist cours : 7 créneaux × 3 passes = 21 segments.
 _TEST_SUB_PARTS = [
-    "Introduction et contexte professionnel",
-    "Les fondamentaux théoriques",
-    "Méthodes et outils pratiques",
-    "Études de cas et mises en situation",
-    "Réglementation et cadre légal",
-    "Évaluation et certification",
+    f"{slot['label']} — {slot['start']}-{slot['end']} — Créneau test {slot['index'] + 1}"
+    for slot in COURSE_AUDIO_SLOTS
 ]
 
 
@@ -169,25 +167,25 @@ def _read_doc_text(file_storage) -> str:
     raise ValueError(f"Format de fichier non supporté : {filename} (attendu .docx ou .txt)")
 
 
-def _split_into_18_chunks(text: str) -> list:
-    """Découpe un texte en 18 chunks à peu près équilibrés en paragraphes.
+def _split_into_21_chunks(text: str) -> list:
+    """Découpe un texte en 21 chunks à peu près équilibrés en paragraphes.
 
-    18 = 6 sous-parties × 3 passes (modèle pédagogique standard du projet).
-    Si le texte a moins de 18 paragraphes, on le pad par duplication. Le but
+    21 = 7 créneaux cours × 3 passes (playlist audio réelle).
+    Si le texte a moins de 21 paragraphes, on le pad par duplication. Le but
     n'est pas de produire du contenu pédagogique fin (c'est un mode test) mais
-    d'avoir 18 segments avec du texte non vide pour que la review et l'audio
+    d'avoir 21 segments avec du texte non vide pour que la review et l'audio
     aient quelque chose à mâcher.
     """
     paragraphs = [p.strip() for p in text.split("\n\n") if p.strip()]
-    if len(paragraphs) < 18:
+    if len(paragraphs) < 21:
         # Pad par duplication cyclique
-        paragraphs = (paragraphs * (18 // max(len(paragraphs), 1) + 1))[: max(18, len(paragraphs))]
+        paragraphs = (paragraphs * (21 // max(len(paragraphs), 1) + 1))[: max(21, len(paragraphs))]
 
     chunks = []
-    paras_per_chunk = max(1, len(paragraphs) // 18)
-    for i in range(18):
+    paras_per_chunk = max(1, len(paragraphs) // 21)
+    for i in range(21):
         start = i * paras_per_chunk
-        end = start + paras_per_chunk if i < 17 else len(paragraphs)
+        end = start + paras_per_chunk if i < 20 else len(paragraphs)
         chunks.append("\n\n".join(paragraphs[start:end]).strip() or paragraphs[i % len(paragraphs)])
     return chunks
 
@@ -387,16 +385,20 @@ def init_test_pipeline():
         conn.close()
 
         daily_programs_stub = [
-            {
+            _normalize_day_audio_slots({
                 "day_number": i + 1,
                 "title": f"Journée {i+1} (test)",
                 "sub_parts": [
-                    {"name": sp_name, "module_content": f"Contenu test sous-partie {idx+1}"}
+                    {
+                        "index": idx,
+                        "name": sp_name,
+                        "module_content": f"Contenu test créneau cours {idx+1}",
+                    }
                     for idx, sp_name in enumerate(_TEST_SUB_PARTS)
                 ],
                 "day_recap": "" if i == 0 else "Lors de la dernière séance, nous avons vu les fondamentaux.",
                 "day_transition": "À la prochaine séance, nous aborderons la suite du programme.",
-            }
+            })
             for i in range(nb_days)
         ]
         update_job(
@@ -410,7 +412,7 @@ def init_test_pipeline():
         )
         logger.info(f"🧪 [TEST] Job pipeline {job_id} créé avec stubs (KB/global/daily seront skippés par l'auto-pilot)")
 
-        # 3. Crée N cours_folders + cg_jobs + 18 segments par cg_job
+        # 3. Crée N cours_folders + cg_jobs + 21 segments par cg_job
         conn = get_db_connection()
         cursor = conn.cursor()
         segments_inserted = 0
@@ -449,19 +451,19 @@ def init_test_pipeline():
             )
             cg_job_id = cursor.lastrowid
 
-            # Parse le doc + split en 18 chunks
+            # Parse le doc + split en 21 chunks
             try:
                 full_text = _read_doc_text(doc_file)
             except Exception as e:
                 conn.close()
                 return jsonify({"error": f"Lecture fichier '{doc_file.filename}' : {e}"}), 400
-            chunks_18 = _split_into_18_chunks(full_text)
+            chunks_21 = _split_into_21_chunks(full_text)
 
-            # Insère 18 segments (6 sub × 3 passes)
-            for sub_idx in range(6):
+            # Insère 21 segments (7 créneaux cours × 3 passes)
+            for sub_idx in range(len(_TEST_SUB_PARTS)):
                 for passe in range(1, 4):
                     seg_idx = sub_idx * 3 + (passe - 1)
-                    text = chunks_18[seg_idx]
+                    text = chunks_21[seg_idx]
                     word_count = len(text.split())
                     cursor.execute(
                         """
@@ -477,7 +479,7 @@ def init_test_pipeline():
                     )
                     segments_inserted += 1
 
-            logger.info(f"🧪 [TEST] Folder {folder_id} (Jour {day_num}) : 18 segments injectés depuis '{doc_file.filename}'")
+            logger.info(f"🧪 [TEST] Folder {folder_id} (Jour {day_num}) : 21 segments injectés depuis '{doc_file.filename}'")
 
         conn.commit()
         conn.close()
@@ -1002,6 +1004,8 @@ def list_content(job_id):
             cg_status, cg_words, cur_sub, cur_passe, cg_err = None, 0, 0, 1, None
             n_completed, n_reviewed, n_humanized, n_review_errors, n_dirty = 0, 0, 0, 0, 0
 
+        day_sub_parts = day_meta.get("sub_parts")
+        segment_total = (len(day_sub_parts) if day_sub_parts else 6) * 3
         result.append({
             "folder_id": fid,
             "folder_label": f"F{fid}",
@@ -1015,7 +1019,7 @@ def list_content(job_id):
             "content_status": cg_status,
             "total_words": cg_words or 0,
             "segments_completed": n_completed,
-            "segments_total": 18,
+            "segments_total": max(3, segment_total),
             "segments_humanized": n_humanized,
             "segments_reviewed": n_reviewed,
             "segments_review_errors": n_review_errors,
@@ -4309,6 +4313,7 @@ def _refresh_ap_lock(job_id: int) -> None:
 
 def _determine_next_ap_step(job_id: int) -> str | None:
     """Détermine la prochaine étape à exécuter (checks idempotents). None = terminé."""
+    import json as _json
     from database.db import get_db_connection
     j = get_job(job_id)
     if not j:
@@ -4359,10 +4364,25 @@ def _determine_next_ap_step(job_id: int) -> str | None:
     # 5. Génération contenu — comparer au nombre ATTENDU, pas aux segments existants.
     # Un restart en cours de création peut laisser total < attendu ; sans ce check,
     # le tick croirait à tort que le contenu est terminé (ex. 900 ok sur 936 attendus).
-    # Invariant : 6 sous-parties × 3 passes = 18 segments/jour.
+    # Invariant : 1 segment par passe, donc nombre de sub_parts du daily split × 3.
+    # Par défaut nouveau format : 7 créneaux cours × 3 = 21 segments/jour.
     # Filtre par formation_job_id (pas platform_id) pour éviter de compter les
     # segments d'un pipeline précédent sur la même plateforme.
-    expected_segs = (j.get("nb_days") or 0) * 18
+    try:
+        daily_programs_for_count = _json.loads(daily or "[]")
+    except Exception:
+        daily_programs_for_count = []
+    expected_segs = 0
+    for day in daily_programs_for_count:
+        if isinstance(day, dict):
+            sub_parts = day.get("sub_parts")
+            # Backward compatibility : anciens daily_programs très pauvres
+            # pouvaient stocker seulement {"day_number": 1}; ces jobs ont été
+            # créés sous l'ancien modèle 6 × 3.
+            expected_sub_parts = len(sub_parts) if sub_parts else 6
+            expected_segs += max(1, expected_sub_parts) * 3
+    if expected_segs == 0:
+        expected_segs = (j.get("nb_days") or 0) * len(COURSE_AUDIO_SLOTS) * 3
     from services.formation_pipeline_service import get_expected_course_folders
     folder_state = get_expected_course_folders(job_id)
     folder_ids = folder_state.get("folder_ids") or []
@@ -4676,6 +4696,7 @@ def _execute_ap_step(job_id: int, step: str, job: dict) -> None:
                 )
 
             for idx, day_data in enumerate(daily_programs):
+                day_data = _normalize_day_audio_slots(day_data)
                 folder_name = expected_course_folder_name(day_data, idx + 1)
                 folder_info = folders_by_name.get(folder_name)
                 if not folder_info:
@@ -4691,10 +4712,14 @@ def _execute_ap_step(job_id: int, step: str, job: dict) -> None:
 
                 if not cg_job:
                     sub_parts = [sp["name"] for sp in day_data.get("sub_parts", [])]
-                    module_contents = {
-                        sp["name"]: sp.get("module_content", "")
-                        for sp in day_data.get("sub_parts", [])
-                    }
+                    module_contents = {}
+                    for sp in day_data.get("sub_parts", []):
+                        slot_header = (
+                            f"CRÉNEAU AUDIO : {sp.get('audio_slot')} · "
+                            f"{sp.get('start_time')}-{sp.get('end_time')} · "
+                            f"{sp.get('duration_min')} min · fichier {sp.get('filename')}\n"
+                        )
+                        module_contents[sp["name"]] = slot_header + (sp.get("module_content", "") or "")
                     conn = get_db_connection()
                     cursor = conn.cursor()
                     cursor.execute("""

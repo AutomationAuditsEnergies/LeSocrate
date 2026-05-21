@@ -3,7 +3,7 @@ Génération d'un PDF "programme de formation" par journée.
 
 Pipeline :
   1. Récupère le job formation (tp_name, RNCP, daily_programs JSON)
-  2. Récupère les segments texte du dossier cours (6 sub_parts × 3 passes)
+  2. Récupère les segments texte du dossier cours (créneaux cours × 3 passes)
   3. Nettoie les tags Fish Audio ([pause], [warm], etc.) réservés au TTS
   4. Rend un template Jinja2 LaTeX → .tex
   5. Compile avec xelatex (2 passes pour la TOC) dans un tempdir

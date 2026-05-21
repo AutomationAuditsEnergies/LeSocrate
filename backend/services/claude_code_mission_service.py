@@ -60,7 +60,7 @@ STEP_LABELS = {
 
 # Étapes dont l'output total dépasse la limite de 1 appel Claude (64k tokens
 # output Sonnet) : on découpe en N missions séquentielles, 1 subprocess `claude`
-# par chunk. content = 1 segment calibré sur les créneaux cours, 18 par journée.
+# par chunk. content = 1 segment calibré sur les créneaux cours, 21 par journée.
 # humanization_review/review = 1 journée × groupe de règles en input, patches
 # courts en output.
 _CHUNKED_STEPS = {"content", "humanization_review", "review"}
@@ -69,6 +69,20 @@ _CHUNKED_STEPS = {"content", "humanization_review", "review"}
 # Clé : (job_id, step_key) → {status, model, error, result}
 # status : 'running' | 'done' | 'error'
 _EXECUTION_STATE = {}
+
+
+def _course_audio_slots_prompt() -> str:
+    from services.formation_pipeline_service import COURSE_AUDIO_SLOTS
+    return "\n".join(
+        f"- {slot['label']} · {slot['start']}-{slot['end']} · "
+        f"{slot['duration_min']} min · fichier {slot['filename']}"
+        for slot in COURSE_AUDIO_SLOTS
+    )
+
+
+def _normalize_day_audio_slots(day_data: dict) -> dict:
+    from services.formation_pipeline_service import _normalize_day_audio_slots as _normalize
+    return _normalize(day_data)
 
 
 def mission_dir(job_id: int, step_key: str) -> str:
@@ -302,6 +316,7 @@ Objectif : ~16 000 tokens de markdown structuré.
 
 
 def _build_daily_mission(target, job, model):
+    slots = _course_audio_slots_prompt()
     _write(
         target,
         "task.md",
@@ -311,8 +326,16 @@ def _build_daily_mission(target, job, model):
 
 Tu lis `input.md` qui contient le programme global (Markdown).
 
-Découpe en **{job['nb_days']} journées** de 7h chacune. Chaque journée a 6 sous-parties
-de ~50 min chacune (selon la playlist horodatée du projet).
+Découpe en **{job['nb_days']} journées** de 7h chacune. Chaque journée a exactement
+7 créneaux cours alignés sur la playlist audio réelle.
+
+Créneaux à respecter strictement pour chaque journée :
+{slots}
+
+Les modules du programme global doivent être redistribués sur ces créneaux :
+un module peut occuper plusieurs créneaux, et plusieurs petits modules peuvent
+partager un créneau si c'est cohérent. Chaque créneau doit avoir une fin propre
+avec chute, synthèse ou transition naturelle.
 
 Produis un **JSON array** avec une entrée par journée :
 
@@ -322,8 +345,17 @@ Produis un **JSON array** avec une entrée par journée :
     "day_number": 1,
     "title": "Journée 1 — titre synthétique",
     "sub_parts": [
-      {{ "index": 0, "name": "Sous-partie 1", "module_content": "~contenu condensé 300-500 mots tiré du programme global" }},
-      ... 6 sous-parties au total
+      {{
+        "index": 0,
+        "audio_slot": "Cours 1",
+        "start_time": "9h00",
+        "end_time": "9h45",
+        "duration_min": 45,
+        "filename": "cours_9h00_9h45.mp3",
+        "name": "Cours 1 — 9h00-9h45 — titre précis",
+        "module_content": "~contenu condensé tiré du programme global, adapté à la durée du créneau"
+      }},
+      ... 7 créneaux au total
     ]
   }},
   ...
@@ -350,6 +382,8 @@ Tu lis `input.md` qui contient les {job['nb_days']} programmes journée (JSON).
 
 Pour chaque journée × chaque sous-partie × chaque passe (3 passes par sous-partie :
 Fondation / Pratique / Maîtrise), génère environ {target_words} mots de texte oral TTS-ready.
+Les sous-parties sont les 7 créneaux cours réels de la journée ; utilise leurs
+métadonnées horaire/durée pour calibrer naturellement le volume.
 
 **Applique strictement les règles #1 à #27** contenues dans `rules.md` (saturation
 sandwich, pas de mensonge, pas d'énumérations mécaniques, registre oral, etc.).
@@ -365,7 +399,7 @@ Sortie attendue dans `output.md` : un **JSON** de la forme :
         {{ "sub_part_index": 0, "passe": 1, "text": "... ~{target_words} mots ..." }},
         {{ "sub_part_index": 0, "passe": 2, "text": "... ~{target_words} mots ..." }},
         {{ "sub_part_index": 0, "passe": 3, "text": "... ~{target_words} mots ..." }},
-        ... 18 segments par journée
+        ... 21 segments par journée
       ]
     }},
     ...
@@ -720,6 +754,7 @@ def _import_daily(job_id, output, generated_via):
         parsed = json.loads(_extract_json(output))
         if not isinstance(parsed, list):
             raise ValueError("output.md doit être un JSON array")
+        parsed = [_normalize_day_audio_slots(day) for day in parsed if isinstance(day, dict)]
     except Exception as e:
         raise ValueError(f"JSON invalide dans output.md : {e}")
     conn = get_db_connection()
@@ -1341,9 +1376,15 @@ def _read_progress(job_id: int, step_key: str) -> dict:
 def _format_day_program_text_minimal(day_data: dict, tp_name: str) -> str:
     """Format minimal du programme texte d'1 journée (stocké dans cg_jobs.program_text).
     Pas le format LaTeX complet — juste de quoi alimenter le contexte des passes."""
+    day_data = _normalize_day_audio_slots(day_data)
     title = day_data.get("title", "Journée")
     parts = [f"# {tp_name} — {title}\n"]
     for sp in day_data.get("sub_parts", []):
+        parts.append(
+            f"\nCRÉNEAU AUDIO : {sp.get('audio_slot')} · "
+            f"{sp.get('start_time')}-{sp.get('end_time')} · "
+            f"{sp.get('duration_min')} min · {sp.get('filename')}\n"
+        )
         parts.append(f"\n## {sp.get('name', '?')}\n")
         parts.append(sp.get("module_content", "") + "\n")
     return "\n".join(parts)
@@ -1368,15 +1409,20 @@ def _ensure_content_pipeline_structure(job: dict) -> list:
     cg_job_ids = []
 
     try:
-        for i, day_data in enumerate(daily_programs):
+        normalized_daily_programs = [_normalize_day_audio_slots(day) for day in daily_programs]
+        for i, day_data in enumerate(normalized_daily_programs):
             day_num = day_data.get("day_number", i + 1)
             day_title = day_data.get("title", f"Jour {day_num}")
             folder_name = f"Jour {day_num} — {day_title}"
             sub_parts = [sp["name"] for sp in day_data.get("sub_parts", [])]
-            module_contents = {
-                sp["name"]: sp.get("module_content", "")
-                for sp in day_data.get("sub_parts", [])
-            }
+            module_contents = {}
+            for sp in day_data.get("sub_parts", []):
+                slot_header = (
+                    f"CRÉNEAU AUDIO : {sp.get('audio_slot')} · "
+                    f"{sp.get('start_time')}-{sp.get('end_time')} · "
+                    f"{sp.get('duration_min')} min · fichier {sp.get('filename')}\n"
+                )
+                module_contents[sp["name"]] = slot_header + (sp.get("module_content", "") or "")
 
             cursor.execute(
                 "SELECT id FROM cours_folders WHERE formation_job_id = ? AND name = ?",
@@ -1449,7 +1495,7 @@ def _list_content_chunks(job: dict) -> list:
     cursor = conn.cursor()
     chunks = []
     try:
-        for i, day_data in enumerate(daily_programs):
+        for i, day_data in enumerate(_normalize_day_audio_slots(day) for day in daily_programs):
             day_num = day_data.get("day_number", i + 1)
             cg_job_id = cg_job_ids[i]
             cursor.execute(
@@ -1461,7 +1507,12 @@ def _list_content_chunks(job: dict) -> list:
 
             for sub_idx, sp in enumerate(day_data.get("sub_parts", [])):
                 sub_part_name = sp.get("name", f"Sous-partie {sub_idx + 1}")
-                module_content = sp.get("module_content", "")
+                module_content = (
+                    f"CRÉNEAU AUDIO : {sp.get('audio_slot')} · "
+                    f"{sp.get('start_time')}-{sp.get('end_time')} · "
+                    f"{sp.get('duration_min')} min · fichier {sp.get('filename')}\n"
+                    + (sp.get("module_content", "") or "")
+                )
                 for passe in (1, 2, 3):
                     if (sub_idx, passe) in done:
                         continue
@@ -1868,7 +1919,7 @@ def _build_content_chunk(chunk_dir: str, job: dict, chunk: dict, model: str) -> 
     prompt += "\n\n" + _build_course_position_context(
         **generation_context,
     )
-    prompt += "\n\n" + _build_generation_volume_context()
+    prompt += "\n\n" + _build_generation_volume_context(generation_context)
     prompt += "\n\n" + _build_audio_day_plan_context(generation_context)
 
     # Pour passe 2/3, ajouter le contexte des passes précédentes en fin de prompt

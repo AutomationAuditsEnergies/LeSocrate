@@ -2,8 +2,8 @@
 Service de génération de contenu TTS-direct.
 
 Pipeline par dossier (= 1 journée de formation) :
-  1. Extraction automatique de 6 sous-parties depuis le programme (1 appel Claude)
-  2. Pour chaque sous-partie : Passe 1 → Passe 2 → Passe 3 (volume calibré audio)
+  1. Extraction automatique de 7 créneaux cours depuis le programme (1 appel Claude)
+  2. Pour chaque créneau : Passe 1 → Passe 2 → Passe 3 (volume calibré audio)
   3. Total TTS-ready calibré sur les créneaux cours Fish Audio → document .txt
 
 Checkpointing : chaque segment complété est sauvegardé en DB immédiatement.
@@ -31,7 +31,7 @@ from utils.logger import get_logger
 logger = get_logger(__name__)
 
 CLAUDE_MODEL = default_model()
-NUM_SUB_PARTS = 6
+NUM_SUB_PARTS = 7
 _COURSE_START_SILENCE_SECONDS = 17
 # Fish Audio S2-Pro mesuré sur 72,2 min / 11 959 mots à speed=0.90.
 _DEFAULT_TTS_WORDS_PER_MINUTE = 165.7
@@ -314,31 +314,69 @@ def get_course_day_word_budget(playlist_spec=None) -> dict:
     }
 
 
-def get_course_segment_generation_budget(segment_count: int = NUM_SUB_PARTS * 3) -> dict:
+def _course_block_for_generation_context(generation_context=None) -> dict | None:
+    """Retourne le bloc cours associé à la sous-partie générée, si connu."""
+    if not generation_context:
+        return None
+    try:
+        sub_idx = int(generation_context.get("sub_part_index", -1))
+    except (TypeError, ValueError):
+        return None
+    bloc_number = sub_idx + 1
+    for block in _course_audio_block_plan(
+        folder_position=generation_context.get("folder_position"),
+    ):
+        if int(block.get("bloc_number") or 0) == bloc_number:
+            return block
+    return None
+
+
+def get_course_segment_generation_budget(segment_count: int = NUM_SUB_PARTS * 3,
+                                         generation_context=None) -> dict:
     """Budget indicatif par segment pour que la journée tombe juste après review."""
     day_budget = get_course_day_word_budget()
-    segment_count = max(1, int(segment_count or 1))
     reserve_ratio = _env_float(
         "FORMATION_TTS_GENERATION_REVIEW_RESERVE_RATIO",
         0.97,
         min_value=0.80,
         max_value=1.0,
     )
-    target = max(800, int(day_budget["target_words"] * reserve_ratio / segment_count))
-    minimum = max(700, int(day_budget["min_words"] / segment_count))
-    maximum = max(target, int(day_budget["max_words"] / segment_count))
+    block = _course_block_for_generation_context(generation_context)
+    if block:
+        segment_count = 3
+        target = max(800, int(int(block["target_words"]) * reserve_ratio / segment_count))
+        minimum = max(700, int(int(block["min_words"]) / segment_count))
+        maximum = max(target, int(int(block["max_words"]) / segment_count))
+        block_budget = block
+    else:
+        segment_count = max(1, int(segment_count or 1))
+        target = max(800, int(day_budget["target_words"] * reserve_ratio / segment_count))
+        minimum = max(700, int(day_budget["min_words"] / segment_count))
+        maximum = max(target, int(day_budget["max_words"] / segment_count))
+        block_budget = None
     return {
         "target_words": target,
         "min_words": minimum,
         "max_words": maximum,
         "day_budget": day_budget,
         "segment_count": segment_count,
+        "block_budget": block_budget,
     }
 
 
-def _build_generation_volume_context() -> str:
-    budget = get_course_segment_generation_budget()
+def _build_generation_volume_context(generation_context=None) -> str:
+    budget = get_course_segment_generation_budget(generation_context=generation_context)
     day = budget["day_budget"]
+    block = budget.get("block_budget")
+    block_line = ""
+    if block:
+        block_line = (
+            f"\nCette passe appartient au bloc cours {block['bloc_number']} "
+            f"({block['filename']}, {block['duration_min']} min). Le bloc complet "
+            f"doit viser {block['target_words']} mots parlés, avec une plage "
+            f"{block['min_words']}–{block['max_words']} mots. Les trois passes de "
+            "ce créneau doivent donc se compléter sans déborder sur le créneau suivant.\n"
+        )
     return f"""
 ═══════════════════════════════════════════════════════════════════
 CONTRAINTE VOLUME AUDIO PRIORITAIRE — FISH AUDIO
@@ -354,6 +392,7 @@ Cette passe doit viser environ {budget['target_words']} mots utiles,
 avec une plage acceptable de {budget['min_words']} à {budget['max_words']}
 mots. Cette consigne remplace toutes les anciennes consignes qui parlaient
 de 5 000 mots ou de 90 000 mots par journée.
+{block_line}
 
 N'allonge pas artificiellement le texte. Ne cherche pas à remplir les Q&A
 ou les pauses : ils ont leurs propres fichiers et ne comptent pas ici.
@@ -3454,7 +3493,7 @@ def _build_course_position_context(
     if folder_name:
         lines.append(f"Intitulé de journée : {folder_name}.")
     if sub_number:
-        lines.append(f"Sous-partie : {sub_number}/6.")
+        lines.append(f"Créneau cours : {sub_number}/{NUM_SUB_PARTS}.")
     if passe_number:
         lines.append(f"Passe : {passe_number}/3.")
 
@@ -3498,25 +3537,26 @@ def _build_course_position_context(
 # ─── Extraction des sous-parties ─────────────────────────────────────────────
 
 _EXTRACT_PROMPT = """Tu analyses un programme de formation professionnelle.
-Ton rôle : identifier exactement 6 sous-parties distinctes qui couvriront une journée complète de formation.
+Ton rôle : identifier exactement 7 créneaux cours distincts qui couvrent une journée complète de formation, dans l'ordre de la playlist audio réelle.
 
 Réponds UNIQUEMENT en JSON valide, sans aucun texte avant ou après :
 {{
   "title": "Nom exact du titre professionnel préparé",
   "sub_parts": [
-    "Nom précis de la sous-partie 1",
-    "Nom précis de la sous-partie 2",
-    "Nom précis de la sous-partie 3",
-    "Nom précis de la sous-partie 4",
-    "Nom précis de la sous-partie 5",
-    "Nom précis de la sous-partie 6"
+    "Cours 1 — 9h00-9h45 — Nom précis du créneau",
+    "Cours 2 — 10h05-10h50 — Nom précis du créneau",
+    "Cours 3 — 11h05-12h00 — Nom précis du créneau",
+    "Cours 4 — 12h20-13h05 — Nom précis du créneau",
+    "Cours 5 — 14h45-15h45 — Nom précis du créneau",
+    "Cours 6 — 16h00-17h00 — Nom précis du créneau",
+    "Cours 7 — 17h25-18h15 — Nom précis du créneau"
   ]
 }}
 
 Règles :
-- Exactement 6 sous-parties (ni plus ni moins)
+- Exactement 7 créneaux, dans cet ordre horaire strict : 45 min, 45 min, 55 min, 45 min, 60 min, 60 min, 50 min
 - Chaque nom doit être suffisamment précis pour orienter la génération au budget audio injecté
-- Couvrir l'essentiel du programme sans répétition entre sous-parties
+- Couvrir l'essentiel du programme sans répétition entre créneaux
 - Si le programme couvre 2 journées, prendre uniquement les sous-parties de la première moitié
 
 PROGRAMME :
@@ -3535,8 +3575,8 @@ def _anthropic_post(messages, max_tokens, model=None):
 
 def extract_sub_parts(program_text):
     """
-    Appelle Claude pour extraire 6 sous-parties depuis le programme.
-    Synchrone — retourne {"title": str, "sub_parts": [str×6]} ou lève une exception.
+    Appelle Claude pour extraire 7 créneaux cours depuis le programme.
+    Synchrone — retourne {"title": str, "sub_parts": [str×7]} ou lève une exception.
     """
     prompt = _EXTRACT_PROMPT.replace("{program_text}", program_text[:15000])
 
@@ -3558,7 +3598,7 @@ def extract_sub_parts(program_text):
             if "sub_parts" not in data or len(data["sub_parts"]) < 1:
                 raise ValueError(f"Format incorrect : {list(data.keys())}")
 
-            # Forcer exactement 6 sous-parties
+            # Forcer exactement 7 créneaux cours
             sub_parts = data["sub_parts"][:NUM_SUB_PARTS]
             while len(sub_parts) < NUM_SUB_PARTS:
                 sub_parts.append(f"Sous-partie {len(sub_parts) + 1}")
@@ -3622,7 +3662,7 @@ def _generate_segment_text(passe, sub_part_name, program_title, program_text, pr
 
     if generation_context:
         prompt += "\n\n" + _build_course_position_context(**generation_context)
-    prompt += "\n\n" + _build_generation_volume_context()
+    prompt += "\n\n" + _build_generation_volume_context(generation_context)
     prompt += "\n\n" + _build_audio_day_plan_context(generation_context)
 
     mode_label = "from_scratch" if from_scratch else "expansion"

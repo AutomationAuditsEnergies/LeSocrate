@@ -242,8 +242,22 @@ def compute_health(job_id: int) -> dict:
         job.get("status") == "text_ready"
         or not bool(job.get("auto_pilot_generate_audio", 0))
     )
-    expected_segments_per_day = 6 * 3  # 6 sous-parties × 3 passes (modèle pédagogique)
-    expected_total_segments = nb_days * expected_segments_per_day
+    try:
+        import json
+        from services.formation_pipeline_service import COURSE_AUDIO_SLOTS
+        daily_programs = json.loads(job.get("daily_programs") or "[]")
+    except Exception:
+        COURSE_AUDIO_SLOTS = [None] * 7
+        daily_programs = []
+    expected_total_segments = 0
+    for day_data in daily_programs:
+        if isinstance(day_data, dict):
+            sub_parts = day_data.get("sub_parts")
+            expected_sub_parts = len(sub_parts) if sub_parts else 6
+            expected_total_segments += max(1, expected_sub_parts) * 3
+    if expected_total_segments == 0:
+        expected_total_segments = nb_days * len(COURSE_AUDIO_SLOTS) * 3
+    expected_segments_per_day = len(COURSE_AUDIO_SLOTS) * 3
 
     # Inventaire des cours_folders + cg_jobs + segments. On audite uniquement
     # le folder canonique de chaque journée attendue : des doublons peuvent
