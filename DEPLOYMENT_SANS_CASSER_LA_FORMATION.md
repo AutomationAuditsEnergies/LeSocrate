@@ -174,6 +174,200 @@ manuellement les deux workflows GitHub avec `target=production` :
 - backend production
 - base `/home/database.db`
 
+## Procédure exacte qui a fonctionné le 2026-05-20
+
+Cette section documente le cas réel du repo, avec les pièges qu'on a
+effectivement rencontrés.
+
+### Ce qui a marché
+
+Pour publier la vraie prod Socrate1 sans casser le flux :
+
+1. pousser le code sur `staging`
+2. vérifier que le frontend staging et le backend staging passent
+3. mettre `main` au même niveau que `staging`
+4. lancer le frontend production
+5. lancer le backend production
+
+Les runs GitHub qui ont finalement réussi étaient :
+
+- frontend production : `Deploy Frontend - Socrate1`, run `26151742977`
+- backend production : `Deploy Backend - socrate1`, run `26151743040`
+
+### Règle critique pour le backend production
+
+Le backend production Socrate1 doit être déclenché depuis la ref `staging`,
+pas depuis `main`, même quand `target=production`.
+
+Pourquoi :
+
+- l'auth Azure OIDC du workflow backend Socrate1 est actuellement liée à la
+  branche `staging`
+- si on lance `staging_socrate1.yml` depuis `main`, Azure refuse avec :
+
+```text
+AADSTS700213: No matching federated identity record found for presented assertion subject 'repo:AutomationAuditsEnergies/LeSocrate:ref:refs/heads/main'
+```
+
+Donc :
+
+- frontend production : peut être lancé depuis `main` ou `staging`
+- backend production : doit être lancé depuis `staging`
+
+### Ancien workflow à ne pas utiliser
+
+Il existe un ancien workflow backend :
+
+```text
+.github/workflows/main_socrate-backend-v.yml
+```
+
+Ce n'est pas le backend Socrate1 en production.
+
+Symptômes typiques :
+
+- il se lance sur `main`
+- il cherche `requirements.txt` à la racine
+- il échoue avec :
+
+```text
+Could not open requirements file: [Errno 2] No such file or directory: 'requirements.txt'
+```
+
+Ce workflow legacy a été neutralisé pour éviter les faux positifs dans l'onglet
+Actions.
+
+## Règles de push
+
+### 1. Toujours partir d'un arbre propre
+
+Avant de pousser :
+
+- vérifier `git status`
+- ne pas embarquer `venv/`, `frontend/.vite/`, exports audio locaux, caches
+- ne pas embarquer de fichiers de debug si on ne veut pas les publier
+
+Commande minimale :
+
+```bash
+git status
+```
+
+### 2. Test normal = `staging`
+
+Pour toute correction ou feature :
+
+```bash
+git checkout staging
+git pull origin staging
+git merge ta-branche
+git push origin staging
+```
+
+Effet attendu :
+
+- frontend Socrate1 staging
+- backend Socrate1 slot `staging`
+- base staging uniquement
+
+### 3. Production = validation préalable sur staging
+
+Ne pas envoyer en prod tant que :
+
+- la page staging n'est pas bonne
+- le backend staging n'est pas bon
+- le cas utilisateur n'a pas été retesté
+
+### 4. Synchroniser `main` sans croire que ça déploie
+
+Une fois staging validé :
+
+```bash
+git checkout main
+git pull origin main
+git merge staging
+git push origin main
+```
+
+Important :
+
+- ce push ne doit pas être considéré comme le déploiement prod
+- il met seulement `main` à jour
+
+### 5. Déployer la prod dans le bon ordre
+
+Ordre recommandé :
+
+1. frontend production
+2. backend production
+
+Déclenchement GitHub :
+
+- workflow `Deploy Frontend - Socrate1`
+- workflow `Deploy Backend - socrate1`
+
+Paramètre :
+
+```text
+target=production
+```
+
+Règle de ref :
+
+- frontend : OK depuis `main` ou `staging`
+- backend : lancer depuis `staging`
+
+### 6. Si un run backend prod échoue avec OIDC
+
+Si tu vois :
+
+```text
+AADSTS700213
+```
+
+ça veut dire en pratique :
+
+- le workflow a été lancé depuis la mauvaise branche
+- il faut le relancer depuis `staging`
+
+### 7. Si un run backend staging échoue avec `409 Conflict`
+
+Si tu vois :
+
+```text
+Conflict (CODE: 409)
+```
+
+ça signifie généralement :
+
+- un autre déploiement App Service est déjà en cours
+- il faut attendre la fin du run concurrent puis relancer
+
+## Checklist courte
+
+Avant push :
+
+- `git status` propre
+- pas d'artefacts locaux indésirables
+- bonne branche
+
+Pour tester :
+
+- push sur `staging`
+- vérifier frontend staging
+- vérifier backend staging
+
+Pour prod :
+
+- merge `staging` -> `main`
+- lancer `Deploy Frontend - Socrate1` avec `target=production`
+- lancer `Deploy Backend - socrate1` avec `target=production` depuis `staging`
+- vérifier la vraie URL :
+
+```text
+https://thankful-wave-043aa3b03.4.azurestaticapps.net/hr-dashboard
+```
+
 ## Procédure urgente pendant une formation
 
 Si une formation est en cours :

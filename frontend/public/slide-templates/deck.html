@@ -653,12 +653,393 @@
     padding: 10px 22px; border-radius: 999px;
   }
 
+  /* ============================================================ */
+  /* 13 — AGENDA                                                    */
+  /* ============================================================ */
+  .s-agenda { display: grid; grid-template-columns: 1fr 1.4fr; padding: 0 0 0 140px; align-items: center; }
+  .s-agenda .left { padding-right: 80px; }
+  .s-agenda .left .eyebrow { display: block; margin-bottom: 24px; }
+  .s-agenda .left h1 {
+    font-family: var(--f-display); font-size: 200px; line-height: 0.82;
+    letter-spacing: -0.03em; text-transform: uppercase; margin: 0 0 32px;
+    color: transparent; -webkit-text-stroke: 3px rgba(255,255,255,0.3);
+  }
+  .s-agenda .left h1 b {
+    display: block; color: #fff; -webkit-text-stroke: 0;
+  }
+  .s-agenda .left .sub {
+    font-family: var(--f-body); font-size: 22px; line-height: 1.5;
+    color: var(--ink-dim); max-width: 460px;
+  }
+  .s-agenda .right {
+    height: 100%; background: rgba(255,255,255,0.03);
+    border-left: 1px solid rgba(255,255,255,0.12);
+    padding: 0 100px 0 80px;
+    display: flex; flex-direction: column; justify-content: center;
+    gap: 0;
+  }
+  .s-agenda .item {
+    display: grid; grid-template-columns: 72px 1fr; gap: 24px;
+    align-items: center;
+    padding: 28px 0;
+    border-bottom: 1px solid rgba(255,255,255,0.08);
+    position: relative;
+  }
+  .s-agenda .item:last-child { border-bottom: none; }
+  .s-agenda .item .n {
+    font-family: var(--f-display); font-size: 56px; line-height: 1;
+    letter-spacing: -0.03em;
+    color: rgba(255,255,255,0.18);
+  }
+  .s-agenda .item.active .n { color: var(--coral); }
+  .s-agenda .item .txt { }
+  .s-agenda .item .t {
+    font-family: var(--f-display); font-size: 36px; line-height: 0.95;
+    text-transform: uppercase; letter-spacing: -0.01em;
+    color: rgba(255,255,255,0.45);
+    margin-bottom: 6px;
+  }
+  .s-agenda .item.active .t { color: #fff; }
+  .s-agenda .item .d {
+    font-family: var(--f-mono); font-size: 12px; letter-spacing: 0.22em;
+    color: var(--ink-mute); text-transform: uppercase;
+  }
+  .s-agenda .item.active .d { color: var(--coral); }
+  .s-agenda .item.active::before {
+    content: ""; position: absolute; left: -80px; top: 0; bottom: 0;
+    width: 4px; background: var(--coral);
+    border-radius: 0 2px 2px 0;
+  }
+  .s-agenda .item.done .t { color: rgba(255,255,255,0.25); }
+  .s-agenda .item.done .n { color: var(--green); font-size: 36px; }
+
+  /* ============================================================ */
+  /* 14 — QUOTE                                                     */
+  /* ============================================================ */
+  .s-quote { display: grid; place-items: center; padding: 0 160px; }
+  .s-quote .wrap { max-width: 1500px; width: 100%; display: grid; grid-template-columns: auto 1fr; gap: 80px; align-items: center; }
+  .s-quote .portrait {
+    width: 280px; height: 280px; flex-shrink: 0;
+    border-radius: 50%;
+    background: linear-gradient(135deg, var(--coral) 0%, var(--coral-deep) 100%);
+    display: flex; align-items: center; justify-content: center;
+    position: relative;
+  }
+  .s-quote .portrait::after {
+    content: ""; position: absolute; inset: -10px;
+    border-radius: 50%;
+    border: 1px solid rgba(255,255,255,0.18);
+  }
+  .s-quote .portrait .initials {
+    font-family: var(--f-display); font-size: 96px; color: #fff;
+    letter-spacing: -0.04em;
+  }
+  .s-quote .body { }
+  .s-quote .qmark {
+    font-family: 'Georgia', serif; font-size: 200px; color: var(--coral);
+    line-height: 0.7; display: block; margin-bottom: 8px;
+    opacity: 0.85;
+  }
+  .s-quote .text {
+    font-family: var(--f-head); font-size: 52px; font-weight: 400;
+    font-style: italic; line-height: 1.25;
+    color: #fff; margin: 0 0 48px;
+  }
+  .s-quote .text b { font-style: normal; font-weight: 800; color: var(--coral); }
+  .s-quote .attrib {
+    display: flex; align-items: center; gap: 20px;
+  }
+  .s-quote .attrib .line { width: 48px; height: 2px; background: var(--coral); flex-shrink: 0; }
+  .s-quote .attrib .name {
+    font-family: var(--f-head); font-size: 22px; font-weight: 700; color: #fff;
+  }
+  .s-quote .attrib .role {
+    font-family: var(--f-mono); font-size: 13px; letter-spacing: 0.22em;
+    color: var(--ink-dim); text-transform: uppercase; margin-top: 4px;
+  }
+  .s-quote .eyebrow { display: block; margin-bottom: 20px; }
+
+  /* ============================================================ */
+  /* 15 — EXERCISE                                                  */
+  /* ============================================================ */
+  .s-exo { padding: 120px 140px 0; display: grid; grid-template-columns: 1.1fr 1fr; gap: 80px; align-items: start; }
+  .s-exo .left { }
+  .s-exo .left .header { display: flex; align-items: baseline; gap: 24px; margin-bottom: 36px; }
+  .s-exo .left .num {
+    font-family: var(--f-display); font-size: 180px; line-height: 0.85;
+    color: transparent; -webkit-text-stroke: 3px var(--coral);
+    letter-spacing: -0.04em;
+  }
+  .s-exo .left .header-r .eyebrow { display: block; margin-bottom: 14px; }
+  .s-exo .left .timer {
+    display: inline-flex; align-items: center; gap: 10px;
+    font-family: var(--f-mono); font-size: 14px; letter-spacing: 0.22em;
+    color: var(--ink); background: rgba(255,255,255,0.1);
+    padding: 10px 20px; border-radius: 999px;
+    border: 1px solid rgba(255,255,255,0.25);
+  }
+  .s-exo .left .timer .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--coral); animation: pulse 1.6s infinite; }
+  .s-exo .left h1 {
+    font-family: var(--f-display); font-size: 96px; line-height: 0.9;
+    letter-spacing: -0.02em; text-transform: uppercase; margin: 0 0 28px;
+  }
+  .s-exo .left h1 .crl { color: var(--coral); }
+  .s-exo .left .context {
+    font-family: var(--f-head); font-size: 26px; line-height: 1.45;
+    color: rgba(255,255,255,0.75); max-width: 580px;
+  }
+  .s-exo .right { display: flex; flex-direction: column; gap: 16px; margin-top: 8px; }
+  .s-exo .step {
+    display: grid; grid-template-columns: 56px 1fr; gap: 20px; align-items: start;
+    padding: 24px 26px;
+    background: rgba(255,255,255,0.04);
+    border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 8px;
+  }
+  .s-exo .step.active { border-color: var(--coral); background: rgba(255,93,108,0.06); }
+  .s-exo .step .sn {
+    width: 44px; height: 44px; border-radius: 50%;
+    background: rgba(255,255,255,0.1);
+    border: 1px solid rgba(255,255,255,0.2);
+    display: flex; align-items: center; justify-content: center;
+    font-family: var(--f-display); font-size: 20px; color: var(--ink-dim);
+  }
+  .s-exo .step.active .sn { background: var(--coral); border-color: var(--coral); color: #fff; }
+  .s-exo .step .st {
+    font-family: var(--f-head); font-weight: 600; font-size: 24px; color: #fff;
+    line-height: 1.25;
+  }
+  .s-exo .step .sd {
+    font-family: var(--f-body); font-size: 17px; line-height: 1.4;
+    color: var(--ink-dim); margin-top: 6px;
+  }
+  .s-exo .mode {
+    display: flex; gap: 12px; margin-top: 8px;
+  }
+  .s-exo .mode span {
+    font-family: var(--f-mono); font-size: 12px; letter-spacing: 0.22em;
+    text-transform: uppercase;
+    padding: 8px 14px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.18);
+    color: var(--ink-dim);
+  }
+  .s-exo .mode span.on { background: rgba(255,255,255,0.1); color: #fff; border-color: rgba(255,255,255,0.3); }
+
+  /* ============================================================ */
+  /* 16 — STATS                                                     */
+  /* ============================================================ */
+  .s-stats { padding: 120px 140px 0; }
+  .s-stats .head { margin-bottom: 80px; display: flex; justify-content: space-between; align-items: baseline; }
+  .s-stats .head h1 {
+    font-family: var(--f-display); font-size: 88px; line-height: 0.9;
+    letter-spacing: -0.02em; text-transform: uppercase; margin: 0;
+  }
+  .s-stats .head h1 .crl { color: var(--coral); }
+  .s-stats .head .src {
+    font-family: var(--f-mono); font-size: 13px; letter-spacing: 0.22em;
+    color: var(--ink-mute); text-align: right; text-transform: uppercase;
+  }
+  .s-stats .grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 2px; }
+  .s-stats .stat {
+    background: rgba(255,255,255,0.03);
+    border: 1px solid rgba(255,255,255,0.1);
+    padding: 52px 44px 44px;
+    display: flex; flex-direction: column;
+    border-radius: 4px;
+  }
+  .s-stats .stat.accent { background: var(--coral); border-color: transparent; }
+  .s-stats .stat .v {
+    font-family: var(--f-display); font-size: 140px; line-height: 0.85;
+    letter-spacing: -0.04em; color: #fff;
+    display: flex; align-items: baseline; gap: 8px;
+    flex: 1;
+  }
+  .s-stats .stat.accent .v { color: #fff; }
+  .s-stats .stat .v .u {
+    font-size: 52px; color: rgba(255,255,255,0.55); font-weight: 400;
+  }
+  .s-stats .stat.accent .v .u { color: rgba(255,255,255,0.75); }
+  .s-stats .stat .v .sign { font-size: 80px; color: rgba(255,255,255,0.55); }
+  .s-stats .stat.accent .v .sign { color: rgba(255,255,255,0.75); }
+  .s-stats .stat .bar { height: 2px; background: rgba(255,255,255,0.15); margin: 20px 0 16px; }
+  .s-stats .stat.accent .bar { background: rgba(255,255,255,0.35); }
+  .s-stats .stat .l {
+    font-family: var(--f-mono); font-size: 13px; letter-spacing: 0.22em;
+    color: var(--ink-dim); text-transform: uppercase;
+  }
+  .s-stats .stat.accent .l { color: rgba(255,255,255,0.85); }
+  .s-stats .stat .ctx {
+    font-family: var(--f-body); font-size: 17px; color: var(--ink-mute);
+    line-height: 1.4; margin-top: 10px;
+  }
+
+  /* ============================================================ */
+  /* 17 — WARNING                                                   */
+  /* ============================================================ */
+  .s-warn {
+    padding: 0; display: grid; place-items: center;
+    background:
+      radial-gradient(ellipse 1200px 800px at 50% 0%, rgba(220,20,60,0.45) 0%, transparent 65%),
+      radial-gradient(ellipse 900px 700px at 80% 90%, rgba(180,0,40,0.3) 0%, transparent 60%),
+      linear-gradient(180deg, #0e0308 0%, #1a0510 50%, #0e0308 100%);
+  }
+  .s-warn .wrap { text-align: center; max-width: 1500px; padding: 0 120px; }
+  .s-warn .icon {
+    width: 140px; height: 140px; border-radius: 50%;
+    background: rgba(255,255,255,0.06);
+    border: 2px solid rgba(255,255,255,0.2);
+    display: flex; align-items: center; justify-content: center;
+    font-family: var(--f-display); font-size: 80px; color: #fff;
+    margin: 0 auto 44px;
+    box-shadow: 0 0 60px rgba(220,20,60,0.4);
+  }
+  .s-warn .label {
+    font-family: var(--f-mono); font-size: 14px; letter-spacing: 0.4em;
+    color: rgba(255,255,255,0.5); text-transform: uppercase;
+    margin-bottom: 32px; display: block;
+  }
+  .s-warn h1 {
+    font-family: var(--f-display); font-size: 128px; line-height: 0.9;
+    letter-spacing: -0.025em; text-transform: uppercase; margin: 0 0 36px;
+  }
+  .s-warn h1 .hi { color: #ff2244; display: block; text-shadow: 0 0 60px rgba(255,34,68,0.5); }
+  .s-warn .detail {
+    font-family: var(--f-head); font-size: 32px; font-weight: 400;
+    line-height: 1.4; color: rgba(255,255,255,0.75);
+    max-width: 1100px; margin: 0 auto 48px;
+  }
+  .s-warn .detail b { color: #fff; font-weight: 700; }
+  .s-warn .stakes {
+    display: inline-flex; gap: 14px; flex-wrap: wrap; justify-content: center;
+  }
+  .s-warn .stake {
+    font-family: var(--f-mono); font-size: 13px; letter-spacing: 0.2em;
+    text-transform: uppercase;
+    padding: 10px 18px; border-radius: 6px;
+    background: rgba(255,34,68,0.15);
+    border: 1px solid rgba(255,34,68,0.4);
+    color: rgba(255,255,255,0.8);
+  }
+
+  /* ============================================================ */
+  /* 18 — COMPARISON                                                */
+  /* ============================================================ */
+  .s-cmp { padding: 100px 140px 0; }
+  .s-cmp .head { margin-bottom: 56px; display: flex; align-items: baseline; gap: 32px; }
+  .s-cmp .head .eyebrow { }
+  .s-cmp .head h1 {
+    font-family: var(--f-display); font-size: 80px; line-height: 0.9;
+    letter-spacing: -0.02em; text-transform: uppercase; margin: 0;
+  }
+  .s-cmp .head h1 .crl { color: var(--coral); }
+  .s-cmp .table { width: 100%; border-collapse: collapse; }
+  .s-cmp .table .col-label {
+    width: 360px;
+    font-family: var(--f-mono); font-size: 13px; letter-spacing: 0.22em;
+    color: var(--ink-dim); text-transform: uppercase;
+    padding: 14px 0; text-align: left;
+  }
+  .s-cmp .table .col-a,
+  .s-cmp .table .col-b {
+    font-family: var(--f-display); font-size: 26px; letter-spacing: 0.02em;
+    text-align: center; padding: 14px 32px; text-transform: uppercase;
+  }
+  .s-cmp .table .col-a { color: rgba(255,255,255,0.45); }
+  .s-cmp .table .col-b { color: var(--coral); }
+  .s-cmp .table thead tr { border-bottom: 2px solid rgba(255,255,255,0.15); }
+  .s-cmp .row {
+    border-bottom: 1px solid rgba(255,255,255,0.07);
+  }
+  .s-cmp .row td {
+    padding: 22px 0;
+    vertical-align: middle;
+  }
+  .s-cmp .row .lbl {
+    font-family: var(--f-head); font-size: 24px; font-weight: 500; color: rgba(255,255,255,0.8);
+    width: 360px;
+  }
+  .s-cmp .row .lbl small {
+    display: block; font-family: var(--f-mono); font-size: 12px;
+    letter-spacing: 0.2em; color: var(--ink-mute); margin-top: 4px;
+    text-transform: uppercase; font-weight: 400;
+  }
+  .s-cmp .row .val {
+    text-align: center; padding: 22px 32px;
+    font-family: var(--f-head); font-size: 20px; line-height: 1.3; color: rgba(255,255,255,0.5);
+  }
+  .s-cmp .row .val.b { color: #fff; }
+  .s-cmp .row .val .ic {
+    display: block; font-size: 32px; margin-bottom: 6px;
+  }
+  .s-cmp .row .val .ic.no { color: rgba(255,255,255,0.2); }
+  .s-cmp .row .val .ic.yes { color: var(--green); }
+  .s-cmp .row .val .ic.part { color: #f5a623; }
+
+  /* ============================================================ */
+  /* 19 — TIP                                                       */
+  /* ============================================================ */
+  .s-tip { display: grid; grid-template-columns: 1fr 1.35fr; padding: 0 0 0 140px; align-items: center; }
+  .s-tip .left { padding-right: 80px; }
+  .s-tip .left .badge {
+    display: inline-flex; align-items: center; gap: 14px;
+    margin-bottom: 48px;
+  }
+  .s-tip .left .badge .icon {
+    width: 88px; height: 88px; border-radius: 50%;
+    background: var(--coral);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 44px;
+    box-shadow: 0 12px 36px rgba(255,93,108,0.5);
+  }
+  .s-tip .left .badge .meta { }
+  .s-tip .left .badge .meta .eyebrow { display: block; margin-bottom: 6px; }
+  .s-tip .left .badge .meta .num {
+    font-family: var(--f-display); font-size: 28px; color: var(--ink-dim);
+    letter-spacing: 0.04em;
+  }
+  .s-tip .left h1 {
+    font-family: var(--f-display); font-size: 104px; line-height: 0.88;
+    letter-spacing: -0.025em; text-transform: uppercase; margin: 0 0 32px;
+  }
+  .s-tip .left h1 .crl { color: var(--coral); }
+  .s-tip .left .why {
+    font-family: var(--f-head); font-size: 27px; font-weight: 400;
+    line-height: 1.4; color: rgba(255,255,255,0.72); max-width: 560px;
+  }
+  .s-tip .left .why b { color: #fff; font-weight: 700; }
+  .s-tip .right {
+    height: 100%;
+    background: rgba(255,255,255,0.03);
+    border-left: 1px solid rgba(255,255,255,0.12);
+    padding: 0 100px 0 80px;
+    display: flex; flex-direction: column; justify-content: center; gap: 28px;
+  }
+  .s-tip .right .label {
+    font-family: var(--f-mono); font-size: 13px; letter-spacing: 0.3em;
+    color: var(--coral); text-transform: uppercase; margin-bottom: 4px;
+  }
+  .s-tip .card {
+    background: rgba(255,255,255,0.04);
+    border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 8px; padding: 28px 32px;
+  }
+  .s-tip .card.main {
+    border-color: var(--coral); background: rgba(255,93,108,0.06);
+  }
+  .s-tip .card .t {
+    font-family: var(--f-head); font-size: 26px; font-weight: 600; color: #fff;
+    margin-bottom: 10px;
+  }
+  .s-tip .card .d {
+    font-family: var(--f-body); font-size: 19px; line-height: 1.45; color: var(--ink-dim);
+  }
+  .s-tip .card .d b { color: var(--ink); font-weight: 700; }
+
 </style>
 </head>
 <body>
 
 <script type="application/json" id="speaker-notes">
-["", "", "", "", "", "", "", "", "", "", "", ""]
+["", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", ""]
 </script>
 
 <deck-stage>
@@ -1041,6 +1422,305 @@
       <div class="input">
         <span class="ph">Posez votre question…</span>
         <span class="btn">ENVOYER</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================================================== -->
+  <!-- 13 — AGENDA                                              -->
+  <!-- ===================================================== -->
+  <section class="slide s-agenda" data-screen-label="13 Agenda">
+    <div class="chrome">
+      <div class="brand"><span class="mark">Sales</span><span class="tag">Hacking</span></div>
+      <div class="rec"><span class="dot"></span>EN DIRECT · MODULE 03</div>
+      <div class="pages"><b>13</b> / 19</div>
+      <div class="section-label">TYPE · AGENDA</div>
+    </div>
+
+    <div class="left">
+      <span class="eyebrow">— Plan de séance</span>
+      <h1><b>Au</b>programme.</h1>
+      <p class="sub">7 sujets · 42 minutes · 3 livrables à repartir avec.</p>
+    </div>
+    <div class="right">
+      <div class="item done">
+        <div class="n">✓</div>
+        <div class="txt">
+          <div class="t">Intro & Postulat</div>
+          <div class="d">TERMINÉ · 8 MIN</div>
+        </div>
+      </div>
+      <div class="item done">
+        <div class="n">✓</div>
+        <div class="txt">
+          <div class="t">Définition Opération</div>
+          <div class="d">TERMINÉ · 6 MIN</div>
+        </div>
+      </div>
+      <div class="item active">
+        <div class="n">03</div>
+        <div class="txt">
+          <div class="t">Méthode O.D.A.M.</div>
+          <div class="d">EN COURS · 12 MIN</div>
+        </div>
+      </div>
+      <div class="item">
+        <div class="n">04</div>
+        <div class="txt">
+          <div class="t">Cas client — Atelier Mirabel</div>
+          <div class="d">À VENIR · 8 MIN</div>
+        </div>
+      </div>
+      <div class="item">
+        <div class="n">05</div>
+        <div class="txt">
+          <div class="t">Exercice pratique</div>
+          <div class="d">À VENIR · 8 MIN</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================================================== -->
+  <!-- 14 — QUOTE                                               -->
+  <!-- ===================================================== -->
+  <section class="slide s-quote" data-screen-label="14 Quote">
+    <div class="chrome">
+      <div class="brand"><span class="mark">Sales</span><span class="tag">Hacking</span></div>
+      <div class="rec"><span class="dot"></span>EN DIRECT · MODULE 03</div>
+      <div class="pages"><b>14</b> / 19</div>
+      <div class="section-label">TYPE · QUOTE</div>
+    </div>
+
+    <div class="wrap">
+      <div class="portrait">
+        <span class="initials">LM</span>
+      </div>
+      <div class="body">
+        <span class="eyebrow">— Témoignage terrain</span>
+        <span class="qmark">"</span>
+        <p class="text">On a <b>doublé la capacité de l'équipe</b> sans recruter. Le secret ? Arrêter de tout faire passer par nous.</p>
+        <div class="attrib">
+          <span class="line"></span>
+          <div>
+            <div class="name">Léa Marchand</div>
+            <div class="role">Directrice Ops · Nexus Studio · 48 personnes</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================================================== -->
+  <!-- 15 — EXERCISE                                            -->
+  <!-- ===================================================== -->
+  <section class="slide s-exo" data-screen-label="15 Exercise">
+    <div class="chrome">
+      <div class="brand"><span class="mark">Sales</span><span class="tag">Hacking</span></div>
+      <div class="rec"><span class="dot"></span>EN DIRECT · MODULE 03</div>
+      <div class="pages"><b>15</b> / 19</div>
+      <div class="section-label">TYPE · EXERCISE</div>
+    </div>
+
+    <div class="left">
+      <div class="header">
+        <div class="num">01</div>
+        <div class="header-r">
+          <span class="eyebrow">— Exercice pratique</span>
+          <div class="timer"><span class="dot"></span>12 MINUTES</div>
+        </div>
+      </div>
+      <h1>Cartographier<br>un <span class="crl">process.</span></h1>
+      <p class="context">Choisissez une tâche répétitive que vous ou votre équipe faites chaque semaine. Vous allez la décomposer en direct.</p>
+    </div>
+    <div class="right">
+      <div class="step active">
+        <div class="sn">1</div>
+        <div>
+          <div class="st">Nommer la tâche</div>
+          <div class="sd">Un verbe + un objet. Ex : "Répondre à un devis entrant".</div>
+        </div>
+      </div>
+      <div class="step">
+        <div class="sn">2</div>
+        <div>
+          <div class="st">Lister les étapes réelles</div>
+          <div class="sd">Ce que vous faites vraiment — pas la version idéale.</div>
+        </div>
+      </div>
+      <div class="step">
+        <div class="sn">3</div>
+        <div>
+          <div class="st">Identifier la décision critique</div>
+          <div class="sd">Le moment où seule une personne peut choisir.</div>
+        </div>
+      </div>
+      <div class="step">
+        <div class="sn">4</div>
+        <div>
+          <div class="st">Poster dans le canal</div>
+          <div class="sd">Format libre — liste, schéma, texte. On débriefe ensemble.</div>
+        </div>
+      </div>
+      <div class="mode">
+        <span class="on">Solo</span>
+        <span>En binôme</span>
+        <span>En groupe</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================================================== -->
+  <!-- 16 — STATS                                               -->
+  <!-- ===================================================== -->
+  <section class="slide s-stats" data-screen-label="16 Stats">
+    <div class="chrome">
+      <div class="brand"><span class="mark">Sales</span><span class="tag">Hacking</span></div>
+      <div class="rec"><span class="dot"></span>EN DIRECT · MODULE 03</div>
+      <div class="pages"><b>16</b> / 19</div>
+      <div class="section-label">TYPE · STATS</div>
+    </div>
+
+    <div class="head">
+      <h1>L'automatisation,<br>en <span class="crl">chiffres.</span></h1>
+      <div class="src">Source · McKinsey 2024<br>Étude · 1 400 entreprises · EU</div>
+    </div>
+    <div class="grid">
+      <div class="stat">
+        <div class="v">45<span class="u">%</span></div>
+        <div class="bar"></div>
+        <div class="l">Des tâches actuelles automatisables</div>
+        <div class="ctx">Dans les PME de 10–250 collaborateurs.</div>
+      </div>
+      <div class="stat accent">
+        <div class="v">3,2<span class="u">×</span></div>
+        <div class="bar"></div>
+        <div class="l">Productivité gagnée sur les process documentés</div>
+        <div class="ctx">Vs. équipes sans SOP formalisées.</div>
+      </div>
+      <div class="stat">
+        <div class="v"><span class="sign">−</span>62<span class="u">%</span></div>
+        <div class="bar"></div>
+        <div class="l">D'erreurs après 90 jours de SOP</div>
+        <div class="ctx">Toutes tailles d'équipe confondues.</div>
+      </div>
+      <div class="stat">
+        <div class="v">11<span class="u">h</span></div>
+        <div class="bar"></div>
+        <div class="l">Économisées par semaine en moyenne</div>
+        <div class="ctx">Sur les équipes opérationnelles de 5+.</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================================================== -->
+  <!-- 17 — WARNING                                             -->
+  <!-- ===================================================== -->
+  <section class="slide s-warn" data-screen-label="17 Warning">
+    <div class="chrome">
+      <div class="brand"><span class="mark">Sales</span><span class="tag">Hacking</span></div>
+      <div class="rec"><span class="dot"></span>EN DIRECT · MODULE 03</div>
+      <div class="pages"><b>17</b> / 19</div>
+      <div class="section-label">TYPE · WARNING</div>
+    </div>
+
+    <div class="wrap">
+      <div class="icon">⚠</div>
+      <span class="label">Alerte critique · À ne jamais ignorer</span>
+      <h1>Ne jamais<br><span class="hi">scaler le chaos.</span></h1>
+      <p class="detail">Brancher de l'IA sur un process <b>non documenté</b> ne résout rien — ça multiplie les bugs à la vitesse de la machine. Avant toute automatisation, le process doit être stable, mesuré, et reproductible.</p>
+      <div class="stakes">
+        <span class="stake">PERTE DE CONTRÔLE</span>
+        <span class="stake">BUGS × 10</span>
+        <span class="stake">ÉQUIPE DÉSTABILISÉE</span>
+        <span class="stake">ROI NÉGATIF</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================================================== -->
+  <!-- 18 — COMPARISON                                          -->
+  <!-- ===================================================== -->
+  <section class="slide s-cmp" data-screen-label="18 Comparison">
+    <div class="chrome">
+      <div class="brand"><span class="mark">Sales</span><span class="tag">Hacking</span></div>
+      <div class="rec"><span class="dot"></span>EN DIRECT · MODULE 03</div>
+      <div class="pages"><b>18</b> / 19</div>
+      <div class="section-label">TYPE · COMPARISON</div>
+    </div>
+
+    <div class="head">
+      <span class="eyebrow">— Deux approches</span>
+      <h1>Avant vs <span class="crl">après.</span></h1>
+    </div>
+    <table class="table">
+      <thead>
+        <tr>
+          <th class="col-label"></th>
+          <th class="col-a">Avant O.D.A.M.</th>
+          <th class="col-b">Après O.D.A.M.</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr class="row">
+          <td class="lbl">Décisions<small>QUI décide, quand</small></td>
+          <td class="val"><span class="ic no">✕</span>Toujours les mêmes 2 personnes</td>
+          <td class="val b"><span class="ic yes">✓</span>Arbre décisionnel documenté</td>
+        </tr>
+        <tr class="row">
+          <td class="lbl">Onboarding<small>Temps avant autonomie</small></td>
+          <td class="val"><span class="ic no">✕</span>4–6 semaines en moyenne</td>
+          <td class="val b"><span class="ic yes">✓</span>7–10 jours avec SOPs</td>
+        </tr>
+        <tr class="row">
+          <td class="lbl">Erreurs récurrentes<small>Même bug, 2 fois</small></td>
+          <td class="val"><span class="ic no">✕</span>Régulières et non tracées</td>
+          <td class="val b"><span class="ic yes">✓</span>Tracées, analysées, corrigées</td>
+        </tr>
+        <tr class="row">
+          <td class="lbl">Scalabilité IA<small>Prêt à automatiser</small></td>
+          <td class="val"><span class="ic part">◑</span>Partielle, risquée</td>
+          <td class="val b"><span class="ic yes">✓</span>Sur segments stables mesurés</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <!-- ===================================================== -->
+  <!-- 19 — TIP                                                 -->
+  <!-- ===================================================== -->
+  <section class="slide s-tip" data-screen-label="19 Tip">
+    <div class="chrome">
+      <div class="brand"><span class="mark">Sales</span><span class="tag">Hacking</span></div>
+      <div class="rec"><span class="dot"></span>EN DIRECT · MODULE 03</div>
+      <div class="pages"><b>19</b> / 19</div>
+      <div class="section-label">TYPE · TIP</div>
+    </div>
+
+    <div class="left">
+      <div class="badge">
+        <div class="icon">💡</div>
+        <div class="meta">
+          <span class="eyebrow">— Conseil pro</span>
+          <div class="num">TIP 04 / 07</div>
+        </div>
+      </div>
+      <h1>Commencer<br>par <span class="crl">observer.</span></h1>
+      <p class="why">Avant d'écrire un seul process, filmez ou notez ce qui se passe <b>vraiment</b> — pas ce que vous croyez qui se passe. L'écart est souvent de 40 %.</p>
+    </div>
+    <div class="right">
+      <div class="label">Comment l'appliquer</div>
+      <div class="card main">
+        <div class="t">La règle des 5 observations</div>
+        <div class="d">Regardez la tâche s'exécuter <b>5 fois par des personnes différentes</b> avant de toucher quoi que ce soit. Chaque écart est de l'or.</div>
+      </div>
+      <div class="card">
+        <div class="t">Outil recommandé</div>
+        <div class="d">Loom ou Screen Studio · Enregistrement + commentaire vocal · Export vers Notion automatiquement.</div>
+      </div>
+      <div class="card">
+        <div class="t">Piège à éviter</div>
+        <div class="d">Demander à la personne de "faire comme si on regardait pas" — ça ne marche jamais. Observer en conditions réelles uniquement.</div>
       </div>
     </div>
   </section>
