@@ -11,12 +11,14 @@ COURSE_SCRIPT_PLAN_BLOB = "content-script-plan.json"
 CONTENT_PLAN_BLOB = "content-plan.json"
 CONTENT_DRAFT_SECTIONS_BLOB = "content-draft-sections.json"
 CONTENT_COURSE_SCRIPTS_BLOB = "content-course-scripts.json"
+CONTENT_QUALITY_REVIEWS_BLOB = "content-quality-reviews.json"
 CONTENT_REVIEWED_SCRIPTS_BLOB = "content-reviewed-scripts.json"
 CONTENT_AUDIO_PLAN_BLOB = "content-audio-plan.json"
 CONTENT_ARTIFACT_BLOBS = [
     CONTENT_PLAN_BLOB,
     CONTENT_DRAFT_SECTIONS_BLOB,
     CONTENT_COURSE_SCRIPTS_BLOB,
+    CONTENT_QUALITY_REVIEWS_BLOB,
     CONTENT_REVIEWED_SCRIPTS_BLOB,
     CONTENT_AUDIO_PLAN_BLOB,
     COURSE_SCRIPT_PLAN_BLOB,
@@ -26,6 +28,7 @@ CONTENT_ARTIFACT_DESCRIPTIONS = {
     CONTENT_PLAN_BLOB: "Plan JSON verrouillé et validation serveur.",
     CONTENT_DRAFT_SECTIONS_BLOB: "Sections brutes générées avant assemblage/calibrage.",
     CONTENT_COURSE_SCRIPTS_BLOB: "Cours complets calibrés avant reviews.",
+    CONTENT_QUALITY_REVIEWS_BLOB: "Audit d'adhérence au plan et réparations ciblées avant humanisation.",
     CONTENT_REVIEWED_SCRIPTS_BLOB: "Scripts après humanisation/conformité.",
     CONTENT_AUDIO_PLAN_BLOB: "Texte réellement planifié/généré pour les fichiers audio.",
     COURSE_SCRIPT_PLAN_BLOB: "Plan UI historique compatible.",
@@ -85,4 +88,3 @@ def content_artifacts_for_ui(platform_id: int, folder_id: int) -> list[dict]:
         }
         for filename in CONTENT_ARTIFACT_BLOBS
     ]
-

@@ -2139,7 +2139,11 @@ def review_content(job_id, folder_id):
     force = bool(data.get("force") or data.get("force_review"))
 
     import eventlet
-    from services.content_generation_service import run_content_review, run_humanization_review
+    from services.content_generation_service import (
+        run_content_review,
+        run_humanization_review,
+        run_plan_adherence_review,
+    )
 
     def _run_review(_folder_id):
         import sys, traceback
@@ -2161,6 +2165,15 @@ def review_content(job_id, folder_id):
         except Exception:
             pass
         try:
+            plan_result = run_plan_adherence_review(_folder_id, model=model, force=force)
+            _write_api_review_report(job_id, _folder_id, plan_result, model)
+            if plan_result.get("segments_failed", 0) > 0:
+                logger.warning(
+                    "⚠️ Adhérence au plan partiellement échouée job=%s folder=%s segments_failed=%s",
+                    job_id,
+                    _folder_id,
+                    plan_result.get("segments_failed", 0),
+                )
             humanization_result = run_humanization_review(_folder_id, model=model, force=force)
             _write_api_review_report(job_id, _folder_id, humanization_result, model)
             if humanization_result.get("segments_failed", 0) > 0:
@@ -2190,6 +2203,8 @@ def review_content(job_id, folder_id):
                     message="Révision conformité API terminée",
                     data={
                         "segments_reviewed": result.get("segments_reviewed", 0),
+                        "plan_adherence_segments_reviewed": plan_result.get("segments_reviewed", 0),
+                        "plan_adherence_patches_applied": plan_result.get("patches_applied", 0),
                         "humanization_segments_reviewed": humanization_result.get("segments_reviewed", 0),
                         "humanization_patches_proposed": humanization_result.get("patches_proposed", 0),
                         "humanization_patches_applied": humanization_result.get("patches_applied", 0),
@@ -3783,6 +3798,7 @@ def continue_after_text(job_id, folder_id):
                 run_content_generation,
                 run_content_review,
                 run_humanization_review,
+                run_plan_adherence_review,
             )
             from services.formation_observability_service import log_pipeline_event
 
@@ -3936,8 +3952,39 @@ def continue_after_text(job_id, folder_id):
                     job_id, folder_id, from_step,
                 )
 
-            # ── Étape 3 : HUMANISATION → CONFORMITÉ + Word 2 ───────────────
+            # ── Étape 3 : ADHÉRENCE PLAN → HUMANISATION → CONFORMITÉ + Word 2
             if from_step_idx <= 1:
+                step_started = time.time()
+                logger.info(
+                    "PIPELINE_RESUME_STEP_PLAN_ADHERENCE_START formation_job_id=%s folder_id=%s model=%s",
+                    job_id, folder_id, model,
+                )
+                plan_result = run_plan_adherence_review(folder_id, model=model)
+                _write_api_review_report(job_id, folder_id, plan_result, model)
+                log_pipeline_event(
+                    job_id,
+                    "continue_after_text_plan_adherence_completed",
+                    step="plan_adherence_review",
+                    status="completed",
+                    folder_id=folder_id,
+                    model=str(model) if model else None,
+                    message="Révision adhérence au plan terminée",
+                    data={
+                        "segments_reviewed": plan_result.get("segments_reviewed", 0),
+                        "segments_failed": plan_result.get("segments_failed", 0),
+                        "patches_proposed": plan_result.get("patches_proposed", 0),
+                        "patches_applied": plan_result.get("patches_applied", 0),
+                        "patches_rejected": plan_result.get("patches_rejected", 0),
+                    },
+                )
+                if plan_result.get("segments_failed", 0) > 0:
+                    logger.warning(
+                        "PIPELINE_RESUME_STEP_PLAN_ADHERENCE_PARTIAL_FAILURE formation_job_id=%s folder_id=%s failed=%s",
+                        job_id,
+                        folder_id,
+                        plan_result.get("segments_failed", 0),
+                    )
+
                 step_started = time.time()
                 logger.info(
                     "PIPELINE_RESUME_STEP_HUMANIZATION_START formation_job_id=%s folder_id=%s model=%s",
@@ -4852,11 +4899,22 @@ def _execute_ap_step(job_id: int, step: str, job: dict) -> None:
             result = execute_mission_locally(job_id, "humanization_review", cc_model)
             _assert_cc_result_complete("Humanisation", result)
         else:
-            from services.content_generation_service import run_humanization_review
+            from services.content_generation_service import (
+                run_humanization_review,
+                run_plan_adherence_review,
+            )
             failed = []
             reports_written = 0
             for fid in folder_ids:
                 try:
+                    plan_result = run_plan_adherence_review(fid, model=api_model)
+                    _write_api_review_report(job_id, fid, plan_result, api_model)
+                    if plan_result.get("segments_failed", 0) > 0:
+                        logger.warning(
+                            "⚠️ Plan adherence review folder %s : %s segment(s) en erreur",
+                            fid,
+                            plan_result.get("segments_failed", 0),
+                        )
                     result = run_humanization_review(fid, model=api_model)
                     _write_api_review_report(job_id, fid, result, api_model)
                     reports_written += 1
