@@ -30,21 +30,39 @@ from utils.anthropic_client import (
     post_message as _llm_post,
 )
 from utils.logger import get_logger
+from services.content_pipeline.artifacts import (
+    CONTENT_AUDIO_PLAN_BLOB as _CONTENT_AUDIO_PLAN_BLOB,
+    CONTENT_COURSE_SCRIPTS_BLOB as _CONTENT_COURSE_SCRIPTS_BLOB,
+    CONTENT_DRAFT_SECTIONS_BLOB as _CONTENT_DRAFT_SECTIONS_BLOB,
+    CONTENT_PLAN_BLOB as _CONTENT_PLAN_BLOB,
+    CONTENT_REVIEWED_SCRIPTS_BLOB as _CONTENT_REVIEWED_SCRIPTS_BLOB,
+    COURSE_SCRIPT_PLAN_BLOB as _COURSE_SCRIPT_PLAN_BLOB,
+    artifact_payload as _artifact_payload,
+    content_artifacts_for_ui as _content_artifacts_for_ui,
+    save_content_artifact as _save_content_artifact,
+)
+from services.content_pipeline.calibration import (
+    course_section_budget_defaults as _pipeline_course_section_budget_defaults,
+    load_budget_rewrite_contract,
+    structured_generation_max_tokens as _structured_generation_max_tokens,
+)
+from services.content_pipeline.planning import load_planning_prompt_parts
+from services.content_pipeline.prompts import (
+    load_prompt_file as _load_prompt_file,
+    prompt_file_path as _prompt_file_path,
+)
+from services.content_pipeline.reviews import (
+    AUDIO_BLOCK_MARKER_RE as _AUDIO_BLOCK_MARKER_RE,
+    extract_audio_block_number as _extract_audio_block_number,
+    load_structured_rule_file as _load_structured_rule_file,
+    structured_review_context_for_segment as _structured_review_context_for_segment,
+)
+from services.content_pipeline.section_generation import load_section_prompt_parts
+from services.content_pipeline.validators import (
+    validate_structured_course_plan as _validate_structured_course_plan,
+)
 
 logger = get_logger(__name__)
-
-
-def _prompt_file_path(*parts: str) -> str:
-    return os.path.join(os.path.dirname(__file__), "..", "prompts", *parts)
-
-
-def _load_prompt_file(*parts: str, fallback: str = "") -> str:
-    try:
-        with open(_prompt_file_path(*parts), "r", encoding="utf-8") as f:
-            return f.read().strip()
-    except Exception as e:
-        logger.warning("⚠️ Prompt modulaire indisponible %s: %s", "/".join(parts), e)
-        return fallback
 
 
 CLAUDE_MODEL = default_model()
@@ -67,7 +85,6 @@ _CARRYOVER_INTRO = (
 )
 _CARRYOVER_COLUMNS_READY = False
 _FISHAUDIO_TAG_RE = re.compile(r"\[[^\[\]\n]{1,50}\]")
-_AUDIO_BLOCK_MARKER_RE = re.compile(r"^\s*<<<BLOC_AUDIO_(\d+)>>>\s*$", re.MULTILINE)
 _EDGE_TTS_FAST_CACHE = {}
 _EDGE_TTS_FAST_CACHE_LOCK = threading.Lock()
 
@@ -462,46 +479,6 @@ def _structured_content_generation_enabled() -> bool:
     return value not in {"0", "false", "no", "off"}
 
 
-def _course_section_budget_defaults(course_number: int, target_words: int, parts_count: int, *, is_last_day: bool) -> dict:
-    """Répartit le budget d'un cours en sections contrôlables."""
-    target_words = max(900, int(target_words or 0))
-    parts_count = max(2, min(4, int(parts_count or 3)))
-    if course_number == 1:
-        opening = min(900, max(520, int(target_words * 0.11)))
-        conclusion = min(780, max(560, int(target_words * 0.09)))
-        day_conclusion = 0
-    elif course_number == 7:
-        opening = min(520, max(300, int(target_words * 0.06)))
-        day_conclusion = int(round(_course_words_per_minute() * 2.0))
-        conclusion = min(650, max(430, int(target_words * 0.08)))
-    else:
-        opening = min(520, max(340, int(target_words * 0.07)))
-        conclusion = min(700, max(520, int(target_words * 0.08)))
-        day_conclusion = 0
-
-    min_part_words = min(300, max(120, target_words // (parts_count + 3)))
-    reserved = opening + conclusion + day_conclusion
-    reserved_cap = min(int(target_words * 0.42), target_words - parts_count * min_part_words)
-    if reserved > reserved_cap:
-        scale = max(0.2, reserved_cap / max(1, reserved))
-        opening = max(240, int(opening * scale))
-        conclusion = max(320, int(conclusion * scale))
-        day_conclusion = max(0, int(day_conclusion * scale))
-        reserved = opening + conclusion + day_conclusion
-    remaining = max(parts_count * min_part_words, target_words - reserved)
-    if reserved + remaining > target_words:
-        remaining = max(0, target_words - reserved)
-    base = remaining // parts_count
-    part_budgets = [base for _ in range(parts_count)]
-    part_budgets[-1] += remaining - sum(part_budgets)
-    return {
-        "opening": int(opening),
-        "parts": [int(v) for v in part_budgets],
-        "course_conclusion": int(conclusion),
-        "day_conclusion": int(day_conclusion),
-    }
-
-
 def _structured_course_kind(course_number: int) -> str:
     if course_number == 1:
         return "opening_year_day"
@@ -525,10 +502,6 @@ def _sanitize_learner_facing_text(text: str) -> str:
     # sensibles, comme "bloc" côté apprenant, relèvent de la conformité IA afin
     # de choisir naturellement entre "cours", "partie", "séquence" ou "moment".
     return (text or "").strip()
-
-
-def _structured_generation_max_tokens(target_words: int) -> int:
-    return min(16000, max(1200, int(int(target_words or 600) * 2.4) + 700))
 
 
 def _parse_structured_course_plan(raw: str) -> dict:
@@ -921,7 +894,13 @@ def _normalize_structured_course_plans(raw_plan: dict, *, job: dict, playlist_it
         ).strip()
         raw_parts = raw.get("parts") if isinstance(raw.get("parts"), list) else []
         parts_count = max(2, min(4, len(raw_parts) or 3))
-        budgets = _course_section_budget_defaults(course_number, target_words, parts_count, is_last_day=is_last_day)
+        budgets = _pipeline_course_section_budget_defaults(
+            course_number,
+            target_words,
+            parts_count,
+            words_per_minute=_course_words_per_minute(),
+            is_last_day=is_last_day,
+        )
 
         opening = raw.get("opening") if isinstance(raw.get("opening"), dict) else {}
         opening.setdefault("type", "ouverture_formation" if course_number == 1 else "reprise_apres_qa_pause")
@@ -1063,8 +1042,9 @@ def _normalize_structured_course_plans(raw_plan: dict, *, job: dict, playlist_it
 
 
 def _build_structured_course_plan_prompt(job: dict, playlist_items: list, sub_parts: list, module_contents: dict) -> str:
-    base_style = _load_prompt_file("generation", "base-course-style.md")
-    plan_contract = _load_prompt_file("generation", "structured-plan.md")
+    prompt_parts = load_planning_prompt_parts()
+    base_style = prompt_parts["base_style"]
+    plan_contract = prompt_parts["plan_contract"]
     block_plan = _course_audio_block_plan(playlist_items, folder_position=job.get("folder_position"))
     try:
         day_number = int(job.get("folder_position") or 0) + 1
@@ -3574,7 +3554,7 @@ def _build_audio_block_calibration_prompt(
     direction: str,
     day_context: str,
 ) -> str:
-    budget_contract = _load_prompt_file("generation", "budget-rewrite.md")
+    budget_contract = load_budget_rewrite_contract()
     target_words = min(
         int(status.get("max_words") or 0),
         max(int(status.get("min_words") or 0), int(status.get("target_words") or 0) - 40),
@@ -4385,70 +4365,6 @@ def _build_course_position_context(
     return "\n".join(lines)
 
 
-def _extract_audio_block_number(text: str | None) -> int | None:
-    match = _AUDIO_BLOCK_MARKER_RE.search(text or "")
-    if not match:
-        return None
-    try:
-        return int(match.group(1))
-    except Exception:
-        return None
-
-
-def _structured_review_context_for_segment(job: dict, folder_id: int, sub_idx: int, segment_text: str) -> str:
-    """Ajoute le plan JSON verrouillé au reviewer quand il existe."""
-    try:
-        saved = _load_saved_course_script_plan(job["platform_id"], folder_id) or {}
-    except Exception:
-        saved = {}
-
-    structured_plan = saved.get("structured_course_plan") or {}
-    courses = structured_plan.get("courses") if isinstance(structured_plan, dict) else None
-    if not isinstance(courses, list) or not courses:
-        return ""
-
-    marker_course_number = _extract_audio_block_number(segment_text)
-    course_number = marker_course_number or int(sub_idx or 0) + 1
-    course_plan = next(
-        (course for course in courses if int(course.get("course_number") or 0) == course_number),
-        None,
-    )
-    if not course_plan:
-        return ""
-
-    sections = _structured_sections_for_course(course_plan)
-    section_summary = "\n".join(
-        f"- {_section_label(section)} · cible {int(section.get('target_words') or 0)} mots"
-        for section in sections
-    )
-    return f"""
-═══════════════════════════════════════════════════════════════════
-PLAN JSON VERROUILLÉ DU COURS — CONTEXTE REVIEW
-═══════════════════════════════════════════════════════════════════
-Tu révises le cours {course_number}/7 : {course_plan.get('course_title') or ''}.
-Ce segment correspond à UN cours canonique complet, pas à un morceau arbitraire.
-
-Le plan ci-dessous fait autorité. Tu peux corriger une phrase, une transition,
-une redondance, une conclusion mal fermée ou une incohérence locale, mais tu ne
-dois pas réinventer le cours, changer le plan, supprimer une partie annoncée,
-ajouter un nouveau chapitre, ni déplacer le périmètre pédagogique.
-
-Points à vérifier avec ce plan :
-- l'ouverture remplit bien sa fonction ;
-- le plan annoncé est respecté dans l'ordre général ;
-- les parties restent dans leur périmètre ;
-- la conclusion arrive au bon endroit et ne relance pas un développement ;
-- le cours ne termine pas le cours précédent et ne démarre pas le suivant ;
-- les formulations côté apprenant restent naturelles, notamment sans jargon technique comme "bloc".
-
-Sections attendues :
-{section_summary}
-
-Plan complet du cours :
-{json.dumps(course_plan, ensure_ascii=False, indent=2)}
-""".strip()
-
-
 # ─── Extraction des sous-parties ─────────────────────────────────────────────
 
 _EXTRACT_PROMPT = """Tu analyses un programme de formation professionnelle.
@@ -4980,8 +4896,9 @@ def _build_structured_section_prompt(
     generated_so_far: str,
     module_content: str,
 ) -> str:
-    base_style = _load_prompt_file("generation", "base-course-style.md")
-    section_contract = _load_prompt_file("generation", "structured-section.md")
+    prompt_parts = load_section_prompt_parts()
+    base_style = prompt_parts["base_style"]
+    section_contract = prompt_parts["section_contract"]
     target_words = int(section.get("target_words") or 500)
     min_words = max(120, int(target_words * 0.82))
     max_words = max(min_words + 50, int(target_words * 1.10))
@@ -7427,132 +7344,6 @@ def generate_audio_from_script(
     }
 
 
-_COURSE_SCRIPT_PLAN_BLOB = "content-script-plan.json"
-_CONTENT_PLAN_BLOB = "content-plan.json"
-_CONTENT_DRAFT_SECTIONS_BLOB = "content-draft-sections.json"
-_CONTENT_COURSE_SCRIPTS_BLOB = "content-course-scripts.json"
-_CONTENT_REVIEWED_SCRIPTS_BLOB = "content-reviewed-scripts.json"
-_CONTENT_AUDIO_PLAN_BLOB = "content-audio-plan.json"
-_CONTENT_ARTIFACT_BLOBS = [
-    _CONTENT_PLAN_BLOB,
-    _CONTENT_DRAFT_SECTIONS_BLOB,
-    _CONTENT_COURSE_SCRIPTS_BLOB,
-    _CONTENT_REVIEWED_SCRIPTS_BLOB,
-    _CONTENT_AUDIO_PLAN_BLOB,
-    _COURSE_SCRIPT_PLAN_BLOB,
-]
-
-
-def _content_artifact_blob_path(platform_id: int, folder_id: int, filename: str) -> str:
-    return f"platform-{platform_id}/folder-{folder_id}/playlist/{filename}"
-
-
-def _artifact_payload(job: dict | None, artifact_type: str, payload: dict) -> dict:
-    job = job or {}
-    return {
-        "artifact_type": artifact_type,
-        "generated_at": datetime.utcnow().isoformat() + "Z",
-        "platform_id": job.get("platform_id"),
-        "folder_id": job.get("folder_id"),
-        "content_job_id": job.get("id"),
-        "formation_job_id": job.get("formation_job_id"),
-        "folder_position": job.get("folder_position"),
-        "folder_name": job.get("folder_name"),
-        **(payload or {}),
-    }
-
-
-def _save_content_artifact(platform_id: int, folder_id: int, filename: str, payload: dict) -> None:
-    try:
-        from services.azure_blob_service import upload_blob, CONTAINER_AUDIOS
-
-        blob_path = _content_artifact_blob_path(platform_id, folder_id, filename)
-        upload_blob(
-            CONTAINER_AUDIOS,
-            blob_path,
-            json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8"),
-        )
-    except Exception as e:
-        logger.warning(f"⚠️ Sauvegarde artefact contenu impossible {filename} folder={folder_id}: {e}")
-
-
-def _load_content_artifact(platform_id: int, folder_id: int, filename: str) -> dict | None:
-    try:
-        from services.azure_blob_service import download_blob, CONTAINER_AUDIOS
-
-        blob_path = _content_artifact_blob_path(platform_id, folder_id, filename)
-        raw = download_blob(CONTAINER_AUDIOS, blob_path)
-        return json.loads(raw.decode("utf-8"))
-    except Exception as e:
-        if "BlobNotFound" not in str(e) and "The specified blob does not exist" not in str(e):
-            logger.warning(f"⚠️ Lecture artefact contenu impossible {filename} folder={folder_id}: {e}")
-        return None
-
-
-def _content_artifacts_for_ui(platform_id: int, folder_id: int) -> list[dict]:
-    return [
-        {
-            "name": filename,
-            "blob_path": _content_artifact_blob_path(platform_id, folder_id, filename),
-            "description": {
-                _CONTENT_PLAN_BLOB: "Plan JSON verrouillé et validation serveur.",
-                _CONTENT_DRAFT_SECTIONS_BLOB: "Sections brutes générées avant assemblage/calibrage.",
-                _CONTENT_COURSE_SCRIPTS_BLOB: "Cours complets calibrés avant reviews.",
-                _CONTENT_REVIEWED_SCRIPTS_BLOB: "Scripts après humanisation/conformité.",
-                _CONTENT_AUDIO_PLAN_BLOB: "Texte réellement planifié/généré pour les fichiers audio.",
-                _COURSE_SCRIPT_PLAN_BLOB: "Plan UI historique compatible.",
-            }.get(filename, ""),
-        }
-        for filename in _CONTENT_ARTIFACT_BLOBS
-    ]
-
-
-def _validate_structured_course_plan(plan: dict) -> dict:
-    errors = []
-    warnings = []
-    courses = plan.get("courses") if isinstance(plan, dict) else None
-    if not isinstance(courses, list):
-        errors.append("courses_absent_or_not_list")
-        courses = []
-    if len(courses) != NUM_SUB_PARTS:
-        errors.append(f"courses_count_{len(courses)}")
-
-    is_first_day = int(plan.get("day_number") or 0) == 1
-    for expected_number in range(1, NUM_SUB_PARTS + 1):
-        course = next(
-            (item for item in courses if int(item.get("course_number") or 0) == expected_number),
-            None,
-        )
-        if not course:
-            errors.append(f"course_{expected_number}_missing")
-            continue
-        parts = course.get("parts") if isinstance(course.get("parts"), list) else []
-        if not 2 <= len(parts) <= 4:
-            errors.append(f"course_{expected_number}_parts_count_{len(parts)}")
-        expected_budget = int(course.get("target_words") or 0)
-        section_budget = int((course.get("opening") or {}).get("target_words") or 0)
-        section_budget += sum(int((part or {}).get("target_words") or 0) for part in parts)
-        section_budget += int((course.get("course_conclusion") or {}).get("target_words") or 0)
-        section_budget += int((course.get("day_conclusion") or {}).get("target_words") or 0)
-        if expected_budget and section_budget != expected_budget:
-            errors.append(
-                f"course_{expected_number}_budget_sum_{section_budget}_expected_{expected_budget}"
-            )
-        if expected_number == 7 and not course.get("day_conclusion"):
-            errors.append("course_7_day_conclusion_missing")
-        if expected_number == 1 and not is_first_day:
-            opening_terms = " ".join((course.get("opening") or {}).get("must_include") or []).lower()
-            if "programme annuel" in opening_terms or "parcours annuel" in opening_terms:
-                warnings.append("course_1_non_first_day_mentions_annual_program")
-
-    return {
-        "ok": not errors,
-        "errors": errors,
-        "warnings": warnings,
-        "courses_count": len(courses),
-    }
-
-
 def _course_filename_for_bloc(playlist_spec, bloc_number: int) -> str:
     return next(
         (
@@ -8128,24 +7919,6 @@ def _extract_rules_for_group(full_rules_text: str, rule_numbers: list) -> str:
         if m and int(m.group(1)) in rule_numbers:
             extracted.append(part.strip())
     return "\n\n".join(extracted)
-
-
-def _load_structured_rule_file(filename: str) -> tuple[str, float]:
-    path = _prompt_file_path("reviews", filename)
-    with open(path, "r", encoding="utf-8") as f:
-        data = _json.load(f)
-    rules = data.get("rules") or []
-    if not isinstance(rules, list):
-        raise ValueError(f"Fichier règles invalide: {filename}")
-    blocks = []
-    for rule in rules:
-        body = (rule.get("body") or "").strip() if isinstance(rule, dict) else ""
-        if body:
-            blocks.append(body)
-    if not blocks:
-        raise ValueError(f"Aucune règle exploitable dans {filename}")
-    header = f"SOURCE MODULAIRE: {filename} · version {data.get('version') or 'unknown'}"
-    return header + "\n\n" + "\n\n".join(blocks), os.path.getmtime(path)
 
 
 def _build_review_prompt_focused(
@@ -8735,6 +8508,10 @@ def _run_content_review_pass(
         review_signature[:12],
         bool(force),
     )
+    try:
+        saved_script_plan = _load_saved_course_script_plan(job["platform_id"], folder_id) or {}
+    except Exception:
+        saved_script_plan = {}
 
     total_applied = 0
     total_rejected = 0
@@ -8771,8 +8548,7 @@ def _run_content_review_pass(
             passe=passe,
         )
         structured_review_context = _structured_review_context_for_segment(
-            job,
-            folder_id,
+            saved_script_plan,
             sub_idx,
             original_text,
         )
