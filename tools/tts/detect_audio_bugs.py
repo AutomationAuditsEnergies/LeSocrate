@@ -5,9 +5,9 @@ Utilise les MFCCs (empreinte vocale) + pitch + centroïde spectral,
 uniquement sur les frames vocalisées (ignore silences, début et fin de fichier).
 
 Usage:
-    python detect_audio_bugs.py fichier.mp3
-    python detect_audio_bugs.py dossier/         (scanne tous les MP3)
-    python detect_audio_bugs.py fichier.mp3 --seuil 3.5 --duree-min 1.5
+    python tools/tts/detect_audio_bugs.py fichier.mp3
+    python tools/tts/detect_audio_bugs.py dossier/         (scanne tous les MP3)
+    python tools/tts/detect_audio_bugs.py fichier.mp3 --seuil 3.5 --duree-min 1.5
 """
 
 import sys

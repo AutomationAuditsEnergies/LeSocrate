@@ -54,11 +54,10 @@ _DB_WRITE_LOCK = threading.Lock()
 # éthiques, de contenu, et anti-hallucination que les 3 passes TTS. Ces règles
 # sont éditables par l'utilisateur via /schedule-config → POST /api/hr/tts-prompt,
 # on les charge donc dynamiquement depuis le fichier source (pas de duplication).
-# Le fichier scratch contient les règles de la pipeline formation active
-# (identique à direct.md sauf pour les consignes de passe — cf. README scratch.md).
+# Le fichier de prompts généraux contient les règles de la pipeline formation active.
 
 _TTS_PROMPT_FILE = os.path.join(
-    os.path.dirname(__file__), "..", "prompts", "prompt-generation-tts-scratch.md"
+    os.path.dirname(__file__), "..", "prompts", "prompts-generaux-contenu-formation.md"
 )
 
 _EDITORIAL_RULES_CACHE = None
@@ -68,7 +67,7 @@ _EDITORIAL_RULES_MTIME = 0.0
 def _load_editorial_rules() -> str:
     """
     Extrait la section 'CONTENU — RÈGLES ABSOLUES' + 'HALLUCINATION' du
-    fichier prompt-generation-tts-direct.md (règles #1 à #20).
+    fichier de prompts généraux de contenu formation (règles #1 à #20).
     Cache invalidé si le fichier est modifié (mtime).
     """
     global _EDITORIAL_RULES_CACHE, _EDITORIAL_RULES_MTIME

@@ -17,11 +17,12 @@ from pathlib import Path
 
 import requests
 
-ROOT = Path(__file__).resolve().parent
-ENV = ROOT / "backend" / ".env"
-SRC = ROOT / "courstxt" / "Module1_accueil_boulangerie_TTS_ready.txt"
-OUT_AUDIO = ROOT / "fish_1h_audio.mp3"
-OUT_REPORT = ROOT / "fish_wpm_report.json"
+TOOL_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+ENV = PROJECT_ROOT / "backend" / ".env"
+SRC = PROJECT_ROOT / "courstxt" / "Module1_accueil_boulangerie_TTS_ready.txt"
+OUT_AUDIO = TOOL_DIR / "fish_1h_audio.mp3"
+OUT_REPORT = TOOL_DIR / "fish_wpm_report.json"
 
 API_URL = "https://api.fish.audio/v1/tts/stream/with-timestamp"
 MODEL = "s2-pro"

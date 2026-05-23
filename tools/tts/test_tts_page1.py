@@ -4,9 +4,12 @@ Genere un fichier MP3 de test.
 """
 import requests
 import os
+from pathlib import Path
 from dotenv import load_dotenv
 
-load_dotenv("backend/.env")
+TOOL_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+load_dotenv(PROJECT_ROOT / "backend" / ".env")
 
 API_KEY = os.getenv("FISH_AUDIO_API_KEY")
 VOICE_ID = os.getenv("FISH_AUDIO_VOICE_ID", "90a39a3f3c0a45c38502fa1d99dabf96")
@@ -65,7 +68,7 @@ def generate():
         print(f"ERREUR {resp.status_code}: {resp.text[:500]}")
         return
 
-    output_path = "test_tts_page1.mp3"
+    output_path = TOOL_DIR / "test_tts_page1.mp3"
     with open(output_path, "wb") as f:
         f.write(resp.content)
 

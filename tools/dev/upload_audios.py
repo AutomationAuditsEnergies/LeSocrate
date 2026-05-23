@@ -1,9 +1,11 @@
 # Upload d'un seul fichier vers Azure Storage
 import os
+from pathlib import Path
 from azure.storage.blob import BlobServiceClient
 from dotenv import load_dotenv
 
-load_dotenv()
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+load_dotenv(PROJECT_ROOT / "backend" / ".env")
 
 # Configuration Azure Storage
 AZURE_STORAGE_CONNECTION_STRING = os.getenv("AZURE_STORAGE_CONNECTION_STRING")
@@ -28,7 +30,7 @@ def upload_single_file():
 
         # Fichier à uploader
         filename = "cours_10h05_10h50.wav"
-        local_path = os.path.join("audios", filename)
+        local_path = PROJECT_ROOT / "audios" / filename
 
         # Vérifier que le fichier existe
         if not os.path.exists(local_path):

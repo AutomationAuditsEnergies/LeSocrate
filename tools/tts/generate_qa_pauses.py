@@ -6,11 +6,14 @@ Structure : 10s silence → intro TTS → silence → outro TTS (20s avant la fi
 import io
 import os
 import time
+from pathlib import Path
 import requests
 from dotenv import load_dotenv
 from pydub import AudioSegment
 
-load_dotenv("backend/.env")
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+TOOL_DIR = Path(__file__).resolve().parent
+load_dotenv(PROJECT_ROOT / "backend" / ".env")
 
 FISH_API_KEY = os.getenv("FISH_AUDIO_API_KEY")
 FISH_VOICE_ID = os.getenv("FISH_AUDIO_VOICE_ID", "90a39a3f3c0a45c38502fa1d99dabf96")
@@ -172,7 +175,7 @@ def build_vocal(intro_text, outro_text, total_duration_s, outro_offset_s=20):
 
 # ─── Pipeline ────────────────────────────────────────────────────────────────
 
-def generate_all(output_dir="output_qa_pauses"):
+def generate_all(output_dir=TOOL_DIR / "output_qa_pauses"):
     """Génère tous les vocaux Q&A et Pauses pour 2 jours."""
 
     print("=" * 60)

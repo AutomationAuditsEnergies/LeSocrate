@@ -1,11 +1,15 @@
 """Smoke test local pour verifier que gTTS genere bien un MP3.
 
 Usage:
-    PYTHONPATH=backend venv/bin/python backend/smoke_gtts.py
+    PYTHONPATH=backend venv/bin/python tools/dev/smoke_gtts.py
 """
 
 import argparse
+import sys
 from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(PROJECT_ROOT / "backend"))
 
 from services.basic_tts_service import convert_to_speech_basic
 
@@ -22,7 +26,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--output",
-        default="output_gtts_smoke.mp3",
+        default=str(Path(__file__).resolve().parent / "output_gtts_smoke.mp3"),
         help="Chemin du MP3 de sortie.",
     )
     parser.add_argument(

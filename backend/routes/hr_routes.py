@@ -4052,17 +4052,14 @@ def create_hr_blueprint(socketio):
             return jsonify({"success": False, "error": str(e)}), 500
 
     # ─── Routes Prompt TTS ─────────────────────────────────────────────────
-    # Édite le prompt de la pipeline formation (mode from_scratch) — c'est le
-    # prompt actif pour /formation-pipeline. Le mode expansion legacy utilise
-    # prompt-generation-tts-direct.md qu'on peut ignorer tant qu'on n'utilise
-    # pas le HR Dashboard → Cours Folders en mode manuel.
+    # Édite le prompt général de génération du contenu de formation.
     _TTS_PROMPT_FILE = os.path.join(
-        os.path.dirname(__file__), "..", "prompts", "prompt-generation-tts-scratch.md"
+        os.path.dirname(__file__), "..", "prompts", "prompts-generaux-contenu-formation.md"
     )
 
     @hr_bp.route("/api/hr/tts-prompt", methods=["GET"])
     def get_tts_prompt():
-        """Retourne le contenu du fichier prompt-generation-tts-scratch.md"""
+        """Retourne le contenu du fichier de prompts généraux."""
         denied = _require_admin()
         if denied:
             return denied
@@ -4078,7 +4075,7 @@ def create_hr_blueprint(socketio):
 
     @hr_bp.route("/api/hr/tts-prompt", methods=["POST"])
     def set_tts_prompt():
-        """Écrase le contenu du fichier prompt-generation-tts-scratch.md"""
+        """Écrase le contenu du fichier de prompts généraux."""
         denied = _require_admin()
         if denied:
             return denied

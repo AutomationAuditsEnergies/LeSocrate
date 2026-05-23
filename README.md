@@ -1,38 +1,44 @@
-# 👨‍🏫 Socrate
+# Socrate
 
-## 📘 Présentation
+Application de formation audio synchronisee, avec backend Flask/SocketIO,
+frontend React/Vite, pipeline de generation de contenus pedagogiques et outils
+TTS.
 
-Le projet Socrate est une application web interactive destinée à la diffusion d’un cours audio synchronisé, avec une interface permettant aux utilisateurs de se connecter, d’écouter un fichier audio, et de poser des questions en temps réel via un chat assisté par un agent IA (microservice ElevenLabs). Une interface d’administration permet de consulter l’historique des connexions et durées de présence des utilisateurs.
+## Structure
 
+- `backend/` : API Flask, routes, services, base SQLite locale, prompts backend.
+- `frontend/` : application React/Vite, tests Playwright.
+- `azure-function/` : fonction Azure separee.
+- `cours/` : documents source lourds ou bureautiques (`.docx`, `.pdf`).
+- `courstxt/` : textes de cours et versions TTS-ready.
+- `docs/` : documentation projet, audits, deployment, design, references.
+- `memoire/` : notes d'architecture, decisions, problemes et solutions.
+- `tools/` : scripts ponctuels hors runtime applicatif.
+  - `tools/tts/` : generation/calibration/debug audio.
+  - `tools/dev/` : scripts de developpement local.
+  - `tools/content/` : scripts de correction/nettoyage de contenu.
 
+La racine doit rester limitee aux fichiers de pilotage du repo : README,
+changelog, configuration Git et dossiers principaux.
 
-## ⚙️ Technologies utilisées
+## Installation
 
-- **Python 3** avec **Flask** pour le backend web  
-- **Flask-SocketIO** pour la communication temps réel WebSocket  
-- **Eventlet** pour la gestion asynchrone des websockets  
-- **SQLite** comme base de données légère intégrée  
-- **HTML / JS / CSS** pour les templates frontend  
-- **Requests** pour communiquer avec le microservice IA ElevenLabs (API locale HTTP)  
-- **Socket.IO** côté client pour le chat en temps réel  
-- Fichiers audio statiques pour le cours (wav et mp4)  
+Backend :
 
+```bash
+python -m venv venv
+source venv/bin/activate
+pip install -r backend/requirements.txt
+python backend/run.py
+```
 
+Frontend :
 
-## 📦 Installation et lancement
+```bash
+cd frontend
+npm install
+npm run dev
+```
 
-1. Cloner le dépôt  
-2. Installer les dépendances Python :
-
-   ```bash
-   pip install -r requirements.txt
-   ```
-3. S’assurer que le microservice ElevenLabs est lancé localement sur le port 6000 (endpoint /ask)
-
-4. Lancer le serveur avec :
-
-    ```bash
-    python run.py
-    ```
-
-5. Accéder à l’application via http://localhost:5000
+Les fichiers locaux sensibles ou generes (`backend/.env`, bases `.db`,
+`node_modules`, sorties audio, caches, builds) sont ignores par Git.

@@ -2,7 +2,7 @@
 seed_test_content.py — Insère des segments de test directement en DB.
 
 Usage :
-    python seed_test_content.py <folder_id>
+    python tools/dev/seed_test_content.py <folder_id>
 
 Effet : crée (ou réinitialise) un content_generation_job pour le folder_id
 donné, puis insère 18 segments factices (6 sous-parties × 3 passes).
@@ -16,8 +16,10 @@ import sys
 import os
 import json
 import sqlite3
+from pathlib import Path
 
-DB_PATH = os.path.join(os.path.dirname(__file__), "backend", "database", "socrate.db")
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+DB_PATH = PROJECT_ROOT / "backend" / "database" / "socrate.db"
 
 MOCK_SUB_PARTS = [
     "Introduction et contexte professionnel",
@@ -121,7 +123,7 @@ def seed(folder_id):
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print("Usage : python seed_test_content.py <folder_id>")
+        print("Usage : python tools/dev/seed_test_content.py <folder_id>")
         sys.exit(1)
     try:
         fid = int(sys.argv[1])

@@ -6,10 +6,13 @@ On génère un audio par paragraphe, puis on assemble avec du blanc entre chaque
 import requests
 import os
 import io
+from pathlib import Path
 from pydub import AudioSegment
 from dotenv import load_dotenv
 
-load_dotenv("backend/.env")
+TOOL_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+load_dotenv(PROJECT_ROOT / "backend" / ".env")
 
 API_KEY = os.getenv("FISH_AUDIO_API_KEY")
 VOICE_ID = os.getenv("FISH_AUDIO_VOICE_ID", "90a39a3f3c0a45c38502fa1d99dabf96")
@@ -115,7 +118,7 @@ def generate():
                 full_audio = full_audio + silence_question
 
     # Export
-    output_path = "test_tts_paragraphes.mp3"
+    output_path = TOOL_DIR / "test_tts_paragraphes.mp3"
     output = io.BytesIO()
     full_audio.export(output, format="mp3", bitrate="128k")
 

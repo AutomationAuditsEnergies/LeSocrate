@@ -21,9 +21,9 @@ import edge_tts
 
 import measure_fish_wpm as fish  # réutilise TAG_RE / load_paragraphs / build_batches
 
-ROOT = Path(__file__).resolve().parent
-REPORT_FISH = ROOT / "fish_wpm_report.json"
-OUT_REPORT = ROOT / "edge_calibration_report.json"
+TOOL_DIR = Path(__file__).resolve().parent
+REPORT_FISH = TOOL_DIR / "fish_wpm_report.json"
+OUT_REPORT = TOOL_DIR / "edge_calibration_report.json"
 VOICE = "fr-FR-DeniseNeural"   # défaut EDGE_TTS_VOICE de basic_tts_service
 SAMPLE_WORDS = 4000
 SUBCHUNK_CHARS = 3500          # Edge TTS : on découpe les longs textes

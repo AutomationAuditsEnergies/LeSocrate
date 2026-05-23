@@ -10,6 +10,8 @@ Checkpointing : chaque segment complété est sauvegardé en DB immédiatement.
 En cas d'interruption, la génération reprend au segment suivant non complété.
 """
 
+from __future__ import annotations
+
 import io
 import hashlib
 import os
@@ -18,6 +20,7 @@ import json
 import threading
 import time
 import uuid as uuid_mod
+from datetime import datetime
 
 from database.db import get_db_connection
 from utils.anthropic_client import (
@@ -36,7 +39,9 @@ _COURSE_START_SILENCE_SECONDS = 17
 # Fish Audio S2-Pro mesuré sur 72,2 min / 11 959 mots à speed=0.90.
 _DEFAULT_TTS_WORDS_PER_MINUTE = 165.7
 _COURSE_CONCLUSION_START_MARGIN_SECONDS = 0
-_COURSE_FINAL_SILENCE_SECONDS = 60
+# Marge utilisée pour calculer moins de mots que la durée théorique.
+# Elle ne coupe pas l'audio final : elle réduit seulement la parole générée.
+_COURSE_FINAL_SILENCE_SECONDS = 120
 _DEFAULT_TTS_SPEED = 0.90
 _DEFAULT_TTS_LOCAL_MAX_SPEEDUP = 1.0
 _DEFAULT_TTS_PREFLIGHT_SAFETY = 1.0
@@ -207,6 +212,17 @@ def _content_parallel_subpart_workers(default: int = 7) -> int:
     return max(1, min(16, workers))
 
 
+def _runtime_intra_day_carryover_enabled() -> bool:
+    """Autorise le report technique d'un reste audio vers le cours suivant.
+
+    Désactivé par défaut : chaque cours doit rester autonome. Si un bloc est
+    trop long, on réduit/régénère le texte plutôt que de terminer ce bloc au
+    début du cours suivant.
+    """
+    value = (os.getenv("FORMATION_RUNTIME_INTRA_DAY_CARRYOVER") or "").strip().lower()
+    return value in {"1", "true", "yes", "on"}
+
+
 def _course_conclusion_start_margin_sec():
     return _env_float(
         "FORMATION_TTS_CONCLUSION_START_MARGIN_SEC",
@@ -220,7 +236,7 @@ def _course_final_silence_sec():
     return _env_float(
         "FORMATION_TTS_FINAL_SILENCE_SEC",
         _COURSE_FINAL_SILENCE_SECONDS,
-        min_value=10,
+        min_value=60,
         max_value=180,
     )
 
@@ -234,12 +250,12 @@ def _words_budget_for_speaking_window(target_sec: int, stop_before_end_sec: floa
 
 
 def _course_speech_deadline_sec(target_sec: int | float) -> float:
-    """Dernière seconde autorisée pour la parole avant le silence final."""
+    """Dernière seconde autorisée pour la parole avant la marge finale."""
     return max(0.0, float(target_sec or 0) - _course_final_silence_sec())
 
 
 def _course_voice_window_sec(target_sec: int | float) -> float:
-    """Durée maximale de voix réelle, hors silence initial et silence final."""
+    """Durée maximale de voix réelle, hors marge initiale et marge finale."""
     return max(0.0, _course_speech_deadline_sec(target_sec) - _COURSE_START_SILENCE_SECONDS)
 
 
@@ -269,13 +285,24 @@ def _strip_audio_block_markers(text: str | None) -> str:
     return _AUDIO_BLOCK_MARKER_RE.sub("", text or "").strip()
 
 
+def _preserve_audio_block_marker(original_text: str, updated_text: str) -> str:
+    """Conserve le marqueur canonique `<<<BLOC_AUDIO_N>>>` après review."""
+    match = _AUDIO_BLOCK_MARKER_RE.search(original_text or "")
+    if not match:
+        return updated_text or ""
+    marker = match.group(0).strip()
+    clean_updated = _strip_audio_block_markers(updated_text or "")
+    return f"{marker}\n\n{clean_updated}".strip()
+
+
 def get_course_day_word_budget(playlist_spec=None) -> dict:
     """Budget mots quotidien dérivé des seuls créneaux `cours`.
 
     Les Q&A/pauses ne sont pas intégrées au texte de cours et ne doivent donc
-    pas gonfler la cible. Pour chaque créneau cours, on retire le silence de
-    début et le silence final de sécurité avant d'appliquer la cadence calibrée
-    Fish Audio.
+    pas gonfler la cible. Pour chaque créneau cours, on retire la marge
+    initiale et la marge parole finale avant d'appliquer la cadence calibrée
+    Fish Audio. Cette marge réduit le nombre de mots cible ; elle ne retire pas
+    de minutes au fichier audio final.
     """
     if playlist_spec is None:
         from services.playlist_tts_service import PLAYLIST_SPEC as playlist_spec
@@ -377,6 +404,9 @@ def _build_generation_volume_context(generation_context=None) -> str:
     budget = get_course_segment_generation_budget(generation_context=generation_context)
     day = budget["day_budget"]
     block = budget.get("block_budget")
+    final_margin_sec = int(round(_course_final_silence_sec()))
+    final_margin_min = final_margin_sec / 60.0
+    final_margin_words = int((final_margin_sec / 60.0) * float(day["words_per_minute"]))
     block_line = ""
     if block:
         block_line = (
@@ -396,6 +426,11 @@ hors Q&A et hors pauses.
 Cadence calibrée : {day['words_per_minute']:.0f} mots/minute.
 Budget journée cours uniquement : cible {day['target_words']} mots parlés,
 tolérance {day['min_words']} à {day['max_words']} mots.
+Le budget ne coupe pas l'audio final : il réduit seulement le nombre de mots
+demandés. Il retire déjà la marge initiale et une marge parole finale de
+{final_margin_sec} secondes ({final_margin_min:.1f} min), soit environ
+{final_margin_words} mots en moins par rapport à une parole continue jusqu'à la
+fin du créneau.
 
 Cette passe doit viser environ {budget['target_words']} mots utiles,
 avec une plage acceptable de {budget['min_words']} à {budget['max_words']}
@@ -406,6 +441,108 @@ de 5 000 mots ou de 90 000 mots par journée.
 N'allonge pas artificiellement le texte. Ne cherche pas à remplir les Q&A
 ou les pauses : ils ont leurs propres fichiers et ne comptent pas ici.
 """
+
+
+def _structured_content_generation_enabled() -> bool:
+    value = (os.getenv("FORMATION_STRUCTURED_CONTENT_GENERATION", "true") or "").strip().lower()
+    return value not in {"0", "false", "no", "off"}
+
+
+def _course_section_budget_defaults(course_number: int, target_words: int, parts_count: int, *, is_last_day: bool) -> dict:
+    """Répartit le budget d'un cours en sections contrôlables."""
+    target_words = max(900, int(target_words or 0))
+    parts_count = max(2, min(4, int(parts_count or 3)))
+    if course_number == 1:
+        opening = min(900, max(520, int(target_words * 0.11)))
+        conclusion = min(780, max(560, int(target_words * 0.09)))
+        day_conclusion = 0
+    elif course_number == 7:
+        opening = min(520, max(300, int(target_words * 0.06)))
+        day_conclusion = int(round(_course_words_per_minute() * 2.0))
+        conclusion = min(650, max(430, int(target_words * 0.08)))
+    else:
+        opening = min(520, max(340, int(target_words * 0.07)))
+        conclusion = min(700, max(520, int(target_words * 0.08)))
+        day_conclusion = 0
+
+    min_part_words = min(300, max(120, target_words // (parts_count + 3)))
+    reserved = opening + conclusion + day_conclusion
+    reserved_cap = min(int(target_words * 0.42), target_words - parts_count * min_part_words)
+    if reserved > reserved_cap:
+        scale = max(0.2, reserved_cap / max(1, reserved))
+        opening = max(240, int(opening * scale))
+        conclusion = max(320, int(conclusion * scale))
+        day_conclusion = max(0, int(day_conclusion * scale))
+        reserved = opening + conclusion + day_conclusion
+    remaining = max(parts_count * min_part_words, target_words - reserved)
+    if reserved + remaining > target_words:
+        remaining = max(0, target_words - reserved)
+    base = remaining // parts_count
+    part_budgets = [base for _ in range(parts_count)]
+    part_budgets[-1] += remaining - sum(part_budgets)
+    return {
+        "opening": int(opening),
+        "parts": [int(v) for v in part_budgets],
+        "course_conclusion": int(conclusion),
+        "day_conclusion": int(day_conclusion),
+    }
+
+
+def _structured_course_kind(course_number: int) -> str:
+    if course_number == 1:
+        return "opening_year_day"
+    if course_number == 7:
+        return "end_of_day"
+    return "standard_reprise"
+
+
+def _clean_llm_text(raw: str) -> str:
+    text = (raw or "").strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```[a-zA-Z0-9_-]*\s*", "", text)
+        text = re.sub(r"\s*```$", "", text).strip()
+    text = _strip_audio_block_markers(text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
+
+
+def _sanitize_learner_facing_text(text: str) -> str:
+    clean = text or ""
+    clean = re.sub(r"\b[Bb]loc\b", "partie", clean)
+    clean = re.sub(r"\b[Bb]locs\b", "parties", clean)
+    return clean.strip()
+
+
+def _structured_generation_max_tokens(target_words: int) -> int:
+    return min(16000, max(1200, int(int(target_words or 600) * 2.4) + 700))
+
+
+def _parse_structured_course_plan(raw: str) -> dict:
+    data = _extract_llm_json(raw)
+    if "courses" not in data and "course_plans" in data:
+        data["courses"] = data.get("course_plans")
+    if not isinstance(data.get("courses"), list):
+        raise ValueError("Plan structuré invalide : clé courses absente")
+    return data
+
+
+def _merge_unique_strings(*values) -> list[str]:
+    seen = set()
+    merged = []
+    for value in values:
+        if isinstance(value, str):
+            candidates = [value]
+        elif isinstance(value, list):
+            candidates = value
+        else:
+            candidates = []
+        for item in candidates:
+            clean = str(item or "").strip()
+            key = clean.lower()
+            if clean and key not in seen:
+                seen.add(key)
+                merged.append(clean)
+    return merged
 
 
 def _next_playlist_item_after_index(playlist_spec, idx: int):
@@ -426,14 +563,22 @@ def _course_block_role(bloc_number: int, *, folder_position=None, next_item=None
     parts = []
     if bloc_number == 1 and day_number == 1:
         parts.append(
-            "Ouverture absolue de la formation : accueil calme, contexte général, "
-            "utilité concrète de la formation, programme global, encouragement, "
-            "puis lancement progressif du premier sujet."
+            "Ouverture absolue de la formation : accueil calme, présentation "
+            "synthétique du parcours annuel, thèmes de la journée sans horaires, "
+            "rôle du cours 1, plan du cours en 2 à 4 parties, puis seulement "
+            "lancement progressif du premier sujet."
         )
     elif bloc_number == 1:
         parts.append(
             "Ouverture de journée : reprise douce, rappel vague de la progression, "
             "objectifs de la journée, puis transition naturelle vers le premier sujet."
+        )
+    elif bloc_number == 2:
+        parts.append(
+            "Reprise autonome après Q&A/pause : ne jamais terminer le cours 1. "
+            "Faire un rappel très bref de ce qui a été vu, relier la posture "
+            "d'accueil à distance au thème du cours 2, annoncer l'objectif puis "
+            "un plan de 2 à 4 parties avant tout exemple."
         )
     else:
         parts.append(
@@ -451,10 +596,21 @@ def _course_block_role(bloc_number: int, *, folder_position=None, next_item=None
     next_duration = int(next_item[1] or 0) if next_item and len(next_item) >= 2 else 0
     if next_type in {"qa", "pause", "pause_midi"}:
         if next_type == "qa":
-            parts.append(
+            qa_outro = (
                 "Outro : annoncer que l'on va passer au temps de questions-réponses. "
                 "Le Q&A suivant démarre sans introduction propre."
             )
+            if bloc_number == 1:
+                qa_outro += (
+                    " Pour le cours 1, après cette annonce, aucun nouveau "
+                    "développement ne doit suivre."
+                )
+            elif bloc_number == 2:
+                qa_outro += (
+                    " Pour le cours 2, ne pas ouvrir le cours 3 et ne pas "
+                    "réexpliquer le cours 1 après cette annonce."
+                )
+            parts.append(qa_outro)
         elif next_type == "pause_midi":
             parts.append(
                 "Outro : annoncer naturellement la pause déjeuner. "
@@ -473,58 +629,72 @@ def _course_block_role(bloc_number: int, *, folder_position=None, next_item=None
 
 _COURSE_SLOT_PROMPT_PROFILES = {
     1: {
-        "label": "Cours 1 — lancement de matinée",
-        "moment": "début de matinée, premier contact avec le sujet du jour",
+        "label": "Cours 1 — ouverture de la formation et lancement de journée",
+        "moment": "premier cours de la journée, et potentiellement premier cours de l'année",
         "intention": (
-            "installer la journée, remettre l'apprenant dans le parcours, poser le cadre "
-            "du thème et rendre immédiatement utile ce qui va suivre"
+            "installer une carte mentale claire avant le contenu : parcours global, "
+            "thèmes de la journée, rôle du cours actuel, objectifs et plan oral"
         ),
         "rhythm": (
-            "progressif et accueillant : phrases d'installation, définitions nettes, "
-            "exemples courts, montée en précision sans accélérer trop vite"
+            "progressif, accueillant et très clair : accueil humain, cadrage explicite, "
+            "plan annoncé, puis exemples courts seulement après la structure"
         ),
         "structure": [
-            "ouvrir avec une vraie amorce orale, jamais avec une attaque technique",
-            "situer le sujet dans le métier et dans la journée",
-            "poser les deux ou trois notions socles nécessaires",
-            "donner un premier exemple simple qui servira de repère",
-            "finir par une mini-synthèse et une ouverture vers le Q&A ou la suite",
+            "accueillir les apprenants sans démarrer par une métaphore ou un cas client",
+            "si c'est le premier cours de l'année, présenter synthétiquement les grands thèmes de la formation",
+            "annoncer les thèmes de la journée dans l'ordre, sans citer les horaires",
+            "expliquer le rôle précis du cours 1 et ce que l'apprenant saura mieux faire à la fin",
+            "annoncer un plan de cours en 2 à 4 parties et suivre ce plan dans le même ordre",
+            "verbaliser chaque changement de partie avec une transition claire",
+            "conclure par 3 à 4 minutes équivalent audio : récapitulatif des points vus, utilité concrète, annonce du Q&A dans le tchat",
+            "arrêter strictement le texte après l'annonce du Q&A : aucun exemple, aucune mini-synthèse, aucun remplissage après la conclusion",
         ],
-        "examples": "exemples simples, scènes d'accueil, première demande client, situation facile à visualiser",
+        "examples": "exemples simples et explicitement fictifs, uniquement après l'annonce du cadre et du plan",
         "avoid": [
-            "démarrage brutal du type nouvelle partie ou on va aborder",
-            "liste exhaustive dès les premières minutes",
-            "conclusion de journée ou synthèse trop globale",
-            "cas complexe avant que les bases soient posées",
+            "démarrage direct par la relation client, la voix de l'entreprise ou un client mécontent",
+            "storytelling avant que l'apprenant sache où il est et ce qu'il va apprendre",
+            "tunnels émotionnels ou métaphores longues sans idée nouvelle identifiable",
+            "vocabulaire littéraire ou trop abstrait pour un cours magistral professionnel",
+            "blocs répétés comme 'Prenons quelques secondes pour ancrer cette idée'",
+            "nouveau développement après la conclusion et l'annonce du Q&A",
         ],
-        "handoff": "annoncer naturellement le Q&A ou le prochain temps sans refaire tout le plan",
+        "handoff": "annoncer uniquement le passage au temps de questions-réponses dans le tchat, sans transition vers le cours 2",
     },
     2: {
-        "label": "Cours 2 — première mise en méthode",
-        "moment": "reprise après le premier temps de questions ou une courte pause",
+        "label": "Cours 2 — reprise autonome et nouveau thème",
+        "moment": "reprise après le Q&A et la pause qui suivent le cours 1",
         "intention": (
-            "transformer les bases du cours 1 en méthode de travail : étapes, réflexes, "
-            "ordre des actions, premières erreurs à éviter"
+            "ouvrir un nouveau cours autonome : rappeler brièvement la posture "
+            "d'accueil à distance vue au cours 1, puis basculer vers le thème "
+            "du cours 2 avec objectif, plan et progression claire"
         ),
         "rhythm": (
-            "plus méthodique : on avance par séquences claires, avec des formulations "
-            "pratiques et des points de contrôle réguliers"
+            "reprise douce mais nette : quelques phrases de lien, annonce du "
+            "nouveau thème, plan oral en 2 à 4 parties, puis développement "
+            "méthodique avec transitions visibles"
         ),
         "structure": [
-            "reprendre le fil en une ou deux phrases seulement",
-            "présenter une méthode ou une grille de lecture utilisable",
-            "décomposer les étapes dans l'ordre d'une vraie situation professionnelle",
-            "illustrer par un exemple guidé du début à la fin",
-            "fermer sur ce que l'apprenant doit commencer à faire automatiquement",
+            "commencer par une reprise autonome : ne jamais finir une idée qui appartenait au cours 1",
+            "rappeler en une ou deux phrases ce qui a été abordé au cours précédent",
+            "faire le lien entre le thème du cours 1 et le thème du cours 2",
+            "annoncer clairement ce que ce cours va apprendre et pourquoi c'est utile",
+            "annoncer un plan de 2 à 4 parties maximum avant tout exemple développé",
+            "développer les parties dans l'ordre annoncé, chacune avec une idée nouvelle identifiable",
+            "verbaliser les transitions : passons au deuxième point, maintenant que nous avons vu X, intéressons-nous à Y",
+            "conclure par 3 à 4 minutes équivalent audio : récapitulatif des points du cours 2, utilité concrète, annonce du Q&A dans le tchat",
         ],
-        "examples": "exemple guidé, procédure appliquée, erreur fréquente corrigée, mini-dialogue professionnel",
+        "examples": "exemples simples et explicitement fictifs si le cas n'est pas issu du programme, uniquement après le rappel, le lien et le plan",
         "avoid": [
+            "commencer par 'Et puis', 'Ensuite' ou une phrase qui continue directement la conclusion du cours 1",
+            "terminer une notion absente du texte écrit du cours 1",
+            "rejouer la conclusion du cours 1 ou annoncer son Q&A",
+            "démarrer par un exemple comme Monsieur Klein avant d'avoir annoncé le nouveau thème et le plan",
+            "faire une double introduction du cours 2",
             "réexpliquer longuement le cours 1",
-            "changer de thème sans transition",
+            "changer de thème sans transition explicite",
             "accumuler des conseils non hiérarchisés",
-            "donner une méthode sans exemple complet",
         ],
-        "handoff": "stabiliser la méthode avant d'ouvrir vers un approfondissement ou un cas plus dense",
+        "handoff": "annoncer uniquement le passage au temps de questions-réponses dans le tchat si un Q&A suit, sans transition vers le cours 3",
     },
     3: {
         "label": "Cours 3 — densité de fin de matinée",
@@ -703,6 +873,270 @@ def _course_slot_prompt_profile(bloc_number: int | str | None, passe: int | str 
         f"- Focus de cette passe : {passe_focus}",
     ])
     return "\n".join(lines)
+
+
+def _normalize_structured_course_plans(raw_plan: dict, *, job: dict, playlist_items: list, sub_parts: list) -> dict:
+    """Valide et complète les plans JSON. Les budgets serveur font autorité."""
+    block_plan = _course_audio_block_plan(playlist_items, folder_position=job.get("folder_position"))
+    budgets_by_course = {int(b["bloc_number"]): b for b in block_plan}
+    raw_by_number = {}
+    for item in raw_plan.get("courses") or []:
+        try:
+            raw_by_number[int(item.get("course_number"))] = item
+        except Exception:
+            continue
+
+    try:
+        day_number = int(job.get("folder_position") or 0) + 1
+    except Exception:
+        day_number = None
+    try:
+        nb_days = int(job.get("nb_days") or 0) or None
+    except Exception:
+        nb_days = None
+    is_last_day = bool(nb_days and day_number == nb_days)
+
+    courses = []
+    for course_number in range(1, 8):
+        raw = raw_by_number.get(course_number) or {}
+        budget_block = budgets_by_course.get(course_number) or {}
+        target_words = int(budget_block.get("target_words") or budget_block.get("max_words") or 1200)
+        title = (
+            raw.get("course_title")
+            or (sub_parts[course_number - 1] if course_number - 1 < len(sub_parts) else f"Cours {course_number}")
+        ).strip()
+        raw_parts = raw.get("parts") if isinstance(raw.get("parts"), list) else []
+        parts_count = max(2, min(4, len(raw_parts) or 3))
+        budgets = _course_section_budget_defaults(course_number, target_words, parts_count, is_last_day=is_last_day)
+
+        opening = raw.get("opening") if isinstance(raw.get("opening"), dict) else {}
+        opening.setdefault("type", "ouverture_formation" if course_number == 1 else "reprise_apres_qa_pause")
+        opening["target_words"] = budgets["opening"]
+        if course_number == 1:
+            forced_opening_include = [
+                "accueil oral des apprenants",
+                "présentation synthétique du programme annuel",
+                "présentation des thèmes de la journée sans horaires",
+                "thème du cours actuel",
+                "objectif du cours actuel",
+                "plan du cours avant tout exemple",
+            ]
+            forced_opening_avoid = [
+                "démarrer directement par un exemple",
+                "storytelling avant carte mentale",
+                "mot bloc devant les élèves",
+            ]
+        else:
+            forced_opening_include = [
+                "petite amorce orale naturelle du type Ok, on continue, c'est parti",
+                "rappel bref du cours précédent",
+                "lien avec le cours actuel",
+                "thème du cours actuel",
+                "objectif du cours actuel",
+                "plan du cours avant tout exemple",
+            ]
+            forced_opening_avoid = [
+                "continuer le cours précédent",
+                "double introduction",
+                "exemple avant le plan",
+                "mot bloc devant les élèves",
+            ]
+        opening["must_include"] = _merge_unique_strings(opening.get("must_include"), forced_opening_include)
+        opening["must_avoid"] = _merge_unique_strings(opening.get("must_avoid"), forced_opening_avoid)
+
+        parts = []
+        for idx in range(parts_count):
+            raw_part = raw_parts[idx] if idx < len(raw_parts) and isinstance(raw_parts[idx], dict) else {}
+            parts.append({
+                "part_number": idx + 1,
+                "title": (raw_part.get("title") or f"Partie {idx + 1}").strip(),
+                "target_words": budgets["parts"][idx],
+                "function": (raw_part.get("function") or "Développer une idée pédagogique identifiable.").strip(),
+                "must_include": raw_part.get("must_include") if isinstance(raw_part.get("must_include"), list) else [],
+                "transition_in": (raw_part.get("transition_in") or "").strip(),
+                "transition_out": (raw_part.get("transition_out") or "").strip(),
+            })
+
+        course_conclusion = raw.get("course_conclusion") if isinstance(raw.get("course_conclusion"), dict) else {}
+        course_conclusion["target_words"] = budgets["course_conclusion"]
+        if course_number == 7:
+            course_conclusion["must_include"] = _merge_unique_strings(
+                course_conclusion.get("must_include"),
+                ["récapitulatif du cours", "utilité concrète des points vus"],
+            )
+            course_conclusion["must_avoid"] = _merge_unique_strings(
+                course_conclusion.get("must_avoid"),
+                ["annonce Q/R avant la conclusion globale", "transition vers un nouveau développement"],
+            )
+        else:
+            course_conclusion["must_include"] = _merge_unique_strings(
+                course_conclusion.get("must_include"),
+                ["récapitulatif du cours", "utilité concrète", "annonce Q/R dans le tchat"],
+            )
+            course_conclusion["must_avoid"] = _merge_unique_strings(
+                course_conclusion.get("must_avoid"),
+                ["nouveau développement après annonce Q/R", "transition vers le cours suivant"],
+            )
+
+        day_conclusion = None
+        if course_number == 7:
+            raw_day = raw.get("day_conclusion") if isinstance(raw.get("day_conclusion"), dict) else {}
+            day_conclusion = {
+                "target_words": budgets["day_conclusion"],
+                "must_include": _merge_unique_strings(
+                    raw_day.get("must_include"),
+                    "récapitulatif global de la journée",
+                    "amorce légère de la prochaine séance" if not is_last_day else "clôture finale de formation",
+                    "bonne semaine et à la semaine prochaine" if not is_last_day else "bonne continuation",
+                    "vous pouvez encore poser vos questions dans le tchat si vous voulez",
+                ),
+                "must_avoid": _merge_unique_strings(
+                    raw_day.get("must_avoid"),
+                    ["nouveau développement", "mot bloc devant les élèves"],
+                ),
+            }
+
+        courses.append({
+            "course_number": course_number,
+            "course_title": title,
+            "filename": budget_block.get("filename") or _course_filename_for_bloc(playlist_items, course_number),
+            "duration_minutes": budget_block.get("duration_min") or round(_course_duration_for_bloc(playlist_items, course_number) / 60, 1),
+            "target_words": target_words,
+            "pedagogical_role": (raw.get("pedagogical_role") or _course_block_role(
+                course_number,
+                folder_position=job.get("folder_position"),
+                next_item=("qa", 0, "qa", course_number),
+            )).strip(),
+            "course_kind": _structured_course_kind(course_number),
+            "opening": opening,
+            "learning_objectives": raw.get("learning_objectives") if isinstance(raw.get("learning_objectives"), list) else [],
+            "parts": parts,
+            "course_conclusion": course_conclusion,
+            "day_conclusion": day_conclusion,
+            "global_constraints": {
+                "parts_min": 2,
+                "parts_max": 4,
+                "learner_facing_forbidden_words": ["bloc"],
+                "examples_policy": "Les exemples non sourcés doivent être explicitement fictifs.",
+            },
+        })
+
+    return {
+        "version": "structured-course-plan-v1",
+        "generated_at": datetime.utcnow().isoformat() + "Z",
+        "title": job.get("program_title") or "",
+        "folder_id": job.get("folder_id"),
+        "day_number": day_number,
+        "nb_days": nb_days,
+        "is_last_day": is_last_day,
+        "courses": courses,
+    }
+
+
+def _build_structured_course_plan_prompt(job: dict, playlist_items: list, sub_parts: list, module_contents: dict) -> str:
+    block_plan = _course_audio_block_plan(playlist_items, folder_position=job.get("folder_position"))
+    block_lines = "\n".join(
+        f"- Cours {b['bloc_number']} · {b['duration_min']} min · cible {b['target_words']} mots · {b['role']}"
+        for b in block_plan
+    )
+    sub_part_lines = "\n".join(f"- Cours {i + 1}: {name}" for i, name in enumerate(sub_parts or []))
+    module_summary = "\n\n".join(
+        f"## {name}\n{_compact_words(text, 650)}"
+        for name, text in (module_contents or {}).items()
+        if (text or "").strip()
+    )
+    return f"""Tu es ingénieur pédagogique. Tu dois produire le PLAN JSON STRICT de 7 cours audio d'une journée.
+
+Le plan est libre maintenant, mais il sera verrouillé ensuite : le texte final devra suivre ce plan.
+
+Contraintes générales :
+- Chaque cours a 2 à 4 parties, jamais moins, jamais plus.
+- Devant les élèves, ne jamais utiliser le mot "bloc" : utiliser "partie", "cours", "séance" ou "moment".
+- Un cours est toujours suivi d'un temps de questions-réponses dans le tchat.
+- Cours 1 : accueil, parcours annuel synthétique, thèmes de la journée, thème/objectifs/plan, conclusion + Q/R.
+- Cours 2 à 6 : petite reprise naturelle, rappel bref du cours précédent, lien avec le thème actuel, thème/objectifs/plan, conclusion + Q/R.
+- Cours 7 : conclusion du cours, conclusion globale de journée, amorce prochaine séance, bonne semaine/à la semaine prochaine, puis mention douce du tchat.
+- Si c'est la dernière journée de formation, le cours 7 doit souhaiter bonne continuation au lieu d'annoncer la prochaine séance.
+- Les exemples non sourcés doivent être explicitement fictifs.
+
+Budget audio par cours :
+{block_lines}
+
+Créneaux détectés :
+{sub_part_lines}
+
+Titre professionnel :
+{job.get('program_title') or ''}
+
+Intitulé journée :
+{job.get('folder_name') or ''}
+
+Programme source :
+{_compact_words(job.get('program_text') or '', 3500)}
+
+Contenus module disponibles :
+{module_summary or '(aucun contenu module dédié)'}
+
+Réponds UNIQUEMENT en JSON valide :
+{{
+  "courses": [
+    {{
+      "course_number": 1,
+      "course_title": "...",
+      "pedagogical_role": "...",
+      "opening": {{"type": "...", "must_include": [], "must_avoid": []}},
+      "learning_objectives": ["..."],
+      "parts": [
+        {{"part_number": 1, "title": "...", "function": "...", "must_include": [], "transition_in": "...", "transition_out": "..."}}
+      ],
+      "course_conclusion": {{"must_include": [], "must_avoid": []}},
+      "day_conclusion": null
+    }}
+  ]
+}}"""
+
+
+def _generate_structured_course_plan(job: dict, playlist_items: list, sub_parts: list, module_contents: dict, model=None) -> dict:
+    prompt = _build_structured_course_plan_prompt(job, playlist_items, sub_parts, module_contents)
+    for attempt in range(3):
+        try:
+            raw = _anthropic_post(
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=9000,
+                model=model,
+            )
+            return _normalize_structured_course_plans(
+                _parse_structured_course_plan(raw),
+                job=job,
+                playlist_items=playlist_items,
+                sub_parts=sub_parts,
+            )
+        except Exception as e:
+            logger.warning("⚠️ Plan structuré tentative %s/3 échouée : %s", attempt + 1, str(e)[:300])
+            if attempt == 2:
+                raise
+    raise ValueError("Plan structuré impossible")
+
+
+def _section_label(section: dict) -> str:
+    kind = section.get("kind")
+    if kind == "opening":
+        return "introduction"
+    if kind == "course_conclusion":
+        return "conclusion du cours"
+    if kind == "day_conclusion":
+        return "conclusion globale de la journée"
+    return f"partie {section.get('part_number')}"
+
+
+def _structured_sections_for_course(course_plan: dict) -> list[dict]:
+    sections = [{"kind": "opening", **(course_plan.get("opening") or {})}]
+    for part in course_plan.get("parts") or []:
+        sections.append({"kind": "part", **part})
+    sections.append({"kind": "course_conclusion", **(course_plan.get("course_conclusion") or {})})
+    if course_plan.get("day_conclusion"):
+        sections.append({"kind": "day_conclusion", **course_plan["day_conclusion"]})
+    return sections
 
 
 def _block_min_words(word_budget: int) -> int:
@@ -1283,7 +1717,7 @@ def _assert_course_voice_duration_within_deadline(
     *,
     has_start_silence: bool,
 ) -> None:
-    """Vérifie que la dernière parole du cours respecte le silence final configuré."""
+    """Vérifie que la parole reste sous la marge finale configurée."""
     if not target_sec or voice_duration_sec is None:
         return
     final_silence_sec = _course_final_silence_sec()
@@ -1296,7 +1730,7 @@ def _assert_course_voice_duration_within_deadline(
         raise ValueError(
             f"{filename} dépasse la limite de parole T-{final_silence_sec:.0f}s "
             f"({float(voice_duration_sec):.1f}s > {float(limit_sec):.1f}s). "
-            "Audio non uploadé pour garder le silence final prévu."
+            "Audio non uploadé : il faut moins de mots pour garder la marge finale."
         )
 
 
@@ -1791,12 +2225,14 @@ def _synthesize_course_audio_synced_to_slides(
           `_mp3_duration_seconds_no_ffprobe`, et calcule un `observed_wpm`
           à mesure (bootstrap _BOOTSTRAP_WPM_EDGE_TTS).
         - Sub-chunke adaptativement (paliers 600/300/150 mots) selon la
-          marge restante avant la deadline parole (`target_sec - silence final`).
-        - Stoppe la génération avant dépassement et reporte les chunks
-          non générés via le retour `unconsumed_chunks` (cascade vers le
-          bloc suivant ou le carryover inter-jours).
-        - Préfixe `prepended_chunks` (carryover intra-jour des blocs
-          précédents) en tête de la file.
+          marge restante avant la deadline parole (`target_sec - marge parole finale`).
+        - Stoppe la génération avant dépassement et retourne les chunks non
+          générés via `unconsumed_chunks`.
+        - Par défaut, ces chunks ne sont PAS préfixés au cours suivant :
+          chaque cours doit rester autonome. Le report intra-jour n'est actif
+          que si `FORMATION_RUNTIME_INTRA_DAY_CARRYOVER=1`.
+        - Si `prepended_chunks` est explicitement fourni, il est préfixé en
+          tête de la file avec une amorce IA.
         - N'ajoute plus de conclusion runtime : la fin du cours appartient au
           texte calibré en amont, puis à l'humanisation/review.
 
@@ -2176,7 +2612,7 @@ def _synthesize_course_audio_synced_to_slides(
             raise ValueError(
                 f"Bloc {bloc['bloc_number']} sync trop long "
                 f"({final_duration:.1f}s > limite parole {speech_deadline_sec:.1f}s, "
-                f"silence final {final_silence_sec:.0f}s)."
+                f"marge parole {final_silence_sec:.0f}s)."
             )
         if final_duration < target_sec:
             full_audio += AudioSegment.silent(duration=int((target_sec - final_duration) * 1000))
@@ -2442,6 +2878,98 @@ Réponds uniquement avec le texte remanié, sans commentaire."""
     if len(reduced.split()) > budget:
         raise ValueError(
             f"Réduction dernier bloc encore trop longue ({len(reduced.split())} mots > budget {budget})"
+        )
+    return reduced
+
+
+def _reduce_course_bloc_for_runtime_overflow(
+    bloc: dict,
+    runtime_unconsumed_chunks: list,
+    *,
+    model=None,
+) -> str:
+    """Réduit automatiquement un bloc trop long au lieu de reporter sa fin au bloc suivant."""
+    text = (bloc.get("text") or "").strip()
+    if not text:
+        return text
+
+    current_words = count_tts_spoken_words(text)
+    overflow_text = "\n\n".join(
+        (chunk.get("text") or "").strip()
+        for chunk in (runtime_unconsumed_chunks or [])
+        if (chunk.get("text") or "").strip()
+    )
+    overflow_words = max(1, count_tts_spoken_words(overflow_text))
+    budget = int(bloc.get("main_word_budget") or bloc.get("word_budget") or current_words)
+
+    # On retire le surplus observé + une marge pour éviter une deuxième dérive.
+    target_words = min(
+        max(700, int(budget * 0.96)),
+        max(700, current_words - overflow_words - 140),
+    )
+    target_words = max(450, min(target_words, current_words - 80))
+    min_words = max(350, int(target_words * 0.90))
+    bloc_number = int(bloc.get("bloc_number") or 0)
+
+    prompt = f"""Tu es un réviseur pédagogique spécialisé dans les scripts audio TTS.
+
+PROBLÈME :
+Le cours {bloc_number}/7 est trop long pour son créneau. La fin ne doit JAMAIS
+être reportée au cours suivant. Tu dois réduire le texte du cours actuel pour
+qu'il tienne dans son propre créneau.
+
+OBJECTIF MOTS :
+- Texte actuel : {current_words} mots parlés environ.
+- Surplus observé en fin de bloc : {overflow_words} mots environ.
+- Cible de sortie : entre {min_words} et {target_words} mots.
+
+PARTIE QUI A DÉBORDÉ AU RUNTIME :
+---
+{_compact_words(overflow_text, 900) or "(non disponible)"}
+---
+
+TEXTE COMPLET DU COURS À RÉDUIRE :
+---
+{text}
+---
+
+MISSION :
+Réécris le TEXTE COMPLET DU COURS À RÉDUIRE en version plus courte.
+Réduis prioritairement la fin, les reformulations, les exemples redondants et
+les développements qui ouvrent un nouveau sujet trop tard.
+
+CONTRAINTES ABSOLUES :
+- Ne reporte rien au cours suivant.
+- Ne supprime pas l'architecture du cours : reprise, thème, objectif, plan,
+  transitions, conclusion.
+- Ne crée pas de double introduction.
+- Ne termine pas le cours précédent au début de ce cours.
+- Ne change pas le fond pédagogique.
+- N'ajoute aucune nouvelle idée.
+- Si le cours se termine par une Q/R, garde une annonce Q/R sobre à la fin.
+- Après l'annonce Q/R, aucun nouveau développement.
+- Garde un style oral naturel, professionnel, prêt pour Fish Audio.
+- Pas de markdown, pas de commentaire, pas de métadonnées.
+
+Réponds uniquement avec le texte réduit complet."""
+
+    reduced = _llm_post(
+        messages=[{"role": "user", "content": prompt}],
+        max_tokens=min(14000, int(target_words * 2.1) + 900),
+        model=model or default_model(),
+    )
+    reduced = (reduced or "").replace("```", "").strip()
+    if not reduced:
+        logger.warning("⚠️ Réduction runtime bloc %s vide, texte original conservé", bloc_number)
+        return text
+
+    reduced_words = count_tts_spoken_words(reduced)
+    if reduced_words > target_words:
+        logger.warning(
+            "⚠️ Réduction runtime bloc %s encore longue : %s mots > cible %s",
+            bloc_number,
+            reduced_words,
+            target_words,
         )
     return reduced
 
@@ -3604,7 +4132,7 @@ def _synthesize_course_audio_to_fit(bloc, convert_to_speech, measure_duration_ms
     if max_voice_sec <= 0:
         raise ValueError(
             f"Bloc {bloc['bloc_number']} impossible à synthétiser : cible {target_sec}s "
-            f"trop courte pour garder {final_silence_sec:.0f}s de silence final."
+            f"trop courte pour garder {final_silence_sec:.0f}s de marge parole."
         )
     api_speed = _course_tts_speed()
     attempts = []
@@ -3637,7 +4165,7 @@ def _synthesize_course_audio_to_fit(bloc, convert_to_speech, measure_duration_ms
         raise ValueError(
             f"Bloc {bloc['bloc_number']} trop long pour {target_sec}s "
             f"(voix {raw_duration:.1f}s > max {max_voice_sec:.1f}s à speed={api_speed}, "
-            f"silence final {final_silence_sec:.0f}s). "
+            f"marge parole {final_silence_sec:.0f}s). "
             "Speedup local désactivé par défaut pour préserver la voix. "
             "Audio non uploadé pour éviter une coupure en pleine phrase."
         )
@@ -3647,7 +4175,7 @@ def _synthesize_course_audio_to_fit(bloc, convert_to_speech, measure_duration_ms
             f"Bloc {bloc['bloc_number']} trop long pour {target_sec}s "
             f"(voix {raw_duration:.1f}s > max {max_voice_sec:.1f}s, "
             f"speedup requis x{required_speedup:.3f} > limite x{max_speedup:.3f}, "
-            f"silence final {final_silence_sec:.0f}s). "
+            f"marge parole {final_silence_sec:.0f}s). "
             "Audio non uploadé pour éviter une coupure en pleine phrase."
         )
 
@@ -3687,26 +4215,22 @@ def _synthesize_course_audio_to_fit(bloc, convert_to_speech, measure_duration_ms
     )
     raise ValueError(
         f"Bloc {bloc['bloc_number']} trop long pour {target_sec}s "
-        f"(max voix {max_voice_sec:.1f}s, silence final {final_silence_sec:.0f}s). "
+        f"(max voix {max_voice_sec:.1f}s, marge parole {final_silence_sec:.0f}s). "
         f"Tentatives locales: {attempts_str}. "
         "Audio non uploadé pour éviter une coupure en pleine phrase."
     )
 
-# Chemins vers les fichiers de prompts (dans backend/prompts/ pour qu'ils soient
-# embarqués dans l'artifact de déploiement backend — le workflow ne package que
-# ./backend/, donc des fichiers à la racine du repo seraient introuvables en prod).
-_PROMPT_FILE = os.path.join(
-    os.path.dirname(__file__), "..", "prompts", "prompt-generation-tts-direct.md"
-)
-_PROMPT_FILE_SCRATCH = os.path.join(
-    os.path.dirname(__file__), "..", "prompts", "prompt-generation-tts-scratch.md"
+# Prompt général de génération du contenu de formation.
+# Il reste dans backend/prompts/ pour être embarqué dans l'artifact de déploiement
+# backend — le workflow ne package que ./backend/.
+_GENERAL_FORMATION_PROMPTS_FILE = os.path.join(
+    os.path.dirname(__file__), "..", "prompts", "prompts-generaux-contenu-formation.md"
 )
 
 # Cache des prompts invalidé sur mtime du fichier source — permet d'éditer
 # les prompts .md sans redémarrer le backend (watchmedo ne watch que *.py).
 # Structure : (prompts_list, mtime) ou None.
-_PASSE_PROMPTS = None           # mode expansion
-_PASSE_PROMPTS_SCRATCH = None   # mode from_scratch
+_PASSE_PROMPTS = None
 
 
 def _parse_passe_prompts_from_file(path: str) -> list:
@@ -3722,22 +4246,18 @@ def _parse_passe_prompts_from_file(path: str) -> list:
 
 def _get_passe_prompts(from_scratch=False):
     """
-    Retourne les 3 prompts (Passe 1/2/3) depuis le bon fichier .md.
+    Retourne les 3 prompts généraux (Passe 1/2/3) depuis le fichier .md.
     Recharge automatiquement si le fichier a été modifié depuis la dernière lecture.
     """
-    global _PASSE_PROMPTS, _PASSE_PROMPTS_SCRATCH
-    path = _PROMPT_FILE_SCRATCH if from_scratch else _PROMPT_FILE
+    global _PASSE_PROMPTS
+    path = _GENERAL_FORMATION_PROMPTS_FILE
     mtime = os.path.getmtime(path)
 
-    cached = _PASSE_PROMPTS_SCRATCH if from_scratch else _PASSE_PROMPTS
-    if cached is not None and cached[1] == mtime:
-        return cached[0]
+    if _PASSE_PROMPTS is not None and _PASSE_PROMPTS[1] == mtime:
+        return _PASSE_PROMPTS[0]
 
     prompts = _parse_passe_prompts_from_file(path)
-    if from_scratch:
-        _PASSE_PROMPTS_SCRATCH = (prompts, mtime)
-    else:
-        _PASSE_PROMPTS = (prompts, mtime)
+    _PASSE_PROMPTS = (prompts, mtime)
     logger.info(f"📖 Prompts rechargés depuis {os.path.basename(path)}")
     return prompts
 
@@ -3792,10 +4312,14 @@ def _build_course_position_context(
             "Avant toute notion métier, écris une vraie introduction de formation",
             "de 220 à 380 mots. Elle doit accueillir, raconter pourquoi cette",
             "formation existe, expliquer en quoi elle sera utile concrètement",
-            "dans le métier, présenter le parcours global, annoncer les grandes",
-            "familles de compétences qui seront travaillées, donner envie de",
-            "s'engager, rassurer les apprenants sur le rythme, puis seulement",
-            "faire une transition douce vers le premier sujet.",
+            "dans le métier, présenter synthétiquement le parcours global de",
+            "l'année, annoncer les grandes familles de compétences qui seront",
+            "travaillées, donner envie de s'engager et rassurer les apprenants",
+            "sur le rythme.",
+            "Ensuite, annonce les thèmes de la journée dans l'ordre, sans citer",
+            "les horaires, puis explique le rôle du cours actuel, ses objectifs",
+            "et son plan oral de 2 à 4 parties. Les exemples, cas clients et",
+            "métaphores ne doivent venir qu'après cette carte mentale.",
             "Cette ouverture doit ressembler au début d'une année de formation,",
             "pas au début d'un chapitre isolé.",
             "Interdiction de commencer par : \"Bon, on va aborder...\",",
@@ -3808,7 +4332,8 @@ def _build_course_position_context(
             "CETTE PASSE EST LE DÉBUT D'UNE JOURNÉE DE FORMATION.",
             "Tu dois commencer par une vraie amorce de journée : accueil,",
             "remise en route, lien avec la progression globale, intention du jour,",
-            "puis transition progressive vers le premier sujet.",
+            "thèmes de la journée dans l'ordre sans horaires, puis transition",
+            "progressive vers le premier sujet.",
             "Interdiction de démarrer brutalement par \"Bon, on va aborder...\",",
             "\"nouvelle partie du cours\" ou une phrase de conférence.",
         ])
@@ -3924,29 +4449,15 @@ def _generate_segment_text(passe, sub_part_name, program_title, program_text, pr
     prompts = _get_passe_prompts(from_scratch=from_scratch)
     template = prompts[passe - 1]
 
-    if from_scratch:
-        # Mode from_scratch : toutes les passes reçoivent le contenu du module
-        prompt = template
-        prompt = prompt.replace("{NOM_DU_TITRE_PROFESSIONNEL}", program_title)
-        prompt = prompt.replace("{NOM_DE_LA_SOUS_PARTIE}", sub_part_name)
-        prompt = prompt.replace("{CONTENU_DU_MODULE}", (module_content or program_text)[:15000])
-    else:
-        # Mode expansion (comportement historique)
-        if passe == 1:
-            prompt = template
-            prompt = prompt.replace("{NOM_DU_TITRE_PROFESSIONNEL}", program_title)
-            prompt = prompt.replace("{NOM_DE_LA_SOUS_PARTIE}", sub_part_name)
-            prompt = prompt.replace("{COLLER_LE_PROGRAMME_ICI}", program_text[:12000])
-        elif passe == 2:
-            prompt = template
-            prompt = prompt.replace("{NOM_DU_TITRE_PROFESSIONNEL}", program_title)
-            prompt = prompt.replace("{NOM_DE_LA_SOUS_PARTIE}", sub_part_name)
-            prompt = prompt.replace("{COLLER_LE_TEXTE_DE_LA_PASSE_1}", prev_text[:40000])
-        else:  # passe 3
-            prompt = template
-            prompt = prompt.replace("{NOM_DU_TITRE_PROFESSIONNEL}", program_title)
-            prompt = prompt.replace("{NOM_DE_LA_SOUS_PARTIE}", sub_part_name)
-            prompt = prompt.replace("{COLLER_LE_TEXTE_COMPLET_PASSE_1_ET_2}", prev_text[:60000])
+    prompt = template
+    prompt = prompt.replace("{NOM_DU_TITRE_PROFESSIONNEL}", program_title)
+    prompt = prompt.replace("{NOM_DE_LA_SOUS_PARTIE}", sub_part_name)
+    prompt = prompt.replace("{CONTENU_DU_MODULE}", (module_content or program_text)[:15000])
+    # Compatibilité avec d'anciens placeholders encore présents dans certaines
+    # sections documentaires du prompt.
+    prompt = prompt.replace("{COLLER_LE_PROGRAMME_ICI}", program_text[:12000])
+    prompt = prompt.replace("{COLLER_LE_TEXTE_DE_LA_PASSE_1}", prev_text[:40000])
+    prompt = prompt.replace("{COLLER_LE_TEXTE_COMPLET_PASSE_1_ET_2}", prev_text[:60000])
 
     if generation_context:
         prompt += "\n\n" + _build_course_position_context(**generation_context)
@@ -4294,6 +4805,245 @@ def _assemble_and_upload(folder_id, platform_id, job_id):
     return total_words, original_name
 
 
+def _build_structured_section_prompt(
+    *,
+    job: dict,
+    course_plan: dict,
+    section: dict,
+    previous_course_summary: str,
+    generated_so_far: str,
+    module_content: str,
+) -> str:
+    target_words = int(section.get("target_words") or 500)
+    min_words = max(120, int(target_words * 0.82))
+    max_words = max(min_words + 50, int(target_words * 1.10))
+    return f"""Tu écris UNE SECTION d'un cours audio professionnel TTS-ready.
+
+Tu dois respecter le plan verrouillé. N'écris que la section demandée : {_section_label(section)}.
+
+Budget section :
+- cible : {target_words} mots
+- plage acceptable : {min_words} à {max_words} mots
+
+Plan complet verrouillé du cours :
+{json.dumps(course_plan, ensure_ascii=False, indent=2)}
+
+Section à écrire :
+{json.dumps(section, ensure_ascii=False, indent=2)}
+
+Contexte utile :
+- Titre professionnel : {job.get('program_title') or ''}
+- Intitulé journée : {job.get('folder_name') or ''}
+- Rappel cours précédent : {previous_course_summary or '(aucun)'}
+- Texte déjà généré dans ce cours : {_compact_words(generated_so_far, 900) or '(début du cours)'}
+
+Contenu source à utiliser :
+{_compact_words(module_content or job.get('program_text') or '', 4500)}
+
+Contraintes absolues :
+- N'utilise jamais le mot "bloc" devant les élèves.
+- Oral professionnel, clair, chaleureux, sans vocabulaire littéraire excessif.
+- Pas de markdown, pas de titre écrit, pas de liste administrative froide.
+- Les exemples non sourcés doivent être présentés comme fictifs ou hypothétiques.
+- Ne termine jamais le cours précédent.
+- Ne devance pas une section suivante.
+- Si cette section est une introduction, elle doit annoncer le plan avant tout exemple.
+- Si cette section est une partie, elle doit développer seulement cette partie et apporter une idée nouvelle identifiable.
+- Si cette section est une conclusion, elle doit récapituler sans ouvrir un nouveau développement.
+- Après l'annonce Q/R ou la mention du tchat, aucun nouveau développement.
+
+Réponds uniquement avec le texte oral de cette section."""
+
+
+def _fit_generated_section_to_budget(text: str, target_words: int) -> str:
+    text = _sanitize_learner_facing_text(_clean_llm_text(text))
+    target_words = int(target_words or 0)
+    if target_words <= 0:
+        return text
+    max_words = int(target_words * 1.14)
+    if count_tts_spoken_words(text) > max_words:
+        text = _trim_text_to_max_spoken_words(text, max_words)
+    return text.strip()
+
+
+def _generate_structured_section(
+    *,
+    job: dict,
+    course_plan: dict,
+    section: dict,
+    previous_course_summary: str,
+    generated_so_far: str,
+    module_content: str,
+    model=None,
+) -> str:
+    target_words = int(section.get("target_words") or 500)
+    prompt = _build_structured_section_prompt(
+        job=job,
+        course_plan=course_plan,
+        section=section,
+        previous_course_summary=previous_course_summary,
+        generated_so_far=generated_so_far,
+        module_content=module_content,
+    )
+    raw = _anthropic_post(
+        messages=[{"role": "user", "content": prompt}],
+        max_tokens=_structured_generation_max_tokens(target_words),
+        model=model,
+    )
+    return _fit_generated_section_to_budget(raw, target_words)
+
+
+def _summarize_previous_course_for_structured(course_text: str, model=None) -> str:
+    text = _compact_words(course_text or "", 900)
+    if not text:
+        return ""
+    prompt = f"""Résume en 2 phrases maximum ce cours pour permettre au cours suivant de faire un rappel bref.
+Ne parle pas de fichier, d'audio ou de bloc.
+
+COURS :
+{text}
+
+Réponds uniquement avec le résumé oral court."""
+    try:
+        return _sanitize_learner_facing_text(_clean_llm_text(_anthropic_post(
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=350,
+            model=model,
+        )))
+    except Exception:
+        return _compact_words(course_text, 80)
+
+
+def _calibrate_structured_course_text(course_plan: dict, text: str, model=None) -> tuple[str, dict]:
+    target_words = int(course_plan.get("target_words") or 0)
+    block = {
+        "bloc_number": int(course_plan.get("course_number") or 0),
+        "filename": course_plan.get("filename"),
+        "duration_min": course_plan.get("duration_minutes"),
+        "target_words": target_words,
+        "min_words": _block_min_words(target_words),
+        "max_words": target_words,
+        "word_budget": target_words,
+        "role": course_plan.get("pedagogical_role") or "",
+    }
+    calibrated, result = _calibrate_single_audio_block(
+        block=block,
+        text=_sanitize_learner_facing_text(text),
+        model=model,
+        max_iterations=int(os.getenv("FORMATION_STRUCTURED_COURSE_CALIBRATION_ITERATIONS", "2") or "2"),
+        day_context="Plan structuré verrouillé : respecter l'architecture du cours et ne jamais utiliser le mot bloc devant les élèves.",
+    )
+    return _sanitize_learner_facing_text(calibrated), result
+
+
+def _clear_content_segments_for_structured(job_id: int) -> None:
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM content_generation_segments WHERE job_id = ?", (job_id,))
+    conn.commit()
+    conn.close()
+
+
+def _save_structured_course_segment(job_id: int, course_plan: dict, text: str) -> None:
+    course_number = int(course_plan.get("course_number") or 0)
+    stored_text = f"<<<BLOC_AUDIO_{course_number}>>>\n\n{text}".strip()
+    _save_segment_db(
+        job_id,
+        course_number - 1,
+        course_plan.get("course_title") or f"Cours {course_number}",
+        1,
+        stored_text,
+    )
+
+
+def _run_structured_content_generation(
+    *,
+    job: dict,
+    folder_id: int,
+    platform_id: int,
+    sub_parts: list,
+    module_contents: dict,
+    on_progress=None,
+    model=None,
+) -> tuple[int, str, dict]:
+    playlist_items = _playlist_items_for_platform(platform_id)
+    plan = _generate_structured_course_plan(job, playlist_items, sub_parts, module_contents, model=model)
+    _clear_content_segments_for_structured(job["id"])
+
+    generated_blocks = []
+    previous_summary = ""
+    total_words = 0
+    total_courses = len(plan.get("courses") or [])
+
+    for idx, course_plan in enumerate(plan.get("courses") or [], start=1):
+        course_number = int(course_plan.get("course_number") or idx)
+        if on_progress:
+            on_progress(course_number - 1, NUM_SUB_PARTS, 1, total_words, f"Plan validé · génération cours {course_number}/7")
+        module_content = module_contents.get(course_plan.get("course_title") or "", "")
+        if not module_content and course_number - 1 < len(sub_parts):
+            module_content = module_contents.get(sub_parts[course_number - 1], "")
+
+        section_texts = []
+        for section in _structured_sections_for_course(course_plan):
+            label = _section_label(section)
+            if on_progress:
+                on_progress(course_number - 1, NUM_SUB_PARTS, 1, total_words, f"Cours {course_number}/7 · {label}")
+            section_text = _generate_structured_section(
+                job=job,
+                course_plan=course_plan,
+                section=section,
+                previous_course_summary=previous_summary,
+                generated_so_far="\n\n".join(section_texts),
+                module_content=module_content,
+                model=model,
+            )
+            section_texts.append(section_text)
+
+        course_text = "\n\n".join(s for s in section_texts if s.strip()).strip()
+        course_text, calibration = _calibrate_structured_course_text(course_plan, course_text, model=model)
+        _save_structured_course_segment(job["id"], course_plan, course_text)
+        words = count_tts_spoken_words(course_text)
+        total_words += words
+        generated_blocks.append({
+            "bloc_number": course_number,
+            "filename": course_plan.get("filename"),
+            "duration_sec": _course_duration_for_bloc(playlist_items, course_number),
+            "duration_min": course_plan.get("duration_minutes"),
+            "status": "planned",
+            "text": course_text,
+            "word_count": words,
+            "planned_word_count": words,
+            "word_budget": int(course_plan.get("target_words") or 0),
+            "main_word_budget": int(course_plan.get("target_words") or 0),
+            "dirty": True,
+            "structured_plan": course_plan,
+            "calibration": calibration,
+        })
+        previous_summary = _summarize_previous_course_for_structured(course_text, model=model)
+        _update_job_db(job["id"], total_words=total_words, current_sub_part=course_number - 1, current_passe=1)
+        logger.info(
+            "PIPELINE_STRUCTURED_COURSE_DONE formation_job_id=%s content_job_id=%s folder_id=%s course=%s/%s words=%s target=%s",
+            job.get("formation_job_id"),
+            job["id"],
+            folder_id,
+            course_number,
+            total_courses,
+            words,
+            course_plan.get("target_words"),
+        )
+
+    final_words, filename = _assemble_and_upload(folder_id, platform_id, job["id"])
+    payload = {
+        "generated_at": datetime.utcnow().isoformat() + "Z",
+        "mode": "structured_content_generation",
+        "structured_course_plan": plan,
+        "planned_course_blocs": generated_blocks,
+        "course_blocs": [],
+    }
+    _save_course_script_plan(platform_id, folder_id, payload)
+    return final_words, filename, payload
+
+
 # ─── Pipeline principale ──────────────────────────────────────────────────────
 
 def run_content_generation(folder_id, on_progress=None, mode="normal", model=None):
@@ -4377,6 +5127,31 @@ def run_content_generation(folder_id, on_progress=None, mode="normal", model=Non
     _update_job_db(job_id, status="running", error_message=None)
 
     try:
+        if _structured_content_generation_enabled() and not is_mock and not is_mini:
+            structured_job = dict(job)
+            structured_job["folder_id"] = folder_id
+            _progress(0, 1, job["total_words"] or 0, "Plan JSON structuré — génération des 7 cours")
+            total_words, filename, _payload = _run_structured_content_generation(
+                job=structured_job,
+                folder_id=folder_id,
+                platform_id=platform_id,
+                sub_parts=sub_parts,
+                module_contents=module_contents,
+                on_progress=on_progress,
+                model=model,
+            )
+            _update_job_db(job_id, status="completed", total_words=total_words)
+            _progress(NUM_SUB_PARTS, 1, total_words, f"✅ Génération structurée terminée : {filename}")
+            logger.info(
+                "PIPELINE_CONTENT_DONE formation_job_id=%s content_job_id=%s folder_id=%s mode=structured total_words=%s duration_ms=%s",
+                formation_job_id,
+                job_id,
+                folder_id,
+                total_words,
+                int((time.time() - started_at) * 1000),
+            )
+            return
+
         done_set = _get_completed_segments(job_id)
         total_words = job["total_words"] or 0
         logger.info(
@@ -5624,10 +6399,15 @@ def generate_audio_from_script(
 
         target_sec = bloc["target_sec"]
 
-        # Si on a un carryover intra-jour à injecter, on doit régénérer ce bloc
-        # même s'il était propre côté texte initial (sinon l'ancien MP3 ne
-        # contiendra pas le carryover qu'on doit lire au début).
-        if runtime_fit_enabled and intra_day_carryover_chunks and not bloc["dirty"]:
+        # Le carryover intra-jour est désactivé par défaut : un cours ne doit
+        # pas commencer en terminant le précédent.
+        intra_day_carryover_active = (
+            runtime_fit_enabled and _runtime_intra_day_carryover_enabled()
+        )
+
+        # Si le carryover intra-jour est explicitement activé, on doit
+        # régénérer ce bloc même s'il était propre côté texte initial.
+        if intra_day_carryover_active and intra_day_carryover_chunks and not bloc["dirty"]:
             bloc["dirty"] = True
             logger.info(
                 f"   🔁 Bloc {bloc['bloc_number']} ({filename}) : forcé dirty=True "
@@ -5768,30 +6548,126 @@ def generate_audio_from_script(
                 f"[SYNC SLIDES] Bloc {bloc['bloc_number']}/7 — {mode_label} ({len(audio_bloc['text'].split())} mots)...",
             )
             logger.info(f"   🖼️ Bloc {bloc['bloc_number']} ({filename}) — TTS synchronisé slides")
-            # Runtime fit : préfixe le tampon intra-jour, capture le surplus
-            # non consommé pour cascade au bloc suivant.
-            prepended_for_call = intra_day_carryover_chunks if runtime_fit_enabled else None
-            (
-                final_bytes,
-                voice_duration,
-                fit_method,
-                attempts,
-                bloc_timings,
-                runtime_unconsumed_chunks,
-                runtime_consumed_chunks,
-            ) = _synthesize_course_audio_synced_to_slides(
-                audio_bloc,
-                slide_deck.get("slides", []) if slide_deck else [],
-                filename,
-                mock=mock,
-                basic_tts=basic_tts,
-                progress_callback=lambda msg: _progress(step, len(playlist_items), msg),
-                prepended_chunks=prepended_for_call,
-                runtime_fit=runtime_fit_enabled,
-                fast_tts_pipeline=fast_tts_pipeline,
-                llm_model=llm_model,
-                next_playlist_item=_next_playlist_item_after(playlist_items, item_idx),
-            )
+            # Runtime fit : ne reporte pas le surplus au cours suivant par défaut.
+            # Si un bloc ne tient pas, il doit être réduit/régénéré.
+            runtime_reduction_attempts = []
+            synthesis_ok = False
+            for reduction_attempt in range(5):
+                prepended_for_call = (
+                    intra_day_carryover_chunks if intra_day_carryover_active else None
+                )
+                try:
+                    (
+                        final_bytes,
+                        voice_duration,
+                        fit_method,
+                        attempts,
+                        bloc_timings,
+                        runtime_unconsumed_chunks,
+                        runtime_consumed_chunks,
+                    ) = _synthesize_course_audio_synced_to_slides(
+                        audio_bloc,
+                        slide_deck.get("slides", []) if slide_deck else [],
+                        filename,
+                        mock=mock,
+                        basic_tts=basic_tts,
+                        progress_callback=lambda msg: _progress(step, len(playlist_items), msg),
+                        prepended_chunks=prepended_for_call,
+                        runtime_fit=runtime_fit_enabled,
+                        fast_tts_pipeline=fast_tts_pipeline,
+                        llm_model=llm_model,
+                        next_playlist_item=_next_playlist_item_after(playlist_items, item_idx),
+                    )
+                    synthesis_ok = True
+                except ValueError as e:
+                    message = str(e)
+                    if "trop long" not in message and "aucun audio généré" not in message:
+                        raise
+                    current_text = audio_bloc.get("text") or ""
+                    pseudo_overflow = [{"text": _tail_words(current_text, 1200)}]
+                    _progress(
+                        step,
+                        len(playlist_items),
+                        f"Bloc {bloc['bloc_number']}/7 — réduction IA après dépassement TTS ({reduction_attempt + 1}/5)...",
+                    )
+                    reduced_text = _reduce_course_bloc_for_runtime_overflow(
+                        audio_bloc,
+                        pseudo_overflow,
+                        model=llm_model,
+                    )
+                    audio_bloc = dict(audio_bloc)
+                    audio_bloc["text"] = reduced_text
+                    audio_bloc["word_count"] = count_tts_spoken_words(reduced_text)
+                    bloc["text"] = reduced_text
+                    bloc["word_count"] = audio_bloc["word_count"]
+                    runtime_reduction_attempts.append({
+                        "kind": "ai_runtime_exception_reduction",
+                        "attempt": reduction_attempt + 1,
+                        "error": message[:180],
+                        "words_after": audio_bloc["word_count"],
+                    })
+                    continue
+                overflow_words = (
+                    sum(len((c.get("text") or "").split()) for c in (runtime_unconsumed_chunks or []))
+                    if runtime_fit_enabled and not intra_day_carryover_active
+                    else 0
+                )
+                if not overflow_words:
+                    break
+                _progress(
+                    step,
+                    len(playlist_items),
+                    f"Bloc {bloc['bloc_number']}/7 — réduction IA du surplus ({overflow_words} mots)...",
+                )
+                reduced_text = _reduce_course_bloc_for_runtime_overflow(
+                    audio_bloc,
+                    runtime_unconsumed_chunks,
+                    model=llm_model,
+                )
+                audio_bloc = dict(audio_bloc)
+                audio_bloc["text"] = reduced_text
+                audio_bloc["word_count"] = count_tts_spoken_words(reduced_text)
+                bloc["text"] = reduced_text
+                bloc["word_count"] = audio_bloc["word_count"]
+                runtime_reduction_attempts.append({
+                    "kind": "ai_runtime_overflow_reduction",
+                    "attempt": reduction_attempt + 1,
+                    "overflow_words": overflow_words,
+                    "words_after": audio_bloc["word_count"],
+                })
+            if not synthesis_ok:
+                emergency_words = max(450, int((audio_bloc.get("word_budget") or 1200) * 0.70))
+                audio_bloc = dict(audio_bloc)
+                audio_bloc["text"] = _limit_text_words_natural(audio_bloc.get("text") or "", emergency_words)
+                audio_bloc["word_count"] = count_tts_spoken_words(audio_bloc["text"])
+                bloc["text"] = audio_bloc["text"]
+                bloc["word_count"] = audio_bloc["word_count"]
+                (
+                    final_bytes,
+                    voice_duration,
+                    fit_method,
+                    attempts,
+                    bloc_timings,
+                    runtime_unconsumed_chunks,
+                    runtime_consumed_chunks,
+                ) = _synthesize_course_audio_synced_to_slides(
+                    audio_bloc,
+                    slide_deck.get("slides", []) if slide_deck else [],
+                    filename,
+                    mock=mock,
+                    basic_tts=basic_tts,
+                    progress_callback=lambda msg: _progress(step, len(playlist_items), msg),
+                    prepended_chunks=None,
+                    runtime_fit=runtime_fit_enabled,
+                    fast_tts_pipeline=fast_tts_pipeline,
+                    llm_model=llm_model,
+                    next_playlist_item=_next_playlist_item_after(playlist_items, item_idx),
+                )
+                runtime_reduction_attempts.append({
+                    "kind": "emergency_natural_limit_after_ai_reductions",
+                    "words_after": audio_bloc["word_count"],
+                })
+            attempts = runtime_reduction_attempts + list(attempts or [])
             runtime_conclusions = _runtime_conclusions_from_attempts(attempts)
             runtime_ai_decisions = _runtime_ai_decisions_from_attempts(attempts)
             # Le tampon est consommé par cet appel ; le runtime peut en
@@ -5806,7 +6682,22 @@ def generate_audio_from_script(
                     for c in (runtime_consumed_chunks or [])
                     if (c.get("text") or "").strip()
                 )
-                intra_day_carryover_chunks = list(runtime_unconsumed_chunks or [])
+                if intra_day_carryover_active:
+                    intra_day_carryover_chunks = list(runtime_unconsumed_chunks or [])
+                else:
+                    overflow_words = sum(
+                        len((c.get("text") or "").split())
+                        for c in (runtime_unconsumed_chunks or [])
+                    )
+                    if overflow_words:
+                        logger.warning(
+                            "PIPELINE_AUDIO_BLOC_RUNTIME_OVERFLOW_AFTER_AI_REDUCE "
+                            "formation_job_id=%s content_job_id=%s folder_id=%s "
+                            "bloc=%s words=%s action=overflow_remaining_after_5_ai_reductions_no_carryover",
+                            formation_job_id, job_id, folder_id, bloc["bloc_number"],
+                            overflow_words,
+                        )
+                    intra_day_carryover_chunks = []
                 unconsumed_words = sum(
                     len((c.get("text") or "").split()) for c in intra_day_carryover_chunks
                 )
@@ -5843,28 +6734,124 @@ def generate_audio_from_script(
                 f"   🔊 [BASIC edge-tts] Bloc {bloc['bloc_number']} ({filename}) — "
                 "génération calée sur durée réelle…"
             )
-            prepended_for_call = intra_day_carryover_chunks if runtime_fit_enabled else None
-            (
-                final_bytes,
-                voice_duration,
-                fit_method,
-                attempts,
-                _bloc_timings,
-                runtime_unconsumed_chunks,
-                runtime_consumed_chunks,
-            ) = _synthesize_course_audio_synced_to_slides(
-                audio_bloc,
-                [],
-                filename,
-                mock=False,
-                basic_tts=True,
-                progress_callback=lambda msg: _progress(step, len(playlist_items), msg),
-                prepended_chunks=prepended_for_call,
-                runtime_fit=runtime_fit_enabled,
-                fast_tts_pipeline=fast_tts_pipeline,
-                llm_model=llm_model,
-                next_playlist_item=_next_playlist_item_after(playlist_items, item_idx),
-            )
+            runtime_reduction_attempts = []
+            synthesis_ok = False
+            for reduction_attempt in range(5):
+                prepended_for_call = (
+                    intra_day_carryover_chunks if intra_day_carryover_active else None
+                )
+                try:
+                    (
+                        final_bytes,
+                        voice_duration,
+                        fit_method,
+                        attempts,
+                        _bloc_timings,
+                        runtime_unconsumed_chunks,
+                        runtime_consumed_chunks,
+                    ) = _synthesize_course_audio_synced_to_slides(
+                        audio_bloc,
+                        [],
+                        filename,
+                        mock=False,
+                        basic_tts=True,
+                        progress_callback=lambda msg: _progress(step, len(playlist_items), msg),
+                        prepended_chunks=prepended_for_call,
+                        runtime_fit=runtime_fit_enabled,
+                        fast_tts_pipeline=fast_tts_pipeline,
+                        llm_model=llm_model,
+                        next_playlist_item=_next_playlist_item_after(playlist_items, item_idx),
+                    )
+                    synthesis_ok = True
+                except ValueError as e:
+                    message = str(e)
+                    if "trop long" not in message and "aucun audio généré" not in message:
+                        raise
+                    current_text = audio_bloc.get("text") or ""
+                    pseudo_overflow = [{"text": _tail_words(current_text, 1200)}]
+                    _progress(
+                        step,
+                        len(playlist_items),
+                        f"Bloc {bloc['bloc_number']}/7 — réduction IA après dépassement TTS ({reduction_attempt + 1}/5)...",
+                    )
+                    reduced_text = _reduce_course_bloc_for_runtime_overflow(
+                        audio_bloc,
+                        pseudo_overflow,
+                        model=llm_model,
+                    )
+                    audio_bloc = dict(audio_bloc)
+                    audio_bloc["text"] = reduced_text
+                    audio_bloc["word_count"] = count_tts_spoken_words(reduced_text)
+                    bloc["text"] = reduced_text
+                    bloc["word_count"] = audio_bloc["word_count"]
+                    runtime_reduction_attempts.append({
+                        "kind": "ai_runtime_exception_reduction",
+                        "attempt": reduction_attempt + 1,
+                        "error": message[:180],
+                        "words_after": audio_bloc["word_count"],
+                    })
+                    continue
+                overflow_words = (
+                    sum(len((c.get("text") or "").split()) for c in (runtime_unconsumed_chunks or []))
+                    if runtime_fit_enabled and not intra_day_carryover_active
+                    else 0
+                )
+                if not overflow_words:
+                    break
+                _progress(
+                    step,
+                    len(playlist_items),
+                    f"Bloc {bloc['bloc_number']}/7 — réduction IA du surplus ({overflow_words} mots)...",
+                )
+                reduced_text = _reduce_course_bloc_for_runtime_overflow(
+                    audio_bloc,
+                    runtime_unconsumed_chunks,
+                    model=llm_model,
+                )
+                audio_bloc = dict(audio_bloc)
+                audio_bloc["text"] = reduced_text
+                audio_bloc["word_count"] = count_tts_spoken_words(reduced_text)
+                bloc["text"] = reduced_text
+                bloc["word_count"] = audio_bloc["word_count"]
+                runtime_reduction_attempts.append({
+                    "kind": "ai_runtime_overflow_reduction",
+                    "attempt": reduction_attempt + 1,
+                    "overflow_words": overflow_words,
+                    "words_after": audio_bloc["word_count"],
+                })
+            if not synthesis_ok:
+                emergency_words = max(450, int((audio_bloc.get("word_budget") or 1200) * 0.70))
+                audio_bloc = dict(audio_bloc)
+                audio_bloc["text"] = _limit_text_words_natural(audio_bloc.get("text") or "", emergency_words)
+                audio_bloc["word_count"] = count_tts_spoken_words(audio_bloc["text"])
+                bloc["text"] = audio_bloc["text"]
+                bloc["word_count"] = audio_bloc["word_count"]
+                (
+                    final_bytes,
+                    voice_duration,
+                    fit_method,
+                    attempts,
+                    _bloc_timings,
+                    runtime_unconsumed_chunks,
+                    runtime_consumed_chunks,
+                ) = _synthesize_course_audio_synced_to_slides(
+                    audio_bloc,
+                    [],
+                    filename,
+                    mock=False,
+                    basic_tts=True,
+                    progress_callback=lambda msg: _progress(step, len(playlist_items), msg),
+                    prepended_chunks=None,
+                    runtime_fit=runtime_fit_enabled,
+                    fast_tts_pipeline=fast_tts_pipeline,
+                    llm_model=llm_model,
+                    next_playlist_item=_next_playlist_item_after(playlist_items, item_idx),
+                )
+                runtime_reduction_attempts.append({
+                    "kind": "emergency_natural_limit_after_ai_reductions",
+                    "words_after": audio_bloc["word_count"],
+                })
+            attempts = runtime_reduction_attempts + list(attempts or [])
             runtime_conclusions = _runtime_conclusions_from_attempts(attempts)
             runtime_ai_decisions = _runtime_ai_decisions_from_attempts(attempts)
             if runtime_fit_enabled:
@@ -5877,7 +6864,22 @@ def generate_audio_from_script(
                     for c in (runtime_consumed_chunks or [])
                     if (c.get("text") or "").strip()
                 )
-                intra_day_carryover_chunks = list(runtime_unconsumed_chunks or [])
+                if intra_day_carryover_active:
+                    intra_day_carryover_chunks = list(runtime_unconsumed_chunks or [])
+                else:
+                    overflow_words = sum(
+                        len((c.get("text") or "").split())
+                        for c in (runtime_unconsumed_chunks or [])
+                    )
+                    if overflow_words:
+                        logger.warning(
+                            "PIPELINE_AUDIO_BLOC_RUNTIME_OVERFLOW_AFTER_AI_REDUCE "
+                            "formation_job_id=%s content_job_id=%s folder_id=%s "
+                            "bloc=%s words=%s action=overflow_remaining_after_5_ai_reductions_no_carryover",
+                            formation_job_id, job_id, folder_id, bloc["bloc_number"],
+                            overflow_words,
+                        )
+                    intra_day_carryover_chunks = []
                 unconsumed_words = sum(
                     len((c.get("text") or "").split()) for c in intra_day_carryover_chunks
                 )
@@ -5899,12 +6901,83 @@ def generate_audio_from_script(
         else:
             _progress(step, len(playlist_items), f"Bloc {bloc['bloc_number']}/7 — génération TTS ({len(audio_bloc['text'].split())} mots)...")
             logger.info(f"   🎙️ Bloc {bloc['bloc_number']} ({filename}) — TTS en cours...")
-            final_bytes, voice_duration, fit_method, attempts = _synthesize_course_audio_to_fit(
-                audio_bloc,
-                convert_to_speech,
-                _measure_duration_ms,
-                _pad_audio_to_duration,
-            )
+            tts_errors = []
+            for reduction_attempt in range(5):
+                try:
+                    final_bytes, voice_duration, fit_method, attempts = _synthesize_course_audio_to_fit(
+                        audio_bloc,
+                        convert_to_speech,
+                        _measure_duration_ms,
+                        _pad_audio_to_duration,
+                    )
+                    if tts_errors:
+                        attempts = [
+                            {
+                                "kind": "ai_tts_overflow_reduction",
+                                "attempts": len(tts_errors),
+                                "words_after": count_tts_spoken_words(audio_bloc.get("text") or ""),
+                            }
+                        ] + list(attempts or [])
+                    break
+                except ValueError as e:
+                    message = str(e)
+                    if "trop long" not in message and "budget prudent" not in message:
+                        raise
+                    tts_errors.append(message)
+                    current_text = audio_bloc.get("text") or ""
+                    current_words = count_tts_spoken_words(current_text)
+                    budget_words = int(
+                        audio_bloc.get("main_word_budget")
+                        or audio_bloc.get("word_budget")
+                        or current_words
+                    )
+                    overflow_estimate = max(120, current_words - budget_words + 180)
+                    pseudo_overflow = [{"text": _tail_words(current_text, min(1400, overflow_estimate))}]
+                    _progress(
+                        step,
+                        len(playlist_items),
+                        f"Bloc {bloc['bloc_number']}/7 — réduction IA avant Fish Audio ({len(tts_errors)}/5)...",
+                    )
+                    reduced_text = _reduce_course_bloc_for_runtime_overflow(
+                        audio_bloc,
+                        pseudo_overflow,
+                        model=llm_model,
+                    )
+                    audio_bloc = dict(audio_bloc)
+                    audio_bloc["text"] = reduced_text
+                    audio_bloc["word_count"] = count_tts_spoken_words(reduced_text)
+                    bloc["text"] = reduced_text
+                    bloc["word_count"] = audio_bloc["word_count"]
+            else:
+                logger.warning(
+                    "PIPELINE_AUDIO_BLOC_TTS_OVERFLOW_AFTER_AI_REDUCE "
+                    "formation_job_id=%s content_job_id=%s folder_id=%s bloc=%s "
+                    "errors=%s action=basic_runtime_fallback",
+                    formation_job_id, job_id, folder_id, bloc["bloc_number"],
+                    len(tts_errors),
+                )
+                (
+                    final_bytes,
+                    voice_duration,
+                    fit_method,
+                    attempts,
+                    _bloc_timings,
+                    runtime_unconsumed_chunks,
+                    runtime_consumed_chunks,
+                ) = _synthesize_course_audio_synced_to_slides(
+                    audio_bloc,
+                    [],
+                    filename,
+                    mock=False,
+                    basic_tts=True,
+                    progress_callback=lambda msg: _progress(step, len(playlist_items), msg),
+                    prepended_chunks=None,
+                    runtime_fit=True,
+                    fast_tts_pipeline=fast_tts_pipeline,
+                    llm_model=llm_model,
+                    next_playlist_item=_next_playlist_item_after(playlist_items, item_idx),
+                )
+                fit_method = f"{fit_method}, basic_runtime_fallback_after_ai_reduce"
             if len(attempts) > 1:
                 logger.info(f"   🔁 Bloc {bloc['bloc_number']} ajusté localement ({fit_method})")
             logger.info(f"   TTS voix : {voice_duration:.1f}s ({fit_method}, cible : {target_sec}s)")
@@ -6022,11 +7095,10 @@ def generate_audio_from_script(
         )
 
     # ── 5. Cascade finale : runtime carryover après le dernier bloc cours ──
-    # Si runtime_fit a stoppé un bloc avant la fin et qu'il reste du surplus
-    # après le dernier cours de la journée, on doit le reporter au folder
-    # suivant (en plus du carryover statique calculé en pré-allocation).
+    # Désactivée par défaut pour préserver les frontières pédagogiques entre
+    # cours. Elle ne s'active que via FORMATION_RUNTIME_INTRA_DAY_CARRYOVER=1.
     runtime_carryover_text = ""
-    if runtime_fit_enabled and intra_day_carryover_chunks:
+    if runtime_fit_enabled and _runtime_intra_day_carryover_enabled() and intra_day_carryover_chunks:
         runtime_carryover_text = "\n\n".join(
             (c.get("text") or "").strip()
             for c in intra_day_carryover_chunks
@@ -6342,6 +7414,7 @@ def get_course_script_plan_for_ui(folder_id: int, job: dict | None = None) -> di
             "planned_course_blocs_source": "none",
             "planned_course_blocs_note": "Aucun job de contenu pour ce dossier.",
             "breaks": [],
+            "structured_course_plan": None,
         }
 
     breaks = _build_breaks_for_ui(job["platform_id"])
@@ -6395,6 +7468,7 @@ def get_course_script_plan_for_ui(folder_id: int, job: dict | None = None) -> di
             "dirty_blocs": dirty_blocs,
             "total_blocs": total_blocs,
             "breaks": breaks,
+            "structured_course_plan": saved.get("structured_course_plan"),
         }
 
     preview = _build_course_blocs_preview(folder_id, job)
@@ -6414,6 +7488,7 @@ def get_course_script_plan_for_ui(folder_id: int, job: dict | None = None) -> di
         "dirty_blocs": dirty_blocs,
         "total_blocs": total_blocs,
         "breaks": breaks,
+        "structured_course_plan": None,
     }
 
 
@@ -6501,8 +7576,8 @@ def _env_int(name: str, default: int, min_value: int = 1) -> int:
 _REVIEW_CHUNK_WORDS = _env_int("FORMATION_REVIEW_CHUNK_WORDS", 1500, min_value=300)
 _REVIEW_CHUNK_CONCURRENCY = _env_int("FORMATION_REVIEW_CHUNK_CONCURRENCY", 2, min_value=1)
 _REVIEW_MAX_ATTEMPTS = 3
-_REVIEW_RULESET_VERSION = "2026-05-17-compliance-v3"
-_HUMANIZATION_RULESET_VERSION = "2026-05-19-humanisation-v4"
+_REVIEW_RULESET_VERSION = "2026-05-22-compliance-v4-architecture"
+_HUMANIZATION_RULESET_VERSION = "2026-05-22-humanisation-v6-frontieres-cours"
 _REVIEW_SIGNATURE_COLUMNS_READY = False
 
 _COMPLIANCE_REVIEW_RULE_GROUPS = [
@@ -6532,9 +7607,9 @@ _COMPLIANCE_REVIEW_RULE_GROUPS = [
     },
     {
         "id": "style_oral_tts",
-        "label": "Style oral TTS",
-        "rules": [21, 22, 23, 24, 25, 26, 27],
-        "description": "Fusion syntaxique, guillemets, posture dialogale, punchlines, cours à distance, énumérations, registre oral",
+        "label": "Style oral TTS et architecture pédagogique",
+        "rules": [21, 22, 23, 24, 25, 26, 27, 28],
+        "description": "Fusion syntaxique, guillemets, posture dialogale, punchlines, cours à distance, énumérations, registre oral, architecture visible",
     },
 ]
 
@@ -6542,8 +7617,8 @@ _HUMANIZATION_REVIEW_RULE_GROUPS = [
     {
         "id": "humanisation_rythme",
         "label": "Humanisation et rythme pédagogique",
-        "rules": [101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114],
-        "description": "Intros plus douces, intro annuelle, débuts de journée, respirations, transitions, continuité pédagogique et références inter-cours non datées",
+        "rules": [101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119],
+        "description": "Intros plus douces, intro annuelle, débuts de journée, respirations, transitions, continuité pédagogique, références inter-cours non datées, carte mentale, conclusion Q/R, anti-redondance et frontières entre cours",
     },
 ]
 
@@ -6636,15 +7711,50 @@ d'hier", "hier on a vu"). Remplace par des formulations vagues : "la dernière
 fois", "lors du dernier cours", "dans la séance précédente", "au prochain
 cours", "la prochaine fois". Une intro de début de journée ne doit jamais
 supposer que le cours précédent était la veille.
+
+RÈGLE #115 — Carte mentale avant développement
+Avant tout storytelling, cas client, métaphore ou exemple émotionnel, le cours
+doit poser une carte mentale claire : où l'apprenant se situe, ce qu'il va
+apprendre, pourquoi c'est utile, comment le cours est structuré et ce qui vient
+ensuite. Corrige les ouvertures qui commencent par l'inspiration ou l'exemple
+avant d'avoir donné ce repère.
+
+RÈGLE #116 — Cours 1 : parcours annuel, journée, cours actuel
+Pour le premier cours de la première journée, l'ouverture doit garder l'accueil
+humain puis présenter synthétiquement les grands thèmes de l'année, les thèmes
+de la journée dans l'ordre sans horaires, le rôle du cours actuel, ses objectifs
+et un plan oral de 2 à 4 parties. Le texte doit ensuite suivre ce plan dans le
+même ordre avec des transitions explicites.
+
+RÈGLE #117 — Cours 1 : conclusion Q/R verrouillée
+Pour le cours 1, la conclusion doit durer environ 3 à 4 minutes en équivalent
+audio : récapituler les points vus, redire pourquoi ils comptent et à quoi ils
+serviront, puis annoncer le temps de questions-réponses dans le tchat. Après
+cette annonce, aucun nouveau développement, exemple, mini-synthèse ou ajout de
+remplissage ne doit apparaître.
+
+RÈGLE #118 — Anti-redondance et anti-remplissage
+Chaque développement doit apporter une idée nouvelle identifiable. Corrige les
+blocs répétés, les reformulations qui tournent à vide, les tunnels de métaphores
+ou de storytelling sans progression, et les ajouts placés après une conclusion
+uniquement pour allonger le texte.
+
+RÈGLE #119 — Frontières nettes entre cours, Q/R et pauses
+Un cours ne doit jamais commencer en terminant le cours précédent. Après un Q/R
+ou une pause, la reprise doit être autonome : rappel bref de ce qui a été vu,
+lien avec le nouveau thème, annonce de l'objectif et du plan du cours actuel.
+Corrige les débuts qui commencent par "Et puis", "Ensuite", ou qui poursuivent
+une conclusion précédente. Corrige aussi les doubles introductions : une seule
+reprise, un seul cadrage, puis le développement du nouveau cours.
 """.strip()
 
 
 def _load_review_rules() -> str:
-    """Extrait le bloc 'RÈGLES ABSOLUES #1 à #27' de la passe 1 du prompt
+    """Extrait le bloc 'RÈGLES ABSOLUES #1 à #28' de la passe 1 du prompt
     (les règles sont identiques dans les 3 passes, une seule extraction
     suffit). Mise en cache par mtime du fichier."""
     path = os.path.join(
-        os.path.dirname(__file__), "..", "prompts", "prompt-generation-tts-scratch.md"
+        os.path.dirname(__file__), "..", "prompts", "prompts-generaux-contenu-formation.md"
     )
     mtime = os.path.getmtime(path)
     if _RULES_CACHE["mtime"] == mtime and _RULES_CACHE["text"]:
@@ -6745,10 +7855,12 @@ def _build_review_prompt_focused(
     rules_list = ", ".join(f"#{n}" for n in rule_numbers)
     is_humanization_scope = any(int(n) >= 100 for n in (rule_numbers or []))
     review_mode = (
-        "Pour les règles #101 à #114, une intro trop brusque, un premier cours "
+        "Pour les règles #101 à #119, une intro trop brusque, un premier cours "
         "sans introduction annuelle, un début de journée mécanique, un bloc trop dense, "
-        "une transition mécanique, une fin sèche, l'absence de respiration "
-        "pédagogique ou une référence datée entre cours (\"hier\", \"demain\") "
+        "une transition mécanique, une fin sèche, l'absence de carte mentale, "
+        "un plan absent, une conclusion suivie de contenu, une confusion entre "
+        "cours précédent, Q/R, pause et nouveau cours, l'absence de respiration "
+        "pédagogique, une redondance de remplissage ou une référence datée entre cours (\"hier\", \"demain\") "
         "comptent comme des non-conformités. Tu dois proposer des "
         "corrections concrètes quand le texte sonne trop récité, trop rapide ou "
         "pas assez accompagné."
@@ -6756,13 +7868,15 @@ def _build_review_prompt_focused(
         else "Tu renvoies un JSON avec uniquement les passages qui violent une règle de ton scope."
     )
     replacement_constraint = (
-        "- Pour #101 à #114, `replacement` peut ajouter une phrase orale, "
+        "- Pour #101 à #119, `replacement` peut ajouter une phrase orale, "
         "une micro-interaction ou un tag comme [pause] si cela corrige vraiment "
         "le rythme, sans changer le fond pédagogique. Pour une violation #112, "
         "`replacement` doit remplacer l'ouverture trop courte par une vraie "
         "introduction de formation développée : 180 à 320 mots, utilité de la "
         "formation, contexte métier, grandes compétences abordées, progression, "
-        "encouragement et transition vers le premier sujet. Dans tous les cas, "
+        "encouragement et transition vers le premier sujet. Pour une violation "
+        "#116, #117 ou #119, `replacement` doit rétablir l'ordre pédagogique attendu "
+        "sans inventer de contenu métier non fourni. Dans tous les cas, "
         "respecte le budget audio déjà calculé : substitue et condense autant "
         "que possible, ne gonfle pas le segment hors budget mots."
         if is_humanization_scope
@@ -6804,6 +7918,7 @@ Contraintes impératives :
 - `original` doit être trouvable TEL QUEL dans le texte (copie mot pour mot, ponctuation comprise).
 {replacement_constraint}
 {preference_constraint}
+- Ne supprime jamais et ne modifie jamais les marqueurs techniques `<<<BLOC_AUDIO_N>>>`.
 - Ne gonfle pas le texte : les cours sont calibrés au mot près pour la synthèse audio. Toute correction trop longue sera rejetée par `budget_guard`.
 - `rule_violated` = numéro parmi {rules_list} (ex: "#1", "#9").
 
@@ -6979,7 +8094,7 @@ def _review_group_chunks(current_text: str, rules_text: str, group: dict, model=
 
 def _build_review_prompt(segment_text: str, rules_text: str) -> str:
     return f"""Tu es un reviewer éditorial. Tu reçois un extrait de cours oral \
-généré par un autre Claude, et les règles #1 à #27 que ce cours doit \
+généré par un autre Claude, et les règles #1 à #28 que ce cours doit \
 respecter. Ton unique rôle : identifier les passages qui VIOLENT une règle, \
 et proposer une correction minimale.
 
@@ -7108,8 +8223,8 @@ def _apply_review_budget_guard(
     """Rollback des patches appliqués si la review dépasse le budget mots."""
     if not applied:
         return candidate_text, applied, []
-    original_words = len((original_text or "").split())
-    candidate_words = len((candidate_text or "").split())
+    original_words = count_tts_spoken_words(original_text)
+    candidate_words = count_tts_spoken_words(candidate_text)
     max_words = _review_budget_guard_limit(original_words, review_kind)
     if candidate_words <= max_words:
         return candidate_text, applied, []
@@ -7451,6 +8566,8 @@ def _run_content_review_pass(
                 all_applied = guarded_applied
                 all_rejected.extend(budget_rejected)
 
+        current_text = _preserve_audio_block_marker(original_text, current_text)
+
         # Écriture finale en DB (une seule transaction par segment)
         conn = get_db_connection()
         cursor = conn.cursor()
@@ -7487,7 +8604,7 @@ def _run_content_review_pass(
 
         # Toutes les salves ont réussi
         if all_applied:
-            new_word_count = len(current_text.split())
+            new_word_count = count_tts_spoken_words(current_text)
             cursor.execute(
                 f"""
                 UPDATE content_generation_segments

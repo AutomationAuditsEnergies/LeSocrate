@@ -4,23 +4,24 @@ Test des tags Fish Audio S2-Pro.
 Génère un MP3 par tag pour écouter l'effet réel.
 
 Usage:
-    cd backend && python ../test_tags.py
-    ou depuis la racine avec les variables d'env chargées :
-    python test_tags.py
+    python tools/tts/test_tags.py
 """
 
 import os
 import sys
+from pathlib import Path
 import requests
 from dotenv import load_dotenv
 
 # Charge les variables d'env depuis backend/.env
-load_dotenv(os.path.join(os.path.dirname(__file__), "backend", ".env"))
+TOOL_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+load_dotenv(PROJECT_ROOT / "backend" / ".env")
 
 API_KEY   = os.getenv("FISH_AUDIO_API_KEY")
 VOICE_ID  = os.getenv("FISH_AUDIO_VOICE_ID", "90a39a3f3c0a45c38502fa1d99dabf96")
 API_URL   = "https://api.fish.audio/v1/tts"
-OUT_DIR   = "test_tags_output"
+OUT_DIR   = TOOL_DIR / "test_tags_output"
 
 os.makedirs(OUT_DIR, exist_ok=True)
 

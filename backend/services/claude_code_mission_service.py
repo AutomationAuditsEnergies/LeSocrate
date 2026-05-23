@@ -139,9 +139,9 @@ def _load_kb_entries(job_id: int) -> list:
 
 
 def _load_rules_text() -> str:
-    """Règles #1-#27 pour les étapes `content` et `review`."""
+    """Règles #1-#28 pour les étapes `content` et `review`."""
     path = os.path.join(
-        os.path.dirname(__file__), "..", "prompts", "prompt-generation-tts-scratch.md"
+        os.path.dirname(__file__), "..", "prompts", "prompts-generaux-contenu-formation.md"
     )
     try:
         with open(path, "r", encoding="utf-8") as f:
@@ -392,7 +392,7 @@ Fondation / Pratique / Maîtrise), génère environ {target_words} mots de texte
 Les sous-parties sont les 7 créneaux cours réels de la journée ; utilise leurs
 métadonnées horaire/durée pour calibrer naturellement le volume.
 
-**Applique strictement les règles #1 à #27** contenues dans `rules.md` (saturation
+**Applique strictement les règles #1 à #28** contenues dans `rules.md` (saturation
 sandwich, pas de mensonge, pas d'énumérations mécaniques, registre oral, etc.).
 
 Sortie attendue dans `output.md` : un **JSON** de la forme :
@@ -553,12 +553,13 @@ def _build_humanization_review_mission(target, job, model):
 **TP** : {job['tp_name']} · **Modèle demandé** : {model}
 
 Tu lis `input.md` qui contient les segments à améliorer (JSON array). Pour chacun,
-vérifie uniquement les règles #101 à #114 dans `rules.md`.
+vérifie uniquement les règles #101 à #119 dans `rules.md`.
 
 Une intro trop brusque, une ouverture annuelle absente, un début de journée
 mécanique, un bloc trop dense, une transition mécanique, une fin sèche,
-l'absence de respiration pédagogique ou une référence datée entre cours
-("hier", "demain") comptent comme des non-conformités.
+l'absence de respiration pédagogique, une référence datée entre cours
+("hier", "demain"), une confusion entre cours précédent/Q&R/pause/nouveau
+cours, ou une double introduction comptent comme des non-conformités.
 Tu proposes des corrections concrètes, mais **pas de réécriture complète**.
 
 Contexte positionnel :
@@ -1788,7 +1789,7 @@ def _continue_content_until_volume(
 
 Tu as écrit **{words} mots** sur une cible de **{target_words} mots** (minimum {min_words}, maximum prudent {max_words}). Tu dois continuer le cours là où tu t'es arrêté, avec :
 - Le même ton oral et la même voix narrative
-- Les mêmes règles TTS (cf. `rules.md` — règles #1 à #27)
+- Les mêmes règles TTS (cf. `rules.md` — règles #1 à #28)
 - **Sans RÉPÉTER ce qui a déjà été dit**
 
 **Volume cible pour cette continuation : environ {max(350, target_words - words)} mots supplémentaires, sans dépasser {max_words} mots au total si possible.**
@@ -1846,7 +1847,7 @@ Contexte : Passe {chunk['passe']}/3 ({passe_name}) sur la sous-partie "{chunk['s
 def _build_content_chunk(chunk_dir: str, job: dict, chunk: dict, model: str) -> None:
     """Construit task.md + input.md + rules.md pour 1 segment.
 
-    Réutilise le **vrai template du mode API** (`prompt-generation-tts-scratch.md`,
+    Réutilise le **vrai template du mode API** (`prompts-generaux-contenu-formation.md`,
     extrait via `_get_passe_prompts(from_scratch=True)`). Sans ça, Claude Code
     rendait systématiquement des segments trop courts — le prompt minimaliste
     précédent ne contenait pas le bloc de volume audio calibré.
@@ -2021,7 +2022,7 @@ Lis le détail complet de chacune de tes règles dans `rules.md` (cherche
         cap_per_segment = 10
     else:
         scope_block = (
-            "\nTu vérifies la conformité aux **règles #1 à #27** "
+            "\nTu vérifies la conformité aux **règles #1 à #28** "
             "détaillées dans `rules.md` (lis le fichier intégralement).\n"
         )
         cap_per_segment = 10
@@ -3332,7 +3333,7 @@ supplémentaires**.
 
 Le contenu additionnel DOIT :
 - Reprendre le ton oral et la voix narrative du texte existant
-- Respecter scrupuleusement les règles **#1 à #27** décrites dans `rules.md`
+- Respecter scrupuleusement les règles **#1 à #28** décrites dans `rules.md`
   (lis le fichier intégralement avant d'écrire)
 - Enchaîner avec une transition naturelle ("Allons plus loin maintenant…",
   "Je voudrais te donner d'autres exemples…", "On va creuser un autre angle…")
@@ -3407,7 +3408,7 @@ supplémentaires**.
 
 Le contenu additionnel DOIT :
 - Reprendre le ton oral et la voix narrative du texte existant
-- Respecter scrupuleusement les règles **#1 à #27** décrites plus bas
+- Respecter scrupuleusement les règles **#1 à #28** décrites plus bas
 - Enchaîner avec une transition naturelle ("Allons plus loin maintenant…",
   "Je voudrais te donner d'autres exemples…", "On va creuser un autre angle…")
 - Rester dans le scope thématique de la sous-partie "{sub_part_name}" et de la
