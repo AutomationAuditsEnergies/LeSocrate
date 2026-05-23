@@ -4359,6 +4359,70 @@ def _build_course_position_context(
     return "\n".join(lines)
 
 
+def _extract_audio_block_number(text: str | None) -> int | None:
+    match = _AUDIO_BLOCK_MARKER_RE.search(text or "")
+    if not match:
+        return None
+    try:
+        return int(match.group(1))
+    except Exception:
+        return None
+
+
+def _structured_review_context_for_segment(job: dict, folder_id: int, sub_idx: int, segment_text: str) -> str:
+    """Ajoute le plan JSON verrouillé au reviewer quand il existe."""
+    try:
+        saved = _load_saved_course_script_plan(job["platform_id"], folder_id) or {}
+    except Exception:
+        saved = {}
+
+    structured_plan = saved.get("structured_course_plan") or {}
+    courses = structured_plan.get("courses") if isinstance(structured_plan, dict) else None
+    if not isinstance(courses, list) or not courses:
+        return ""
+
+    marker_course_number = _extract_audio_block_number(segment_text)
+    course_number = marker_course_number or int(sub_idx or 0) + 1
+    course_plan = next(
+        (course for course in courses if int(course.get("course_number") or 0) == course_number),
+        None,
+    )
+    if not course_plan:
+        return ""
+
+    sections = _structured_sections_for_course(course_plan)
+    section_summary = "\n".join(
+        f"- {_section_label(section)} · cible {int(section.get('target_words') or 0)} mots"
+        for section in sections
+    )
+    return f"""
+═══════════════════════════════════════════════════════════════════
+PLAN JSON VERROUILLÉ DU COURS — CONTEXTE REVIEW
+═══════════════════════════════════════════════════════════════════
+Tu révises le cours {course_number}/7 : {course_plan.get('course_title') or ''}.
+Ce segment correspond à UN cours canonique complet, pas à un morceau arbitraire.
+
+Le plan ci-dessous fait autorité. Tu peux corriger une phrase, une transition,
+une redondance, une conclusion mal fermée ou une incohérence locale, mais tu ne
+dois pas réinventer le cours, changer le plan, supprimer une partie annoncée,
+ajouter un nouveau chapitre, ni déplacer le périmètre pédagogique.
+
+Points à vérifier avec ce plan :
+- l'ouverture remplit bien sa fonction ;
+- le plan annoncé est respecté dans l'ordre général ;
+- les parties restent dans leur périmètre ;
+- la conclusion arrive au bon endroit et ne relance pas un développement ;
+- le cours ne termine pas le cours précédent et ne démarre pas le suivant ;
+- les formulations côté apprenant restent naturelles, notamment sans jargon technique comme "bloc".
+
+Sections attendues :
+{section_summary}
+
+Plan complet du cours :
+{json.dumps(course_plan, ensure_ascii=False, indent=2)}
+""".strip()
+
+
 # ─── Extraction des sous-parties ─────────────────────────────────────────────
 
 _EXTRACT_PROMPT = """Tu analyses un programme de formation professionnelle.
@@ -7593,8 +7657,8 @@ def _env_int(name: str, default: int, min_value: int = 1) -> int:
 _REVIEW_CHUNK_WORDS = _env_int("FORMATION_REVIEW_CHUNK_WORDS", 1500, min_value=300)
 _REVIEW_CHUNK_CONCURRENCY = _env_int("FORMATION_REVIEW_CHUNK_CONCURRENCY", 2, min_value=1)
 _REVIEW_MAX_ATTEMPTS = 3
-_REVIEW_RULESET_VERSION = "2026-05-23-compliance-v5-structured-cleanup"
-_HUMANIZATION_RULESET_VERSION = "2026-05-23-humanisation-v7-reprise-contextuelle"
+_REVIEW_RULESET_VERSION = "2026-05-23-compliance-v6-plan-context"
+_HUMANIZATION_RULESET_VERSION = "2026-05-23-humanisation-v8-plan-context"
 _REVIEW_SIGNATURE_COLUMNS_READY = False
 
 _COMPLIANCE_REVIEW_RULE_GROUPS = [
@@ -7889,15 +7953,13 @@ def _build_review_prompt_focused(
         else "Tu renvoies un JSON avec uniquement les passages qui violent une règle de ton scope."
     )
     replacement_constraint = (
-        "- Pour #101 à #119, `replacement` peut ajouter une phrase orale, "
+        "- Pour #101 à #119, `replacement` peut ajouter une courte phrase orale, "
         "une micro-interaction ou un tag comme [pause] si cela corrige vraiment "
-        "le rythme, sans changer le fond pédagogique. Pour une violation #112, "
-        "`replacement` doit remplacer l'ouverture trop courte par une vraie "
-        "introduction de formation développée : 180 à 320 mots, utilité de la "
-        "formation, contexte métier, grandes compétences abordées, progression, "
-        "encouragement et transition vers le premier sujet. Pour une violation "
-        "#116, #117 ou #119, `replacement` doit rétablir l'ordre pédagogique attendu "
-        "sans inventer de contenu métier non fourni. Dans tous les cas, "
+        "le rythme, sans changer le fond pédagogique ni le plan verrouillé. "
+        "Pour une violation #112, #116, #117 ou #119, `replacement` doit corriger "
+        "localement l'ordre pédagogique attendu sans inventer de contenu métier "
+        "non fourni. Si la correction exigerait de réécrire toute une section, "
+        "propose seulement le patch local le plus utile. Dans tous les cas, "
         "respecte le budget audio déjà calculé : substitue et condense autant "
         "que possible, ne gonfle pas le segment hors budget mots."
         if is_humanization_scope
@@ -7939,6 +8001,9 @@ Contraintes impératives :
 - `original` doit être trouvable TEL QUEL dans le texte (copie mot pour mot, ponctuation comprise).
 {replacement_constraint}
 {preference_constraint}
+- Le plan JSON verrouillé, s'il est fourni dans le contexte, fait autorité.
+- Ne réécris jamais le cours entier. Ne change pas le nombre de parties, ne réordonne pas le plan, ne crée pas de nouveau chapitre.
+- Corrige précisément les incohérences, transitions faibles, répétitions, manque d'oralité, conclusion mal fermée, vocabulaire trop abstrait ou problème de périmètre.
 - Ne supprime jamais et ne modifie jamais les marqueurs techniques `<<<BLOC_AUDIO_N>>>`.
 - Ne gonfle pas le texte : les cours sont calibrés au mot près pour la synthèse audio. Toute correction trop longue sera rejetée par `budget_guard`.
 - `rule_violated` = numéro parmi {rules_list} (ex: "#1", "#9").
@@ -8481,6 +8546,14 @@ def _run_content_review_pass(
             sub_part_index=sub_idx,
             passe=passe,
         )
+        structured_review_context = _structured_review_context_for_segment(
+            job,
+            folder_id,
+            sub_idx,
+            original_text,
+        )
+        if structured_review_context:
+            review_context = f"{review_context}\n\n{structured_review_context}"
         all_applied = []
         all_rejected = []
         all_proposed = 0
