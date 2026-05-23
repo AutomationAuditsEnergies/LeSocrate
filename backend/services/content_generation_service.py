@@ -33,6 +33,20 @@ from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
+
+def _prompt_file_path(*parts: str) -> str:
+    return os.path.join(os.path.dirname(__file__), "..", "prompts", *parts)
+
+
+def _load_prompt_file(*parts: str, fallback: str = "") -> str:
+    try:
+        with open(_prompt_file_path(*parts), "r", encoding="utf-8") as f:
+            return f.read().strip()
+    except Exception as e:
+        logger.warning("⚠️ Prompt modulaire indisponible %s: %s", "/".join(parts), e)
+        return fallback
+
+
 CLAUDE_MODEL = default_model()
 NUM_SUB_PARTS = 7
 _COURSE_START_SILENCE_SECONDS = 17
@@ -1049,6 +1063,8 @@ def _normalize_structured_course_plans(raw_plan: dict, *, job: dict, playlist_it
 
 
 def _build_structured_course_plan_prompt(job: dict, playlist_items: list, sub_parts: list, module_contents: dict) -> str:
+    base_style = _load_prompt_file("generation", "base-course-style.md")
+    plan_contract = _load_prompt_file("generation", "structured-plan.md")
     block_plan = _course_audio_block_plan(playlist_items, folder_position=job.get("folder_position"))
     try:
         day_number = int(job.get("folder_position") or 0) + 1
@@ -1071,6 +1087,12 @@ def _build_structured_course_plan_prompt(job: dict, playlist_items: list, sub_pa
         if (text or "").strip()
     )
     return f"""Tu es ingénieur pédagogique. Tu dois produire le PLAN JSON STRICT de 7 cours audio d'une journée.
+
+SOCLE GÉNÉRAL À RESPECTER :
+{base_style}
+
+CONTRAT DE PLANIFICATION :
+{plan_contract}
 
 Le plan est libre maintenant, mais il sera verrouillé ensuite : le texte final devra suivre ce plan.
 
@@ -3552,6 +3574,7 @@ def _build_audio_block_calibration_prompt(
     direction: str,
     day_context: str,
 ) -> str:
+    budget_contract = _load_prompt_file("generation", "budget-rewrite.md")
     target_words = min(
         int(status.get("max_words") or 0),
         max(int(status.get("min_words") or 0), int(status.get("target_words") or 0) - 40),
@@ -3570,6 +3593,9 @@ def _build_audio_block_calibration_prompt(
         "- Si tu ajoutes un exemple, il doit aider une idée précise du plan verrouillé.\n"
     )
     return f"""Tu es directeur éditorial d'un cours audio TTS Fish Audio.
+
+CONTRAT DE RÉÉCRITURE BUDGET :
+{budget_contract}
 
 Objectif : réécrire UN bloc de cours pour qu'il tombe dans son budget de mots parlé.
 Ce texte sera lu tel quel. Il ne faut PAS répondre en JSON, PAS ajouter de titre,
@@ -4890,10 +4916,18 @@ def _build_structured_section_prompt(
     generated_so_far: str,
     module_content: str,
 ) -> str:
+    base_style = _load_prompt_file("generation", "base-course-style.md")
+    section_contract = _load_prompt_file("generation", "structured-section.md")
     target_words = int(section.get("target_words") or 500)
     min_words = max(120, int(target_words * 0.82))
     max_words = max(min_words + 50, int(target_words * 1.10))
     return f"""Tu écris UNE SECTION d'un cours audio professionnel TTS-ready.
+
+SOCLE GÉNÉRAL À RESPECTER :
+{base_style}
+
+CONTRAT DE SECTION :
+{section_contract}
 
 Tu dois respecter le plan verrouillé. N'écris que la section demandée : {_section_label(section)}.
 
@@ -7708,150 +7742,30 @@ _REVIEW_RULE_GROUPS = _COMPLIANCE_REVIEW_RULE_GROUPS
 
 _RULES_CACHE = {"mtime": 0, "text": ""}
 
-_HUMANIZATION_REVIEW_RULES = """
-RÈGLE #101 — Éviter les débuts trop brusques ou trop conférence
-Couche de finition uniquement : corrige localement une ouverture trop sèche,
-trop mécanique ou trop "grand discours". Ne recrée pas l'introduction complète
-et ne change pas le plan. Préfère une phrase d'accueil ou de reprise plus
-naturelle, courte et compatible avec le plan verrouillé.
-
-RÈGLE #102 — Créer des respirations pédagogiques
-Après une idée dense, une démonstration ou un exemple important, le texte doit
-laisser une respiration : reformulation simple, phrase tampon, [pause],
-mini-synthèse ou reconnexion terrain. Corrige uniquement les passages trop
-compacts qui ne laissent pas le temps d'assimiler, sans ajouter un nouveau
-développement.
-
-RÈGLE #103 — Laisser vivre les idées importantes
-Une phrase forte ne doit pas toujours être immédiatement sur-expliquée. Ajoute
-ou conserve une respiration courte, une reformulation calme ou une phrase
-émotionnelle simple après les idées importantes.
-
-RÈGLE #104 — Humaniser le formateur
-Le formateur doit sembler humain : il accompagne, rassure, réfléchit légèrement,
-normalise les difficultés et partage des repères terrain. Corrige les passages
-qui sonnent comme une conférence mécanique ou une démonstration permanente,
-sans inventer d'anecdote, de vécu personnel ou d'exemple métier non nécessaire.
-
-RÈGLE #105 — Éviter l'accumulation de punchlines
-N'enchaîne pas les phrases très fortes comme des slogans. Alterne phrases
-fortes, phrases simples, phrases neutres et formulations conversationnelles.
-
-RÈGLE #106 — Ajouter des micro-interactions sobres
-Le cours doit régulièrement s'adresser aux apprenants : "vous voyez l'idée ?",
-"essayez de vous projeter", "retenez surtout ça". Corrige les longs passages
-qui oublient complètement l'apprenant. Ne demande pas d'interaction réelle :
-pas de "vous me répondez", pas de "vous m'entendez ?", pas de question qui
-suppose une réponse immédiate.
-
-RÈGLE #107 — Varier le niveau d'énergie
-Le script doit alterner phases dynamiques, moments calmes, exemples terrain,
-synthèses lentes et transitions douces. Utilise les tags [pause], [calm],
-[speaking softly], [inhale], [warm and reassuring] uniquement quand ils servent
-une respiration, une transition ou une reformulation.
-
-RÈGLE #108 — Réduire la densité cognitive des longues phrases
-Corrige les phrases longues qui contiennent plusieurs concepts ou nuances.
-Sépare les idées, ajoute des pauses et préfère des phrases plus courtes.
-
-RÈGLE #109 — Créer de vraies transitions entre grandes idées
-Une transition ne doit pas être seulement logique et rapide. Elle doit ralentir,
-reconnecter à ce qui vient d'être vu et préparer la suite avec anticipation.
-
-RÈGLE #110 — Préparer des fins de blocs conclues
-Quand un passage ressemble à une fin de séquence, il doit redescendre
-progressivement : synthèse, valorisation du chemin parcouru, projection vers la
-suite. Évite les arrêts secs du type "on continue". Ne transforme pas cette
-fin locale en conclusion générale si le plan ne le prévoit pas.
-
-RÈGLE #111 — Donner l'impression d'une journée vécue
-Le cours doit former une progression continue, pas une succession de fichiers
-indépendants. Corrige les transitions qui ignorent totalement ce qui précède ou
-qui cassent le fil émotionnel et pédagogique de la journée. La correction doit
-rester locale : elle lisse le passage, elle ne réorganise pas le cours.
-
-RÈGLE #112 — Premier cours de l'année : introduction générale obligatoire
-Quand le passage est l'ouverture absolue de la formation, il ne doit jamais
-démarrer directement par "bon, on va aborder", "on entre dans le vif du sujet",
-"nouvelle partie" ou une phrase intense. Il doit d'abord faire une vraie
-introduction annuelle, développée et chaleureuse, avant toute notion métier.
-Cette ouverture doit raconter la formation : à quoi elle sert, dans quel
-contexte professionnel elle s'inscrit, ce que les apprenants vont construire,
-les grandes familles de compétences qui seront abordées, la progression sur les
-journées, la manière de travailler, et pourquoi ce parcours va leur être utile
-concrètement. Elle doit encourager les élèves, rassurer sur le rythme, donner
-envie d'avancer, puis seulement faire une transition douce vers le premier
-sujet. Une simple intro générique de quelques phrases est insuffisante.
-
-RÈGLE #113 — Début de journée ou de bloc : amorce progressive obligatoire
-Chaque début de journée, de reprise ou de cours doit avoir une amorce orale
-progressive. Corrige les démarrages mécaniques du type "Bon, on va aborder une
-nouvelle partie du cours" ou "c'est une partie absolument fondamentale". Le
-formateur doit reconnecter calmement au parcours et introduire le sujet sans
-brusquerie, sans refaire tout le cadrage pédagogique.
-
-RÈGLE #114 — Références entre cours toujours vagues, jamais datées
-Les cours ne s'enchaînent PAS au jour le jour : il y a en général un cours par
-semaine, et ce rythme peut changer. Toute référence à un cours passé ou à venir
-doit donc rester VAGUE et NON datée. Corrige systématiquement "hier", "demain",
-"la semaine dernière", "la semaine prochaine" et toute mention calendaire
-précise — y compris dans les intros de reprise ("depuis hier", "la pause
-d'hier", "hier on a vu"). Remplace par des formulations vagues : "la dernière
-fois", "lors du dernier cours", "dans la séance précédente", "au prochain
-cours", "la prochaine fois". Une intro de début de journée ne doit jamais
-supposer que le cours précédent était la veille.
-
-RÈGLE #115 — Carte mentale avant développement
-Avant tout storytelling, cas client, métaphore ou exemple émotionnel, le cours
-doit poser une carte mentale claire : où l'apprenant se situe, ce qu'il va
-apprendre, pourquoi c'est utile, comment le cours est structuré et ce qui vient
-ensuite. Corrige les ouvertures qui commencent par l'inspiration ou l'exemple
-avant d'avoir donné ce repère.
-
-RÈGLE #116 — Cours 1 : parcours annuel, journée, cours actuel
-Pour le premier cours de la première journée, l'ouverture doit garder l'accueil
-humain puis présenter synthétiquement les grands thèmes de l'année, les thèmes
-de la journée dans l'ordre sans horaires, le rôle du cours actuel, ses objectifs
-et un plan oral de 2 à 4 parties. Le texte doit ensuite suivre ce plan dans le
-même ordre avec des transitions explicites. Pour le cours 1 d'une journée
-suivante, ne refais pas la présentation annuelle complète : fais un accueil de
-journée, une reprise douce de la progression, les thèmes de la journée, puis le
-thème, les objectifs et le plan du cours actuel.
-
-RÈGLE #117 — Cours 1 : conclusion Q/R verrouillée
-Pour le cours 1, la conclusion doit durer environ 3 à 4 minutes en équivalent
-audio : récapituler les points vus, redire pourquoi ils comptent et à quoi ils
-serviront, puis annoncer le temps de questions-réponses dans le tchat. Après
-cette annonce, aucun nouveau développement, exemple, mini-synthèse ou ajout de
-remplissage ne doit apparaître.
-
-RÈGLE #118 — Anti-redondance et anti-remplissage
-Chaque développement doit apporter une idée nouvelle identifiable. Corrige les
-passages répétés, les reformulations qui tournent à vide, les tunnels de
-métaphores ou de storytelling sans progression, et les ajouts placés après une
-conclusion uniquement pour allonger le texte. La correction attendue est une
-suppression ou une fusion propre, pas un nouveau développement.
-
-RÈGLE #119 — Frontières nettes entre cours, Q/R et pauses
-Un cours ne doit jamais commencer en terminant le cours précédent. Après un Q/R
-ou une pause, la reprise doit être autonome et cohérente avec le vocal précédent
-qui indique que la pause ou le Q/R est terminé : reprise naturelle, rappel bref
-de ce qui a été vu, lien avec le nouveau thème, annonce de l'objectif et du plan
-du cours actuel. Corrige les débuts qui poursuivent une conclusion précédente,
-qui font comme si la pause/Q/R n'avait pas eu lieu, ou qui redémarrent deux fois.
-Une seule reprise, un seul cadrage, puis le développement du nouveau cours.
-""".strip()
-
 
 def _load_review_rules() -> str:
-    """Extrait le bloc 'RÈGLES ABSOLUES #1 à #28' de la passe 1 du prompt
-    (les règles sont identiques dans les 3 passes, une seule extraction
-    suffit). Mise en cache par mtime du fichier."""
-    path = os.path.join(
-        os.path.dirname(__file__), "..", "prompts", "prompts-generaux-contenu-formation.md"
-    )
+    """Charge les règles de review depuis les fichiers modulaires JSON.
+
+    Fallback : ancien markdown monolithique si les fichiers structurés sont
+    absents, pour ne pas casser un déploiement incomplet.
+    """
+    try:
+        compliance_text, compliance_mtime = _load_structured_rule_file("compliance-rules.json")
+        humanization_text, humanization_mtime = _load_structured_rule_file("humanization-rules.json")
+        cache_key = ("modular", compliance_mtime, humanization_mtime)
+        if _RULES_CACHE["mtime"] == cache_key and _RULES_CACHE["text"]:
+            return _RULES_CACHE["text"]
+        rules_text = compliance_text.rstrip() + "\n\n" + humanization_text.strip()
+        _RULES_CACHE["mtime"] = cache_key
+        _RULES_CACHE["text"] = rules_text
+        return rules_text
+    except Exception as e:
+        logger.warning("⚠️ Règles modulaires indisponibles, fallback markdown historique: %s", e)
+
+    path = _prompt_file_path("prompts-generaux-contenu-formation.md")
     mtime = os.path.getmtime(path)
-    if _RULES_CACHE["mtime"] == mtime and _RULES_CACHE["text"]:
+    cache_key = ("legacy", mtime)
+    if _RULES_CACHE["mtime"] == cache_key and _RULES_CACHE["text"]:
         return _RULES_CACHE["text"]
     with open(path, "r", encoding="utf-8") as f:
         content = f.read()
@@ -7861,8 +7775,7 @@ def _load_review_rules() -> str:
         _re.DOTALL,
     )
     rules_text = m.group(0) if m else content[:20000]
-    rules_text = rules_text.rstrip() + "\n\n" + _HUMANIZATION_REVIEW_RULES
-    _RULES_CACHE["mtime"] = mtime
+    _RULES_CACHE["mtime"] = cache_key
     _RULES_CACHE["text"] = rules_text
     return rules_text
 
@@ -7942,12 +7855,34 @@ def _extract_rules_for_group(full_rules_text: str, rule_numbers: list) -> str:
     return "\n\n".join(extracted)
 
 
+def _load_structured_rule_file(filename: str) -> tuple[str, float]:
+    path = _prompt_file_path("reviews", filename)
+    with open(path, "r", encoding="utf-8") as f:
+        data = _json.load(f)
+    rules = data.get("rules") or []
+    if not isinstance(rules, list):
+        raise ValueError(f"Fichier règles invalide: {filename}")
+    blocks = []
+    for rule in rules:
+        body = (rule.get("body") or "").strip() if isinstance(rule, dict) else ""
+        if body:
+            blocks.append(body)
+    if not blocks:
+        raise ValueError(f"Aucune règle exploitable dans {filename}")
+    header = f"SOURCE MODULAIRE: {filename} · version {data.get('version') or 'unknown'}"
+    return header + "\n\n" + "\n\n".join(blocks), os.path.getmtime(path)
+
+
 def _build_review_prompt_focused(
     segment_text: str, rules_text: str, group_label: str, group_desc: str, rule_numbers: list,
     chunk_index: int = 1, chunk_total: int = 1, review_context: str = "",
 ) -> str:
     rules_list = ", ".join(f"#{n}" for n in rule_numbers)
     is_humanization_scope = any(int(n) >= 100 for n in (rule_numbers or []))
+    review_contract = _load_prompt_file(
+        "reviews",
+        "humanization-polish.md" if is_humanization_scope else "compliance-review.md",
+    )
     max_patches = _HUMANIZATION_MAX_PATCHES if is_humanization_scope else _REVIEW_MAX_PATCHES
     review_mode = (
         "Pour les règles d'humanisation, tu fais une finition orale légère. "
@@ -7975,6 +7910,9 @@ def _build_review_prompt_focused(
         else f"- Ne corrige QUE les vraies violations de {rules_list}. Pas d'autres règles, pas de préférence stylistique."
     )
     return f"""Tu es un reviewer éditorial SPÉCIALISÉ. Tu reçois un extrait de cours oral et un sous-ensemble de règles à vérifier.
+
+CONTRAT DE REVIEW :
+{review_contract}
 
 🎯 TON SCOPE EXCLUSIF : {group_label} — {group_desc}
 Tu vérifies UNIQUEMENT les règles {rules_list}. Ignore toutes les autres règles.
