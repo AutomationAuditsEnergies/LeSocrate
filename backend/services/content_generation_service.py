@@ -245,6 +245,15 @@ def _content_parallel_subpart_workers(default: int = 7) -> int:
     return max(1, min(16, workers))
 
 
+def _structured_course_parallel_workers(default: int = 3) -> int:
+    """Concurrence prudente pour le mode structuré."""
+    try:
+        workers = int(os.getenv("FORMATION_STRUCTURED_COURSE_WORKERS", str(default)))
+    except (TypeError, ValueError):
+        workers = default
+    return max(1, min(7, workers))
+
+
 def _runtime_intra_day_carryover_enabled() -> bool:
     """Autorise le report technique d'un reste audio vers le cours suivant.
 
@@ -4904,6 +4913,12 @@ def _build_structured_section_prompt(
     target_words = int(section.get("target_words") or 500)
     min_words = max(120, int(target_words * 0.82))
     max_words = max(min_words + 50, int(target_words * 1.10))
+    if section.get("kind") == "opening" and (generated_so_far or "").strip():
+        generated_context_label = "Contenu principal déjà généré à cadrer dans cette ouverture"
+        generated_context = _compact_words(generated_so_far, 900) or "(aucun)"
+    else:
+        generated_context_label = "Texte déjà généré dans ce cours"
+        generated_context = _compact_words(generated_so_far, 900) or "(début du cours)"
     return f"""Tu écris UNE SECTION d'un cours audio professionnel TTS-ready.
 
 SOCLE GÉNÉRAL À RESPECTER :
@@ -4928,7 +4943,7 @@ Contexte utile :
 - Titre professionnel : {job.get('program_title') or ''}
 - Intitulé journée : {job.get('folder_name') or ''}
 - Rappel cours précédent : {previous_course_summary or '(aucun)'}
-- Texte déjà généré dans ce cours : {_compact_words(generated_so_far, 900) or '(début du cours)'}
+- {generated_context_label} : {generated_context}
 
 Contenu source à utiliser :
 {_compact_words(module_content or job.get('program_text') or '', 4500)}
@@ -4941,6 +4956,7 @@ Contraintes absolues :
 - Ne termine jamais le cours précédent.
 - Ne devance pas une section suivante.
 - Si cette section est une introduction, elle doit annoncer le plan avant tout exemple.
+- Si cette introduction est générée après le contenu principal, écris-la quand même comme le tout début du cours, jamais comme une suite.
 - Si cette section est une partie, elle doit développer seulement cette partie et apporter une idée nouvelle identifiable.
 - Si cette section est une conclusion, elle doit récapituler sans ouvrir un nouveau développement.
 - Après l'annonce Q/R ou la mention du tchat, aucun nouveau développement.
@@ -5391,6 +5407,203 @@ def _save_structured_course_segment(job_id: int, course_plan: dict, text: str) -
     )
 
 
+def _module_content_for_structured_course(
+    course_plan: dict,
+    course_number: int,
+    sub_parts: list,
+    module_contents: dict,
+) -> str:
+    module_content = module_contents.get(course_plan.get("course_title") or "", "")
+    if not module_content and course_number - 1 < len(sub_parts or []):
+        module_content = module_contents.get(sub_parts[course_number - 1], "")
+    return module_content or ""
+
+
+def _structured_opening_section_for_course(course_plan: dict) -> dict:
+    return {"kind": "opening", **(course_plan.get("opening") or {})}
+
+
+def _structured_body_sections_for_course(course_plan: dict) -> list[dict]:
+    return [
+        section
+        for section in _structured_sections_for_course(course_plan)
+        if section.get("kind") not in {"opening", "day_conclusion"}
+    ]
+
+
+def _structured_day_conclusion_section_for_course(course_plan: dict) -> dict | None:
+    if not course_plan.get("day_conclusion"):
+        return None
+    return {"kind": "day_conclusion", **course_plan["day_conclusion"]}
+
+
+def _run_structured_parallel(items: list, worker, *, workers: int) -> list:
+    if not items:
+        return []
+    workers = max(1, min(int(workers or 1), len(items)))
+    if workers <= 1:
+        return [worker(item) for item in items]
+    import eventlet
+    pool = eventlet.GreenPool(size=workers)
+    greenlets = [pool.spawn(worker, item) for item in items]
+    return [greenlet.wait() for greenlet in greenlets]
+
+
+def _generate_structured_course_body(
+    *,
+    job: dict,
+    course_plan: dict,
+    sub_parts: list,
+    module_contents: dict,
+    model=None,
+) -> dict:
+    course_number = int(course_plan.get("course_number") or 0)
+    module_content = _module_content_for_structured_course(
+        course_plan,
+        course_number,
+        sub_parts,
+        module_contents,
+    )
+    section_texts = []
+    section_records = []
+    logger.info(
+        "PIPELINE_STRUCTURED_BODY_START formation_job_id=%s content_job_id=%s course=%s",
+        job.get("formation_job_id"),
+        job.get("id"),
+        course_number,
+    )
+    for section in _structured_body_sections_for_course(course_plan):
+        label = _section_label(section)
+        section_text = _generate_structured_section(
+            job=job,
+            course_plan=course_plan,
+            section=section,
+            previous_course_summary="",
+            generated_so_far="\n\n".join(section_texts),
+            module_content=module_content,
+            model=model,
+        )
+        section_texts.append(section_text)
+        section_records.append({
+            "kind": section.get("kind"),
+            "label": label,
+            "part_number": section.get("part_number"),
+            "title": section.get("title"),
+            "target_words": int(section.get("target_words") or 0),
+            "word_count": count_tts_spoken_words(section_text),
+            "text": section_text,
+        })
+    body_text = "\n\n".join(s for s in section_texts if s.strip()).strip()
+    logger.info(
+        "PIPELINE_STRUCTURED_BODY_DONE formation_job_id=%s content_job_id=%s course=%s words=%s",
+        job.get("formation_job_id"),
+        job.get("id"),
+        course_number,
+        count_tts_spoken_words(body_text),
+    )
+    return {
+        "course_number": course_number,
+        "course_plan": course_plan,
+        "module_content": module_content,
+        "body_text": body_text,
+        "body_sections": section_records,
+    }
+
+
+def _summarize_structured_course_body(body_result: dict, model=None) -> tuple[int, str]:
+    course_number = int(body_result.get("course_number") or 0)
+    summary = _summarize_previous_course_for_structured(body_result.get("body_text") or "", model=model)
+    return course_number, summary
+
+
+def _generate_late_opening_for_structured_course(
+    *,
+    job: dict,
+    body_result: dict,
+    previous_course_summary: str,
+    model=None,
+) -> dict:
+    course_plan = body_result["course_plan"]
+    course_number = int(body_result.get("course_number") or 0)
+    section = _structured_opening_section_for_course(course_plan)
+    opening_text = _generate_structured_section(
+        job=job,
+        course_plan=course_plan,
+        section=section,
+        previous_course_summary=previous_course_summary,
+        generated_so_far=body_result.get("body_text") or "",
+        module_content=body_result.get("module_content") or "",
+        model=model,
+    )
+    return {
+        "course_number": course_number,
+        "record": {
+            "kind": section.get("kind"),
+            "label": _section_label(section),
+            "part_number": section.get("part_number"),
+            "title": section.get("title"),
+            "target_words": int(section.get("target_words") or 0),
+            "word_count": count_tts_spoken_words(opening_text),
+            "text": opening_text,
+            "generated_late": True,
+        },
+        "text": opening_text,
+    }
+
+
+def _generate_late_day_conclusion_for_structured_course(
+    *,
+    job: dict,
+    body_result: dict,
+    day_summary_context: str,
+    model=None,
+) -> dict | None:
+    course_plan = body_result["course_plan"]
+    section = _structured_day_conclusion_section_for_course(course_plan)
+    if not section:
+        return None
+    course_number = int(body_result.get("course_number") or 0)
+    day_conclusion_text = _generate_structured_section(
+        job=job,
+        course_plan=course_plan,
+        section=section,
+        previous_course_summary=day_summary_context,
+        generated_so_far=body_result.get("body_text") or "",
+        module_content=body_result.get("module_content") or "",
+        model=model,
+    )
+    return {
+        "course_number": course_number,
+        "record": {
+            "kind": section.get("kind"),
+            "label": _section_label(section),
+            "part_number": section.get("part_number"),
+            "title": section.get("title"),
+            "target_words": int(section.get("target_words") or 0),
+            "word_count": count_tts_spoken_words(day_conclusion_text),
+            "text": day_conclusion_text,
+            "generated_late": True,
+        },
+        "text": day_conclusion_text,
+    }
+
+
+def _assemble_structured_course_draft(body_result: dict, opening_result: dict, day_conclusion_result: dict | None) -> dict:
+    section_records = [opening_result["record"], *body_result.get("body_sections", [])]
+    section_texts = [opening_result.get("text") or "", body_result.get("body_text") or ""]
+    if day_conclusion_result:
+        section_records.append(day_conclusion_result["record"])
+        section_texts.append(day_conclusion_result.get("text") or "")
+    course_text = "\n\n".join(s for s in section_texts if (s or "").strip()).strip()
+    return {
+        "course_number": int(body_result.get("course_number") or 0),
+        "course_plan": body_result["course_plan"],
+        "course_text": course_text,
+        "sections": section_records,
+        "draft_word_count": count_tts_spoken_words(course_text),
+    }
+
+
 def _run_structured_content_generation(
     *,
     job: dict,
@@ -5428,70 +5641,160 @@ def _run_structured_content_generation(
     _clear_content_segments_for_structured(job["id"])
 
     generated_blocks = []
-    draft_courses = []
     course_scripts = []
-    previous_summary = ""
     total_words = 0
-    total_courses = len(plan.get("courses") or [])
+    course_plans = sorted(
+        list(plan.get("courses") or []),
+        key=lambda course: int(course.get("course_number") or 0),
+    )
+    total_courses = len(course_plans)
+    workers = _structured_course_parallel_workers()
+    logger.info(
+        "PIPELINE_STRUCTURED_PARALLEL_CONFIG formation_job_id=%s content_job_id=%s folder_id=%s workers=%s courses=%s strategy=body_then_late_opening",
+        job.get("formation_job_id"),
+        job["id"],
+        folder_id,
+        workers,
+        total_courses,
+    )
 
-    for idx, course_plan in enumerate(plan.get("courses") or [], start=1):
-        course_number = int(course_plan.get("course_number") or idx)
-        if on_progress:
-            on_progress(course_number - 1, NUM_SUB_PARTS, 1, total_words, f"Plan validé · génération cours {course_number}/7")
-        module_content = module_contents.get(course_plan.get("course_title") or "", "")
-        if not module_content and course_number - 1 < len(sub_parts):
-            module_content = module_contents.get(sub_parts[course_number - 1], "")
+    if on_progress:
+        on_progress(0, NUM_SUB_PARTS, 1, total_words, f"Génération parallèle des contenus principaux ({workers} cours à la fois)")
+    body_results = _run_structured_parallel(
+        course_plans,
+        lambda course_plan: _generate_structured_course_body(
+            job=job,
+            course_plan=course_plan,
+            sub_parts=sub_parts,
+            module_contents=module_contents,
+            model=model,
+        ),
+        workers=workers,
+    )
+    body_results = sorted(body_results, key=lambda item: int(item.get("course_number") or 0))
 
-        section_texts = []
-        section_records = []
-        for section in _structured_sections_for_course(course_plan):
-            label = _section_label(section)
-            if on_progress:
-                on_progress(course_number - 1, NUM_SUB_PARTS, 1, total_words, f"Cours {course_number}/7 · {label}")
-            section_text = _generate_structured_section(
-                job=job,
-                course_plan=course_plan,
-                section=section,
-                previous_course_summary=previous_summary,
-                generated_so_far="\n\n".join(section_texts),
-                module_content=module_content,
-                model=model,
-            )
-            section_texts.append(section_text)
-            section_records.append({
-                "kind": section.get("kind"),
-                "label": label,
-                "part_number": section.get("part_number"),
-                "title": section.get("title"),
-                "target_words": int(section.get("target_words") or 0),
-                "word_count": count_tts_spoken_words(section_text),
-                "text": section_text,
-            })
+    if on_progress:
+        on_progress(0, NUM_SUB_PARTS, 1, total_words, "Résumés courts des cours pour les reprises tardives")
+    summary_pairs = _run_structured_parallel(
+        body_results,
+        lambda body_result: _summarize_structured_course_body(body_result, model=model),
+        workers=workers,
+    )
+    course_summaries = {int(course_number): summary for course_number, summary in summary_pairs}
+    day_summary_context = "\n".join(
+        f"Cours {course_number}: {course_summaries.get(course_number) or ''}"
+        for course_number in sorted(course_summaries)
+    )
 
-        course_text = "\n\n".join(s for s in section_texts if s.strip()).strip()
+    if on_progress:
+        on_progress(0, NUM_SUB_PARTS, 1, total_words, "Génération tardive des introductions et raccords")
+    opening_results = _run_structured_parallel(
+        body_results,
+        lambda body_result: _generate_late_opening_for_structured_course(
+            job=job,
+            body_result=body_result,
+            previous_course_summary=course_summaries.get(int(body_result.get("course_number") or 0) - 1, ""),
+            model=model,
+        ),
+        workers=workers,
+    )
+    openings_by_course = {
+        int(opening.get("course_number") or 0): opening
+        for opening in opening_results
+    }
+    day_conclusion_tasks = [
+        body_result
+        for body_result in body_results
+        if _structured_day_conclusion_section_for_course(body_result["course_plan"])
+    ]
+    day_conclusion_results = _run_structured_parallel(
+        day_conclusion_tasks,
+        lambda body_result: _generate_late_day_conclusion_for_structured_course(
+            job=job,
+            body_result=body_result,
+            day_summary_context=day_summary_context,
+            model=model,
+        ),
+        workers=max(1, min(workers, len(day_conclusion_tasks) or 1)),
+    )
+    day_conclusions_by_course = {
+        int(result.get("course_number") or 0): result
+        for result in day_conclusion_results
+        if result
+    }
+
+    draft_courses = []
+    for body_result in body_results:
+        course_number = int(body_result.get("course_number") or 0)
+        draft = _assemble_structured_course_draft(
+            body_result,
+            openings_by_course[course_number],
+            day_conclusions_by_course.get(course_number),
+        )
+        course_plan = draft["course_plan"]
         draft_courses.append({
             "course_number": course_number,
             "course_title": course_plan.get("course_title") or f"Cours {course_number}",
             "target_words": int(course_plan.get("target_words") or 0),
-            "draft_word_count": count_tts_spoken_words(course_text),
-            "sections": section_records,
+            "draft_word_count": draft["draft_word_count"],
+            "sections": draft["sections"],
+            "generation_strategy": "parallel_body_then_late_opening",
         })
-        _save_content_artifact(
-            platform_id,
-            folder_id,
-            _CONTENT_DRAFT_SECTIONS_BLOB,
-            _artifact_payload(
-                job,
-                "content_draft_sections",
-                {
-                    "structured_course_plan_version": plan.get("version"),
-                    "courses": draft_courses,
-                },
-            ),
+        body_result["draft"] = draft
+
+    _save_content_artifact(
+        platform_id,
+        folder_id,
+        _CONTENT_DRAFT_SECTIONS_BLOB,
+        _artifact_payload(
+            job,
+            "content_draft_sections",
+            {
+                "structured_course_plan_version": plan.get("version"),
+                "generation_strategy": "parallel_body_then_late_opening",
+                "parallel_workers": workers,
+                "course_summaries": course_summaries,
+                "courses": draft_courses,
+            },
+        ),
+    )
+
+    if on_progress:
+        on_progress(0, NUM_SUB_PARTS, 1, total_words, "Calibrage parallèle des budgets mots par cours")
+
+    def _calibrate_draft(body_result: dict) -> dict:
+        draft = body_result["draft"]
+        course_plan = draft["course_plan"]
+        course_text, calibration = _calibrate_structured_course_text(
+            course_plan,
+            draft["course_text"],
+            model=model,
         )
-        course_text, calibration = _calibrate_structured_course_text(course_plan, course_text, model=model)
-        _save_structured_course_segment(job["id"], course_plan, course_text)
         words = count_tts_spoken_words(course_text)
+        course_number = int(course_plan.get("course_number") or body_result.get("course_number") or 0)
+        return {
+            "course_number": course_number,
+            "course_plan": course_plan,
+            "course_text": course_text,
+            "words": words,
+            "calibration": calibration,
+            "draft": draft,
+        }
+
+    calibrated_results = _run_structured_parallel(
+        body_results,
+        _calibrate_draft,
+        workers=workers,
+    )
+    calibrated_results = sorted(calibrated_results, key=lambda item: int(item.get("course_number") or 0))
+
+    for result in calibrated_results:
+        course_number = int(result.get("course_number") or 0)
+        course_plan = result["course_plan"]
+        course_text = result["course_text"]
+        words = int(result.get("words") or 0)
+        calibration = result.get("calibration") or {}
+        _save_structured_course_segment(job["id"], course_plan, course_text)
         total_words += words
         generated_block = {
             "bloc_number": course_number,
@@ -5507,6 +5810,7 @@ def _run_structured_content_generation(
             "dirty": True,
             "structured_plan": course_plan,
             "calibration": calibration,
+            "generation_strategy": "parallel_body_then_late_opening",
         }
         generated_blocks.append(generated_block)
         course_scripts.append({
@@ -5518,22 +5822,12 @@ def _run_structured_content_generation(
             "text": course_text,
             "calibration": calibration,
             "structured_plan": course_plan,
+            "generation_strategy": "parallel_body_then_late_opening",
+            "previous_course_summary_used": course_summaries.get(course_number - 1, ""),
         })
-        _save_content_artifact(
-            platform_id,
-            folder_id,
-            _CONTENT_COURSE_SCRIPTS_BLOB,
-            _artifact_payload(
-                job,
-                "content_course_scripts",
-                {
-                    "structured_course_plan_version": plan.get("version"),
-                    "courses": course_scripts,
-                },
-            ),
-        )
-        previous_summary = _summarize_previous_course_for_structured(course_text, model=model)
         _update_job_db(job["id"], total_words=total_words, current_sub_part=course_number - 1, current_passe=1)
+        if on_progress:
+            on_progress(course_number, NUM_SUB_PARTS, 1, total_words, f"Cours {course_number}/7 calibré ({words} mots)")
         logger.info(
             "PIPELINE_STRUCTURED_COURSE_DONE formation_job_id=%s content_job_id=%s folder_id=%s course=%s/%s words=%s target=%s",
             job.get("formation_job_id"),
@@ -5545,10 +5839,29 @@ def _run_structured_content_generation(
             course_plan.get("target_words"),
         )
 
+    _save_content_artifact(
+        platform_id,
+        folder_id,
+        _CONTENT_COURSE_SCRIPTS_BLOB,
+        _artifact_payload(
+            job,
+            "content_course_scripts",
+            {
+                "structured_course_plan_version": plan.get("version"),
+                "generation_strategy": "parallel_body_then_late_opening",
+                "parallel_workers": workers,
+                "course_summaries": course_summaries,
+                "courses": course_scripts,
+            },
+        ),
+    )
+
     final_words, filename = _assemble_and_upload(folder_id, platform_id, job["id"])
     payload = {
         "generated_at": datetime.utcnow().isoformat() + "Z",
         "mode": "structured_content_generation",
+        "generation_strategy": "parallel_body_then_late_opening",
+        "parallel_workers": workers,
         "structured_course_plan": plan,
         "planned_course_blocs": generated_blocks,
         "course_blocs": [],
