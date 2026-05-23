@@ -952,9 +952,9 @@ Pour un début de cours, annonce clairement : le thème, l'objectif, les compét
 
 Le développement doit suivre le plan annoncé dans le même ordre. Chaque partie apporte une idée nouvelle identifiable. Les transitions sont explicites : "Maintenant que nous avons vu X, passons à Y", "Deuxième point", "Avant de continuer, faisons une synthèse".
 
-Frontière entre cours : un nouveau cours ne doit jamais terminer le cours précédent. Après une Q/R ou une pause, fais seulement un rappel bref, puis annonce le thème, l'objectif et le plan du cours actuel.
+Frontière entre cours : un nouveau cours ne doit jamais terminer le cours précédent. Après une Q/R ou une pause, la reprise doit être cohérente avec le vocal précédent qui vient de clôturer ce temps : reprendre naturellement, faire seulement un rappel bref, puis annoncer le thème, l'objectif et le plan du cours actuel.
 
-Interdit : tunnels de métaphores, exemples ou reformulations sans information nouvelle ; conclusion suivie d'un nouveau développement ; paragraphes redondants répétés pour remplir le volume. Si le cours arrive à sa conclusion, enrichis en amont les parties utiles au lieu d'ajouter du texte après la clôture.
+Interdit : tunnels de métaphores, exemples ou reformulations sans information nouvelle ; conclusion suivie d'un nouveau développement ; paragraphes redondants répétés pour remplir le volume ; emploi du mot "bloc" dans le texte entendu par les apprenants, à reformuler naturellement en "cours", "partie", "séquence" ou "moment" selon le contexte. Si le cours arrive à sa conclusion, enrichis en amont les parties utiles au lieu d'ajouter du texte après la clôture.
 
 Ces 8 règles de style oral (#21 à #28) sont au même niveau de
 priorité que les règles éthiques (#1-#16) et anti-hallucination
@@ -1932,9 +1932,9 @@ Pour un début de cours, annonce clairement : le thème, l'objectif, les compét
 
 Le développement doit suivre le plan annoncé dans le même ordre. Chaque partie apporte une idée nouvelle identifiable. Les transitions sont explicites : "Maintenant que nous avons vu X, passons à Y", "Deuxième point", "Avant de continuer, faisons une synthèse".
 
-Frontière entre cours : un nouveau cours ne doit jamais terminer le cours précédent. Après une Q/R ou une pause, fais seulement un rappel bref, puis annonce le thème, l'objectif et le plan du cours actuel.
+Frontière entre cours : un nouveau cours ne doit jamais terminer le cours précédent. Après une Q/R ou une pause, la reprise doit être cohérente avec le vocal précédent qui vient de clôturer ce temps : reprendre naturellement, faire seulement un rappel bref, puis annoncer le thème, l'objectif et le plan du cours actuel.
 
-Interdit : tunnels de métaphores, exemples ou reformulations sans information nouvelle ; conclusion suivie d'un nouveau développement ; paragraphes redondants répétés pour remplir le volume. Si le cours arrive à sa conclusion, enrichis en amont les parties utiles au lieu d'ajouter du texte après la clôture.
+Interdit : tunnels de métaphores, exemples ou reformulations sans information nouvelle ; conclusion suivie d'un nouveau développement ; paragraphes redondants répétés pour remplir le volume ; emploi du mot "bloc" dans le texte entendu par les apprenants, à reformuler naturellement en "cours", "partie", "séquence" ou "moment" selon le contexte. Si le cours arrive à sa conclusion, enrichis en amont les parties utiles au lieu d'ajouter du texte après la clôture.
 
 Ces 8 règles de style oral (#21 à #28) sont au même niveau de
 priorité que les règles éthiques (#1-#16) et anti-hallucination
@@ -2916,9 +2916,9 @@ Pour un début de cours, annonce clairement : le thème, l'objectif, les compét
 
 Le développement doit suivre le plan annoncé dans le même ordre. Chaque partie apporte une idée nouvelle identifiable. Les transitions sont explicites : "Maintenant que nous avons vu X, passons à Y", "Deuxième point", "Avant de continuer, faisons une synthèse".
 
-Frontière entre cours : un nouveau cours ne doit jamais terminer le cours précédent. Après une Q/R ou une pause, fais seulement un rappel bref, puis annonce le thème, l'objectif et le plan du cours actuel.
+Frontière entre cours : un nouveau cours ne doit jamais terminer le cours précédent. Après une Q/R ou une pause, la reprise doit être cohérente avec le vocal précédent qui vient de clôturer ce temps : reprendre naturellement, faire seulement un rappel bref, puis annoncer le thème, l'objectif et le plan du cours actuel.
 
-Interdit : tunnels de métaphores, exemples ou reformulations sans information nouvelle ; conclusion suivie d'un nouveau développement ; paragraphes redondants répétés pour remplir le volume. Si le cours arrive à sa conclusion, enrichis en amont les parties utiles au lieu d'ajouter du texte après la clôture.
+Interdit : tunnels de métaphores, exemples ou reformulations sans information nouvelle ; conclusion suivie d'un nouveau développement ; paragraphes redondants répétés pour remplir le volume ; emploi du mot "bloc" dans le texte entendu par les apprenants, à reformuler naturellement en "cours", "partie", "séquence" ou "moment" selon le contexte. Si le cours arrive à sa conclusion, enrichis en amont les parties utiles au lieu d'ajouter du texte après la clôture.
 
 Ces 8 règles de style oral (#21 à #28) sont au même niveau de
 priorité que les règles éthiques (#1-#16) et anti-hallucination

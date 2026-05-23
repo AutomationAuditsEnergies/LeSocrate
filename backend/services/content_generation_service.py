@@ -507,10 +507,10 @@ def _clean_llm_text(raw: str) -> str:
 
 
 def _sanitize_learner_facing_text(text: str) -> str:
-    clean = text or ""
-    clean = re.sub(r"\b[Bb]loc\b", "partie", clean)
-    clean = re.sub(r"\b[Bb]locs\b", "parties", clean)
-    return clean.strip()
+    # Ne fait pas de remplacement lexical automatique : les reformulations
+    # sensibles, comme "bloc" côté apprenant, relèvent de la conformité IA afin
+    # de choisir naturellement entre "cours", "partie", "séquence" ou "moment".
+    return (text or "").strip()
 
 
 def _structured_generation_max_tokens(target_words: int) -> int:
@@ -912,7 +912,7 @@ def _normalize_structured_course_plans(raw_plan: dict, *, job: dict, playlist_it
         opening = raw.get("opening") if isinstance(raw.get("opening"), dict) else {}
         opening.setdefault("type", "ouverture_formation" if course_number == 1 else "reprise_apres_qa_pause")
         opening["target_words"] = budgets["opening"]
-        if course_number == 1:
+        if course_number == 1 and day_number == 1:
             forced_opening_include = [
                 "accueil oral des apprenants",
                 "présentation synthétique du programme annuel",
@@ -926,9 +926,24 @@ def _normalize_structured_course_plans(raw_plan: dict, *, job: dict, playlist_it
                 "storytelling avant carte mentale",
                 "mot bloc devant les élèves",
             ]
+        elif course_number == 1:
+            forced_opening_include = [
+                "accueil oral des apprenants",
+                "reprise douce de la progression de formation",
+                "présentation des thèmes de la journée sans horaires",
+                "thème du cours actuel",
+                "objectif du cours actuel",
+                "plan du cours avant tout exemple",
+            ]
+            forced_opening_avoid = [
+                "refaire la présentation annuelle complète",
+                "démarrer directement par un exemple",
+                "storytelling avant carte mentale",
+                "mot bloc devant les élèves",
+            ]
         else:
             forced_opening_include = [
-                "petite amorce orale naturelle du type Ok, on continue, c'est parti",
+                "petite reprise naturelle cohérente avec un vocal précédent indiquant que la pause ou le Q/R est terminé",
                 "rappel bref du cours précédent",
                 "lien avec le cours actuel",
                 "thème du cours actuel",
@@ -1035,6 +1050,16 @@ def _normalize_structured_course_plans(raw_plan: dict, *, job: dict, playlist_it
 
 def _build_structured_course_plan_prompt(job: dict, playlist_items: list, sub_parts: list, module_contents: dict) -> str:
     block_plan = _course_audio_block_plan(playlist_items, folder_position=job.get("folder_position"))
+    try:
+        day_number = int(job.get("folder_position") or 0) + 1
+    except Exception:
+        day_number = None
+    try:
+        nb_days = int(job.get("nb_days") or 0) or None
+    except Exception:
+        nb_days = None
+    is_first_day = day_number == 1
+    is_last_day = bool(nb_days and day_number == nb_days)
     block_lines = "\n".join(
         f"- Cours {b['bloc_number']} · {b['duration_min']} min · cible {b['target_words']} mots · {b['role']}"
         for b in block_plan
@@ -1053,11 +1078,18 @@ Contraintes générales :
 - Chaque cours a 2 à 4 parties, jamais moins, jamais plus.
 - Devant les élèves, ne jamais utiliser le mot "bloc" : utiliser "partie", "cours", "séance" ou "moment".
 - Un cours est toujours suivi d'un temps de questions-réponses dans le tchat.
-- Cours 1 : accueil, parcours annuel synthétique, thèmes de la journée, thème/objectifs/plan, conclusion + Q/R.
-- Cours 2 à 6 : petite reprise naturelle, rappel bref du cours précédent, lien avec le thème actuel, thème/objectifs/plan, conclusion + Q/R.
+- Cours 1 de la première journée seulement : accueil, parcours annuel synthétique, thèmes de la journée, thème/objectifs/plan, conclusion + Q/R.
+- Cours 1 d'une journée suivante : accueil de journée, reprise douce de la progression, thèmes de la journée, thème/objectifs/plan, conclusion + Q/R. Ne refais pas la présentation annuelle complète.
+- Cours 2 à 6 : reprise naturelle cohérente avec le vocal précédent de fin de pause/Q/R, rappel bref du cours précédent, lien avec le thème actuel, thème/objectifs/plan, conclusion + Q/R.
 - Cours 7 : conclusion du cours, conclusion globale de journée, amorce prochaine séance, bonne semaine/à la semaine prochaine, puis mention douce du tchat.
 - Si c'est la dernière journée de formation, le cours 7 doit souhaiter bonne continuation au lieu d'annoncer la prochaine séance.
 - Les exemples non sourcés doivent être explicitement fictifs.
+
+Position dans la formation :
+- Journée courante : {day_number or "inconnue"}
+- Nombre total de journées : {nb_days or "inconnu"}
+- Première journée : {"oui" if is_first_day else "non"}
+- Dernière journée : {"oui" if is_last_day else "non"}
 
 Budget audio par cours :
 {block_lines}
@@ -3499,47 +3531,17 @@ def _trim_text_to_max_spoken_words(text: str, max_words: int) -> str:
 
 
 _AUDIO_BLOCK_FILLERS = [
-    (
-        "Prenons quelques secondes pour ancrer cette idée. [pause]\n\n"
-        "Dans une situation réelle, ce point ne reste jamais théorique. Il se voit "
-        "dans la manière d'accueillir, de questionner, de reformuler et de sécuriser "
-        "l'échange. L'objectif, ici, c'est de transformer une notion en réflexe simple, "
-        "utilisable sans avoir besoin d'y réfléchir longtemps. [pause]\n\n"
-        "Retenez surtout ceci : une posture professionnelle se construit par petites "
-        "décisions répétées. On écoute mieux, on clarifie plus tôt, et on évite de "
-        "laisser l'autre dans le flou."
-    ),
-    (
-        "On peut aussi le voir avec un exemple très courant. [pause]\n\n"
-        "Un client arrive avec une demande qui paraît simple, mais derrière cette demande, "
-        "il y a souvent une attente implicite : être compris, être orienté et sentir que "
-        "quelqu'un tient le fil. Le rôle professionnel consiste donc à ralentir juste assez "
-        "pour vérifier la demande, puis à proposer une suite claire. [pause]\n\n"
-        "Ce n'est pas spectaculaire, mais c'est précisément ce qui rend l'échange fiable."
-    ),
-    (
-        "Avant d'avancer, faisons une mini-synthèse. [pause]\n\n"
-        "Ce qu'il faut garder en tête, c'est que la compétence ne se limite pas à connaître "
-        "une procédure. Il faut aussi savoir quand l'appliquer, comment l'expliquer, et comment "
-        "adapter son rythme à la personne en face. [pause]\n\n"
-        "C'est cette combinaison entre méthode et présence qui donne de la qualité au travail."
-    ),
 ]
 
 
 def _expand_text_to_min_spoken_words(text: str, min_words: int, max_words: int) -> str:
-    """Ajoute des respirations pédagogiques déterministes si l'IA reste trop courte."""
-    result = (text or "").strip()
-    min_words = max(0, int(min_words or 0))
-    max_words = max(min_words, int(max_words or min_words))
-    idx = 0
-    while count_tts_spoken_words(result) < min_words and idx < 80:
-        filler = _AUDIO_BLOCK_FILLERS[idx % len(_AUDIO_BLOCK_FILLERS)]
-        result = (result + "\n\n" + filler).strip() if result else filler
-        idx += 1
-    if count_tts_spoken_words(result) > max_words:
-        result = _trim_text_to_max_spoken_words(result, max_words)
-    return result.strip()
+    """Dernier recours sans remplissage générique.
+
+    Le sous-budget doit être corrigé par l'IA dans les itérations de calibrage.
+    Si l'IA n'y arrive pas ou échoue, on conserve le texte existant plutôt que
+    d'ajouter des paragraphes génériques qui dégradent la formation.
+    """
+    return (text or "").strip()
 
 
 def _build_audio_block_calibration_prompt(
@@ -3557,7 +3559,15 @@ def _build_audio_block_calibration_prompt(
     action = (
         "raccourcir sans perdre les idées essentielles"
         if direction == "shorten"
-        else "enrichir avec des exemples, respirations, transitions et mini-synthèses utiles"
+        else "enrichir avec du contenu pédagogique pertinent, directement lié au plan et au sujet"
+    )
+    direction_rules = (
+        "- Réduis prioritairement les répétitions, les reformulations faibles, les exemples trop longs et les développements après conclusion.\n"
+        "- Si une conclusion est suivie d'un nouveau développement, supprime ou fusionne ce débordement pour que la fin reste propre.\n"
+        if direction == "shorten"
+        else "- Complète le cours avec des explications utiles, des nuances terrain, des exemples fictifs clairement annoncés et des mini-synthèses liées au plan.\n"
+        "- N'ajoute jamais de remplissage générique, de répétition automatique ou de paragraphe passe-partout.\n"
+        "- Si tu ajoutes un exemple, il doit aider une idée précise du plan verrouillé.\n"
     )
     return f"""Tu es directeur éditorial d'un cours audio TTS Fish Audio.
 
@@ -3580,11 +3590,13 @@ Mission :
 - Tu dois {action}.
 - Le texte final doit rester oral, fluide, humain, TTS-ready.
 - Garde les tags TTS utiles comme [pause] ou [calm], mais n'en abuse pas.
+- Respecte le plan et la fonction pédagogique du cours.
 - Ne change pas le niveau RNCP, ne rajoute pas de promesse ou contenu sensible.
 - Respecte la logique playlist : si ce bloc annonce une pause ou un Q&A, cette annonce
   reste dans l'outro du bloc précédent, pas dans le fichier pause/Q&A.
 - Ne gonfle pas hors budget : le résultat doit finir entre {status.get('min_words')}
   et {status.get('max_words')} mots parlés.
+{direction_rules}
 
 Texte actuel à réécrire :
 {current_text}
@@ -4930,8 +4942,13 @@ def _calibrate_structured_course_text(course_plan: dict, text: str, model=None) 
         block=block,
         text=_sanitize_learner_facing_text(text),
         model=model,
-        max_iterations=int(os.getenv("FORMATION_STRUCTURED_COURSE_CALIBRATION_ITERATIONS", "2") or "2"),
-        day_context="Plan structuré verrouillé : respecter l'architecture du cours et ne jamais utiliser le mot bloc devant les élèves.",
+        max_iterations=int(os.getenv("FORMATION_STRUCTURED_COURSE_CALIBRATION_ITERATIONS", "4") or "4"),
+        day_context=(
+            "Plan structuré verrouillé : respecter l'architecture du cours, "
+            "compléter/réduire uniquement avec du contenu pertinent, et ne "
+            "jamais utiliser le mot bloc devant les élèves.\n\n"
+            f"{json.dumps(course_plan, ensure_ascii=False, indent=2)}"
+        ),
     )
     return _sanitize_learner_facing_text(calibrated), result
 
@@ -7576,8 +7593,8 @@ def _env_int(name: str, default: int, min_value: int = 1) -> int:
 _REVIEW_CHUNK_WORDS = _env_int("FORMATION_REVIEW_CHUNK_WORDS", 1500, min_value=300)
 _REVIEW_CHUNK_CONCURRENCY = _env_int("FORMATION_REVIEW_CHUNK_CONCURRENCY", 2, min_value=1)
 _REVIEW_MAX_ATTEMPTS = 3
-_REVIEW_RULESET_VERSION = "2026-05-22-compliance-v4-architecture"
-_HUMANIZATION_RULESET_VERSION = "2026-05-22-humanisation-v6-frontieres-cours"
+_REVIEW_RULESET_VERSION = "2026-05-23-compliance-v5-structured-cleanup"
+_HUMANIZATION_RULESET_VERSION = "2026-05-23-humanisation-v7-reprise-contextuelle"
 _REVIEW_SIGNATURE_COLUMNS_READY = False
 
 _COMPLIANCE_REVIEW_RULE_GROUPS = [
@@ -7724,7 +7741,10 @@ Pour le premier cours de la première journée, l'ouverture doit garder l'accuei
 humain puis présenter synthétiquement les grands thèmes de l'année, les thèmes
 de la journée dans l'ordre sans horaires, le rôle du cours actuel, ses objectifs
 et un plan oral de 2 à 4 parties. Le texte doit ensuite suivre ce plan dans le
-même ordre avec des transitions explicites.
+même ordre avec des transitions explicites. Pour le cours 1 d'une journée
+suivante, ne refais pas la présentation annuelle complète : fais un accueil de
+journée, une reprise douce de la progression, les thèmes de la journée, puis le
+thème, les objectifs et le plan du cours actuel.
 
 RÈGLE #117 — Cours 1 : conclusion Q/R verrouillée
 Pour le cours 1, la conclusion doit durer environ 3 à 4 minutes en équivalent
@@ -7741,11 +7761,12 @@ uniquement pour allonger le texte.
 
 RÈGLE #119 — Frontières nettes entre cours, Q/R et pauses
 Un cours ne doit jamais commencer en terminant le cours précédent. Après un Q/R
-ou une pause, la reprise doit être autonome : rappel bref de ce qui a été vu,
-lien avec le nouveau thème, annonce de l'objectif et du plan du cours actuel.
-Corrige les débuts qui commencent par "Et puis", "Ensuite", ou qui poursuivent
-une conclusion précédente. Corrige aussi les doubles introductions : une seule
-reprise, un seul cadrage, puis le développement du nouveau cours.
+ou une pause, la reprise doit être autonome et cohérente avec le vocal précédent
+qui indique que la pause ou le Q/R est terminé : reprise naturelle, rappel bref
+de ce qui a été vu, lien avec le nouveau thème, annonce de l'objectif et du plan
+du cours actuel. Corrige les débuts qui poursuivent une conclusion précédente,
+qui font comme si la pause/Q/R n'avait pas eu lieu, ou qui redémarrent deux fois.
+Une seule reprise, un seul cadrage, puis le développement du nouveau cours.
 """.strip()
 
 
@@ -7856,7 +7877,7 @@ def _build_review_prompt_focused(
     is_humanization_scope = any(int(n) >= 100 for n in (rule_numbers or []))
     review_mode = (
         "Pour les règles #101 à #119, une intro trop brusque, un premier cours "
-        "sans introduction annuelle, un début de journée mécanique, un bloc trop dense, "
+        "sans introduction annuelle quand c'est la première journée, un début de journée mécanique, un passage trop dense, "
         "une transition mécanique, une fin sèche, l'absence de carte mentale, "
         "un plan absent, une conclusion suivie de contenu, une confusion entre "
         "cours précédent, Q/R, pause et nouveau cours, l'absence de respiration "
