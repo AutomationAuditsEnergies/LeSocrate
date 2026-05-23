@@ -4734,7 +4734,7 @@ def get_job_from_db(folder_id):
     if not row:
         return None
     return {
-        "id": row[0], "platform_id": row[1], "program_text": row[2],
+        "id": row[0], "folder_id": folder_id, "platform_id": row[1], "program_text": row[2],
         "program_title": row[3], "sub_parts": json.loads(row[4] or "[]"),
         "status": row[5], "current_sub_part": row[6], "current_passe": row[7],
         "total_words": row[8], "error_message": row[9],
@@ -4850,6 +4850,70 @@ def _get_segment_text(job_id, sub_idx, passe):
     row = cursor.fetchone()
     conn.close()
     return row[0] if row else ""
+
+
+def _content_segments_artifact_snapshot(job_id: int) -> list[dict]:
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT sub_part_index, sub_part_name, passe, text_content, word_count, dirty,
+               COALESCE(humanized, 0), COALESCE(reviewed, 0),
+               humanization_error, review_error
+        FROM content_generation_segments
+        WHERE job_id = ? AND status = 'completed'
+        ORDER BY sub_part_index ASC, passe ASC
+    """, (job_id,))
+    rows = cursor.fetchall()
+    conn.close()
+
+    courses = []
+    for row in rows:
+        sub_idx, sub_name, passe, text, word_count, dirty, humanized, reviewed, humanization_error, review_error = row
+        marker_course_number = _extract_audio_block_number(text or "")
+        course_number = marker_course_number or int(sub_idx or 0) + 1
+        clean_text = _strip_audio_block_markers(text or "")
+        courses.append({
+            "course_number": int(course_number),
+            "sub_part_index": int(sub_idx or 0),
+            "sub_part_name": sub_name or f"Cours {course_number}",
+            "passe": int(passe or 0),
+            "word_count": count_tts_spoken_words(clean_text),
+            "stored_word_count": int(word_count or 0),
+            "dirty": bool(dirty),
+            "humanized": bool(humanized),
+            "reviewed": bool(reviewed),
+            "humanization_error": humanization_error or "",
+            "review_error": review_error or "",
+            "text": clean_text,
+            "has_audio_marker": bool(marker_course_number),
+        })
+    return courses
+
+
+def _save_reviewed_scripts_artifact(
+    job: dict,
+    folder_id: int,
+    *,
+    review_kind: str,
+    review_label: str,
+    summary: dict,
+) -> None:
+    artifact_job = {**(job or {}), "folder_id": folder_id}
+    _save_content_artifact(
+        job["platform_id"],
+        folder_id,
+        _CONTENT_REVIEWED_SCRIPTS_BLOB,
+        _artifact_payload(
+            artifact_job,
+            "content_reviewed_scripts",
+            {
+                "last_review_kind": review_kind,
+                "last_review_label": review_label,
+                "review_summary": summary,
+                "courses": _content_segments_artifact_snapshot(job["id"]),
+            },
+        ),
+    )
 
 
 # ─── Assemblage final ─────────────────────────────────────────────────────────
@@ -5083,9 +5147,33 @@ def _run_structured_content_generation(
 ) -> tuple[int, str, dict]:
     playlist_items = _playlist_items_for_platform(platform_id)
     plan = _generate_structured_course_plan(job, playlist_items, sub_parts, module_contents, model=model)
+    plan_validation = _validate_structured_course_plan(plan)
+    _save_content_artifact(
+        platform_id,
+        folder_id,
+        _CONTENT_PLAN_BLOB,
+        _artifact_payload(
+            job,
+            "content_plan",
+            {
+                "structured_course_plan": plan,
+                "validation": plan_validation,
+            },
+        ),
+    )
+    if not plan_validation["ok"]:
+        logger.warning(
+            "PIPELINE_STRUCTURED_PLAN_VALIDATION_WARN content_job_id=%s folder_id=%s errors=%s warnings=%s",
+            job["id"],
+            folder_id,
+            plan_validation.get("errors"),
+            plan_validation.get("warnings"),
+        )
     _clear_content_segments_for_structured(job["id"])
 
     generated_blocks = []
+    draft_courses = []
+    course_scripts = []
     previous_summary = ""
     total_words = 0
     total_courses = len(plan.get("courses") or [])
@@ -5099,6 +5187,7 @@ def _run_structured_content_generation(
             module_content = module_contents.get(sub_parts[course_number - 1], "")
 
         section_texts = []
+        section_records = []
         for section in _structured_sections_for_course(course_plan):
             label = _section_label(section)
             if on_progress:
@@ -5113,13 +5202,42 @@ def _run_structured_content_generation(
                 model=model,
             )
             section_texts.append(section_text)
+            section_records.append({
+                "kind": section.get("kind"),
+                "label": label,
+                "part_number": section.get("part_number"),
+                "title": section.get("title"),
+                "target_words": int(section.get("target_words") or 0),
+                "word_count": count_tts_spoken_words(section_text),
+                "text": section_text,
+            })
 
         course_text = "\n\n".join(s for s in section_texts if s.strip()).strip()
+        draft_courses.append({
+            "course_number": course_number,
+            "course_title": course_plan.get("course_title") or f"Cours {course_number}",
+            "target_words": int(course_plan.get("target_words") or 0),
+            "draft_word_count": count_tts_spoken_words(course_text),
+            "sections": section_records,
+        })
+        _save_content_artifact(
+            platform_id,
+            folder_id,
+            _CONTENT_DRAFT_SECTIONS_BLOB,
+            _artifact_payload(
+                job,
+                "content_draft_sections",
+                {
+                    "structured_course_plan_version": plan.get("version"),
+                    "courses": draft_courses,
+                },
+            ),
+        )
         course_text, calibration = _calibrate_structured_course_text(course_plan, course_text, model=model)
         _save_structured_course_segment(job["id"], course_plan, course_text)
         words = count_tts_spoken_words(course_text)
         total_words += words
-        generated_blocks.append({
+        generated_block = {
             "bloc_number": course_number,
             "filename": course_plan.get("filename"),
             "duration_sec": _course_duration_for_bloc(playlist_items, course_number),
@@ -5133,7 +5251,31 @@ def _run_structured_content_generation(
             "dirty": True,
             "structured_plan": course_plan,
             "calibration": calibration,
+        }
+        generated_blocks.append(generated_block)
+        course_scripts.append({
+            "course_number": course_number,
+            "course_title": course_plan.get("course_title") or f"Cours {course_number}",
+            "filename": course_plan.get("filename"),
+            "target_words": int(course_plan.get("target_words") or 0),
+            "word_count": words,
+            "text": course_text,
+            "calibration": calibration,
+            "structured_plan": course_plan,
         })
+        _save_content_artifact(
+            platform_id,
+            folder_id,
+            _CONTENT_COURSE_SCRIPTS_BLOB,
+            _artifact_payload(
+                job,
+                "content_course_scripts",
+                {
+                    "structured_course_plan_version": plan.get("version"),
+                    "courses": course_scripts,
+                },
+            ),
+        )
         previous_summary = _summarize_previous_course_for_structured(course_text, model=model)
         _update_job_db(job["id"], total_words=total_words, current_sub_part=course_number - 1, current_passe=1)
         logger.info(
@@ -7246,21 +7388,27 @@ def generate_audio_from_script(
     )
 
     mode = "mock" if mock else "edge_tts_sync" if (basic_tts and sync_slides) else "edge_tts" if basic_tts else "fish_audio"
-    _save_course_script_plan(
+    audio_plan_payload = {
+        "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "platform_id": platform_id,
+        "folder_id": folder_id,
+        "content_job_id": job_id,
+        "formation_job_id": formation_job_id,
+        "mode": mode,
+        "sync_slides": bool(sync_slides),
+        "basic_tts": bool(basic_tts),
+        "mock": bool(mock),
+        "course_blocs": course_script_plan,
+        "planned_course_blocs": planned_course_script_plan,
+    }
+    _save_course_script_plan(platform_id, folder_id, audio_plan_payload)
+    _save_content_artifact(
         platform_id,
         folder_id,
+        _CONTENT_AUDIO_PLAN_BLOB,
         {
-            "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-            "platform_id": platform_id,
-            "folder_id": folder_id,
-            "content_job_id": job_id,
-            "formation_job_id": formation_job_id,
-            "mode": mode,
-            "sync_slides": bool(sync_slides),
-            "basic_tts": bool(basic_tts),
-            "mock": bool(mock),
-            "course_blocs": course_script_plan,
-            "planned_course_blocs": planned_course_script_plan,
+            "artifact_type": "content_audio_plan",
+            **audio_plan_payload,
         },
     )
 
@@ -7280,6 +7428,129 @@ def generate_audio_from_script(
 
 
 _COURSE_SCRIPT_PLAN_BLOB = "content-script-plan.json"
+_CONTENT_PLAN_BLOB = "content-plan.json"
+_CONTENT_DRAFT_SECTIONS_BLOB = "content-draft-sections.json"
+_CONTENT_COURSE_SCRIPTS_BLOB = "content-course-scripts.json"
+_CONTENT_REVIEWED_SCRIPTS_BLOB = "content-reviewed-scripts.json"
+_CONTENT_AUDIO_PLAN_BLOB = "content-audio-plan.json"
+_CONTENT_ARTIFACT_BLOBS = [
+    _CONTENT_PLAN_BLOB,
+    _CONTENT_DRAFT_SECTIONS_BLOB,
+    _CONTENT_COURSE_SCRIPTS_BLOB,
+    _CONTENT_REVIEWED_SCRIPTS_BLOB,
+    _CONTENT_AUDIO_PLAN_BLOB,
+    _COURSE_SCRIPT_PLAN_BLOB,
+]
+
+
+def _content_artifact_blob_path(platform_id: int, folder_id: int, filename: str) -> str:
+    return f"platform-{platform_id}/folder-{folder_id}/playlist/{filename}"
+
+
+def _artifact_payload(job: dict | None, artifact_type: str, payload: dict) -> dict:
+    job = job or {}
+    return {
+        "artifact_type": artifact_type,
+        "generated_at": datetime.utcnow().isoformat() + "Z",
+        "platform_id": job.get("platform_id"),
+        "folder_id": job.get("folder_id"),
+        "content_job_id": job.get("id"),
+        "formation_job_id": job.get("formation_job_id"),
+        "folder_position": job.get("folder_position"),
+        "folder_name": job.get("folder_name"),
+        **(payload or {}),
+    }
+
+
+def _save_content_artifact(platform_id: int, folder_id: int, filename: str, payload: dict) -> None:
+    try:
+        from services.azure_blob_service import upload_blob, CONTAINER_AUDIOS
+
+        blob_path = _content_artifact_blob_path(platform_id, folder_id, filename)
+        upload_blob(
+            CONTAINER_AUDIOS,
+            blob_path,
+            json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8"),
+        )
+    except Exception as e:
+        logger.warning(f"⚠️ Sauvegarde artefact contenu impossible {filename} folder={folder_id}: {e}")
+
+
+def _load_content_artifact(platform_id: int, folder_id: int, filename: str) -> dict | None:
+    try:
+        from services.azure_blob_service import download_blob, CONTAINER_AUDIOS
+
+        blob_path = _content_artifact_blob_path(platform_id, folder_id, filename)
+        raw = download_blob(CONTAINER_AUDIOS, blob_path)
+        return json.loads(raw.decode("utf-8"))
+    except Exception as e:
+        if "BlobNotFound" not in str(e) and "The specified blob does not exist" not in str(e):
+            logger.warning(f"⚠️ Lecture artefact contenu impossible {filename} folder={folder_id}: {e}")
+        return None
+
+
+def _content_artifacts_for_ui(platform_id: int, folder_id: int) -> list[dict]:
+    return [
+        {
+            "name": filename,
+            "blob_path": _content_artifact_blob_path(platform_id, folder_id, filename),
+            "description": {
+                _CONTENT_PLAN_BLOB: "Plan JSON verrouillé et validation serveur.",
+                _CONTENT_DRAFT_SECTIONS_BLOB: "Sections brutes générées avant assemblage/calibrage.",
+                _CONTENT_COURSE_SCRIPTS_BLOB: "Cours complets calibrés avant reviews.",
+                _CONTENT_REVIEWED_SCRIPTS_BLOB: "Scripts après humanisation/conformité.",
+                _CONTENT_AUDIO_PLAN_BLOB: "Texte réellement planifié/généré pour les fichiers audio.",
+                _COURSE_SCRIPT_PLAN_BLOB: "Plan UI historique compatible.",
+            }.get(filename, ""),
+        }
+        for filename in _CONTENT_ARTIFACT_BLOBS
+    ]
+
+
+def _validate_structured_course_plan(plan: dict) -> dict:
+    errors = []
+    warnings = []
+    courses = plan.get("courses") if isinstance(plan, dict) else None
+    if not isinstance(courses, list):
+        errors.append("courses_absent_or_not_list")
+        courses = []
+    if len(courses) != NUM_SUB_PARTS:
+        errors.append(f"courses_count_{len(courses)}")
+
+    is_first_day = int(plan.get("day_number") or 0) == 1
+    for expected_number in range(1, NUM_SUB_PARTS + 1):
+        course = next(
+            (item for item in courses if int(item.get("course_number") or 0) == expected_number),
+            None,
+        )
+        if not course:
+            errors.append(f"course_{expected_number}_missing")
+            continue
+        parts = course.get("parts") if isinstance(course.get("parts"), list) else []
+        if not 2 <= len(parts) <= 4:
+            errors.append(f"course_{expected_number}_parts_count_{len(parts)}")
+        expected_budget = int(course.get("target_words") or 0)
+        section_budget = int((course.get("opening") or {}).get("target_words") or 0)
+        section_budget += sum(int((part or {}).get("target_words") or 0) for part in parts)
+        section_budget += int((course.get("course_conclusion") or {}).get("target_words") or 0)
+        section_budget += int((course.get("day_conclusion") or {}).get("target_words") or 0)
+        if expected_budget and section_budget != expected_budget:
+            errors.append(
+                f"course_{expected_number}_budget_sum_{section_budget}_expected_{expected_budget}"
+            )
+        if expected_number == 7 and not course.get("day_conclusion"):
+            errors.append("course_7_day_conclusion_missing")
+        if expected_number == 1 and not is_first_day:
+            opening_terms = " ".join((course.get("opening") or {}).get("must_include") or []).lower()
+            if "programme annuel" in opening_terms or "parcours annuel" in opening_terms:
+                warnings.append("course_1_non_first_day_mentions_annual_program")
+
+    return {
+        "ok": not errors,
+        "errors": errors,
+        "warnings": warnings,
+        "courses_count": len(courses),
+    }
 
 
 def _course_filename_for_bloc(playlist_spec, bloc_number: int) -> str:
@@ -7530,9 +7801,11 @@ def get_course_script_plan_for_ui(folder_id: int, job: dict | None = None) -> di
             "planned_course_blocs_note": "Aucun job de contenu pour ce dossier.",
             "breaks": [],
             "structured_course_plan": None,
+            "content_artifacts": [],
         }
 
     breaks = _build_breaks_for_ui(job["platform_id"])
+    content_artifacts = _content_artifacts_for_ui(job["platform_id"], folder_id)
 
     dirty_info = get_script_dirty_blocs(folder_id)
     dirty_blocs = int(dirty_info.get("dirty_blocs", 0) or 0)
@@ -7584,6 +7857,7 @@ def get_course_script_plan_for_ui(folder_id: int, job: dict | None = None) -> di
             "total_blocs": total_blocs,
             "breaks": breaks,
             "structured_course_plan": saved.get("structured_course_plan"),
+            "content_artifacts": content_artifacts,
         }
 
     preview = _build_course_blocs_preview(folder_id, job)
@@ -7604,6 +7878,7 @@ def get_course_script_plan_for_ui(folder_id: int, job: dict | None = None) -> di
         "total_blocs": total_blocs,
         "breaks": breaks,
         "structured_course_plan": None,
+        "content_artifacts": content_artifacts,
     }
 
 
@@ -8425,7 +8700,7 @@ def _run_content_review_pass(
             int((time.time() - started_at) * 1000),
             review_signature[:12],
         )
-        return {
+        summary = {
             "segments_reviewed": 0,
             "segments_failed": 0,
             "segments_total_completed": total_completed,
@@ -8439,6 +8714,14 @@ def _run_content_review_pass(
             "force": bool(force),
             "details": [],
         }
+        _save_reviewed_scripts_artifact(
+            job,
+            folder_id,
+            review_kind=review_kind,
+            review_label=review_label,
+            summary=summary,
+        )
+        return summary
 
     logger.info(
         "PIPELINE_REVIEW_PLAN formation_job_id=%s content_job_id=%s folder_id=%s segments_to_review=%s completed=%s already_current=%s groups=%s signature=%s force=%s",
@@ -8727,7 +9010,7 @@ def _run_content_review_pass(
         int((time.time() - started_at) * 1000),
         review_signature[:12],
     )
-    return {
+    summary = {
         "segments_reviewed": total - total_failed,
         "segments_failed": total_failed,
         "segments_total_completed": total_completed,
@@ -8741,6 +9024,14 @@ def _run_content_review_pass(
         "force": bool(force),
         "details": details,
     }
+    _save_reviewed_scripts_artifact(
+        job,
+        folder_id,
+        review_kind=review_kind,
+        review_label=review_label,
+        summary=summary,
+    )
+    return summary
 
 
 def run_humanization_review(folder_id, on_progress=None, model=None, force: bool = False):
