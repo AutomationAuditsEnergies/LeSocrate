@@ -7643,6 +7643,7 @@ import json as _json
 import re as _re
 
 _REVIEW_MAX_PATCHES = 5
+_HUMANIZATION_MAX_PATCHES = 3
 _REVIEW_MAX_TOKENS = 2000
 
 
@@ -7658,7 +7659,7 @@ _REVIEW_CHUNK_WORDS = _env_int("FORMATION_REVIEW_CHUNK_WORDS", 1500, min_value=3
 _REVIEW_CHUNK_CONCURRENCY = _env_int("FORMATION_REVIEW_CHUNK_CONCURRENCY", 2, min_value=1)
 _REVIEW_MAX_ATTEMPTS = 3
 _REVIEW_RULESET_VERSION = "2026-05-23-compliance-v6-plan-context"
-_HUMANIZATION_RULESET_VERSION = "2026-05-23-humanisation-v8-plan-context"
+_HUMANIZATION_RULESET_VERSION = "2026-05-23-humanisation-v9-polish-only"
 _REVIEW_SIGNATURE_COLUMNS_READY = False
 
 _COMPLIANCE_REVIEW_RULE_GROUPS = [
@@ -7696,10 +7697,10 @@ _COMPLIANCE_REVIEW_RULE_GROUPS = [
 
 _HUMANIZATION_REVIEW_RULE_GROUPS = [
     {
-        "id": "humanisation_rythme",
-        "label": "Humanisation et rythme pédagogique",
-        "rules": [101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119],
-        "description": "Intros plus douces, intro annuelle, débuts de journée, respirations, transitions, continuité pédagogique, références inter-cours non datées, carte mentale, conclusion Q/R, anti-redondance et frontières entre cours",
+        "id": "humanisation_polish",
+        "label": "Finition orale légère",
+        "rules": [101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 113, 118],
+        "description": "Polish oral : rythme, respirations, transitions locales, densité, présence du formateur, anti-redondance. Ne restructure pas le cours.",
     },
 ]
 
@@ -7709,15 +7710,17 @@ _RULES_CACHE = {"mtime": 0, "text": ""}
 
 _HUMANIZATION_REVIEW_RULES = """
 RÈGLE #101 — Éviter les débuts trop brusques ou trop conférence
-Un début de cours doit accueillir, rassurer, ralentir et installer calmement
-l'apprenant. Corrige les ouvertures trop intenses, trop abruptes ou trop
-"grand discours". Préfère une entrée progressive avec une présence humaine.
+Couche de finition uniquement : corrige localement une ouverture trop sèche,
+trop mécanique ou trop "grand discours". Ne recrée pas l'introduction complète
+et ne change pas le plan. Préfère une phrase d'accueil ou de reprise plus
+naturelle, courte et compatible avec le plan verrouillé.
 
 RÈGLE #102 — Créer des respirations pédagogiques
 Après une idée dense, une démonstration ou un exemple important, le texte doit
 laisser une respiration : reformulation simple, phrase tampon, [pause],
-mini-synthèse ou reconnexion terrain. Corrige les blocs d'information trop
-compacts qui ne laissent pas le temps d'assimiler.
+mini-synthèse ou reconnexion terrain. Corrige uniquement les passages trop
+compacts qui ne laissent pas le temps d'assimiler, sans ajouter un nouveau
+développement.
 
 RÈGLE #103 — Laisser vivre les idées importantes
 Une phrase forte ne doit pas toujours être immédiatement sur-expliquée. Ajoute
@@ -7727,7 +7730,8 @@ ou conserve une respiration courte, une reformulation calme ou une phrase
 RÈGLE #104 — Humaniser le formateur
 Le formateur doit sembler humain : il accompagne, rassure, réfléchit légèrement,
 normalise les difficultés et partage des repères terrain. Corrige les passages
-qui sonnent comme une conférence mécanique ou une démonstration permanente.
+qui sonnent comme une conférence mécanique ou une démonstration permanente,
+sans inventer d'anecdote, de vécu personnel ou d'exemple métier non nécessaire.
 
 RÈGLE #105 — Éviter l'accumulation de punchlines
 N'enchaîne pas les phrases très fortes comme des slogans. Alterne phrases
@@ -7735,8 +7739,10 @@ fortes, phrases simples, phrases neutres et formulations conversationnelles.
 
 RÈGLE #106 — Ajouter des micro-interactions sobres
 Le cours doit régulièrement s'adresser aux apprenants : "vous voyez l'idée ?",
-"essayez de vous projeter", "retenez surtout ça", "vous me suivez ?". Corrige
-les longs passages qui oublient complètement l'apprenant.
+"essayez de vous projeter", "retenez surtout ça". Corrige les longs passages
+qui oublient complètement l'apprenant. Ne demande pas d'interaction réelle :
+pas de "vous me répondez", pas de "vous m'entendez ?", pas de question qui
+suppose une réponse immédiate.
 
 RÈGLE #107 — Varier le niveau d'énergie
 Le script doit alterner phases dynamiques, moments calmes, exemples terrain,
@@ -7755,12 +7761,14 @@ reconnecter à ce qui vient d'être vu et préparer la suite avec anticipation.
 RÈGLE #110 — Préparer des fins de blocs conclues
 Quand un passage ressemble à une fin de séquence, il doit redescendre
 progressivement : synthèse, valorisation du chemin parcouru, projection vers la
-suite. Évite les arrêts secs du type "on continue".
+suite. Évite les arrêts secs du type "on continue". Ne transforme pas cette
+fin locale en conclusion générale si le plan ne le prévoit pas.
 
 RÈGLE #111 — Donner l'impression d'une journée vécue
 Le cours doit former une progression continue, pas une succession de fichiers
 indépendants. Corrige les transitions qui ignorent totalement ce qui précède ou
-qui cassent le fil émotionnel et pédagogique de la journée.
+qui cassent le fil émotionnel et pédagogique de la journée. La correction doit
+rester locale : elle lisse le passage, elle ne réorganise pas le cours.
 
 RÈGLE #112 — Premier cours de l'année : introduction générale obligatoire
 Quand le passage est l'ouverture absolue de la formation, il ne doit jamais
@@ -7776,11 +7784,11 @@ envie d'avancer, puis seulement faire une transition douce vers le premier
 sujet. Une simple intro générique de quelques phrases est insuffisante.
 
 RÈGLE #113 — Début de journée ou de bloc : amorce progressive obligatoire
-Chaque début de journée, de reprise ou de bloc audio doit avoir une vraie
-amorce orale. Interdire les démarrages mécaniques du type "Bon, on va aborder
-une nouvelle partie du cours" ou "c'est une partie absolument fondamentale".
-Le formateur doit reconnecter calmement au parcours, poser l'intention du bloc,
-accueillir l'apprenant dans le rythme, puis introduire le sujet sans brusquerie.
+Chaque début de journée, de reprise ou de cours doit avoir une amorce orale
+progressive. Corrige les démarrages mécaniques du type "Bon, on va aborder une
+nouvelle partie du cours" ou "c'est une partie absolument fondamentale". Le
+formateur doit reconnecter calmement au parcours et introduire le sujet sans
+brusquerie, sans refaire tout le cadrage pédagogique.
 
 RÈGLE #114 — Références entre cours toujours vagues, jamais datées
 Les cours ne s'enchaînent PAS au jour le jour : il y a en général un cours par
@@ -7819,9 +7827,10 @@ remplissage ne doit apparaître.
 
 RÈGLE #118 — Anti-redondance et anti-remplissage
 Chaque développement doit apporter une idée nouvelle identifiable. Corrige les
-blocs répétés, les reformulations qui tournent à vide, les tunnels de métaphores
-ou de storytelling sans progression, et les ajouts placés après une conclusion
-uniquement pour allonger le texte.
+passages répétés, les reformulations qui tournent à vide, les tunnels de
+métaphores ou de storytelling sans progression, et les ajouts placés après une
+conclusion uniquement pour allonger le texte. La correction attendue est une
+suppression ou une fusion propre, pas un nouveau développement.
 
 RÈGLE #119 — Frontières nettes entre cours, Q/R et pauses
 Un cours ne doit jamais commencer en terminant le cours précédent. Après un Q/R
@@ -7939,29 +7948,23 @@ def _build_review_prompt_focused(
 ) -> str:
     rules_list = ", ".join(f"#{n}" for n in rule_numbers)
     is_humanization_scope = any(int(n) >= 100 for n in (rule_numbers or []))
+    max_patches = _HUMANIZATION_MAX_PATCHES if is_humanization_scope else _REVIEW_MAX_PATCHES
     review_mode = (
-        "Pour les règles #101 à #119, une intro trop brusque, un premier cours "
-        "sans introduction annuelle quand c'est la première journée, un début de journée mécanique, un passage trop dense, "
-        "une transition mécanique, une fin sèche, l'absence de carte mentale, "
-        "un plan absent, une conclusion suivie de contenu, une confusion entre "
-        "cours précédent, Q/R, pause et nouveau cours, l'absence de respiration "
-        "pédagogique, une redondance de remplissage ou une référence datée entre cours (\"hier\", \"demain\") "
-        "comptent comme des non-conformités. Tu dois proposer des "
-        "corrections concrètes quand le texte sonne trop récité, trop rapide ou "
-        "pas assez accompagné."
+        "Pour les règles d'humanisation, tu fais une finition orale légère. "
+        "Tu corriges seulement ce qui sonne trop récité, trop dense, trop sec, "
+        "trop mécanique, redondant ou mal relié localement. Tu ne restructures "
+        "pas le cours et tu ne compenses pas un problème de plan."
         if is_humanization_scope
         else "Tu renvoies un JSON avec uniquement les passages qui violent une règle de ton scope."
     )
     replacement_constraint = (
-        "- Pour #101 à #119, `replacement` peut ajouter une courte phrase orale, "
+        "- Pour l'humanisation, `replacement` peut ajouter une courte phrase orale, "
         "une micro-interaction ou un tag comme [pause] si cela corrige vraiment "
         "le rythme, sans changer le fond pédagogique ni le plan verrouillé. "
-        "Pour une violation #112, #116, #117 ou #119, `replacement` doit corriger "
-        "localement l'ordre pédagogique attendu sans inventer de contenu métier "
-        "non fourni. Si la correction exigerait de réécrire toute une section, "
-        "propose seulement le patch local le plus utile. Dans tous les cas, "
-        "respecte le budget audio déjà calculé : substitue et condense autant "
-        "que possible, ne gonfle pas le segment hors budget mots."
+        "Si la correction exigerait de réécrire toute une section ou de changer "
+        "l'architecture, renvoie plutôt {\"patches\": []}. Dans tous les cas, "
+        "respecte le budget audio : substitue et condense autant que possible, "
+        "ne gonfle pas le segment hors budget mots."
         if is_humanization_scope
         else "- `replacement` corrige la violation sans reformuler le sens, sans ajouter de contenu."
     )
@@ -7997,7 +8000,7 @@ Format de sortie strict (JSON valide, rien d'autre avant ou après) :
 }}
 
 Contraintes impératives :
-- Maximum {_REVIEW_MAX_PATCHES} patches. Si tu vois plus de violations, garde les {_REVIEW_MAX_PATCHES} pires.
+- Maximum {max_patches} patches. Si tu vois plus de violations, garde les {max_patches} pires.
 - `original` doit être trouvable TEL QUEL dans le texte (copie mot pour mot, ponctuation comprise).
 {replacement_constraint}
 {preference_constraint}
@@ -8291,8 +8294,8 @@ def _review_budget_guard_limit(original_word_count: int, review_kind: str) -> in
     original_word_count = max(0, int(original_word_count or 0))
     is_humanization = (review_kind or "").strip().lower() == "humanization"
     if is_humanization:
-        ratio = _env_float("FORMATION_HUMANIZATION_MAX_WORD_GROWTH_RATIO", 0.08, min_value=0.0, max_value=0.50)
-        absolute = _env_int("FORMATION_HUMANIZATION_MAX_WORD_GROWTH_WORDS", 320, min_value=1)
+        ratio = _env_float("FORMATION_HUMANIZATION_MAX_WORD_GROWTH_RATIO", 0.03, min_value=0.0, max_value=0.20)
+        absolute = _env_int("FORMATION_HUMANIZATION_MAX_WORD_GROWTH_WORDS", 120, min_value=1)
     else:
         ratio = _env_float("FORMATION_COMPLIANCE_MAX_WORD_GROWTH_RATIO", 0.04, min_value=0.0, max_value=0.25)
         absolute = _env_int("FORMATION_COMPLIANCE_MAX_WORD_GROWTH_WORDS", 160, min_value=1)
@@ -8803,7 +8806,7 @@ def _run_content_review_pass(
 
 
 def run_humanization_review(folder_id, on_progress=None, model=None, force: bool = False):
-    """Passe 1 : reformule les intros/transitions/respirations avant la conformité stricte."""
+    """Passe 1 : finition orale légère avant la conformité stricte."""
     return _run_content_review_pass(
         folder_id,
         on_progress=on_progress,
