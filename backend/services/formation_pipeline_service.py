@@ -16,6 +16,7 @@ import math
 import json
 import time
 import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.parse import quote
 
 import requests as _http
@@ -749,36 +750,277 @@ def launch_global_program_generation(job_id: int, model: str = None):
 
 # ─── Découpage en journées ────────────────────────────────────────────────────
 
-BATCH_SIZE = 5  # jours par appel Claude
-
-
-def _clean_json(raw: str) -> str:
-    """Nettoie une réponse Claude pour extraire du JSON valide."""
-    # Supprimer les blocs markdown ```json ... ```
-    raw = re.sub(r'```(?:json)?\s*', '', raw).strip()
-    # Extraire le premier objet JSON { ... }
-    match = re.search(r'\{[\s\S]*\}', raw)
-    if not match:
-        raise ValueError("Pas de JSON valide dans la réponse")
-    text = match.group()
-    # Tenter de réparer un JSON tronqué en fermant les structures ouvertes
+def _env_int(name: str, default: int, *, min_value: int, max_value: int) -> int:
     try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        # Compter les accolades/crochets ouverts pour tenter une réparation
-        opens = text.count('{') - text.count('}')
-        arr_opens = text.count('[') - text.count(']')
-        # Fermer proprement en remontant jusqu'au dernier objet complet
-        # Trouver la dernière virgule + objet complet avant la troncature
-        last_complete = text.rfind('},')
-        if last_complete > 0:
-            text = text[:last_complete + 1]
-            # Refermer les structures
-            text += ']' * max(0, arr_opens - 1) + '}' * max(0, opens)
+        value = int(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        value = default
+    return max(min_value, min(max_value, value))
+
+
+# Le daily split était historiquement batché par 5 jours. C'est rapide, mais une
+# seule réponse JSON longue et mal fermée bloque toute la pipeline. Par défaut on
+# privilégie donc la robustesse : 1 jour par réponse, avec concurrence bornée.
+BATCH_SIZE = _env_int("FORMATION_DAILY_BATCH_SIZE", 1, min_value=1, max_value=5)
+DAILY_SPLIT_WORKERS = _env_int("FORMATION_DAILY_SPLIT_WORKERS", 3, min_value=1, max_value=6)
+DAILY_SPLIT_ATTEMPTS = _env_int("FORMATION_DAILY_SPLIT_ATTEMPTS", 4, min_value=1, max_value=8)
+DAILY_SPLIT_MAX_TOKENS = _env_int("FORMATION_DAILY_SPLIT_MAX_TOKENS", 12000, min_value=4000, max_value=24000)
+
+
+def _escape_control_chars_in_strings(text: str) -> str:
+    result = []
+    in_string = False
+    escaped = False
+    for ch in text:
+        if escaped:
+            result.append(ch)
+            escaped = False
+        elif ch == "\\" and in_string:
+            result.append(ch)
+            escaped = True
+        elif ch == '"':
+            result.append(ch)
+            in_string = not in_string
+        elif in_string and ch in "\n\r\t":
+            result.append({"\n": "\\n", "\r": "\\r", "\t": "\\t"}[ch])
+        else:
+            result.append(ch)
+    return "".join(result)
+
+
+def _balanced_json_slice(text: str) -> str:
+    """Retourne le premier objet/array JSON complet, en ignorant les accolades en string."""
+    text = str(text or "").strip()
+    starts = [(idx, ch) for idx, ch in ((text.find("{"), "{"), (text.find("["), "[")) if idx >= 0]
+    if not starts:
+        raise ValueError("Aucun début JSON détectable")
+    start, _ = min(starts, key=lambda item: item[0])
+
+    stack = []
+    in_string = False
+    escaped = False
+    for i, ch in enumerate(text[start:], start=start):
+        if escaped:
+            escaped = False
+            continue
+        if in_string:
+            if ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+        elif ch == "{":
+            stack.append("}")
+        elif ch == "[":
+            stack.append("]")
+        elif ch in ("}", "]"):
+            if stack and stack[-1] == ch:
+                stack.pop()
+                if not stack:
+                    return text[start:i + 1]
+
+    # JSON tronqué : on garde la zone JSON la plus probable pour json_repair.
+    end = max(text.rfind("}"), text.rfind("]"))
+    if end > start:
+        return text[start:end + 1]
+    return text[start:]
+
+
+def _json_candidates(raw: str) -> list[str]:
+    raw = str(raw or "").strip()
+    candidates = []
+    for match in re.finditer(r"```(?:json)?\s*([\s\S]*?)```", raw, re.IGNORECASE):
+        candidates.append(match.group(1).strip())
+    candidates.append(raw)
+
+    expanded = []
+    for candidate in candidates:
+        if not candidate:
+            continue
+        expanded.append(candidate)
+        try:
+            expanded.append(_balanced_json_slice(candidate))
+        except ValueError:
+            pass
+
+    seen = set()
+    unique = []
+    for candidate in expanded:
+        candidate = candidate.strip()
+        if candidate and candidate not in seen:
+            seen.add(candidate)
+            unique.append(candidate)
+    return unique
+
+
+def _loads_lenient_json(candidate: str):
+    errors = []
+    for text in (candidate, _escape_control_chars_in_strings(candidate)):
         try:
             return json.loads(text)
         except json.JSONDecodeError as e:
-            raise ValueError(f"JSON invalide même après réparation : {e}")
+            errors.append(str(e))
+
+    try:
+        from json_repair import repair_json
+        repaired = repair_json(candidate)
+        return json.loads(repaired)
+    except Exception as e:
+        errors.append(str(e))
+
+    raise ValueError(errors[-1] if errors else "JSON invalide")
+
+
+def _clean_json(raw: str):
+    """Extrait et répare une réponse LLM JSON avec plusieurs stratégies."""
+    errors = []
+    for candidate in _json_candidates(raw):
+        try:
+            return _loads_lenient_json(candidate)
+        except Exception as e:
+            errors.append(str(e))
+    raise ValueError(
+        "JSON invalide même après réparation : "
+        + (errors[-1] if errors else "aucun JSON détectable")
+    )
+
+
+def _coerce_day_number(value) -> int | None:
+    if isinstance(value, int):
+        return value
+    match = re.search(r"\d+", str(value or ""))
+    if not match:
+        return None
+    try:
+        return int(match.group(0))
+    except ValueError:
+        return None
+
+
+def _ensure_list(value) -> list:
+    if isinstance(value, list):
+        return value
+    if value in (None, ""):
+        return []
+    return [value]
+
+
+def _normalize_daily_payload(data, day_start: int, day_end: int, tp_name: str) -> list[dict]:
+    expected = list(range(day_start, day_end + 1))
+    if isinstance(data, dict):
+        raw_days = data.get("days")
+        if raw_days is None and "day_number" in data:
+            raw_days = [data]
+    elif isinstance(data, list):
+        raw_days = data
+    else:
+        raise ValueError("Le JSON daily doit être un objet {days:[...]} ou une liste")
+
+    days = [dict(day) for day in _ensure_list(raw_days) if isinstance(day, dict)]
+    if len(days) == len(expected):
+        for idx, day in enumerate(days):
+            if _coerce_day_number(day.get("day_number")) is None:
+                day["day_number"] = expected[idx]
+
+    by_number = {}
+    for day in days:
+        number = _coerce_day_number(day.get("day_number"))
+        if number is not None:
+            day["day_number"] = number
+            by_number[number] = day
+
+    selected = []
+    missing = []
+    for number in expected:
+        day = by_number.get(number)
+        if not day:
+            missing.append(number)
+            continue
+        selected.append(_complete_day_program_shape(day, number, tp_name))
+
+    if missing:
+        raise ValueError(f"Journée(s) manquante(s) dans le JSON : {missing}")
+    return selected
+
+
+def _complete_day_program_shape(day: dict, day_number: int, tp_name: str) -> dict:
+    day = dict(day or {})
+    day["day_number"] = day_number
+    day["hours"] = HOURS_PER_DAY
+    title = _strip_internal_schedule_from_label(day.get("title") or "")
+    day["title"] = title or f"Journée {day_number} — Progression {tp_name}"
+    modules = day.get("modules_covered")
+    if not isinstance(modules, list):
+        day["modules_covered"] = [str(modules).strip()] if modules else []
+    if day_number == 1 and not str(day.get("day_recap") or "").strip():
+        day["day_recap"] = ""
+    elif not str(day.get("day_recap") or "").strip():
+        day["day_recap"] = "Lors de la dernière séance, nous avons vu les bases nécessaires pour aborder cette nouvelle étape."
+    if not str(day.get("day_transition") or "").strip():
+        day["day_transition"] = "À la prochaine séance, nous aborderons la suite logique de cette progression."
+    return _normalize_day_audio_slots(day)
+
+
+def _global_program_slice(global_program: str, day_number: int, nb_days: int, max_chars: int = 1800) -> str:
+    text = re.sub(r"\s+", " ", str(global_program or "")).strip()
+    if len(text) <= max_chars:
+        return text
+    nb_days = max(1, int(nb_days or 1))
+    chunk = max(max_chars, len(text) // nb_days)
+    start = min(max(0, (day_number - 1) * chunk), max(0, len(text) - max_chars))
+    return text[start:start + max_chars].strip()
+
+
+def _fallback_day_program(tp_name: str, nb_days: int, global_program: str, day_number: int, reason: str) -> dict:
+    focus = _global_program_slice(global_program, day_number, nb_days)
+    focus_short = focus[:900] if focus else (
+        "reprendre les compétences du référentiel et les transformer en progression pédagogique opérationnelle"
+    )
+    themes = [
+        ("Cadre et objectifs du thème", "poser le contexte, les objectifs et les notions clés"),
+        ("Notions fondamentales", "expliquer les bases indispensables avec des exemples simples"),
+        ("Méthode professionnelle", "montrer une méthode d'action applicable en situation métier"),
+        ("Cas pratique guidé", "développer un cas concret et faire verbaliser le raisonnement attendu"),
+        ("Points de vigilance", "identifier les erreurs fréquentes, limites et bonnes pratiques"),
+        ("Mise en situation", "faire le lien avec une situation réaliste de terrain"),
+        ("Synthèse et transition", "résumer les acquis et préparer la suite de la progression"),
+    ]
+    sub_parts = []
+    for idx, (title, role) in enumerate(themes):
+        slot = COURSE_AUDIO_SLOTS[idx]
+        sub_parts.append({
+            "index": idx,
+            "audio_slot": slot["label"],
+            "start_time": slot["start"],
+            "end_time": slot["end"],
+            "duration_min": slot["duration_min"],
+            "filename": slot["filename"],
+            "name": f"{slot['label']} — {title}",
+            "module_content": (
+                f"Cette partie doit {role}. Elle s'appuie sur le programme global de "
+                f"la formation : {focus_short}. Le formateur doit rester concret, "
+                "progressif et naturel, sans mentionner les horaires ni la mécanique interne."
+            ),
+            "generation_brief": {
+                "must_cover": [title, "application métier", "lien avec le référentiel"],
+                "examples": ["exemple professionnel fictif et réaliste"],
+                "finish": "Synthèse courte qui ferme le point avant la suite.",
+                "avoid": ["horaires", "durée", "nom de template", "répétition de l'introduction générale"],
+                "handoff": "Transition naturelle vers le point suivant ou la pause.",
+            },
+        })
+    return _normalize_day_audio_slots({
+        "day_number": day_number,
+        "title": f"Journée {day_number} — Progression {tp_name}",
+        "hours": HOURS_PER_DAY,
+        "modules_covered": [],
+        "sub_parts": sub_parts,
+        "day_recap": "" if day_number == 1 else "Lors de la dernière séance, nous avons vu les bases nécessaires pour aborder cette nouvelle étape.",
+        "day_transition": "À la prochaine séance, nous aborderons la suite logique de cette progression.",
+        "generation_warning": f"Fallback déterministe utilisé après échec JSON du batch daily : {reason[:300]}",
+    })
 
 
 def _split_batch(tp_name: str, nb_days: int, global_program: str,
@@ -803,43 +1045,82 @@ def _split_batch(tp_name: str, nb_days: int, global_program: str,
         .replace("{COURSE_AUDIO_SLOTS}", _course_audio_slots_prompt())
         .replace("{GLOBAL_PROGRAM}", global_program[:20000] + enrichment)
     )
-    for attempt in range(5):
+    last_error = None
+    for attempt in range(DAILY_SPLIT_ATTEMPTS):
         try:
             raw = _claude_post(
                 messages=[{"role": "user", "content": prompt}],
-                max_tokens=8000,
+                max_tokens=DAILY_SPLIT_MAX_TOKENS,
                 model=model,
             )
             data = _clean_json(raw)
-            return data.get("days", [])
+            return _normalize_daily_payload(data, day_start, day_end, tp_name)
         except AnthropicRateLimitError as e:
-            if attempt < 4:
+            if attempt < DAILY_SPLIT_ATTEMPTS - 1:
                 logger.warning(
-                    f"⏳ Retry {attempt+1}/5 batch jours {day_start}-{day_end} "
+                    f"⏳ Retry {attempt+1}/{DAILY_SPLIT_ATTEMPTS} batch jours {day_start}-{day_end} "
                     f"(429, sleep {e.wait_seconds:.0f}s)"
                 )
                 time.sleep(e.wait_seconds)
             else:
                 raise
         except Exception as e:
-            if attempt < 4:
-                logger.warning(f"⚠️ Retry {attempt+1}/5 batch jours {day_start}-{day_end} : {e}")
+            last_error = e
+            if attempt < DAILY_SPLIT_ATTEMPTS - 1:
+                logger.warning(
+                    f"⚠️ Retry {attempt+1}/{DAILY_SPLIT_ATTEMPTS} "
+                    f"batch jours {day_start}-{day_end} : {e}"
+                )
                 time.sleep(10)
-            else:
-                raise
+    if day_start < day_end:
+        logger.warning(
+            "⚠️ Batch jours %s-%s invalide après retries, découpage en journées unitaires",
+            day_start,
+            day_end,
+        )
+        days = []
+        for day_number in range(day_start, day_end + 1):
+            days.extend(
+                _split_batch(
+                    tp_name=tp_name,
+                    nb_days=nb_days,
+                    global_program=global_program,
+                    day_start=day_number,
+                    day_end=day_number,
+                    model=model,
+                    reac_text=reac_text,
+                    rc_text=rc_text,
+                    rome_text=rome_text,
+                )
+            )
+        return days
+
+    logger.error(
+        "❌ Batch journée %s JSON impossible à réparer, fallback déterministe : %s",
+        day_start,
+        last_error,
+    )
+    return [_fallback_day_program(tp_name, nb_days, global_program, day_start, str(last_error or ""))]
 
 
-def _split_daily_programs_thread(job_id: int, model: str = None):
-    """Thread : découpe le programme global en N journées par batches parallèles."""
+def run_daily_split(job_id: int, model: str = None) -> dict:
+    """Découpe le programme global en N journées et persiste un résultat exploitable."""
     try:
         job = get_job(job_id)
         if not job:
-            return
+            raise ValueError(f"Job {job_id} introuvable")
 
-        update_job(job_id, status="daily_splitting")
+        update_job(job_id, status="daily_splitting", error_message=None)
         used_model = model or CLAUDE_MODEL
         nb_days = job["nb_days"]
-        logger.info(f"🔄 Job {job_id} : découpage en {nb_days} journées par batches de {BATCH_SIZE} (modèle: {used_model})...")
+        logger.info(
+            "🔄 Job %s : découpage en %s journée(s), batch=%s, workers=%s (modèle: %s)...",
+            job_id,
+            nb_days,
+            BATCH_SIZE,
+            DAILY_SPLIT_WORKERS,
+            used_model,
+        )
 
         # Découper en batches
         batches = []
@@ -850,33 +1131,34 @@ def _split_daily_programs_thread(job_id: int, model: str = None):
         results = [None] * len(batches)
         errors = []
 
-        def run_batch(idx, day_start, day_end):
-            try:
-                days = _split_batch(
-                    tp_name=job["tp_name"],
-                    nb_days=nb_days,
-                    global_program=job["global_program"],
-                    day_start=day_start,
-                    day_end=day_end,
-                    model=used_model,
-                    reac_text=job.get("reac_text") or "",
-                    rc_text=job.get("rc_text") or "",
-                    rome_text=job.get("rome_text") or "",
-                )
-                results[idx] = days
-                logger.info(f"✅ Batch {day_start}-{day_end} : {len(days)} journées")
-            except Exception as e:
-                errors.append(f"Batch {day_start}-{day_end} : {e}")
-                results[idx] = []
+        def run_batch(day_start, day_end):
+            return _split_batch(
+                tp_name=job["tp_name"],
+                nb_days=nb_days,
+                global_program=job["global_program"],
+                day_start=day_start,
+                day_end=day_end,
+                model=used_model,
+                reac_text=job.get("reac_text") or "",
+                rc_text=job.get("rc_text") or "",
+                rome_text=job.get("rome_text") or "",
+            )
 
-        threads = []
-        for i, (start, end) in enumerate(batches):
-            t = threading.Thread(target=run_batch, args=(i, start, end), daemon=True)
-            threads.append(t)
-            t.start()
-
-        for t in threads:
-            t.join()
+        workers = min(max(1, DAILY_SPLIT_WORKERS), max(1, len(batches)))
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            future_map = {
+                pool.submit(run_batch, start, end): (idx, start, end)
+                for idx, (start, end) in enumerate(batches)
+            }
+            for future in as_completed(future_map):
+                idx, start, end = future_map[future]
+                try:
+                    days = future.result()
+                    results[idx] = days
+                    logger.info(f"✅ Batch {start}-{end} : {len(days)} journée(s)")
+                except Exception as e:
+                    errors.append(f"Batch {start}-{end} : {e}")
+                    results[idx] = []
 
         if errors:
             raise ValueError("; ".join(errors))
@@ -886,16 +1168,42 @@ def _split_daily_programs_thread(job_id: int, model: str = None):
         for batch_days in results:
             all_days.extend(batch_days or [])
         all_days.sort(key=lambda d: d.get("day_number", 0))
-        all_days = [_normalize_day_audio_slots(day) for day in all_days]
+        all_days = [_complete_day_program_shape(day, i + 1, job["tp_name"]) for i, day in enumerate(all_days)]
+
+        expected_numbers = list(range(1, nb_days + 1))
+        actual_numbers = [_coerce_day_number(day.get("day_number")) for day in all_days]
+        if actual_numbers != expected_numbers:
+            raise ValueError(
+                f"Daily split incohérent : attendu jours {expected_numbers}, reçu {actual_numbers}"
+            )
 
         logger.info(f"✅ Job {job_id} : {len(all_days)} journées générées au total")
-        update_job(job_id, status="daily_ready",
-                   daily_programs=json.dumps(all_days, ensure_ascii=False),
-                   daily_programs_generated_via="api")
+        generated_via = (
+            "api_fallback"
+            if any(day.get("generation_warning") for day in all_days)
+            else "api"
+        )
+        update_job(
+            job_id,
+            status="daily_ready",
+            daily_programs=json.dumps(all_days, ensure_ascii=False),
+            daily_programs_generated_via=generated_via,
+            error_message=None,
+        )
+        return {"ok": True, "days": len(all_days), "generated_via": generated_via}
 
     except Exception as e:
         logger.error(f"❌ Job {job_id} découpage journées échoué : {e}")
         update_job(job_id, status="error", error_message=str(e))
+        raise
+
+
+def _split_daily_programs_thread(job_id: int, model: str = None):
+    """Thread manuel : découpe le programme global sans propager l'exception au serveur."""
+    try:
+        run_daily_split(job_id, model=model)
+    except Exception:
+        pass
 
 
 def launch_daily_split(job_id: int, model: str = None):

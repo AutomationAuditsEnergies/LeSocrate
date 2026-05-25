@@ -31,6 +31,7 @@ from services.formation_pipeline_service import (
     fetch_rome_data,
     launch_global_program_generation,
     launch_daily_split,
+    run_daily_split,
     launch_tts_for_all_days,
     create_job,
     update_job,
@@ -4848,8 +4849,7 @@ def _execute_ap_step(job_id: int, step: str, job: dict) -> None:
         if use_cc:
             execute_mission_locally(job_id, "daily", cc_model)
         else:
-            launch_daily_split(job_id, model=api_model)
-            _wait_status({"daily_ready"}, max_wait=600)
+            run_daily_split(job_id, model=api_model)
         update_job(job_id, daily_programs_validated=1, status="daily_validated")
         logger.info(f"🤖 ✓ Programmes journée validés job {job_id}")
 

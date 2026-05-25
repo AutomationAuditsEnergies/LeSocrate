@@ -766,15 +766,21 @@ def _import_daily(job_id, output, generated_via):
     réimport daily peut ne concerner que quelques journées ajoutées, pas un
     remplacement total ; invalider automatiquement tous les segments serait
     trop agressif."""
-    try:
-        parsed = json.loads(_extract_json(output))
-        if not isinstance(parsed, list):
-            raise ValueError("output.md doit être un JSON array")
-        parsed = [_normalize_day_audio_slots(day) for day in parsed if isinstance(day, dict)]
-    except Exception as e:
-        raise ValueError(f"JSON invalide dans output.md : {e}")
     conn = get_db_connection()
     cursor = conn.cursor()
+    cursor.execute("SELECT tp_name, nb_days FROM formation_pipeline_jobs WHERE id = ?", (job_id,))
+    row = cursor.fetchone()
+    if not row:
+        conn.close()
+        raise ValueError(f"Job pipeline {job_id} introuvable")
+    tp_name, nb_days = row[0], int(row[1] or 0)
+    try:
+        from services.formation_pipeline_service import _clean_json, _normalize_daily_payload
+        parsed_data = _clean_json(output)
+        parsed = _normalize_daily_payload(parsed_data, 1, nb_days, tp_name or "formation")
+    except Exception as e:
+        conn.close()
+        raise ValueError(f"JSON invalide dans output.md : {e}")
     cursor.execute(
         "UPDATE formation_pipeline_jobs SET daily_programs = ?, "
         "daily_programs_generated_via = ?, "
