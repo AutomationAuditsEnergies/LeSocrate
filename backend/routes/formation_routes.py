@@ -1109,6 +1109,50 @@ def get_course_text(job_id, folder_id):
         return jsonify({"error": str(e)}), 500
 
 
+@formation_bp.route("/api/formation/<int:job_id>/content/<int:folder_id>/artifact/<path:filename>", methods=["GET"])
+def get_content_artifact(job_id, folder_id, filename):
+    """Retourne un artefact JSON structuré d'une journée pour l'audit UI."""
+    if not _require_admin():
+        return jsonify({"error": "Non autorisé"}), 403
+
+    job = get_job(job_id)
+    if not job:
+        return jsonify({"error": "Job introuvable"}), 404
+
+    from services.content_pipeline.artifacts import (
+        CONTENT_ARTIFACT_BLOBS,
+        load_content_artifact,
+    )
+    from database.db import get_db_connection
+
+    filename = os.path.basename(str(filename or ""))
+    if filename not in CONTENT_ARTIFACT_BLOBS:
+        return jsonify({"error": "Artefact non autorisé"}), 400
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT platform_id, name FROM cours_folders WHERE id = ? AND formation_job_id = ?",
+        (folder_id, job_id),
+    )
+    row = cursor.fetchone()
+    conn.close()
+    if not row:
+        return jsonify({"error": "Folder introuvable ou hors pipeline"}), 404
+
+    platform_id, folder_name = row
+    artifact = load_content_artifact(platform_id, folder_id, filename)
+    if not artifact:
+        return jsonify({"error": "Artefact indisponible", "filename": filename}), 404
+
+    return jsonify({
+        "artifact": artifact,
+        "filename": filename,
+        "folder_id": folder_id,
+        "folder_name": folder_name,
+    }), 200
+
+
 @formation_bp.route("/api/formation/<int:job_id>/content/<int:folder_id>/docx", methods=["GET"])
 def download_course_docx(job_id, folder_id):
     """Télécharge le document Word d'une journée de formation (programme officiel).

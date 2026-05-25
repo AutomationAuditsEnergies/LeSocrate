@@ -1121,7 +1121,7 @@ function hasCompletedPipelineEvent(events, predicate) {
   return (events || []).some(event => event?.status === 'completed' && predicate(event))
 }
 
-function PipelineStagePill({ stage, index }) {
+function PipelineStagePill({ stage, index, onClick }) {
   const tone = stage.done
     ? { color: '#34d399', bg: 'rgba(16,185,129,0.10)', border: 'rgba(16,185,129,0.24)', icon: 'check_circle' }
     : stage.active
@@ -1130,7 +1130,11 @@ function PipelineStagePill({ stage, index }) {
   const label = stage.done ? 'OK' : stage.active ? 'En cours' : stage.optional ? 'Optionnel' : 'À venir'
 
   return (
-    <div style={{
+    <button
+      type="button"
+      onClick={onClick}
+      title="Ouvrir le détail de cette étape"
+      style={{
       display: 'grid',
       gridTemplateColumns: '30px minmax(0, 1fr)',
       gap: '9px',
@@ -1140,6 +1144,11 @@ function PipelineStagePill({ stage, index }) {
       border: `1px solid ${tone.border}`,
       background: tone.bg,
       minHeight: '92px',
+      width: '100%',
+      textAlign: 'left',
+      cursor: 'pointer',
+      fontFamily: 'inherit',
+      appearance: 'none',
     }}>
       <div style={{
         width: '28px',
@@ -1170,11 +1179,12 @@ function PipelineStagePill({ stage, index }) {
           {stage.detail}
         </div>
       </div>
-    </div>
+    </button>
   )
 }
 
 function PipelineVisualMap({ job, currentStep, autoPilotState, contentFolders, volumeAudit, diagnostic }) {
+  const [auditStage, setAuditStage] = useState(null)
   if (!job) return null
 
   const events = diagnostic?.events || []
@@ -1220,6 +1230,7 @@ function PipelineVisualMap({ job, currentStep, autoPilotState, contentFolders, v
   const contentActive = autoActive('content') || (job.status === 'tts_launched' && !allContentCompleted)
   const stages = [
     {
+      key: 'start',
       title: 'Initialisation RNCP et plateforme',
       detail: `Job ${job.job_label || `#${job.id}`} créé, plateforme cible verrouillée.`,
       icon: 'search',
@@ -1227,6 +1238,7 @@ function PipelineVisualMap({ job, currentStep, autoPilotState, contentFolders, v
       active: currentStep === 0 || autoActive('start'),
     },
     {
+      key: 'reac',
       title: 'Téléchargement REAC',
       detail: 'Sources officielles récupérées avant enrichissement métier.',
       icon: 'download',
@@ -1234,6 +1246,7 @@ function PipelineVisualMap({ job, currentStep, autoPilotState, contentFolders, v
       active: job.status === 'reac_fetching' || autoActive('reac'),
     },
     {
+      key: 'kb',
       title: 'Enrichissement Knowledge Base',
       detail: 'Compétences, cas terrain, pièges fréquents et vocabulaire métier.',
       icon: 'psychology',
@@ -1241,6 +1254,7 @@ function PipelineVisualMap({ job, currentStep, autoPilotState, contentFolders, v
       active: job.status === 'kb_building' || autoActive('kb'),
     },
     {
+      key: 'global',
       title: 'Programme global',
       detail: 'Architecture complète de la formation à partir du REAC enrichi.',
       icon: 'auto_stories',
@@ -1248,6 +1262,7 @@ function PipelineVisualMap({ job, currentStep, autoPilotState, contentFolders, v
       active: job.status === 'global_generating' || autoActive('global'),
     },
     {
+      key: 'daily',
       title: 'Programmes journée',
       detail: 'Découpage pédagogique par journées, thèmes et chapitres.',
       icon: 'calendar_view_week',
@@ -1255,48 +1270,62 @@ function PipelineVisualMap({ job, currentStep, autoPilotState, contentFolders, v
       active: job.status === 'daily_splitting' || autoActive('daily'),
     },
     {
+      key: 'plan_json',
       title: 'Plan JSON verrouillé',
       detail: 'Validation structure, budgets, cours 7, ouvertures et conclusions.',
       icon: 'schema',
+      artifacts: ['content-plan.json'],
       done: allContentCompleted || autoPassed('content'),
       active: contentActive,
     },
     {
+      key: 'slide_beats',
       title: 'Teaching beats et anchors slides',
       detail: 'Exemples, conseils, pièges, comparaisons et templates associés au plan.',
       icon: 'account_tree',
+      artifacts: ['content-plan.json'],
       done: allContentCompleted || autoPassed('content'),
       active: contentActive,
     },
     {
+      key: 'section_generation',
       title: 'Génération par section',
       detail: `${completedFolders}/${expectedFolders || job.nb_days} journée${(expectedFolders || job.nb_days) > 1 ? 's' : ''} générée${completedFolders > 1 ? 's' : ''}, section par section.`,
       icon: 'edit_note',
+      artifacts: ['content-draft-sections.json'],
       done: allContentCompleted || autoPassed('content'),
       active: contentActive,
     },
     {
+      key: 'ethical_micro',
       title: 'Micro-conformité éthique',
       detail: 'Contrôle local des règles éthiques #1-#16 sur chaque portion générée.',
       icon: 'shield',
+      artifacts: ['content-ethical-micro-review.json'],
+      auditMode: 'ethical_micro',
       done: allContentCompleted || autoPassed('content'),
       active: contentActive,
     },
     {
+      key: 'structured_artifacts',
       title: 'Artefacts structurés',
       detail: 'content-plan, draft-sections, course-scripts et reviewed-scripts.',
       icon: 'data_object',
+      artifacts: ['content-plan.json', 'content-draft-sections.json', 'content-course-scripts.json', 'content-reviewed-scripts.json'],
       done: allContentCompleted || autoPassed('content'),
       active: contentActive,
     },
     {
+      key: 'budget_calibration',
       title: 'Calibrage budget texte',
       detail: 'Alignement des volumes de mots sur les blocs audio attendus.',
       icon: 'speed',
+      artifacts: ['content-course-scripts.json'],
       done: allContentCompleted || autoPassed('content'),
       active: contentActive,
     },
     {
+      key: 'volume_safety',
       title: 'Sécurité volume',
       detail: 'Audit et enrichissement ciblé si une journée est sous le budget audio.',
       icon: 'auto_fix_high',
@@ -1304,20 +1333,27 @@ function PipelineVisualMap({ job, currentStep, autoPilotState, contentFolders, v
       active: autoActive('volume_safety'),
     },
     {
+      key: 'plan_adherence',
       title: 'Adhérence au plan',
       detail: 'Vérifie ordre, reprises, conclusions, doublons d’intro et fuites d’horaires.',
       icon: 'rule',
+      artifacts: ['content-quality-reviews.json'],
+      auditMode: 'artifact_review',
       done: planAdherenceDone,
       active: autoActive('humanization_review'),
     },
     {
+      key: 'humanization',
       title: 'Humanisation orale',
       detail: 'Finition légère : rythme, transitions, naturel et fluidité TTS.',
       icon: 'auto_fix_high',
+      reportEndpoint: 'humanization-report',
+      auditMode: 'review_report',
       done: allHumanized || allReviewed || Boolean(job.auto_pilot_post_review_docs_done),
       active: autoActive('humanization_review'),
     },
     {
+      key: 'audio_block_calibration',
       title: 'Calibrage blocs audio',
       detail: 'Recontrôle des blocs après humanisation et après conformité finale.',
       icon: 'graphic_eq',
@@ -1325,20 +1361,26 @@ function PipelineVisualMap({ job, currentStep, autoPilotState, contentFolders, v
       active: autoActive('review') || autoActive('post_review_docs'),
     },
     {
+      key: 'final_compliance',
       title: 'Conformité finale',
       detail: 'Review stricte hors micro-éthique : hallucinations, TTS, oral et architecture.',
       icon: 'verified_user',
+      reportEndpoint: 'review-report',
+      auditMode: 'review_report',
       done: allReviewed || Boolean(job.auto_pilot_post_review_docs_done) || autoPassed('review'),
       active: autoActive('review'),
     },
     {
+      key: 'post_review_docs',
       title: 'Budget final, Word 2 et audio-plan',
       detail: 'Vérification finale, assemblage Word 2 et artefacts prêts pour l’audio.',
       icon: 'description',
+      artifacts: ['content-reviewed-scripts.json', 'content-audio-plan.json', 'content-script-plan.json'],
       done: postDocsDone || finalBudgetDone || autoPassed('post_review_docs'),
       active: autoActive('post_review_docs'),
     },
     {
+      key: 'slides',
       title: 'Slides anchor-first',
       detail: 'Deck généré depuis les anchors du JSON, puis persisté par journée.',
       icon: 'slideshow',
@@ -1346,6 +1388,7 @@ function PipelineVisualMap({ job, currentStep, autoPilotState, contentFolders, v
       active: autoActive('slides'),
     },
     {
+      key: 'audio',
       title: 'TTS et synchronisation slides',
       detail: audioPlanned
         ? 'Synthèse audio avec timings slides/audio et génération des fichiers MP3.'
@@ -1356,6 +1399,7 @@ function PipelineVisualMap({ job, currentStep, autoPilotState, contentFolders, v
       optional: !audioPlanned,
     },
     {
+      key: 'done',
       title: 'Finalisation',
       detail: audioPlanned ? 'Module validé, voix mise à jour et health-check final.' : 'Texte, Word 2 et slides prêts ; audio lançable séparément.',
       icon: 'inventory_2',
@@ -1388,7 +1432,506 @@ function PipelineVisualMap({ job, currentStep, autoPilotState, contentFolders, v
         gap: '9px',
       }}>
         {stages.map((stage, index) => (
-          <PipelineStagePill key={`${index}-${stage.title}`} stage={stage} index={index} />
+          <PipelineStagePill
+            key={`${index}-${stage.title}`}
+            stage={stage}
+            index={index}
+            onClick={() => setAuditStage({ stage, index })}
+          />
+        ))}
+      </div>
+      {auditStage && (
+        <PipelineStepAuditModal
+          job={job}
+          stage={auditStage.stage}
+          index={auditStage.index}
+          folders={folders}
+          events={events}
+          onClose={() => setAuditStage(null)}
+        />
+      )}
+    </div>
+  )
+}
+
+const PIPELINE_STAGE_EVENT_ALIASES = {
+  start: ['start', 'init'],
+  reac: ['reac'],
+  kb: ['kb'],
+  global: ['global'],
+  daily: ['daily'],
+  plan_json: ['content', 'structured_plan'],
+  slide_beats: ['content', 'slides'],
+  section_generation: ['content', 'structured_section'],
+  ethical_micro: ['content', 'ethical_micro'],
+  structured_artifacts: ['content', 'artifact'],
+  budget_calibration: ['content', 'budget', 'calibration'],
+  volume_safety: ['volume_safety'],
+  plan_adherence: ['plan_adherence_review', 'humanization_review'],
+  humanization: ['humanization_review'],
+  audio_block_calibration: ['audio_word_calibration', 'review', 'post_review_docs'],
+  final_compliance: ['review'],
+  post_review_docs: ['post_review_docs', 'word_budget_review'],
+  slides: ['slides'],
+  audio: ['audio'],
+  done: ['done', 'finalize'],
+}
+
+function eventMatchesPipelineStage(event, stage) {
+  const aliases = PIPELINE_STAGE_EVENT_ALIASES[stage.key] || [stage.key]
+  const haystack = [
+    event?.step,
+    event?.event_type,
+    event?.message,
+  ].filter(Boolean).join(' ').toLowerCase()
+  return aliases.some(alias => haystack.includes(String(alias).toLowerCase()))
+}
+
+function pipelineStageStatusLabel(stage) {
+  if (stage.done) return 'OK'
+  if (stage.active) return 'En cours'
+  if (stage.optional) return 'Optionnel'
+  return 'À venir'
+}
+
+function PipelineStepAuditModal({ job, stage, index, folders, events, onClose }) {
+  const [payload, setPayload] = useState({ artifacts: [], reports: [] })
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+
+  const stageEvents = (events || []).filter(event => eventMatchesPipelineStage(event, stage)).slice(0, 20)
+  const folderList = (folders || []).filter(folder => folder.folder_id)
+  const artifactNames = stage.artifacts || []
+
+  useEffect(() => {
+    let cancelled = false
+    async function load() {
+      setLoading(true)
+      setError('')
+      const artifacts = []
+      const reports = []
+
+      try {
+        if (artifactNames.length > 0) {
+          const artifactResults = await Promise.all(
+            folderList.flatMap(folder =>
+              artifactNames.map(async name => {
+                try {
+                  const resp = await fetch(
+                    apiUrl(`/api/formation/${job.id}/content/${folder.folder_id}/artifact/${encodeURIComponent(name)}`),
+                    { credentials: 'include' },
+                  )
+                  const data = await resp.json()
+                  return { folder, name, ok: resp.ok, artifact: data.artifact || null, error: data.error || '' }
+                } catch (e) {
+                  return { folder, name, ok: false, artifact: null, error: 'Erreur réseau' }
+                }
+              }),
+            ),
+          )
+          artifacts.push(...artifactResults)
+        }
+
+        if (stage.reportEndpoint) {
+          const reportResults = await Promise.all(
+            folderList.map(async folder => {
+              try {
+                const resp = await fetch(
+                  apiUrl(`/api/formation/${job.id}/content/${folder.folder_id}/${stage.reportEndpoint}`),
+                  { credentials: 'include' },
+                )
+                const data = await resp.json()
+                return { folder, ok: resp.ok, report: data.report || null, error: data.error || '' }
+              } catch (e) {
+                return { folder, ok: false, report: null, error: 'Erreur réseau' }
+              }
+            }),
+          )
+          reports.push(...reportResults)
+        }
+
+        if (!cancelled) setPayload({ artifacts, reports })
+      } catch (e) {
+        if (!cancelled) setError('Impossible de charger le détail de cette étape.')
+      } finally {
+        if (!cancelled) setLoading(false)
+      }
+    }
+    load()
+    return () => { cancelled = true }
+  }, [job.id, stage.key])
+
+  const loadedArtifacts = payload.artifacts.filter(item => item.ok && item.artifact)
+  const loadedReports = payload.reports.filter(item => item.ok && item.report)
+  const patchStats = computeAuditPatchStats(payload)
+
+  return (
+    <div onClick={onClose} style={{
+      position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.72)',
+      zIndex: 1200, padding: '20px', display: 'flex', alignItems: 'center', justifyContent: 'center',
+    }}>
+      <div onClick={e => e.stopPropagation()} style={{
+        width: 'min(1180px, 100%)', maxHeight: '92vh', overflow: 'hidden',
+        background: '#111827', border: '1px solid rgba(148,163,184,0.18)',
+        borderRadius: '12px', display: 'flex', flexDirection: 'column',
+        boxShadow: '0 24px 80px rgba(0,0,0,0.45)',
+      }}>
+        <div style={{
+          padding: '18px 22px', borderBottom: '1px solid rgba(148,163,184,0.14)',
+          display: 'flex', justifyContent: 'space-between', gap: '16px', alignItems: 'flex-start',
+        }}>
+          <div style={{ minWidth: 0 }}>
+            <div style={{ color: '#94a3b8', fontSize: '11px', fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase' }}>
+              Étape {String(index + 1).padStart(2, '0')} · {pipelineStageStatusLabel(stage)}
+            </div>
+            <div style={{ color: '#e2e8f0', fontSize: '19px', fontWeight: 800, marginTop: '4px' }}>
+              {stage.title}
+            </div>
+            <div style={{ color: '#94a3b8', fontSize: '13px', lineHeight: 1.45, marginTop: '5px' }}>
+              {stage.detail}
+            </div>
+          </div>
+          <button onClick={onClose} style={{ ...S.btn('ghost'), padding: '5px 10px', flexShrink: 0 }}>
+            <Icon name="close" />
+          </button>
+        </div>
+
+        <div style={{ overflow: 'auto', padding: '20px 22px' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(145px, 1fr))', gap: '10px', marginBottom: '18px' }}>
+            <AuditStatCard label="Dossiers" value={folderList.length} color="#a78bfa" />
+            <AuditStatCard label="Événements" value={stageEvents.length} color="#94a3b8" />
+            <AuditStatCard label="Artefacts" value={loadedArtifacts.length} color="#38bdf8" />
+            <AuditStatCard label="Rapports" value={loadedReports.length} color="#34d399" />
+            <AuditStatCard label="Patches appliqués" value={patchStats.applied} color="#60a5fa" />
+            <AuditStatCard label="Patches rejetés" value={patchStats.rejected} color="#fb923c" />
+          </div>
+
+          {loading && <div style={{ color: '#94a3b8', fontSize: '13px' }}>Chargement du détail…</div>}
+          {error && <div style={{ color: '#f87171', fontSize: '13px' }}><Icon name="error" /> {error}</div>}
+
+          {!loading && stage.auditMode === 'ethical_micro' && (
+            <EthicalMicroAuditView artifacts={payload.artifacts} />
+          )}
+          {!loading && stage.auditMode === 'review_report' && (
+            <ReviewReportsAuditView reports={payload.reports} />
+          )}
+          {!loading && stage.auditMode !== 'ethical_micro' && stage.auditMode !== 'review_report' && (
+            <ArtifactAuditView artifacts={payload.artifacts} stage={stage} />
+          )}
+
+          <StepEventsList events={stageEvents} />
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function AuditStatCard({ label, value, color }) {
+  return (
+    <div style={{ padding: '11px 12px', background: 'rgba(15,23,42,0.55)', border: '1px solid rgba(148,163,184,0.14)', borderRadius: '8px' }}>
+      <div style={{ color: '#94a3b8', fontSize: '11px', marginBottom: '3px' }}>{label}</div>
+      <div style={{ color, fontSize: '21px', fontWeight: 800 }}>{value}</div>
+    </div>
+  )
+}
+
+function computeAuditPatchStats(payload) {
+  let applied = 0
+  let rejected = 0
+  for (const item of payload.artifacts || []) {
+    const summary = item.artifact?.summary || {}
+    applied += Number(summary.patches_applied || 0)
+    rejected += Number(summary.patches_rejected || 0)
+  }
+  for (const item of payload.reports || []) {
+    const summary = item.report?.summary || {}
+    applied += Number(summary.patches_applied || 0)
+    rejected += Number(summary.patches_rejected || 0)
+  }
+  return { applied, rejected }
+}
+
+function folderDisplayName(folder = {}) {
+  return folder.folder_name || folder.name || `Dossier ${folder.folder_id}`
+}
+
+function EthicalMicroAuditView({ artifacts }) {
+  const available = (artifacts || []).filter(item => item.ok && item.artifact)
+  const missing = (artifacts || []).filter(item => !item.ok)
+  const records = available.flatMap(item =>
+    (item.artifact.records || []).map(record => ({ ...record, folder: item.folder, generated_at: item.artifact.generated_at })),
+  )
+  const issueRecords = records.filter(record =>
+    record.status !== 'clean' || (record.patches_detail || []).length > 0 || record.error,
+  )
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+      {missing.length > 0 && available.length === 0 && (
+        <AuditEmptyState
+          icon="info"
+          title="Aucun rapport micro-éthique disponible pour cette génération"
+          detail="Les prochaines générations écriront content-ethical-micro-review.json avec les passages problématiques et les corrections exactes."
+        />
+      )}
+      {available.length > 0 && issueRecords.length === 0 && (
+        <AuditEmptyState
+          icon="verified_user"
+          title="Aucune correction micro-éthique appliquée"
+          detail={`${records.length} section(s) auditées sur les règles #1 à #16, sans patch appliqué.`}
+        />
+      )}
+      {issueRecords.map((record, i) => (
+        <div key={`${record.folder?.folder_id}-${record.course_number}-${record.section_label}-${i}`} style={{
+          background: 'rgba(15,23,42,0.48)', border: '1px solid rgba(148,163,184,0.14)',
+          borderRadius: '10px', overflow: 'hidden',
+        }}>
+          <div style={{ padding: '12px 14px', borderBottom: '1px solid rgba(148,163,184,0.12)' }}>
+            <div style={{ color: '#e2e8f0', fontWeight: 800, fontSize: '13px' }}>
+              {folderDisplayName(record.folder)} · Cours {record.course_number} · {record.section_label}
+            </div>
+            <div style={{ color: '#94a3b8', fontSize: '12px', marginTop: '3px' }}>
+              {record.status} · {record.patches_applied || 0} appliqué(s) · {record.patches_rejected || 0} rejeté(s)
+              {record.error ? ` · ${record.error}` : ''}
+            </div>
+          </div>
+          <div style={{ padding: '14px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+            {(record.patches_detail || []).map((patch, patchIndex) => (
+              <PatchBeforeAfter
+                key={patchIndex}
+                patch={patch}
+                beforeText={record.original_text}
+                afterText={record.final_text}
+                leftTitle="Passage problématique"
+                rightTitle={patch.status === 'applied' ? 'Correction appliquée' : 'Correction proposée'}
+              />
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function ReviewReportsAuditView({ reports }) {
+  const available = (reports || []).filter(item => item.ok && item.report)
+  const patches = available.flatMap(item =>
+    (item.report.by_segment || []).flatMap(segment =>
+      (segment.patches_detail || []).map(patch => ({
+        patch,
+        folder: item.folder,
+        segment,
+        report: item.report,
+      })),
+    ),
+  )
+
+  if (available.length === 0) {
+    return (
+      <AuditEmptyState
+        icon="info"
+        title="Aucun rapport disponible"
+        detail="Cette étape n'a pas encore produit de rapport lisible, ou elle n'a pas encore été exécutée."
+      />
+    )
+  }
+
+  if (patches.length === 0) {
+    return (
+      <AuditEmptyState
+        icon="verified"
+        title="Aucun patch dans les rapports chargés"
+        detail={`${available.length} rapport(s) trouvé(s), sans correction détaillée.`}
+      />
+    )
+  }
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+      {patches.map((entry, i) => (
+        <div key={i} style={{ background: 'rgba(15,23,42,0.48)', border: '1px solid rgba(148,163,184,0.14)', borderRadius: '10px', padding: '13px' }}>
+          <div style={{ color: '#cbd5e1', fontWeight: 800, fontSize: '13px', marginBottom: '8px' }}>
+            {folderDisplayName(entry.folder)} · Sous-partie {Number(entry.segment.sub_idx || 0) + 1} · Passe {entry.segment.passe}
+          </div>
+          <PatchBeforeAfter
+            patch={entry.patch}
+            beforeText={entry.patch.original}
+            afterText={entry.patch.replacement}
+            leftTitle="Avant"
+            rightTitle="Après"
+          />
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function PatchBeforeAfter({ patch, beforeText, afterText, leftTitle, rightTitle }) {
+  const leftTerm = patch.original || ''
+  const rightTerm = patch.replacement || ''
+  return (
+    <div style={{ border: '1px solid rgba(148,163,184,0.12)', borderRadius: '8px', overflow: 'hidden' }}>
+      <div style={{
+        padding: '8px 10px', background: 'rgba(15,23,42,0.72)', display: 'flex',
+        gap: '8px', alignItems: 'center', flexWrap: 'wrap', fontSize: '11px',
+      }}>
+        <span style={{ color: '#a78bfa', fontWeight: 800 }}>{patch.rule || '?'}</span>
+        <span style={{ color: patch.status === 'applied' ? '#60a5fa' : '#fb923c', fontWeight: 800, textTransform: 'uppercase' }}>
+          {patch.status === 'applied' ? 'appliqué' : (patch.reject_reason || 'rejeté')}
+        </span>
+        {patch.reason && <span style={{ color: '#94a3b8' }}>{patch.reason}</span>}
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))' }}>
+        <DiffPane title={leftTitle} color="#ef4444" text={beforeText || leftTerm} highlights={[leftTerm]} />
+        <DiffPane title={rightTitle} color="#3b82f6" text={afterText || rightTerm} highlights={[rightTerm]} />
+      </div>
+    </div>
+  )
+}
+
+function DiffPane({ title, color, text, highlights }) {
+  return (
+    <div style={{ padding: '12px', borderRight: '1px solid rgba(148,163,184,0.10)' }}>
+      <div style={{ color, fontSize: '11px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '8px' }}>
+        {title}
+      </div>
+      <div style={{
+        color: '#cbd5e1', fontSize: '12px', lineHeight: 1.6, whiteSpace: 'pre-wrap',
+        maxHeight: '260px', overflow: 'auto',
+      }}>
+        <HighlightedText text={text || '—'} highlights={highlights || []} color={color} />
+      </div>
+    </div>
+  )
+}
+
+function HighlightedText({ text, highlights, color }) {
+  let parts = [{ text: String(text || ''), hit: false }]
+  for (const raw of (highlights || []).filter(Boolean)) {
+    const term = String(raw)
+    if (!term) continue
+    parts = parts.flatMap(part => {
+      if (part.hit || !part.text.includes(term)) return [part]
+      const split = part.text.split(term)
+      const next = []
+      split.forEach((chunk, index) => {
+        if (chunk) next.push({ text: chunk, hit: false })
+        if (index < split.length - 1) next.push({ text: term, hit: true })
+      })
+      return next
+    })
+  }
+  return (
+    <>
+      {parts.map((part, index) => part.hit ? (
+        <mark key={index} style={{ color: '#f8fafc', background: color === '#3b82f6' ? 'rgba(59,130,246,0.55)' : 'rgba(239,68,68,0.55)', borderRadius: '3px', padding: '1px 2px' }}>
+          {part.text}
+        </mark>
+      ) : (
+        <span key={index}>{part.text}</span>
+      ))}
+    </>
+  )
+}
+
+function ArtifactAuditView({ artifacts, stage }) {
+  const available = (artifacts || []).filter(item => item.ok && item.artifact)
+  if ((stage.artifacts || []).length === 0) {
+    return (
+      <AuditEmptyState
+        icon="visibility"
+        title="Étape observable par événements"
+        detail="Cette étape ne produit pas encore d'artefact JSON dédié. Les événements associés sont listés plus bas."
+      />
+    )
+  }
+  if (available.length === 0) {
+    return (
+      <AuditEmptyState
+        icon="info"
+        title="Aucun artefact disponible"
+        detail="L'étape n'a pas encore tourné, ou ce job a été généré avant la persistance de cet artefact."
+      />
+    )
+  }
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+      {available.map((item, i) => (
+        <div key={`${item.folder.folder_id}-${item.name}-${i}`} style={{ background: 'rgba(15,23,42,0.48)', border: '1px solid rgba(148,163,184,0.14)', borderRadius: '10px', overflow: 'hidden' }}>
+          <div style={{ padding: '10px 12px', borderBottom: '1px solid rgba(148,163,184,0.12)', color: '#cbd5e1', fontWeight: 800, fontSize: '12px' }}>
+            {folderDisplayName(item.folder)} · {item.name}
+          </div>
+          <pre style={{ margin: 0, padding: '12px', maxHeight: '360px', overflow: 'auto', color: '#94a3b8', fontSize: '11px', lineHeight: 1.5, whiteSpace: 'pre-wrap' }}>
+            {JSON.stringify(compactArtifactForPreview(item.artifact), null, 2)}
+          </pre>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function compactArtifactForPreview(artifact) {
+  if (!artifact || typeof artifact !== 'object') return artifact
+  const compact = { ...artifact }
+  if (Array.isArray(compact.courses)) {
+    compact.courses = compact.courses.slice(0, 3).map(course => ({
+      course_number: course.course_number,
+      course_title: course.course_title,
+      target_words: course.target_words,
+      word_count: course.word_count || course.draft_word_count,
+      sections: Array.isArray(course.sections) ? course.sections.length : undefined,
+      calibration: course.calibration,
+    }))
+    compact.preview_note = 'Aperçu limité aux 3 premiers cours pour garder la modale lisible.'
+  }
+  if (Array.isArray(compact.records)) {
+    compact.records = compact.records.slice(0, 8).map(record => ({
+      course_number: record.course_number,
+      section_label: record.section_label,
+      status: record.status,
+      proposed: record.proposed,
+      patches_applied: record.patches_applied,
+      patches_rejected: record.patches_rejected,
+    }))
+    compact.preview_note = 'Aperçu limité aux 8 premiers enregistrements; les diffs détaillés sont affichés dans la vue dédiée.'
+  }
+  return compact
+}
+
+function AuditEmptyState({ icon, title, detail }) {
+  return (
+    <div style={{ padding: '18px', background: 'rgba(15,23,42,0.42)', border: '1px solid rgba(148,163,184,0.14)', borderRadius: '10px' }}>
+      <div style={{ color: '#e2e8f0', fontWeight: 800, fontSize: '13px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+        <Icon name={icon} /> {title}
+      </div>
+      <div style={{ color: '#94a3b8', fontSize: '12px', lineHeight: 1.5, marginTop: '6px' }}>
+        {detail}
+      </div>
+    </div>
+  )
+}
+
+function StepEventsList({ events }) {
+  if (!events || events.length === 0) return null
+  return (
+    <div style={{ marginTop: '18px' }}>
+      <div style={{ color: '#cbd5e1', fontSize: '13px', fontWeight: 800, marginBottom: '8px' }}>
+        Événements pipeline liés
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+        {events.map((event, i) => (
+          <div key={event.id || i} style={{
+            display: 'grid', gridTemplateColumns: '150px 110px 1fr', gap: '10px',
+            padding: '8px 10px', background: 'rgba(15,23,42,0.42)',
+            border: '1px solid rgba(148,163,184,0.10)', borderRadius: '7px',
+            color: '#94a3b8', fontSize: '11px',
+          }}>
+            <span>{event.created_at ? new Date(String(event.created_at).replace(' ', 'T')).toLocaleString('fr-FR') : '—'}</span>
+            <span style={{ color: event.status === 'completed' ? '#34d399' : event.status === 'error' ? '#f87171' : '#fbbf24', fontWeight: 800 }}>
+              {event.status || event.event_type}
+            </span>
+            <span style={{ color: '#cbd5e1' }}>{event.message || event.event_type || event.step}</span>
+          </div>
         ))}
       </div>
     </div>

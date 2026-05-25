@@ -34,6 +34,7 @@ from services.content_pipeline.artifacts import (
     CONTENT_AUDIO_PLAN_BLOB as _CONTENT_AUDIO_PLAN_BLOB,
     CONTENT_COURSE_SCRIPTS_BLOB as _CONTENT_COURSE_SCRIPTS_BLOB,
     CONTENT_DRAFT_SECTIONS_BLOB as _CONTENT_DRAFT_SECTIONS_BLOB,
+    CONTENT_ETHICAL_MICRO_REVIEW_BLOB as _CONTENT_ETHICAL_MICRO_REVIEW_BLOB,
     CONTENT_PLAN_BLOB as _CONTENT_PLAN_BLOB,
     CONTENT_QUALITY_REVIEWS_BLOB as _CONTENT_QUALITY_REVIEWS_BLOB,
     CONTENT_REVIEWED_SCRIPTS_BLOB as _CONTENT_REVIEWED_SCRIPTS_BLOB,
@@ -5664,6 +5665,90 @@ def _patch_rule_number(patch: dict) -> int | None:
         return None
 
 
+def _micro_review_patch_for_report(patch: dict, status: str) -> dict:
+    return {
+        "rule": str((patch or {}).get("rule_violated") or (patch or {}).get("rule") or "?"),
+        "reason": str((patch or {}).get("reason") or "")[:500],
+        "original": str((patch or {}).get("original") or ""),
+        "replacement": str((patch or {}).get("replacement") or ""),
+        "status": status,
+        "reject_reason": (patch or {}).get("reject_reason"),
+    }
+
+
+def _record_ethical_micro_review(job: dict, record: dict) -> None:
+    try:
+        records = job.setdefault("_ethical_micro_review_records", [])
+        records.append(record)
+    except Exception:
+        pass
+
+
+def _ethical_micro_review_record(
+    *,
+    job: dict,
+    course_plan: dict,
+    section: dict,
+    status: str,
+    original_text: str,
+    final_text: str | None = None,
+    proposed: int = 0,
+    applied: list | None = None,
+    rejected: list | None = None,
+    error: str | None = None,
+    duration_ms: int | None = None,
+) -> dict:
+    applied = applied or []
+    rejected = rejected or []
+    return {
+        "course_number": int(course_plan.get("course_number") or 0),
+        "course_title": course_plan.get("course_title") or f"Cours {course_plan.get('course_number') or '?'}",
+        "section_label": _section_label(section),
+        "section": section,
+        "status": status,
+        "proposed": int(proposed or 0),
+        "patches_applied": len(applied),
+        "patches_rejected": len(rejected),
+        "patches_detail": (
+            [_micro_review_patch_for_report(p, "applied") for p in applied]
+            + [_micro_review_patch_for_report(p, "rejected") for p in rejected]
+        ),
+        "original_text": original_text or "",
+        "final_text": final_text if final_text is not None else (original_text or ""),
+        "error": str(error or "")[:700],
+        "duration_ms": duration_ms,
+        "rules_scope": "ethics_compliance",
+        "rules": [f"#{rid}" for rid in _ETHICAL_MICRO_RULE_IDS],
+        "ruleset_version": _ETHICAL_MICRO_RULESET_VERSION,
+    }
+
+
+def _ethical_micro_review_summary(records: list[dict]) -> dict:
+    return {
+        "sections_reviewed": len(records),
+        "sections_clean": sum(1 for r in records if r.get("status") == "clean"),
+        "sections_patched": sum(1 for r in records if r.get("status") == "patched"),
+        "sections_rejected": sum(1 for r in records if r.get("status") == "rejected"),
+        "sections_failed": sum(1 for r in records if r.get("status") in {"error", "parse_error"}),
+        "patches_proposed": sum(int(r.get("proposed") or 0) for r in records),
+        "patches_applied": sum(int(r.get("patches_applied") or 0) for r in records),
+        "patches_rejected": sum(int(r.get("patches_rejected") or 0) for r in records),
+    }
+
+
+def _sorted_ethical_micro_review_records(job: dict) -> list[dict]:
+    records = list(job.get("_ethical_micro_review_records") or [])
+    return sorted(
+        records,
+        key=lambda r: (
+            int(r.get("course_number") or 0),
+            int(((r.get("section") or {}).get("part_number") or 0)),
+            str((r.get("section") or {}).get("section_kind") or ""),
+            str(r.get("section_label") or ""),
+        ),
+    )
+
+
 def _run_ethical_micro_review_for_section(
     *,
     job: dict,
@@ -5702,6 +5787,18 @@ def _run_ethical_micro_review_for_section(
             _section_label(section),
             str(exc)[:220],
         )
+        _record_ethical_micro_review(
+            job,
+            _ethical_micro_review_record(
+                job=job,
+                course_plan=course_plan,
+                section=section,
+                status="error",
+                original_text=section_text,
+                error=str(exc),
+                duration_ms=int((time.time() - started) * 1000),
+            ),
+        )
         return section_text
 
     patches, parse_error = _parse_patches_response(raw)
@@ -5713,6 +5810,18 @@ def _run_ethical_micro_review_for_section(
             course_plan.get("course_number"),
             _section_label(section),
             parse_error,
+        )
+        _record_ethical_micro_review(
+            job,
+            _ethical_micro_review_record(
+                job=job,
+                course_plan=course_plan,
+                section=section,
+                status="parse_error",
+                original_text=section_text,
+                error=parse_error,
+                duration_ms=int((time.time() - started) * 1000),
+            ),
         )
         return section_text
 
@@ -5730,6 +5839,18 @@ def _run_ethical_micro_review_for_section(
             course_plan.get("course_number"),
             _section_label(section),
             int((time.time() - started) * 1000),
+        )
+        _record_ethical_micro_review(
+            job,
+            _ethical_micro_review_record(
+                job=job,
+                course_plan=course_plan,
+                section=section,
+                status="clean",
+                original_text=section_text,
+                proposed=0,
+                duration_ms=int((time.time() - started) * 1000),
+            ),
         )
         return section_text
 
@@ -5753,6 +5874,21 @@ def _run_ethical_micro_review_for_section(
             len(rejected),
             int((time.time() - started) * 1000),
         )
+        _record_ethical_micro_review(
+            job,
+            _ethical_micro_review_record(
+                job=job,
+                course_plan=course_plan,
+                section=section,
+                status="patched",
+                original_text=section_text,
+                final_text=candidate,
+                proposed=len(scoped_patches),
+                applied=applied,
+                rejected=rejected,
+                duration_ms=int((time.time() - started) * 1000),
+            ),
+        )
         return _sanitize_learner_facing_text(candidate)
 
     logger.info(
@@ -5764,6 +5900,19 @@ def _run_ethical_micro_review_for_section(
         len(scoped_patches),
         len(rejected),
         int((time.time() - started) * 1000),
+    )
+    _record_ethical_micro_review(
+        job,
+        _ethical_micro_review_record(
+            job=job,
+            course_plan=course_plan,
+            section=section,
+            status="rejected",
+            original_text=section_text,
+            proposed=len(scoped_patches),
+            rejected=rejected,
+            duration_ms=int((time.time() - started) * 1000),
+        ),
     )
     return section_text
 
@@ -6523,6 +6672,7 @@ def _run_structured_content_generation(
     model=None,
 ) -> tuple[int, str, dict]:
     playlist_items = _playlist_items_for_platform(platform_id)
+    job["_ethical_micro_review_records"] = []
     plan = _generate_structured_course_plan(job, playlist_items, sub_parts, module_contents, model=model)
     plan_validation = _validate_structured_course_plan(plan)
     _save_content_artifact(
@@ -6663,6 +6813,26 @@ def _run_structured_content_generation(
                 "parallel_workers": workers,
                 "course_summaries": course_summaries,
                 "courses": draft_courses,
+            },
+        ),
+    )
+    micro_records = _sorted_ethical_micro_review_records(job)
+    _save_content_artifact(
+        platform_id,
+        folder_id,
+        _CONTENT_ETHICAL_MICRO_REVIEW_BLOB,
+        _artifact_payload(
+            job,
+            "content_ethical_micro_review",
+            {
+                "review_kind": "ethical_micro",
+                "review_label": "Micro-conformité éthique",
+                "rules_scope": "ethics_compliance",
+                "rules": [f"#{rid}" for rid in _ETHICAL_MICRO_RULE_IDS],
+                "version": _ETHICAL_MICRO_RULESET_VERSION,
+                "structured_course_plan_version": plan.get("version"),
+                "summary": _ethical_micro_review_summary(micro_records),
+                "records": micro_records,
             },
         ),
     )
