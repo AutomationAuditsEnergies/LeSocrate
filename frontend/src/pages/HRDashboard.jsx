@@ -27,6 +27,7 @@ const getPlatformThumbnail = (platform = {}) => {
 export default function HRDashboard() {
   const [platforms, setPlatforms] = useState([])
   const [loading, setLoading] = useState(true)
+  const [platformsError, setPlatformsError] = useState('')
   const [expandedPlatform, setExpandedPlatform] = useState(null)
   const [platformAudios, setPlatformAudios] = useState({})
   const [playingAudio, setPlayingAudio] = useState(null)
@@ -89,8 +90,15 @@ export default function HRDashboard() {
 
   // ─── Fetch data ──────────────────────────────────────────────────────
   const fetchPlatforms = async (refreshSelectedId = null) => {
+    const controller = new AbortController()
+    const timeoutId = window.setTimeout(() => controller.abort(), 15000)
     try {
-      const resp = await fetch(apiUrl('/api/hr/platforms'), { credentials: 'include' })
+      setPlatformsError('')
+      const resp = await fetch(apiUrl('/api/hr/platforms?include_blob_stats=0'), {
+        credentials: 'include',
+        signal: controller.signal,
+      })
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
       const data = await resp.json()
       if (data.success) {
         setPlatforms(data.platforms)
@@ -106,10 +114,18 @@ export default function HRDashboard() {
           const fresh = data.platforms.find(p => p.id === prev.id)
           return fresh || prev
         })
+      } else {
+        setPlatformsError(data.error || 'Impossible de charger les plateformes.')
       }
     } catch (e) {
       console.error('Erreur chargement plateformes:', e)
+      setPlatformsError(
+        e.name === 'AbortError'
+          ? 'Chargement des plateformes trop long. Réessayez dans quelques secondes.'
+          : 'Impossible de charger les plateformes.'
+      )
     } finally {
+      window.clearTimeout(timeoutId)
       setLoading(false)
     }
   }
@@ -664,6 +680,20 @@ export default function HRDashboard() {
         )}
 
         <div className="relative z-10 mx-auto max-w-7xl px-6 py-8">
+          {platformsError && (
+            <div
+              className="mb-6 flex items-center gap-3 rounded-lg border px-4 py-3 text-sm"
+              style={{
+                backgroundColor: darkMode ? 'rgba(127, 29, 29, 0.18)' : '#fef2f2',
+                borderColor: darkMode ? 'rgba(248, 113, 113, 0.28)' : '#fecaca',
+                color: darkMode ? '#fecaca' : '#991b1b',
+              }}
+            >
+              <Icon name="warning" className="text-base" />
+              <span>{platformsError}</span>
+            </div>
+          )}
+
           {showModulesModal ? (
             <ModulesCatalogueView
               colors={colors}
@@ -2495,7 +2525,9 @@ function PlatformCard({
               className="text-xs"
               style={{ color: colors.textMuted, fontVariantNumeric: 'tabular-nums' }}
             >
-              {(p.audio_count || 0) > 0 ? (
+              {p.audio_count == null ? (
+                <span>Audios consultables dans Cours</span>
+              ) : (p.audio_count || 0) > 0 ? (
                 <>
                   <span className="font-semibold" style={{ color: colors.textSecondary }}>
                     {p.audio_count}

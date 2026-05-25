@@ -16,6 +16,9 @@ logger = get_logger(__name__)
 PDF_UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "..", "uploads", "pdfs")
 
 HR_ENABLED = os.environ.get("HR_DASHBOARD_ENABLED", "false").lower() == "true"
+HR_DASHBOARD_BLOB_PAGE_SIZE = int(os.environ.get("HR_DASHBOARD_BLOB_PAGE_SIZE", "200"))
+HR_DASHBOARD_BLOB_MAX_ITEMS = int(os.environ.get("HR_DASHBOARD_BLOB_MAX_ITEMS", "1000"))
+HR_DASHBOARD_BLOB_TIMEOUT_SECONDS = float(os.environ.get("HR_DASHBOARD_BLOB_TIMEOUT_SECONDS", "4"))
 
 
 _ARCHIVE_DEFAULTS = {
@@ -49,6 +52,37 @@ def _is_local_platform(pid):
     """True si la plateforme tourne sur ce backend (pas de backend_url distant)"""
     info = _get_platform_info(pid)
     return not info.get("backend_url")
+
+
+def _bool_arg(name, default=False):
+    raw = request.args.get(name)
+    if raw is None:
+        return default
+    return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _summarize_blobs(container_client, *, max_items=None, timeout_seconds=None):
+    """Résumé borné d'un container Azure pour éviter de bloquer le dashboard RH."""
+    max_items = max_items or HR_DASHBOARD_BLOB_MAX_ITEMS
+    timeout_seconds = timeout_seconds or HR_DASHBOARD_BLOB_TIMEOUT_SECONDS
+    deadline = time.monotonic() + timeout_seconds
+    count = 0
+    latest_blob = None
+
+    pager = container_client.list_blobs(timeout=timeout_seconds).by_page(
+        results_per_page=HR_DASHBOARD_BLOB_PAGE_SIZE
+    )
+    for page in pager:
+        for blob in page:
+            count += 1
+            if latest_blob is None or blob.last_modified > latest_blob.last_modified:
+                latest_blob = blob
+            if count >= max_items or time.monotonic() >= deadline:
+                return count, latest_blob
+        if time.monotonic() >= deadline:
+            return count, latest_blob
+
+    return count, latest_blob
 
 
 def _call_platform(pid, path, method="POST", json_data=None):
@@ -117,11 +151,9 @@ def create_hr_blueprint(socketio):
             container_name = os.environ.get("AZURE_STORAGE_CONTAINER", "formationpdf")
             blob_service_client = BlobServiceClient.from_connection_string(connection_string)
             container_client = blob_service_client.get_container_client(container_name)
-            blobs = list(container_client.list_blobs())
-            if not blobs:
+            _, blob = _summarize_blobs(container_client)
+            if not blob:
                 return None, None
-            # Prendre le blob le plus récent
-            blob = max(blobs, key=lambda b: b.last_modified)
             account_name = blob_service_client.account_name
             account_key = blob_service_client.credential.account_key
             expiry = datetime.now(timezone.utc) + timedelta(hours=2)
@@ -297,6 +329,7 @@ def create_hr_blueprint(socketio):
             return denied
 
         try:
+            include_blob_stats = _bool_arg("include_blob_stats", default=False)
             conn = get_db_connection()
             cursor = conn.cursor()
 
@@ -390,22 +423,21 @@ def create_hr_blueprint(socketio):
             pending_counts = dict(cursor.fetchall())
             conn.close()
 
-            # Stats Azure pour P1
-            audio_count_p1 = 0
+            # Stats Azure : optionnelles, car scanner les containers peut bloquer
+            # le chargement initial du dashboard si Azure Storage répond lentement.
+            audio_count_p1 = None
             last_upload_p1 = None
-            blob_service_client, container_client = _get_azure_audio_clients()
-            if container_client:
+            blob_service_client, container_client = _get_azure_audio_clients() if include_blob_stats else (None, None)
+            if include_blob_stats and container_client:
                 try:
-                    blobs = list(container_client.list_blobs())
-                    audio_count_p1 = len(blobs)
-                    if blobs:
-                        latest = max(blobs, key=lambda b: b.last_modified)
+                    audio_count_p1, latest = _summarize_blobs(container_client)
+                    if latest:
                         last_upload_p1 = latest.last_modified.astimezone(FRANCE_TZ).strftime("%Y-%m-%d %H:%M")
                 except Exception as e:
                     logger.warning(f"⚠️ Erreur lecture Azure audio: {e}")
 
             # PDF réel depuis Azure (source de vérité)
-            azure_pdf_filename, azure_pdf_url = _get_azure_pdf_info()
+            azure_pdf_filename, azure_pdf_url = _get_azure_pdf_info() if include_blob_stats else (None, None)
 
             platforms = []
             for row in rows:
@@ -431,18 +463,16 @@ def create_hr_blueprint(socketio):
                     audio_count = audio_count_p1
                     last_upload = last_upload_p1
                 else:
-                    audio_count = 0
+                    audio_count = None
                     last_upload = None
-                    if active:
+                    if include_blob_stats and active:
                         try:
                             cs = os.environ.get("AZURE_AUDIO_STORAGE_CONNECTION_STRING")
                             if cs:
                                 bsc = BlobServiceClient.from_connection_string(cs)
                                 cc = bsc.get_container_client(pinfo["audio_container"])
-                                blobs = list(cc.list_blobs())
-                                audio_count = len(blobs)
-                                if blobs:
-                                    latest = max(blobs, key=lambda b: b.last_modified)
+                                audio_count, latest = _summarize_blobs(cc)
+                                if latest:
                                     last_upload = latest.last_modified.astimezone(FRANCE_TZ).strftime("%Y-%m-%d %H:%M")
                         except Exception:
                             pass
@@ -450,21 +480,20 @@ def create_hr_blueprint(socketio):
                 # Pour P1, utiliser le vrai fichier Azure comme source de vérité
                 # Pour P2+, chercher dans leur container PDF Azure
                 if pid == 1:
-                    real_pdf_filename = azure_pdf_filename
-                    real_pdf_url = azure_pdf_url
+                    real_pdf_filename = azure_pdf_filename if include_blob_stats else pdf_filename
+                    real_pdf_url = azure_pdf_url if include_blob_stats else None
                 else:
                     real_pdf_filename = pdf_filename
                     real_pdf_url = None
-                    if active:
+                    if include_blob_stats and active:
                         try:
                             cs = os.environ.get("AZURE_STORAGE_CONNECTION_STRING")
                             if cs:
                                 from azure.storage.blob import generate_blob_sas, BlobSasPermissions
                                 bsc = BlobServiceClient.from_connection_string(cs)
                                 cc = bsc.get_container_client(pinfo["pdf_container"])
-                                blobs = list(cc.list_blobs())
-                                if blobs:
-                                    blob = max(blobs, key=lambda b: b.last_modified)
+                                _, blob = _summarize_blobs(cc)
+                                if blob:
                                     real_pdf_filename = blob.name
                                     expiry = datetime.now(timezone.utc) + timedelta(hours=2)
                                     sas = generate_blob_sas(
@@ -483,7 +512,7 @@ def create_hr_blueprint(socketio):
                 if active:
                     if not real_pdf_filename:
                         alerts.append("PDF manquant")
-                    if audio_count == 0:
+                    if include_blob_stats and audio_count == 0:
                         alerts.append("Aucun audio")
                 pending = pending_counts.get(pid, 0)
                 if pending > 0:
@@ -507,6 +536,7 @@ def create_hr_blueprint(socketio):
                     "source_module_id": p_source_module_id,
                     "source_rncp_code": p_source_rncp_code or "",
                     "source_tp_name": p_source_tp_name or "",
+                    "blob_stats_loaded": include_blob_stats,
                 })
 
             return jsonify({"success": True, "platforms": platforms}), 200
