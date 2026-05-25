@@ -208,7 +208,7 @@ def generate_from_script():
         _generation_timeline = result["timeline"]
         _pipeline_debug = result.get("pipeline_debug", {})
         _transcription_full = None
-        _generation_mode = "script"
+        _generation_mode = (result.get("stats") or {}).get("generation_mode") or "script"
         _generation_error = None
 
         logger.info(f"Génération script réussie: {len(_generated_slides)} slides")
@@ -265,7 +265,7 @@ def get_slides():
         if deck:
             return jsonify({
                 "status": "success",
-                "generation_mode": "script",
+                "generation_mode": (deck.get("stats") or {}).get("generation_mode") or "script",
                 "slides": deck["slides"],
                 "slides_count": len(deck["slides"]),
                 "stats": deck["stats"],
@@ -279,7 +279,7 @@ def get_slides():
             "message": _generation_error
         }), 500
 
-    if _generation_mode == "script" and not session.get("is_admin", False):
+    if str(_generation_mode or "").startswith("script") and not session.get("is_admin", False):
         return jsonify({"status": "error", "message": "Non autorisé"}), 403
 
     if _generated_slides is None:

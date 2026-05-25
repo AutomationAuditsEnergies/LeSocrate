@@ -23,6 +23,20 @@ def validate_structured_course_plan(plan: dict, *, expected_courses: int = 7) ->
         parts = course.get("parts") if isinstance(course.get("parts"), list) else []
         if not 2 <= len(parts) <= 4:
             errors.append(f"course_{expected_number}_parts_count_{len(parts)}")
+        course_anchor_count = 0
+        for idx, part in enumerate(parts, start=1):
+            beats = part.get("teaching_beats") if isinstance(part.get("teaching_beats"), list) else []
+            if not beats:
+                warnings.append(f"course_{expected_number}_part_{idx}_teaching_beats_missing")
+                continue
+            for beat in beats:
+                anchor = beat.get("slide_anchor") if isinstance(beat, dict) and isinstance(beat.get("slide_anchor"), dict) else {}
+                if anchor.get("enabled"):
+                    course_anchor_count += 1
+                    if not anchor.get("template_type"):
+                        warnings.append(f"course_{expected_number}_part_{idx}_slide_anchor_template_missing")
+        if course_anchor_count == 0:
+            warnings.append(f"course_{expected_number}_slide_anchors_missing")
         expected_budget = int(course.get("target_words") or 0)
         section_budget = int((course.get("opening") or {}).get("target_words") or 0)
         section_budget += sum(int((part or {}).get("target_words") or 0) for part in parts)
@@ -44,5 +58,13 @@ def validate_structured_course_plan(plan: dict, *, expected_courses: int = 7) ->
         "errors": errors,
         "warnings": warnings,
         "courses_count": len(courses),
+        "slide_anchors_count": sum(
+            1
+            for course in courses
+            for part in (course.get("parts") if isinstance(course.get("parts"), list) else [])
+            for beat in (part.get("teaching_beats") if isinstance(part.get("teaching_beats"), list) else [])
+            if isinstance(beat, dict)
+            and isinstance(beat.get("slide_anchor"), dict)
+            and beat["slide_anchor"].get("enabled")
+        ),
     }
-

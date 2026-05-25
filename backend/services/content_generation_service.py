@@ -2,9 +2,9 @@
 Service de génération de contenu TTS-direct.
 
 Pipeline par dossier (= 1 journée de formation) :
-  1. Extraction automatique de 7 créneaux cours depuis le programme (1 appel Claude)
-  2. Pour chaque créneau : Passe 1 → Passe 2 → Passe 3 (volume calibré audio)
-  3. Total TTS-ready calibré sur les créneaux cours Fish Audio → document .txt
+  1. Extraction automatique de 7 cours depuis le programme (1 appel Claude)
+  2. Pour chaque cours : Passe 1 → Passe 2 → Passe 3 (volume calibré audio)
+  3. Total TTS-ready calibré sur les cours audio Fish Audio → document .txt
 
 Checkpointing : chaque segment complété est sauvegardé en DB immédiatement.
 En cas d'interruption, la génération reprend au segment suivant non complété.
@@ -81,12 +81,73 @@ _DEFAULT_TTS_LOCAL_MAX_SPEEDUP = 1.0
 _DEFAULT_TTS_PREFLIGHT_SAFETY = 1.0
 _SENTENCE_END_RE = re.compile(r"[.!?…][\"'»”’)\]]*$")
 _CARRYOVER_INTRO = (
-    "Avant d'entrer dans la suite de ce cours, on reprend le point que nous "
+    "Avant d'entrer dans la suite, on reprend le point que nous "
     "n'avons pas terminé la dernière fois. On le pose proprement, puis on "
     "enchaînera naturellement avec le programme prévu."
 )
 _CARRYOVER_COLUMNS_READY = False
 _FISHAUDIO_TAG_RE = re.compile(r"\[[^\[\]\n]{1,50}\]")
+_INTERNAL_SCHEDULE_TIME_RANGE_RE = re.compile(
+    r"\b(?:[01]?\d|2[0-3])\s*(?:h|:)\s*(?:[0-5]\d)?\s*"
+    r"(?:[-–—]|à|a)\s*"
+    r"(?:[01]?\d|2[0-3])\s*(?:h|:)\s*(?:[0-5]\d)?\b",
+    re.IGNORECASE,
+)
+_INTERNAL_SCHEDULE_SINGLE_TIME_RE = re.compile(
+    r"\b(?:[01]?\d|2[0-3])\s*h\s*(?:[0-5]\d)?\b|"
+    r"\b(?:[01]?\d|2[0-3]):[0-5]\d\b",
+    re.IGNORECASE,
+)
+_LEARNER_FACING_SCHEDULE_LEAK_RE = re.compile(
+    r"\b(?:horaires?|créneaux?|creneaux?|planning|emploi\s+du\s+temps)\b|"
+    r"\b(?:trois\s+quarts?\s+d['’]heure|45\s+minutes?|quarante-cinq\s+minutes?)\s+"
+    r"(?:à\s+venir|qui\s+viennent|prochaines?)\b|"
+    r"(?:[01]?\d|2[0-3])\s*(?:h|:)\s*(?:[0-5]\d)?\s*"
+    r"(?:[-–—]|à|a)\s*"
+    r"(?:[01]?\d|2[0-3])\s*(?:h|:)\s*(?:[0-5]\d)?|"
+    r"\b(?:[01]?\d|2[0-3])\s*h\s*(?:[0-5]\d)?\b|"
+    r"\b(?:[01]?\d|2[0-3]):[0-5]\d\b",
+    re.IGNORECASE,
+)
+_LEARNER_FACING_INTERNAL_COURSE_RE = re.compile(
+    r"\b(?:tout\s+premier\s+cours|premier\s+cours|ce\s+cours|cours\s+actuel|"
+    r"cours\s+qui\s+nous\s+occupe|cours\s+qui\s+va\s+nous\s+occuper|"
+    r"pour\s+(?:les\s+)?(?:trois\s+quarts?\s+d['’]heure|45\s+minutes?|quarante-cinq\s+minutes?)(?:\s+à\s+venir)?)\b",
+    re.IGNORECASE,
+)
+_PART_SECTION_OPENING_LEAK_RE = re.compile(
+    r"\b(?:bonjour\s+à\s+(?:tous|toutes)|bienvenue|"
+    r"cadre\s+g[ée]n[ée]ral\s+(?:de\s+la\s+journ[ée]e|est\s+pos[ée])|"
+    r"th[èe]mes?\s+de\s+la\s+journ[ée]e|programme\s+annuel|parcours\s+annuel|"
+    r"tout\s+au\s+long\s+de\s+la\s+journ[ée]e|d['’]ici\s+ce\s+soir|"
+    r"chemin\s+que\s+nous\s+allons\s+parcourir|"
+    r"premi[èe]re\s+journ[ée]e\s+(?:est\s+)?cruciale|"
+    r"pose\s+les\s+bases\s+de\s+tout\s+le\s+reste|"
+    r"concentrons-nous\s+sur\s+aujourd['’]hui|"
+    r"on\s+peut\s+entrer\s+dans\s+le\s+premier\s+grand\s+th[èe]me)\b",
+    re.IGNORECASE,
+)
+_DUPLICATE_OPENING_CATEGORY_PATTERNS = {
+    "annual_overview": re.compile(
+        r"\b(?:programme\s+annuel|parcours\s+annuel|formation\s+sur\s+l['’]ann[ée]e)\b",
+        re.IGNORECASE,
+    ),
+    "day_overview": re.compile(
+        r"\b(?:th[èe]mes?\s+de\s+la\s+journ[ée]e|tout\s+au\s+long\s+de\s+la\s+journ[ée]e|"
+        r"d['’]ici\s+ce\s+soir|chemin\s+que\s+nous\s+allons\s+parcourir|"
+        r"cadre\s+g[ée]n[ée]ral\s+de\s+la\s+journ[ée]e)\b",
+        re.IGNORECASE,
+    ),
+    "theme_opening": re.compile(
+        r"\b(?:premier\s+grand\s+th[èe]me|cette\s+premi[èe]re\s+partie|"
+        r"ce\s+premier\s+th[èe]me)\b.{0,260}\b(?:objectif|plan|axes?|fil\s+conducteur)\b",
+        re.IGNORECASE | re.DOTALL,
+    ),
+}
+_SLIDE_META_LEAK_RE = re.compile(
+    r"\b(?:slides?|power\s*point|powerpoint|templates?|slide_anchor|anchor|teaching\s+beats?|beats?)\b",
+    re.IGNORECASE,
+)
 _EDGE_TTS_FAST_CACHE = {}
 _EDGE_TTS_FAST_CACHE_LOCK = threading.Lock()
 
@@ -237,7 +298,7 @@ def _course_words_per_minute():
 
 
 def _content_parallel_subpart_workers(default: int = 7) -> int:
-    """Nombre de créneaux cours générés en parallèle."""
+    """Nombre de cours générés en parallèle."""
     try:
         workers = int(os.getenv("FORMATION_CONTENT_PARALLEL_SUBPART_WORKERS", str(default)))
     except (TypeError, ValueError):
@@ -452,17 +513,18 @@ def _build_generation_volume_context(generation_context=None) -> str:
     block_line = ""
     if block:
         block_line = (
-            f"\nCette passe appartient au bloc cours {block['bloc_number']} "
-            f"({block['filename']}, {block['duration_min']} min). Le bloc complet "
+            f"\nCette passe appartient au cours interne {block['bloc_number']} "
+            f"({block['filename']}, {block['duration_min']} min). Le cours complet "
             f"doit viser {block['target_words']} mots parlés, avec une plage "
             f"{block['min_words']}–{block['max_words']} mots. Les trois passes de "
-            "ce créneau doivent donc se compléter sans déborder sur le créneau suivant.\n"
+            "cette unité interne doit donc se compléter sans déborder sur la suivante. "
+            "Ces données sont internes : ne les verbalise jamais aux apprenants.\n"
         )
     return f"""
 ═══════════════════════════════════════════════════════════════════
 CONTRAINTE VOLUME AUDIO PRIORITAIRE — FISH AUDIO
 ═══════════════════════════════════════════════════════════════════
-La journée est maintenant calculée au mot près sur les créneaux cours,
+La journée est maintenant calculée au mot près sur les cours internes,
 hors Q&A et hors pauses.
 
 Cadence calibrée : {day['words_per_minute']:.0f} mots/minute.
@@ -472,7 +534,7 @@ Le budget ne coupe pas l'audio final : il réduit seulement le nombre de mots
 demandés. Il retire déjà la marge initiale et une marge parole finale de
 {final_margin_sec} secondes ({final_margin_min:.1f} min), soit environ
 {final_margin_words} mots en moins par rapport à une parole continue jusqu'à la
-fin du créneau.
+fin du cours interne.
 
 Cette passe doit viser environ {budget['target_words']} mots utiles,
 avec une plage acceptable de {budget['min_words']} à {budget['max_words']}
@@ -482,6 +544,8 @@ de 5 000 mots ou de 90 000 mots par journée.
 
 N'allonge pas artificiellement le texte. Ne cherche pas à remplir les Q&A
 ou les pauses : ils ont leurs propres fichiers et ne comptent pas ici.
+Ne parle jamais côté apprenant d'horaires, de créneaux, de planning, de durée
+de fichier ou de budget mots.
 """
 
 
@@ -506,6 +570,24 @@ def _clean_llm_text(raw: str) -> str:
     text = _strip_audio_block_markers(text)
     text = re.sub(r"\n{3,}", "\n\n", text)
     return text.strip()
+
+
+def _strip_internal_schedule_from_label(value: str | None) -> str:
+    """Retire les horaires techniques des libellés injectés dans les prompts."""
+    original = str(value or "").strip()
+    if not original:
+        return ""
+    text = _INTERNAL_SCHEDULE_TIME_RANGE_RE.sub("", original)
+    text = _INTERNAL_SCHEDULE_SINGLE_TIME_RE.sub("", text)
+    text = re.sub(r"\b(?:45|50|55|60)\s*minutes\b", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"\s*[-–—]\s*[-–—]\s*", " — ", text)
+    text = re.sub(r"\s*[-–—]\s*:\s*", " — ", text)
+    text = re.sub(r"\s*:\s*[-–—]\s*", " — ", text)
+    text = re.sub(r"\s{2,}", " ", text).strip()
+    text = re.sub(r"\s*[-–—]\s*$", "", text).strip()
+    text = re.sub(r"^\s*[-–—]\s*", "", text).strip()
+    text = re.sub(r"^cours\s+\d+\s*[-–—:]\s*", "", text, flags=re.IGNORECASE).strip()
+    return text or original
 
 
 def _sanitize_learner_facing_text(text: str) -> str:
@@ -543,6 +625,164 @@ def _merge_unique_strings(*values) -> list[str]:
     return merged
 
 
+_BEAT_TYPE_TO_TEMPLATE = {
+    "definition": "reflection",
+    "concept": "reflection",
+    "key_message": "reflection",
+    "process": "facilitator",
+    "method": "facilitator",
+    "framework": "facilitator",
+    "steps": "facilitator",
+    "checklist": "recap",
+    "recap": "recap",
+    "takeaways": "recap",
+    "example": "casestudy",
+    "case": "casestudy",
+    "comparison": "casestudy",
+    "warning": "warning",
+    "mistake": "warning",
+    "risk": "warning",
+    "tip": "tip",
+    "advice": "tip",
+    "good_practice": "tip",
+    "story": "story",
+    "scenario": "story",
+    "analogy": "analogy",
+    "metaphor": "analogy",
+    "data": "stats",
+    "numbers": "stats",
+    "chart": "chart",
+    "transition": "transition",
+    "opinion": "opinion",
+}
+_SUPPORTED_SLIDE_TEMPLATES = {
+    "reflection",
+    "casestudy",
+    "facilitator",
+    "stats",
+    "story",
+    "recap",
+    "analogy",
+    "warning",
+    "tip",
+    "opinion",
+    "transition",
+    "chart",
+}
+_ETHICAL_MICRO_RULE_IDS = list(range(1, 17))
+_ETHICAL_MICRO_RULESET_VERSION = "2026-05-25-ethical-micro-v1"
+_ETHICAL_MICRO_RULES_CACHE = {"mtime": None, "text": ""}
+
+
+def _load_slide_template_catalog() -> dict:
+    raw = _load_prompt_file("slides", "template-catalog.json", fallback="")
+    if not raw:
+        return {"version": "missing", "templates": []}
+    try:
+        data = json.loads(raw)
+    except Exception as exc:
+        logger.warning("⚠️ Catalogue templates slides invalide: %s", exc)
+        return {"version": "invalid", "templates": []}
+    if not isinstance(data.get("templates"), list):
+        data["templates"] = []
+    return data
+
+
+def _slide_template_catalog_prompt() -> str:
+    catalog = _load_slide_template_catalog()
+    templates = []
+    for item in catalog.get("templates") or []:
+        if not isinstance(item, dict):
+            continue
+        template_id = item.get("template_id")
+        if template_id not in _SUPPORTED_SLIDE_TEMPLATES:
+            continue
+        templates.append({
+            "template_id": template_id,
+            "families": item.get("families") or [],
+            "use_when": item.get("use_when") or "",
+            "avoid_when": item.get("avoid_when") or "",
+            "requires": item.get("requires") or {},
+        })
+    return json.dumps(
+        {
+            "catalog_version": catalog.get("version"),
+            "principle": catalog.get("principle"),
+            "templates": templates,
+        },
+        ensure_ascii=False,
+        indent=2,
+    )
+
+
+def _slide_template_for_beat(beat_type: str | None, requested: str | None = None) -> str:
+    requested_key = str(requested or "").strip().lower()
+    if requested_key in _SUPPORTED_SLIDE_TEMPLATES:
+        return requested_key
+    alias = _BEAT_TYPE_TO_TEMPLATE.get(requested_key)
+    if alias in _SUPPORTED_SLIDE_TEMPLATES:
+        return alias
+    beat_key = str(beat_type or "").strip().lower()
+    return _BEAT_TYPE_TO_TEMPLATE.get(beat_key, "reflection")
+
+
+def _normalize_teaching_beats(raw_part: dict, *, course_number: int, part_number: int) -> list[dict]:
+    raw_beats = raw_part.get("teaching_beats") if isinstance(raw_part.get("teaching_beats"), list) else []
+    if not raw_beats:
+        raw_beats = [
+            {
+                "type": "concept",
+                "role": "poser l'idée centrale de cette partie",
+                "spoken_requirement": (
+                    "Présenter clairement l'idée principale de cette partie avec une formulation "
+                    "orale concrète et mémorisable."
+                ),
+                "slide_anchor": {
+                    "enabled": True,
+                    "template_type": "reflection",
+                    "visual_goal": "faire retenir l'idée centrale",
+                },
+            }
+        ]
+
+    normalized = []
+    for idx, raw in enumerate(raw_beats[:5], start=1):
+        if not isinstance(raw, dict):
+            continue
+        beat_type = str(raw.get("type") or raw.get("beat_type") or "concept").strip().lower()
+        role = str(raw.get("role") or raw.get("intent") or "développer un point pédagogique").strip()
+        spoken_requirement = str(
+            raw.get("spoken_requirement")
+            or raw.get("requirement")
+            or raw.get("description")
+            or role
+        ).strip()
+        anchor = raw.get("slide_anchor") if isinstance(raw.get("slide_anchor"), dict) else {}
+        enabled = bool(anchor.get("enabled", idx == 1))
+        template_type = _slide_template_for_beat(
+            beat_type,
+            anchor.get("template_type") or anchor.get("template_family") or raw.get("template_type"),
+        )
+        beat_id = str(raw.get("beat_id") or f"c{course_number}p{part_number}b{idx}").strip()
+        slide_anchor = {
+            "enabled": enabled,
+            "anchor_id": str(anchor.get("anchor_id") or f"{beat_id}-slide").strip(),
+            "template_type": template_type,
+            "visual_goal": str(anchor.get("visual_goal") or "visualiser le point pédagogique").strip(),
+            "items_expected": anchor.get("items_expected"),
+            "fields_hint": anchor.get("fields_hint") if isinstance(anchor.get("fields_hint"), dict) else {},
+        }
+        normalized.append({
+            "beat_id": beat_id,
+            "type": beat_type,
+            "role": role,
+            "spoken_requirement": spoken_requirement,
+            "slide_anchor": slide_anchor,
+        })
+
+    return normalized
+
+
 def _next_playlist_item_after_index(playlist_spec, idx: int):
     try:
         return playlist_spec[idx + 1] if idx + 1 < len(playlist_spec) else None
@@ -562,8 +802,8 @@ def _course_block_role(bloc_number: int, *, folder_position=None, next_item=None
     if bloc_number == 1 and day_number == 1:
         parts.append(
             "Ouverture absolue de la formation : accueil calme, présentation "
-            "synthétique du parcours annuel, thèmes de la journée sans horaires, "
-            "rôle du cours 1, plan du cours en 2 à 4 parties, puis seulement "
+            "synthétique du parcours annuel, thèmes de la journée dans leur ordre pédagogique, "
+            "transition vers le premier grand thème, plan oral en 2 à 4 axes, puis seulement "
             "lancement progressif du premier sujet."
         )
     elif bloc_number == 1:
@@ -573,10 +813,10 @@ def _course_block_role(bloc_number: int, *, folder_position=None, next_item=None
         )
     elif bloc_number == 2:
         parts.append(
-            "Reprise autonome après Q&A/pause : ne jamais terminer le cours 1. "
+            "Reprise autonome après Q&A/pause : ne jamais terminer la partie précédente. "
             "Faire un rappel très bref de ce qui a été vu, relier la posture "
-            "d'accueil à distance au thème du cours 2, annoncer l'objectif puis "
-            "un plan de 2 à 4 parties avant tout exemple."
+            "d'accueil à distance au nouveau thème, annoncer l'objectif puis "
+            "un plan de 2 à 4 axes avant tout exemple."
         )
     else:
         parts.append(
@@ -600,13 +840,13 @@ def _course_block_role(bloc_number: int, *, folder_position=None, next_item=None
             )
             if bloc_number == 1:
                 qa_outro += (
-                    " Pour le cours 1, après cette annonce, aucun nouveau "
+                    " Pour le premier thème interne, après cette annonce, aucun nouveau "
                     "développement ne doit suivre."
                 )
             elif bloc_number == 2:
                 qa_outro += (
-                    " Pour le cours 2, ne pas ouvrir le cours 3 et ne pas "
-                    "réexpliquer le cours 1 après cette annonce."
+                    " Pour le deuxième thème interne, ne pas ouvrir la suite et ne pas "
+                    "réexpliquer la partie précédente après cette annonce."
                 )
             parts.append(qa_outro)
         elif next_type == "pause_midi":
@@ -627,11 +867,12 @@ def _course_block_role(bloc_number: int, *, folder_position=None, next_item=None
 
 _COURSE_SLOT_PROMPT_PROFILES = {
     1: {
-        "label": "Cours 1 — ouverture de la formation et lancement de journée",
-        "moment": "premier cours de la journée, et potentiellement premier cours de l'année",
+        "label": "Cours interne 1 — ouverture de la formation et premier grand thème",
+        "moment": "première grande partie de la journée, et potentiellement ouverture absolue de l'année",
         "intention": (
             "installer une carte mentale claire avant le contenu : parcours global, "
-            "thèmes de la journée, rôle du cours actuel, objectifs et plan oral"
+            "thèmes de la journée, transition naturelle vers le premier grand thème, "
+            "objectif et plan oral en axes"
         ),
         "rhythm": (
             "progressif, accueillant et très clair : accueil humain, cadrage explicite, "
@@ -639,10 +880,11 @@ _COURSE_SLOT_PROMPT_PROFILES = {
         ),
         "structure": [
             "accueillir les apprenants sans démarrer par une métaphore ou un cas client",
-            "si c'est le premier cours de l'année, présenter synthétiquement les grands thèmes de la formation",
-            "annoncer les thèmes de la journée dans l'ordre, sans citer les horaires",
-            "expliquer le rôle précis du cours 1 et ce que l'apprenant saura mieux faire à la fin",
-            "annoncer un plan de cours en 2 à 4 parties et suivre ce plan dans le même ordre",
+            "si c'est l'ouverture absolue de l'année, présenter synthétiquement les grands thèmes de la formation",
+            "annoncer les thèmes de la journée dans leur ordre pédagogique sans parler d'horaires ni de planning",
+            "basculer naturellement vers le premier grand thème de la journée",
+            "formuler l'objectif de cette première partie et ce que l'apprenant saura mieux faire ensuite",
+            "annoncer un plan oral en 2 à 4 axes et suivre ce plan dans le même ordre",
             "verbaliser chaque changement de partie avec une transition claire",
             "conclure par 3 à 4 minutes équivalent audio : récapitulatif des points vus, utilité concrète, annonce du Q&A dans le tchat",
             "arrêter strictement le texte après l'annonce du Q&A : aucun exemple, aucune mini-synthèse, aucun remplissage après la conclusion",
@@ -654,63 +896,65 @@ _COURSE_SLOT_PROMPT_PROFILES = {
             "tunnels émotionnels ou métaphores longues sans idée nouvelle identifiable",
             "vocabulaire littéraire ou trop abstrait pour un cours magistral professionnel",
             "blocs répétés comme 'Prenons quelques secondes pour ancrer cette idée'",
+            "dire 'tout premier cours', 'ce cours', 'cours actuel' ou 'trois quarts d'heure à venir'",
             "nouveau développement après la conclusion et l'annonce du Q&A",
         ],
-        "handoff": "annoncer uniquement le passage au temps de questions-réponses dans le tchat, sans transition vers le cours 2",
+        "handoff": "annoncer uniquement le passage au temps de questions-réponses dans le tchat, sans transition vers le thème suivant",
     },
     2: {
-        "label": "Cours 2 — reprise autonome et nouveau thème",
-        "moment": "reprise après le Q&A et la pause qui suivent le cours 1",
+        "label": "Cours interne 2 — reprise autonome et nouveau thème",
+        "moment": "reprise après le Q&A et la pause qui suivent la première partie",
         "intention": (
-            "ouvrir un nouveau cours autonome : rappeler brièvement la posture "
-            "d'accueil à distance vue au cours 1, puis basculer vers le thème "
-            "du cours 2 avec objectif, plan et progression claire"
+            "ouvrir une nouvelle partie autonome de la journée : rappeler brièvement "
+            "ce qui a été posé avant la pause, puis basculer vers le nouveau thème "
+            "avec objectif, axes et progression claire"
         ),
         "rhythm": (
             "reprise douce mais nette : quelques phrases de lien, annonce du "
-            "nouveau thème, plan oral en 2 à 4 parties, puis développement "
+            "nouveau thème, plan oral en 2 à 4 axes, puis développement "
             "méthodique avec transitions visibles"
         ),
         "structure": [
-            "commencer par une reprise autonome : ne jamais finir une idée qui appartenait au cours 1",
+            "commencer par une reprise autonome : ne jamais finir une idée qui appartenait à la partie précédente",
             "rappeler en une ou deux phrases ce qui a été abordé au cours précédent",
-            "faire le lien entre le thème du cours 1 et le thème du cours 2",
-            "annoncer clairement ce que ce cours va apprendre et pourquoi c'est utile",
-            "annoncer un plan de 2 à 4 parties maximum avant tout exemple développé",
+            "faire le lien entre le thème précédent et le nouveau thème",
+            "annoncer clairement ce que cette nouvelle partie va travailler et pourquoi c'est utile",
+            "annoncer un plan de 2 à 4 axes maximum avant tout exemple développé",
             "développer les parties dans l'ordre annoncé, chacune avec une idée nouvelle identifiable",
             "verbaliser les transitions : passons au deuxième point, maintenant que nous avons vu X, intéressons-nous à Y",
-            "conclure par 3 à 4 minutes équivalent audio : récapitulatif des points du cours 2, utilité concrète, annonce du Q&A dans le tchat",
+            "conclure par 3 à 4 minutes équivalent audio : récapitulatif des points de cette partie, utilité concrète, annonce du Q&A dans le tchat",
         ],
         "examples": "exemples simples et explicitement fictifs si le cas n'est pas issu du programme, uniquement après le rappel, le lien et le plan",
         "avoid": [
-            "commencer par 'Et puis', 'Ensuite' ou une phrase qui continue directement la conclusion du cours 1",
-            "terminer une notion absente du texte écrit du cours 1",
-            "rejouer la conclusion du cours 1 ou annoncer son Q&A",
+            "commencer par 'Et puis', 'Ensuite' ou une phrase qui continue directement la conclusion de la partie précédente",
+            "terminer une notion absente du texte écrit de la partie précédente",
+            "rejouer la conclusion de la partie précédente ou annoncer son Q&A",
             "démarrer par un exemple comme Monsieur Klein avant d'avoir annoncé le nouveau thème et le plan",
-            "faire une double introduction du cours 2",
-            "réexpliquer longuement le cours 1",
+            "faire une double introduction du nouveau thème",
+            "dire 'ce cours' ou 'cours actuel' côté apprenant",
+            "réexpliquer longuement la partie précédente",
             "changer de thème sans transition explicite",
             "accumuler des conseils non hiérarchisés",
         ],
-        "handoff": "annoncer uniquement le passage au temps de questions-réponses dans le tchat si un Q&A suit, sans transition vers le cours 3",
+        "handoff": "annoncer uniquement le passage au temps de questions-réponses dans le tchat si un Q&A suit, sans transition vers le thème suivant",
     },
     3: {
-        "label": "Cours 3 — densité de fin de matinée",
-        "moment": "fin de matinée, juste avant une respiration plus longue",
+        "label": "Cours 3 — densité avant respiration longue",
+        "moment": "troisième cours de la journée, juste avant une respiration plus longue",
         "intention": (
-            "traiter le point le plus dense de la matinée, pousser le raisonnement, "
-            "faire travailler les arbitrages et refermer proprement la séquence matinale"
+            "traiter un point dense, pousser le raisonnement, faire travailler les "
+            "arbitrages et refermer proprement cette première grande séquence"
         ),
         "rhythm": (
-            "soutenu mais respirable : blocs d'explication plus longs, pauses pédagogiques, "
+            "soutenu mais respirable : séquences d'explication plus longues, pauses pédagogiques, "
             "synthèses intermédiaires pour ne pas saturer"
         ),
         "structure": [
-            "rappeler en une phrase où on en est dans la matinée",
+            "rappeler en une phrase où on en est dans la progression de la journée",
             "entrer dans une situation plus exigeante ou un cas plus complet",
             "montrer les décisions successives à prendre",
             "insister sur les pièges, limites et critères de qualité",
-            "conclure clairement la matinée avant le Q&A ou la pause",
+            "conclure clairement cette séquence avant le Q&A ou la pause",
         ],
         "examples": "cas complexe, diagnostic, arbitrage, client difficile, erreur de procédure, correction commentée",
         "avoid": [
@@ -719,7 +963,7 @@ _COURSE_SLOT_PROMPT_PROFILES = {
             "enchaîner trop de notions nouvelles sans respiration",
             "annoncer la pause comme une coupure administrative froide",
         ],
-        "handoff": "faire sentir que la matinée a une vraie conclusion avant la pause ou le déjeuner",
+        "handoff": "faire sentir que la séquence a une vraie conclusion avant la pause ou le déjeuner",
     },
     4: {
         "label": "Cours 4 — reprise après déjeuner",
@@ -734,7 +978,7 @@ _COURSE_SLOT_PROMPT_PROFILES = {
         ),
         "structure": [
             "reprendre avec une amorce de relance, pas avec un rappel lourd",
-            "rattacher la matinée au sujet de l'après-midi",
+            "rattacher ce qui a déjà été vu au nouveau sujet",
             "lancer une application pratique ou un nouveau terrain d'exemple",
             "faire alterner explication et mise en situation",
             "finir sur un point clair pour éviter l'effet tunnel",
@@ -742,7 +986,7 @@ _COURSE_SLOT_PROMPT_PROFILES = {
         "examples": "cas simple de reprise, application terrain, situation de service, comparaison avant/après",
         "avoid": [
             "supposer une attention maximale dès la première phrase",
-            "reprendre toute la matinée en détail",
+            "reprendre toute la séquence précédente en détail",
             "démarrer par une abstraction lourde",
             "finir sans signal de clôture",
         ],
@@ -750,9 +994,9 @@ _COURSE_SLOT_PROMPT_PROFILES = {
     },
     5: {
         "label": "Cours 5 — grand développement de l'après-midi",
-        "moment": "milieu d'après-midi, premier long créneau de 60 minutes",
+        "moment": "cours long d'approfondissement après la reprise",
         "intention": (
-            "développer le bloc le plus substantiel : approfondissement, démonstration, variations, "
+            "développer la séquence la plus substantielle : approfondissement, démonstration, variations, "
             "contre-exemples et consolidation"
         ),
         "rhythm": (
@@ -769,15 +1013,15 @@ _COURSE_SLOT_PROMPT_PROFILES = {
         "examples": "scénarios professionnels complets, contre-exemples, analyse d'une mauvaise réponse, amélioration progressive",
         "avoid": [
             "remplissage générique pour tenir la durée",
-            "redite des créneaux 1 à 4",
+            "redite des parties précédentes",
             "enchaînement de listes sans narration pédagogique",
             "absence de jalons dans un long passage",
         ],
-        "handoff": "donner le sentiment d'un gros bloc maîtrisé, puis préparer la mise en maîtrise",
+        "handoff": "donner le sentiment d'une séquence maîtrisée, puis préparer la mise en maîtrise",
     },
     6: {
         "label": "Cours 6 — mise en maîtrise",
-        "moment": "dernière grande séquence de 60 minutes avant la fin de journée",
+        "moment": "dernière grande séquence avant la fin de journée",
         "intention": (
             "passer de la compréhension à la maîtrise : relier les compétences, traiter les cas limites "
             "et montrer comment décider dans une vraie situation"
@@ -787,7 +1031,7 @@ _COURSE_SLOT_PROMPT_PROFILES = {
             "de comparaisons et de posture professionnelle"
         ),
         "structure": [
-            "reprendre le résultat du cours 5 sans le répéter",
+            "reprendre le résultat de la partie précédente sans le répéter",
             "mettre les notions en tension dans un cas plus réaliste",
             "montrer les critères de décision et les arbitrages",
             "faire verbaliser la posture attendue",
@@ -800,11 +1044,11 @@ _COURSE_SLOT_PROMPT_PROFILES = {
             "faire une conclusion finale trop tôt",
             "traiter le cas pratique comme une simple illustration décorative",
         ],
-        "handoff": "ouvrir naturellement vers la consolidation finale du cours 7",
+        "handoff": "ouvrir naturellement vers la consolidation finale de la journée",
     },
     7: {
         "label": "Cours 7 — consolidation et clôture",
-        "moment": "fin de journée, dernier créneau avant le Q&A final",
+        "moment": "fin de journée, dernier cours avant le Q&A final",
         "intention": (
             "terminer la progression du jour, consolider les apprentissages, faire une synthèse utile "
             "et projeter sobrement vers la suite"
@@ -833,7 +1077,7 @@ _COURSE_SLOT_PROMPT_PROFILES = {
 
 
 def _course_slot_prompt_profile(bloc_number: int | str | None, passe: int | str | None = None) -> str:
-    """Profil éditorial stable par créneau audio."""
+    """Profil éditorial stable par cours audio interne."""
     try:
         bloc = int(bloc_number or 0)
     except (TypeError, ValueError):
@@ -848,9 +1092,9 @@ def _course_slot_prompt_profile(bloc_number: int | str | None, passe: int | str 
         return ""
 
     passe_focus = {
-        1: "Passe 1 : poser les bases du créneau, clarifier les notions et préparer l'écoute.",
+        1: "Passe 1 : poser les bases de la partie, clarifier les notions et préparer l'écoute.",
         2: "Passe 2 : développer la pratique, les exemples, les gestes professionnels et les cas terrain.",
-        3: "Passe 3 : consolider, nuancer, relier les idées et finir le créneau proprement.",
+        3: "Passe 3 : consolider, nuancer, relier les idées et finir le cours proprement.",
     }.get(passe_num, "Passe : respecter la progression Fondation / Pratique / Maîtrise.")
 
     lines = [
@@ -867,7 +1111,7 @@ def _course_slot_prompt_profile(bloc_number: int | str | None, passe: int | str 
     ])
     lines.extend(f"  - {item}" for item in profile.get("avoid", []))
     lines.extend([
-        f"- Sortie du créneau : {profile['handoff']}.",
+        f"- Sortie de la partie : {profile['handoff']}.",
         f"- Focus de cette passe : {passe_focus}",
     ])
     return "\n".join(lines)
@@ -899,7 +1143,7 @@ def _normalize_structured_course_plans(raw_plan: dict, *, job: dict, playlist_it
         raw = raw_by_number.get(course_number) or {}
         budget_block = budgets_by_course.get(course_number) or {}
         target_words = int(budget_block.get("target_words") or budget_block.get("max_words") or 1200)
-        title = (
+        title = _strip_internal_schedule_from_label(
             raw.get("course_title")
             or (sub_parts[course_number - 1] if course_number - 1 < len(sub_parts) else f"Cours {course_number}")
         ).strip()
@@ -920,45 +1164,51 @@ def _normalize_structured_course_plans(raw_plan: dict, *, job: dict, playlist_it
             forced_opening_include = [
                 "accueil oral des apprenants",
                 "présentation synthétique du programme annuel",
-                "présentation des thèmes de la journée sans horaires",
-                "thème du cours actuel",
-                "objectif du cours actuel",
-                "plan du cours avant tout exemple",
+                "présentation des thèmes de la journée dans leur ordre pédagogique",
+                "transition naturelle vers le premier grand thème",
+                "objectif de cette première partie",
+                "plan oral en axes avant tout exemple",
             ]
             forced_opening_avoid = [
                 "démarrer directement par un exemple",
                 "storytelling avant carte mentale",
                 "mot bloc devant les élèves",
+                "dire ce cours ou tout premier cours devant les élèves",
+                "mentionner trois quarts d'heure ou une durée",
             ]
         elif course_number == 1:
             forced_opening_include = [
                 "accueil oral des apprenants",
                 "reprise douce de la progression de formation",
-                "présentation des thèmes de la journée sans horaires",
-                "thème du cours actuel",
-                "objectif du cours actuel",
-                "plan du cours avant tout exemple",
+                "présentation des thèmes de la journée dans leur ordre pédagogique",
+                "transition naturelle vers le premier grand thème de la journée",
+                "objectif de cette première partie",
+                "plan oral en axes avant tout exemple",
             ]
             forced_opening_avoid = [
                 "refaire la présentation annuelle complète",
                 "démarrer directement par un exemple",
                 "storytelling avant carte mentale",
                 "mot bloc devant les élèves",
+                "dire ce cours ou tout premier cours devant les élèves",
+                "mentionner trois quarts d'heure ou une durée",
             ]
         else:
             forced_opening_include = [
                 "petite reprise naturelle cohérente avec un vocal précédent indiquant que la pause ou le Q/R est terminé",
-                "rappel bref du cours précédent",
-                "lien avec le cours actuel",
-                "thème du cours actuel",
-                "objectif du cours actuel",
-                "plan du cours avant tout exemple",
+                "rappel bref de la partie précédente",
+                "lien avec le nouveau thème",
+                "thème de cette nouvelle partie",
+                "objectif de cette partie",
+                "plan oral en axes avant tout exemple",
             ]
             forced_opening_avoid = [
                 "continuer le cours précédent",
                 "double introduction",
                 "exemple avant le plan",
                 "mot bloc devant les élèves",
+                "dire ce cours ou cours actuel devant les élèves",
+                "mentionner trois quarts d'heure ou une durée",
             ]
         opening["must_include"] = _merge_unique_strings(opening.get("must_include"), forced_opening_include)
         opening["must_avoid"] = _merge_unique_strings(opening.get("must_avoid"), forced_opening_avoid)
@@ -966,12 +1216,34 @@ def _normalize_structured_course_plans(raw_plan: dict, *, job: dict, playlist_it
         parts = []
         for idx in range(parts_count):
             raw_part = raw_parts[idx] if idx < len(raw_parts) and isinstance(raw_parts[idx], dict) else {}
+            forced_part_avoid = [
+                "refaire l'accueil ou l'introduction",
+                "réannoncer les thèmes de la journée",
+                "réannoncer le programme annuel",
+                "répéter l'objectif global ou le plan complet",
+                "mentionner les horaires, créneaux, durées ou le planning",
+            ]
+            if idx == 0:
+                forced_part_avoid.extend([
+                    "commencer par le cadrage général de la journée",
+                    "dire maintenant que le cadre général est posé",
+                    "dire on peut entrer dans le premier grand thème",
+                ])
             parts.append({
                 "part_number": idx + 1,
                 "title": (raw_part.get("title") or f"Partie {idx + 1}").strip(),
                 "target_words": budgets["parts"][idx],
                 "function": (raw_part.get("function") or "Développer une idée pédagogique identifiable.").strip(),
                 "must_include": raw_part.get("must_include") if isinstance(raw_part.get("must_include"), list) else [],
+                "must_avoid": _merge_unique_strings(
+                    raw_part.get("must_avoid") if isinstance(raw_part.get("must_avoid"), list) else [],
+                    forced_part_avoid,
+                ),
+                "teaching_beats": _normalize_teaching_beats(
+                    raw_part,
+                    course_number=course_number,
+                    part_number=idx + 1,
+                ),
                 "transition_in": (raw_part.get("transition_in") or "").strip(),
                 "transition_out": (raw_part.get("transition_out") or "").strip(),
             })
@@ -981,7 +1253,7 @@ def _normalize_structured_course_plans(raw_plan: dict, *, job: dict, playlist_it
         if course_number == 7:
             course_conclusion["must_include"] = _merge_unique_strings(
                 course_conclusion.get("must_include"),
-                ["récapitulatif du cours", "utilité concrète des points vus"],
+                ["récapitulatif de la partie", "utilité concrète des points vus"],
             )
             course_conclusion["must_avoid"] = _merge_unique_strings(
                 course_conclusion.get("must_avoid"),
@@ -990,7 +1262,7 @@ def _normalize_structured_course_plans(raw_plan: dict, *, job: dict, playlist_it
         else:
             course_conclusion["must_include"] = _merge_unique_strings(
                 course_conclusion.get("must_include"),
-                ["récapitulatif du cours", "utilité concrète", "annonce Q/R dans le tchat"],
+                ["récapitulatif de la partie", "utilité concrète", "annonce Q/R dans le tchat"],
             )
             course_conclusion["must_avoid"] = _merge_unique_strings(
                 course_conclusion.get("must_avoid"),
@@ -1035,13 +1307,22 @@ def _normalize_structured_course_plans(raw_plan: dict, *, job: dict, playlist_it
             "global_constraints": {
                 "parts_min": 2,
                 "parts_max": 4,
-                "learner_facing_forbidden_words": ["bloc"],
+                "learner_facing_forbidden_words": ["bloc", "créneau", "horaire", "planning"],
+                "learner_facing_preferred_units": ["thème", "partie", "chapitre", "séquence", "axe"],
+                "learner_facing_internal_course_policy": (
+                    "Le mot course/cours désigne une unité interne. Dans le texte "
+                    "apprenant, préférer thème, partie, chapitre, séquence ou axe."
+                ),
                 "examples_policy": "Les exemples non sourcés doivent être explicitement fictifs.",
+                "schedule_policy": (
+                    "Les horaires, durées et créneaux sont internes. Le formateur "
+                    "présente la progression pédagogique sans les mentionner."
+                ),
             },
         })
 
     return {
-        "version": "structured-course-plan-v1",
+        "version": "structured-course-plan-v2",
         "generated_at": datetime.utcnow().isoformat() + "Z",
         "title": job.get("program_title") or "",
         "folder_id": job.get("folder_id"),
@@ -1056,6 +1337,7 @@ def _build_structured_course_plan_prompt(job: dict, playlist_items: list, sub_pa
     prompt_parts = load_planning_prompt_parts()
     base_style = prompt_parts["base_style"]
     plan_contract = prompt_parts["plan_contract"]
+    slide_template_catalog = _slide_template_catalog_prompt()
     block_plan = _course_audio_block_plan(playlist_items, folder_position=job.get("folder_position"))
     try:
         day_number = int(job.get("folder_position") or 0) + 1
@@ -1071,9 +1353,12 @@ def _build_structured_course_plan_prompt(job: dict, playlist_items: list, sub_pa
         f"- Cours {b['bloc_number']} · {b['duration_min']} min · cible {b['target_words']} mots · {b['role']}"
         for b in block_plan
     )
-    sub_part_lines = "\n".join(f"- Cours {i + 1}: {name}" for i, name in enumerate(sub_parts or []))
+    sub_part_lines = "\n".join(
+        f"- Cours {i + 1}: {_strip_internal_schedule_from_label(name)}"
+        for i, name in enumerate(sub_parts or [])
+    )
     module_summary = "\n\n".join(
-        f"## {name}\n{_compact_words(text, 650)}"
+        f"## {_strip_internal_schedule_from_label(name)}\n{_compact_words(text, 650)}"
         for name, text in (module_contents or {}).items()
         if (text or "").strip()
     )
@@ -1089,14 +1374,23 @@ Le plan est libre maintenant, mais il sera verrouillé ensuite : le texte final 
 
 Contraintes générales :
 - Chaque cours a 2 à 4 parties, jamais moins, jamais plus.
-- Devant les élèves, ne jamais utiliser le mot "bloc" : utiliser "partie", "cours", "séance" ou "moment".
+- Dans ce JSON, "cours" est une unité interne. Devant les élèves, présente ces unités comme des grands thèmes, parties, chapitres ou séquences de journée.
+- Devant les élèves, ne jamais utiliser les mots "bloc", "créneau", "horaire" ou "planning" : utiliser "thème", "partie", "chapitre", "séquence", "axe", "moment" ou parler simplement de progression.
+- Évite aussi côté apprenant : "tout premier cours", "ce cours", "cours actuel", "le cours qui nous occupe", "pour les trois quarts d'heure à venir".
+- Les durées, horaires, budgets mots, noms de fichiers et découpages playlist sont internes. Ils ne doivent jamais apparaître dans les titres, ouvertures, transitions ou conclusions côté apprenant.
+- Ne jamais écrire une phrase du type "sans vous soucier des horaires précis" : si tu présentes la journée, énonce seulement les thèmes dans leur ordre pédagogique.
 - Un cours est toujours suivi d'un temps de questions-réponses dans le tchat.
-- Cours 1 de la première journée seulement : accueil, parcours annuel synthétique, thèmes de la journée, thème/objectifs/plan, conclusion + Q/R.
-- Cours 1 d'une journée suivante : accueil de journée, reprise douce de la progression, thèmes de la journée, thème/objectifs/plan, conclusion + Q/R. Ne refais pas la présentation annuelle complète.
-- Cours 2 à 6 : reprise naturelle cohérente avec le vocal précédent de fin de pause/Q/R, rappel bref du cours précédent, lien avec le thème actuel, thème/objectifs/plan, conclusion + Q/R.
-- Cours 7 : conclusion du cours, conclusion globale de journée, amorce prochaine séance, bonne semaine/à la semaine prochaine, puis mention douce du tchat.
+- Cours interne 1 de la première journée seulement : accueil, parcours annuel synthétique, thèmes de la journée, transition vers le premier grand thème, objectif/axes, conclusion + Q/R.
+- Cours interne 1 d'une journée suivante : accueil de journée, reprise douce de la progression, thèmes de la journée, transition vers le premier grand thème, objectif/axes, conclusion + Q/R. Ne refais pas la présentation annuelle complète.
+- Cours internes 2 à 6 : reprise naturelle cohérente avec le vocal précédent de fin de pause/Q/R, rappel bref de la partie précédente, lien avec le nouveau thème, objectif/axes, conclusion + Q/R.
+- Cours interne 7 : conclusion de la dernière partie, conclusion globale de journée, amorce prochaine séance, bonne semaine/à la semaine prochaine, puis mention douce du tchat.
 - Si c'est la dernière journée de formation, le cours 7 doit souhaiter bonne continuation au lieu d'annoncer la prochaine séance.
 - Les exemples non sourcés doivent être explicitement fictifs.
+- Pour chaque partie de développement, crée des `teaching_beats` : 2 à 4 moments pédagogiques structurants qui guideront le texte.
+- Chaque teaching beat doit avoir : beat_id, type, role, spoken_requirement, slide_anchor.
+- Un slide_anchor n'est activé que si le moment mérite vraiment une visualisation. N'active pas une slide pour une simple transition orale.
+- Le texte final ne doit jamais dire "slide", "PowerPoint", "template", "anchor" ou "teaching beat". Ces anchors sont internes.
+- Choisis les templates uniquement dans le catalogue fourni. Ne force pas une roue, une checklist ou des étapes si le contenu ne s'y prête pas.
 
 Position dans la formation :
 - Journée courante : {day_number or "inconnue"}
@@ -1107,7 +1401,7 @@ Position dans la formation :
 Budget audio par cours :
 {block_lines}
 
-Créneaux détectés :
+Cours détectés, libellés nettoyés des horaires internes :
 {sub_part_lines}
 
 Titre professionnel :
@@ -1122,6 +1416,9 @@ Programme source :
 Contenus module disponibles :
 {module_summary or '(aucun contenu module dédié)'}
 
+Catalogue interne des templates de slides :
+{slide_template_catalog}
+
 Réponds UNIQUEMENT en JSON valide :
 {{
   "courses": [
@@ -1132,7 +1429,30 @@ Réponds UNIQUEMENT en JSON valide :
       "opening": {{"type": "...", "must_include": [], "must_avoid": []}},
       "learning_objectives": ["..."],
       "parts": [
-        {{"part_number": 1, "title": "...", "function": "...", "must_include": [], "transition_in": "...", "transition_out": "..."}}
+        {{
+          "part_number": 1,
+          "title": "...",
+          "function": "...",
+          "must_include": [],
+          "must_avoid": [],
+          "teaching_beats": [
+            {{
+              "beat_id": "c1p1b1",
+              "type": "concept|definition|process|method|example|comparison|warning|tip|story|analogy|data|recap|opinion",
+              "role": "fonction pédagogique du moment",
+              "spoken_requirement": "ce que le texte oral devra couvrir naturellement",
+              "slide_anchor": {{
+                "enabled": true,
+                "template_type": "reflection|casestudy|facilitator|stats|story|recap|analogy|warning|tip|opinion|transition|chart",
+                "visual_goal": "ce que la slide doit aider à retenir",
+                "items_expected": null,
+                "fields_hint": {{}}
+              }}
+            }}
+          ],
+          "transition_in": "...",
+          "transition_out": "..."
+        }}
       ],
       "course_conclusion": {{"must_include": [], "must_avoid": []}},
       "day_conclusion": null
@@ -1222,27 +1542,30 @@ def _build_audio_day_plan_context(generation_context=None) -> str:
     blocks = _course_audio_block_plan(folder_position=folder_position)
     lines = [
         "═══════════════════════════════════════════════════════════════════",
-        "DIRECTION ARTISTIQUE AUDIO — STRUCTURE PAR BLOCS PLAYLIST",
+        "DIRECTION ARTISTIQUE AUDIO — STRUCTURE INTERNE PLAYLIST",
         "═══════════════════════════════════════════════════════════════════",
         "Le texte final sera lu en plusieurs fichiers cours selon la playlist réelle.",
         "Écris donc une journée vécue, fluide, avec des paragraphes qui peuvent se",
-        "répartir naturellement dans les blocs ci-dessous. Ne mets pas de marqueurs",
+        "répartir naturellement dans les cours internes ci-dessous. Ne mets pas de marqueurs",
         "techniques dans ta réponse : le système s'en charge.",
+        "Ces durées, budgets et découpages sont invisibles pour les apprenants :",
+        "ne les verbalise jamais, même pour dire qu'ils ne sont pas importants.",
         "",
     ]
     for block in blocks:
         lines.append(
-            f"- Bloc cours {block['bloc_number']} · {block['duration_min']} min · "
+            f"- Cours interne {block['bloc_number']} · {block['duration_min']} min · "
             f"budget parole {block['min_words']}–{block['max_words']} mots : {block['role']}"
         )
     lines.extend([
         "",
         "Règles impératives :",
-        "- Le premier bloc ne démarre jamais brutalement.",
-        "- Chaque bloc se ferme proprement : mini-synthèse, transition, ou annonce pause/Q&A si nécessaire.",
+        "- La première partie ne démarre jamais brutalement.",
+        "- Chaque partie se ferme proprement : mini-synthèse, transition, ou annonce pause/Q&A si nécessaire.",
         "- Si un Q&A ou une pause suit, son introduction est portée par l'outro du cours précédent.",
         "- Les Q&A et pauses ne comptent pas dans le texte de cours.",
         "- Les références entre cours restent vagues : jamais \"hier\" ni \"demain\".",
+        "- Ne jamais dire \"horaire\", \"créneau\", \"planning\" ou \"sans vous soucier des horaires\".",
     ])
     return "\n".join(lines)
 
@@ -1260,7 +1583,7 @@ def _build_course_slot_generation_context(
         return ""
 
     slot_label = (
-        f"Bloc cours {block['bloc_number']} · {block['filename']} · "
+        f"Cours interne {block['bloc_number']} · {block['filename']} · "
         f"{block['duration_min']} min"
     )
     slot_profile = _course_slot_prompt_profile(
@@ -1269,26 +1592,30 @@ def _build_course_slot_generation_context(
     )
     return f"""
 ═══════════════════════════════════════════════════════════════════
-CADRAGE DU CRÉNEAU COURANT — À RESPECTER STRICTEMENT
+CADRAGE INTERNE DU COURS COURANT — À RESPECTER STRICTEMENT
 ═══════════════════════════════════════════════════════════════════
-Tu écris uniquement ce créneau : {slot_label}.
-Titre du créneau : {sub_part_name}
-Rôle oral du créneau : {block.get('role') or 'continuité pédagogique'}
+Tu écris uniquement cette unité interne : {slot_label}.
+Thème pédagogique : {_strip_internal_schedule_from_label(sub_part_name)}
+Rôle oral de cette partie : {block.get('role') or 'continuité pédagogique'}
 
-Profil éditorial propre à ce créneau :
+Attention : le libellé, la durée, le fichier, le budget et la position dans la
+playlist sont des données internes. Les apprenants ne doivent jamais entendre
+"horaire", "créneau", "planning", une heure précise ou une durée de fichier.
+
+Profil éditorial propre à cette partie :
 {slot_profile or '(profil spécifique indisponible)'}
 
-Contenu prioritaire à développer dans CE créneau :
+Contenu prioritaire à développer dans CETTE PARTIE :
 {(module_content or '').strip()[:7000] or '(contenu spécifique non fourni)'}
 
 Contexte journée complet, seulement pour éviter les doublons et assurer la continuité :
 {(program_text or '').strip()[:9000] or '(contexte journée non fourni)'}
 
 Règles de périmètre :
-- Ne traite pas les autres créneaux comme s'ils appartenaient à celui-ci.
+- Ne traite pas les autres cours comme s'ils appartenaient à celui-ci.
 - Ne recommence pas toute la journée à chaque passe.
-- Si une notion appartient plutôt à un autre horaire, garde-la en transition courte.
-- La fin du créneau doit être propre : synthèse, chute ou transition naturelle.
+- Si une notion appartient plutôt à une autre partie, garde-la en transition courte.
+- La fin de la partie doit être propre : synthèse, chute ou transition naturelle.
 """
 
 
@@ -1960,6 +2287,37 @@ def _tail_words(text: str, max_words: int) -> str:
     return " ".join(words[-max_words:]).strip()
 
 
+def _escape_control_chars_in_strings(text: str) -> str:
+    """Échappe les caractères de contrôle littéraux à l'intérieur des strings JSON.
+
+    DeepSeek génère parfois des \\n/\\t/\\r littéraux dans les valeurs string,
+    ce qui produit un JSONDecodeError 'Expecting , delimiter'.
+    """
+    result = []
+    in_string = False
+    escaped = False
+    for ch in text:
+        if escaped:
+            result.append(ch)
+            escaped = False
+        elif ch == "\\" and in_string:
+            result.append(ch)
+            escaped = True
+        elif ch == '"':
+            result.append(ch)
+            in_string = not in_string
+        elif in_string and ch in "\n\r\t":
+            if ch == "\n":
+                result.append("\\n")
+            elif ch == "\r":
+                result.append("\\r")
+            else:
+                result.append("\\t")
+        else:
+            result.append(ch)
+    return "".join(result)
+
+
 def _extract_llm_json(raw: str) -> dict:
     raw = (raw or "").strip().replace("```json", "```")
     if "```" in raw:
@@ -1967,7 +2325,18 @@ def _extract_llm_json(raw: str) -> dict:
     match = re.search(r"\{[\s\S]*\}", raw)
     if match:
         raw = match.group(0)
-    return json.loads(raw)
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        sanitized = _escape_control_chars_in_strings(raw)
+        try:
+            return json.loads(sanitized)
+        except json.JSONDecodeError:
+            try:
+                from json_repair import repair_json
+                return json.loads(repair_json(raw))
+            except Exception as e:
+                raise ValueError(f"JSON LLM invalide après réparation : {e}")
 
 
 def _course_ai_stop_decision_enabled() -> bool:
@@ -2334,7 +2703,7 @@ def _synthesize_course_audio_synced_to_slides(
             progress_callback(message)
 
     # Préfixer le carryover intra-jour uniquement en runtime_fit. Si du texte a
-    # été reporté du bloc précédent, on l'amorce et on reformule son début avant
+    # été reporté du cours précédent, on l'amorce et on reformule son début avant
     # de l'envoyer au TTS.
     runtime_handoff_meta = {}
     if use_runtime_fit and prepended_chunks:
@@ -2885,15 +3254,15 @@ def _get_existing_carryover_out(source_folder_id: int, target_folder_id: int | N
 
 
 def _reduce_last_bloc_to_budget(bloc: dict, model=None) -> str:
-    """Réduit le dernier bloc avant TTS si aucun jour suivant ne peut absorber le surplus."""
+    """Réduit le dernier cours interne avant TTS si aucun jour suivant ne peut absorber le surplus."""
     budget = int(bloc.get("main_word_budget") or bloc.get("word_budget") or 0)
     if budget <= 0:
         raise ValueError("Budget TTS indisponible pour réduction du dernier bloc")
 
     # On vise plus bas que le cap prudent pour absorber l'écart de calibration Fish.
     target_words = max(800, int(budget * 0.90))
-    prompt = f"""Tu es un formateur expert. Tu dois REMANIER le dernier bloc d'un cours audio
-pour qu'il tienne dans son créneau TTS, sans jouer sur la vitesse de la voix.
+    prompt = f"""Tu es un formateur expert. Tu dois REMANIER le dernier cours audio interne
+pour qu'il tienne dans sa contrainte TTS, sans jouer sur la vitesse de la voix.
 
 OBJECTIF :
 - Réduis le texte à environ {target_words} mots.
@@ -2904,6 +3273,8 @@ OBJECTIF :
   précédente, dis "la dernière fois" ou "lors du dernier cours".
 - Termine par une vraie conclusion de cours.
 - Texte oral fluide, naturel, prêt pour TTS.
+- Ne mentionne jamais côté apprenant les mots "bloc", "créneau", "horaire",
+  "planning", une heure précise, une durée de fichier ou un budget mots.
 
 TEXTE À REMANIER :
 ---
@@ -2959,13 +3330,13 @@ def _reduce_course_bloc_for_runtime_overflow(
     prompt = f"""Tu es un réviseur pédagogique spécialisé dans les scripts audio TTS.
 
 PROBLÈME :
-Le cours {bloc_number}/7 est trop long pour son créneau. La fin ne doit JAMAIS
-être reportée au cours suivant. Tu dois réduire le texte du cours actuel pour
-qu'il tienne dans son propre créneau.
+La partie interne {bloc_number}/7 est trop longue pour sa contrainte TTS. La fin ne doit JAMAIS
+être reportée à la partie suivante. Tu dois réduire le texte de la partie actuelle pour
+qu'il tienne dans son propre fichier.
 
 OBJECTIF MOTS :
 - Texte actuel : {current_words} mots parlés environ.
-- Surplus observé en fin de bloc : {overflow_words} mots environ.
+- Surplus observé en fin de partie : {overflow_words} mots environ.
 - Cible de sortie : entre {min_words} et {target_words} mots.
 
 PARTIE QUI A DÉBORDÉ AU RUNTIME :
@@ -2973,27 +3344,29 @@ PARTIE QUI A DÉBORDÉ AU RUNTIME :
 {_compact_words(overflow_text, 900) or "(non disponible)"}
 ---
 
-TEXTE COMPLET DU COURS À RÉDUIRE :
+TEXTE COMPLET DE LA PARTIE À RÉDUIRE :
 ---
 {text}
 ---
 
 MISSION :
-Réécris le TEXTE COMPLET DU COURS À RÉDUIRE en version plus courte.
+Réécris le TEXTE COMPLET DE LA PARTIE À RÉDUIRE en version plus courte.
 Réduis prioritairement la fin, les reformulations, les exemples redondants et
 les développements qui ouvrent un nouveau sujet trop tard.
 
 CONTRAINTES ABSOLUES :
-- Ne reporte rien au cours suivant.
-- Ne supprime pas l'architecture du cours : reprise, thème, objectif, plan,
+- Ne reporte rien à la partie suivante.
+- Ne supprime pas l'architecture de la partie : reprise, thème, objectif, plan,
   transitions, conclusion.
 - Ne crée pas de double introduction.
-- Ne termine pas le cours précédent au début de ce cours.
+- Ne termine pas la partie précédente au début de cette partie.
 - Ne change pas le fond pédagogique.
 - N'ajoute aucune nouvelle idée.
 - Si le cours se termine par une Q/R, garde une annonce Q/R sobre à la fin.
 - Après l'annonce Q/R, aucun nouveau développement.
 - Garde un style oral naturel, professionnel, prêt pour Fish Audio.
+- Ne mentionne jamais côté apprenant les mots "bloc", "créneau", "horaire",
+  "planning", une heure précise, une durée de fichier ou un budget mots.
 - Pas de markdown, pas de commentaire, pas de métadonnées.
 
 Réponds uniquement avec le texte réduit complet."""
@@ -3595,9 +3968,9 @@ PAS ajouter de markdown, PAS ajouter de marqueur technique.
 Contexte journée :
 {day_context}
 
-Bloc audio :
-- Bloc cours {block.get('bloc_number')} · fichier {block.get('filename')}
-- Durée slot : {block.get('duration_min')} min
+Cours audio interne :
+- Cours {block.get('bloc_number')} · fichier {block.get('filename')}
+- Durée interne : {block.get('duration_min')} min
 - Budget accepté : {status.get('min_words')} à {status.get('max_words')} mots parlés
 - Cible pratique : environ {target_words} mots parlés
 - Texte actuel : {status.get('words')} mots
@@ -3609,8 +3982,10 @@ Mission :
 - Garde les tags TTS utiles comme [pause] ou [calm], mais n'en abuse pas.
 - Respecte le plan et la fonction pédagogique du cours.
 - Ne change pas le niveau RNCP, ne rajoute pas de promesse ou contenu sensible.
-- Respecte la logique playlist : si ce bloc annonce une pause ou un Q&A, cette annonce
-  reste dans l'outro du bloc précédent, pas dans le fichier pause/Q&A.
+- Respecte la logique playlist : si ce cours annonce une pause ou un Q&A, cette annonce
+  reste dans l'outro du cours précédent, pas dans le fichier pause/Q&A.
+- Les mots "bloc", "créneau", "horaire", "planning", les durées, les fichiers et
+  les budgets sont internes : ne les mentionne jamais dans le texte final.
 - Ne gonfle pas hors budget : le résultat doit finir entre {status.get('min_words')}
   et {status.get('max_words')} mots parlés.
 {direction_rules}
@@ -4330,7 +4705,7 @@ def _build_course_position_context(
     if folder_name:
         lines.append(f"Intitulé de journée : {folder_name}.")
     if sub_number:
-        lines.append(f"Créneau cours : {sub_number}/{NUM_SUB_PARTS}.")
+        lines.append(f"Cours de la journée : {sub_number}/{NUM_SUB_PARTS}.")
     if passe_number:
         lines.append(f"Passe : {passe_number}/3.")
 
@@ -4345,9 +4720,9 @@ def _build_course_position_context(
             "l'année, annoncer les grandes familles de compétences qui seront",
             "travaillées, donner envie de s'engager et rassurer les apprenants",
             "sur le rythme.",
-            "Ensuite, annonce les thèmes de la journée dans l'ordre, sans citer",
-            "les horaires, puis explique le rôle du cours actuel, ses objectifs",
-            "et son plan oral de 2 à 4 parties. Les exemples, cas clients et",
+            "Ensuite, annonce les thèmes de la journée dans leur ordre",
+            "pédagogique, puis bascule vers le premier grand thème, son objectif",
+            "et son plan oral en 2 à 4 axes. Les exemples, cas clients et",
             "métaphores ne doivent venir qu'après cette carte mentale.",
             "Cette ouverture doit ressembler au début d'une année de formation,",
             "pas au début d'un chapitre isolé.",
@@ -4361,8 +4736,10 @@ def _build_course_position_context(
             "CETTE PASSE EST LE DÉBUT D'UNE JOURNÉE DE FORMATION.",
             "Tu dois commencer par une vraie amorce de journée : accueil,",
             "remise en route, lien avec la progression globale, intention du jour,",
-            "thèmes de la journée dans l'ordre sans horaires, puis transition",
+            "thèmes de la journée dans leur ordre pédagogique, puis transition",
             "progressive vers le premier sujet.",
+            "Côté apprenant, parle de premier grand thème, première partie ou",
+            "chapitre, pas de 'premier cours', 'ce cours' ou 'cours actuel'.",
             "Interdiction de démarrer brutalement par \"Bon, on va aborder...\",",
             "\"nouvelle partie du cours\" ou une phrase de conférence.",
         ])
@@ -4379,26 +4756,27 @@ def _build_course_position_context(
 # ─── Extraction des sous-parties ─────────────────────────────────────────────
 
 _EXTRACT_PROMPT = """Tu analyses un programme de formation professionnelle.
-Ton rôle : identifier exactement 7 créneaux cours distincts qui couvrent une journée complète de formation, dans l'ordre de la playlist audio réelle.
+Ton rôle : identifier exactement 7 cours distincts qui couvrent une journée complète de formation, dans l'ordre pédagogique de la journée.
 
 Réponds UNIQUEMENT en JSON valide, sans aucun texte avant ou après :
 {{
   "title": "Nom exact du titre professionnel préparé",
   "sub_parts": [
-    "Cours 1 — 9h00-9h45 — Nom précis du créneau",
-    "Cours 2 — 10h05-10h50 — Nom précis du créneau",
-    "Cours 3 — 11h05-12h00 — Nom précis du créneau",
-    "Cours 4 — 12h20-13h05 — Nom précis du créneau",
-    "Cours 5 — 14h45-15h45 — Nom précis du créneau",
-    "Cours 6 — 16h00-17h00 — Nom précis du créneau",
-    "Cours 7 — 17h25-18h15 — Nom précis du créneau"
+    "Cours 1 — Nom précis du thème",
+    "Cours 2 — Nom précis du thème",
+    "Cours 3 — Nom précis du thème",
+    "Cours 4 — Nom précis du thème",
+    "Cours 5 — Nom précis du thème",
+    "Cours 6 — Nom précis du thème",
+    "Cours 7 — Nom précis du thème"
   ]
 }}
 
 Règles :
-- Exactement 7 créneaux, dans cet ordre horaire strict : 45 min, 45 min, 55 min, 45 min, 60 min, 60 min, 50 min
+- Exactement 7 cours, dans l'ordre pédagogique de la journée.
+- Ne mets jamais d'heure, de durée, de créneau, de planning ou de mention de fichier dans les noms.
 - Chaque nom doit être suffisamment précis pour orienter la génération au budget audio injecté
-- Couvrir l'essentiel du programme sans répétition entre créneaux
+- Couvrir l'essentiel du programme sans répétition entre cours
 - Si le programme couvre 2 journées, prendre uniquement les sous-parties de la première moitié
 
 PROGRAMME :
@@ -4417,7 +4795,7 @@ def _anthropic_post(messages, max_tokens, model=None):
 
 def extract_sub_parts(program_text):
     """
-    Appelle Claude pour extraire 7 créneaux cours depuis le programme.
+    Appelle Claude pour extraire 7 cours depuis le programme.
     Synchrone — retourne {"title": str, "sub_parts": [str×7]} ou lève une exception.
     """
     prompt = _EXTRACT_PROMPT.replace("{program_text}", program_text[:15000])
@@ -4440,8 +4818,11 @@ def extract_sub_parts(program_text):
             if "sub_parts" not in data or len(data["sub_parts"]) < 1:
                 raise ValueError(f"Format incorrect : {list(data.keys())}")
 
-            # Forcer exactement 7 créneaux cours
-            sub_parts = data["sub_parts"][:NUM_SUB_PARTS]
+            # Forcer exactement 7 cours.
+            sub_parts = [
+                _strip_internal_schedule_from_label(item)
+                for item in data["sub_parts"][:NUM_SUB_PARTS]
+            ]
             while len(sub_parts) < NUM_SUB_PARTS:
                 sub_parts.append(f"Sous-partie {len(sub_parts) + 1}")
 
@@ -4473,14 +4854,15 @@ def _generate_segment_text(passe, sub_part_name, program_title, program_text, pr
       - Chaque passe génère depuis module_content (pas du texte précédent)
       - Passe 1 = Fondation, Passe 2 = Pratique, Passe 3 = Maîtrise
 
-    Retourne le texte généré avec un volume calibré sur les créneaux cours.
+    Retourne le texte généré avec un volume calibré sur les cours audio internes.
     """
     prompts = _get_passe_prompts(from_scratch=from_scratch)
     template = prompts[passe - 1]
+    learner_safe_sub_part_name = _strip_internal_schedule_from_label(sub_part_name)
 
     prompt = template
     prompt = prompt.replace("{NOM_DU_TITRE_PROFESSIONNEL}", program_title)
-    prompt = prompt.replace("{NOM_DE_LA_SOUS_PARTIE}", sub_part_name)
+    prompt = prompt.replace("{NOM_DE_LA_SOUS_PARTIE}", learner_safe_sub_part_name)
     prompt = prompt.replace("{CONTENU_DU_MODULE}", (module_content or program_text)[:15000])
     # Compatibilité avec d'anciens placeholders encore présents dans certaines
     # sections documentaires du prompt.
@@ -4492,7 +4874,7 @@ def _generate_segment_text(passe, sub_part_name, program_title, program_text, pr
         prompt += "\n\n" + _build_course_position_context(**generation_context)
     prompt += "\n\n" + _build_course_slot_generation_context(
         generation_context,
-        sub_part_name=sub_part_name,
+        sub_part_name=learner_safe_sub_part_name,
         module_content=module_content,
         program_text=program_text,
     )
@@ -4590,10 +4972,19 @@ def start_generation_job(folder_id: int, platform_id: int, program_text: str,
     from_scratch       : True = passes indépendantes depuis module_content (nouveau paradigme)
     """
     import threading
+    if module_contents:
+        normalized_module_contents = {}
+        for key, value in (module_contents or {}).items():
+            normalized_module_contents[key] = value
+            normalized_module_contents[_strip_internal_schedule_from_label(key)] = value
+        module_contents = normalized_module_contents
 
     # Extraction des sous-parties si pas fournie
     if sub_parts_override:
-        sub_parts = sub_parts_override[:NUM_SUB_PARTS]
+        sub_parts = [
+            _strip_internal_schedule_from_label(item)
+            for item in sub_parts_override[:NUM_SUB_PARTS]
+        ]
         while len(sub_parts) < NUM_SUB_PARTS:
             sub_parts.append(f"Sous-partie {len(sub_parts) + 1}")
         title = program_title
@@ -4917,9 +5308,11 @@ def _build_structured_section_prompt(
         generated_context_label = "Contenu principal déjà généré à cadrer dans cette ouverture"
         generated_context = _compact_words(generated_so_far, 900) or "(aucun)"
     else:
-        generated_context_label = "Texte déjà généré dans ce cours"
-        generated_context = _compact_words(generated_so_far, 900) or "(début du cours)"
-    return f"""Tu écris UNE SECTION d'un cours audio professionnel TTS-ready.
+        generated_context_label = "Texte déjà généré dans cette partie interne"
+        generated_context = _compact_words(generated_so_far, 900) or "(début de la partie)"
+    scope_guard = _structured_section_scope_guard(section)
+    teaching_beats_context = _section_teaching_beats_prompt(section)
+    return f"""Tu écris UNE SECTION d'une partie audio professionnelle TTS-ready.
 
 SOCLE GÉNÉRAL À RESPECTER :
 {base_style}
@@ -4933,11 +5326,17 @@ Budget section :
 - cible : {target_words} mots
 - plage acceptable : {min_words} à {max_words} mots
 
-Plan complet verrouillé du cours :
+Plan complet verrouillé de la partie interne :
 {json.dumps(course_plan, ensure_ascii=False, indent=2)}
 
 Section à écrire :
 {json.dumps(section, ensure_ascii=False, indent=2)}
+
+Frontière stricte de cette section :
+{scope_guard}
+
+Moments pédagogiques internes à couvrir :
+{teaching_beats_context}
 
 Contexte utile :
 - Titre professionnel : {job.get('program_title') or ''}
@@ -4950,18 +5349,161 @@ Contenu source à utiliser :
 
 Contraintes absolues :
 - N'utilise jamais le mot "bloc" devant les élèves.
+- N'utilise jamais les mots "horaire", "créneau" ou "planning" devant les élèves.
+- Ne formule pas l'unité interne comme "ce cours", "premier cours", "cours actuel" ou "le cours qui nous occupe".
+- Préfère "premier grand thème", "cette première partie", "ce chapitre", "cette séquence", "ce point" ou "cet axe" selon le contexte.
+- Ne dis jamais "trois quarts d'heure", "45 minutes" ou une durée équivalente pour situer la séquence.
+- Ne mentionne jamais d'heure précise, de durée de fichier, de budget mots, de nom de fichier ou de découpage technique.
+- Ne dis jamais aux apprenants de ne pas se soucier des horaires : présente seulement la progression pédagogique.
+- Pour une introduction seulement : ton naturel, posé, proche de "Bien. Maintenant que le cadre général est posé, on peut entrer dans le premier grand thème." Ne recopie pas cette phrase systématiquement. Pour une partie de développement, n'utilise pas ce modèle : entre directement dans l'axe demandé.
 - Oral professionnel, clair, chaleureux, sans vocabulaire littéraire excessif.
 - Pas de markdown, pas de titre écrit, pas de liste administrative froide.
 - Les exemples non sourcés doivent être présentés comme fictifs ou hypothétiques.
 - Ne termine jamais le cours précédent.
 - Ne devance pas une section suivante.
-- Si cette section est une introduction, elle doit annoncer le plan avant tout exemple.
-- Si cette introduction est générée après le contenu principal, écris-la quand même comme le tout début du cours, jamais comme une suite.
-- Si cette section est une partie, elle doit développer seulement cette partie et apporter une idée nouvelle identifiable.
+- Si cette section est une introduction, elle doit annoncer le plan avant tout exemple, avec une formulation naturelle du type : "Pour avancer progressivement, on va suivre trois grands axes. D'abord... Ensuite... Et enfin...".
+- Si cette introduction est générée après le contenu principal, écris-la quand même comme le tout début de la partie, jamais comme une suite.
+- Si cette section est une partie, elle doit développer seulement cette partie et apporter une idée nouvelle identifiable. Elle ne doit jamais refaire l'accueil, le cadrage de la journée, l'annonce des thèmes de la journée ou le plan global déjà porté par l'introduction.
+- Si cette section contient des teaching_beats, couvre-les dans l'ordre avec naturel. Ne les nomme jamais comme des beats, slides, anchors, PowerPoint ou templates.
 - Si cette section est une conclusion, elle doit récapituler sans ouvrir un nouveau développement.
 - Après l'annonce Q/R ou la mention du tchat, aucun nouveau développement.
 
 Réponds uniquement avec le texte oral de cette section."""
+
+
+def _structured_section_scope_guard(section: dict) -> str:
+    kind = section.get("kind")
+    if kind == "opening":
+        return (
+            "- Tu écris l'unique ouverture de cette partie interne.\n"
+            "- C'est le seul endroit où tu peux accueillir, cadrer la journée, "
+            "annoncer le nouveau thème, l'objectif et les axes.\n"
+            "- Après cette ouverture, le développement commencera directement : "
+            "n'écris pas une ouverture qui appelle une seconde ouverture."
+        )
+    if kind == "part":
+        part_number = int(section.get("part_number") or 0)
+        if part_number == 1:
+            return (
+                "- Tu écris le premier axe de développement, pas l'ouverture.\n"
+                "- L'ouverture a déjà accueilli, cadré la journée, présenté le thème, "
+                "l'objectif et le plan. Ne répète aucun de ces éléments.\n"
+                "- Ne commence pas par 'Bien, maintenant que le cadre général est posé', "
+                "'on peut entrer dans le premier grand thème', 'cette journée est cruciale', "
+                "ou une formule équivalente.\n"
+                "- Commence directement par le contenu du premier axe : une phrase courte "
+                "du type 'Commençons par ce qui change concrètement...' suffit."
+            )
+        return (
+            f"- Tu écris l'axe {part_number} de développement, pas une nouvelle introduction.\n"
+            "- Fais une transition courte depuis l'axe précédent, puis développe l'idée prévue.\n"
+            "- Ne réannonce pas le thème général, la journée, l'objectif global ou le plan complet."
+        )
+    if kind == "course_conclusion":
+        return (
+            "- Tu écris seulement la conclusion de cette partie interne.\n"
+            "- Récapitule et ferme proprement avant le temps de questions-réponses.\n"
+            "- Ne lance pas un nouveau thème et ne refais pas d'introduction."
+        )
+    if kind == "day_conclusion":
+        return (
+            "- Tu écris seulement la conclusion globale de journée.\n"
+            "- Fais une synthèse de journée, puis ferme. Ne crée pas un nouveau développement."
+        )
+    return "- Respecte strictement le périmètre de la section demandée."
+
+
+def _section_teaching_beats_prompt(section: dict) -> str:
+    beats = section.get("teaching_beats") if isinstance(section.get("teaching_beats"), list) else []
+    if not beats:
+        return "- Aucun teaching beat spécifique pour cette section."
+    compact = []
+    for beat in beats:
+        if not isinstance(beat, dict):
+            continue
+        anchor = beat.get("slide_anchor") if isinstance(beat.get("slide_anchor"), dict) else {}
+        compact.append({
+            "beat_id": beat.get("beat_id"),
+            "type": beat.get("type"),
+            "role": beat.get("role"),
+            "spoken_requirement": beat.get("spoken_requirement"),
+            "slide_anchor": {
+                "enabled": bool(anchor.get("enabled")),
+                "template_type": anchor.get("template_type"),
+                "visual_goal": anchor.get("visual_goal"),
+                "items_expected": anchor.get("items_expected"),
+            },
+        })
+    return json.dumps(compact, ensure_ascii=False, indent=2)
+
+
+def _part_section_opening_leak_evidence(section: dict, text: str) -> str:
+    if section.get("kind") != "part":
+        return ""
+    opening_window = _compact_words(text or "", 220)
+    if not opening_window:
+        return ""
+    match = _PART_SECTION_OPENING_LEAK_RE.search(opening_window)
+    if not match:
+        return ""
+    return _compact_words(opening_window[max(0, match.start() - 90):match.end() + 130], 42)
+
+
+def _repair_part_section_opening_leak(
+    *,
+    job: dict,
+    course_plan: dict,
+    section: dict,
+    section_text: str,
+    module_content: str,
+    model=None,
+) -> str:
+    target_words = int(section.get("target_words") or 500)
+    prompt = f"""Tu corriges une section de développement audio.
+
+Problème : cette section refait une ouverture de journée ou de thème alors que l'ouverture existe déjà.
+
+Objectif :
+- garder le fond utile ;
+- supprimer l'accueil, le cadrage de journée, l'annonce des thèmes de la journée, le programme annuel et le plan global répété ;
+- commencer directement par le contenu de l'axe demandé ;
+- ne pas ajouter de markdown ni de titre écrit ;
+- ne pas mentionner horaires, créneaux, planning, durée ou budget mots.
+
+Section demandée :
+{json.dumps(section, ensure_ascii=False, indent=2)}
+
+Plan verrouillé :
+{json.dumps(course_plan, ensure_ascii=False, indent=2)}
+
+Titre professionnel : {job.get('program_title') or ''}
+Intitulé journée : {job.get('folder_name') or ''}
+
+Contenu source utile :
+{_compact_words(module_content or job.get('program_text') or '', 2500)}
+
+Texte à corriger :
+{section_text}
+
+Réponds uniquement avec la section corrigée."""
+    try:
+        raw = _anthropic_post(
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=_structured_generation_max_tokens(target_words),
+            model=model,
+        )
+        repaired = _fit_generated_section_to_budget(raw, target_words)
+        if _part_section_opening_leak_evidence(section, repaired):
+            return section_text
+        return repaired
+    except Exception as exc:
+        logger.warning(
+            "⚠️ Réparation de double ouverture ignorée course=%s part=%s: %s",
+            course_plan.get("course_number"),
+            section.get("part_number"),
+            str(exc)[:220],
+        )
+        return section_text
 
 
 def _fit_generated_section_to_budget(text: str, target_words: int) -> str:
@@ -4999,14 +5541,238 @@ def _generate_structured_section(
         max_tokens=_structured_generation_max_tokens(target_words),
         model=model,
     )
-    return _fit_generated_section_to_budget(raw, target_words)
+    section_text = _fit_generated_section_to_budget(raw, target_words)
+    if _part_section_opening_leak_evidence(section, section_text):
+        logger.info(
+            "PIPELINE_STRUCTURED_SECTION_SCOPE_REPAIR formation_job_id=%s content_job_id=%s course=%s part=%s",
+            job.get("formation_job_id"),
+            job.get("id"),
+            course_plan.get("course_number"),
+            section.get("part_number"),
+        )
+        section_text = _repair_part_section_opening_leak(
+            job=job,
+            course_plan=course_plan,
+            section=section,
+            section_text=section_text,
+            module_content=module_content,
+            model=model,
+        )
+    section_text = _run_ethical_micro_review_for_section(
+        job=job,
+        course_plan=course_plan,
+        section=section,
+        section_text=section_text,
+        model=model,
+    )
+    return section_text
+
+
+def _ethical_micro_review_enabled() -> bool:
+    value = str(os.getenv("FORMATION_ETHICAL_MICRO_REVIEW_ENABLED", "1")).strip().lower()
+    return value not in {"0", "false", "no", "off"}
+
+
+def _load_ethical_micro_rules_text() -> str:
+    path = _prompt_file_path("reviews", "compliance-rules.json")
+    try:
+        mtime = os.path.getmtime(path)
+        if _ETHICAL_MICRO_RULES_CACHE["mtime"] == mtime and _ETHICAL_MICRO_RULES_CACHE["text"]:
+            return _ETHICAL_MICRO_RULES_CACHE["text"]
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        blocks = []
+        for rule in data.get("rules") or []:
+            if not isinstance(rule, dict):
+                continue
+            if rule.get("scope") != "ethics_compliance":
+                continue
+            body = str(rule.get("body") or "").strip()
+            if body:
+                blocks.append(body)
+        if not blocks:
+            raise ValueError("aucune règle ethics_compliance trouvée")
+        rules_text = (
+            f"SOURCE MODULAIRE: compliance-rules.json · version {data.get('version') or 'unknown'} "
+            f"· scope ethics_compliance · micro-review {_ETHICAL_MICRO_RULESET_VERSION}\n\n"
+            + "\n\n".join(blocks)
+        )
+        _ETHICAL_MICRO_RULES_CACHE["mtime"] = mtime
+        _ETHICAL_MICRO_RULES_CACHE["text"] = rules_text
+        return rules_text
+    except Exception as exc:
+        logger.warning("⚠️ Règles micro-éthique JSON indisponibles, fallback règles #1-#16: %s", exc)
+        return _extract_rules_for_group(_load_review_rules(), _ETHICAL_MICRO_RULE_IDS)
+
+
+def _build_ethical_micro_review_prompt(*, course_plan: dict, section: dict, section_text: str, rules_text: str) -> str:
+    contract = _load_prompt_file("reviews", "ethical-micro-review.md")
+    max_patches = _env_int("FORMATION_ETHICAL_MICRO_REVIEW_MAX_PATCHES", 3, min_value=1)
+    return f"""Tu es reviewer de conformité ÉTHIQUE en micro-passe.
+
+CONTRAT :
+{contract}
+
+Tu vérifies uniquement les règles #1 à #16 du scope ethics_compliance.
+Ignore tout le reste : style oral, humanisation, plan, budget, structure, slides,
+anchors, templates, horaires, transitions, répétitions ou préférence éditoriale.
+
+Contexte pédagogique minimal :
+- Cours interne : {course_plan.get('course_number')} / 7
+- Titre : {course_plan.get('course_title') or ''}
+- Section : {_section_label(section)}
+
+Section JSON :
+{json.dumps(section, ensure_ascii=False, indent=2)}
+
+Format de sortie strict, JSON valide uniquement :
+{{
+  "patches": [
+    {{
+      "original": "phrase EXACTE à remplacer, copie verbatim",
+      "replacement": "correction minimale, même sens pédagogique",
+      "rule_violated": "#1",
+      "reason": "raison brève"
+    }}
+  ]
+}}
+
+Contraintes impératives :
+- Maximum {max_patches} patches.
+- `original` doit être trouvable tel quel dans le texte, une seule fois.
+- `replacement` corrige uniquement la violation éthique, sans enrichir, sans restructurer, sans changer la pédagogie.
+- N'ajoute pas de nouvelle idée, pas de nouveau chapitre, pas de mention de slide/PowerPoint/template/anchor/teaching beat.
+- Si la section est conforme pour #1 à #16, renvoie exactement {{"patches": []}}.
+- `rule_violated` doit être un numéro parmi #1 à #16.
+
+RÈGLES ÉTHIQUES À VÉRIFIER :
+{rules_text}
+
+TEXTE DE LA SECTION :
+{section_text}
+
+JSON :"""
+
+
+def _patch_rule_number(patch: dict) -> int | None:
+    match = _re.search(r"#?\s*(\d+)", str((patch or {}).get("rule_violated") or ""))
+    if not match:
+        return None
+    try:
+        return int(match.group(1))
+    except Exception:
+        return None
+
+
+def _run_ethical_micro_review_for_section(
+    *,
+    job: dict,
+    course_plan: dict,
+    section: dict,
+    section_text: str,
+    model=None,
+) -> str:
+    if not _ethical_micro_review_enabled() or not (section_text or "").strip():
+        return section_text
+
+    rules_text = _load_ethical_micro_rules_text()
+    if not rules_text.strip():
+        return section_text
+
+    prompt = _build_ethical_micro_review_prompt(
+        course_plan=course_plan,
+        section=section,
+        section_text=section_text,
+        rules_text=rules_text,
+    )
+    max_tokens = _env_int("FORMATION_ETHICAL_MICRO_REVIEW_MAX_TOKENS", 1600, min_value=400)
+    started = time.time()
+    try:
+        raw = _anthropic_post(
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=max_tokens,
+            model=model,
+        )
+    except Exception as exc:
+        logger.warning(
+            "PIPELINE_ETHICAL_MICRO_REVIEW_ERROR formation_job_id=%s content_job_id=%s course=%s section=%s error=%s",
+            job.get("formation_job_id"),
+            job.get("id"),
+            course_plan.get("course_number"),
+            _section_label(section),
+            str(exc)[:220],
+        )
+        return section_text
+
+    patches, parse_error = _parse_patches_response(raw)
+    if parse_error:
+        logger.warning(
+            "PIPELINE_ETHICAL_MICRO_REVIEW_PARSE_ERROR formation_job_id=%s content_job_id=%s course=%s section=%s error=%s",
+            job.get("formation_job_id"),
+            job.get("id"),
+            course_plan.get("course_number"),
+            _section_label(section),
+            parse_error,
+        )
+        return section_text
+
+    max_patches = _env_int("FORMATION_ETHICAL_MICRO_REVIEW_MAX_PATCHES", 3, min_value=1)
+    scoped_patches = [
+        patch
+        for patch in patches
+        if (_patch_rule_number(patch) in _ETHICAL_MICRO_RULE_IDS)
+    ][:max_patches]
+    if not scoped_patches:
+        logger.info(
+            "PIPELINE_ETHICAL_MICRO_REVIEW_CLEAN formation_job_id=%s content_job_id=%s course=%s section=%s duration_ms=%s",
+            job.get("formation_job_id"),
+            job.get("id"),
+            course_plan.get("course_number"),
+            _section_label(section),
+            int((time.time() - started) * 1000),
+        )
+        return section_text
+
+    candidate, applied, rejected = _apply_patches(section_text, scoped_patches)
+    candidate, applied, budget_rejected = _apply_review_budget_guard(
+        section_text,
+        candidate,
+        applied,
+        "compliance",
+    )
+    rejected = rejected + budget_rejected
+    if applied:
+        logger.info(
+            "PIPELINE_ETHICAL_MICRO_REVIEW_PATCHED formation_job_id=%s content_job_id=%s course=%s section=%s proposed=%s applied=%s rejected=%s duration_ms=%s",
+            job.get("formation_job_id"),
+            job.get("id"),
+            course_plan.get("course_number"),
+            _section_label(section),
+            len(scoped_patches),
+            len(applied),
+            len(rejected),
+            int((time.time() - started) * 1000),
+        )
+        return _sanitize_learner_facing_text(candidate)
+
+    logger.info(
+        "PIPELINE_ETHICAL_MICRO_REVIEW_REJECTED formation_job_id=%s content_job_id=%s course=%s section=%s proposed=%s rejected=%s duration_ms=%s",
+        job.get("formation_job_id"),
+        job.get("id"),
+        course_plan.get("course_number"),
+        _section_label(section),
+        len(scoped_patches),
+        len(rejected),
+        int((time.time() - started) * 1000),
+    )
+    return section_text
 
 
 def _summarize_previous_course_for_structured(course_text: str, model=None) -> str:
     text = _compact_words(course_text or "", 900)
     if not text:
         return ""
-    prompt = f"""Résume en 2 phrases maximum ce cours pour permettre au cours suivant de faire un rappel bref.
+    prompt = f"""Résume en 2 phrases maximum cette partie pour permettre à la partie suivante de faire un rappel bref.
 Ne parle pas de fichier, d'audio ou de bloc.
 
 COURS :
@@ -5050,7 +5816,7 @@ def _calibrate_structured_course_text(course_plan: dict, text: str, model=None) 
     return _sanitize_learner_facing_text(calibrated), result
 
 
-_PLAN_ADHERENCE_REVIEW_VERSION = "2026-05-24-plan-adherence-v1"
+_PLAN_ADHERENCE_REVIEW_VERSION = "2026-05-25-plan-adherence-v5"
 
 
 def _structured_course_budget_status(course_plan: dict, text: str) -> dict:
@@ -5106,6 +5872,144 @@ def _exact_repetition_issues(text: str, *, max_issues: int = 3) -> list[dict]:
     return issues
 
 
+def _learner_schedule_leakage_issues(text: str, *, max_issues: int = 4) -> list[dict]:
+    clean_text = _strip_audio_block_markers(text or "")
+    issues = []
+    seen = set()
+    for match in _LEARNER_FACING_SCHEDULE_LEAK_RE.finditer(clean_text):
+        leak = re.sub(r"\s+", " ", match.group(0)).strip()
+        key = leak.lower()
+        if not leak or key in seen:
+            continue
+        seen.add(key)
+        start = max(0, match.start() - 120)
+        end = min(len(clean_text), match.end() + 120)
+        evidence = _compact_words(clean_text[start:end], 42)
+        issues.append({
+            "type": "schedule_leakage",
+            "severity": "major",
+            "section": "whole_course",
+            "evidence": evidence,
+            "problem": (
+                "Le texte fait entendre une contrainte interne de planning "
+                f"({leak!r}) au lieu de parler seulement de progression pédagogique."
+            ),
+            "fix_instruction": (
+                "Supprimer la mention d'horaire, créneau, durée ou planning. "
+                "Reformuler naturellement : thèmes de la journée dans l'ordre, "
+                "reprise après pause, rappel bref, nouveau thème, objectif et plan."
+            ),
+        })
+        if len(issues) >= max_issues:
+            break
+    return issues
+
+
+def _learner_internal_course_framing_issues(text: str, *, max_issues: int = 4) -> list[dict]:
+    clean_text = _strip_audio_block_markers(text or "")
+    issues = []
+    seen = set()
+    for match in _LEARNER_FACING_INTERNAL_COURSE_RE.finditer(clean_text):
+        phrase = re.sub(r"\s+", " ", match.group(0)).strip()
+        key = phrase.lower()
+        if not phrase or key in seen:
+            continue
+        seen.add(key)
+        start = max(0, match.start() - 120)
+        end = min(len(clean_text), match.end() + 140)
+        issues.append({
+            "type": "internal_course_framing",
+            "severity": "major",
+            "section": "opening",
+            "evidence": _compact_words(clean_text[start:end], 48),
+            "problem": (
+                "Le texte présente une unité interne comme un cours autonome "
+                f"({phrase!r}) au lieu d'un thème ou chapitre naturel de la journée."
+            ),
+            "fix_instruction": (
+                "Reformuler avec une voix plus naturelle : 'premier grand thème', "
+                "'cette première partie', 'ce chapitre', 'cette séquence', puis "
+                "annoncer les axes avec d'abord, ensuite, enfin."
+            ),
+        })
+        if len(issues) >= max_issues:
+            break
+    return issues
+
+
+def _duplicate_opening_issues(text: str, *, max_issues: int = 2) -> list[dict]:
+    clean_text = _strip_audio_block_markers(text or "")
+    paragraphs = [
+        re.sub(r"\s+", " ", p).strip()
+        for p in re.split(r"\n\s*\n+", clean_text)
+        if len((p or "").split()) >= 14
+    ]
+    category_hits: dict[str, list[tuple[int, str]]] = {}
+    for idx, paragraph in enumerate(paragraphs[:12], start=1):
+        for category, pattern in _DUPLICATE_OPENING_CATEGORY_PATTERNS.items():
+            if pattern.search(paragraph):
+                category_hits.setdefault(category, []).append((idx, _compact_words(paragraph, 44)))
+
+    issues = []
+    labels = {
+        "annual_overview": "l'introduction annuelle",
+        "day_overview": "le cadrage de la journée",
+        "theme_opening": "l'ouverture du premier thème",
+    }
+    for category, hits in category_hits.items():
+        if len(hits) < 2:
+            continue
+        first, second = hits[0], hits[1]
+        issues.append({
+            "type": "duplicate_opening",
+            "severity": "major",
+            "section": "whole_course",
+            "evidence": f"Paragraphe {first[0]}: {first[1]} / Paragraphe {second[0]}: {second[1]}",
+            "problem": (
+                f"Le texte semble répéter {labels.get(category, 'une ouverture')} "
+                "au lieu de l'annoncer une seule fois puis d'entrer dans le développement."
+            ),
+            "fix_instruction": (
+                "Garder une seule ouverture. Supprimer la deuxième annonce de journée/thème "
+                "et commencer directement le développement de l'axe concerné."
+            ),
+        })
+        if len(issues) >= max_issues:
+            break
+    return issues
+
+
+def _slide_meta_leakage_issues(text: str, *, max_issues: int = 3) -> list[dict]:
+    clean_text = _strip_audio_block_markers(text or "")
+    issues = []
+    seen = set()
+    for match in _SLIDE_META_LEAK_RE.finditer(clean_text):
+        leak = re.sub(r"\s+", " ", match.group(0)).strip()
+        key = leak.lower()
+        if not leak or key in seen:
+            continue
+        seen.add(key)
+        start = max(0, match.start() - 120)
+        end = min(len(clean_text), match.end() + 120)
+        issues.append({
+            "type": "slide_meta_leakage",
+            "severity": "major",
+            "section": "whole_course",
+            "evidence": _compact_words(clean_text[start:end], 42),
+            "problem": (
+                "Le texte verbalise une mécanique interne de slides ou de templates "
+                f"({leak!r}) qui ne doit pas être entendue par les apprenants."
+            ),
+            "fix_instruction": (
+                "Supprimer la méta-formulation slide/template/anchor et garder seulement "
+                "l'idée pédagogique naturelle."
+            ),
+        })
+        if len(issues) >= max_issues:
+            break
+    return issues
+
+
 def _quality_signature(course_plan: dict, text: str) -> str:
     payload = json.dumps(
         {
@@ -5158,6 +6062,10 @@ def _normalize_plan_adherence_audit(raw_audit: dict, course_plan: dict, text: st
         })
 
     issues.extend(_exact_repetition_issues(text))
+    issues.extend(_duplicate_opening_issues(text))
+    issues.extend(_slide_meta_leakage_issues(text))
+    issues.extend(_learner_schedule_leakage_issues(text))
+    issues.extend(_learner_internal_course_framing_issues(text))
     ok = not any(issue.get("severity") in {"major", "critical"} for issue in issues)
     return {
         "ok": ok,
@@ -5185,7 +6093,7 @@ Contexte :
 - Titre professionnel : {job.get('program_title') or ''}
 - Journée : {job.get('folder_name') or ''}
 - Cours : {course_plan.get('course_number')} / 7
-- Rappel très bref du cours précédent : {previous_course_summary or '(aucun)'}
+- Rappel très bref de la partie précédente : {previous_course_summary or '(aucun)'}
 
 Statut budget mots :
 {json.dumps(budget_status, ensure_ascii=False, indent=2)}
@@ -5193,7 +6101,7 @@ Statut budget mots :
 Plan JSON verrouillé :
 {json.dumps(course_plan, ensure_ascii=False, indent=2)}
 
-Texte du cours à auditer :
+Texte de la partie à auditer :
 {text}
 
 Réponds uniquement avec le JSON d'audit."""
@@ -5240,7 +6148,7 @@ Contexte :
 - Titre professionnel : {job.get('program_title') or ''}
 - Journée : {job.get('folder_name') or ''}
 - Cours : {course_plan.get('course_number')} / 7
-- Rappel très bref du cours précédent : {previous_course_summary or '(aucun)'}
+- Rappel très bref de la partie précédente : {previous_course_summary or '(aucun)'}
 
 Budget à respecter :
 {json.dumps(budget_status, ensure_ascii=False, indent=2)}
@@ -5251,7 +6159,7 @@ Audit à corriger :
 Plan JSON verrouillé :
 {json.dumps(course_plan, ensure_ascii=False, indent=2)}
 
-Texte actuel du cours :
+Texte actuel de la partie :
 {text}
 
 Texte complet corrigé :"""
@@ -6414,15 +7322,15 @@ def _rewrite_course_opening_for_audio(
         "qa": "une séance de questions-réponses",
         "pause": "une pause courte",
         "pause_midi": "la pause déjeuner",
-        "cours": "un cours",
+        "cours": "une partie précédente",
         None: "le début de journée",
     }.get(previous_item_type, str(previous_item_type))
 
     rest_preview = " ".join(rest.split()[:90])
-    prompt = f"""Tu écris l'amorce audio d'un bloc de cours pour une classe virtuelle.
+    prompt = f"""Tu écris l'amorce audio d'une partie de journée pour une classe virtuelle.
 
-BLOC COURS : {bloc_number}/7
-ÉLÉMENT JUSTE AVANT CE COURS : {previous_label}
+PARTIE INTERNE : {bloc_number}/7
+ÉLÉMENT JUSTE AVANT CETTE PARTIE : {previous_label}
 
 CONTEXTE PRÉCÉDENT DISPONIBLE :
 ---
@@ -6454,13 +7362,13 @@ CONSIGNES STRICTES :
 - Tu peux situer brièvement le fil, mais ne fais pas un résumé long du cours précédent.
 - Ne répète pas la conclusion, le Q&A ou la pause qui viennent déjà d'avoir lieu.
 - Si l'élément précédent est une pause, ne dis pas "la pause est terminée".
-- Ne spoile pas tout le bloc : ouvre seulement la porte du sujet.
+- Ne spoile pas tout le cours : ouvre seulement la porte du sujet.
 - Ne change pas le fond : conserve les idées du début actuel.
 - Ne recopie pas littéralement le début actuel : reformule sur le vif, naturellement.
 - L'amorce doit faire 25 à 55 mots.
 - Le début reformulé doit faire 35 à 85 mots.
 - Termine le début reformulé de façon à enchaîner naturellement avec la suite immédiate.
-- Pas d'horaires, pas de markdown, pas de guillemets.
+- Pas d'horaires, pas de créneau, pas de planning, pas de markdown, pas de guillemets.
 
 Réponds uniquement avec ce JSON valide :
 {{
@@ -6529,11 +7437,11 @@ def _rewrite_runtime_carryover_chunks(
         if (chunk.get("text") or "").strip()
     )
 
-    prompt = f"""Tu écris l'amorce d'un cours audio qui reprend un passage reporté
+    prompt = f"""Tu écris l'amorce d'une partie audio qui reprend un passage reporté
 depuis le fichier audio précédent.
 
 CONTEXTE :
-- Bloc cours actuel : {bloc_number}/7.
+- Partie interne actuelle : {bloc_number}/7.
 - Le début ci-dessous n'est pas un nouveau texte indépendant : c'est un passage
   qui n'a pas été lu dans le cours précédent, et qui doit maintenant être relancé
   proprement.
@@ -6548,7 +7456,7 @@ PASSAGE REPORTÉ AUTOUR :
 {_compact_words(carried_preview, 320)}
 ---
 
-DÉBUT DU BLOC PRÉVU APRÈS LE REPORT :
+DÉBUT DU COURS PRÉVU APRÈS LE REPORT :
 ---
 {_compact_words(base_preview, 180) or "(indisponible)"}
 ---
@@ -6563,12 +7471,13 @@ CONSIGNES :
   humain, pas de reprise sèche au milieu d'un exemple.
 - Ne fais pas semblant de répondre à des questions.
 - Ne parle pas de fichier audio, de découpage technique, de chunk ou de report.
+- Ne parle pas d'horaire, de créneau, de planning, de durée ou de budget.
 - Tu peux dire sobrement qu'on reprend le fil ou qu'on pose le point proprement.
 - Ne change pas le fond.
 - Ne recopie pas littéralement le début reporté.
 - "opening" : 25 à 55 mots.
 - "rewritten_start" : 35 à 85 mots.
-- Pas d'horaires, pas de markdown, pas de guillemets.
+- Pas d'horaires, pas de créneau, pas de markdown, pas de guillemets.
 
 Réponds uniquement avec ce JSON valide :
 {{
@@ -8711,7 +9620,7 @@ def _env_int(name: str, default: int, min_value: int = 1) -> int:
 _REVIEW_CHUNK_WORDS = _env_int("FORMATION_REVIEW_CHUNK_WORDS", 1500, min_value=300)
 _REVIEW_CHUNK_CONCURRENCY = _env_int("FORMATION_REVIEW_CHUNK_CONCURRENCY", 2, min_value=1)
 _REVIEW_MAX_ATTEMPTS = 3
-_REVIEW_RULESET_VERSION = "2026-05-23-compliance-v6-plan-context"
+_REVIEW_RULESET_VERSION = "2026-05-25-compliance-v7-ethical-micro-split"
 _HUMANIZATION_RULESET_VERSION = "2026-05-23-humanisation-v9-polish-only"
 _REVIEW_SIGNATURE_COLUMNS_READY = False
 
@@ -8760,6 +9669,21 @@ _HUMANIZATION_REVIEW_RULE_GROUPS = [
 _REVIEW_RULE_GROUPS = _COMPLIANCE_REVIEW_RULE_GROUPS
 
 _RULES_CACHE = {"mtime": 0, "text": ""}
+
+
+def _ethical_micro_replaces_final_compliance() -> bool:
+    value = str(os.getenv("FORMATION_ETHICAL_MICRO_REPLACES_FINAL_COMPLIANCE", "1")).strip().lower()
+    return value not in {"0", "false", "no", "off"}
+
+
+def _compliance_review_groups_for_final_pass() -> list[dict]:
+    if not (_ethical_micro_review_enabled() and _ethical_micro_replaces_final_compliance()):
+        return _COMPLIANCE_REVIEW_RULE_GROUPS
+    return [
+        group
+        for group in _COMPLIANCE_REVIEW_RULE_GROUPS
+        if not all(int(rule) in _ETHICAL_MICRO_RULE_IDS for rule in group.get("rules") or [])
+    ]
 
 
 def _load_review_rules() -> str:
@@ -8819,7 +9743,7 @@ def _review_rules_signature(
 def _current_compliance_review_signature() -> str:
     return _review_rules_signature(
         _load_review_rules(),
-        groups=_COMPLIANCE_REVIEW_RULE_GROUPS,
+        groups=_compliance_review_groups_for_final_pass(),
         version=_REVIEW_RULESET_VERSION,
     )
 
@@ -9782,13 +10706,17 @@ def run_humanization_review(folder_id, on_progress=None, model=None, force: bool
 
 
 def run_content_review(folder_id, on_progress=None, model=None, force: bool = False):
-    """Passe 2 : conformité stricte #1-#27 après la reformulation humanisation."""
+    """Passe 2 : conformité stricte finale après humanisation.
+
+    Si la micro-review éthique est active, les règles #1-#16 sont traitées au
+    niveau section dès la génération ; la passe finale garde les autres scopes.
+    """
     return _run_content_review_pass(
         folder_id,
         on_progress=on_progress,
         model=model,
         force=force,
-        groups=_COMPLIANCE_REVIEW_RULE_GROUPS,
+        groups=_compliance_review_groups_for_final_pass(),
         signature_version=_REVIEW_RULESET_VERSION,
         reviewed_column="reviewed",
         error_column="review_error",

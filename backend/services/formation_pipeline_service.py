@@ -47,16 +47,45 @@ COURSE_AUDIO_SLOTS = [
 ]
 
 
+_INTERNAL_SCHEDULE_TIME_RANGE_RE = re.compile(
+    r"\b(?:[01]?\d|2[0-3])\s*(?:h|:)\s*(?:[0-5]\d)?\s*"
+    r"(?:[-–—]|à|a)\s*"
+    r"(?:[01]?\d|2[0-3])\s*(?:h|:)\s*(?:[0-5]\d)?\b",
+    re.IGNORECASE,
+)
+_INTERNAL_SCHEDULE_SINGLE_TIME_RE = re.compile(
+    r"\b(?:[01]?\d|2[0-3])\s*h\s*(?:[0-5]\d)?\b|"
+    r"\b(?:[01]?\d|2[0-3]):[0-5]\d\b",
+    re.IGNORECASE,
+)
+
+
+def _strip_internal_schedule_from_label(value: str | None) -> str:
+    original = str(value or "").strip()
+    if not original:
+        return ""
+    text = _INTERNAL_SCHEDULE_TIME_RANGE_RE.sub("", original)
+    text = _INTERNAL_SCHEDULE_SINGLE_TIME_RE.sub("", text)
+    text = re.sub(r"\b(?:45|50|55|60)\s*minutes\b", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"\s*[-–—]\s*[-–—]\s*", " — ", text)
+    text = re.sub(r"\s{2,}", " ", text).strip()
+    text = re.sub(r"\s*[-–—]\s*$", "", text).strip()
+    text = re.sub(r"^\s*[-–—]\s*", "", text).strip()
+    text = re.sub(r"^cours\s+\d+\s*[-–—:]\s*", "", text, flags=re.IGNORECASE).strip()
+    return text or original
+
+
 def _course_audio_slots_prompt() -> str:
     return "\n".join(
-        f"- {slot['label']} · {slot['start']}-{slot['end']} · "
-        f"{slot['duration_min']} min · fichier {slot['filename']}"
+        f"- {slot['label']} · données internes: {slot['start']}-{slot['end']}, "
+        f"{slot['duration_min']} min, fichier {slot['filename']}. "
+        "Le nom pédagogique ne doit jamais reprendre ces données."
         for slot in COURSE_AUDIO_SLOTS
     )
 
 
 def _normalize_day_audio_slots(day_data: dict) -> dict:
-    """Garantit que daily_programs expose 7 créneaux audio cours."""
+    """Garantit que daily_programs expose 7 cours audio internes."""
     sub_parts = list(day_data.get("sub_parts") or [])
     normalized = []
     for idx, slot in enumerate(COURSE_AUDIO_SLOTS):
@@ -65,15 +94,16 @@ def _normalize_day_audio_slots(day_data: dict) -> dict:
         name = (src.get("name") or "").strip()
         if not name and isinstance(raw, str):
             name = raw.strip()
+        name = _strip_internal_schedule_from_label(name)
         if not name:
-            name = f"{slot['label']} — {slot['start']}-{slot['end']}"
+            name = f"{slot['label']} — Sujet à préciser"
         elif not name.lower().startswith("cours"):
-            name = f"{slot['label']} — {slot['start']}-{slot['end']} — {name}"
+            name = f"{slot['label']} — {name}"
         module_content = (src.get("module_content") or "").strip()
         if not module_content:
             module_content = (
-                f"Créneau audio de {slot['duration_min']} minutes. Développer le contenu "
-                "prévu pour cette partie de la journée en respectant le budget de mots du cours."
+                "Développer le contenu prévu pour cette partie de la journée "
+                "en respectant le budget interne du cours, sans mentionner le planning."
             )
         normalized.append({
             **src,
@@ -93,19 +123,18 @@ def _normalize_day_audio_slots(day_data: dict) -> dict:
 
 
 def _format_slot_generation_source(slot_data: dict) -> str:
-    """Texte source injecté dans le prompt TTS pour un créneau."""
+    """Texte source injecté dans le prompt TTS pour un cours interne."""
     brief = slot_data.get("generation_brief") or {}
     lines = [
-        f"CRÉNEAU AUDIO : {slot_data.get('audio_slot')} · "
-        f"{slot_data.get('start_time')}-{slot_data.get('end_time')} · "
-        f"{slot_data.get('duration_min')} min · fichier {slot_data.get('filename')}",
-        f"OBJECTIF DU CRÉNEAU : {slot_data.get('name') or ''}",
+        f"COURS AUDIO INTERNE : {slot_data.get('audio_slot')}.",
+        "Les horaires, durées et fichiers associés à ce cours sont internes et ne doivent jamais être verbalisés.",
+        f"OBJECTIF DU COURS : {_strip_internal_schedule_from_label(slot_data.get('name') or '')}",
         "",
         "CONTENU PRIORITAIRE :",
         slot_data.get("module_content", "") or "",
     ]
     if isinstance(brief, dict) and brief:
-        lines.extend(["", "BRIEF DE GÉNÉRATION DU CRÉNEAU :"])
+        lines.extend(["", "BRIEF DE GÉNÉRATION DU COURS :"])
         for key, label in (
             ("must_cover", "À couvrir"),
             ("examples", "Exemples à intégrer"),
@@ -198,18 +227,19 @@ Génère uniquement les journées {DAY_START} à {DAY_END}, en répartissant le 
 
 RÈGLES :
 - Chaque journée = exactement 7 heures de contenu
-- Chaque journée a EXACTEMENT 7 créneaux cours dans "sub_parts", alignés sur la playlist audio réelle ci-dessous.
-- Les durées pédagogiques du programme global doivent être redistribuées sur ces créneaux exacts.
-- Un module peut occuper plusieurs créneaux, ou plusieurs petits modules peuvent partager un créneau si c'est pédagogiquement cohérent.
-- Ne coupe jamais une idée au hasard : chaque créneau doit avoir une fin propre, avec chute, synthèse ou transition naturelle.
+- Chaque journée a EXACTEMENT 7 cours dans "sub_parts", alignés sur la playlist audio interne ci-dessous.
+- Les durées pédagogiques du programme global doivent être redistribuées sur ces cours internes.
+- Un module peut occuper plusieurs cours, ou plusieurs petits modules peuvent partager un cours si c'est pédagogiquement cohérent.
+- Ne coupe jamais une idée au hasard : chaque cours doit avoir une fin propre, avec chute, synthèse ou transition naturelle.
 - Jour 1 : pas de rappel. Autres jours : bref rappel de la séance précédente.
 - "day_recap" : commence par "Lors de la dernière séance, nous avons vu…" (sauf jour 1)
 - "day_transition" : commence par "À la prochaine séance, nous aborderons…" (jamais "demain" ni "la semaine prochaine")
-- "module_content" : 5-8 phrases détaillées : compétences visées, notions clés, exemples concrets, points de vigilance, progression interne du créneau. Ce contenu sera la base directe de la génération TTS.
-- "generation_brief" : objet opérationnel qui servira au prompt TTS du créneau. Il doit dire quoi couvrir, quels exemples intégrer, comment finir, quoi éviter pour ne pas répéter les autres créneaux.
-- La durée du créneau sert ensuite au budget mots : 45 min reçoit moins de contenu qu'un créneau de 60 min.
+- "module_content" : 5-8 phrases détaillées : compétences visées, notions clés, exemples concrets, points de vigilance, progression interne du cours. Ce contenu sera la base directe de la génération TTS.
+- "generation_brief" : objet opérationnel qui servira au prompt TTS du cours. Il doit dire quoi couvrir, quels exemples intégrer, comment finir, quoi éviter pour ne pas répéter les autres cours.
+- Les horaires, durées et fichiers sont strictement internes. Ils peuvent rester dans les champs techniques start_time/end_time/duration_min/filename, mais ne doivent jamais apparaître dans "name", "module_content" ou "generation_brief".
+- "name" doit contenir seulement "Cours N — thème pédagogique précis", sans heure, sans durée, sans mot "créneau" et sans planning.
 
-CRÉNEAUX AUDIO À RESPECTER STRICTEMENT :
+COURS AUDIO INTERNES À RESPECTER STRICTEMENT :
 {COURSE_AUDIO_SLOTS}
 
 FORMAT DE SORTIE : JSON valide uniquement, sans texte avant ni après.
@@ -229,14 +259,14 @@ FORMAT DE SORTIE : JSON valide uniquement, sans texte avant ni après.
           "end_time": "9h45",
           "duration_min": 45,
           "filename": "cours_9h00_9h45.mp3",
-          "name": "Cours 1 — 9h00-9h45 — Nom précis du créneau",
-          "module_content": "Contenu condensé et structuré de ce créneau, calibré pour sa durée.",
+          "name": "Cours 1 — Nom précis du thème",
+          "module_content": "Contenu condensé et structuré de ce cours, sans mentionner l'horaire ni la durée.",
           "generation_brief": {{
             "must_cover": ["notion prioritaire 1", "notion prioritaire 2"],
             "examples": ["exemple métier à développer"],
-            "finish": "Type de chute ou synthèse attendue à la fin du créneau",
-            "avoid": ["notion réservée à un autre créneau", "redite à éviter"],
-            "handoff": "Lien naturel avec le Q&A, la pause ou le créneau suivant"
+            "finish": "Type de chute ou synthèse attendue à la fin du cours",
+            "avoid": ["notion réservée à un autre cours", "redite à éviter"],
+            "handoff": "Lien naturel avec le Q&A, la pause ou le cours suivant"
           }}
         }}
       ],

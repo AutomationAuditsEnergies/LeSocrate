@@ -224,8 +224,8 @@ def post_message(messages, max_tokens=8000, model=None, timeout=600) -> str:
 
     model = _normalize_model_alias(model)
 
-    # LOCAL_DEV=true → forfait Claude Code (OAuth) au lieu de l'API à la carte
-    if _is_local_dev() and shutil.which("claude"):
+    # LOCAL_DEV=true → forfait Claude Code (OAuth) — uniquement pour les modèles Claude
+    if _is_local_dev() and shutil.which("claude") and not model.lower().startswith("deepseek"):
         logger.info(f"🖥️  LOCAL_DEV: routing via claude CLI (model={model})")
         return _call_via_claude_cli(messages, model, timeout)
 

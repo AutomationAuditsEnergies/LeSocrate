@@ -60,7 +60,7 @@ STEP_LABELS = {
 
 # Étapes dont l'output total dépasse la limite de 1 appel Claude (64k tokens
 # output Sonnet) : on découpe en N missions séquentielles, 1 subprocess `claude`
-# par chunk. content = 1 segment calibré sur les créneaux cours, 21 par journée.
+# par chunk. content = 1 segment calibré sur les cours internes, 21 par journée.
 # humanization_review/review = 1 journée × groupe de règles en input, patches
 # courts en output.
 _CHUNKED_STEPS = {"content", "humanization_review", "review"}
@@ -74,8 +74,9 @@ _EXECUTION_STATE = {}
 def _course_audio_slots_prompt() -> str:
     from services.formation_pipeline_service import COURSE_AUDIO_SLOTS
     return "\n".join(
-        f"- {slot['label']} · {slot['start']}-{slot['end']} · "
-        f"{slot['duration_min']} min · fichier {slot['filename']}"
+        f"- {slot['label']} · données internes: {slot['start']}-{slot['end']}, "
+        f"{slot['duration_min']} min, fichier {slot['filename']}. "
+        "Le nom pédagogique ne doit jamais reprendre ces données."
         for slot in COURSE_AUDIO_SLOTS
     )
 
@@ -304,7 +305,8 @@ avec définition, contexte, etc.).
 
 Produis un **programme global structuré en Markdown** couvrant toute la formation :
 - Hiérarchie : Blocs → Modules → Sections → Sous-parties.
-- Respecter la répartition 7h/jour = 420 min, dont 4 créneaux cours de ~50 min chacun.
+- Respecter la répartition pédagogique d'une journée de 7h sans faire apparaître
+  les horaires internes dans les titres ou le texte apprenant.
 - Chaque sous-partie doit avoir un titre clair et une brève description (2-3 lignes).
 - Équilibrer le volume entre compétences selon leur importance dans le REAC.
 
@@ -327,15 +329,21 @@ def _build_daily_mission(target, job, model):
 Tu lis `input.md` qui contient le programme global (Markdown).
 
 Découpe en **{job['nb_days']} journées** de 7h chacune. Chaque journée a exactement
-7 créneaux cours alignés sur la playlist audio réelle.
+7 cours alignés sur la playlist audio interne.
 
-Créneaux à respecter strictement pour chaque journée :
+Cours audio internes à respecter strictement pour chaque journée :
 {slots}
 
-Les modules du programme global doivent être redistribués sur ces créneaux :
-un module peut occuper plusieurs créneaux, et plusieurs petits modules peuvent
-partager un créneau si c'est cohérent. Chaque créneau doit avoir une fin propre
+Les modules du programme global doivent être redistribués sur ces cours :
+un module peut occuper plusieurs cours, et plusieurs petits modules peuvent
+partager un cours si c'est cohérent. Chaque cours doit avoir une fin propre
 avec chute, synthèse ou transition naturelle.
+
+Les horaires, durées et fichiers sont strictement internes. Ils peuvent rester
+dans start_time/end_time/duration_min/filename, mais ne doivent jamais apparaître
+dans "name", "module_content" ou "generation_brief". Le champ "name" doit être
+"Cours N — thème pédagogique précis", sans heure, sans durée, sans mot
+"créneau" et sans planning.
 
 Produis un **JSON array** avec une entrée par journée :
 
@@ -352,17 +360,17 @@ Produis un **JSON array** avec une entrée par journée :
         "end_time": "9h45",
         "duration_min": 45,
         "filename": "cours_9h00_9h45.mp3",
-        "name": "Cours 1 — 9h00-9h45 — titre précis",
-        "module_content": "~contenu condensé tiré du programme global, adapté à la durée du créneau",
+        "name": "Cours 1 — titre pédagogique précis",
+        "module_content": "~contenu condensé tiré du programme global, sans mentionner l'horaire ni la durée",
         "generation_brief": {{
           "must_cover": ["notion prioritaire"],
           "examples": ["exemple métier à développer"],
           "finish": "chute, synthèse ou transition attendue",
-          "avoid": ["redite ou sujet réservé à un autre créneau"],
-          "handoff": "lien naturel avec le Q&A, la pause ou le créneau suivant"
+          "avoid": ["redite ou sujet réservé à un autre cours"],
+          "handoff": "lien naturel avec le Q&A, la pause ou le cours suivant"
         }}
       }},
-      ... 7 créneaux au total
+      ... 7 cours au total
     ]
   }},
   ...
@@ -389,8 +397,8 @@ Tu lis `input.md` qui contient les {job['nb_days']} programmes journée (JSON).
 
 Pour chaque journée × chaque sous-partie × chaque passe (3 passes par sous-partie :
 Fondation / Pratique / Maîtrise), génère environ {target_words} mots de texte oral TTS-ready.
-Les sous-parties sont les 7 créneaux cours réels de la journée ; utilise leurs
-métadonnées horaire/durée pour calibrer naturellement le volume.
+Les sous-parties sont les 7 cours internes de la journée ; utilise leurs
+métadonnées techniques pour calibrer le volume, sans les verbaliser côté apprenant.
 
 **Applique strictement les règles #1 à #28** contenues dans `rules.md` (saturation
 sandwich, pas de mensonge, pas d'énumérations mécaniques, registre oral, etc.).
@@ -414,7 +422,7 @@ Sortie attendue dans `output.md` : un **JSON** de la forme :
 }}
 ```
 
-Volume total calibré sur les créneaux cours uniquement. Les Q&A et pauses ne
+Volume total calibré sur les cours internes uniquement. Les Q&A et pauses ne
 comptent pas dans ce texte. Reste dense, mais ne gonfle pas artificiellement.
 """,
     )
@@ -3144,7 +3152,7 @@ def _finalize_content_step(job_id: int, model: str) -> None:
 # `_continue_content_until_volume` :
 #   - L'étape 6 garantit qu'aucun segment n'est sous-développé.
 #   - L'étape 6.5 garantit qu'aucune journée n'est sous le budget calculé
-#     depuis les créneaux cours, hors Q&A/pauses.
+#     depuis les cours internes, hors Q&A/pauses.
 #
 # Pattern : append-only. Le texte original n'est jamais réécrit, on concatène
 # simplement le nouveau contenu. Le snapshot text_content_pre_review (pris au

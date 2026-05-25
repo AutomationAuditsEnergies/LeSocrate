@@ -84,7 +84,11 @@ Points à vérifier avec ce plan :
 - les parties restent dans leur périmètre ;
 - la conclusion arrive au bon endroit et ne relance pas un développement ;
 - le cours ne termine pas le cours précédent et ne démarre pas le suivant ;
-- les formulations côté apprenant restent naturelles, notamment sans jargon technique comme "bloc".
+- les formulations côté apprenant restent naturelles, notamment sans jargon
+  technique comme "bloc", "créneau", "horaire" ou "planning".
+- les unités internes ne sont pas nommées "ce cours", "premier cours" ou
+  "cours actuel" côté apprenant ; préférer thème, partie, chapitre, séquence ou
+  axe.
 
 Sections attendues :
 {section_summary}
@@ -110,4 +114,3 @@ def load_structured_rule_file(filename: str) -> tuple[str, float]:
         raise ValueError(f"Aucune règle exploitable dans {filename}")
     header = f"SOURCE MODULAIRE: {filename} · version {data.get('version') or 'unknown'}"
     return header + "\n\n" + "\n\n".join(blocks), os.path.getmtime(path)
-

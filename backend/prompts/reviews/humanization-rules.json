@@ -92,19 +92,19 @@
     },
     {
       "id": 112,
-      "name": "Premier cours de l'année : introduction générale obligatoire",
+      "name": "Ouverture annuelle : introduction générale obligatoire",
       "scope": "humanization_legacy_reference",
       "severity": "medium",
       "repair_mode": "targeted_patch",
-      "body": "RÈGLE #112 — Premier cours de l'année : introduction générale obligatoire\nQuand le passage est l'ouverture absolue de la formation, il ne doit jamais\ndémarrer directement par \"bon, on va aborder\", \"on entre dans le vif du sujet\",\n\"nouvelle partie\" ou une phrase intense. Il doit d'abord faire une vraie\nintroduction annuelle, développée et chaleureuse, avant toute notion métier.\nCette ouverture doit raconter la formation : à quoi elle sert, dans quel\ncontexte professionnel elle s'inscrit, ce que les apprenants vont construire,\nles grandes familles de compétences qui seront abordées, la progression sur les\njournées, la manière de travailler, et pourquoi ce parcours va leur être utile\nconcrètement. Elle doit encourager les élèves, rassurer sur le rythme, donner\nenvie d'avancer, puis seulement faire une transition douce vers le premier\nsujet. Une simple intro générique de quelques phrases est insuffisante."
+      "body": "RÈGLE #112 — Ouverture annuelle : introduction générale obligatoire\nQuand le passage est l'ouverture absolue de la formation, il ne doit jamais\ndémarrer directement par \"bon, on va aborder\", \"on entre dans le vif du sujet\",\n\"nouvelle partie\" ou une phrase intense. Il doit d'abord faire une vraie\nintroduction annuelle, développée et chaleureuse, avant toute notion métier.\nCette ouverture doit raconter la formation : à quoi elle sert, dans quel\ncontexte professionnel elle s'inscrit, ce que les apprenants vont construire,\nles grandes familles de compétences qui seront abordées, la progression sur les\njournées, la manière de travailler, et pourquoi ce parcours va leur être utile\nconcrètement. Elle doit encourager les élèves, rassurer sur le rythme, donner\nenvie d'avancer, puis seulement faire une transition douce vers le premier grand\nthème de la journée. Une simple intro générique de quelques phrases est insuffisante."
     },
     {
       "id": 113,
-      "name": "Début de journée ou de bloc : amorce progressive obligatoire",
+      "name": "Début de journée ou de thème : amorce progressive obligatoire",
       "scope": "humanization_polish",
       "severity": "medium",
       "repair_mode": "targeted_patch",
-      "body": "RÈGLE #113 — Début de journée ou de bloc : amorce progressive obligatoire\nChaque début de journée, de reprise ou de cours doit avoir une amorce orale\nprogressive. Corrige les démarrages mécaniques du type \"Bon, on va aborder une\nnouvelle partie du cours\" ou \"c'est une partie absolument fondamentale\". Le\nformateur doit reconnecter calmement au parcours et introduire le sujet sans\nbrusquerie, sans refaire tout le cadrage pédagogique."
+      "body": "RÈGLE #113 — Début de journée ou de thème : amorce progressive obligatoire\nChaque début de journée, de reprise ou de grand thème doit avoir une amorce orale\nprogressive. Corrige les démarrages mécaniques du type \"Bon, on va aborder une\nnouvelle partie du cours\", \"ce cours\" ou \"c'est une partie absolument fondamentale\".\nLe formateur doit reconnecter calmement au parcours et introduire le sujet sans\nbrusquerie, sans refaire tout le cadrage pédagogique."
     },
     {
       "id": 114,
@@ -124,19 +124,19 @@
     },
     {
       "id": 116,
-      "name": "Cours 1 : parcours annuel, journée, cours actuel",
+      "name": "Première partie : parcours annuel, journée, thème actuel",
       "scope": "humanization_legacy_reference",
       "severity": "medium",
       "repair_mode": "targeted_patch",
-      "body": "RÈGLE #116 — Cours 1 : parcours annuel, journée, cours actuel\nPour le premier cours de la première journée, l'ouverture doit garder l'accueil\nhumain puis présenter synthétiquement les grands thèmes de l'année, les thèmes\nde la journée dans l'ordre sans horaires, le rôle du cours actuel, ses objectifs\net un plan oral de 2 à 4 parties. Le texte doit ensuite suivre ce plan dans le\nmême ordre avec des transitions explicites. Pour le cours 1 d'une journée\nsuivante, ne refais pas la présentation annuelle complète : fais un accueil de\njournée, une reprise douce de la progression, les thèmes de la journée, puis le\nthème, les objectifs et le plan du cours actuel."
+      "body": "RÈGLE #116 — Première partie : parcours annuel, journée, thème actuel\nPour la première partie de la première journée, l'ouverture doit garder l'accueil\nhumain puis présenter synthétiquement les grands thèmes de l'année, les thèmes\nde la journée dans l'ordre pédagogique, puis basculer naturellement vers le\npremier grand thème, son objectif et un plan oral en 2 à 4 axes. Le texte doit\nensuite suivre ce plan dans le même ordre avec des transitions explicites. Pour\nla première partie d'une journée suivante, ne refais pas la présentation annuelle\ncomplète : fais un accueil de journée, une reprise douce de la progression, les\nthèmes de la journée, puis le thème, l'objectif et les axes de la première partie.\nNe mentionne jamais les horaires, les créneaux, les durées ou le planning, même\npour dire aux apprenants de ne pas s'en soucier. Évite \"ce cours\", \"premier cours\",\n\"cours actuel\" et \"trois quarts d'heure à venir\" côté apprenant."
     },
     {
       "id": 117,
-      "name": "Cours 1 : conclusion Q/R verrouillée",
+      "name": "Première partie : conclusion Q/R verrouillée",
       "scope": "humanization_legacy_reference",
       "severity": "medium",
       "repair_mode": "targeted_patch",
-      "body": "RÈGLE #117 — Cours 1 : conclusion Q/R verrouillée\nPour le cours 1, la conclusion doit durer environ 3 à 4 minutes en équivalent\naudio : récapituler les points vus, redire pourquoi ils comptent et à quoi ils\nserviront, puis annoncer le temps de questions-réponses dans le tchat. Après\ncette annonce, aucun nouveau développement, exemple, mini-synthèse ou ajout de\nremplissage ne doit apparaître."
+      "body": "RÈGLE #117 — Première partie : conclusion Q/R verrouillée\nPour la première partie, la conclusion doit durer environ 3 à 4 minutes en équivalent\naudio : récapituler les points vus, redire pourquoi ils comptent et à quoi ils\nserviront, puis annoncer le temps de questions-réponses dans le tchat. Après\ncette annonce, aucun nouveau développement, exemple, mini-synthèse ou ajout de\nremplissage ne doit apparaître."
     },
     {
       "id": 118,
@@ -152,7 +152,7 @@
       "scope": "humanization_legacy_reference",
       "severity": "medium",
       "repair_mode": "targeted_patch",
-      "body": "RÈGLE #119 — Frontières nettes entre cours, Q/R et pauses\nUn cours ne doit jamais commencer en terminant le cours précédent. Après un Q/R\nou une pause, la reprise doit être autonome et cohérente avec le vocal précédent\nqui indique que la pause ou le Q/R est terminé : reprise naturelle, rappel bref\nde ce qui a été vu, lien avec le nouveau thème, annonce de l'objectif et du plan\ndu cours actuel. Corrige les débuts qui poursuivent une conclusion précédente,\nqui font comme si la pause/Q/R n'avait pas eu lieu, ou qui redémarrent deux fois.\nUne seule reprise, un seul cadrage, puis le développement du nouveau cours."
+      "body": "RÈGLE #119 — Frontières nettes entre grands thèmes, Q/R et pauses\nUne nouvelle partie ne doit jamais commencer en terminant la partie précédente. Après un Q/R\nou une pause, la reprise doit être autonome et cohérente avec le vocal précédent\nqui indique que la pause ou le Q/R est terminé : reprise naturelle, rappel bref\nde ce qui a été vu, lien avec le nouveau thème, annonce de l'objectif et des axes\nde la partie actuelle. Corrige les débuts qui poursuivent une conclusion précédente,\nqui font comme si la pause/Q/R n'avait pas eu lieu, qui redémarrent deux fois,\nou qui parlent du planning interne. Une seule reprise, un seul cadrage, puis le\ndéveloppement du nouveau thème."
     }
   ]
 }

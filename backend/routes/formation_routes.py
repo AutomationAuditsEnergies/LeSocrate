@@ -1000,10 +1000,47 @@ def list_content(job_id):
                 (cg_id,),
             )
             n_dirty = cursor.fetchone()[0]
+            slide_deck_id = None
+            slide_count = 0
+            slide_generation_mode = None
+            try:
+                cursor.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name='script_slide_decks'"
+                )
+                has_slide_table = bool(cursor.fetchone())
+                if has_slide_table:
+                    cursor.execute(
+                        """
+                        SELECT id, slides_json, stats_json
+                        FROM script_slide_decks
+                        WHERE folder_id = ? AND content_job_id = ?
+                        ORDER BY id DESC
+                        LIMIT 1
+                        """,
+                        (fid, cg_id),
+                    )
+                    deck_row = cursor.fetchone()
+                    if deck_row:
+                        slide_deck_id = deck_row[0]
+                        try:
+                            slide_count = len(_json.loads(deck_row[1] or "[]"))
+                        except Exception:
+                            slide_count = 0
+                        try:
+                            slide_generation_mode = (_json.loads(deck_row[2] or "{}") or {}).get("generation_mode")
+                        except Exception:
+                            slide_generation_mode = None
+            except Exception:
+                slide_deck_id = None
+                slide_count = 0
+                slide_generation_mode = None
         else:
             cg_id = None
             cg_status, cg_words, cur_sub, cur_passe, cg_err = None, 0, 0, 1, None
             n_completed, n_reviewed, n_humanized, n_review_errors, n_dirty = 0, 0, 0, 0, 0
+            slide_deck_id = None
+            slide_count = 0
+            slide_generation_mode = None
 
         day_sub_parts = day_meta.get("sub_parts")
         segment_total = (len(day_sub_parts) if day_sub_parts else 6) * 3
@@ -1025,6 +1062,9 @@ def list_content(job_id):
             "segments_reviewed": n_reviewed,
             "segments_review_errors": n_review_errors,
             "dirty_segments": n_dirty,
+            "slide_deck_id": slide_deck_id,
+            "slide_count": slide_count,
+            "slide_generation_mode": slide_generation_mode,
             "current_sub_part": cur_sub,
             "current_passe": cur_passe,
             "error_message": cg_err,
@@ -4553,7 +4593,49 @@ def _determine_next_ap_step(job_id: int) -> str | None:
     if not j.get("auto_pilot_post_review_docs_done"):
         return "post_review_docs"
 
-    # 9. Audio TTS optionnel. Par défaut l'auto-pilot s'arrête texte prêt :
+    # 9. Slides anchor-first : elles sont générées explicitement avant la fin
+    # texte, pour ne plus rester cachées dans l'étape TTS synchronisée.
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(f"""
+        SELECT cf.id, cgj.id
+        FROM cours_folders cf
+        JOIN content_generation_jobs cgj ON cgj.folder_id = cf.id
+        WHERE cf.id IN ({placeholders}) AND cgj.status = 'completed'
+        ORDER BY cf.position ASC
+    """, tuple(folder_ids))
+    slide_rows = cursor.fetchall()
+    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='script_slide_decks'")
+    has_slide_table = bool(cursor.fetchone())
+    missing_slide_decks = []
+    if not has_slide_table:
+        missing_slide_decks = [fid for fid, _ in slide_rows]
+    else:
+        for fid, cg_job_id in slide_rows:
+            cursor.execute(
+                """
+                SELECT id, slides_json
+                FROM script_slide_decks
+                WHERE folder_id = ? AND content_job_id = ?
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (fid, cg_job_id),
+            )
+            deck_row = cursor.fetchone()
+            deck_has_slides = False
+            if deck_row:
+                try:
+                    deck_has_slides = len(_json.loads(deck_row[1] or "[]")) > 0
+                except Exception:
+                    deck_has_slides = False
+            if not deck_has_slides:
+                missing_slide_decks.append(fid)
+    conn.close()
+    if missing_slide_decks:
+        return "slides"
+
+    # 10. Audio TTS optionnel. Par défaut l'auto-pilot s'arrête texte prêt :
     # les audios se génèrent ensuite à la demande, journée/semaine par journée/semaine.
     if not j.get("auto_pilot_generate_audio"):
         try:
@@ -5113,15 +5195,126 @@ def _execute_ap_step(job_id: int, step: str, job: dict) -> None:
                 pass
             final_words, filename = _assemble_and_upload(fid, platform_id, cg_job_id)
             _update_job_db(cg_job_id, total_words=final_words)
+            try:
+                deleted_decks = _delete_slide_deck_for_resume(fid, cg_job_id)
+            except Exception as e:
+                deleted_decks = 0
+                logger.warning(
+                    "⚠️ Nettoyage deck slides post-Word2 impossible job=%s folder=%s: %s",
+                    job_id,
+                    fid,
+                    str(e)[:300],
+                )
             logger.info(
                 f"🤖   ✓ Document post-révision folder {fid} : "
-                f"{final_words} mots, {filename}"
+                f"{final_words} mots, {filename}, decks slides supprimés={deleted_decks}"
             )
         next_status = "tts_launched" if job.get("auto_pilot_generate_audio") else "text_ready"
         if next_status == "text_ready":
             _finalize_text_ready_state(job_id)
         update_job(job_id, status=next_status, auto_pilot_post_review_docs_done=1)
         logger.info(f"🤖 ✓ Documents post-révision générés job {job_id} (status={next_status})")
+
+    elif step == "slides":
+        from services.formation_pipeline_service import get_expected_course_folders
+        from services.script_slide_generation_service import (
+            generate_slides_from_script,
+            get_latest_script_slide_deck,
+        )
+        from services.formation_observability_service import log_pipeline_event
+
+        folder_ids = get_expected_course_folders(job_id).get("folder_ids") or []
+        if not folder_ids:
+            raise RuntimeError("Aucun cours_folder trouvé pour générer les slides")
+        placeholders = ",".join("?" * len(folder_ids))
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            f"""
+            SELECT cf.id, cgj.id
+            FROM cours_folders cf
+            JOIN content_generation_jobs cgj ON cgj.folder_id = cf.id
+            WHERE cf.id IN ({placeholders}) AND cgj.status = 'completed'
+            ORDER BY cf.position ASC
+            """,
+            tuple(folder_ids),
+        )
+        rows = cursor.fetchall()
+        conn.close()
+        if not rows:
+            raise RuntimeError("Aucun texte complété disponible pour générer les slides")
+
+        generated = 0
+        skipped = 0
+        failures = []
+        for fid, cg_job_id in rows:
+            existing = get_latest_script_slide_deck(fid, content_job_id=cg_job_id)
+            if existing and (existing.get("slides") or []):
+                skipped += 1
+                continue
+            started = time.time()
+            try:
+                log_pipeline_event(
+                    job_id,
+                    "slides_folder_started",
+                    step="slides",
+                    status="running",
+                    folder_id=fid,
+                    model=api_model,
+                    message="Génération slides anchor-first démarrée",
+                    data={"content_job_id": cg_job_id, "max_slides": 60, "pace": "normal"},
+                )
+                result = generate_slides_from_script(
+                    folder_id=fid,
+                    job_id=job_id,
+                    platform_id=platform_id,
+                    max_slides=60,
+                    pace="normal",
+                    model=api_model,
+                )
+                generated += 1
+                log_pipeline_event(
+                    job_id,
+                    "slides_folder_completed",
+                    step="slides",
+                    status="completed",
+                    folder_id=fid,
+                    model=api_model,
+                    duration_ms=int((time.time() - started) * 1000),
+                    message="Génération slides anchor-first terminée",
+                    data={
+                        "content_job_id": cg_job_id,
+                        "deck_id": (result.get("stats") or {}).get("deck_id"),
+                        "slides_generated": (result.get("stats") or {}).get("slides_generated"),
+                        "slide_anchors_found": (result.get("stats") or {}).get("slide_anchors_found"),
+                        "generation_mode": (result.get("stats") or {}).get("generation_mode"),
+                    },
+                )
+            except Exception as e:
+                err = str(e)[:500]
+                failures.append(f"{fid}({err})")
+                try:
+                    log_pipeline_event(
+                        job_id,
+                        "slides_folder_failed",
+                        step="slides",
+                        status="error",
+                        folder_id=fid,
+                        model=api_model,
+                        duration_ms=int((time.time() - started) * 1000),
+                        message="Génération slides anchor-first échouée",
+                        error=err,
+                    )
+                except Exception:
+                    pass
+        if failures:
+            raise RuntimeError("Slides échouées sur folders : " + ", ".join(failures))
+        logger.info(
+            "🤖 ✓ Slides générées job %s : generated=%s skipped=%s",
+            job_id,
+            generated,
+            skipped,
+        )
 
     elif step == "audio":
         from services.content_generation_service import generate_audio_from_script
@@ -5160,6 +5353,11 @@ def _execute_ap_step(job_id: int, step: str, job: dict) -> None:
                     basic_tts=basic_tts,
                     next_folder_id=next_fid,
                     is_last_folder=next_fid is None,
+                    sync_slides=True,
+                    auto_generate_slides=True,
+                    slide_max_slides=60,
+                    slide_pace="normal",
+                    slide_model=_resolve_pipeline_api_model(job),
                     llm_model=_resolve_pipeline_api_model(job),
                 )
             except Exception as e:
@@ -5290,11 +5488,11 @@ def _tick_auto_pilot(job_id: int) -> None:
                     step="done",
                     status="completed",
                     model=j.get("auto_pilot_model"),
-                    message=(
-                        "Auto-pilot texte terminé"
-                        if not j.get("auto_pilot_generate_audio")
-                        else "Auto-pilot terminé"
-                    ),
+	                    message=(
+	                        "Auto-pilot texte et slides terminé"
+	                        if not j.get("auto_pilot_generate_audio")
+	                        else "Auto-pilot terminé"
+	                    ),
                     data={"generate_audio": bool(j.get("auto_pilot_generate_audio"))},
                 )
             except Exception:
@@ -5423,7 +5621,8 @@ def start_auto_pilot_watchdog() -> None:
 
 @formation_bp.route("/api/formation/<int:job_id>/run-auto", methods=["POST"])
 def run_auto_pilot(job_id):
-    """Lance l'auto-pilot texte : REAC → KB → global → daily → content → volume → humanisation → conformité → docs.
+    """Lance l'auto-pilot : REAC → KB → global → daily → content → volume
+    → adhérence plan → humanisation → conformité → Word 2 → slides → audio optionnel.
 
     Body (optionnel) :
       - tts_mode : 'fish_audio' | 'gtts' | 'mock' (défaut 'gtts')

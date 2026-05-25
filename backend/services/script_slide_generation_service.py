@@ -14,6 +14,8 @@ import time
 from typing import Iterable
 
 from database.db import get_db_connection
+from services.content_pipeline.artifacts import CONTENT_PLAN_BLOB, load_content_artifact
+from services.content_pipeline.prompts import load_prompt_file
 from utils.anthropic_client import default_model, post_message
 from utils.logger import get_logger
 
@@ -60,6 +62,35 @@ SUPPORTED_TEMPLATES = {
     "opinion",
     "transition",
     "chart",
+}
+TEMPLATE_ALIASES = {
+    "definition": "reflection",
+    "concept": "reflection",
+    "key_message": "reflection",
+    "process": "facilitator",
+    "method": "facilitator",
+    "framework": "facilitator",
+    "steps": "facilitator",
+    "checklist": "recap",
+    "takeaways": "recap",
+    "example": "casestudy",
+    "case": "casestudy",
+    "comparison": "casestudy",
+    "warning": "warning",
+    "mistake": "warning",
+    "risk": "warning",
+    "tip": "tip",
+    "advice": "tip",
+    "good_practice": "tip",
+    "story": "story",
+    "scenario": "story",
+    "analogy": "analogy",
+    "metaphor": "analogy",
+    "data": "stats",
+    "numbers": "stats",
+    "chart": "chart",
+    "transition": "transition",
+    "opinion": "opinion",
 }
 
 EVENT_TYPES = {
@@ -125,6 +156,58 @@ def _json_dumps(value) -> str:
     return json.dumps(value, ensure_ascii=False)
 
 
+def _canonical_template(template: str | None, fallback: str = "reflection") -> str:
+    key = str(template or "").strip().lower()
+    if key in SUPPORTED_TEMPLATES:
+        return key
+    mapped = TEMPLATE_ALIASES.get(key)
+    if mapped in SUPPORTED_TEMPLATES:
+        return mapped
+    return fallback
+
+
+def _load_slide_template_catalog() -> dict:
+    raw = load_prompt_file("slides", "template-catalog.json", fallback="")
+    if not raw:
+        return {"version": "missing", "templates": []}
+    try:
+        data = json.loads(raw)
+    except Exception as exc:
+        logger.warning("PIPELINE_SLIDES_TEMPLATE_CATALOG_INVALID error=%s", exc)
+        return {"version": "invalid", "templates": []}
+    if not isinstance(data.get("templates"), list):
+        data["templates"] = []
+    return data
+
+
+def _template_catalog_for_prompt() -> str:
+    catalog = _load_slide_template_catalog()
+    templates = []
+    for item in catalog.get("templates") or []:
+        if not isinstance(item, dict):
+            continue
+        template_id = _canonical_template(item.get("template_id"))
+        if template_id != item.get("template_id"):
+            continue
+        templates.append({
+            "template_id": template_id,
+            "families": item.get("families") or [],
+            "use_when": item.get("use_when") or "",
+            "avoid_when": item.get("avoid_when") or "",
+            "requires": item.get("requires") or {},
+            "schema": item.get("schema") or {},
+        })
+    return json.dumps(
+        {
+            "version": catalog.get("version"),
+            "principle": catalog.get("principle"),
+            "templates": templates,
+        },
+        ensure_ascii=False,
+        indent=2,
+    )
+
+
 def _ensure_slide_deck_tables() -> None:
     """Persist generated decks so audio sync can run outside the request."""
     global _SLIDE_DECK_TABLES_READY
@@ -183,13 +266,14 @@ def _persist_script_slide_deck(
         (folder_id, content_job_id, formation_job_id, platform_id, generation_mode,
          pace, max_slides, model, slides_json, timeline_json, stats_json,
          pipeline_debug_json)
-        VALUES (?, ?, ?, ?, 'script', ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             source["folder_id"],
             source["content_job_id"],
             source.get("formation_job_id"),
             source.get("platform_id"),
+            (result.get("stats") or {}).get("generation_mode") or "script",
             pace,
             max_slides,
             model,
@@ -481,6 +565,105 @@ def _load_script_source(folder_id: int, job_id: int | None = None, platform_id: 
     }
 
 
+def _load_content_plan(source: dict) -> dict | None:
+    try:
+        artifact = load_content_artifact(
+            int(source["platform_id"]),
+            int(source["folder_id"]),
+            CONTENT_PLAN_BLOB,
+        )
+    except Exception as exc:
+        logger.warning(
+            "PIPELINE_SLIDES_CONTENT_PLAN_LOAD_ERROR folder=%s content_job=%s error=%s",
+            source.get("folder_id"),
+            source.get("content_job_id"),
+            str(exc)[:220],
+        )
+        return None
+    if not isinstance(artifact, dict):
+        return None
+    plan = artifact.get("structured_course_plan")
+    return plan if isinstance(plan, dict) else None
+
+
+def _extract_slide_anchors_from_plan(plan: dict | None) -> list[dict]:
+    anchors = []
+    if not isinstance(plan, dict):
+        return anchors
+    for course in plan.get("courses") or []:
+        if not isinstance(course, dict):
+            continue
+        course_number = _safe_int(course.get("course_number"), 0, 0, 10**6)
+        for part in course.get("parts") or []:
+            if not isinstance(part, dict):
+                continue
+            part_number = _safe_int(part.get("part_number"), 0, 0, 100)
+            for order, beat in enumerate(part.get("teaching_beats") or [], start=1):
+                if not isinstance(beat, dict):
+                    continue
+                slide_anchor = beat.get("slide_anchor") if isinstance(beat.get("slide_anchor"), dict) else {}
+                if not slide_anchor.get("enabled"):
+                    continue
+                template_type = _canonical_template(
+                    slide_anchor.get("template_type")
+                    or slide_anchor.get("template_family")
+                    or beat.get("type")
+                )
+                anchors.append({
+                    "anchor_id": str(slide_anchor.get("anchor_id") or f"c{course_number}p{part_number}b{order}-slide"),
+                    "beat_id": str(beat.get("beat_id") or f"c{course_number}p{part_number}b{order}"),
+                    "course_number": course_number,
+                    "course_title": course.get("course_title") or "",
+                    "part_number": part_number,
+                    "part_title": part.get("title") or "",
+                    "beat_order": order,
+                    "beat_type": str(beat.get("type") or "concept"),
+                    "role": beat.get("role") or "",
+                    "spoken_requirement": beat.get("spoken_requirement") or "",
+                    "template_type": template_type,
+                    "visual_goal": slide_anchor.get("visual_goal") or "",
+                    "items_expected": slide_anchor.get("items_expected"),
+                    "fields_hint": slide_anchor.get("fields_hint") if isinstance(slide_anchor.get("fields_hint"), dict) else {},
+                })
+    return anchors
+
+
+def _assign_slide_anchors_to_source_blocks(source_blocks: list[dict], anchors: list[dict]) -> None:
+    for block in source_blocks:
+        block["slide_anchors"] = []
+    if not source_blocks or not anchors:
+        return
+
+    blocks_by_course: dict[int, list[dict]] = {}
+    for block in source_blocks:
+        try:
+            course_number = int(block.get("sub_part_index") or 0) + 1
+        except Exception:
+            continue
+        blocks_by_course.setdefault(course_number, []).append(block)
+
+    anchors_by_course: dict[int, list[dict]] = {}
+    for anchor in anchors:
+        course_number = int(anchor.get("course_number") or 0)
+        anchors_by_course.setdefault(course_number, []).append(anchor)
+
+    for course_number, course_anchors in anchors_by_course.items():
+        blocks = sorted(blocks_by_course.get(course_number) or [], key=lambda item: int(item.get("source_block_id") or 0))
+        if not blocks:
+            continue
+        course_anchors = sorted(
+            course_anchors,
+            key=lambda item: (int(item.get("part_number") or 0), int(item.get("beat_order") or 0)),
+        )
+        if len(blocks) == 1:
+            blocks[0]["slide_anchors"].extend(course_anchors)
+            continue
+        total = max(1, len(course_anchors))
+        for idx, anchor in enumerate(course_anchors):
+            block_idx = min(len(blocks) - 1, int((idx + 0.5) * len(blocks) / total))
+            blocks[block_idx]["slide_anchors"].append(anchor)
+
+
 def _split_long_paragraph(text: str, max_words: int) -> list[str]:
     words = text.split()
     if len(words) <= max_words:
@@ -653,9 +836,24 @@ def _prompt_for_blocks(blocks: list[dict], source_title: str, pace_profile: dict
             "sub_part_name": block.get("sub_part_name"),
             "word_count": block.get("word_count"),
             "text": _shorten(block.get("text", ""), 3600),
+            "slide_anchors": [
+                {
+                    "anchor_id": anchor.get("anchor_id"),
+                    "beat_id": anchor.get("beat_id"),
+                    "part_title": anchor.get("part_title"),
+                    "beat_type": anchor.get("beat_type"),
+                    "spoken_requirement": anchor.get("spoken_requirement"),
+                    "template_type": anchor.get("template_type"),
+                    "visual_goal": anchor.get("visual_goal"),
+                    "items_expected": anchor.get("items_expected"),
+                    "fields_hint": anchor.get("fields_hint") or {},
+                }
+                for anchor in block.get("slide_anchors") or []
+            ],
         }
         for block in blocks
     ]
+    anchors_count = sum(len(block.get("slide_anchors") or []) for block in blocks)
 
     return f"""Tu conçois des slides pédagogiques pour Le Socrate.
 
@@ -663,15 +861,22 @@ Source: {source_title}
 
 RÈGLES:
 - Tu reçois des fenêtres de contexte. Elles servent à te donner le texte, pas à imposer le nombre de slides.
-- Sélectionne les thèmes, points et idées pédagogiques qui méritent vraiment un visuel.
+- Si une fenêtre contient `slide_anchors`, ils sont le plan prioritaire : crée les slides depuis ces anchors si le texte source couvre réellement leur intention.
+- Si un anchor n'est pas couvert par le texte source, ignore-le au lieu d'inventer.
+- Quand tu utilises un anchor, recopie exactement `slide_anchor_id` et `beat_id` dans la slide générée.
+- Si aucun anchor n'est disponible pour une fenêtre, sélectionne les thèmes, points et idées pédagogiques qui méritent vraiment un visuel.
 - Tu peux produire 0, 1 ou plusieurs slides par fenêtre selon la densité réelle des idées.
 - Maximum {max_batch_slides} slides pour tout ce batch.
-- Maximum {pace_profile["max_slides_per_block"]} slides pour une même fenêtre source.
+- Maximum {pace_profile["max_slides_per_block"]} slides pour une même fenêtre source, sauf si plusieurs slide_anchors explicites y sont attachés.
 - {pace_profile["instruction"]}
 - Ne rajoute aucun timing. Ne crée pas de slide absente du texte.
+- Le JSON de plan peut orienter le choix, mais le texte final reste le contrôle : une slide doit correspondre à ce qui est vraiment dit.
 - Le deck doit être lisible: titres courts, contenu très synthétique, aucun pavé.
 - Si deux idées sont proches, regroupe-les. Si une fenêtre répète une idée déjà traitée, saute-la.
 - Réponds uniquement en JSON valide.
+
+CATALOGUE TEMPLATES:
+{_template_catalog_for_prompt()}
 
 TEMPLATES AUTORISÉS ET SCHÉMAS:
 - reflection: data={{"title":"3-6 mots","text":"1-2 phrases"}}
@@ -695,6 +900,8 @@ FORMAT EXACT:
   "slides": [
     {{
       "source_block_id": 0,
+      "slide_anchor_id": "anchor optionnel si utilisé",
+      "beat_id": "beat optionnel si utilisé",
       "template_type": "reflection",
       "event_type": "concept",
       "event_summary": "Phrase courte décrivant l'idée source",
@@ -703,6 +910,8 @@ FORMAT EXACT:
     }}
   ]
 }}
+
+Nombre d'anchors dans ce batch: {anchors_count}
 
 FENÊTRES DE CONTEXTE:
 {json.dumps(payload, ensure_ascii=False)}
@@ -805,6 +1014,8 @@ def _fallback_slide(block: dict, reason: str = "fallback") -> dict:
         "event_summary": title,
         "importance": 2,
         "data": {"title": title, "text": text},
+        "slide_anchor_id": None,
+        "beat_id": "",
         "fallback_reason": reason,
     }
 
@@ -813,9 +1024,17 @@ def _normalize_slide(raw: dict, block: dict) -> dict:
     if not isinstance(raw, dict):
         return _fallback_slide(block, "invalid_slide")
 
-    template = raw.get("template_type") or raw.get("template") or "reflection"
-    if template not in SUPPORTED_TEMPLATES:
-        template = "reflection"
+    anchor_by_id = {
+        str(anchor.get("anchor_id")): anchor
+        for anchor in block.get("slide_anchors") or []
+        if anchor.get("anchor_id")
+    }
+    slide_anchor_id = str(raw.get("slide_anchor_id") or raw.get("anchor_id") or "").strip()
+    anchor = anchor_by_id.get(slide_anchor_id)
+    template = _canonical_template(
+        raw.get("template_type") or raw.get("template") or (anchor or {}).get("template_type"),
+        fallback="reflection",
+    )
 
     event_type = raw.get("event_type") or "concept"
     if event_type not in EVENT_TYPES:
@@ -832,6 +1051,9 @@ def _normalize_slide(raw: dict, block: dict) -> dict:
         "event_summary": _as_text(raw.get("event_summary"), fallback_title)[:180],
         "importance": _safe_int(raw.get("importance"), 3, 1, 5),
         "data": data,
+        "slide_anchor_id": slide_anchor_id or (anchor or {}).get("anchor_id"),
+        "beat_id": _as_text(raw.get("beat_id"), (anchor or {}).get("beat_id") or "")[:100],
+        "anchor_role": (anchor or {}).get("role") or "",
     }
 
 
@@ -862,7 +1084,11 @@ def _generate_batch(blocks: list[dict], source_title: str, model: str, pace_prof
         block = block_by_id.get(source_block_id)
         if not block:
             continue
-        if per_block_counts.get(source_block_id, 0) >= pace_profile["max_slides_per_block"]:
+        per_block_limit = max(
+            pace_profile["max_slides_per_block"],
+            len(block.get("slide_anchors") or []),
+        )
+        if per_block_counts.get(source_block_id, 0) >= per_block_limit:
             continue
         slides.append(_normalize_slide(raw, block))
         per_block_counts[source_block_id] = per_block_counts.get(source_block_id, 0) + 1
@@ -883,6 +1109,9 @@ def _build_final_slide(slide: dict, block: dict, slide_number: int) -> dict:
         "data": slide["data"],
         "event_type": slide["event_type"],
         "event_summary": slide["event_summary"],
+        "slide_anchor_id": slide.get("slide_anchor_id"),
+        "beat_id": slide.get("beat_id"),
+        "anchor_role": slide.get("anchor_role"),
         "source_text": block["text"],
         "source_ref": {
             "source_block_id": block["source_block_id"],
@@ -892,6 +1121,7 @@ def _build_final_slide(slide: dict, block: dict, slide_number: int) -> dict:
             "sub_part_index": block.get("sub_part_index"),
             "sub_part_name": block.get("sub_part_name"),
             "segments": block.get("source_refs", []),
+            "slide_anchors": block.get("slide_anchors") or [],
         },
         "importance": slide.get("importance", 3),
         **({"fallback_reason": slide["fallback_reason"]} if slide.get("fallback_reason") else {}),
@@ -949,13 +1179,16 @@ def generate_slides_from_script(
         target_words=context_words,
         max_slides=max_slides,
     )
+    content_plan = _load_content_plan(source)
+    slide_anchors = _extract_slide_anchors_from_plan(content_plan)
+    _assign_slide_anchors_to_source_blocks(source_blocks, slide_anchors)
 
     if not source_blocks:
         raise ValueError("Aucun bloc source exploitable")
 
     logger.info(
         "PIPELINE_SLIDES_START folder=%s content_job=%s platform=%s words=%s source_segments=%s "
-        "context_windows=%s max_slides=%s pace=%s context_words=%s batch_size=%s model=%s",
+        "context_windows=%s max_slides=%s pace=%s context_words=%s batch_size=%s model=%s anchors=%s",
         folder_id,
         source.get("content_job_id"),
         source.get("platform_id"),
@@ -967,6 +1200,7 @@ def generate_slides_from_script(
         effective_words_per_slide,
         batch_size,
         model,
+        len(slide_anchors),
     )
 
     planned = []
@@ -981,14 +1215,18 @@ def generate_slides_from_script(
                 math.ceil(max_slides * (len(batch) / max(1, len(source_blocks)))) + 1,
             ),
         )
+        batch_anchor_count = sum(len(block.get("slide_anchors") or []) for block in batch)
+        if batch_anchor_count:
+            max_batch_slides = max(max_batch_slides, min(batch_anchor_count, max_slides))
         logger.info(
-            "PIPELINE_SLIDES_BATCH_START folder=%s content_job=%s batch=%s-%s blocks=%s max_batch_slides=%s",
+            "PIPELINE_SLIDES_BATCH_START folder=%s content_job=%s batch=%s-%s blocks=%s max_batch_slides=%s anchors=%s",
             folder_id,
             source.get("content_job_id"),
             start,
             start + len(batch) - 1,
             len(batch),
             max_batch_slides,
+            batch_anchor_count,
         )
         try:
             batch_slides = _generate_batch(batch, source["program_title"], model, pace_config, max_batch_slides)
@@ -1014,6 +1252,7 @@ def generate_slides_from_script(
                 "end_block": batch[-1]["source_block_id"],
                 "blocks": len(batch),
                 "max_slides": max_batch_slides,
+                "anchors": batch_anchor_count,
                 "status": status,
             }
         )
@@ -1033,6 +1272,8 @@ def generate_slides_from_script(
             "slide_id": slide["slide_id"],
             "type": slide["event_type"],
             "summary": slide["event_summary"],
+            "slide_anchor_id": slide.get("slide_anchor_id"),
+            "beat_id": slide.get("beat_id"),
             "start_time": None,
             "end_time": None,
             "source_block_id": slide["source_ref"]["source_block_id"],
@@ -1051,6 +1292,7 @@ def generate_slides_from_script(
             "word_end": block["word_end"],
             "word_count": block["word_count"],
             "source_refs": block.get("source_refs", []),
+            "slide_anchors": block.get("slide_anchors") or [],
             "excerpt": _shorten(block.get("text", ""), 360),
         }
         for block in source_blocks
@@ -1060,15 +1302,18 @@ def generate_slides_from_script(
         "slides": final_slides,
         "timeline": timeline,
         "stats": {
-            "generation_mode": "script",
+            "generation_mode": "script_anchor_first" if slide_anchors else "script",
             "folder_id": source["folder_id"],
             "folder_name": source["folder_name"],
             "job_id": job_id,
             "source": "content_generation_segments",
+            "content_plan_source": CONTENT_PLAN_BLOB if content_plan else None,
             "source_words": total_words,
             "source_segments": len(source["segments"]),
             "source_blocks": len(source_blocks),
             "source_windows": len(source_blocks),
+            "slide_anchors_found": len(slide_anchors),
+            "slide_anchors_attached": sum(len(block.get("slide_anchors") or []) for block in source_blocks),
             "pace": pace_config["label"],
             "context_words": effective_words_per_slide,
             "max_slides": max_slides,
@@ -1078,11 +1323,14 @@ def generate_slides_from_script(
             "model": model,
         },
         "pipeline_debug": {
-            "generation_mode": "script",
+            "generation_mode": "script_anchor_first" if slide_anchors else "script",
+            "slide_anchors": slide_anchors,
             "source_blocks": source_block_debug,
             "slide_plan": [
                 {
                     "source_block_id": slide["source_block_id"],
+                    "slide_anchor_id": slide.get("slide_anchor_id"),
+                    "beat_id": slide.get("beat_id"),
                     "template": slide["template_type"],
                     "event_type": slide["event_type"],
                     "title_hint": slide["data"].get("title", ""),

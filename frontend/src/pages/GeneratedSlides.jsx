@@ -236,7 +236,7 @@ export default function GeneratedSlides() {
     return colors[type] || '#6B7280';
   };
 
-  const isScriptMode = generationMode === 'script' || stats?.generation_mode === 'script';
+  const isScriptMode = (generationMode || '').startsWith('script') || (stats?.generation_mode || '').startsWith('script');
   const statsItems = stats
     ? (isScriptMode
       ? [
@@ -244,6 +244,7 @@ export default function GeneratedSlides() {
           { label: 'Mots', value: stats.source_words || 0 },
           { label: 'Sources', value: stats.source_blocks || 0 },
           { label: 'Rythme', value: stats.pace || slidePace },
+          ...(stats.slide_anchors_found ? [{ label: 'Anchors', value: stats.slide_anchors_found }] : []),
           { label: 'Slides max/jour', value: stats.max_slides || maxSlides },
           { label: 'Slides', value: stats.slides_generated || slides.length },
           ...(stats.audio_sync?.enabled ? [{ label: 'Sync audio', value: stats.audio_sync.mode || 'active' }] : [])

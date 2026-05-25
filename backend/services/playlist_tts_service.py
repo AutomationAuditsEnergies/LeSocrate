@@ -223,22 +223,24 @@ def _call_claude_reformulate(course_text, progress_callback=None):
             })
             continue
 
-        # Contexte des blocs précédents
+        # Contexte des cours précédents
         context_prev = ""
         if blocs and blocs[-1].get("content"):
             last_content = blocs[-1]["content"]
             last_sentences = re.sub(r'\[.*?\]', '', last_content).split(".")[-3:]
-            context_prev = f"\nLe bloc précédent se terminait par : \"{'. '.join(s.strip() for s in last_sentences if s.strip())}\"\nFais une reprise naturelle."
+            context_prev = f"\nLe cours précédent se terminait par : \"{'. '.join(s.strip() for s in last_sentences if s.strip())}\"\nFais une reprise naturelle."
 
         bloc_prompt = f"""Tu es un professeur passionné qui donne un cours en présentiel à ses élèves.
 Reformule le contenu ci-dessous en un script oral pour TTS (fish.audio S2-Pro).
 
-BLOC {bloc_num}/7 — durée max : {duration} minutes — vise environ {target} mots (hors tags entre crochets).
+COURS INTERNE {bloc_num}/7 — contrainte audio interne : {duration} minutes, environ {target} mots (hors tags entre crochets).
 {context_prev}
 
 RÈGLE ABSOLUE : REFORMULE FIDÈLEMENT LE CONTENU SOURCE CI-DESSOUS.
 - N'invente RIEN. Ne rajoute RIEN qui ne soit pas dans le contenu source.
-- Si le contenu source est court, le bloc sera court. C'est NORMAL. Ne rallonge pas artificiellement.
+- Si le contenu source est court, le cours sera court. C'est NORMAL. Ne rallonge pas artificiellement.
+- Ne mentionne jamais côté apprenant le mot "bloc", les horaires, les créneaux,
+  le planning, la durée du fichier ou le budget mots.
 - Tu peux reformuler, illustrer avec des exemples issus du texte, expliquer autrement, mais
   le fond doit rester fidèle au contenu fourni.
 

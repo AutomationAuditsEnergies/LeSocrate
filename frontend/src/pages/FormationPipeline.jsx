@@ -89,7 +89,7 @@ const STEP_LABELS = [
   { icon: 'auto_stories', label: 'Programme global' },
   { icon: 'calendar_view_week', label: 'Programmes journée' },
   { icon: 'edit_note', label: 'Génération cours' },
-  { icon: 'description', label: 'Textes prêts' },
+  { icon: 'slideshow', label: 'Slides + audio' },
 ]
 
 const AUTO_PILOT_STEP_LABELS = {
@@ -100,13 +100,37 @@ const AUTO_PILOT_STEP_LABELS = {
   daily: 'programmes journée',
   content: 'génération texte',
   volume_safety: 'sécurité volume',
-  humanization_review: 'humanisation',
-  review: 'révision conformité',
-  post_review_docs: 'Word 2',
-  audio: 'synthèse audio',
-  done: 'texte prêt',
+  plan_adherence_review: 'adhérence au plan',
+  humanization_review: 'adhérence plan + humanisation',
+  audio_word_calibration: 'calibrage blocs audio',
+  review: 'conformité finale',
+  word_budget_review: 'vérification budget mots',
+  post_review_docs: 'Word 2 + artefacts',
+  slides: 'slides anchor-first',
+  audio: 'TTS + synchronisation slides',
+  done: 'texte + slides prêts',
   '?': '—',
 }
+
+const AUTO_PILOT_ORDER = [
+  'start',
+  'reac',
+  'kb',
+  'global',
+  'daily',
+  'content',
+  'volume_safety',
+  'humanization_review',
+  'review',
+  'post_review_docs',
+  'slides',
+  'audio',
+  'done',
+]
+const AUTO_PILOT_ORDER_INDEX = AUTO_PILOT_ORDER.reduce((acc, key, idx) => {
+  acc[key] = idx
+  return acc
+}, {})
 
 // ─── Connecteurs visuels entre étapes du pipeline ─────────────────────────────
 // Matérialise le flux de données : RNCP → REAC → split (API/CC) → ... → merge → TTS.
@@ -487,6 +511,11 @@ function eventLabel(eventType) {
     review_started: 'Review démarrée',
     review_completed: 'Review terminée',
     review_failed: 'Review échouée',
+    audio_block_word_calibration_completed: 'Calibrage blocs audio terminé',
+    day_word_budget_verified: 'Budget mots journée vérifié',
+    continue_after_text_plan_adherence_completed: 'Adhérence au plan terminée',
+    continue_after_text_humanization_completed: 'Humanisation terminée',
+    continue_after_text_review_completed: 'Conformité finale terminée',
     audio_started: 'Audio démarré',
     audio_progress: 'Fichier playlist en cours',
     audio_folder_started: 'Journée audio démarrée',
@@ -494,6 +523,9 @@ function eventLabel(eventType) {
     audio_folder_failed: 'Journée audio échouée',
     audio_completed: 'Audio terminé',
     audio_failed: 'Audio échoué',
+    slides_folder_started: 'Slides journée démarrées',
+    slides_folder_completed: 'Slides journée terminées',
+    slides_folder_failed: 'Slides journée échouées',
     continue_after_text_started: 'Reprise aval démarrée',
     continue_after_text_completed: 'Reprise aval terminée',
     continue_after_text_failed: 'Reprise aval échouée',
@@ -535,10 +567,17 @@ function PipelineDiagnosticPanel({ diagnostic, loading, error, onRefresh }) {
   const [selectedEvent, setSelectedEvent] = useState(null)
   const [eventFilter, setEventFilter] = useState('audio')
   const audioEvents = events.filter(event => event.step === 'audio' || String(event.event_type || '').startsWith('audio_'))
-  const reviewEvents = events.filter(event => event.step === 'review' || String(event.event_type || '').includes('review'))
+  const reviewEvents = events.filter(event =>
+    ['review', 'humanization_review', 'plan_adherence_review', 'audio_word_calibration', 'word_budget_review'].includes(event.step) ||
+    String(event.event_type || '').includes('review') ||
+    String(event.event_type || '').includes('humanization') ||
+    String(event.event_type || '').includes('calibration')
+  )
+  const slidesEvents = events.filter(event => event.step === 'slides' || String(event.event_type || '').includes('slides'))
   const visibleEvents = (
     eventFilter === 'audio' ? audioEvents
       : eventFilter === 'review' ? reviewEvents
+      : eventFilter === 'slides' ? slidesEvents
       : events
   ).slice(-18)
   const latestAudioEvent = audioEvents[audioEvents.length - 1]
@@ -791,6 +830,7 @@ function PipelineDiagnosticPanel({ diagnostic, loading, error, onRefresh }) {
         {[
           ['audio', 'Audio'],
           ['review', 'Review'],
+          ['slides', 'Slides'],
           ['all', 'Tout'],
         ].map(([value, label]) => (
           <button
@@ -913,9 +953,11 @@ function PipelineActiveNotice({ job, autoPilotState, diagnostic, contentFolders 
         <div style={{ fontSize: '12px', color: '#94a3b8', marginTop: '3px' }}>
           {stepKey === 'content'
             ? `Génération texte en cours — ${completed}/${expected || job.nb_days} journée${(expected || job.nb_days) > 1 ? 's' : ''} terminée${completed > 1 ? 's' : ''}`
-            : stepKey === 'audio'
-              ? `Synthèse audio en cours — ${diagnostic?.folders?.length || contentFolders.length || expected || job.nb_days} journée${(expected || job.nb_days) > 1 ? 's' : ''} prévue${(expected || job.nb_days) > 1 ? 's' : ''}`
-              : 'La pipeline travaille sur cette étape.'}
+            : stepKey === 'slides'
+              ? `Génération des decks slides anchor-first — ${contentFolders.filter(folder => (folder.slide_count || 0) > 0).length}/${expected || job.nb_days} journée${(expected || job.nb_days) > 1 ? 's' : ''} prête${(expected || job.nb_days) > 1 ? 's' : ''}`
+              : stepKey === 'audio'
+                ? `Synthèse audio en cours — ${diagnostic?.folders?.length || contentFolders.length || expected || job.nb_days} journée${(expected || job.nb_days) > 1 ? 's' : ''} prévue${(expected || job.nb_days) > 1 ? 's' : ''}`
+                : 'La pipeline travaille sur cette étape.'}
           {activeFolder ? ` · dossier actif : ${activeFolder.folder_label || `F${activeFolder.folder_id}`}` : ''}
           {ttsMode ? <> · TTS : <strong>{ttsMode}</strong></> : null}
           {model ? <> · modèle : <strong>{pipelineModelLabel(model)}</strong></> : null}
@@ -1071,6 +1113,284 @@ function Stepper({ currentStep, status }) {
           </div>
         )
       })}
+    </div>
+  )
+}
+
+function hasCompletedPipelineEvent(events, predicate) {
+  return (events || []).some(event => event?.status === 'completed' && predicate(event))
+}
+
+function PipelineStagePill({ stage, index }) {
+  const tone = stage.done
+    ? { color: '#34d399', bg: 'rgba(16,185,129,0.10)', border: 'rgba(16,185,129,0.24)', icon: 'check_circle' }
+    : stage.active
+      ? { color: '#fbbf24', bg: 'rgba(245,158,11,0.10)', border: 'rgba(245,158,11,0.32)', icon: 'hourglass_empty' }
+      : { color: '#64748b', bg: 'rgba(30,41,59,0.42)', border: 'rgba(99,102,241,0.13)', icon: stage.icon }
+  const label = stage.done ? 'OK' : stage.active ? 'En cours' : stage.optional ? 'Optionnel' : 'À venir'
+
+  return (
+    <div style={{
+      display: 'grid',
+      gridTemplateColumns: '30px minmax(0, 1fr)',
+      gap: '9px',
+      alignItems: 'start',
+      padding: '10px 11px',
+      borderRadius: '8px',
+      border: `1px solid ${tone.border}`,
+      background: tone.bg,
+      minHeight: '92px',
+    }}>
+      <div style={{
+        width: '28px',
+        height: '28px',
+        borderRadius: '8px',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        color: tone.color,
+        background: 'rgba(15,23,42,0.52)',
+        fontSize: '15px',
+      }}>
+        <Icon name={tone.icon} />
+      </div>
+      <div style={{ minWidth: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '7px', flexWrap: 'wrap', marginBottom: '4px' }}>
+          <span style={{ color: '#64748b', fontSize: '10.5px', fontWeight: 700 }}>
+            {String(index + 1).padStart(2, '0')}
+          </span>
+          <span style={{ color: tone.color, fontSize: '10.5px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+            {label}
+          </span>
+        </div>
+        <div style={{ color: stage.done || stage.active ? '#e2e8f0' : '#94a3b8', fontSize: '12.5px', fontWeight: 700, lineHeight: 1.3 }}>
+          {stage.title}
+        </div>
+        <div style={{ color: stage.done || stage.active ? '#94a3b8' : '#64748b', fontSize: '11.5px', lineHeight: 1.35, marginTop: '4px' }}>
+          {stage.detail}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function PipelineVisualMap({ job, currentStep, autoPilotState, contentFolders, volumeAudit, diagnostic }) {
+  if (!job) return null
+
+  const events = diagnostic?.events || []
+  const activeAutoStep = autoPilotState?.status === 'running' ? autoPilotState.step : null
+  const activeAutoIdx = AUTO_PILOT_ORDER_INDEX[activeAutoStep] ?? -1
+  const autoDone = autoPilotState?.status === 'done' || job.auto_pilot_step === 'done'
+  const autoPassed = key => {
+    const idx = AUTO_PILOT_ORDER_INDEX[key]
+    return autoDone || (activeAutoIdx >= 0 && idx >= 0 && activeAutoIdx > idx)
+  }
+  const autoActive = key => activeAutoStep === key
+
+  const folders = contentFolders || []
+  const expectedFolders = diagnostic?.folder_resolution?.expected_count || job.nb_days || folders.length || 0
+  const completedFolders = folders.filter(f => f.content_status === 'completed').length
+  const allContentCompleted = folders.length > 0 && folders.every(f => f.content_status === 'completed')
+  const allHumanized = folders.length > 0 && folders.every(f => (f.segments_completed || 0) > 0 && (f.segments_humanized || 0) >= (f.segments_completed || 0))
+  const allReviewed = folders.length > 0 && folders.every(f => {
+    const completed = f.segments_completed || 0
+    const processed = (f.segments_reviewed || 0) + (f.segments_review_errors || 0)
+    return completed > 0 && processed >= completed
+  })
+  const allSlidesGenerated = folders.length > 0 && folders.every(f => (f.slide_count || 0) > 0)
+  const audioPlanned = Boolean(autoPilotState?.generate_audio || job.auto_pilot_generate_audio)
+  const textReady = TEXT_AVAILABLE_STATUSES.has(job.status)
+  const audioDone = AUDIO_DONE_STATUSES.has(job.status)
+  const audioActive = AUDIO_ACTIVE_STATUSES.has(job.status) || autoActive('audio')
+  const volumeOkFromAudit = Boolean(volumeAudit?.folders?.length) &&
+    volumeAudit.folders.every(f => (f.deficit || 0) <= 0)
+  const volumeDone = Boolean(job.auto_pilot_volume_done) || volumeOkFromAudit ||
+    allHumanized || allReviewed || Boolean(job.auto_pilot_post_review_docs_done)
+  const planAdherenceDone = hasCompletedPipelineEvent(events, e => e.step === 'plan_adherence_review') ||
+    allHumanized || allReviewed || autoPassed('humanization_review')
+  const calibrationDone = hasCompletedPipelineEvent(events, e => e.step === 'audio_word_calibration') ||
+    allReviewed || Boolean(job.auto_pilot_post_review_docs_done)
+  const finalBudgetDone = hasCompletedPipelineEvent(events, e => e.step === 'word_budget_review') ||
+    Boolean(job.auto_pilot_post_review_docs_done) || audioDone
+  const postDocsDone = Boolean(job.auto_pilot_post_review_docs_done) || audioDone ||
+    (textReady && allReviewed && !autoActive('post_review_docs'))
+  const slidesDone = allSlidesGenerated || hasCompletedPipelineEvent(events, e => e.step === 'slides' && e.event_type === 'step_completed') ||
+    autoPassed('slides')
+
+  const contentActive = autoActive('content') || (job.status === 'tts_launched' && !allContentCompleted)
+  const stages = [
+    {
+      title: 'Initialisation RNCP et plateforme',
+      detail: `Job ${job.job_label || `#${job.id}`} créé, plateforme cible verrouillée.`,
+      icon: 'search',
+      done: currentStep > 0 || autoPassed('start'),
+      active: currentStep === 0 || autoActive('start'),
+    },
+    {
+      title: 'Téléchargement REAC',
+      detail: 'Sources officielles récupérées avant enrichissement métier.',
+      icon: 'download',
+      done: Boolean(job.reac_available) || currentStep > 1 || autoPassed('reac'),
+      active: job.status === 'reac_fetching' || autoActive('reac'),
+    },
+    {
+      title: 'Enrichissement Knowledge Base',
+      detail: 'Compétences, cas terrain, pièges fréquents et vocabulaire métier.',
+      icon: 'psychology',
+      done: (job.kb_total || 0) > 0 || currentStep > 2 || autoPassed('kb'),
+      active: job.status === 'kb_building' || autoActive('kb'),
+    },
+    {
+      title: 'Programme global',
+      detail: 'Architecture complète de la formation à partir du REAC enrichi.',
+      icon: 'auto_stories',
+      done: Boolean(job.global_program_validated) || currentStep > 3 || autoPassed('global'),
+      active: job.status === 'global_generating' || autoActive('global'),
+    },
+    {
+      title: 'Programmes journée',
+      detail: 'Découpage pédagogique par journées, thèmes et chapitres.',
+      icon: 'calendar_view_week',
+      done: Boolean(job.daily_programs_validated) || currentStep > 4 || autoPassed('daily'),
+      active: job.status === 'daily_splitting' || autoActive('daily'),
+    },
+    {
+      title: 'Plan JSON verrouillé',
+      detail: 'Validation structure, budgets, cours 7, ouvertures et conclusions.',
+      icon: 'schema',
+      done: allContentCompleted || autoPassed('content'),
+      active: contentActive,
+    },
+    {
+      title: 'Teaching beats et anchors slides',
+      detail: 'Exemples, conseils, pièges, comparaisons et templates associés au plan.',
+      icon: 'account_tree',
+      done: allContentCompleted || autoPassed('content'),
+      active: contentActive,
+    },
+    {
+      title: 'Génération par section',
+      detail: `${completedFolders}/${expectedFolders || job.nb_days} journée${(expectedFolders || job.nb_days) > 1 ? 's' : ''} générée${completedFolders > 1 ? 's' : ''}, section par section.`,
+      icon: 'edit_note',
+      done: allContentCompleted || autoPassed('content'),
+      active: contentActive,
+    },
+    {
+      title: 'Micro-conformité éthique',
+      detail: 'Contrôle local des règles éthiques #1-#16 sur chaque portion générée.',
+      icon: 'shield',
+      done: allContentCompleted || autoPassed('content'),
+      active: contentActive,
+    },
+    {
+      title: 'Artefacts structurés',
+      detail: 'content-plan, draft-sections, course-scripts et reviewed-scripts.',
+      icon: 'data_object',
+      done: allContentCompleted || autoPassed('content'),
+      active: contentActive,
+    },
+    {
+      title: 'Calibrage budget texte',
+      detail: 'Alignement des volumes de mots sur les blocs audio attendus.',
+      icon: 'speed',
+      done: allContentCompleted || autoPassed('content'),
+      active: contentActive,
+    },
+    {
+      title: 'Sécurité volume',
+      detail: 'Audit et enrichissement ciblé si une journée est sous le budget audio.',
+      icon: 'auto_fix_high',
+      done: volumeDone || autoPassed('volume_safety'),
+      active: autoActive('volume_safety'),
+    },
+    {
+      title: 'Adhérence au plan',
+      detail: 'Vérifie ordre, reprises, conclusions, doublons d’intro et fuites d’horaires.',
+      icon: 'rule',
+      done: planAdherenceDone,
+      active: autoActive('humanization_review'),
+    },
+    {
+      title: 'Humanisation orale',
+      detail: 'Finition légère : rythme, transitions, naturel et fluidité TTS.',
+      icon: 'auto_fix_high',
+      done: allHumanized || allReviewed || Boolean(job.auto_pilot_post_review_docs_done),
+      active: autoActive('humanization_review'),
+    },
+    {
+      title: 'Calibrage blocs audio',
+      detail: 'Recontrôle des blocs après humanisation et après conformité finale.',
+      icon: 'graphic_eq',
+      done: calibrationDone,
+      active: autoActive('review') || autoActive('post_review_docs'),
+    },
+    {
+      title: 'Conformité finale',
+      detail: 'Review stricte hors micro-éthique : hallucinations, TTS, oral et architecture.',
+      icon: 'verified_user',
+      done: allReviewed || Boolean(job.auto_pilot_post_review_docs_done) || autoPassed('review'),
+      active: autoActive('review'),
+    },
+    {
+      title: 'Budget final, Word 2 et audio-plan',
+      detail: 'Vérification finale, assemblage Word 2 et artefacts prêts pour l’audio.',
+      icon: 'description',
+      done: postDocsDone || finalBudgetDone || autoPassed('post_review_docs'),
+      active: autoActive('post_review_docs'),
+    },
+    {
+      title: 'Slides anchor-first',
+      detail: 'Deck généré depuis les anchors du JSON, puis persisté par journée.',
+      icon: 'slideshow',
+      done: slidesDone,
+      active: autoActive('slides'),
+    },
+    {
+      title: 'TTS et synchronisation slides',
+      detail: audioPlanned
+        ? 'Synthèse audio avec timings slides/audio et génération des fichiers MP3.'
+        : 'Disponible après le texte et les slides ; non lancé automatiquement sans option audio.',
+      icon: 'record_voice_over',
+      done: audioDone,
+      active: audioActive,
+      optional: !audioPlanned,
+    },
+    {
+      title: 'Finalisation',
+      detail: audioPlanned ? 'Module validé, voix mise à jour et health-check final.' : 'Texte, Word 2 et slides prêts ; audio lançable séparément.',
+      icon: 'inventory_2',
+      done: audioDone || (autoDone && !audioPlanned),
+      active: autoActive('done'),
+    },
+  ]
+
+  const doneCount = stages.filter(stage => stage.done || stage.optional).length
+  const activeLabel = AUTO_PILOT_STEP_LABELS[activeAutoStep] || (activeAutoStep ? String(activeAutoStep).replace(/_/g, ' ') : null)
+
+  return (
+    <div style={{ ...S.card, marginBottom: '22px', padding: '18px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap', marginBottom: '12px' }}>
+        <div style={{ ...S.cardTitle, marginBottom: 0, flex: 1, minWidth: 0 }}>
+          <Icon name="route" /> Roadmap auto-pilot API
+        </div>
+        <span style={S.tag(activeAutoStep ? 'amber' : doneCount === stages.length ? 'green' : 'violet')}>
+          <Icon name={activeAutoStep ? 'hourglass_empty' : 'timeline'} />
+          {activeAutoStep ? `Actif : ${activeLabel}` : `${doneCount}/${stages.length} étapes`}
+        </span>
+      </div>
+      <div style={{ fontSize: '12px', color: '#94a3b8', lineHeight: 1.45, marginBottom: '14px' }}>
+        Cette carte montre le vrai trajet de fabrication : plan structuré, génération par sections,
+        micro-review éthique, artefacts, reviews, slides anchor-first, puis audio si activé.
+      </div>
+      <div style={{
+        display: 'grid',
+        gridTemplateColumns: 'repeat(auto-fit, minmax(255px, 1fr))',
+        gap: '9px',
+      }}>
+        {stages.map((stage, index) => (
+          <PipelineStagePill key={`${index}-${stage.title}`} stage={stage} index={index} />
+        ))}
+      </div>
     </div>
   )
 }
@@ -2277,6 +2597,17 @@ export default function FormationPipeline() {
   }, [])
 
   useEffect(() => {
+    if (!selectedJobId || !autoPilotState || !['running', 'starting'].includes(autoPilotState.status)) return
+    fetchContentFolders(selectedJobId)
+    fetchVolumeAudit(selectedJobId)
+    const interval = setInterval(() => {
+      fetchContentFolders(selectedJobId)
+      fetchVolumeAudit(selectedJobId)
+    }, 5000)
+    return () => clearInterval(interval)
+  }, [selectedJobId, autoPilotState?.status, autoPilotState?.step, fetchContentFolders, fetchVolumeAudit])
+
+  useEffect(() => {
     const ids = Object.keys(continuingAfterTextFolders)
     if (ids.length === 0 || !selectedJobId) return
     const interval = setInterval(() => {
@@ -2856,6 +3187,14 @@ export default function FormationPipeline() {
 
             {/* Stepper */}
             <Stepper currentStep={currentStep} status={job.status} />
+            <PipelineVisualMap
+              job={job}
+              currentStep={currentStep}
+              autoPilotState={autoPilotState}
+              contentFolders={contentFolders}
+              volumeAudit={volumeAudit}
+              diagnostic={pipelineDiagnostic}
+            />
 
             {/* Bandeau missions Claude Code en attente d'import (Phase 3) */}
             {DUAL_COLUMN_ENABLED && Object.keys(pendingMissions).length > 0 && (
@@ -3491,7 +3830,7 @@ export default function FormationPipeline() {
                                     ? <span style={{ color: '#f87171' }}>Erreur — {folder.error_message || 'inconnu'}</span>
                                     : `${folder.segments_completed}/${folder.segments_total} segments — ${pct}%`}
                               </div>
-                              {/* Statut révision conformité (étape 6bis).
+	                              {/* Statut révision conformité (étape 6bis).
                                   Trois états distincts :
                                   - En cours : ambre, progression X/Y
                                   - Terminé tout OK : vert, "N segments révisés"
@@ -3512,13 +3851,13 @@ export default function FormationPipeline() {
                                     </div>
                                   )
                                 }
-                                if (processed >= nComp && nComp > 0 && nErr === 0) {
-                                  return (
-                                    <div style={{ fontSize: '12px', color: '#34d399', marginTop: '2px' }}>
-                                      <Icon name="verified" style={{ fontSize: '12px' }} /> Conformité révisée ({nRev} segments)
-                                    </div>
-                                  )
-                                }
+	                                if (processed >= nComp && nComp > 0 && nErr === 0) {
+	                                  return (
+	                                    <div style={{ fontSize: '12px', color: '#34d399', marginTop: '2px' }}>
+	                                      <Icon name="verified" style={{ fontSize: '12px' }} /> Conformité finale révisée ({nRev} segments)
+	                                    </div>
+	                                  )
+	                                }
                                 if (processed >= nComp && nComp > 0 && nErr > 0) {
                                   return (
                                     <div style={{ fontSize: '12px', color: '#fb923c', marginTop: '2px' }}>
@@ -3535,13 +3874,25 @@ export default function FormationPipeline() {
                                 }
                                 return null
                               })()}
-                            </div>
-                            {/* ─── 3 sous-zones du flux d'une journée ──────────
-                                 1. Texte généré (lecture / téléchargements / rapport)
-                                 2. Sécurité volume (enrichissement si sous budget audio)
-                                 3. Révision conformité (audit règles #1-#27)
-                                 Séparées par des FlowArrowDown pour matérialiser
-                                 l'ordre du flux : génération → volume → révision. */}
+                              {isDone && (
+                                <div style={{
+                                  fontSize: '12px',
+                                  color: (folder.slide_count || 0) > 0 ? '#60a5fa' : '#64748b',
+                                  marginTop: '2px',
+                                }}>
+                                  <Icon name="slideshow" style={{ fontSize: '12px' }} />{' '}
+                                  {(folder.slide_count || 0) > 0
+                                    ? `Slides anchor-first prêtes (${folder.slide_count})`
+                                    : 'Slides anchor-first en attente'}
+                                </div>
+                              )}
+	                            </div>
+	                            {/* ─── 3 sous-zones du flux d'une journée ──────────
+	                                 1. Texte généré (lecture / téléchargements / rapport)
+	                                 2. Sécurité volume (enrichissement si sous budget audio)
+	                                 3. Révision conformité finale (hors micro-éthique)
+	                                 Séparées par des FlowArrowDown pour matérialiser
+	                                 l'ordre du flux : génération → volume → révision. */}
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
                               {/* ── Zone 1 : Texte généré ──────────────────── */}
                               <div style={{
@@ -3700,10 +4051,10 @@ export default function FormationPipeline() {
                                         </div>
                                         <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
                                           {[
-                                            { step: 'content', label: 'Génération texte', icon: 'text_fields', title: 'Purge les segments et régénère le texte depuis zéro, puis enchaîne volume + conformité + slides + TTS' },
-                                            { step: 'volume', label: 'Volume', icon: 'auto_fix_high', title: 'Reset + volume + conformité + Word 2 + slides + TTS' },
-                                            { step: 'review', label: 'Conformité', icon: 'rule', title: 'Saute le volume — lance conformité + Word 2 + slides + TTS' },
-                                            { step: 'slides', label: 'Slides', icon: 'slideshow', title: 'Saute volume et conformité — supprime le deck slides existant, régénère les slides puis lance le TTS' },
+                                            { step: 'content', label: 'Génération texte', icon: 'text_fields', title: 'Purge les segments et régénère le texte depuis zéro, puis enchaîne plan JSON, micro-éthique, volume, reviews, slides et TTS' },
+                                            { step: 'volume', label: 'Volume', icon: 'auto_fix_high', title: 'Reset + sécurité volume + adhérence plan + humanisation + conformité finale + Word 2 + slides + TTS' },
+                                            { step: 'review', label: 'Reviews', icon: 'rule', title: 'Saute le volume — lance adhérence plan + humanisation + conformité finale + Word 2 + slides + TTS' },
+                                            { step: 'slides', label: 'Slides', icon: 'slideshow', title: 'Saute volume et reviews — supprime le deck slides existant, régénère les slides puis lance le TTS' },
                                             { step: 'tts', label: 'TTS', icon: 'record_voice_over', title: 'Saute tout — conserve les slides existantes et relance uniquement le TTS dessus' },
                                             { step: 'tts_fast', label: 'TTS — pipeline presque instantanée', icon: 'bolt', title: 'Mode test uniquement — conserve les slides existantes, relance le TTS Edge avec parallélisation/cache, sans modifier le chemin TTS normal' },
                                           ].map(({ step, label, icon, title }) => (
@@ -3809,7 +4160,7 @@ export default function FormationPipeline() {
                                   alignItems: 'center',
                                   gap: '5px',
                                 }}>
-                                  <Icon name="rule" style={{ fontSize: '12px' }} /> Révision conformité <span style={{ fontWeight: 400, opacity: 0.7, textTransform: 'none', letterSpacing: 'normal' }}>· règles #1-#27</span>
+	                                  <Icon name="rule" style={{ fontSize: '12px' }} /> Conformité finale <span style={{ fontWeight: 400, opacity: 0.7, textTransform: 'none', letterSpacing: 'normal' }}>· hors micro-éthique</span>
                                 </div>
                                 {(() => {
                                   const reviewing = !!reviewingFolders[folder.folder_id]
@@ -4086,8 +4437,8 @@ export default function FormationPipeline() {
             {/* ─── Connecteur fin-pipeline : merge des 2 colonnes vers TTS ── */}
             {DUAL_COLUMN_ENABLED ? <FlowMerge /> : <FlowArrowDown />}
 
-            {/* ── Étape 7 : Synthèse TTS Fish Audio ── */}
-            <StepBlock stepIndex={6} currentStep={currentStep} status={job.status} title="Synthèse TTS Fish Audio" icon="record_voice_over">
+            {/* ── Étape 7 : Slides synchronisées + synthèse TTS ── */}
+            <StepBlock stepIndex={6} currentStep={currentStep} status={job.status} title="Slides synchronisées & synthèse TTS" icon="record_voice_over">
               {AUDIO_DONE_STATUSES.has(job.status) || AUDIO_ACTIVE_STATUSES.has(job.status) ? (
                 <div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '10px', color: AUDIO_ACTIVE_STATUSES.has(job.status) ? '#fbbf24' : '#34d399', fontSize: '15px', fontWeight: 600, marginBottom: '12px' }}>
@@ -4232,9 +4583,9 @@ export default function FormationPipeline() {
                 </div>
               ) : (
                 <div>
-                  <p style={{ fontSize: '14px', color: '#94a3b8', marginBottom: '8px' }}>
-                    Lance la synthèse <strong style={{ color: '#a78bfa' }}>Fish Audio S2-Pro</strong> pour toutes les journées : 19 MP3 par jour (cours + Q&A + pauses).
-                  </p>
+	                  <p style={{ fontSize: '14px', color: '#94a3b8', marginBottom: '8px' }}>
+	                    Lance les slides synchronisées puis la synthèse <strong style={{ color: '#a78bfa' }}>Fish Audio S2-Pro</strong> pour toutes les journées : 19 MP3 par jour (cours + Q&A + pauses).
+	                  </p>
                   <p style={{ fontSize: '13px', color: '#475569', marginBottom: '16px' }}>
                     Compter ~1h à 2h par journée. Étape irréversible côté facturation Fish Audio — vérifiez d'abord les textes via "Voir" ou "PDF" ci-dessus.
                   </p>

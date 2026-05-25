@@ -7,16 +7,41 @@ Le plan est libre pendant sa création, puis obligatoire pour la génération.
 Contraintes :
 - 7 cours exactement.
 - 2 à 4 parties par cours.
-- Cours 1 de la première journée : accueil, programme annuel synthétique,
-  thèmes de la journée, thème/objectifs/plan du cours.
-- Cours 1 d'une journée suivante : accueil de journée et reprise de progression,
+- Cours interne 1 de la première journée : accueil, programme annuel synthétique,
+  thèmes de la journée, transition vers premier grand thème, objectif/axes.
+- Cours interne 1 d'une journée suivante : accueil de journée et reprise de progression,
   sans refaire la présentation annuelle complète.
-- Cours 2 à 6 : reprise naturelle cohérente avec le vocal précédent de fin de
-  pause/Q/R, rappel bref du cours précédent, lien avec le thème actuel,
-  thème/objectifs/plan.
-- Cours 7 : conclusion du cours, conclusion globale de journée, amorce prochaine
+- Cours internes 2 à 6 : reprise naturelle cohérente avec le vocal précédent de
+  fin de pause/Q/R, rappel bref de la partie précédente, lien avec le nouveau
+  thème, objectif/axes.
+- Cours interne 7 : conclusion de la dernière partie, conclusion globale de journée, amorce prochaine
   séance ou clôture finale, puis mention douce du tchat.
 - Les exemples non sourcés doivent rester explicitement fictifs.
 - Ne pas employer le mot "bloc" côté apprenant.
+- Les objets JSON "course" sont internes. Côté apprenant, chaque entrée doit
+  être formulée comme un grand thème, une partie, un chapitre ou une séquence de
+  la journée, jamais comme "le cours 1" ou "ce cours".
+- Les horaires, durées, créneaux, budgets mots et fichiers audio sont des
+  informations internes. Le plan peut les utiliser pour organiser la journée,
+  mais le texte final ne doit jamais les verbaliser.
+- Ne formule jamais une consigne côté apprenant du type "sans vous soucier des
+  horaires précis". Présente seulement les thèmes dans leur ordre pédagogique.
+- Les plans internes doivent se traduire à l'oral en axes naturels : "d'abord",
+  "ensuite", "enfin", pas en formule scolaire ou administrative.
+- L'ouverture porte le cadrage. Les parties de développement ne doivent pas
+  répéter l'accueil, les thèmes de la journée, le programme annuel, l'objectif
+  global ou le plan déjà annoncé.
+- Chaque partie de développement doit recevoir des `teaching_beats` : des
+  moments pédagogiques internes qui guideront le texte. Un beat peut poser une
+  définition, développer une méthode, donner un exemple, signaler un piège,
+  proposer un conseil, faire une comparaison ou récapituler.
+- Chaque `teaching_beat` peut contenir un `slide_anchor`. Active l'anchor
+  seulement si le moment mérite vraiment une slide. Ne force jamais une forme
+  visuelle si le contenu n'en a pas besoin.
+- Le catalogue de templates fait autorité : choisis un template compatible avec
+  l'intention pédagogique et le nombre réel d'items. Si le contenu n'a pas cinq
+  éléments, ne demande pas un visuel à cinq éléments.
+- Ces beats et anchors sont internes. Le texte final ne doit jamais prononcer
+  "slide", "PowerPoint", "template", "anchor" ou "teaching beat".
 
 Le JSON doit rester strictement valide.

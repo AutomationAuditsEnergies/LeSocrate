@@ -396,7 +396,7 @@ CONSIGNES :
 - Pour les Q&A, mentionne que les questions peuvent être posées dans le chat.
 - Pour les pauses, ne parle pas trop : l'intro doit rester courte.
 - Pour la pause déjeuner, l'intro NE doit faire AUCUNE référence au contenu du
-  matin ou au bloc précédent. Elle annonce uniquement la pause déjeuner.
+  matin ou au cours précédent. Elle annonce uniquement la pause déjeuner.
 - Si TRANSITION SENSIBLE ÉTÉ/HIVER vaut oui, l'outro ne doit jamais annoncer
   l'élément suivant : ni prochain cours, ni pause déjeuner, ni reprise immédiate,
   ni thème à venir. Le fichier doit rester valable si l'ordre change.
@@ -404,7 +404,7 @@ CONSIGNES :
   "intro": "" dans le JSON. Ne recrée aucune intro de pause.
 - Ton de formateur adulte, sobre, clair, professionnel.
 - Pas de "super", "génial", "bravo", "je vous vois", "levez la main", "vous m'entendez".
-- Pas d'horaires absolus.
+- Pas d'horaires, de créneaux ou de planning.
 - Pas de guillemets, pas de JSON imbriqué, pas de markdown.
 - Cibles : {target}.
 

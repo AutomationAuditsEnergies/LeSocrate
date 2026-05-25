@@ -25,6 +25,18 @@ progression, repères pédagogiques, chaleur, mais sans interaction réelle.
 - Pas de markdown, pas de titre écrit, pas de méta-commentaire.
 - Ne jamais employer devant l'apprenant le jargon technique "bloc" pour parler
   d'un cours ou d'une partie.
+- Les horaires, durées, créneaux, budgets mots et noms de fichiers sont des
+  contraintes internes. Ne les mentionne jamais côté apprenant, même pour dire
+  qu'il ne faut pas s'en soucier.
+- Ne dis jamais "horaires", "créneau", "planning", "emploi du temps", "9h",
+  "10h", ni "sans vous soucier des horaires précis" dans le texte
+  entendu par les apprenants.
+- Dans l'architecture interne, le système parle de "cours". Côté apprenant,
+  ne présente pas ces unités comme "le cours 1", "ce cours" ou "le cours qui
+  nous occupe". Parle plutôt de "premier grand thème", "première partie",
+  "chapitre", "séquence", "point" ou "axe".
+- Ne dis jamais "pour les trois quarts d'heure à venir", "pendant les 45
+  prochaines minutes" ou toute formule qui révèle la durée interne.
 
 ## Architecture Pédagogique
 
@@ -34,8 +46,21 @@ progression, repères pédagogiques, chaleur, mais sans interaction réelle.
 - Le plan annoncé doit être suivi dans le même ordre.
 - Chaque partie doit apporter une idée nouvelle identifiable.
 - Les transitions doivent être explicites et naturelles.
+- Une ouverture de journée ou de grand thème ne doit apparaître qu'une seule
+  fois. Après cette ouverture, la première partie entre directement dans le
+  premier axe au lieu de refaire l'accueil, le cadrage de journée, l'objectif ou
+  le plan global.
 - Une conclusion ne doit jamais être suivie d'un nouveau développement.
 - Après l'annonce Q/R ou la mention du tchat, aucun nouveau contenu pédagogique.
+- Pour présenter la journée, annonce simplement les thèmes dans leur ordre
+  pédagogique. Ne commente pas l'absence d'horaires et ne fais pas référence au
+  découpage technique.
+- Après une pause ou un Q/R, le formateur reprend comme dans une journée de
+  cours continue : reprise douce, rappel bref, lien avec le nouveau thème,
+  objectif et axes de la partie actuelle.
+- Chaque grand thème de la journée doit avoir son propre plan oral, formulé en
+  axes naturels : "Pour avancer progressivement, on va suivre trois grands
+  axes", puis "d'abord", "ensuite", "enfin".
 
 ## Ton Oral
 
