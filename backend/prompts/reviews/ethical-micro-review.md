@@ -1,10 +1,11 @@
 # Ethical Micro Review Prompt
 
-Rôle : vérifier uniquement la conformité éthique et sensible d'une petite
-section qui vient d'être générée.
+Rôle : vérifier uniquement la conformité éthique et sensible d'une portion de
+texte déjà générée et déjà calibrée en volume.
 
-Cette passe intervient très tôt, juste après la génération d'une section. Elle
-sert à corriger localement les risques éthiques avant l'assemblage du cours.
+Cette passe intervient après le calibrage budget texte. Elle sert à corriger
+localement les risques éthiques sur le texte qui sera réellement conservé,
+y compris les enrichissements ajoutés pendant le calibrage.
 
 Périmètre strict :
 - contenu professionnel ;

@@ -1489,6 +1489,8 @@ def _section_label(section: dict) -> str:
     kind = section.get("kind")
     if kind == "opening":
         return "introduction"
+    if kind == "course_calibrated":
+        return "cours complet calibré"
     if kind == "course_conclusion":
         return "conclusion du cours"
     if kind == "day_conclusion":
@@ -5602,13 +5604,6 @@ def _generate_structured_section(
             module_content=module_content,
             model=model,
         )
-    section_text = _run_ethical_micro_review_for_section(
-        job=job,
-        course_plan=course_plan,
-        section=section,
-        section_text=section_text,
-        model=model,
-    )
     return section_text
 
 
@@ -5649,9 +5644,14 @@ def _load_ethical_micro_rules_text() -> str:
         return _extract_rules_for_group(_load_review_rules(), _ETHICAL_MICRO_RULE_IDS)
 
 
+def _ethical_micro_max_patches(section: dict) -> int:
+    default = 8 if (section or {}).get("kind") == "course_calibrated" else 3
+    return _env_int("FORMATION_ETHICAL_MICRO_REVIEW_MAX_PATCHES", default, min_value=1)
+
+
 def _build_ethical_micro_review_prompt(*, course_plan: dict, section: dict, section_text: str, rules_text: str) -> str:
     contract = _load_prompt_file("reviews", "ethical-micro-review.md")
-    max_patches = _env_int("FORMATION_ETHICAL_MICRO_REVIEW_MAX_PATCHES", 3, min_value=1)
+    max_patches = _ethical_micro_max_patches(section)
     return f"""Tu es reviewer de conformité ÉTHIQUE en micro-passe.
 
 CONTRAT :
@@ -5813,7 +5813,8 @@ def _run_ethical_micro_review_for_section(
         section_text=section_text,
         rules_text=rules_text,
     )
-    max_tokens = _env_int("FORMATION_ETHICAL_MICRO_REVIEW_MAX_TOKENS", 1600, min_value=400)
+    default_max_tokens = 2600 if section.get("kind") == "course_calibrated" else 1600
+    max_tokens = _env_int("FORMATION_ETHICAL_MICRO_REVIEW_MAX_TOKENS", default_max_tokens, min_value=400)
     started = time.time()
     try:
         raw = _anthropic_post(
@@ -5868,7 +5869,7 @@ def _run_ethical_micro_review_for_section(
         )
         return section_text
 
-    max_patches = _env_int("FORMATION_ETHICAL_MICRO_REVIEW_MAX_PATCHES", 3, min_value=1)
+    max_patches = _ethical_micro_max_patches(section)
     scoped_patches = [
         patch
         for patch in patches
@@ -6537,6 +6538,18 @@ def _structured_day_conclusion_section_for_course(course_plan: dict) -> dict | N
     return {"kind": "day_conclusion", **course_plan["day_conclusion"]}
 
 
+def _ethical_micro_section_for_calibrated_course(course_plan: dict) -> dict:
+    return {
+        "kind": "course_calibrated",
+        "title": course_plan.get("course_title") or f"Cours {course_plan.get('course_number') or '?'}",
+        "target_words": int(course_plan.get("target_words") or 0),
+        "review_scope": "full_course_after_budget_calibration",
+        "course_kind": course_plan.get("course_kind"),
+        "learning_objectives": course_plan.get("learning_objectives") or [],
+        "global_constraints": course_plan.get("global_constraints") or {},
+    }
+
+
 def _run_structured_parallel(items: list, worker, *, workers: int) -> list:
     if not items:
         return []
@@ -6862,45 +6875,26 @@ def _run_structured_content_generation(
             },
         ),
     )
-    micro_records = _sorted_ethical_micro_review_records(job)
-    _save_content_artifact(
-        platform_id,
-        folder_id,
-        _CONTENT_ETHICAL_MICRO_REVIEW_BLOB,
-        _artifact_payload(
-            job,
-            "content_ethical_micro_review",
-            {
-                "review_kind": "ethical_micro",
-                "review_label": "Micro-conformité éthique",
-                "rules_scope": "ethics_compliance",
-                "rules": [f"#{rid}" for rid in _ETHICAL_MICRO_RULE_IDS],
-                "version": _ETHICAL_MICRO_RULESET_VERSION,
-                "structured_course_plan_version": plan.get("version"),
-                "summary": _ethical_micro_review_summary(micro_records),
-                "records": micro_records,
-            },
-        ),
-    )
-
     if on_progress:
         on_progress(0, NUM_SUB_PARTS, 1, total_words, "Calibrage parallèle des budgets mots par cours")
 
     def _calibrate_draft(body_result: dict) -> dict:
         draft = body_result["draft"]
         course_plan = draft["course_plan"]
-        course_text, calibration = _calibrate_structured_course_text(
+        calibrated_text, calibration = _calibrate_structured_course_text(
             course_plan,
             draft["course_text"],
             model=model,
         )
-        words = count_tts_spoken_words(course_text)
+        calibrated_words = count_tts_spoken_words(calibrated_text)
         course_number = int(course_plan.get("course_number") or body_result.get("course_number") or 0)
         return {
             "course_number": course_number,
             "course_plan": course_plan,
-            "course_text": course_text,
-            "words": words,
+            "calibrated_text": calibrated_text,
+            "calibrated_words": calibrated_words,
+            "course_text": calibrated_text,
+            "words": calibrated_words,
             "calibration": calibration,
             "draft": draft,
         }
@@ -6916,14 +6910,12 @@ def _run_structured_content_generation(
     for result in calibrated_results:
         course_number = int(result.get("course_number") or 0)
         course_plan = result["course_plan"]
-        course_text = result["course_text"]
-        words = int(result.get("words") or 0)
+        calibrated_text = result.get("calibrated_text") or result.get("course_text") or ""
+        calibrated_words = int(result.get("calibrated_words") or count_tts_spoken_words(calibrated_text))
         calibration = result.get("calibration") or {}
         draft = result.get("draft") or {}
         before_text = draft.get("course_text") or ""
         before_words = int(draft.get("draft_word_count") or count_tts_spoken_words(before_text))
-        _save_structured_course_segment(job["id"], course_plan, course_text)
-        total_words += words
         budget_calibration_records.append({
             "course_number": course_number,
             "course_title": course_plan.get("course_title") or f"Cours {course_number}",
@@ -6932,57 +6924,15 @@ def _run_structured_content_generation(
             "min_words": calibration.get("min_words"),
             "max_words": calibration.get("max_words"),
             "before_words": before_words,
-            "after_words": words,
-            "delta_words": words - before_words,
-            "changed": bool((course_text or "").strip() != (before_text or "").strip() or calibration.get("changed")),
+            "after_words": calibrated_words,
+            "delta_words": calibrated_words - before_words,
+            "changed": bool((calibrated_text or "").strip() != (before_text or "").strip() or calibration.get("changed")),
             "calibration": calibration,
             "before_text": before_text,
-            "after_text": course_text,
+            "after_text": calibrated_text,
             "sections": draft.get("sections") or [],
             "structured_plan": course_plan,
         })
-        generated_block = {
-            "bloc_number": course_number,
-            "filename": course_plan.get("filename"),
-            "duration_sec": _course_duration_for_bloc(playlist_items, course_number),
-            "duration_min": course_plan.get("duration_minutes"),
-            "status": "planned",
-            "text": course_text,
-            "word_count": words,
-            "planned_word_count": words,
-            "word_budget": int(course_plan.get("target_words") or 0),
-            "main_word_budget": int(course_plan.get("target_words") or 0),
-            "dirty": True,
-            "structured_plan": course_plan,
-            "calibration": calibration,
-            "generation_strategy": "parallel_body_then_late_opening",
-        }
-        generated_blocks.append(generated_block)
-        course_scripts.append({
-            "course_number": course_number,
-            "course_title": course_plan.get("course_title") or f"Cours {course_number}",
-            "filename": course_plan.get("filename"),
-            "target_words": int(course_plan.get("target_words") or 0),
-            "word_count": words,
-            "text": course_text,
-            "calibration": calibration,
-            "structured_plan": course_plan,
-            "generation_strategy": "parallel_body_then_late_opening",
-            "previous_course_summary_used": course_summaries.get(course_number - 1, ""),
-        })
-        _update_job_db(job["id"], total_words=total_words, current_sub_part=course_number - 1, current_passe=1)
-        if on_progress:
-            on_progress(course_number, NUM_SUB_PARTS, 1, total_words, f"Cours {course_number}/7 calibré ({words} mots)")
-        logger.info(
-            "PIPELINE_STRUCTURED_COURSE_DONE formation_job_id=%s content_job_id=%s folder_id=%s course=%s/%s words=%s target=%s",
-            job.get("formation_job_id"),
-            job["id"],
-            folder_id,
-            course_number,
-            total_courses,
-            words,
-            course_plan.get("target_words"),
-        )
 
     _save_content_artifact(
         platform_id,
@@ -7006,6 +6956,113 @@ def _run_structured_content_generation(
             },
         ),
     )
+
+    if on_progress:
+        on_progress(0, NUM_SUB_PARTS, 1, total_words, "Micro-conformité éthique après calibrage budget")
+
+    def _micro_review_calibrated_course(result: dict) -> dict:
+        course_plan = result["course_plan"]
+        calibrated_text = result.get("calibrated_text") or result.get("course_text") or ""
+        final_text = _run_ethical_micro_review_for_section(
+            job=job,
+            course_plan=course_plan,
+            section=_ethical_micro_section_for_calibrated_course(course_plan),
+            section_text=calibrated_text,
+            model=model,
+        )
+        return {
+            **result,
+            "course_text": final_text,
+            "words": count_tts_spoken_words(final_text),
+            "micro_changed": (final_text or "").strip() != (calibrated_text or "").strip(),
+            "post_micro_budget_status": _structured_course_budget_status(course_plan, final_text),
+        }
+
+    final_course_results = _run_structured_parallel(
+        calibrated_results,
+        _micro_review_calibrated_course,
+        workers=workers,
+    )
+    final_course_results = sorted(final_course_results, key=lambda item: int(item.get("course_number") or 0))
+
+    micro_records = _sorted_ethical_micro_review_records(job)
+    _save_content_artifact(
+        platform_id,
+        folder_id,
+        _CONTENT_ETHICAL_MICRO_REVIEW_BLOB,
+        _artifact_payload(
+            job,
+            "content_ethical_micro_review",
+            {
+                "review_kind": "ethical_micro",
+                "review_label": "Micro-conformité éthique après calibrage budget",
+                "rules_scope": "ethics_compliance",
+                "rules": [f"#{rid}" for rid in _ETHICAL_MICRO_RULE_IDS],
+                "version": _ETHICAL_MICRO_RULESET_VERSION,
+                "structured_course_plan_version": plan.get("version"),
+                "review_timing": "after_budget_calibration",
+                "summary": _ethical_micro_review_summary(micro_records),
+                "records": micro_records,
+            },
+        ),
+    )
+
+    for result in final_course_results:
+        course_number = int(result.get("course_number") or 0)
+        course_plan = result["course_plan"]
+        course_text = result["course_text"]
+        words = int(result.get("words") or 0)
+        calibration = result.get("calibration") or {}
+        _save_structured_course_segment(job["id"], course_plan, course_text)
+        total_words += words
+        generated_block = {
+            "bloc_number": course_number,
+            "filename": course_plan.get("filename"),
+            "duration_sec": _course_duration_for_bloc(playlist_items, course_number),
+            "duration_min": course_plan.get("duration_minutes"),
+            "status": "planned",
+            "text": course_text,
+            "word_count": words,
+            "planned_word_count": words,
+            "word_budget": int(course_plan.get("target_words") or 0),
+            "main_word_budget": int(course_plan.get("target_words") or 0),
+            "dirty": True,
+            "structured_plan": course_plan,
+            "calibration": calibration,
+            "calibrated_word_count": int(result.get("calibrated_words") or 0),
+            "micro_changed": bool(result.get("micro_changed")),
+            "post_micro_budget_status": result.get("post_micro_budget_status"),
+            "generation_strategy": "parallel_body_then_late_opening",
+        }
+        generated_blocks.append(generated_block)
+        course_scripts.append({
+            "course_number": course_number,
+            "course_title": course_plan.get("course_title") or f"Cours {course_number}",
+            "filename": course_plan.get("filename"),
+            "target_words": int(course_plan.get("target_words") or 0),
+            "word_count": words,
+            "text": course_text,
+            "calibration": calibration,
+            "calibrated_word_count": int(result.get("calibrated_words") or 0),
+            "micro_changed": bool(result.get("micro_changed")),
+            "post_micro_budget_status": result.get("post_micro_budget_status"),
+            "structured_plan": course_plan,
+            "generation_strategy": "parallel_body_then_late_opening",
+            "previous_course_summary_used": course_summaries.get(course_number - 1, ""),
+        })
+        _update_job_db(job["id"], total_words=total_words, current_sub_part=course_number - 1, current_passe=1)
+        if on_progress:
+            on_progress(course_number, NUM_SUB_PARTS, 1, total_words, f"Cours {course_number}/7 calibré et contrôlé ({words} mots)")
+        logger.info(
+            "PIPELINE_STRUCTURED_COURSE_DONE formation_job_id=%s content_job_id=%s folder_id=%s course=%s/%s words=%s target=%s",
+            job.get("formation_job_id"),
+            job["id"],
+            folder_id,
+            course_number,
+            total_courses,
+            words,
+            course_plan.get("target_words"),
+        )
 
     _save_content_artifact(
         platform_id,
@@ -10968,8 +11025,8 @@ def run_humanization_review(folder_id, on_progress=None, model=None, force: bool
 def run_content_review(folder_id, on_progress=None, model=None, force: bool = False):
     """Passe 2 : conformité stricte finale après humanisation.
 
-    Si la micro-review éthique est active, les règles #1-#16 sont traitées au
-    niveau section dès la génération ; la passe finale garde les autres scopes.
+    Si la micro-review éthique est active, les règles #1-#16 sont traitées
+    après le calibrage budget ; la passe finale garde les autres scopes.
     """
     return _run_content_review_pass(
         folder_id,

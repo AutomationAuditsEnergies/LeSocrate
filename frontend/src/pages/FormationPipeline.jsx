@@ -1292,9 +1292,19 @@ function PipelineVisualMap({ job, currentStep, autoPilotState, contentFolders, v
       active: contentActive,
     },
     {
+      key: 'budget_calibration',
+      title: 'Calibrage budget texte',
+      detail: 'Alignement des volumes de mots avant toute conformité éthique.',
+      icon: 'speed',
+      artifacts: ['content-budget-calibration.json', 'content-draft-sections.json', 'content-course-scripts.json'],
+      auditMode: 'budget_calibration',
+      done: allContentCompleted || autoPassed('content'),
+      active: contentActive,
+    },
+    {
       key: 'ethical_micro',
       title: 'Micro-conformité éthique',
-      detail: 'Contrôle local des règles éthiques #1-#16 sur chaque portion générée.',
+      detail: 'Contrôle des règles éthiques #1-#16 sur le texte calibré.',
       icon: 'shield',
       artifacts: ['content-ethical-micro-review.json'],
       auditMode: 'ethical_micro',
@@ -1307,16 +1317,6 @@ function PipelineVisualMap({ job, currentStep, autoPilotState, contentFolders, v
       detail: 'content-plan, draft-sections, course-scripts et reviewed-scripts.',
       icon: 'data_object',
       artifacts: ['content-plan.json', 'content-draft-sections.json', 'content-course-scripts.json', 'content-reviewed-scripts.json'],
-      done: allContentCompleted || autoPassed('content'),
-      active: contentActive,
-    },
-    {
-      key: 'budget_calibration',
-      title: 'Calibrage budget texte',
-      detail: 'Alignement des volumes de mots sur les blocs audio attendus.',
-      icon: 'speed',
-      artifacts: ['content-budget-calibration.json', 'content-draft-sections.json', 'content-course-scripts.json'],
-      auditMode: 'budget_calibration',
       done: allContentCompleted || autoPassed('content'),
       active: contentActive,
     },
@@ -1412,7 +1412,7 @@ function PipelineVisualMap({ job, currentStep, autoPilotState, contentFolders, v
       </div>
       <div style={{ fontSize: '12px', color: '#94a3b8', lineHeight: 1.45, marginBottom: '14px' }}>
         Cette carte montre le vrai trajet de fabrication : plan structuré, génération par sections,
-        micro-review éthique, artefacts, reviews, slides anchor-first, puis audio si activé.
+        calibrage budget, micro-review éthique, artefacts, reviews, slides anchor-first, puis audio si activé.
       </div>
       <div style={{
         display: 'grid',
@@ -5478,7 +5478,7 @@ export default function FormationPipeline() {
                                         </div>
                                         <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
                                           {[
-                                            { step: 'content', label: 'Génération texte', icon: 'text_fields', title: 'Purge les segments et régénère le texte depuis zéro, puis enchaîne plan JSON, micro-éthique, calibrage budget, reviews, slides et TTS' },
+                                            { step: 'content', label: 'Génération texte', icon: 'text_fields', title: 'Purge les segments et régénère le texte depuis zéro, puis enchaîne plan JSON, calibrage budget, micro-éthique, reviews, slides et TTS' },
                                             { step: 'review', label: 'Reviews', icon: 'rule', title: 'Lance adhérence plan + humanisation + conformité finale + Word 2 + slides + TTS' },
                                             { step: 'slides', label: 'Slides', icon: 'slideshow', title: 'Saute les reviews — supprime le deck slides existant, régénère les slides puis lance le TTS' },
                                             { step: 'tts', label: 'TTS', icon: 'record_voice_over', title: 'Saute tout — conserve les slides existantes et relance uniquement le TTS dessus' },
