@@ -1,3 +1,4 @@
+import json
 import os
 import sqlite3
 import tempfile
@@ -13,7 +14,7 @@ def _connect(path):
     return sqlite3.connect(path)
 
 
-def _make_review_db(*, humanized: bool, reviewed: bool):
+def _make_review_db(*, humanized: bool, reviewed: bool, segment_count: int = 18):
     tmp = tempfile.NamedTemporaryFile(delete=False)
     tmp.close()
     conn = sqlite3.connect(tmp.name)
@@ -25,7 +26,9 @@ def _make_review_db(*, humanized: bool, reviewed: bool):
         );
         CREATE TABLE content_generation_jobs (
             id INTEGER PRIMARY KEY,
-            folder_id INTEGER NOT NULL
+            folder_id INTEGER NOT NULL,
+            status TEXT NOT NULL,
+            total_words INTEGER DEFAULT 0
         );
         CREATE TABLE content_generation_segments (
             id INTEGER PRIMARY KEY,
@@ -40,10 +43,11 @@ def _make_review_db(*, humanized: bool, reviewed: bool):
             review_signature TEXT
         );
         INSERT INTO cours_folders (id, formation_job_id) VALUES (10, 99);
-        INSERT INTO content_generation_jobs (id, folder_id) VALUES (20, 10);
+        INSERT INTO content_generation_jobs (id, folder_id, status, total_words)
+        VALUES (20, 10, 'completed', 5000);
         """
     )
-    for idx in range(18):
+    for idx in range(segment_count):
         conn.execute(
             """
             INSERT INTO content_generation_segments
@@ -129,6 +133,20 @@ class PipelineOrderTest(unittest.TestCase):
             self.assertFalse(ok)
             self.assertEqual(detail["humanized_current"], 18)
             self.assertEqual(detail["reviewed_current"], 0)
+        finally:
+            os.unlink(db_path)
+
+    def test_structured_content_completion_uses_job_status_not_legacy_segment_count(self):
+        db_path = _make_review_db(humanized=False, reviewed=False, segment_count=7)
+        daily = [{
+            "day_number": 1,
+            "sub_parts": [{"name": f"Partie {idx}"} for idx in range(7)],
+        }]
+        try:
+            self.assertEqual(
+                self._run_next_step(db_path, _job(daily_programs=json.dumps(daily))),
+                "humanization_review",
+            )
         finally:
             os.unlink(db_path)
 

@@ -4527,46 +4527,42 @@ def _determine_next_ap_step(job_id: int) -> str | None:
     if not daily or daily in ("[]", '"[]"'):
         return "daily"
 
-    # 5. Génération contenu — comparer au nombre ATTENDU, pas aux segments existants.
-    # Un restart en cours de création peut laisser total < attendu ; sans ce check,
-    # le tick croirait à tort que le contenu est terminé (ex. 900 ok sur 936 attendus).
-    # Invariant : 1 segment par passe, donc nombre de sub_parts du daily split × 3.
-    # Par défaut nouveau format : 7 créneaux cours × 3 = 21 segments/jour.
-    # Filtre par formation_job_id (pas platform_id) pour éviter de compter les
-    # segments d'un pipeline précédent sur la même plateforme.
-    try:
-        daily_programs_for_count = _json.loads(daily or "[]")
-    except Exception:
-        daily_programs_for_count = []
-    expected_segs = 0
-    for day in daily_programs_for_count:
-        if isinstance(day, dict):
-            sub_parts = day.get("sub_parts")
-            # Backward compatibility : anciens daily_programs très pauvres
-            # pouvaient stocker seulement {"day_number": 1}; ces jobs ont été
-            # créés sous l'ancien modèle 6 × 3.
-            expected_sub_parts = len(sub_parts) if sub_parts else 6
-            expected_segs += max(1, expected_sub_parts) * 3
-    if expected_segs == 0:
-        expected_segs = (j.get("nb_days") or 0) * len(COURSE_AUDIO_SLOTS) * 3
+    # 5. Génération contenu.
+    # Ancien garde-fou : comparer les segments terminés à `sub_parts × 3`.
+    # Ce n'est plus fiable depuis la génération structurée : un dossier peut être
+    # complet avec un nombre de segments différent de l'ancien pipeline 3 passes.
+    # La source de vérité devient donc le job contenu par dossier :
+    # tous les dossiers attendus doivent exister, avoir un content job `completed`
+    # et contenir au moins un segment finalisé.
     from services.formation_pipeline_service import get_expected_course_folders
     folder_state = get_expected_course_folders(job_id)
     folder_ids = folder_state.get("folder_ids") or []
-    if expected_segs == 0 or len(folder_ids) < (j.get("nb_days") or 0):
+    expected_folder_count = int(j.get("nb_days") or 0)
+    if len(folder_ids) < expected_folder_count:
         return "content"
     placeholders = ",".join("?" * len(folder_ids))
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute(f"""
-        SELECT COALESCE(SUM(CASE WHEN cgs.status = 'completed' THEN 1 ELSE 0 END), 0)
-        FROM content_generation_segments cgs
-        JOIN content_generation_jobs cgj ON cgj.id = cgs.job_id
-        JOIN cours_folders cf ON cf.id = cgj.folder_id
+        SELECT
+            cf.id,
+            cgj.status,
+            COALESCE(cgj.total_words, 0),
+            COALESCE(SUM(CASE WHEN cgs.status = 'completed' THEN 1 ELSE 0 END), 0)
+        FROM cours_folders cf
+        LEFT JOIN content_generation_jobs cgj ON cgj.folder_id = cf.id
+        LEFT JOIN content_generation_segments cgs ON cgs.job_id = cgj.id
         WHERE cf.id IN ({placeholders})
+        GROUP BY cf.id, cgj.status, cgj.total_words
     """, tuple(folder_ids))
-    completed_segs = cursor.fetchone()[0]
+    content_rows = cursor.fetchall()
     conn.close()
-    if completed_segs < expected_segs:
+    completed_folder_ids = {
+        row[0]
+        for row in content_rows
+        if row[1] == "completed" and (int(row[2] or 0) > 0 or int(row[3] or 0) > 0)
+    }
+    if len(completed_folder_ids) < len(folder_ids):
         return "content"
 
     # 5.5. Volume safety : l'audit réel est prioritaire sur le flag DB.
