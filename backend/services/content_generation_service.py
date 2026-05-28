@@ -1534,6 +1534,11 @@ def _block_min_words(word_budget: int) -> int:
     return max(0, int(int(word_budget or 0) * ratio))
 
 
+def _structured_course_min_words(word_budget: int) -> int:
+    ratio = _env_float("FORMATION_STRUCTURED_COURSE_MIN_RATIO", 0.985, min_value=0.90, max_value=1.0)
+    return max(0, int(int(word_budget or 0) * ratio))
+
+
 def _course_audio_block_plan(playlist_spec=None, *, folder_position=None) -> list[dict]:
     if playlist_spec is None:
         from services.playlist_tts_service import PLAYLIST_SPEC as playlist_spec
@@ -3973,13 +3978,23 @@ def _build_audio_block_calibration_prompt(
         if direction == "shorten"
         else "enrichir avec du contenu pédagogique pertinent, directement lié au plan et au sujet"
     )
-    direction_rules = (
-        "- Réduis prioritairement les répétitions, les reformulations faibles, les exemples trop longs et les développements après conclusion.\n"
-        "- Si une conclusion est suivie d'un nouveau développement, supprime ou fusionne ce débordement pour que la fin reste propre.\n"
-        if direction == "shorten"
-        else "- Complète le cours avec des explications utiles, des nuances terrain, des exemples fictifs clairement annoncés et des mini-synthèses liées au plan.\n"
+    if direction == "shorten":
+        direction_rules = (
+            "- Réduis prioritairement les répétitions, les reformulations faibles, les exemples trop longs et les développements après conclusion.\n"
+            "- Si une conclusion est suivie d'un nouveau développement, supprime ou fusionne ce débordement pour que la fin reste propre.\n"
+        )
+    else:
+        direction_rules = (
+            "- Le texte est trop court : tu dois l'enrichir en intégrant de vrais apports pédagogiques dans les parties de développement, jamais en ajoutant un appendice à la fin.\n"
+            "- Ajoute une idée utile à la fois : nuance terrain, contre-exemple, mini-cas fictif, clarification méthodologique, erreur fréquente ou lien concret avec un teaching beat existant.\n"
+            "- Ne rends pas simplement les phrases plus verbeuses. Chaque ajout doit apporter une valeur pédagogique identifiable.\n"
+            "- Insère les enrichissements AVANT la conclusion et AVANT toute annonce de questions-réponses ou de tchat.\n"
+            "- Respecte les slides/anchors prévus : les enrichissements doivent soutenir les moments pédagogiques existants, pas créer une trajectoire parallèle.\n"
+            "- Les exemples ajoutés doivent être fictifs ou hypothétiques et aider une idée précise du plan verrouillé.\n"
+        )
+    direction_rules += (
+        "- Si le texte contient déjà une conclusion/Q-R, elle doit rester la dernière partie du texte final. Aucun nouveau développement après cette conclusion.\n"
         "- N'ajoute jamais de remplissage générique, de répétition automatique ou de paragraphe passe-partout.\n"
-        "- Si tu ajoutes un exemple, il doit aider une idée précise du plan verrouillé.\n"
     )
     return f"""Tu es directeur éditorial d'un cours audio TTS Fish Audio.
 
@@ -3999,6 +4014,7 @@ Cours audio interne :
 - Budget accepté : {status.get('min_words')} à {status.get('max_words')} mots parlés
 - Cible pratique : environ {target_words} mots parlés
 - Texte actuel : {status.get('words')} mots
+- Écart à corriger : {status.get('delta')} mots
 - Direction artistique : {block.get('role') or 'continuité pédagogique orale'}
 
 Mission :
@@ -4013,6 +4029,9 @@ Mission :
   les budgets sont internes : ne les mentionne jamais dans le texte final.
 - Ne gonfle pas hors budget : le résultat doit finir entre {status.get('min_words')}
   et {status.get('max_words')} mots parlés.
+- Si tu enrichis, garde l'ordre du texte existant : introduction, développement,
+  conclusion. Ne prolonge jamais le développement après une annonce Q/R, tchat,
+  temps d'échange ou fin de partie.
 {direction_rules}
 
 Texte actuel à réécrire :
@@ -5969,7 +5988,7 @@ def _calibrate_structured_course_text(course_plan: dict, text: str, model=None) 
         "filename": course_plan.get("filename"),
         "duration_min": course_plan.get("duration_minutes"),
         "target_words": target_words,
-        "min_words": _block_min_words(target_words),
+        "min_words": _structured_course_min_words(target_words),
         "max_words": target_words,
         "word_budget": target_words,
         "role": course_plan.get("pedagogical_role") or "",
@@ -5978,7 +5997,7 @@ def _calibrate_structured_course_text(course_plan: dict, text: str, model=None) 
         block=block,
         text=_sanitize_learner_facing_text(text),
         model=model,
-        max_iterations=int(os.getenv("FORMATION_STRUCTURED_COURSE_CALIBRATION_ITERATIONS", "4") or "4"),
+        max_iterations=int(os.getenv("FORMATION_STRUCTURED_COURSE_CALIBRATION_ITERATIONS", "6") or "6"),
         day_context=(
             "Plan structuré verrouillé : respecter l'architecture du cours, "
             "compléter/réduire uniquement avec du contenu pertinent, et ne "
@@ -5995,7 +6014,7 @@ _PLAN_ADHERENCE_REVIEW_VERSION = "2026-05-25-plan-adherence-v5"
 def _structured_course_budget_status(course_plan: dict, text: str) -> dict:
     target_words = int(course_plan.get("target_words") or 0)
     words = count_tts_spoken_words(text)
-    min_words = _block_min_words(target_words) if target_words else 0
+    min_words = _structured_course_min_words(target_words) if target_words else 0
     max_words = target_words
     if target_words <= 0:
         status = "unknown"

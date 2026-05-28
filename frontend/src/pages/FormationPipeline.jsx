@@ -99,7 +99,6 @@ const AUTO_PILOT_STEP_LABELS = {
   global: 'programme global',
   daily: 'programmes journée',
   content: 'génération texte',
-  volume_safety: 'sécurité volume',
   plan_adherence_review: 'adhérence au plan',
   humanization_review: 'adhérence plan + humanisation',
   audio_word_calibration: 'calibrage blocs audio',
@@ -119,7 +118,6 @@ const AUTO_PILOT_ORDER = [
   'global',
   'daily',
   'content',
-  'volume_safety',
   'humanization_review',
   'review',
   'post_review_docs',
@@ -1183,7 +1181,7 @@ function PipelineStagePill({ stage, index, onClick }) {
   )
 }
 
-function PipelineVisualMap({ job, currentStep, autoPilotState, contentFolders, volumeAudit, diagnostic }) {
+function PipelineVisualMap({ job, currentStep, autoPilotState, contentFolders, volumeAudit: _volumeAudit, diagnostic }) {
   const [auditStage, setAuditStage] = useState(null)
   if (!job) return null
 
@@ -1212,10 +1210,6 @@ function PipelineVisualMap({ job, currentStep, autoPilotState, contentFolders, v
   const textReady = TEXT_AVAILABLE_STATUSES.has(job.status)
   const audioDone = AUDIO_DONE_STATUSES.has(job.status)
   const audioActive = AUDIO_ACTIVE_STATUSES.has(job.status) || autoActive('audio')
-  const volumeOkFromAudit = Boolean(volumeAudit?.folders?.length) &&
-    volumeAudit.folders.every(f => (f.deficit || 0) <= 0)
-  const volumeDone = Boolean(job.auto_pilot_volume_done) || volumeOkFromAudit ||
-    allHumanized || allReviewed || Boolean(job.auto_pilot_post_review_docs_done)
   const planAdherenceDone = hasCompletedPipelineEvent(events, e => e.step === 'plan_adherence_review') ||
     allHumanized || allReviewed || autoPassed('humanization_review')
   const calibrationDone = hasCompletedPipelineEvent(events, e => e.step === 'audio_word_calibration') ||
@@ -1325,16 +1319,6 @@ function PipelineVisualMap({ job, currentStep, autoPilotState, contentFolders, v
       auditMode: 'budget_calibration',
       done: allContentCompleted || autoPassed('content'),
       active: contentActive,
-    },
-    {
-      key: 'volume_safety',
-      title: 'Sécurité volume',
-      detail: 'Audit et enrichissement ciblé si une journée est sous le budget audio.',
-      icon: 'auto_fix_high',
-      artifacts: ['content-volume-safety.json'],
-      auditMode: 'volume_safety',
-      done: volumeDone || autoPassed('volume_safety'),
-      active: autoActive('volume_safety'),
     },
     {
       key: 'plan_adherence',
@@ -1470,7 +1454,6 @@ const PIPELINE_STAGE_EVENT_ALIASES = {
   ethical_micro: ['content', 'ethical_micro'],
   structured_artifacts: ['content', 'artifact'],
   budget_calibration: ['content', 'budget', 'calibration'],
-  volume_safety: ['volume_safety'],
   plan_adherence: ['plan_adherence_review', 'humanization_review'],
   humanization: ['humanization_review'],
   audio_block_calibration: ['audio_word_calibration', 'review', 'post_review_docs'],
@@ -3901,7 +3884,7 @@ export default function FormationPipeline() {
     }
   }
 
-  const handleContinueAfterText = async (folderId, modelOverride = null, fromStep = 'volume') => {
+  const handleContinueAfterText = async (folderId, modelOverride = null, fromStep = 'review') => {
     setContinueAfterTextError('')
     setContinueAfterTextNotice('')
     setPipelineDiagnostic(null)
@@ -5332,12 +5315,11 @@ export default function FormationPipeline() {
                                 </div>
                               )}
 	                            </div>
-	                            {/* ─── 3 sous-zones du flux d'une journée ──────────
+	                            {/* ─── 2 sous-zones du flux d'une journée ──────────
 	                                 1. Texte généré (lecture / téléchargements / rapport)
-	                                 2. Sécurité volume (enrichissement si sous budget audio)
-	                                 3. Révision conformité finale (hors micro-éthique)
+	                                 2. Révision conformité finale (hors micro-éthique)
 	                                 Séparées par des FlowArrowDown pour matérialiser
-	                                 l'ordre du flux : génération → volume → révision. */}
+	                                 l'ordre du flux : génération → révision. */}
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
                               {/* ── Zone 1 : Texte généré ──────────────────── */}
                               <div style={{
@@ -5496,10 +5478,9 @@ export default function FormationPipeline() {
                                         </div>
                                         <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
                                           {[
-                                            { step: 'content', label: 'Génération texte', icon: 'text_fields', title: 'Purge les segments et régénère le texte depuis zéro, puis enchaîne plan JSON, micro-éthique, volume, reviews, slides et TTS' },
-                                            { step: 'volume', label: 'Volume', icon: 'auto_fix_high', title: 'Reset + sécurité volume + adhérence plan + humanisation + conformité finale + Word 2 + slides + TTS' },
-                                            { step: 'review', label: 'Reviews', icon: 'rule', title: 'Saute le volume — lance adhérence plan + humanisation + conformité finale + Word 2 + slides + TTS' },
-                                            { step: 'slides', label: 'Slides', icon: 'slideshow', title: 'Saute volume et reviews — supprime le deck slides existant, régénère les slides puis lance le TTS' },
+                                            { step: 'content', label: 'Génération texte', icon: 'text_fields', title: 'Purge les segments et régénère le texte depuis zéro, puis enchaîne plan JSON, micro-éthique, calibrage budget, reviews, slides et TTS' },
+                                            { step: 'review', label: 'Reviews', icon: 'rule', title: 'Lance adhérence plan + humanisation + conformité finale + Word 2 + slides + TTS' },
+                                            { step: 'slides', label: 'Slides', icon: 'slideshow', title: 'Saute les reviews — supprime le deck slides existant, régénère les slides puis lance le TTS' },
                                             { step: 'tts', label: 'TTS', icon: 'record_voice_over', title: 'Saute tout — conserve les slides existantes et relance uniquement le TTS dessus' },
                                             { step: 'tts_fast', label: 'TTS — pipeline presque instantanée', icon: 'bolt', title: 'Mode test uniquement — conserve les slides existantes, relance le TTS Edge avec parallélisation/cache, sans modifier le chemin TTS normal' },
                                           ].map(({ step, label, icon, title }) => (
@@ -5526,64 +5507,6 @@ export default function FormationPipeline() {
                                   </div>
                                 )
                               })()}
-
-                              <FlowArrowDown height={18} />
-
-                              {/* ── Zone 2 : Sécurité volume ───────────────── */}
-                              <div style={{
-                                padding: '8px 10px',
-                                borderRadius: '8px',
-                                background: 'rgba(245, 158, 11, 0.05)',
-                                border: '1px solid rgba(245, 158, 11, 0.22)',
-                              }}>
-                                <div style={{
-                                  fontSize: '10px',
-                                  fontWeight: 700,
-                                  color: '#fbbf24',
-                                  textTransform: 'uppercase',
-                                  letterSpacing: '0.08em',
-                                  marginBottom: '6px',
-                                  display: 'flex',
-                                  alignItems: 'center',
-                                  gap: '5px',
-                                }}>
-                                  <Icon name="auto_fix_high" style={{ fontSize: '12px' }} /> Sécurité volume <span style={{ fontWeight: 400, opacity: 0.7, textTransform: 'none', letterSpacing: 'normal' }}>· cible {volumeAudit?.target ? `${volumeAudit.target.toLocaleString('fr-FR')} mots` : 'playlist'}</span>
-                                </div>
-                                {(() => {
-                                  const folderAudit = (volumeAudit?.folders || []).find(f => f.folder_id === folder.folder_id)
-                                  const deficit = folderAudit?.deficit || 0
-                                  const minTarget = folderAudit?.min_words || volumeAudit?.min_target || folderAudit?.target_words || volumeAudit?.target || 0
-                                  const minTargetLabel = minTarget ? `${minTarget.toLocaleString('fr-FR')} mots` : 'la cible'
-                                  const running = !!safetyRunning[folder.folder_id]
-                                  const atTarget = isDone && deficit === 0 && folderAudit
-                                  const disabled = !canUseFolder || running || atTarget
-                                  return (
-                                    <button
-                                      style={{ ...S.btn('ghost'), padding: '6px 12px', fontSize: '12px' }}
-                                      disabled={disabled}
-                                      onClick={() => handleLaunchVolumeSafety(folder.folder_id, 'api')}
-                                      title={
-                                        !belongsToSelectedJob
-                                          ? 'Dossier rattaché à un autre job'
-                                          : !isDone
-                                          ? 'En attente de génération'
-                                          : running
-                                            ? 'Enrichissement en cours'
-                                            : atTarget
-                                              ? `Volume OK (${folderAudit.total_words.toLocaleString('fr-FR')} mots ≥ ${minTargetLabel})`
-                                              : `Compléter via API jusqu'à ${minTargetLabel} minimum (déficit ${deficit.toLocaleString('fr-FR')} mots)`
-                                      }
-                                    >
-                                      <Icon name={running ? 'hourglass_empty' : (atTarget ? 'check_circle' : 'auto_fix_high')} />{' '}
-                                      {running
-                                        ? 'Enrichissement…'
-                                        : atTarget
-                                          ? 'Volume OK'
-                                          : 'Compléter le volume via API'}
-                                    </button>
-                                  )
-                                })()}
-                              </div>
 
                               <FlowArrowDown height={18} />
 
@@ -5716,132 +5639,6 @@ export default function FormationPipeline() {
                   pendingMission={pendingMissions.content}
                   generatedVia={null}
                 />
-
-                {/* ── Étape intermédiaire : Sécurité volume (budget cours audio) ──
-                    Entre la génération texte et la révision conformité. Audite
-                    le total_words par folder ; si sous budget, propose un enrichissement
-                    Claude Code (append-only, règles #1-#27). */}
-                {volumeAudit && volumeAudit.folders && volumeAudit.folders.length > 0 && (
-                  <FlowArrowDown height={20} />
-                )}
-                {volumeAudit && volumeAudit.folders && volumeAudit.folders.length > 0 && (
-                  <div
-                    style={{
-                      padding: '14px',
-                      border: '1px dashed rgba(245, 158, 11, 0.3)',
-                      borderRadius: '10px',
-                      background: 'rgba(245, 158, 11, 0.04)',
-                      display: 'flex',
-                      flexDirection: 'column',
-                      gap: '10px',
-                    }}
-                  >
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-                      <span style={{ fontSize: '13px', color: '#fbbf24', fontWeight: 600, flex: 1, minWidth: 0 }}>
-                        Sécurité volume — cible {volumeAudit.target.toLocaleString('fr-FR')} mots / journée
-                      </span>
-                      <select
-                        value={safetyModel}
-                        onChange={e => setSafetyModel(e.target.value)}
-                        style={{
-                          background: 'rgba(15,23,42,0.8)',
-                          color: '#e2e8f0',
-                          border: '1px solid rgba(245,158,11,0.3)',
-                          borderRadius: '6px',
-                          padding: '4px 8px',
-                          fontSize: '12px',
-                        }}
-                      >
-                        <option value="pro">DeepSeek Pro</option>
-                        <option value="flash">DeepSeek Flash</option>
-                        <option value="sonnet">Claude Sonnet</option>
-                        <option value="haiku">Claude Haiku</option>
-                      </select>
-                    </div>
-
-                    <div style={{ fontSize: '11px', color: '#94a3b8' }}>
-                      Audit après génération · les Q&A et pauses ne comptent pas. Plage acceptée :
-                      {' '}{(volumeAudit.min_target || volumeAudit.target).toLocaleString('fr-FR')} à{' '}
-                      {(volumeAudit.max_target || volumeAudit.target).toLocaleString('fr-FR')} mots parlés.
-                    </div>
-
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                      {volumeAudit.folders.map(fa => {
-                        const total = fa.total_words || 0
-                        const target = fa.target_words || volumeAudit.target || 1
-                        const minTarget = fa.min_words || volumeAudit.min_target || target
-                        const maxTarget = fa.max_words || volumeAudit.max_target || target
-                        const pct = Math.min(100, Math.round((total / target) * 100))
-                        const isOk = total >= minTarget && total <= maxTarget
-                        const isLow = total < minTarget
-                        const isHigh = total > maxTarget
-                        const color = isOk ? '#34d399' : isLow ? '#f87171' : '#fbbf24'
-                        const running = !!safetyRunning[fa.folder_id]
-                        return (
-                          <div key={fa.folder_id} style={{
-                            background: 'rgba(15,23,42,0.4)',
-                            borderRadius: '8px',
-                            padding: '8px 10px',
-                          }}>
-                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', flexWrap: 'wrap' }}>
-                              <div style={{ minWidth: 0, flex: 1 }}>
-                                <div style={{ fontSize: '12px', color: '#e2e8f0' }}>
-                                  Jour {fa.day_number} —{' '}
-                                  <strong style={{ color }}>{total.toLocaleString('fr-FR')}</strong>
-                                  <span style={{ color: '#64748b' }}> / {target.toLocaleString('fr-FR')}</span>
-                                </div>
-                                <div style={{
-                                  marginTop: '4px',
-                                  height: '4px',
-                                  borderRadius: '2px',
-                                  background: 'rgba(30,41,59,0.8)',
-                                  overflow: 'hidden',
-                                }}>
-                                  <div style={{
-                                    width: `${pct}%`,
-                                    height: '100%',
-                                    background: color,
-                                    transition: 'width 0.3s',
-                                  }} />
-                                </div>
-                              </div>
-                              {isOk ? (
-                                <span style={{ fontSize: '11px', color: '#34d399', fontWeight: 600 }}>
-                                  <Icon name="check_circle" style={{ fontSize: '13px' }} /> OK
-                                </span>
-                              ) : isHigh ? (
-                                <span style={{ fontSize: '11px', color: '#fbbf24', fontWeight: 600 }}>
-                                  <Icon name="warning" style={{ fontSize: '13px' }} /> Trop long
-                                </span>
-                              ) : (
-                                <button
-                                  style={{
-                                    ...S.btn('primary'),
-                                    background: 'linear-gradient(135deg, #f59e0b, #fbbf24)',
-                                    boxShadow: '0 4px 15px rgba(251,191,36,0.25)',
-                                    padding: '5px 10px',
-                                    fontSize: '11px',
-                                  }}
-                                  disabled={running}
-                                  onClick={() => handleLaunchVolumeSafety(fa.folder_id)}
-                                  title={`Enrichit les ${Math.min(5, fa.shortest_segments?.length || 0)} segments les plus courts (déficit ${fa.deficit.toLocaleString('fr-FR')} mots)`}
-                                >
-                                  <Icon name={running ? 'hourglass_empty' : 'auto_fix_high'} style={{ fontSize: '13px' }} />{' '}
-                                  {running ? 'Enrichissement…' : 'Compléter'}
-                                </button>
-                              )}
-                            </div>
-                          </div>
-                        )
-                      })}
-                    </div>
-                    {safetyError && (
-                      <div style={{ fontSize: '12px', color: '#f87171' }}>
-                        {safetyError}
-                      </div>
-                    )}
-                  </div>
-                )}
 
                 <FlowArrowDown height={20} />
                 <div>

@@ -1964,143 +1964,25 @@ def volume_audit(job_id):
     methods=["POST"],
 )
 def launch_volume_safety(job_id, folder_id):
-    """Lance l'enrichissement des segments les plus courts d'un folder pour
-    atteindre le budget mots audio de la journée.
+    """Ancienne sécurité volume append-only, désactivée.
 
-    Body JSON :
-      - "model": "sonnet"|"haiku" — défaut "sonnet"
-      - "mode": "api"|"cc" — défaut "cc". "api" utilise l'API Anthropic
-        (consomme la clé), "cc" utilise subprocess `claude` (forfait local).
-
-    Append-only : le texte original n'est jamais réécrit. Le snapshot
-    pre_review reste valide.
-
-    Greenlet en background (eventlet) — la route retourne immédiatement
-    avec un status 202 et le client peut poller `/volume-audit` pour suivre.
+    Le rattrapage de volume doit se faire pendant le calibrage budget texte,
+    avant les reviews, avec le plan verrouillé et les sections comme contexte.
     """
     if not _require_admin():
         return jsonify({"error": "Non autorisé"}), 403
-
-    from services.claude_code_mission_service import (
-        local_dev_enabled, ALLOWED_MODELS, run_volume_safety,
-        run_volume_safety_api, _EXECUTION_STATE,
-    )
 
     job = get_job(job_id)
     if not job:
         return jsonify({"error": "Job introuvable"}), 404
 
-    payload = request.get_json(silent=True) or {}
-    job_model_choice = _normalize_pipeline_model_choice(job.get("auto_pilot_model"))
-    default_mode = "api" if job_model_choice in ("flash", "pro") else "cc"
-    mode = (payload.get("mode") or default_mode).lower()
-    if mode not in ("api", "cc"):
-        return jsonify({"error": f"mode invalide (autorisés : api, cc)"}), 400
-
-    # Mode CC : nécessite LOCAL_DEV + claude binary. Mode API : juste la clé.
-    if mode == "cc" and not local_dev_enabled():
-        return jsonify({"error": "LOCAL_DEV requis pour le mode CC. Utilise mode='api'."}), 403
-
-    if mode == "cc":
-        if job_model_choice in ("flash", "pro") and not payload.get("model"):
-            return jsonify({
-                "error": "mode='cc' incompatible avec une pipeline DeepSeek. Utilise mode='api'."
-            }), 400
-        model = (payload.get("model") or "sonnet").lower()
-        if model not in ALLOWED_MODELS:
-            return jsonify({"error": f"model invalide (autorisés : {sorted(ALLOWED_MODELS)})"}), 400
-    else:
-        # Mode API : on accepte le model ID complet ou un raccourci
-        model = _resolve_pipeline_api_model(job, payload.get("model"))
-
-    state_key = (job_id, f"volume_safety_{folder_id}")
-    if _EXECUTION_STATE.get(state_key, {}).get("status") == "running":
-        return jsonify({"error": "Une opération volume safety est déjà en cours pour ce dossier"}), 409
-
-    _EXECUTION_STATE[state_key] = {"status": "running", "model": str(model), "mode": mode}
-    try:
-        from services.formation_observability_service import log_pipeline_event
-        log_pipeline_event(
-            job_id,
-            "volume_safety_started",
-            step="volume_safety",
-            status="running",
-            folder_id=folder_id,
-            model=str(model),
-            message=f"Sécurité volume démarrée ({mode})",
-            data={"mode": mode},
+    return jsonify({
+        "error": (
+            "Sécurité volume désactivée : cette ancienne réparation append-only "
+            "pouvait ajouter du texte après les conclusions/Q-R. Relance la "
+            "génération structurée pour utiliser le calibrage budget texte."
         )
-    except Exception:
-        pass
-
-    import eventlet
-
-    def _run():
-        started_at = time.time()
-        try:
-            if mode == "api":
-                result = run_volume_safety_api(job_id, folder_id, model=model)
-            else:
-                result = run_volume_safety(job_id, folder_id, model=model)
-            _EXECUTION_STATE[state_key] = {
-                "status": "done",
-                "model": str(model),
-                "mode": mode,
-                "result": result,
-            }
-            logger.info(
-                f"📏 Volume safety [{mode}] terminé pour job {job_id}/folder {folder_id} : "
-                f"{len(result.get('enriched', []))} segments enrichis"
-            )
-            try:
-                from services.formation_observability_service import log_pipeline_event
-                audit_after = result.get("audit_after") or result.get("audit") or {}
-                log_pipeline_event(
-                    job_id,
-                    "volume_safety_completed",
-                    step="volume_safety",
-                    status="completed",
-                    folder_id=folder_id,
-                    model=str(model),
-                    duration_ms=int((time.time() - started_at) * 1000),
-                    message=f"Sécurité volume terminée ({mode})",
-                    data={
-                        "mode": mode,
-                        "enriched": len(result.get("enriched") or []),
-                        "failed": len(result.get("failed") or []),
-                        "total_words_after": audit_after.get("total_words"),
-                        "deficit_after": audit_after.get("deficit"),
-                    },
-                )
-            except Exception:
-                pass
-        except Exception as e:
-            logger.error(f"❌ Volume safety [{mode}] job {job_id}/folder {folder_id} : {e}")
-            _EXECUTION_STATE[state_key] = {
-                "status": "error",
-                "model": str(model),
-                "mode": mode,
-                "error": str(e)[:500],
-            }
-            try:
-                from services.formation_observability_service import log_pipeline_event
-                log_pipeline_event(
-                    job_id,
-                    "volume_safety_failed",
-                    step="volume_safety",
-                    status="error",
-                    folder_id=folder_id,
-                    model=str(model),
-                    duration_ms=int((time.time() - started_at) * 1000),
-                    message=f"Sécurité volume échouée ({mode})",
-                    data={"mode": mode},
-                    error=str(e)[:500],
-                )
-            except Exception:
-                pass
-
-    eventlet.spawn(_run)
-    return jsonify({"ok": True, "status": "running", "model": str(model), "mode": mode}), 202
+    }), 410
 
 
 @formation_bp.route(
@@ -3692,7 +3574,7 @@ def _next_folder_in_formation(job_id: int, folder_id: int) -> int | None:
 
 
 def _get_folder_info_for_resume(job_id: int, folder_id: int) -> dict:
-    """Lit platform_id / content_job_id sans modifier l'état (pour from_step != 'volume')."""
+    """Lit platform_id / content_job_id sans modifier l'état."""
     from database.db import get_db_connection
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -3745,8 +3627,9 @@ def _delete_slide_deck_for_resume(folder_id: int, content_job_id: int) -> int:
 def continue_after_text(job_id, folder_id):
     """Relance les étapes aval d'une journée sans régénérer le texte initial.
 
-    Flux complet : reset aval → volume safety API → review API → Word 2 → slides → Edge TTS sync.
-    Paramètre from_step : 'volume' (défaut), 'review', 'tts' — saute les étapes en amont.
+    Flux complet : reset aval → review API → Word 2 → slides → Edge TTS sync.
+    Paramètre from_step : 'review' (défaut), 'slides', 'tts' — saute les étapes en amont.
+    Compatibilité : l'ancien from_step='volume' est mappé vers 'review'.
     """
     if not _require_admin():
         return jsonify({"error": "Non autorisé"}), 403
@@ -3760,12 +3643,14 @@ def continue_after_text(job_id, folder_id):
     max_slides = int(data.get("max_slides") or 60)
     pace = data.get("pace") or "normal"
     requested_folder_id = int(folder_id)
-    _STEP_ORDER = ["volume", "review", "slides", "tts"]
-    raw_from_step = data.get("from_step", "volume")
+    _STEP_ORDER = ["review", "slides", "tts"]
+    raw_from_step = data.get("from_step", "review")
     fast_tts_pipeline = bool(raw_from_step == "tts_fast" or data.get("fast_tts_pipeline"))
     restart_from_content = (raw_from_step == "content")
     from_step = "tts" if raw_from_step == "tts_fast" else raw_from_step
-    from_step = from_step if from_step in _STEP_ORDER else "volume"
+    if from_step == "volume":
+        from_step = "review"
+    from_step = from_step if from_step in _STEP_ORDER else "review"
     if from_step != "tts":
         fast_tts_pipeline = False
     from_step_idx = _STEP_ORDER.index(from_step)
@@ -3873,7 +3758,6 @@ def continue_after_text(job_id, folder_id):
     def _run():
         started_at = time.time()
         try:
-            from services.claude_code_mission_service import run_volume_safety_api
             from services.content_generation_service import (
                 _assemble_and_upload,
                 _update_job_db,
@@ -3953,7 +3837,7 @@ def continue_after_text(job_id, folder_id):
                     job_id, folder_id, int((time.time() - step_started) * 1000),
                 )
 
-            # ── Étape 1 : RESET (uniquement si from_step == volume) ─────────
+            # ── Étape 1 : RESET avant reprise complète des reviews ─────────
             if from_step_idx == 0:
                 step_started = time.time()
                 logger.info(
@@ -3986,7 +3870,7 @@ def continue_after_text(job_id, folder_id):
             else:
                 logger.info(
                     "PIPELINE_RESUME_STEP_RESET_SKIP formation_job_id=%s folder_id=%s "
-                    "from_step=%s — pas de reset (l'utilisateur saute le volume)",
+                    "from_step=%s — pas de reset (l'utilisateur saute les reviews)",
                     job_id, folder_id, from_step,
                 )
                 reset_info = _get_folder_info_for_resume(job_id, folder_id)
@@ -3998,47 +3882,11 @@ def continue_after_text(job_id, folder_id):
                     reset_info.get("platform_id"),
                 )
 
-            # ── Étape 2 : VOLUME SAFETY ─────────────────────────────────────
-            if from_step_idx <= 0:
-                step_started = time.time()
-                logger.info(
-                    "PIPELINE_RESUME_STEP_VOLUME_START formation_job_id=%s folder_id=%s model=%s",
-                    job_id, folder_id, model,
-                )
-                volume_result = run_volume_safety_api(job_id, folder_id, model=model)
-                logger.info(
-                    "PIPELINE_RESUME_STEP_VOLUME_DONE formation_job_id=%s folder_id=%s "
-                    "skipped=%s target_reached=%s enriched=%s failed=%s duration_ms=%s",
-                    job_id, folder_id,
-                    bool(volume_result.get("skipped")),
-                    bool(volume_result.get("target_reached", True)),
-                    len(volume_result.get("enriched") or []),
-                    len(volume_result.get("failed") or []),
-                    int((time.time() - step_started) * 1000),
-                )
-                log_pipeline_event(
-                    job_id,
-                    "continue_after_text_volume_completed",
-                    step="volume_safety",
-                    status="completed",
-                    folder_id=folder_id,
-                    model=str(model) if model else None,
-                    message="Sécurité volume terminée",
-                    data={
-                        "skipped": bool(volume_result.get("skipped")),
-                        "target_reached": bool(volume_result.get("target_reached", True)),
-                        "enriched": len(volume_result.get("enriched") or []),
-                        "failed": len(volume_result.get("failed") or []),
-                    },
-                )
-            else:
-                logger.info(
-                    "PIPELINE_RESUME_STEP_VOLUME_SKIP formation_job_id=%s folder_id=%s from_step=%s",
-                    job_id, folder_id, from_step,
-                )
+            # Sécurité volume append-only supprimée : le volume se corrige
+            # uniquement dans le calibrage budget texte de la génération structurée.
 
             # ── Étape 3 : ADHÉRENCE PLAN → HUMANISATION → CONFORMITÉ + Word 2
-            if from_step_idx <= 1:
+            if from_step_idx <= 0:
                 step_started = time.time()
                 logger.info(
                     "PIPELINE_RESUME_STEP_PLAN_ADHERENCE_START formation_job_id=%s folder_id=%s model=%s",
@@ -4254,7 +4102,7 @@ def continue_after_text(job_id, folder_id):
             # Si on vient de "slides" ou avant, on supprime le deck pour forcer
             # une régénération propre. Si on vient de "tts", on conserve les
             # slides existantes et on relance uniquement le TTS sync dessus.
-            if from_step_idx <= 2:
+            if from_step_idx <= 1:
                 deleted_decks = _delete_slide_deck_for_resume(folder_id, reset_info["content_job_id"])
                 logger.info(
                     "PIPELINE_RESUME_STEP_SLIDES_RESET formation_job_id=%s folder_id=%s "
@@ -4565,24 +4413,9 @@ def _determine_next_ap_step(job_id: int) -> str | None:
     if len(completed_folder_ids) < len(folder_ids):
         return "content"
 
-    # 5.5. Volume safety : l'audit réel est prioritaire sur le flag DB.
-    # Un job ancien peut avoir auto_pilot_volume_done=1 avec une ancienne cible ;
-    # si l'audit calibré audio voit encore un déficit, on repasse obligatoirement
-    # par l'étape volume avant toute révision conformité.
-    if not j.get("auto_pilot_skip_vs"):
-        from services.claude_code_mission_service import compute_volume_audit
-        audit = compute_volume_audit(job_id)
-        deficit_folders = [f for f in audit.get("folders", []) if f.get("deficit", 0) > 0]
-        if deficit_folders:
-            if j.get("auto_pilot_volume_done"):
-                update_job(
-                    job_id,
-                    auto_pilot_volume_done=0,
-                    auto_pilot_post_review_docs_done=0,
-                )
-            return "volume_safety"
-        if not j.get("auto_pilot_volume_done"):
-            return "volume_safety"
+    # Volume safety append-only retirée du flux auto-pilot : elle ajoutait parfois
+    # du développement après les conclusions/Q-R. Le rattrapage de volume se fait
+    # désormais dans le calibrage budget texte, avec le plan verrouillé comme contexte.
 
     from services.content_generation_service import (
         _current_compliance_review_signature,
@@ -4945,74 +4778,11 @@ def _execute_ap_step(job_id: int, step: str, job: dict) -> None:
         logger.info(f"🤖 ✓ Contenu généré job {job_id}")
 
     elif step == "volume_safety":
-        from services.claude_code_mission_service import (
-            compute_volume_audit, run_volume_safety, run_volume_safety_api,
+        logger.warning(
+            "🤖 Auto-pilot job %s : étape volume_safety ignorée, réparation append-only désactivée",
+            job_id,
         )
-        audit = compute_volume_audit(job_id)
-        deficit_folders = [f for f in audit.get("folders", []) if f.get("deficit", 0) > 0]
-        failures = []
-        for fa in deficit_folders:
-            try:
-                if use_cc:
-                    result = run_volume_safety(job_id, fa["folder_id"], model=cc_model)
-                else:
-                    result = run_volume_safety_api(job_id, fa["folder_id"], model=api_model)
-                after = (result.get("audit_after") or result.get("audit") or {})
-                if after.get("deficit", 0) > 0:
-                    failures.append(
-                        f"{fa['folder_id']}({after.get('total_words', '?')}/"
-                        f"{audit.get('target', '?')} mots)"
-                    )
-            except Exception as e:
-                logger.warning(f"⚠️ Volume safety folder {fa['folder_id']} : {e}")
-                failures.append(f"{fa['folder_id']}({str(e)[:120]})")
-
-        final_audit = compute_volume_audit(job_id)
-        remaining = [f for f in final_audit.get("folders", []) if f.get("deficit", 0) > 0]
-        if failures or remaining:
-            update_job(job_id, auto_pilot_volume_done=0, auto_pilot_post_review_docs_done=0)
-            remaining_msg = ", ".join(
-                f"{f['folder_id']}({f['total_words']}/{final_audit.get('target')} mots, "
-                f"manque {f['deficit']})"
-                for f in remaining
-            )
-            failure_msg = ", ".join(failures)
-            raise RuntimeError(
-                "Volume safety incomplète : "
-                + "; ".join(m for m in (failure_msg, remaining_msg) if m)
-            )
-
-        from services.formation_pipeline_service import get_expected_course_folders
-        folder_ids = get_expected_course_folders(job_id).get("folder_ids") or []
-        if folder_ids:
-            placeholders = ",".join("?" * len(folder_ids))
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            cursor.execute(
-                f"""
-                UPDATE content_generation_segments
-                SET review_error = NULL,
-                    humanization_error = CASE
-                        WHEN COALESCE(humanized, 0) = 0 THEN NULL
-                        ELSE humanization_error
-                    END
-                WHERE id IN (
-                    SELECT cgs.id
-                    FROM content_generation_segments cgs
-                    JOIN content_generation_jobs cgj ON cgj.id = cgs.job_id
-                    JOIN cours_folders cf ON cf.id = cgj.folder_id
-                    WHERE cf.id IN ({placeholders})
-                      AND cgs.status = 'completed'
-                      AND COALESCE(cgs.reviewed, 0) = 0
-                )
-                """,
-                tuple(folder_ids),
-            )
-            conn.commit()
-            conn.close()
-
         update_job(job_id, auto_pilot_volume_done=1, auto_pilot_post_review_docs_done=0)
-        logger.info(f"🤖 ✓ Volume safety terminée job {job_id}")
 
     elif step == "humanization_review":
         from services.formation_pipeline_service import get_expected_course_folders
@@ -5661,7 +5431,7 @@ def start_auto_pilot_watchdog() -> None:
 
 @formation_bp.route("/api/formation/<int:job_id>/run-auto", methods=["POST"])
 def run_auto_pilot(job_id):
-    """Lance l'auto-pilot : REAC → KB → global → daily → content → volume
+    """Lance l'auto-pilot : REAC → KB → global → daily → content
     → adhérence plan → humanisation → conformité → Word 2 → slides → audio optionnel.
 
     Body (optionnel) :
