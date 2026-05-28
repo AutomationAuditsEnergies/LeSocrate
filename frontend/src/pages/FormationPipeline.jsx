@@ -1321,7 +1321,8 @@ function PipelineVisualMap({ job, currentStep, autoPilotState, contentFolders, v
       title: 'Calibrage budget texte',
       detail: 'Alignement des volumes de mots sur les blocs audio attendus.',
       icon: 'speed',
-      artifacts: ['content-course-scripts.json'],
+      artifacts: ['content-budget-calibration.json', 'content-draft-sections.json', 'content-course-scripts.json'],
+      auditMode: 'budget_calibration',
       done: allContentCompleted || autoPassed('content'),
       active: contentActive,
     },
@@ -1330,6 +1331,8 @@ function PipelineVisualMap({ job, currentStep, autoPilotState, contentFolders, v
       title: 'Sécurité volume',
       detail: 'Audit et enrichissement ciblé si une journée est sous le budget audio.',
       icon: 'auto_fix_high',
+      artifacts: ['content-volume-safety.json'],
+      auditMode: 'volume_safety',
       done: volumeDone || autoPassed('volume_safety'),
       active: autoActive('volume_safety'),
     },
@@ -1616,10 +1619,16 @@ function PipelineStepAuditModal({ job, stage, index, folders, events, onClose })
           {!loading && stage.auditMode === 'section_generation' && (
             <SectionGenerationAuditView artifacts={payload.artifacts} />
           )}
+          {!loading && stage.auditMode === 'budget_calibration' && (
+            <BudgetCalibrationAuditView artifacts={payload.artifacts} />
+          )}
+          {!loading && stage.auditMode === 'volume_safety' && (
+            <VolumeSafetyAuditView artifacts={payload.artifacts} />
+          )}
           {!loading && stage.auditMode === 'review_report' && (
             <ReviewReportsAuditView reports={payload.reports} />
           )}
-          {!loading && stage.auditMode !== 'ethical_micro' && stage.auditMode !== 'section_generation' && stage.auditMode !== 'review_report' && (
+          {!loading && stage.auditMode !== 'ethical_micro' && stage.auditMode !== 'section_generation' && stage.auditMode !== 'budget_calibration' && stage.auditMode !== 'volume_safety' && stage.auditMode !== 'review_report' && (
             <ArtifactAuditView artifacts={payload.artifacts} stage={stage} />
           )}
 
@@ -2197,6 +2206,355 @@ function sliceAuditWords(text, index, total, limit) {
 
 function formatAuditNumber(value) {
   return Number(value || 0).toLocaleString('fr-FR')
+}
+
+function BudgetCalibrationAuditView({ artifacts }) {
+  const days = buildBudgetCalibrationDays(artifacts)
+  const hasData = days.some(day => day.records.length > 0)
+
+  if (!hasData) {
+    return (
+      <AuditEmptyState
+        icon="info"
+        title="Aucun artefact de calibrage budget disponible"
+        detail="Les nouvelles générations écrivent content-budget-calibration.json. Pour les anciens jobs, cette vue utilise les scripts calibrés si disponibles."
+      />
+    )
+  }
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+      <div style={{
+        padding: '12px 14px',
+        background: 'rgba(250,204,21,0.08)',
+        border: '1px solid rgba(250,204,21,0.24)',
+        borderRadius: '10px',
+        color: '#fde68a',
+        fontSize: '12px',
+        lineHeight: 1.5,
+      }}>
+        <strong>Lecture de l'étape 11.</strong> Cette vue compare le texte avant calibrage et le texte après calibrage. Les passages surlignés en jaune correspondent aux paragraphes ajoutés ou fortement modifiés pour se rapprocher du budget prévu.
+      </div>
+      {days.map((day, index) => (
+        <BudgetCalibrationDay key={day.folder?.folder_id || index} day={day} initiallyOpen={index === 0} />
+      ))}
+    </div>
+  )
+}
+
+function buildBudgetCalibrationDays(artifacts) {
+  const byFolder = new Map()
+  for (const item of artifacts || []) {
+    const folderId = item.folder?.folder_id || item.folder_id || 'unknown'
+    if (!byFolder.has(folderId)) {
+      byFolder.set(folderId, { folder: item.folder || {}, calibration: null, draft: null, scripts: null })
+    }
+    const entry = byFolder.get(folderId)
+    if (!item.ok || !item.artifact) continue
+    if (item.name === 'content-budget-calibration.json') entry.calibration = item.artifact
+    if (item.name === 'content-draft-sections.json') entry.draft = item.artifact
+    if (item.name === 'content-course-scripts.json') entry.scripts = item.artifact
+  }
+  return Array.from(byFolder.values()).map(day => ({
+    ...day,
+    records: budgetCalibrationRecordsForDay(day),
+  })).sort((a, b) =>
+    Number(a.folder?.position ?? a.folder?.folder_position ?? a.folder?.folder_id ?? 0) -
+    Number(b.folder?.position ?? b.folder?.folder_position ?? b.folder?.folder_id ?? 0),
+  )
+}
+
+function budgetCalibrationRecordsForDay(day) {
+  if (Array.isArray(day.calibration?.courses) && day.calibration.courses.length > 0) {
+    return day.calibration.courses
+  }
+  const drafts = Array.isArray(day.draft?.courses) ? day.draft.courses : []
+  const scripts = Array.isArray(day.scripts?.courses) ? day.scripts.courses : []
+  const numbers = Array.from(new Set([
+    ...drafts.map(course => Number(course.course_number || 0)).filter(Boolean),
+    ...scripts.map(course => Number(course.course_number || 0)).filter(Boolean),
+  ])).sort((a, b) => a - b)
+  return numbers.map(number => {
+    const draft = drafts.find(course => Number(course.course_number || 0) === number) || {}
+    const script = scripts.find(course => Number(course.course_number || 0) === number) || {}
+    const beforeText = Array.isArray(draft.sections)
+      ? draft.sections.map(section => section.text || '').filter(Boolean).join('\n\n')
+      : ''
+    const afterText = script.text || ''
+    return {
+      course_number: number,
+      course_title: script.course_title || draft.course_title || `Thème ${number}`,
+      target_words: script.target_words || draft.target_words || 0,
+      before_words: draft.draft_word_count || countAuditWords(beforeText),
+      after_words: script.word_count || countAuditWords(afterText),
+      delta_words: (script.word_count || countAuditWords(afterText)) - (draft.draft_word_count || countAuditWords(beforeText)),
+      changed: beforeText.trim() !== afterText.trim(),
+      calibration: script.calibration || {},
+      before_text: beforeText,
+      after_text: afterText,
+      sections: draft.sections || [],
+      structured_plan: script.structured_plan || draft.course_plan || {},
+    }
+  })
+}
+
+function BudgetCalibrationDay({ day, initiallyOpen }) {
+  const target = day.records.reduce((sum, record) => sum + Number(record.target_words || 0), 0)
+  const before = day.records.reduce((sum, record) => sum + Number(record.before_words || 0), 0)
+  const after = day.records.reduce((sum, record) => sum + Number(record.after_words || 0), 0)
+  const changed = day.records.filter(record => record.changed).length
+
+  return (
+    <details open={initiallyOpen} style={{
+      background: 'rgba(15,23,42,0.48)',
+      border: '1px solid rgba(148,163,184,0.14)',
+      borderRadius: '12px',
+      overflow: 'hidden',
+    }}>
+      <summary style={{ cursor: 'pointer', listStyle: 'none', padding: '14px 16px', borderBottom: '1px solid rgba(148,163,184,0.12)' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', alignItems: 'center', flexWrap: 'wrap' }}>
+          <span style={{ color: '#e2e8f0', fontWeight: 900 }}>
+            <Icon name="speed" /> {folderDisplayName(day.folder)}
+          </span>
+          <span style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+            <SmallMetric label="Avant" value={`${formatAuditNumber(before)} mots`} />
+            <SmallMetric label="Après" value={`${formatAuditNumber(after)} mots`} />
+            <SmallMetric label="Cible" value={`${formatAuditNumber(target)} mots`} />
+            <SmallMetric label="Modifiés" value={changed} />
+          </span>
+        </div>
+      </summary>
+      <div style={{ padding: '14px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+        {day.records.map((record, index) => (
+          <BudgetCalibrationCourse key={record.course_number || index} record={record} initiallyOpen={index === 0} />
+        ))}
+      </div>
+    </details>
+  )
+}
+
+function BudgetCalibrationCourse({ record, initiallyOpen }) {
+  const before = Number(record.before_words || countAuditWords(record.before_text))
+  const after = Number(record.after_words || countAuditWords(record.after_text))
+  const target = Number(record.target_words || 0)
+  const delta = after - before
+  const status = record.calibration?.status || (target && after >= target * 0.94 && after <= target ? 'ok' : 'à vérifier')
+
+  return (
+    <details open={initiallyOpen} style={{
+      background: 'rgba(2,6,23,0.34)',
+      border: '1px solid rgba(148,163,184,0.12)',
+      borderRadius: '10px',
+      overflow: 'hidden',
+    }}>
+      <summary style={{ cursor: 'pointer', listStyle: 'none', padding: '13px 14px' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap' }}>
+          <div style={{ minWidth: 0 }}>
+            <div style={{ color: '#94a3b8', fontSize: '11px', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+              Thème {record.course_number} · {status}
+            </div>
+            <div style={{ color: '#e2e8f0', fontWeight: 900, fontSize: '15px', marginTop: '3px' }}>
+              {record.course_title || `Thème ${record.course_number}`}
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
+            <WordBudgetBadge target={target} actual={after} />
+            <SmallMetric label="Avant" value={formatAuditNumber(before)} />
+            <SmallMetric label="Delta" value={`${delta >= 0 ? '+' : ''}${formatAuditNumber(delta)}`} />
+          </div>
+        </div>
+      </summary>
+      <div style={{ borderTop: '1px solid rgba(148,163,184,0.10)', padding: '12px', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '12px' }}>
+        <CalibrationTextPane title="Avant calibrage" text={record.before_text} muted />
+        <CalibrationTextPane title="Après calibrage" text={record.after_text} beforeText={record.before_text} highlight />
+      </div>
+    </details>
+  )
+}
+
+function CalibrationTextPane({ title, text, beforeText = '', highlight = false, muted = false }) {
+  return (
+    <div style={{ minWidth: 0 }}>
+      <div style={{ color: muted ? '#94a3b8' : '#fde68a', fontSize: '11px', fontWeight: 900, marginBottom: '7px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+        {title}
+      </div>
+      <div style={{
+        color: '#cbd5e1',
+        fontSize: '12px',
+        lineHeight: 1.65,
+        whiteSpace: 'pre-wrap',
+        background: 'rgba(2,6,23,0.46)',
+        border: '1px solid rgba(148,163,184,0.10)',
+        borderRadius: '8px',
+        padding: '11px',
+        maxHeight: '360px',
+        overflow: 'auto',
+      }}>
+        {highlight ? <HighlightedAddedText beforeText={beforeText} afterText={text} /> : (text || 'Aucun texte disponible.')}
+      </div>
+    </div>
+  )
+}
+
+function VolumeSafetyAuditView({ artifacts }) {
+  const available = (artifacts || []).filter(item => item.ok && item.artifact)
+  if (available.length === 0) {
+    return (
+      <AuditEmptyState
+        icon="info"
+        title="Aucun artefact de sécurité volume disponible"
+        detail="La sécurité volume n'a pas encore tourné, ou ce job a été généré avant l'ajout de l'artefact content-volume-safety.json."
+      />
+    )
+  }
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+      <div style={{
+        padding: '12px 14px',
+        background: 'rgba(250,204,21,0.08)',
+        border: '1px solid rgba(250,204,21,0.24)',
+        borderRadius: '10px',
+        color: '#fde68a',
+        fontSize: '12px',
+        lineHeight: 1.5,
+      }}>
+        <strong>Lecture de l'étape 12.</strong> Cette vue montre les ajouts effectués pour combler un déficit de volume journée. Le jaune correspond au contenu additionnel ajouté par sécurité volume.
+      </div>
+      {available.map((item, index) => (
+        <VolumeSafetyDay key={`${item.folder?.folder_id}-${index}`} item={item} initiallyOpen={index === 0} />
+      ))}
+    </div>
+  )
+}
+
+function VolumeSafetyDay({ item, initiallyOpen }) {
+  const artifact = item.artifact || {}
+  const before = artifact.audit_before || {}
+  const after = artifact.audit_after || before
+  const enriched = Array.isArray(artifact.enriched) ? artifact.enriched : []
+  const failed = Array.isArray(artifact.failed) ? artifact.failed : []
+
+  return (
+    <details open={initiallyOpen} style={{
+      background: 'rgba(15,23,42,0.48)',
+      border: '1px solid rgba(148,163,184,0.14)',
+      borderRadius: '12px',
+      overflow: 'hidden',
+    }}>
+      <summary style={{ cursor: 'pointer', listStyle: 'none', padding: '14px 16px', borderBottom: '1px solid rgba(148,163,184,0.12)' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', alignItems: 'center', flexWrap: 'wrap' }}>
+          <span style={{ color: '#e2e8f0', fontWeight: 900 }}>
+            <Icon name="auto_fix_high" /> {folderDisplayName(item.folder)}
+          </span>
+          <span style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+            <SmallMetric label="Avant" value={`${formatAuditNumber(before.total_words)} mots`} />
+            <SmallMetric label="Après" value={`${formatAuditNumber(after.total_words)} mots`} />
+            <SmallMetric label="Déficit" value={formatAuditNumber(after.deficit || 0)} />
+            <SmallMetric label="Ajouts" value={enriched.length} />
+            <SmallMetric label="Échecs" value={failed.length} />
+          </span>
+        </div>
+      </summary>
+      <div style={{ padding: '14px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+        {artifact.skipped && (
+          <AuditEmptyState
+            icon="verified_user"
+            title="Sécurité volume non nécessaire"
+            detail="La journée était déjà au-dessus du seuil minimal, aucun ajout n'a été effectué."
+          />
+        )}
+        {enriched.length === 0 && !artifact.skipped && (
+          <AuditEmptyState
+            icon="info"
+            title="Aucun ajout enregistré"
+            detail="L'étape a tourné sans enrichissement exploitable, ou l'artefact ne contient pas encore les détails."
+          />
+        )}
+        {enriched.map((entry, index) => (
+          <VolumeSafetyAddition key={`${entry.segment_id}-${entry.pass_idx}-${index}`} entry={entry} />
+        ))}
+      </div>
+    </details>
+  )
+}
+
+function VolumeSafetyAddition({ entry }) {
+  return (
+    <div style={{
+      background: 'rgba(2,6,23,0.34)',
+      border: '1px solid rgba(250,204,21,0.18)',
+      borderRadius: '10px',
+      overflow: 'hidden',
+    }}>
+      <div style={{ padding: '12px 13px', borderBottom: '1px solid rgba(148,163,184,0.10)', display: 'flex', justifyContent: 'space-between', gap: '10px', flexWrap: 'wrap' }}>
+        <div>
+          <div style={{ color: '#fde68a', fontSize: '11px', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+            Segment {entry.segment_id} · passe {entry.pass_idx || entry.passe || '?'}
+          </div>
+          <div style={{ color: '#e2e8f0', fontWeight: 800, fontSize: '13px', marginTop: '3px' }}>
+            {entry.sub_part_name || 'Segment enrichi'}
+          </div>
+        </div>
+        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
+          <SmallMetric label="Avant" value={formatAuditNumber(entry.words_before)} />
+          <SmallMetric label="Ajout" value={`+${formatAuditNumber(entry.words_added)}`} />
+          <SmallMetric label="Après" value={formatAuditNumber(entry.words_after)} />
+        </div>
+      </div>
+      <div style={{ padding: '12px', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '12px' }}>
+        <CalibrationTextPane title="Texte ajouté" text={entry.addition_text} beforeText="" highlight />
+        <CalibrationTextPane title="Après ajout dans le segment" text={entry.text_after} beforeText={entry.text_before} highlight />
+      </div>
+    </div>
+  )
+}
+
+function HighlightedAddedText({ beforeText, afterText }) {
+  const after = String(afterText || '')
+  if (!after.trim()) return 'Aucun texte disponible.'
+  if (!String(beforeText || '').trim()) {
+    return <mark style={addedHighlightStyle()}>{after}</mark>
+  }
+  const beforeParagraphKeys = new Set(
+    splitAuditParagraphs(beforeText).map(paragraph => normalizeAuditText(paragraph)),
+  )
+  const paragraphs = splitAuditParagraphs(after)
+  if (paragraphs.length === 0) return after
+  return (
+    <>
+      {paragraphs.map((paragraph, index) => {
+        const isAdded = !beforeParagraphKeys.has(normalizeAuditText(paragraph))
+        return (
+          <span key={index}>
+            {isAdded ? <mark style={addedHighlightStyle()}>{paragraph}</mark> : paragraph}
+            {index < paragraphs.length - 1 ? '\n\n' : ''}
+          </span>
+        )
+      })}
+    </>
+  )
+}
+
+function splitAuditParagraphs(text) {
+  return String(text || '').split(/\n{2,}/).map(paragraph => paragraph.trim()).filter(Boolean)
+}
+
+function normalizeAuditText(text) {
+  return String(text || '')
+    .toLowerCase()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function addedHighlightStyle() {
+  return {
+    color: '#fefce8',
+    background: 'rgba(250,204,21,0.34)',
+    borderRadius: '4px',
+    padding: '1px 3px',
+  }
 }
 
 function EthicalMicroAuditView({ artifacts }) {

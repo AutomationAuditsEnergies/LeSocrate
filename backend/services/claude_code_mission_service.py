@@ -3313,6 +3313,70 @@ def compute_volume_audit(job_id: int) -> dict:
     }
 
 
+def _save_volume_safety_artifact(job: dict, folder_id: int, payload: dict) -> None:
+    try:
+        from services.content_pipeline.artifacts import (
+            CONTENT_VOLUME_SAFETY_BLOB,
+            artifact_payload,
+            save_content_artifact,
+        )
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT id, name, position, platform_id
+            FROM cours_folders
+            WHERE id = ?
+            """,
+            (folder_id,),
+        )
+        folder = cursor.fetchone()
+        cursor.execute(
+            """
+            SELECT id
+            FROM content_generation_jobs
+            WHERE folder_id = ?
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (folder_id,),
+        )
+        content_job = cursor.fetchone()
+        conn.close()
+        if not folder:
+            return
+        platform_id = int(folder[3] or job.get("platform_id") or 0)
+        artifact_job = {
+            "id": content_job[0] if content_job else None,
+            "formation_job_id": job.get("id"),
+            "platform_id": platform_id,
+            "folder_id": folder_id,
+            "folder_name": folder[1],
+            "folder_position": folder[2],
+        }
+        save_content_artifact(
+            platform_id,
+            folder_id,
+            CONTENT_VOLUME_SAFETY_BLOB,
+            artifact_payload(
+                artifact_job,
+                "content_volume_safety",
+                {
+                    "review_kind": "volume_safety",
+                    "review_label": "Sécurité volume",
+                    **(payload or {}),
+                },
+            ),
+        )
+    except Exception:
+        logger.warning(
+            "⚠️ Sauvegarde artefact volume safety impossible job=%s folder=%s",
+            job.get("id") if isinstance(job, dict) else "?",
+            folder_id,
+            exc_info=True,
+        )
+
+
 def _build_volume_safety_chunk(chunk_dir: str, job: dict, segment_data: dict, model: str) -> None:
     """Construit task.md + input.md + rules.md pour 1 enrichissement de segment."""
     sub_part_name = segment_data["sub_part_name"]
@@ -3505,6 +3569,16 @@ def run_volume_safety_api(job_id: int, folder_id: int, model: str = None) -> dic
             initial_audit.get("target"),
             int((time.time() - started_at) * 1000),
         )
+        _save_volume_safety_artifact(job, folder_id, {
+            "mode": "api",
+            "model": str(model),
+            "skipped": True,
+            "reason": "no_deficit",
+            "audit_before": initial_folder_audit,
+            "audit_after": initial_folder_audit,
+            "enriched": [],
+            "failed": [],
+        })
         return {"ok": True, "skipped": True, "reason": "no_deficit",
                 "audit": initial_folder_audit}
 
@@ -3633,6 +3707,9 @@ def run_volume_safety_api(job_id: int, folder_id: int, model: str = None) -> dic
                     "words_before": seg["word_count"],
                     "words_added": new_words - seg["word_count"],
                     "words_after": new_words,
+                    "addition_text": addition,
+                    "text_before": seg["text_content"],
+                    "text_after": new_text,
                 })
                 logger.info(
                     "PIPELINE_VOLUME_API_SEGMENT_DONE job=%s folder=%s segment_id=%s pass=%s words_before=%s "
@@ -3738,6 +3815,17 @@ def run_volume_safety_api(job_id: int, folder_id: int, model: str = None) -> dic
         int((time.time() - started_at) * 1000),
     )
 
+    _save_volume_safety_artifact(job, folder_id, {
+        "mode": "api",
+        "model": str(model),
+        "passes_run": passes_run,
+        "target_reached": final_folder_audit["deficit"] == 0,
+        "audit_before": initial_folder_audit,
+        "audit_after": final_folder_audit,
+        "enriched": all_enriched,
+        "failed": all_failed,
+    })
+
     return {
         "ok": True,
         "skipped": False,
@@ -3792,6 +3880,16 @@ def run_volume_safety(job_id: int, folder_id: int, model: str = "sonnet") -> dic
             f"📏 Volume safety job {job_id}/folder {folder_id} : déjà au seuil "
             f"({initial_folder_audit['total_words']} mots) — skip"
         )
+        _save_volume_safety_artifact(job, folder_id, {
+            "mode": "cc",
+            "model": str(model),
+            "skipped": True,
+            "reason": "no_deficit",
+            "audit_before": initial_folder_audit,
+            "audit_after": initial_folder_audit,
+            "enriched": [],
+            "failed": [],
+        })
         return {"ok": True, "skipped": True, "reason": "no_deficit",
                 "audit": initial_folder_audit}
 
@@ -3911,6 +4009,9 @@ def run_volume_safety(job_id: int, folder_id: int, model: str = "sonnet") -> dic
                     "words_before": seg["word_count"],
                     "words_added": new_words - seg["word_count"],
                     "words_after": new_words,
+                    "addition_text": addition,
+                    "text_before": seg["text_content"],
+                    "text_after": new_text,
                 })
                 logger.info(
                     f"📏 [Pass {pass_idx + 1}] Segment {seg['segment_id']} enrichi : "
@@ -3972,6 +4073,17 @@ def run_volume_safety(job_id: int, folder_id: int, model: str = "sonnet") -> dic
         (f for f in final_audit["folders"] if f["folder_id"] == folder_id),
         initial_folder_audit,
     )
+
+    _save_volume_safety_artifact(job, folder_id, {
+        "mode": "cc",
+        "model": str(model),
+        "passes_run": passes_run,
+        "target_reached": final_folder_audit["deficit"] == 0,
+        "audit_before": initial_folder_audit,
+        "audit_after": final_folder_audit,
+        "enriched": all_enriched,
+        "failed": all_failed,
+    })
 
     return {
         "ok": True,

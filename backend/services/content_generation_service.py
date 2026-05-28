@@ -32,6 +32,7 @@ from utils.anthropic_client import (
 from utils.logger import get_logger
 from services.content_pipeline.artifacts import (
     CONTENT_AUDIO_PLAN_BLOB as _CONTENT_AUDIO_PLAN_BLOB,
+    CONTENT_BUDGET_CALIBRATION_BLOB as _CONTENT_BUDGET_CALIBRATION_BLOB,
     CONTENT_COURSE_SCRIPTS_BLOB as _CONTENT_COURSE_SCRIPTS_BLOB,
     CONTENT_DRAFT_SECTIONS_BLOB as _CONTENT_DRAFT_SECTIONS_BLOB,
     CONTENT_ETHICAL_MICRO_REVIEW_BLOB as _CONTENT_ETHICAL_MICRO_REVIEW_BLOB,
@@ -6892,14 +6893,35 @@ def _run_structured_content_generation(
     )
     calibrated_results = sorted(calibrated_results, key=lambda item: int(item.get("course_number") or 0))
 
+    budget_calibration_records = []
     for result in calibrated_results:
         course_number = int(result.get("course_number") or 0)
         course_plan = result["course_plan"]
         course_text = result["course_text"]
         words = int(result.get("words") or 0)
         calibration = result.get("calibration") or {}
+        draft = result.get("draft") or {}
+        before_text = draft.get("course_text") or ""
+        before_words = int(draft.get("draft_word_count") or count_tts_spoken_words(before_text))
         _save_structured_course_segment(job["id"], course_plan, course_text)
         total_words += words
+        budget_calibration_records.append({
+            "course_number": course_number,
+            "course_title": course_plan.get("course_title") or f"Cours {course_number}",
+            "filename": course_plan.get("filename"),
+            "target_words": int(course_plan.get("target_words") or 0),
+            "min_words": calibration.get("min_words"),
+            "max_words": calibration.get("max_words"),
+            "before_words": before_words,
+            "after_words": words,
+            "delta_words": words - before_words,
+            "changed": bool((course_text or "").strip() != (before_text or "").strip() or calibration.get("changed")),
+            "calibration": calibration,
+            "before_text": before_text,
+            "after_text": course_text,
+            "sections": draft.get("sections") or [],
+            "structured_plan": course_plan,
+        })
         generated_block = {
             "bloc_number": course_number,
             "filename": course_plan.get("filename"),
@@ -6942,6 +6964,29 @@ def _run_structured_content_generation(
             words,
             course_plan.get("target_words"),
         )
+
+    _save_content_artifact(
+        platform_id,
+        folder_id,
+        _CONTENT_BUDGET_CALIBRATION_BLOB,
+        _artifact_payload(
+            job,
+            "content_budget_calibration",
+            {
+                "structured_course_plan_version": plan.get("version"),
+                "generation_strategy": "parallel_body_then_late_opening",
+                "parallel_workers": workers,
+                "summary": {
+                    "courses": len(budget_calibration_records),
+                    "changed": sum(1 for record in budget_calibration_records if record.get("changed")),
+                    "target_words": sum(int(record.get("target_words") or 0) for record in budget_calibration_records),
+                    "before_words": sum(int(record.get("before_words") or 0) for record in budget_calibration_records),
+                    "after_words": sum(int(record.get("after_words") or 0) for record in budget_calibration_records),
+                },
+                "courses": budget_calibration_records,
+            },
+        ),
+    )
 
     _save_content_artifact(
         platform_id,
