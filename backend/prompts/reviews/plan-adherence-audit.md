@@ -29,7 +29,10 @@ Tu dois vérifier uniquement :
 - le texte ne verbalise jamais la mécanique interne des beats ou des slides :
   pas de "slide", "PowerPoint", "template", "anchor", "teaching beat" ;
 - les répétitions évidentes sont signalées ;
-- le budget mots est respecté selon le statut fourni.
+- le budget mots est respecté seulement si la portée budget fournie dans le
+  prompt demande explicitement de le signaler. Si la portée dit que le budget
+  est informatif, ignore les écarts de volume : ils seront traités par le
+  calibrage budget texte.
 
 Tu ne dois pas juger le style fin, la chaleur, l'oralité légère ou la conformité
 éthique : ces sujets sont traités par les passes suivantes.

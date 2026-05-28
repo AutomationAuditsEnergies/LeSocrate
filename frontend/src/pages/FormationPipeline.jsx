@@ -100,7 +100,7 @@ const AUTO_PILOT_STEP_LABELS = {
   daily: 'programmes journée',
   content: 'génération texte',
   plan_adherence_review: 'adhérence au plan',
-  humanization_review: 'adhérence plan + humanisation',
+  humanization_review: 'humanisation orale',
   audio_word_calibration: 'calibrage blocs audio',
   review: 'conformité finale',
   word_budget_review: 'vérification budget mots',
@@ -1211,7 +1211,7 @@ function PipelineVisualMap({ job, currentStep, autoPilotState, contentFolders, v
   const audioDone = AUDIO_DONE_STATUSES.has(job.status)
   const audioActive = AUDIO_ACTIVE_STATUSES.has(job.status) || autoActive('audio')
   const planAdherenceDone = hasCompletedPipelineEvent(events, e => e.step === 'plan_adherence_review') ||
-    allHumanized || allReviewed || autoPassed('humanization_review')
+    allContentCompleted || allHumanized || allReviewed || autoPassed('content')
   const calibrationDone = hasCompletedPipelineEvent(events, e => e.step === 'audio_word_calibration') ||
     allReviewed || Boolean(job.auto_pilot_post_review_docs_done)
   const finalBudgetDone = hasCompletedPipelineEvent(events, e => e.step === 'word_budget_review') ||
@@ -1292,6 +1292,16 @@ function PipelineVisualMap({ job, currentStep, autoPilotState, contentFolders, v
       active: contentActive,
     },
     {
+      key: 'plan_adherence',
+      title: 'Adhérence au plan',
+      detail: 'Corrige ordre, reprises, conclusions, doublons d’intro et fuites d’horaires avant le budget.',
+      icon: 'rule',
+      artifacts: ['content-quality-reviews.json', 'content-draft-sections.json'],
+      auditMode: 'artifact_review',
+      done: planAdherenceDone,
+      active: contentActive,
+    },
+    {
       key: 'budget_calibration',
       title: 'Calibrage budget texte',
       detail: 'Alignement des volumes de mots avant toute conformité éthique.',
@@ -1319,16 +1329,6 @@ function PipelineVisualMap({ job, currentStep, autoPilotState, contentFolders, v
       artifacts: ['content-plan.json', 'content-draft-sections.json', 'content-course-scripts.json', 'content-reviewed-scripts.json'],
       done: allContentCompleted || autoPassed('content'),
       active: contentActive,
-    },
-    {
-      key: 'plan_adherence',
-      title: 'Adhérence au plan',
-      detail: 'Vérifie ordre, reprises, conclusions, doublons d’intro et fuites d’horaires.',
-      icon: 'rule',
-      artifacts: ['content-quality-reviews.json'],
-      auditMode: 'artifact_review',
-      done: planAdherenceDone,
-      active: autoActive('humanization_review'),
     },
     {
       key: 'humanization',
@@ -1412,7 +1412,7 @@ function PipelineVisualMap({ job, currentStep, autoPilotState, contentFolders, v
       </div>
       <div style={{ fontSize: '12px', color: '#94a3b8', lineHeight: 1.45, marginBottom: '14px' }}>
         Cette carte montre le vrai trajet de fabrication : plan structuré, génération par sections,
-        calibrage budget, micro-review éthique, artefacts, reviews, slides anchor-first, puis audio si activé.
+        adhérence au plan, calibrage budget, micro-review éthique, artefacts, reviews, slides anchor-first, puis audio si activé.
       </div>
       <div style={{
         display: 'grid',
@@ -1451,10 +1451,10 @@ const PIPELINE_STAGE_EVENT_ALIASES = {
   plan_json: ['content', 'structured_plan'],
   slide_beats: ['content', 'slides'],
   section_generation: ['content', 'structured_section'],
+  plan_adherence: ['content', 'plan_adherence', 'plan_adherence_review', 'structured_section'],
   ethical_micro: ['content', 'ethical_micro'],
   structured_artifacts: ['content', 'artifact'],
   budget_calibration: ['content', 'budget', 'calibration'],
-  plan_adherence: ['plan_adherence_review', 'humanization_review'],
   humanization: ['humanization_review'],
   audio_block_calibration: ['audio_word_calibration', 'review', 'post_review_docs'],
   final_compliance: ['review'],
@@ -5478,8 +5478,8 @@ export default function FormationPipeline() {
                                         </div>
                                         <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
                                           {[
-                                            { step: 'content', label: 'Génération texte', icon: 'text_fields', title: 'Purge les segments et régénère le texte depuis zéro, puis enchaîne plan JSON, calibrage budget, micro-éthique, reviews, slides et TTS' },
-                                            { step: 'review', label: 'Reviews', icon: 'rule', title: 'Lance adhérence plan + humanisation + conformité finale + Word 2 + slides + TTS' },
+                                            { step: 'content', label: 'Génération texte', icon: 'text_fields', title: 'Purge les segments et régénère le texte depuis zéro, puis enchaîne plan JSON, adhérence plan, calibrage budget, micro-éthique, reviews, slides et TTS' },
+                                            { step: 'review', label: 'Reviews', icon: 'rule', title: 'Lance humanisation + conformité finale + Word 2 + slides + TTS' },
                                             { step: 'slides', label: 'Slides', icon: 'slideshow', title: 'Saute les reviews — supprime le deck slides existant, régénère les slides puis lance le TTS' },
                                             { step: 'tts', label: 'TTS', icon: 'record_voice_over', title: 'Saute tout — conserve les slides existantes et relance uniquement le TTS dessus' },
                                             { step: 'tts_fast', label: 'TTS — pipeline presque instantanée', icon: 'bolt', title: 'Mode test uniquement — conserve les slides existantes, relance le TTS Edge avec parallélisation/cache, sans modifier le chemin TTS normal' },

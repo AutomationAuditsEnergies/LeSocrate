@@ -20,9 +20,9 @@ CONTENT_AUDIO_PLAN_BLOB = "content-audio-plan.json"
 CONTENT_ARTIFACT_BLOBS = [
     CONTENT_PLAN_BLOB,
     CONTENT_DRAFT_SECTIONS_BLOB,
-    CONTENT_COURSE_SCRIPTS_BLOB,
-    CONTENT_BUDGET_CALIBRATION_BLOB,
     CONTENT_QUALITY_REVIEWS_BLOB,
+    CONTENT_BUDGET_CALIBRATION_BLOB,
+    CONTENT_COURSE_SCRIPTS_BLOB,
     CONTENT_ETHICAL_MICRO_REVIEW_BLOB,
     CONTENT_VOLUME_SAFETY_BLOB,
     CONTENT_REVIEWED_SCRIPTS_BLOB,
@@ -33,9 +33,9 @@ CONTENT_ARTIFACT_BLOBS = [
 CONTENT_ARTIFACT_DESCRIPTIONS = {
     CONTENT_PLAN_BLOB: "Plan JSON verrouillé et validation serveur.",
     CONTENT_DRAFT_SECTIONS_BLOB: "Sections brutes générées avant assemblage/calibrage.",
-    CONTENT_COURSE_SCRIPTS_BLOB: "Cours complets calibrés avant reviews.",
+    CONTENT_COURSE_SCRIPTS_BLOB: "Cours complets après calibrage budget et micro-conformité, avant humanisation.",
     CONTENT_BUDGET_CALIBRATION_BLOB: "Avant/après du calibrage budget texte par cours.",
-    CONTENT_QUALITY_REVIEWS_BLOB: "Audit d'adhérence au plan et réparations ciblées avant humanisation.",
+    CONTENT_QUALITY_REVIEWS_BLOB: "Audit d'adhérence au plan après génération par section, avant calibrage budget.",
     CONTENT_ETHICAL_MICRO_REVIEW_BLOB: "Micro-conformité éthique #1-#16, patches avant/après par section.",
     CONTENT_VOLUME_SAFETY_BLOB: "Ajouts de sécurité volume, avec texte avant/après et passages ajoutés.",
     CONTENT_REVIEWED_SCRIPTS_BLOB: "Scripts après humanisation/conformité.",

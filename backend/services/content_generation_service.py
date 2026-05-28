@@ -6009,7 +6009,7 @@ def _calibrate_structured_course_text(course_plan: dict, text: str, model=None) 
     return _sanitize_learner_facing_text(calibrated), result
 
 
-_PLAN_ADHERENCE_REVIEW_VERSION = "2026-05-25-plan-adherence-v5"
+_PLAN_ADHERENCE_REVIEW_VERSION = "2026-05-28-plan-adherence-v6-early"
 
 
 def _structured_course_budget_status(course_plan: dict, text: str) -> dict:
@@ -6216,7 +6216,13 @@ def _quality_signature(course_plan: dict, text: str) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
-def _normalize_plan_adherence_audit(raw_audit: dict, course_plan: dict, text: str) -> dict:
+def _normalize_plan_adherence_audit(
+    raw_audit: dict,
+    course_plan: dict,
+    text: str,
+    *,
+    include_budget_issues: bool = True,
+) -> dict:
     issues = []
     for issue in (raw_audit or {}).get("issues") or []:
         if not isinstance(issue, dict):
@@ -6235,7 +6241,7 @@ def _normalize_plan_adherence_audit(raw_audit: dict, course_plan: dict, text: st
         })
 
     budget_status = _structured_course_budget_status(course_plan, text)
-    if budget_status["status"] == "too_short":
+    if include_budget_issues and budget_status["status"] == "too_short":
         issues.append({
             "type": "budget",
             "severity": "major",
@@ -6244,7 +6250,7 @@ def _normalize_plan_adherence_audit(raw_audit: dict, course_plan: dict, text: st
             "problem": "Le cours est trop court pour le budget audio prévu.",
             "fix_instruction": "Enrichir avec du contenu pédagogique pertinent lié au plan, sans remplissage.",
         })
-    elif budget_status["status"] == "too_long":
+    elif include_budget_issues and budget_status["status"] == "too_long":
         issues.append({
             "type": "budget",
             "severity": "major",
@@ -6274,9 +6280,18 @@ def _build_plan_adherence_audit_prompt(
     course_plan: dict,
     text: str,
     previous_course_summary: str,
+    include_budget_issues: bool = True,
 ) -> str:
     contract = _load_prompt_file("reviews", "plan-adherence-audit.md")
     budget_status = _structured_course_budget_status(course_plan, text)
+    budget_instruction = (
+        "Le budget mots fait partie de l'audit : signale too_short/too_long si nécessaire."
+        if include_budget_issues
+        else (
+            "Le budget mots est seulement informatif ici. Ne signale pas de problème "
+            "de volume : le calibrage budget texte est l'étape suivante dédiée."
+        )
+    )
     return f"""Tu audites l'adhérence pédagogique d'un cours audio à son plan verrouillé.
 
 CONTRAT D'AUDIT :
@@ -6287,6 +6302,7 @@ Contexte :
 - Journée : {job.get('folder_name') or ''}
 - Cours : {course_plan.get('course_number')} / 7
 - Rappel très bref de la partie précédente : {previous_course_summary or '(aucun)'}
+- Portée budget : {budget_instruction}
 
 Statut budget mots :
 {json.dumps(budget_status, ensure_ascii=False, indent=2)}
@@ -6307,19 +6323,26 @@ def _run_plan_adherence_audit(
     text: str,
     previous_course_summary: str,
     model=None,
+    include_budget_issues: bool = True,
 ) -> dict:
     prompt = _build_plan_adherence_audit_prompt(
         job=job,
         course_plan=course_plan,
         text=text,
         previous_course_summary=previous_course_summary,
+        include_budget_issues=include_budget_issues,
     )
     raw = _anthropic_post(
         messages=[{"role": "user", "content": prompt}],
         max_tokens=2200,
         model=model,
     )
-    return _normalize_plan_adherence_audit(_extract_llm_json(raw), course_plan, text)
+    return _normalize_plan_adherence_audit(
+        _extract_llm_json(raw),
+        course_plan,
+        text,
+        include_budget_issues=include_budget_issues,
+    )
 
 
 def _build_plan_adherence_repair_prompt(
@@ -6399,11 +6422,20 @@ def _run_plan_adherence_quality_loop(
     previous_course_summary: str,
     model=None,
     max_repairs: int | None = None,
+    include_budget_issues: bool = True,
+    allow_post_calibration: bool = True,
+    review_timing: str | None = None,
 ) -> tuple[str, dict]:
     if max_repairs is None:
         max_repairs = int(os.getenv("FORMATION_PLAN_ADHERENCE_REPAIR_ITERATIONS", "1") or "1")
     max_repairs = max(0, min(3, int(max_repairs)))
     course_number = int(course_plan.get("course_number") or 0)
+    if not review_timing:
+        review_timing = (
+            "manual_before_humanization"
+            if include_budget_issues or allow_post_calibration
+            else "after_section_generation_before_budget_calibration"
+        )
     current_text = _sanitize_learner_facing_text(text)
     initial_text = current_text
     attempts = []
@@ -6417,6 +6449,7 @@ def _run_plan_adherence_quality_loop(
             text=current_text,
             previous_course_summary=previous_course_summary,
             model=model,
+            include_budget_issues=include_budget_issues,
         )
         final_audit = audit
         record = {
@@ -6455,11 +6488,12 @@ def _run_plan_adherence_quality_loop(
             text=current_text,
             previous_course_summary=previous_course_summary,
             model=model,
+            include_budget_issues=include_budget_issues,
         )
 
     post_calibration = None
     budget_status = _structured_course_budget_status(course_plan, current_text)
-    if changed and budget_status.get("status") in {"too_short", "too_long"}:
+    if allow_post_calibration and changed and budget_status.get("status") in {"too_short", "too_long"}:
         calibrated, post_calibration = _calibrate_structured_course_text(course_plan, current_text, model=model)
         if calibrated.strip() != current_text.strip():
             current_text = calibrated
@@ -6470,6 +6504,7 @@ def _run_plan_adherence_quality_loop(
                 text=current_text,
                 previous_course_summary=previous_course_summary,
                 model=model,
+                include_budget_issues=include_budget_issues,
             )
 
     result = {
@@ -6481,11 +6516,204 @@ def _run_plan_adherence_quality_loop(
         "final_words": count_tts_spoken_words(current_text),
         "initial_signature": _quality_signature(course_plan, initial_text),
         "final_signature": _quality_signature(course_plan, current_text),
+        "review_timing": review_timing,
+        "budget_issues_included": bool(include_budget_issues),
+        "post_calibration_allowed": bool(allow_post_calibration),
         "attempts": attempts,
         "final_audit": final_audit,
         "post_calibration": post_calibration,
     }
     return current_text, result
+
+
+def _run_plan_adherence_on_generated_drafts(
+    *,
+    job: dict,
+    platform_id: int,
+    folder_id: int,
+    plan: dict,
+    body_results: list[dict],
+    course_summaries: dict[int, str],
+    workers: int,
+    total_words: int,
+    on_progress=None,
+    model=None,
+) -> list[dict]:
+    """Corrige l'adhérence au plan juste après génération, avant budget/conformité."""
+    started_at = time.time()
+    sorted_results = sorted(body_results, key=lambda item: int(item.get("course_number") or 0))
+    total = len(sorted_results)
+    course_records = []
+    details = []
+    total_proposed = 0
+    total_applied = 0
+    total_rejected = 0
+    total_failed = 0
+
+    logger.info(
+        "PIPELINE_EARLY_PLAN_ADHERENCE_START formation_job_id=%s content_job_id=%s folder_id=%s courses=%s",
+        job.get("formation_job_id"),
+        job.get("id"),
+        folder_id,
+        total,
+    )
+
+    for step, body_result in enumerate(sorted_results, start=1):
+        draft = body_result.get("draft") or {}
+        course_plan = draft.get("course_plan") or body_result.get("course_plan") or {}
+        course_number = int(course_plan.get("course_number") or body_result.get("course_number") or step)
+        before_text = draft.get("course_text") or ""
+        previous_summary = course_summaries.get(course_number - 1, "")
+        if on_progress:
+            on_progress(
+                0,
+                NUM_SUB_PARTS,
+                1,
+                total_words,
+                f"Adhérence au plan après génération cours {course_number}/7",
+            )
+        try:
+            final_text, quality_result = _run_plan_adherence_quality_loop(
+                job=job,
+                course_plan=course_plan,
+                text=before_text,
+                previous_course_summary=previous_summary,
+                model=model,
+                include_budget_issues=False,
+                allow_post_calibration=False,
+                review_timing="after_section_generation_before_budget_calibration",
+            )
+            before_words = count_tts_spoken_words(before_text)
+            final_words = count_tts_spoken_words(final_text)
+            changed = final_text.strip() != before_text.strip() or bool(quality_result.get("changed"))
+            if changed:
+                draft["course_text"] = final_text
+                draft["draft_word_count"] = final_words
+                body_result["draft"] = draft
+            body_result["plan_adherence"] = quality_result
+            quality_result.update({
+                "changed": bool(changed),
+                "initial_words": before_words,
+                "final_words": final_words,
+                "before_text": before_text,
+                "after_text": final_text,
+                "delta_words": final_words - before_words,
+            })
+            detail = _quality_detail_from_result(0, max(0, course_number - 1), 1, quality_result)
+            details.append(detail)
+            total_proposed += int(detail.get("proposed") or 0)
+            total_applied += len(detail.get("applied") or [])
+            total_rejected += len(detail.get("rejected") or [])
+            course_records.append(quality_result)
+        except Exception as e:
+            total_failed += 1
+            logger.warning(
+                "PIPELINE_EARLY_PLAN_ADHERENCE_COURSE_FAILED formation_job_id=%s content_job_id=%s folder_id=%s course=%s error=%s",
+                job.get("formation_job_id"),
+                job.get("id"),
+                folder_id,
+                course_number,
+                str(e)[:300],
+            )
+            details.append({
+                "segment_id": 0,
+                "sub_idx": max(0, course_number - 1),
+                "passe": 1,
+                "proposed": 0,
+                "applied": [],
+                "rejected": [],
+                "error": str(e)[:500],
+            })
+            course_records.append({
+                "course_number": course_number,
+                "course_title": course_plan.get("course_title") or f"Cours {course_number}",
+                "version": _PLAN_ADHERENCE_REVIEW_VERSION,
+                "changed": False,
+                "failed": True,
+                "error": str(e)[:500],
+                "initial_words": count_tts_spoken_words(before_text),
+                "final_words": count_tts_spoken_words(before_text),
+                "before_text": before_text,
+                "after_text": before_text,
+                "review_timing": "after_section_generation_before_budget_calibration",
+                "budget_issues_included": False,
+                "post_calibration_allowed": False,
+            })
+            body_result["plan_adherence"] = course_records[-1]
+
+        _save_content_artifact(
+            platform_id,
+            folder_id,
+            _CONTENT_QUALITY_REVIEWS_BLOB,
+            _artifact_payload(
+                job,
+                "content_quality_reviews",
+                {
+                    "review_kind": "plan_adherence",
+                    "review_label": "Adhérence au plan après génération par section",
+                    "review_timing": "after_section_generation_before_budget_calibration",
+                    "budget_scope": "ignored_here_budget_calibration_runs_next",
+                    "version": _PLAN_ADHERENCE_REVIEW_VERSION,
+                    "structured_course_plan_version": plan.get("version"),
+                    "generation_strategy": "parallel_body_then_late_opening",
+                    "parallel_workers": workers,
+                    "courses": course_records,
+                },
+            ),
+        )
+
+    duration_ms = int((time.time() - started_at) * 1000)
+    summary = {
+        "segments_reviewed": total - total_failed,
+        "segments_failed": total_failed,
+        "segments_total_completed": total,
+        "segments_already_current": 0,
+        "patches_proposed": total_proposed,
+        "patches_applied": total_applied,
+        "patches_rejected": total_rejected,
+        "review_signature": _PLAN_ADHERENCE_REVIEW_VERSION,
+        "review_kind": "plan_adherence",
+        "review_label": "Adhérence au plan après génération par section",
+        "review_timing": "after_section_generation_before_budget_calibration",
+        "budget_scope": "ignored_here_budget_calibration_runs_next",
+        "force": True,
+        "duration_ms": duration_ms,
+        "details": details,
+    }
+    _save_content_artifact(
+        platform_id,
+        folder_id,
+        _CONTENT_QUALITY_REVIEWS_BLOB,
+        _artifact_payload(
+            job,
+            "content_quality_reviews",
+            {
+                "review_summary": summary,
+                "review_kind": "plan_adherence",
+                "review_label": "Adhérence au plan après génération par section",
+                "review_timing": "after_section_generation_before_budget_calibration",
+                "budget_scope": "ignored_here_budget_calibration_runs_next",
+                "version": _PLAN_ADHERENCE_REVIEW_VERSION,
+                "structured_course_plan_version": plan.get("version"),
+                "generation_strategy": "parallel_body_then_late_opening",
+                "parallel_workers": workers,
+                "duration_ms": duration_ms,
+                "courses": course_records,
+            },
+        ),
+    )
+    logger.info(
+        "PIPELINE_EARLY_PLAN_ADHERENCE_DONE formation_job_id=%s content_job_id=%s folder_id=%s reviewed=%s failed=%s applied=%s rejected=%s duration_ms=%s",
+        job.get("formation_job_id"),
+        job.get("id"),
+        folder_id,
+        summary["segments_reviewed"],
+        total_failed,
+        total_applied,
+        total_rejected,
+        duration_ms,
+    )
+    return sorted_results
 
 
 def _clear_content_segments_for_structured(job_id: int) -> None:
@@ -6875,6 +7103,22 @@ def _run_structured_content_generation(
             },
         ),
     )
+
+    if on_progress:
+        on_progress(0, NUM_SUB_PARTS, 1, total_words, "Adhérence au plan après génération par section")
+    body_results = _run_plan_adherence_on_generated_drafts(
+        job=job,
+        platform_id=platform_id,
+        folder_id=folder_id,
+        plan=plan,
+        body_results=body_results,
+        course_summaries=course_summaries,
+        workers=workers,
+        total_words=total_words,
+        on_progress=on_progress,
+        model=model,
+    )
+
     if on_progress:
         on_progress(0, NUM_SUB_PARTS, 1, total_words, "Calibrage parallèle des budgets mots par cours")
 
@@ -6896,6 +7140,7 @@ def _run_structured_content_generation(
             "course_text": calibrated_text,
             "words": calibrated_words,
             "calibration": calibration,
+            "plan_adherence": body_result.get("plan_adherence"),
             "draft": draft,
         }
 
@@ -6928,6 +7173,7 @@ def _run_structured_content_generation(
             "delta_words": calibrated_words - before_words,
             "changed": bool((calibrated_text or "").strip() != (before_text or "").strip() or calibration.get("changed")),
             "calibration": calibration,
+            "plan_adherence": _compact_plan_adherence_result(result.get("plan_adherence")),
             "before_text": before_text,
             "after_text": calibrated_text,
             "sections": draft.get("sections") or [],
@@ -7029,6 +7275,7 @@ def _run_structured_content_generation(
             "dirty": True,
             "structured_plan": course_plan,
             "calibration": calibration,
+            "plan_adherence": _compact_plan_adherence_result(result.get("plan_adherence")),
             "calibrated_word_count": int(result.get("calibrated_words") or 0),
             "micro_changed": bool(result.get("micro_changed")),
             "post_micro_budget_status": result.get("post_micro_budget_status"),
@@ -7042,6 +7289,7 @@ def _run_structured_content_generation(
             "target_words": int(course_plan.get("target_words") or 0),
             "word_count": words,
             "text": course_text,
+            "plan_adherence": _compact_plan_adherence_result(result.get("plan_adherence")),
             "calibration": calibration,
             "calibrated_word_count": int(result.get("calibrated_words") or 0),
             "micro_changed": bool(result.get("micro_changed")),
@@ -9469,12 +9717,34 @@ def _quality_detail_from_result(seg_id: int, sub_idx: int, passe: int, result: d
     }
 
 
-def run_plan_adherence_review(folder_id, on_progress=None, model=None, force: bool = False):
-    """Review dédiée : adhérence au plan verrouillé avant humanisation.
+def _compact_plan_adherence_result(result: dict | None) -> dict | None:
+    if not isinstance(result, dict):
+        return None
+    final_audit = result.get("final_audit") or {}
+    issues = final_audit.get("issues") or []
+    return {
+        "course_number": result.get("course_number"),
+        "course_title": result.get("course_title"),
+        "version": result.get("version"),
+        "changed": bool(result.get("changed")),
+        "failed": bool(result.get("failed")),
+        "initial_words": result.get("initial_words"),
+        "final_words": result.get("final_words"),
+        "delta_words": result.get("delta_words"),
+        "final_audit_ok": bool(final_audit.get("ok")),
+        "issues_count": len(issues),
+        "review_timing": result.get("review_timing"),
+        "budget_issues_included": bool(result.get("budget_issues_included")),
+        "post_calibration_allowed": bool(result.get("post_calibration_allowed")),
+    }
 
-    Cette passe ne remplace ni l'humanisation ni la conformité. Elle vérifie
-    et répare le périmètre pédagogique, l'ordre du plan, l'ouverture, la fin,
-    les répétitions et le budget mots du cours canonique.
+
+def run_plan_adherence_review(folder_id, on_progress=None, model=None, force: bool = False):
+    """Review dédiée manuelle : adhérence au plan verrouillé avant humanisation.
+
+    La génération structurée l'exécute désormais plus tôt, juste après les
+    sections et avant le calibrage budget. Cette fonction reste disponible
+    pour relance manuelle ou ancien contenu déjà généré.
     """
     def _progress(step, total, msg):
         if on_progress:
