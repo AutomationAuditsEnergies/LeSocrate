@@ -1505,6 +1505,29 @@ def _structured_sections_for_course(course_plan: dict) -> list[dict]:
     return sections
 
 
+def _section_artifact_metadata(section: dict) -> dict:
+    teaching_beats = section.get("teaching_beats") if isinstance(section.get("teaching_beats"), list) else []
+    slide_anchors = []
+    for beat in teaching_beats:
+        anchor = beat.get("slide_anchor") if isinstance(beat, dict) else None
+        if not isinstance(anchor, dict) or not anchor.get("enabled"):
+            continue
+        slide_anchors.append({
+            "beat_id": beat.get("beat_id"),
+            "type": beat.get("type"),
+            "role": beat.get("role"),
+            "spoken_requirement": beat.get("spoken_requirement"),
+            "slide_anchor": anchor,
+            "text_anchor_scope": "section",
+        })
+    return {
+        "must_include": section.get("must_include") if isinstance(section.get("must_include"), list) else [],
+        "must_avoid": section.get("must_avoid") if isinstance(section.get("must_avoid"), list) else [],
+        "teaching_beats": teaching_beats,
+        "slide_anchors": slide_anchors,
+    }
+
+
 def _block_min_words(word_budget: int) -> int:
     ratio = _env_float("FORMATION_TTS_BLOCK_WORD_MIN_RATIO", 0.97, min_value=0.80, max_value=1.0)
     return max(0, int(int(word_budget or 0) * ratio))
@@ -6549,6 +6572,7 @@ def _generate_structured_course_body(
             "target_words": int(section.get("target_words") or 0),
             "word_count": count_tts_spoken_words(section_text),
             "text": section_text,
+            **_section_artifact_metadata(section),
         })
     body_text = "\n\n".join(s for s in section_texts if s.strip()).strip()
     logger.info(
@@ -6603,6 +6627,7 @@ def _generate_late_opening_for_structured_course(
             "word_count": count_tts_spoken_words(opening_text),
             "text": opening_text,
             "generated_late": True,
+            **_section_artifact_metadata(section),
         },
         "text": opening_text,
     }
@@ -6640,6 +6665,7 @@ def _generate_late_day_conclusion_for_structured_course(
             "word_count": count_tts_spoken_words(day_conclusion_text),
             "text": day_conclusion_text,
             "generated_late": True,
+            **_section_artifact_metadata(section),
         },
         "text": day_conclusion_text,
     }

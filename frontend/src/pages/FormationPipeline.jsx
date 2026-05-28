@@ -1292,7 +1292,8 @@ function PipelineVisualMap({ job, currentStep, autoPilotState, contentFolders, v
       title: 'Génération par section',
       detail: `${completedFolders}/${expectedFolders || job.nb_days} journée${(expectedFolders || job.nb_days) > 1 ? 's' : ''} générée${completedFolders > 1 ? 's' : ''}, section par section.`,
       icon: 'edit_note',
-      artifacts: ['content-draft-sections.json'],
+      artifacts: ['content-plan.json', 'content-draft-sections.json'],
+      auditMode: 'section_generation',
       done: allContentCompleted || autoPassed('content'),
       active: contentActive,
     },
@@ -1612,10 +1613,13 @@ function PipelineStepAuditModal({ job, stage, index, folders, events, onClose })
           {!loading && stage.auditMode === 'ethical_micro' && (
             <EthicalMicroAuditView artifacts={payload.artifacts} />
           )}
+          {!loading && stage.auditMode === 'section_generation' && (
+            <SectionGenerationAuditView artifacts={payload.artifacts} />
+          )}
           {!loading && stage.auditMode === 'review_report' && (
             <ReviewReportsAuditView reports={payload.reports} />
           )}
-          {!loading && stage.auditMode !== 'ethical_micro' && stage.auditMode !== 'review_report' && (
+          {!loading && stage.auditMode !== 'ethical_micro' && stage.auditMode !== 'section_generation' && stage.auditMode !== 'review_report' && (
             <ArtifactAuditView artifacts={payload.artifacts} stage={stage} />
           )}
 
@@ -1653,6 +1657,546 @@ function computeAuditPatchStats(payload) {
 
 function folderDisplayName(folder = {}) {
   return folder.folder_name || folder.name || `Dossier ${folder.folder_id}`
+}
+
+function SectionGenerationAuditView({ artifacts }) {
+  const days = buildSectionGenerationDays(artifacts)
+  const hasDraft = days.some(day => day.draft)
+
+  if (!hasDraft) {
+    return (
+      <AuditEmptyState
+        icon="info"
+        title="Aucun texte généré par section disponible"
+        detail="Cette étape n'a pas encore produit content-draft-sections.json, ou le job a été généré avant cet artefact."
+      />
+    )
+  }
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+      <div style={{
+        padding: '12px 14px',
+        background: 'rgba(59,130,246,0.08)',
+        border: '1px solid rgba(96,165,250,0.22)',
+        borderRadius: '10px',
+        color: '#bfdbfe',
+        fontSize: '12px',
+        lineHeight: 1.5,
+      }}>
+        <strong>Lecture de l'étape 8.</strong> Cette vue montre le texte brut généré avant les reviews : budget prévu, mots réellement produits, sections, conclusions et slides prévues dans chaque partie. Quand un ancien artefact ne stocke pas encore le passage exact d'une slide, le passage est reconstruit depuis le texte de la section et marqué en estimation.
+      </div>
+      {days.map((day, index) => (
+        <GeneratedDayAudit key={day.folder?.folder_id || index} day={day} initiallyOpen={index === 0} />
+      ))}
+    </div>
+  )
+}
+
+function buildSectionGenerationDays(artifacts) {
+  const byFolder = new Map()
+  for (const item of artifacts || []) {
+    const folderId = item.folder?.folder_id || item.folder_id || 'unknown'
+    if (!byFolder.has(folderId)) {
+      byFolder.set(folderId, { folder: item.folder || {}, planArtifact: null, draft: null, missing: [] })
+    }
+    const entry = byFolder.get(folderId)
+    if (!item.ok || !item.artifact) {
+      entry.missing.push(item.name)
+      continue
+    }
+    if (item.name === 'content-plan.json') entry.planArtifact = item.artifact
+    if (item.name === 'content-draft-sections.json') entry.draft = item.artifact
+  }
+  return Array.from(byFolder.values()).sort((a, b) =>
+    Number(a.folder?.position ?? a.folder?.folder_position ?? a.folder?.folder_id ?? 0) -
+    Number(b.folder?.position ?? b.folder?.folder_position ?? b.folder?.folder_id ?? 0),
+  )
+}
+
+function GeneratedDayAudit({ day, initiallyOpen }) {
+  const plan = day.planArtifact?.structured_course_plan || {}
+  const planCourses = Array.isArray(plan.courses) ? plan.courses : []
+  const draftCourses = Array.isArray(day.draft?.courses) ? day.draft.courses : []
+  const courseNumbers = Array.from(new Set([
+    ...planCourses.map(course => Number(course.course_number || 0)).filter(Boolean),
+    ...draftCourses.map(course => Number(course.course_number || 0)).filter(Boolean),
+  ])).sort((a, b) => a - b)
+  const courses = courseNumbers.map(number => ({
+    number,
+    plan: planCourses.find(course => Number(course.course_number || 0) === number) || null,
+    draft: draftCourses.find(course => Number(course.course_number || 0) === number) || null,
+  }))
+  const targetWords = courses.reduce((sum, course) => sum + Number(course.plan?.target_words || course.draft?.target_words || 0), 0)
+  const actualWords = courses.reduce((sum, course) => sum + Number(course.draft?.draft_word_count || course.draft?.word_count || 0), 0)
+  const slidesCount = planCourses.reduce((sum, course) =>
+    sum + plannedSectionsForCourse(course).reduce((sectionSum, section) => sectionSum + slideBeatsForSection(section.plan).length, 0),
+  0)
+
+  return (
+    <details open={initiallyOpen} style={{
+      background: 'rgba(15,23,42,0.48)',
+      border: '1px solid rgba(148,163,184,0.14)',
+      borderRadius: '12px',
+      overflow: 'hidden',
+    }}>
+      <summary style={{
+        cursor: 'pointer',
+        padding: '14px 16px',
+        color: '#e2e8f0',
+        fontWeight: 900,
+        listStyle: 'none',
+        borderBottom: '1px solid rgba(148,163,184,0.12)',
+      }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', alignItems: 'center', flexWrap: 'wrap' }}>
+          <span><Icon name="calendar_view_week" /> {folderDisplayName(day.folder)}</span>
+          <span style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+            <SmallMetric label="Thèmes" value={courses.length} />
+            <SmallMetric label="Slides prévues" value={slidesCount} />
+            <SmallMetric label="Mots" value={`${formatAuditNumber(actualWords)} / ${formatAuditNumber(targetWords)}`} />
+          </span>
+        </div>
+      </summary>
+      <div style={{ padding: '14px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+        {courses.length === 0 && (
+          <AuditEmptyState
+            icon="info"
+            title="Aucun thème lisible"
+            detail="L'artefact existe, mais il ne contient pas de liste de thèmes exploitable."
+          />
+        )}
+        {courses.map((course, index) => (
+          <GeneratedCourseAudit key={course.number || index} course={course} initiallyOpen={index === 0} />
+        ))}
+      </div>
+    </details>
+  )
+}
+
+function GeneratedCourseAudit({ course, initiallyOpen }) {
+  const coursePlan = course.plan || course.draft?.course_plan || {}
+  const draft = course.draft || {}
+  const title = coursePlan.course_title || draft.course_title || `Thème ${course.number}`
+  const targetWords = Number(coursePlan.target_words || draft.target_words || 0)
+  const actualWords = Number(draft.draft_word_count || draft.word_count || 0)
+  const sectionRows = buildGeneratedSectionRows(coursePlan, draft)
+  const slidesCount = sectionRows.reduce((sum, row) => sum + row.slideBeats.length, 0)
+
+  return (
+    <details open={initiallyOpen} style={{
+      background: 'rgba(2,6,23,0.34)',
+      border: '1px solid rgba(148,163,184,0.12)',
+      borderRadius: '10px',
+      overflow: 'hidden',
+    }}>
+      <summary style={{ cursor: 'pointer', listStyle: 'none', padding: '13px 14px' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap' }}>
+          <div style={{ minWidth: 0 }}>
+            <div style={{ color: '#94a3b8', fontSize: '11px', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+              Thème {course.number} · {courseKindLabel(coursePlan.course_kind)}
+            </div>
+            <div style={{ color: '#e2e8f0', fontWeight: 900, fontSize: '15px', marginTop: '3px' }}>
+              {title}
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
+            <WordBudgetBadge target={targetWords} actual={actualWords} />
+            <SmallMetric label="Sections" value={sectionRows.length} />
+            <SmallMetric label="Slides" value={slidesCount} />
+          </div>
+        </div>
+      </summary>
+      <div style={{ borderTop: '1px solid rgba(148,163,184,0.10)', padding: '12px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+        {sectionRows.map((row, index) => (
+          <GeneratedSectionAudit key={`${row.kind}-${row.partNumber || index}`} row={row} />
+        ))}
+      </div>
+    </details>
+  )
+}
+
+function GeneratedSectionAudit({ row }) {
+  const text = row.actual?.text || ''
+  const targetWords = Number(row.plan?.target_words || row.actual?.target_words || 0)
+  const actualWords = Number(row.actual?.word_count || countAuditWords(text))
+  const mustInclude = Array.isArray(row.plan?.must_include) ? row.plan.must_include : []
+  const mustAvoid = Array.isArray(row.plan?.must_avoid) ? row.plan.must_avoid : []
+
+  return (
+    <div style={{
+      border: '1px solid rgba(148,163,184,0.12)',
+      borderRadius: '10px',
+      background: 'rgba(15,23,42,0.50)',
+      overflow: 'hidden',
+    }}>
+      <div style={{
+        padding: '11px 12px',
+        borderBottom: '1px solid rgba(148,163,184,0.10)',
+        display: 'flex',
+        justifyContent: 'space-between',
+        gap: '10px',
+        flexWrap: 'wrap',
+      }}>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ color: sectionKindColor(row.kind), fontSize: '11px', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+            {sectionKindLabel(row.kind, row.partNumber)}
+          </div>
+          <div style={{ color: '#e2e8f0', fontWeight: 800, fontSize: '13px', marginTop: '2px' }}>
+            {row.title}
+          </div>
+        </div>
+        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
+          <WordBudgetBadge target={targetWords} actual={actualWords} compact />
+          <SmallMetric label="À couvrir" value={mustInclude.length} />
+          <SmallMetric label="À éviter" value={mustAvoid.length} />
+          <SmallMetric label="Slides" value={row.slideBeats.length} />
+        </div>
+      </div>
+
+      <div style={{ padding: '12px', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '12px' }}>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ color: '#94a3b8', fontSize: '11px', fontWeight: 900, marginBottom: '7px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+            Texte généré pour cette section
+          </div>
+          <div style={{
+            color: '#cbd5e1',
+            fontSize: '12px',
+            lineHeight: 1.65,
+            whiteSpace: 'pre-wrap',
+            background: 'rgba(2,6,23,0.46)',
+            border: '1px solid rgba(148,163,184,0.10)',
+            borderRadius: '8px',
+            padding: '11px',
+            maxHeight: '310px',
+            overflow: 'auto',
+          }}>
+            {text || 'Aucun texte généré trouvé pour cette section.'}
+          </div>
+        </div>
+
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', minWidth: 0 }}>
+          <div style={{ color: '#94a3b8', fontSize: '11px', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+            Slides prévues dans cette section
+          </div>
+          {row.slideBeats.length === 0 ? (
+            <div style={{
+              padding: '12px',
+              color: '#64748b',
+              fontSize: '12px',
+              background: 'rgba(2,6,23,0.32)',
+              border: '1px dashed rgba(148,163,184,0.14)',
+              borderRadius: '8px',
+            }}>
+              Aucune slide prévue ici. La section reste uniquement orale.
+            </div>
+          ) : row.slideBeats.map((beat, index) => (
+            <SlideAnchorAuditCard
+              key={beat.beat_id || index}
+              beat={beat}
+              sectionText={text}
+              sectionTargetWords={targetWords}
+              slideIndex={index}
+              slidesCount={row.slideBeats.length}
+            />
+          ))}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function SlideAnchorAuditCard({ beat, sectionText, sectionTargetWords, slideIndex, slidesCount }) {
+  const anchor = beat.slide_anchor || {}
+  const excerpt = extractBeatExcerpt(sectionText, beat, slideIndex, slidesCount)
+  const explicitTarget = Number(anchor.target_words || beat.target_words || 0)
+  const plannedWords = explicitTarget || estimateSlideAnchorWords(sectionTargetWords, slidesCount)
+  const actualWords = countAuditWords(excerpt)
+  const fields = anchor.fields_hint || {}
+
+  return (
+    <div style={{
+      background: 'rgba(30,41,59,0.44)',
+      border: '1px solid rgba(96,165,250,0.18)',
+      borderRadius: '9px',
+      padding: '10px',
+    }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', alignItems: 'flex-start' }}>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ color: '#93c5fd', fontSize: '11px', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+            Slide {slideIndex + 1} · {anchor.template_type || beat.type || 'template'}
+          </div>
+          <div style={{ color: '#e2e8f0', fontWeight: 800, fontSize: '12px', marginTop: '3px', lineHeight: 1.35 }}>
+            {beat.role || anchor.visual_goal || 'Moment pédagogique prévu'}
+          </div>
+        </div>
+        <div style={{ flexShrink: 0, textAlign: 'right' }}>
+          <div style={{ color: '#bfdbfe', fontSize: '11px', fontWeight: 900 }}>
+            {explicitTarget ? '' : '≈ '}{formatAuditNumber(plannedWords)} prévus
+          </div>
+          <div style={{ color: '#94a3b8', fontSize: '11px', marginTop: '2px' }}>
+            ≈ {formatAuditNumber(actualWords)} générés
+          </div>
+        </div>
+      </div>
+
+      {anchor.visual_goal && (
+        <div style={{ color: '#94a3b8', fontSize: '11px', lineHeight: 1.45, marginTop: '7px' }}>
+          {anchor.visual_goal}
+        </div>
+      )}
+
+      <SlideFieldsPreview fields={fields} />
+
+      <details style={{ marginTop: '8px' }}>
+        <summary style={{ cursor: 'pointer', color: '#c4b5fd', fontSize: '11px', fontWeight: 800 }}>
+          Voir le passage associé
+        </summary>
+        <div style={{
+          marginTop: '7px',
+          color: '#cbd5e1',
+          fontSize: '11px',
+          lineHeight: 1.55,
+          whiteSpace: 'pre-wrap',
+          background: 'rgba(2,6,23,0.36)',
+          border: '1px solid rgba(148,163,184,0.10)',
+          borderRadius: '7px',
+          padding: '8px',
+          maxHeight: '160px',
+          overflow: 'auto',
+        }}>
+          {excerpt || 'Passage non localisable dans le texte existant.'}
+        </div>
+      </details>
+    </div>
+  )
+}
+
+function SlideFieldsPreview({ fields }) {
+  const items = Array.isArray(fields?.items) ? fields.items : []
+  if (!fields?.text && items.length === 0) return null
+  return (
+    <div style={{ marginTop: '8px', display: 'flex', flexDirection: 'column', gap: '5px' }}>
+      {fields.text && (
+        <div style={{ color: '#dbeafe', fontSize: '11px', lineHeight: 1.45, padding: '7px 8px', background: 'rgba(59,130,246,0.10)', borderRadius: '7px' }}>
+          {fields.text}
+        </div>
+      )}
+      {items.length > 0 && (
+        <div style={{ display: 'grid', gap: '5px' }}>
+          {items.slice(0, 6).map((item, index) => (
+            <div key={index} style={{ color: '#cbd5e1', fontSize: '11px', lineHeight: 1.35, padding: '6px 7px', background: 'rgba(15,23,42,0.50)', borderRadius: '7px' }}>
+              <strong style={{ color: '#bfdbfe' }}>{item.title || `Élément ${index + 1}`}</strong>
+              {item.description ? ` — ${item.description}` : ''}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function plannedSectionsForCourse(coursePlan = {}) {
+  const sections = []
+  if (coursePlan.opening) {
+    sections.push({ kind: 'opening', partNumber: null, title: 'Introduction', plan: { kind: 'opening', ...coursePlan.opening } })
+  }
+  for (const part of coursePlan.parts || []) {
+    sections.push({
+      kind: 'part',
+      partNumber: Number(part.part_number || sections.length),
+      title: part.title || `Partie ${part.part_number || ''}`.trim(),
+      plan: { kind: 'part', ...part },
+    })
+  }
+  if (coursePlan.course_conclusion) {
+    sections.push({ kind: 'course_conclusion', partNumber: null, title: 'Conclusion et passage Q/R', plan: { kind: 'course_conclusion', ...coursePlan.course_conclusion } })
+  }
+  if (coursePlan.day_conclusion) {
+    sections.push({ kind: 'day_conclusion', partNumber: null, title: 'Conclusion globale de la journée', plan: { kind: 'day_conclusion', ...coursePlan.day_conclusion } })
+  }
+  return sections
+}
+
+function buildGeneratedSectionRows(coursePlan = {}, draft = {}) {
+  const plannedSections = plannedSectionsForCourse(coursePlan)
+  const actualSections = Array.isArray(draft.sections) ? draft.sections : []
+  if (plannedSections.length === 0) {
+    return actualSections.map(section => ({
+      kind: section.kind || 'section',
+      partNumber: section.part_number,
+      title: section.title || section.label || sectionKindLabel(section.kind, section.part_number),
+      plan: section,
+      actual: section,
+      slideBeats: slideBeatsForSection(section),
+    }))
+  }
+  return plannedSections.map(planned => {
+    const actual = matchGeneratedSection(actualSections, planned)
+    return {
+      kind: planned.kind,
+      partNumber: planned.partNumber,
+      title: planned.title || actual?.title || actual?.label || sectionKindLabel(planned.kind, planned.partNumber),
+      plan: planned.plan,
+      actual: actual || {},
+      slideBeats: slideBeatsForSection(planned.plan),
+    }
+  })
+}
+
+function matchGeneratedSection(actualSections, planned) {
+  return actualSections.find(section =>
+    section.kind === planned.kind &&
+    (planned.kind !== 'part' || Number(section.part_number || 0) === Number(planned.partNumber || 0))
+  ) || actualSections.find(section => String(section.label || '').toLowerCase() === sectionKindLabel(planned.kind, planned.partNumber).toLowerCase())
+}
+
+function slideBeatsForSection(section = {}) {
+  return (Array.isArray(section.teaching_beats) ? section.teaching_beats : [])
+    .filter(beat => beat?.slide_anchor?.enabled)
+}
+
+function SmallMetric({ label, value }) {
+  return (
+    <span style={{
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: '4px',
+      padding: '4px 7px',
+      borderRadius: '999px',
+      background: 'rgba(148,163,184,0.10)',
+      color: '#cbd5e1',
+      fontSize: '11px',
+      fontWeight: 800,
+      whiteSpace: 'nowrap',
+    }}>
+      <span style={{ color: '#94a3b8', fontWeight: 700 }}>{label}</span>
+      {value}
+    </span>
+  )
+}
+
+function WordBudgetBadge({ target, actual, compact = false }) {
+  const delta = Number(actual || 0) - Number(target || 0)
+  const ratio = target ? Math.abs(delta) / target : 0
+  const color = ratio <= 0.15 ? '#34d399' : ratio <= 0.30 ? '#fbbf24' : '#fb7185'
+  return (
+    <span style={{
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: '6px',
+      padding: compact ? '4px 7px' : '6px 9px',
+      borderRadius: '999px',
+      background: `${color}18`,
+      border: `1px solid ${color}45`,
+      color,
+      fontSize: '11px',
+      fontWeight: 900,
+      whiteSpace: 'nowrap',
+    }}>
+      {formatAuditNumber(actual || 0)} / {formatAuditNumber(target || 0)} mots
+      {target ? <span style={{ color: '#94a3b8', fontWeight: 800 }}>{delta >= 0 ? '+' : ''}{formatAuditNumber(delta)}</span> : null}
+    </span>
+  )
+}
+
+function courseKindLabel(kind) {
+  const labels = {
+    opening_year_day: 'ouverture journée',
+    standard_reprise: 'reprise',
+    end_of_day: 'fin de journée',
+  }
+  return labels[kind] || kind || 'thème'
+}
+
+function sectionKindLabel(kind, partNumber) {
+  if (kind === 'opening') return 'Introduction'
+  if (kind === 'course_conclusion') return 'Conclusion / Q-R'
+  if (kind === 'day_conclusion') return 'Conclusion journée'
+  if (kind === 'part') return `Chapitre ${partNumber || ''}`.trim()
+  return 'Section'
+}
+
+function sectionKindColor(kind) {
+  if (kind === 'opening') return '#a78bfa'
+  if (kind === 'course_conclusion' || kind === 'day_conclusion') return '#fbbf24'
+  return '#38bdf8'
+}
+
+function estimateSlideAnchorWords(sectionTargetWords, slidesCount) {
+  if (!sectionTargetWords) return 0
+  const count = Math.max(1, Number(slidesCount || 1))
+  return Math.max(80, Math.min(360, Math.round((Number(sectionTargetWords) * 0.35) / count)))
+}
+
+function extractBeatExcerpt(sectionText, beat, slideIndex, slidesCount) {
+  const text = String(sectionText || '').trim()
+  if (!text) return ''
+  const paragraphs = text.split(/\n{2,}/).map(p => p.trim()).filter(Boolean)
+  if (paragraphs.length === 0) return compactAuditWords(text, 120)
+  const terms = beatSearchTerms(beat)
+  const scored = paragraphs.map((paragraph, index) => ({
+    paragraph,
+    index,
+    score: scoreParagraphForTerms(paragraph, terms),
+  })).sort((a, b) => b.score - a.score)
+  if (scored[0]?.score > 0) {
+    const best = scored[0]
+    const merged = [
+      paragraphs[Math.max(0, best.index - 1)],
+      best.paragraph,
+      paragraphs[Math.min(paragraphs.length - 1, best.index + 1)],
+    ].filter(Boolean)
+    return compactAuditWords(Array.from(new Set(merged)).join('\n\n'), 145)
+  }
+  return sliceAuditWords(text, slideIndex, slidesCount, 135)
+}
+
+function beatSearchTerms(beat = {}) {
+  const anchor = beat.slide_anchor || {}
+  const fields = anchor.fields_hint || {}
+  const chunks = [
+    beat.role,
+    beat.spoken_requirement,
+    anchor.visual_goal,
+    fields.text,
+    ...(Array.isArray(fields.items) ? fields.items.flatMap(item => [item.title, item.description]) : []),
+  ]
+  const stop = new Set(['avec', 'dans', 'pour', 'plus', 'vous', 'nous', 'cette', 'section', 'client', 'clients', 'faire', 'montrer', 'afficher', 'présenter'])
+  return Array.from(new Set(
+    chunks.join(' ')
+      .toLowerCase()
+      .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+      .split(/[^a-z0-9]+/)
+      .filter(word => word.length >= 5 && !stop.has(word)),
+  )).slice(0, 18)
+}
+
+function scoreParagraphForTerms(paragraph, terms) {
+  const normalized = String(paragraph || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+  return (terms || []).reduce((score, term) => score + (normalized.includes(term) ? 1 : 0), 0)
+}
+
+function countAuditWords(text) {
+  return String(text || '').trim().split(/[^\p{L}\p{N}'’-]+/u).filter(Boolean).length
+}
+
+function compactAuditWords(text, limit) {
+  const words = String(text || '').trim().split(/\s+/).filter(Boolean)
+  if (words.length <= limit) return words.join(' ')
+  return `${words.slice(0, limit).join(' ')}…`
+}
+
+function sliceAuditWords(text, index, total, limit) {
+  const words = String(text || '').trim().split(/\s+/).filter(Boolean)
+  if (words.length <= limit) return words.join(' ')
+  const count = Math.max(1, Number(total || 1))
+  const sliceSize = Math.max(limit, Math.ceil(words.length / count))
+  const start = Math.min(words.length - limit, Math.max(0, Number(index || 0) * sliceSize))
+  return compactAuditWords(words.slice(start, start + sliceSize).join(' '), limit)
+}
+
+function formatAuditNumber(value) {
+  return Number(value || 0).toLocaleString('fr-FR')
 }
 
 function EthicalMicroAuditView({ artifacts }) {
