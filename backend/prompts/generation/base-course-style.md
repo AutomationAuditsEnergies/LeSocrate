@@ -64,12 +64,17 @@ progression, repères pédagogiques, chaleur, mais sans interaction réelle.
 
 ## Ton Oral
 
-- Phrases plutôt courtes.
-- Respiration entre les idées.
-- Formulations concrètes et terrain.
+- Écris comme un professeur qui parle vraiment à sa classe : naturel, direct,
+  incarné, mais toujours professionnel.
+- Phrases plutôt courtes, avec des relances orales sobres.
+- Respiration entre les idées : une idée forte, une pause, puis l'explication.
+- Formulations concrètes et terrain, comme dans une explication donnée à voix
+  haute plutôt que dans une fiche écrite.
 - Questions rhétoriques autorisées si elles ne demandent pas de réponse réelle.
 - Reformulations sobres : "En clair", "Autrement dit", "Ce qu'il faut retenir".
 - Éviter les tunnels de métaphores, de storytelling ou de remplissage.
+- Ne compte pas sur une passe d'humanisation après coup : le texte généré doit
+  déjà avoir ce naturel oral dès la première version.
 
 ## Tags TTS
 

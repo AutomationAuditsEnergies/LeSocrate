@@ -11293,10 +11293,11 @@ def run_humanization_review(folder_id, on_progress=None, model=None, force: bool
 
 
 def run_content_review(folder_id, on_progress=None, model=None, force: bool = False):
-    """Passe 2 : conformité stricte finale après humanisation.
+    """Conformité locale par segment après calibrage budget.
 
     Si la micro-review éthique est active, les règles #1-#16 sont traitées
-    après le calibrage budget ; la passe finale garde les autres scopes.
+    pendant la génération structurée ; cette passe garde les autres scopes
+    en patches ciblés, avec garde-fou budget.
     """
     return _run_content_review_pass(
         folder_id,
@@ -11308,6 +11309,6 @@ def run_content_review(folder_id, on_progress=None, model=None, force: bool = Fa
         reviewed_column="reviewed",
         error_column="review_error",
         signature_column="review_signature",
-        review_kind="compliance",
-        review_label="Conformité",
+        review_kind="local_compliance",
+        review_label="Conformité locale",
     )

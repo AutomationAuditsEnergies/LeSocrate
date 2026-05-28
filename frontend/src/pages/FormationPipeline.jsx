@@ -100,9 +100,9 @@ const AUTO_PILOT_STEP_LABELS = {
   daily: 'programmes journée',
   content: 'génération texte',
   plan_adherence_review: 'adhérence au plan',
-  humanization_review: 'humanisation orale',
-  audio_word_calibration: 'calibrage blocs audio',
-  review: 'conformité finale',
+  humanization_review: 'humanisation orale (legacy)',
+  audio_word_calibration: 'calibrage blocs audio (legacy)',
+  review: 'conformité locale par morceau',
   word_budget_review: 'vérification budget mots',
   post_review_docs: 'Word 2 + artefacts',
   slides: 'slides anchor-first',
@@ -118,7 +118,6 @@ const AUTO_PILOT_ORDER = [
   'global',
   'daily',
   'content',
-  'humanization_review',
   'review',
   'post_review_docs',
   'slides',
@@ -509,11 +508,11 @@ function eventLabel(eventType) {
     review_started: 'Review démarrée',
     review_completed: 'Review terminée',
     review_failed: 'Review échouée',
-    audio_block_word_calibration_completed: 'Calibrage blocs audio terminé',
+    audio_block_word_calibration_completed: 'Calibrage budget texte terminé',
     day_word_budget_verified: 'Budget mots journée vérifié',
     continue_after_text_plan_adherence_completed: 'Adhérence au plan terminée',
-    continue_after_text_humanization_completed: 'Humanisation terminée',
-    continue_after_text_review_completed: 'Conformité finale terminée',
+    continue_after_text_humanization_completed: 'Humanisation terminée (legacy)',
+    continue_after_text_review_completed: 'Conformité locale terminée',
     audio_started: 'Audio démarré',
     audio_progress: 'Fichier playlist en cours',
     audio_folder_started: 'Journée audio démarrée',
@@ -566,7 +565,7 @@ function PipelineDiagnosticPanel({ diagnostic, loading, error, onRefresh }) {
   const [eventFilter, setEventFilter] = useState('audio')
   const audioEvents = events.filter(event => event.step === 'audio' || String(event.event_type || '').startsWith('audio_'))
   const reviewEvents = events.filter(event =>
-    ['review', 'humanization_review', 'plan_adherence_review', 'audio_word_calibration', 'word_budget_review'].includes(event.step) ||
+    ['review', 'plan_adherence_review', 'word_budget_review'].includes(event.step) ||
     String(event.event_type || '').includes('review') ||
     String(event.event_type || '').includes('humanization') ||
     String(event.event_type || '').includes('calibration')
@@ -1199,7 +1198,6 @@ function PipelineVisualMap({ job, currentStep, autoPilotState, contentFolders, v
   const expectedFolders = diagnostic?.folder_resolution?.expected_count || job.nb_days || folders.length || 0
   const completedFolders = folders.filter(f => f.content_status === 'completed').length
   const allContentCompleted = folders.length > 0 && folders.every(f => f.content_status === 'completed')
-  const allHumanized = folders.length > 0 && folders.every(f => (f.segments_completed || 0) > 0 && (f.segments_humanized || 0) >= (f.segments_completed || 0))
   const allReviewed = folders.length > 0 && folders.every(f => {
     const completed = f.segments_completed || 0
     const processed = (f.segments_reviewed || 0) + (f.segments_review_errors || 0)
@@ -1211,9 +1209,7 @@ function PipelineVisualMap({ job, currentStep, autoPilotState, contentFolders, v
   const audioDone = AUDIO_DONE_STATUSES.has(job.status)
   const audioActive = AUDIO_ACTIVE_STATUSES.has(job.status) || autoActive('audio')
   const planAdherenceDone = hasCompletedPipelineEvent(events, e => e.step === 'plan_adherence_review') ||
-    allContentCompleted || allHumanized || allReviewed || autoPassed('content')
-  const calibrationDone = hasCompletedPipelineEvent(events, e => e.step === 'audio_word_calibration') ||
-    allReviewed || Boolean(job.auto_pilot_post_review_docs_done)
+    allContentCompleted || allReviewed || autoPassed('content')
   const finalBudgetDone = hasCompletedPipelineEvent(events, e => e.step === 'word_budget_review') ||
     Boolean(job.auto_pilot_post_review_docs_done) || audioDone
   const postDocsDone = Boolean(job.auto_pilot_post_review_docs_done) || audioDone ||
@@ -1283,7 +1279,7 @@ function PipelineVisualMap({ job, currentStep, autoPilotState, contentFolders, v
     },
     {
       key: 'section_generation',
-      title: 'Génération par section',
+      title: 'Génération par section — texte V1',
       detail: `${completedFolders}/${expectedFolders || job.nb_days} journée${(expectedFolders || job.nb_days) > 1 ? 's' : ''} générée${completedFolders > 1 ? 's' : ''}, section par section.`,
       icon: 'edit_note',
       artifacts: ['content-plan.json', 'content-draft-sections.json'],
@@ -1331,27 +1327,9 @@ function PipelineVisualMap({ job, currentStep, autoPilotState, contentFolders, v
       active: contentActive,
     },
     {
-      key: 'humanization',
-      title: 'Humanisation orale',
-      detail: 'Finition légère : rythme, transitions, naturel et fluidité TTS.',
-      icon: 'auto_fix_high',
-      reportEndpoint: 'humanization-report',
-      auditMode: 'review_report',
-      done: allHumanized || allReviewed || Boolean(job.auto_pilot_post_review_docs_done),
-      active: autoActive('humanization_review'),
-    },
-    {
-      key: 'audio_block_calibration',
-      title: 'Calibrage blocs audio',
-      detail: 'Recontrôle des blocs après humanisation et après conformité finale.',
-      icon: 'graphic_eq',
-      done: calibrationDone,
-      active: autoActive('review') || autoActive('post_review_docs'),
-    },
-    {
-      key: 'final_compliance',
-      title: 'Conformité finale',
-      detail: 'Review stricte hors micro-éthique : hallucinations, TTS, oral et architecture.',
+      key: 'local_compliance',
+      title: 'Conformité par morceau',
+      detail: 'Review locale hors micro-éthique : hallucinations, TTS, oral et architecture, sans dépasser le budget.',
       icon: 'verified_user',
       reportEndpoint: 'review-report',
       auditMode: 'review_report',
@@ -1360,8 +1338,8 @@ function PipelineVisualMap({ job, currentStep, autoPilotState, contentFolders, v
     },
     {
       key: 'post_review_docs',
-      title: 'Budget final, Word 2 et audio-plan',
-      detail: 'Vérification finale, assemblage Word 2 et artefacts prêts pour l’audio.',
+      title: 'Texte validé, Word 2 et audio-plan',
+      detail: 'Assemblage du texte validé localement et artefacts prêts pour slides puis audio.',
       icon: 'description',
       artifacts: ['content-reviewed-scripts.json', 'content-audio-plan.json', 'content-script-plan.json'],
       done: postDocsDone || finalBudgetDone || autoPassed('post_review_docs'),
@@ -1455,9 +1433,7 @@ const PIPELINE_STAGE_EVENT_ALIASES = {
   ethical_micro: ['content', 'ethical_micro'],
   structured_artifacts: ['content', 'artifact'],
   budget_calibration: ['content', 'budget', 'calibration'],
-  humanization: ['humanization_review'],
-  audio_block_calibration: ['audio_word_calibration', 'review', 'post_review_docs'],
-  final_compliance: ['review'],
+  local_compliance: ['review'],
   post_review_docs: ['post_review_docs', 'word_budget_review'],
   slides: ['slides'],
   audio: ['audio'],
@@ -3507,11 +3483,10 @@ const CC_DEFAULT_MODEL_BY_STEP = {
   global: 'haiku',
   daily: 'haiku',
   content: 'sonnet',
-  humanization_review: 'sonnet',
   review: 'sonnet',
 }
 // Subprocess auto : global + daily + kb en mode mono-chunk,
-// content + humanization_review + review en mode chunked
+// content + review en mode chunked
 // (boucle séquentielle de N appels CLI dans le backend, voir
 // claude_code_mission_service.py:_execute_chunked).
 // kb : prompt borné à 1500-2500 mots/compétence × ~10 = ~25K mots ≈ 38K tokens
@@ -3522,7 +3497,6 @@ const CC_AUTO_EXEC_ENABLED = {
   kb: true,
   daily: true,
   content: true,
-  humanization_review: true,
   review: true,
 }
 
@@ -3952,7 +3926,7 @@ export default function FormationPipeline() {
   const [contentFolders, setContentFolders] = useState([])
   const [viewingFolder, setViewingFolder] = useState(null)    // folder object affiché en modal
   const [reportFolder, setReportFolder] = useState(null)           // rapport conformité stricte
-  const [humanizationReportFolder, setHumanizationReportFolder] = useState(null)  // rapport humanisation
+  const [humanizationReportFolder, setHumanizationReportFolder] = useState(null)  // ancien rapport humanisation, affiché seulement pour les jobs legacy
 
   // États étape 6 — Synthèse audio Fish Audio
   const [launchingAudio, setLaunchingAudio] = useState(false)
@@ -5667,7 +5641,7 @@ export default function FormationPipeline() {
 	                                if (processed >= nComp && nComp > 0 && nErr === 0) {
 	                                  return (
 	                                    <div style={{ fontSize: '12px', color: '#34d399', marginTop: '2px' }}>
-	                                      <Icon name="verified" style={{ fontSize: '12px' }} /> Conformité finale révisée ({nRev} segments)
+	                                      <Icon name="verified" style={{ fontSize: '12px' }} /> Conformité locale révisée ({nRev} segments)
 	                                    </div>
 	                                  )
 	                                }
@@ -5702,7 +5676,7 @@ export default function FormationPipeline() {
 	                            </div>
 	                            {/* ─── 2 sous-zones du flux d'une journée ──────────
 	                                 1. Texte généré (lecture / téléchargements / rapport)
-	                                 2. Révision conformité finale (hors micro-éthique)
+	                                 2. Conformité locale par morceau (hors micro-éthique)
 	                                 Séparées par des FlowArrowDown pour matérialiser
 	                                 l'ordre du flux : génération → révision. */}
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
@@ -5783,19 +5757,21 @@ export default function FormationPipeline() {
                                       >
                                         <Icon name="assessment" /> Rapport conformité
                                       </button>
-                                      <button
-                                        style={{
-                                          ...S.btn('ghost'),
-                                          padding: '6px 12px',
-                                          fontSize: '12px',
-                                          borderColor: 'rgba(139, 92, 246, 0.4)',
-                                          color: '#a78bfa',
-                                        }}
-                                        onClick={() => setHumanizationReportFolder(folder)}
-                                        title="Voir le rapport de la passe humanisation (intros / transitions / rythme)"
-                                      >
-                                        <Icon name="auto_fix_high" /> Humanisation
-                                      </button>
+                                      {(folder.segments_humanized || 0) > 0 && (
+                                        <button
+                                          style={{
+                                            ...S.btn('ghost'),
+                                            padding: '6px 12px',
+                                            fontSize: '12px',
+                                            borderColor: 'rgba(139, 92, 246, 0.4)',
+                                            color: '#a78bfa',
+                                          }}
+                                          onClick={() => setHumanizationReportFolder(folder)}
+                                          title="Voir l'ancien rapport humanisation pour un job généré avant la refonte"
+                                        >
+                                          <Icon name="auto_fix_high" /> Humanisation legacy
+                                        </button>
+                                      )}
                                     </>
                                   )}
                                 </div>
@@ -5864,7 +5840,7 @@ export default function FormationPipeline() {
                                         <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
                                           {[
                                             { step: 'content', label: 'Génération texte', icon: 'text_fields', title: 'Purge les segments et régénère le texte depuis zéro, puis enchaîne plan JSON, adhérence plan, calibrage budget, micro-éthique, reviews, slides et TTS' },
-                                            { step: 'review', label: 'Reviews', icon: 'rule', title: 'Lance humanisation + conformité finale + Word 2 + slides + TTS' },
+                                            { step: 'review', label: 'Conformité locale', icon: 'rule', title: 'Lance conformité locale par morceau + Word 2 + slides + TTS' },
                                             { step: 'slides', label: 'Slides', icon: 'slideshow', title: 'Saute les reviews — supprime le deck slides existant, régénère les slides puis lance le TTS' },
                                             { step: 'tts', label: 'TTS', icon: 'record_voice_over', title: 'Saute tout — conserve les slides existantes et relance uniquement le TTS dessus' },
                                             { step: 'tts_fast', label: 'TTS — pipeline presque instantanée', icon: 'bolt', title: 'Mode test uniquement — conserve les slides existantes, relance le TTS Edge avec parallélisation/cache, sans modifier le chemin TTS normal' },
@@ -5913,7 +5889,7 @@ export default function FormationPipeline() {
                                   alignItems: 'center',
                                   gap: '5px',
                                 }}>
-	                                  <Icon name="rule" style={{ fontSize: '12px' }} /> Conformité finale <span style={{ fontWeight: 400, opacity: 0.7, textTransform: 'none', letterSpacing: 'normal' }}>· hors micro-éthique</span>
+	                                  <Icon name="rule" style={{ fontSize: '12px' }} /> Conformité locale <span style={{ fontWeight: 400, opacity: 0.7, textTransform: 'none', letterSpacing: 'normal' }}>· hors micro-éthique</span>
                                 </div>
                                 {(() => {
                                   const reviewing = !!reviewingFolders[folder.folder_id]
@@ -6009,7 +5985,7 @@ export default function FormationPipeline() {
               )}
             </StepBlock>
 
-            {/* Pendant Claude Code — étape 6 (Génération cours texte) + étape 6bis (Révision) */}
+            {/* Pendant Claude Code — étape 6 (Génération cours texte) + conformité locale */}
             {DUAL_COLUMN_ENABLED && (
               <StepBlockCC stepIndex={5} currentStep={currentStep} status={job.status} title="Génération cours + Révision (local)" icon="edit_note">
                 <ClaudeCodeStepActions
@@ -6028,24 +6004,8 @@ export default function FormationPipeline() {
                 <FlowArrowDown height={20} />
                 <div>
                   <ClaudeCodeStepActions
-                    stepKey="humanization_review"
-                    stepLabel="Humanisation intros, transitions et rythme"
-                    jobId={selectedJobId}
-                    disabled={!TEXT_AVAILABLE_STATUSES.has(job.status)}
-                    disabledReason="En attente de la génération texte"
-                    onExport={handleExportMission}
-                    onExecute={handleExecuteMission}
-                    onImport={handleImportMission}
-                    pendingMission={pendingMissions.humanization_review}
-                    generatedVia={null}
-                  />
-                </div>
-
-                <FlowArrowDown height={20} />
-                <div>
-                  <ClaudeCodeStepActions
                     stepKey="review"
-                    stepLabel="Révision conformité (étape 6bis)"
+                    stepLabel="Conformité locale par morceau"
                     jobId={selectedJobId}
                     disabled={!TEXT_AVAILABLE_STATUSES.has(job.status)}
                     disabledReason="En attente de la génération texte"

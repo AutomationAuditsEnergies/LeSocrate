@@ -1448,7 +1448,12 @@ def _review_chunk_ids_for_position(position: int) -> list[str]:
     day = int(position or 0) + 1
     return (
         [f"day_{day}_review_{g['id']}" for g in _REVIEW_RULE_GROUPS]
-        + [f"day_{day}_review_api", f"day_{day}_review_humanization_api", f"day_{day}_review"]
+        + [
+            f"day_{day}_review_api",
+            f"day_{day}_review_local_compliance_api",
+            f"day_{day}_review_humanization_api",
+            f"day_{day}_review",
+        ]
     )
 
 
@@ -2106,10 +2111,7 @@ def review_content(job_id, folder_id):
     force = bool(data.get("force") or data.get("force_review"))
 
     import eventlet
-    from services.content_generation_service import (
-        run_content_review,
-        run_humanization_review,
-    )
+    from services.content_generation_service import run_content_review
 
     def _run_review(_folder_id):
         import sys, traceback
@@ -2131,12 +2133,6 @@ def review_content(job_id, folder_id):
         except Exception:
             pass
         try:
-            humanization_result = run_humanization_review(_folder_id, model=model, force=force)
-            _write_api_review_report(job_id, _folder_id, humanization_result, model)
-            if humanization_result.get("segments_failed", 0) > 0:
-                raise RuntimeError(
-                    f"Humanisation échouée sur {humanization_result['segments_failed']} segment(s)"
-                )
             result = run_content_review(_folder_id, model=model, force=force)
             duration_ms = int((time.time() - started_at) * 1000)
             try:
@@ -2160,9 +2156,6 @@ def review_content(job_id, folder_id):
                     message="Révision conformité API terminée",
                     data={
                         "segments_reviewed": result.get("segments_reviewed", 0),
-                        "humanization_segments_reviewed": humanization_result.get("segments_reviewed", 0),
-                        "humanization_patches_proposed": humanization_result.get("patches_proposed", 0),
-                        "humanization_patches_applied": humanization_result.get("patches_applied", 0),
                         "segments_already_current": result.get("segments_already_current", 0),
                         "patches_proposed": result.get("patches_proposed", 0),
                         "patches_applied": result.get("patches_applied", 0),
@@ -2650,10 +2643,8 @@ def _folder_text_reviews_ready(job_id: int, folder_id: int) -> tuple[bool, dict]
     from database.db import get_db_connection
     from services.content_generation_service import (
         _current_compliance_review_signature,
-        _current_humanization_review_signature,
     )
 
-    humanization_signature = _current_humanization_review_signature()
     compliance_signature = _current_compliance_review_signature()
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -2661,11 +2652,8 @@ def _folder_text_reviews_ready(job_id: int, folder_id: int) -> tuple[bool, dict]
         """
         SELECT
             COUNT(*),
-            SUM(CASE WHEN COALESCE(cgs.humanized, 0) = 1
-                      AND cgs.humanization_signature = ? THEN 1 ELSE 0 END),
             SUM(CASE WHEN COALESCE(cgs.reviewed, 0) = 1
                       AND cgs.review_signature = ? THEN 1 ELSE 0 END),
-            SUM(CASE WHEN cgs.humanization_error IS NOT NULL THEN 1 ELSE 0 END),
             SUM(CASE WHEN cgs.review_error IS NOT NULL THEN 1 ELSE 0 END)
         FROM content_generation_segments cgs
         JOIN content_generation_jobs cgj ON cgj.id = cgs.job_id
@@ -2673,19 +2661,17 @@ def _folder_text_reviews_ready(job_id: int, folder_id: int) -> tuple[bool, dict]
         WHERE cf.id = ? AND cf.formation_job_id = ?
           AND cgs.status = 'completed'
         """,
-        (humanization_signature, compliance_signature, folder_id, job_id),
+        (compliance_signature, folder_id, job_id),
     )
-    total, humanized, reviewed, humanization_errors, review_errors = cursor.fetchone()
+    total, reviewed, review_errors = cursor.fetchone()
     conn.close()
     total = int(total or 0)
     detail = {
         "segments_completed": total,
-        "humanized_current": int(humanized or 0),
         "reviewed_current": int(reviewed or 0),
-        "humanization_errors": int(humanization_errors or 0),
         "review_errors": int(review_errors or 0),
     }
-    return total > 0 and detail["humanized_current"] >= total and detail["reviewed_current"] >= total, detail
+    return total > 0 and detail["reviewed_current"] >= total, detail
 
 
 @formation_bp.route("/api/formation/<int:job_id>/content/<int:folder_id>/generate-audio", methods=["POST"])
@@ -2707,7 +2693,7 @@ def generate_folder_audio(job_id, folder_id):
     reviews_ready, review_detail = _folder_text_reviews_ready(job_id, folder_id)
     if not reviews_ready and not bool(data.get("allow_unreviewed")):
         return jsonify({
-            "error": "Texte pas prêt pour l'audio : humanisation et conformité doivent être terminées.",
+            "error": "Texte pas prêt pour l'audio : la conformité locale par morceau doit être terminée.",
             "review_detail": review_detail,
         }), 400
 
@@ -2882,7 +2868,7 @@ def launch_audio(job_id):
             not_review_ready.append({"folder_id": fid, **detail})
     if not_review_ready:
         return jsonify({
-            "error": "Humanisation/conformité incomplète : audio bloqué tant que les textes ne sont pas validés.",
+            "error": "Conformité locale incomplète : audio bloqué tant que les textes ne sont pas validés.",
             "folders": not_review_ready,
         }), 400
 
@@ -3615,7 +3601,7 @@ def _delete_slide_deck_for_resume(folder_id: int, content_job_id: int) -> int:
 def continue_after_text(job_id, folder_id):
     """Relance les étapes aval d'une journée sans régénérer le texte initial.
 
-    Flux complet : reset aval → review API → Word 2 → slides → Edge TTS sync.
+    Flux complet : reset aval → conformité locale API → Word 2 → slides → Edge TTS sync.
     Paramètre from_step : 'review' (défaut), 'slides', 'tts' — saute les étapes en amont.
     Compatibilité : l'ancien from_step='volume' est mappé vers 'review'.
     """
@@ -3751,10 +3737,8 @@ def continue_after_text(job_id, folder_id):
                 _update_job_db,
                 assert_course_day_word_budget,
                 generate_audio_from_script,
-                run_audio_block_word_calibration,
                 run_content_generation,
                 run_content_review,
-                run_humanization_review,
             )
             from services.formation_observability_service import log_pipeline_event
 
@@ -3872,59 +3856,11 @@ def continue_after_text(job_id, folder_id):
             # Sécurité volume append-only supprimée : le volume se corrige
             # uniquement dans le calibrage budget texte de la génération structurée.
 
-            # ── Étape 3 : HUMANISATION → CONFORMITÉ + Word 2
+            # ── Étape 3 : CONFORMITÉ LOCALE + Word 2
             # L'adhérence au plan est corrigée pendant la génération structurée,
             # juste après les sections et avant le calibrage budget.
             if from_step_idx <= 0:
                 step_started = time.time()
-                logger.info(
-                    "PIPELINE_RESUME_STEP_HUMANIZATION_START formation_job_id=%s folder_id=%s model=%s",
-                    job_id, folder_id, model,
-                )
-                humanization_result = run_humanization_review(folder_id, model=model)
-                _write_api_review_report(job_id, folder_id, humanization_result, model)
-                if humanization_result.get("segments_failed", 0) > 0:
-                    raise RuntimeError(
-                        f"Humanisation échouée sur {humanization_result['segments_failed']} segment(s)"
-                    )
-                log_pipeline_event(
-                    job_id,
-                    "continue_after_text_humanization_completed",
-                    step="humanization_review",
-                    status="completed",
-                    folder_id=folder_id,
-                    model=str(model) if model else None,
-                    message="Révision humanisation terminée",
-                    data={
-                        "segments_reviewed": humanization_result.get("segments_reviewed", 0),
-                        "segments_failed": humanization_result.get("segments_failed", 0),
-                        "patches_proposed": humanization_result.get("patches_proposed", 0),
-                        "patches_applied": humanization_result.get("patches_applied", 0),
-                        "patches_rejected": humanization_result.get("patches_rejected", 0),
-                        "review_signature": humanization_result.get("review_signature"),
-                    },
-                )
-
-                calibration_result = run_audio_block_word_calibration(
-                    folder_id,
-                    model=model,
-                    stage="manual_after_humanization",
-                )
-                log_pipeline_event(
-                    job_id,
-                    "continue_after_text_audio_block_calibration_completed",
-                    step="audio_word_calibration",
-                    status="completed",
-                    folder_id=folder_id,
-                    model=str(model) if model else None,
-                    message="Blocs audio calibrés au nombre de mots prévu",
-                    data={
-                        "changed": bool(calibration_result.get("changed")),
-                        "total_words": calibration_result.get("total_words"),
-                        "day_audit": calibration_result.get("day_audit"),
-                        "blocks": calibration_result.get("blocks"),
-                    },
-                )
                 logger.info(
                     "PIPELINE_RESUME_STEP_REVIEW_START formation_job_id=%s folder_id=%s model=%s",
                     job_id, folder_id, model,
@@ -3950,43 +3886,6 @@ def continue_after_text(job_id, folder_id):
                     "PIPELINE_RESUME_STEP_REVIEW_REPORT_WRITTEN formation_job_id=%s folder_id=%s",
                     job_id, folder_id,
                 )
-
-                for guard_round in range(1, 4):
-                    post_review_calibration = run_audio_block_word_calibration(
-                        folder_id,
-                        model=model,
-                        stage=f"manual_after_compliance_round_{guard_round}",
-                    )
-                    log_pipeline_event(
-                        job_id,
-                        "continue_after_text_audio_block_calibration_after_review",
-                        step="audio_word_calibration",
-                        status="completed",
-                        folder_id=folder_id,
-                        model=str(model) if model else None,
-                        message="Vérification mots post-conformité terminée",
-                        data={
-                            "round": guard_round,
-                            "changed": bool(post_review_calibration.get("changed")),
-                            "total_words": post_review_calibration.get("total_words"),
-                            "day_audit": post_review_calibration.get("day_audit"),
-                            "blocks": post_review_calibration.get("blocks"),
-                        },
-                    )
-                    if not post_review_calibration.get("changed"):
-                        break
-                    logger.info(
-                        "PIPELINE_RESUME_STEP_REVIEW_RERUN_AFTER_CALIBRATION "
-                        "formation_job_id=%s folder_id=%s round=%s",
-                        job_id, folder_id, guard_round,
-                    )
-                    review_result = run_content_review(folder_id, model=model, force=True)
-                    _write_api_review_report(job_id, folder_id, review_result, model)
-                    if review_result.get("segments_failed", 0) > 0:
-                        raise RuntimeError(
-                            f"Révision conformité échouée après calibrage sur "
-                            f"{review_result['segments_failed']} segment(s)"
-                        )
 
                 budget_audit = assert_course_day_word_budget(
                     folder_id,
@@ -4036,7 +3935,7 @@ def continue_after_text(job_id, folder_id):
                     status="completed",
                     folder_id=folder_id,
                     model=str(model) if model else None,
-                    message="Révision conformité et Word 2 générés",
+                    message="Conformité locale et Word 2 générés",
                     data={
                         "segments_reviewed": review_result.get("segments_reviewed", 0),
                         "segments_failed": review_result.get("segments_failed", 0),
@@ -4375,33 +4274,11 @@ def _determine_next_ap_step(job_id: int) -> str | None:
     # du développement après les conclusions/Q-R. Le rattrapage de volume se fait
     # désormais dans le calibrage budget texte, avec le plan verrouillé comme contexte.
 
-    from services.content_generation_service import (
-        _current_compliance_review_signature,
-        _current_humanization_review_signature,
-    )
-    humanization_signature = _current_humanization_review_signature()
+    from services.content_generation_service import _current_compliance_review_signature
     compliance_signature = _current_compliance_review_signature()
 
-    # 6. Révision humanisation : intros, transitions, respirations, rythme.
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute(f"""
-        SELECT COUNT(*) FROM content_generation_segments cgs
-        JOIN content_generation_jobs cgj ON cgj.id = cgs.job_id
-        JOIN cours_folders cf ON cf.id = cgj.folder_id
-        WHERE cf.id IN ({placeholders}) AND cgs.status = 'completed'
-          AND (
-                COALESCE(cgs.humanized, 0) = 0
-             OR cgs.humanization_signature IS NULL
-             OR cgs.humanization_signature != ?
-          )
-    """, tuple(folder_ids) + (humanization_signature,))
-    not_humanized = cursor.fetchone()[0]
-    conn.close()
-    if not_humanized > 0:
-        return "humanization_review"
-
-    # 7. Révision conformité stricte
+    # 6. Conformité locale par segment, après adhérence au plan, calibrage
+    # budget et micro-review éthique intégrés à la génération structurée.
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute(f"""
@@ -4420,12 +4297,12 @@ def _determine_next_ap_step(job_id: int) -> str | None:
     if not_reviewed > 0:
         return "review"
 
-    # 8. Document post-révision : ré-assemble le texte courant après volume
-    # et conformité, avant d'autoriser la synthèse audio.
+    # 7. Document post-révision : ré-assemble le texte courant validé avant
+    # d'autoriser slides et synthèse audio.
     if not j.get("auto_pilot_post_review_docs_done"):
         return "post_review_docs"
 
-    # 9. Slides anchor-first : elles sont générées explicitement avant la fin
+    # 8. Slides anchor-first : elles sont générées explicitement avant la fin
     # texte, pour ne plus rester cachées dans l'étape TTS synchronisée.
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -4537,28 +4414,6 @@ def _execute_ap_step(job_id: int, step: str, job: dict) -> None:
             eventlet.sleep(3)
             elapsed += 3
         raise TimeoutError(f"Timeout {max_wait}s en attendant {targets}")
-
-    def _log_audio_block_calibration(fid: int, result: dict, *, stage: str) -> None:
-        try:
-            from services.formation_observability_service import log_pipeline_event
-            log_pipeline_event(
-                job_id,
-                "audio_block_word_calibration_completed",
-                step="audio_word_calibration",
-                status="completed",
-                folder_id=fid,
-                model=api_model,
-                message="Blocs audio calibrés au nombre de mots prévu",
-                data={
-                    "stage": stage,
-                    "changed": bool(result.get("changed")),
-                    "total_words": result.get("total_words"),
-                    "day_audit": result.get("day_audit"),
-                    "blocks": result.get("blocks"),
-                },
-            )
-        except Exception:
-            pass
 
     if step == "reac":
         from services.formation_health_service import compute_preflight
@@ -4743,55 +4598,12 @@ def _execute_ap_step(job_id: int, step: str, job: dict) -> None:
         update_job(job_id, auto_pilot_volume_done=1, auto_pilot_post_review_docs_done=0)
 
     elif step == "humanization_review":
-        from services.formation_pipeline_service import get_expected_course_folders
-        folder_ids = get_expected_course_folders(job_id).get("folder_ids") or []
-        if use_cc:
-            result = execute_mission_locally(job_id, "humanization_review", cc_model)
-            _assert_cc_result_complete("Humanisation", result)
-        else:
-            from services.content_generation_service import (
-                run_humanization_review,
-            )
-            failed = []
-            reports_written = 0
-            for fid in folder_ids:
-                try:
-                    result = run_humanization_review(fid, model=api_model)
-                    _write_api_review_report(job_id, fid, result, api_model)
-                    reports_written += 1
-                    if result.get("segments_failed", 0) > 0:
-                        failed.append(f"{fid}({result['segments_failed']} segments échoués)")
-                except Exception as e:
-                    logger.warning(f"⚠️ Humanization review folder {fid} : {e}")
-                    failed.append(str(fid))
-            if failed:
-                raise RuntimeError(f"Humanisation échouée sur folders : {', '.join(failed)}")
-            logger.info(
-                "🤖 ✓ Rapports humanisation persistés job %s : %s/%s",
-                job_id,
-                reports_written,
-                len(folder_ids),
-            )
-        from services.content_generation_service import run_audio_block_word_calibration
-        calibration_failed = []
-        for fid in folder_ids:
-            try:
-                calibration = run_audio_block_word_calibration(
-                    fid,
-                    model=api_model,
-                    stage="auto_after_humanization",
-                )
-                _log_audio_block_calibration(fid, calibration, stage="auto_after_humanization")
-            except Exception as e:
-                logger.warning(f"⚠️ Calibrage mots audio folder {fid} : {e}")
-                calibration_failed.append(f"{fid}({str(e)[:120]})")
-        if calibration_failed:
-            raise RuntimeError(
-                "Calibrage mots audio échoué sur folders : "
-                + ", ".join(calibration_failed)
-            )
+        logger.info(
+            "🤖 Auto-pilot job %s : étape humanization_review ignorée, "
+            "l'oralité est portée par le prompt initial",
+            job_id,
+        )
         update_job(job_id, auto_pilot_post_review_docs_done=0)
-        logger.info(f"🤖 ✓ Révision humanisation terminée job {job_id}")
 
     elif step == "review":
         from services.formation_pipeline_service import get_expected_course_folders
@@ -4821,61 +4633,14 @@ def _execute_ap_step(job_id: int, step: str, job: dict) -> None:
                 reports_written,
                 len(folder_ids),
             )
-
-        from services.content_generation_service import (
-            run_audio_block_word_calibration,
-            run_content_review,
-        )
-        changed_after_review = []
-        calibration_failed = []
-        for fid in folder_ids:
-            try:
-                calibration = run_audio_block_word_calibration(
-                    fid,
-                    model=api_model,
-                    stage="auto_after_compliance",
-                )
-                _log_audio_block_calibration(fid, calibration, stage="auto_after_compliance")
-                if calibration.get("changed"):
-                    changed_after_review.append(fid)
-            except Exception as e:
-                logger.warning(f"⚠️ Calibrage mots post-review folder {fid} : {e}")
-                calibration_failed.append(f"{fid}({str(e)[:120]})")
-        if calibration_failed:
-            raise RuntimeError(
-                "Calibrage mots post-conformité échoué sur folders : "
-                + ", ".join(calibration_failed)
-            )
-        if changed_after_review:
-            if use_cc:
-                result = execute_mission_locally(job_id, "review", cc_model)
-                _assert_cc_result_complete("Révision conformité après calibrage", result)
-            else:
-                failed = []
-                for fid in changed_after_review:
-                    try:
-                        result = run_content_review(fid, model=api_model, force=True)
-                        _write_api_review_report(job_id, fid, result, api_model)
-                        if result.get("segments_failed", 0) > 0:
-                            failed.append(f"{fid}({result['segments_failed']} segments échoués)")
-                    except Exception as e:
-                        logger.warning(f"⚠️ Review post-calibrage folder {fid} : {e}")
-                        failed.append(str(fid))
-                if failed:
-                    raise RuntimeError(
-                        "Review post-calibrage échouée sur folders : "
-                        + ", ".join(failed)
-                    )
         update_job(job_id, auto_pilot_post_review_docs_done=0)
-        logger.info(f"🤖 ✓ Révision conformité terminée job {job_id}")
+        logger.info(f"🤖 ✓ Conformité locale terminée job {job_id}")
 
     elif step == "post_review_docs":
         from services.content_generation_service import (
             _assemble_and_upload,
             _update_job_db,
             assert_course_day_word_budget,
-            run_audio_block_word_calibration,
-            run_content_review,
         )
         from services.formation_pipeline_service import get_expected_course_folders
         folder_ids = get_expected_course_folders(job_id).get("folder_ids") or []
@@ -4900,27 +4665,6 @@ def _execute_ap_step(job_id: int, step: str, job: dict) -> None:
             raise RuntimeError("Aucun texte complété à assembler après révision")
 
         for fid, cg_job_id in rows:
-            for guard_round in range(1, 4):
-                calibration = run_audio_block_word_calibration(
-                    fid,
-                    model=api_model,
-                    stage=f"auto_pre_word2_round_{guard_round}",
-                )
-                _log_audio_block_calibration(
-                    fid,
-                    calibration,
-                    stage=f"auto_pre_word2_round_{guard_round}",
-                )
-                if not calibration.get("changed"):
-                    break
-                review_result = run_content_review(fid, model=api_model, force=True)
-                _write_api_review_report(job_id, fid, review_result, api_model)
-                if review_result.get("segments_failed", 0) > 0:
-                    raise RuntimeError(
-                        f"Révision conformité échouée après calibrage Word 2 "
-                        f"sur folder {fid}: {review_result['segments_failed']} segment(s)"
-                    )
-
             budget_audit = assert_course_day_word_budget(
                 fid,
                 context="auto_pilot_post_review_docs",
@@ -5382,7 +5126,7 @@ def start_auto_pilot_watchdog() -> None:
 def run_auto_pilot(job_id):
     """Lance l'auto-pilot : REAC → KB → global → daily → content
     (génération sections → adhérence plan → budget → micro-éthique)
-    → humanisation → conformité → Word 2 → slides → audio optionnel.
+    → conformité locale par morceau → Word 2 → slides → audio optionnel.
 
     Body (optionnel) :
       - tts_mode : 'fish_audio' | 'gtts' | 'mock' (défaut 'gtts')

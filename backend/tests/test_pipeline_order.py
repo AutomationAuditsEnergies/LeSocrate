@@ -93,19 +93,15 @@ class PipelineOrderTest(unittest.TestCase):
             return_value={"folder_ids": [10], "folders": []},
         ), patch("database.db.get_db_connection", side_effect=lambda: _connect(db_path)), patch.object(
             cgs,
-            "_current_humanization_review_signature",
-            return_value="human-sig",
-        ), patch.object(
-            cgs,
             "_current_compliance_review_signature",
             return_value="review-sig",
         ):
             return fr._determine_next_ap_step(99)
 
-    def test_humanization_review_runs_before_compliance_review(self):
+    def test_local_compliance_runs_after_content(self):
         db_path = _make_review_db(humanized=False, reviewed=False)
         try:
-            self.assertEqual(self._run_next_step(db_path, _job()), "humanization_review")
+            self.assertEqual(self._run_next_step(db_path, _job()), "review")
         finally:
             os.unlink(db_path)
 
@@ -116,14 +112,10 @@ class PipelineOrderTest(unittest.TestCase):
         finally:
             os.unlink(db_path)
 
-    def test_audio_gate_requires_humanization_and_compliance(self):
+    def test_audio_gate_requires_local_compliance(self):
         db_path = _make_review_db(humanized=True, reviewed=False)
         try:
             with patch("database.db.get_db_connection", side_effect=lambda: _connect(db_path)), patch.object(
-                cgs,
-                "_current_humanization_review_signature",
-                return_value="human-sig",
-            ), patch.object(
                 cgs,
                 "_current_compliance_review_signature",
                 return_value="review-sig",
@@ -131,7 +123,6 @@ class PipelineOrderTest(unittest.TestCase):
                 ok, detail = fr._folder_text_reviews_ready(99, 10)
 
             self.assertFalse(ok)
-            self.assertEqual(detail["humanized_current"], 18)
             self.assertEqual(detail["reviewed_current"], 0)
         finally:
             os.unlink(db_path)
@@ -145,7 +136,7 @@ class PipelineOrderTest(unittest.TestCase):
         try:
             self.assertEqual(
                 self._run_next_step(db_path, _job(daily_programs=json.dumps(daily))),
-                "humanization_review",
+                "review",
             )
         finally:
             os.unlink(db_path)
