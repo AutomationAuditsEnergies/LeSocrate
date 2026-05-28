@@ -1297,7 +1297,7 @@ function PipelineVisualMap({ job, currentStep, autoPilotState, contentFolders, v
       detail: 'Corrige ordre, reprises, conclusions, doublons d’intro et fuites d’horaires avant le budget.',
       icon: 'rule',
       artifacts: ['content-quality-reviews.json', 'content-draft-sections.json'],
-      auditMode: 'artifact_review',
+      auditMode: 'plan_adherence',
       done: planAdherenceDone,
       active: contentActive,
     },
@@ -1602,6 +1602,9 @@ function PipelineStepAuditModal({ job, stage, index, folders, events, onClose })
           {!loading && stage.auditMode === 'section_generation' && (
             <SectionGenerationAuditView artifacts={payload.artifacts} />
           )}
+          {!loading && stage.auditMode === 'plan_adherence' && (
+            <PlanAdherenceAuditView artifacts={payload.artifacts} />
+          )}
           {!loading && stage.auditMode === 'budget_calibration' && (
             <BudgetCalibrationAuditView artifacts={payload.artifacts} />
           )}
@@ -1611,7 +1614,7 @@ function PipelineStepAuditModal({ job, stage, index, folders, events, onClose })
           {!loading && stage.auditMode === 'review_report' && (
             <ReviewReportsAuditView reports={payload.reports} />
           )}
-          {!loading && stage.auditMode !== 'ethical_micro' && stage.auditMode !== 'section_generation' && stage.auditMode !== 'budget_calibration' && stage.auditMode !== 'volume_safety' && stage.auditMode !== 'review_report' && (
+          {!loading && stage.auditMode !== 'ethical_micro' && stage.auditMode !== 'section_generation' && stage.auditMode !== 'plan_adherence' && stage.auditMode !== 'budget_calibration' && stage.auditMode !== 'volume_safety' && stage.auditMode !== 'review_report' && (
             <ArtifactAuditView artifacts={payload.artifacts} stage={stage} />
           )}
 
@@ -1636,8 +1639,11 @@ function computeAuditPatchStats(payload) {
   let rejected = 0
   for (const item of payload.artifacts || []) {
     const summary = item.artifact?.summary || {}
+    const reviewSummary = item.artifact?.review_summary || {}
     applied += Number(summary.patches_applied || 0)
     rejected += Number(summary.patches_rejected || 0)
+    applied += Number(reviewSummary.patches_applied || 0)
+    rejected += Number(reviewSummary.patches_rejected || 0)
   }
   for (const item of payload.reports || []) {
     const summary = item.report?.summary || {}
@@ -2189,6 +2195,385 @@ function sliceAuditWords(text, index, total, limit) {
 
 function formatAuditNumber(value) {
   return Number(value || 0).toLocaleString('fr-FR')
+}
+
+function PlanAdherenceAuditView({ artifacts }) {
+  const days = buildPlanAdherenceDays(artifacts)
+  const hasReview = days.some(day => day.review)
+
+  if (!hasReview) {
+    return (
+      <AuditEmptyState
+        icon="info"
+        title="Aucun audit d'adhérence au plan disponible"
+        detail="Cette étape écrit content-quality-reviews.json après la génération par section. Relance une génération texte pour obtenir l'audit lisible cours par cours."
+      />
+    )
+  }
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+      <div style={{
+        padding: '12px 14px',
+        background: 'rgba(167,139,250,0.08)',
+        border: '1px solid rgba(167,139,250,0.24)',
+        borderRadius: '10px',
+        color: '#ddd6fe',
+        fontSize: '12px',
+        lineHeight: 1.5,
+      }}>
+        <strong>Lecture de l'étape 9.</strong> Cette vue vérifie que le texte suit le plan JSON avant le budget : intro au bon endroit, ordre des chapitres, teaching beats couverts, pas de double introduction, pas de fuite d'horaires et conclusion qui ferme vraiment avant le Q/R.
+      </div>
+      {days.map((day, index) => (
+        <PlanAdherenceDay key={day.folder?.folder_id || index} day={day} initiallyOpen={index === 0} />
+      ))}
+    </div>
+  )
+}
+
+function buildPlanAdherenceDays(artifacts) {
+  const byFolder = new Map()
+  for (const item of artifacts || []) {
+    const folderId = item.folder?.folder_id || item.folder_id || 'unknown'
+    if (!byFolder.has(folderId)) {
+      byFolder.set(folderId, { folder: item.folder || {}, review: null, draft: null })
+    }
+    const entry = byFolder.get(folderId)
+    if (!item.ok || !item.artifact) continue
+    if (item.name === 'content-quality-reviews.json') entry.review = item.artifact
+    if (item.name === 'content-draft-sections.json') entry.draft = item.artifact
+  }
+  return Array.from(byFolder.values()).sort((a, b) =>
+    Number(a.folder?.position ?? a.folder?.folder_position ?? a.folder?.folder_id ?? 0) -
+    Number(b.folder?.position ?? b.folder?.folder_position ?? b.folder?.folder_id ?? 0),
+  )
+}
+
+function PlanAdherenceDay({ day, initiallyOpen }) {
+  const courses = planAdherenceCoursesForDay(day)
+  const summary = day.review?.review_summary || {}
+  const changed = courses.filter(course => course.changed).length
+  const failed = courses.filter(course => course.failed).length
+  const issues = courses.reduce((sum, course) => sum + planAdherenceIssues(course).length, 0)
+  const legacy = courses.filter(course => course.legacy).length
+  const timing = day.review?.review_timing || summary.review_timing || ''
+
+  return (
+    <details open={initiallyOpen} style={{
+      background: 'rgba(15,23,42,0.48)',
+      border: '1px solid rgba(148,163,184,0.14)',
+      borderRadius: '12px',
+      overflow: 'hidden',
+    }}>
+      <summary style={{ cursor: 'pointer', listStyle: 'none', padding: '14px 16px', borderBottom: '1px solid rgba(148,163,184,0.12)' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', alignItems: 'center', flexWrap: 'wrap' }}>
+          <span style={{ color: '#e2e8f0', fontWeight: 900 }}>
+            <Icon name="rule" /> {folderDisplayName(day.folder)}
+          </span>
+          <span style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+            <SmallMetric label="Thèmes audités" value={courses.length} />
+            <SmallMetric label="Corrections" value={changed} />
+            <SmallMetric label="Problèmes" value={issues} />
+            <SmallMetric label="Échecs" value={failed} />
+          </span>
+        </div>
+      </summary>
+      <div style={{ padding: '14px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+        <PlanAdherenceScopeCard timing={timing} legacyCount={legacy} />
+        {courses.length === 0 && (
+          <AuditEmptyState
+            icon="info"
+            title="Aucun cours exploitable"
+            detail="L'artefact existe, mais il ne contient pas de liste de cours exploitable."
+          />
+        )}
+        {courses.map((course, index) => (
+          <PlanAdherenceCourse key={course.course_number || index} course={course} initiallyOpen={index === 0} />
+        ))}
+      </div>
+    </details>
+  )
+}
+
+function planAdherenceCoursesForDay(day) {
+  const reviewCourses = Array.isArray(day.review?.courses) ? day.review.courses : []
+  const draftCourses = Array.isArray(day.draft?.courses) ? day.draft.courses : []
+  const numbers = Array.from(new Set([
+    ...reviewCourses.map(course => Number(course.course_number || 0)).filter(Boolean),
+    ...draftCourses.map(course => Number(course.course_number || 0)).filter(Boolean),
+  ])).sort((a, b) => a - b)
+  return numbers.map(number => {
+    const review = reviewCourses.find(course => Number(course.course_number || 0) === number) || {}
+    const draft = draftCourses.find(course => Number(course.course_number || 0) === number) || {}
+    const draftText = draftCourseText(draft)
+    const beforeText = review.before_text || review.initial_text || draftText
+    const afterText = review.after_text || review.final_text || beforeText
+    const finalAudit = review.final_audit || {}
+    const issues = Array.isArray(finalAudit.issues) ? finalAudit.issues : []
+    const hasDetailedAudit = Boolean(review.final_audit || review.before_text || review.after_text || review.attempts)
+    return {
+      ...review,
+      course_number: number,
+      course_title: review.course_title || draft.course_title || `Thème ${number}`,
+      initial_words: review.initial_words ?? draft.draft_word_count ?? countAuditWords(beforeText),
+      final_words: review.final_words ?? countAuditWords(afterText),
+      changed: Boolean(review.changed),
+      failed: Boolean(review.failed),
+      before_text: beforeText,
+      after_text: afterText,
+      final_audit: finalAudit,
+      issues_count: review.issues_count ?? issues.length,
+      legacy: !hasDetailedAudit,
+    }
+  })
+}
+
+function draftCourseText(draft = {}) {
+  if (draft.course_text) return draft.course_text
+  if (draft.text) return draft.text
+  if (Array.isArray(draft.sections)) {
+    return draft.sections.map(section => section.text || '').filter(Boolean).join('\n\n')
+  }
+  return ''
+}
+
+function PlanAdherenceScopeCard({ timing, legacyCount }) {
+  return (
+    <div style={{
+      display: 'grid',
+      gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))',
+      gap: '8px',
+    }}>
+      <PlanCheckItem label="Ordre du plan" detail="Les chapitres restent dans l'ordre prévu." />
+      <PlanCheckItem label="Intro et reprises" detail="Pas de double intro, pas de reprise incohérente." />
+      <PlanCheckItem label="Conclusions" detail="Le texte ferme avant Q/R, sans nouveau développement." />
+      <PlanCheckItem label="Fuites internes" detail="Pas d'horaires, créneaux, planning ou mot cours mal placé." />
+      {timing && (
+        <PlanCheckItem label="Moment pipeline" detail={timing === 'after_section_generation_before_budget_calibration' ? 'Exécuté juste après génération, avant budget.' : timing} />
+      )}
+      {legacyCount > 0 && (
+        <PlanCheckItem label="Ancien artefact" detail={`${legacyCount} thème(s) sans détail avant/après. Relancer la génération pour l'audit complet.`} warning />
+      )}
+    </div>
+  )
+}
+
+function PlanCheckItem({ label, detail, warning = false }) {
+  return (
+    <div style={{
+      padding: '10px 11px',
+      background: warning ? 'rgba(251,191,36,0.08)' : 'rgba(2,6,23,0.34)',
+      border: `1px solid ${warning ? 'rgba(251,191,36,0.22)' : 'rgba(148,163,184,0.12)'}`,
+      borderRadius: '9px',
+    }}>
+      <div style={{ color: warning ? '#fde68a' : '#c4b5fd', fontWeight: 900, fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+        {label}
+      </div>
+      <div style={{ color: '#cbd5e1', fontSize: '12px', lineHeight: 1.45, marginTop: '4px' }}>
+        {detail}
+      </div>
+    </div>
+  )
+}
+
+function PlanAdherenceCourse({ course, initiallyOpen }) {
+  const issues = planAdherenceIssues(course)
+  const beforeWords = Number(course.initial_words || countAuditWords(course.before_text))
+  const afterWords = Number(course.final_words || countAuditWords(course.after_text))
+  const status = planAdherenceStatus(course, issues)
+
+  return (
+    <details open={initiallyOpen} style={{
+      background: 'rgba(2,6,23,0.34)',
+      border: `1px solid ${status.border}`,
+      borderRadius: '10px',
+      overflow: 'hidden',
+    }}>
+      <summary style={{ cursor: 'pointer', listStyle: 'none', padding: '13px 14px' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap' }}>
+          <div style={{ minWidth: 0 }}>
+            <div style={{ color: status.color, fontSize: '11px', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+              Thème {course.course_number} · {status.label}
+            </div>
+            <div style={{ color: '#e2e8f0', fontWeight: 900, fontSize: '15px', marginTop: '3px' }}>
+              {course.course_title || `Thème ${course.course_number}`}
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
+            <SmallMetric label="Avant" value={`${formatAuditNumber(beforeWords)} mots`} />
+            <SmallMetric label="Après" value={`${formatAuditNumber(afterWords)} mots`} />
+            <SmallMetric label="Écart" value={`${afterWords - beforeWords >= 0 ? '+' : ''}${formatAuditNumber(afterWords - beforeWords)}`} />
+            <SmallMetric label="Issues" value={issues.length} />
+          </div>
+        </div>
+      </summary>
+      <div style={{ borderTop: '1px solid rgba(148,163,184,0.10)', padding: '12px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+        {course.legacy ? (
+          <AuditEmptyState
+            icon="info"
+            title="Audit détaillé non disponible pour ce thème"
+            detail="Cet artefact ancien ne contient que le titre du thème. Les prochaines générations stockeront le diagnostic, les problèmes détectés et le texte avant/après correction."
+          />
+        ) : (
+          <>
+            <PlanAdherenceIssueList issues={issues} ok={Boolean(course.final_audit?.ok)} summary={course.final_audit?.summary} error={course.error} />
+            <PlanAdherenceBeforeAfter course={course} issues={issues} />
+          </>
+        )}
+      </div>
+    </details>
+  )
+}
+
+function planAdherenceIssues(course) {
+  const finalIssues = Array.isArray(course.final_audit?.issues) ? course.final_audit.issues : []
+  const attemptIssues = Array.isArray(course.attempts?.[0]?.audit?.issues) ? course.attempts[0].audit.issues : []
+  return finalIssues.length > 0 ? finalIssues : attemptIssues
+}
+
+function planAdherenceStatus(course, issues) {
+  if (course.failed) return { label: 'échec', color: '#f87171', border: 'rgba(248,113,113,0.28)' }
+  if (course.legacy) return { label: 'ancien artefact', color: '#fbbf24', border: 'rgba(251,191,36,0.24)' }
+  if (course.changed) return { label: 'corrigé', color: '#60a5fa', border: 'rgba(96,165,250,0.28)' }
+  if (issues.length > 0 || course.final_audit?.ok === false) return { label: 'à vérifier', color: '#fb923c', border: 'rgba(251,146,60,0.28)' }
+  return { label: 'ok', color: '#34d399', border: 'rgba(52,211,153,0.24)' }
+}
+
+function PlanAdherenceIssueList({ issues, ok, summary, error }) {
+  if (error) {
+    return <AuditEmptyState icon="error" title="Audit en erreur" detail={error} />
+  }
+  if (!issues.length) {
+    return (
+      <AuditEmptyState
+        icon={ok ? 'verified_user' : 'info'}
+        title={ok ? 'Plan respecté' : 'Aucun problème détaillé enregistré'}
+        detail={summary || 'L’audit n’a pas remonté de problème de structure pédagogique.'}
+      />
+    )
+  }
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))', gap: '8px' }}>
+      {issues.map((issue, index) => (
+        <div key={index} style={{
+          padding: '10px 11px',
+          background: issue.severity === 'critical' ? 'rgba(239,68,68,0.09)' : 'rgba(251,146,60,0.08)',
+          border: `1px solid ${issue.severity === 'critical' ? 'rgba(239,68,68,0.24)' : 'rgba(251,146,60,0.22)'}`,
+          borderRadius: '9px',
+        }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', marginBottom: '5px' }}>
+            <span style={{ color: '#fed7aa', fontSize: '11px', fontWeight: 900, textTransform: 'uppercase' }}>
+              {issue.type || 'problème'}
+            </span>
+            <span style={{ color: '#94a3b8', fontSize: '11px', fontWeight: 800 }}>
+              {issue.section || 'section'}
+            </span>
+          </div>
+          <div style={{ color: '#e2e8f0', fontSize: '12px', lineHeight: 1.45, fontWeight: 800 }}>
+            {issue.problem || 'Problème signalé par l’audit.'}
+          </div>
+          {issue.evidence && (
+            <div style={{ color: '#cbd5e1', fontSize: '12px', lineHeight: 1.45, marginTop: '7px', fontStyle: 'italic' }}>
+              “{issue.evidence}”
+            </div>
+          )}
+          {issue.fix_instruction && (
+            <div style={{ color: '#bfdbfe', fontSize: '12px', lineHeight: 1.45, marginTop: '7px' }}>
+              Correction attendue : {issue.fix_instruction}
+            </div>
+          )}
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function PlanAdherenceBeforeAfter({ course, issues }) {
+  const beforeText = course.before_text || ''
+  const afterText = course.after_text || ''
+  if (!beforeText && !afterText) {
+    return (
+      <AuditEmptyState
+        icon="visibility_off"
+        title="Texte avant/après indisponible"
+        detail="L'audit existe, mais l'artefact ne contient pas le texte comparatif."
+      />
+    )
+  }
+  const evidenceHighlights = issues.map(issue => issue.evidence).filter(Boolean)
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '12px' }}>
+      <PlanTextPane
+        title="Avant audit"
+        color="#ef4444"
+        text={beforeText}
+        highlights={evidenceHighlights}
+      />
+      <PlanTextPane
+        title={course.changed ? 'Après correction' : 'Texte conservé'}
+        color="#3b82f6"
+        text={afterText || beforeText}
+        compareText={beforeText}
+        highlightChanged={course.changed}
+      />
+    </div>
+  )
+}
+
+function PlanTextPane({ title, color, text, highlights = [], compareText = '', highlightChanged = false }) {
+  return (
+    <div style={{ minWidth: 0 }}>
+      <div style={{ color, fontSize: '11px', fontWeight: 900, marginBottom: '7px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+        {title}
+      </div>
+      <div style={{
+        color: '#cbd5e1',
+        fontSize: '12px',
+        lineHeight: 1.65,
+        whiteSpace: 'pre-wrap',
+        background: 'rgba(2,6,23,0.46)',
+        border: '1px solid rgba(148,163,184,0.10)',
+        borderRadius: '8px',
+        padding: '11px',
+        maxHeight: '360px',
+        overflow: 'auto',
+      }}>
+        {highlightChanged
+          ? <HighlightedChangedParagraphs beforeText={compareText} afterText={text} color={color} />
+          : <HighlightedText text={text || 'Aucun texte disponible.'} highlights={highlights} color={color} />}
+      </div>
+    </div>
+  )
+}
+
+function HighlightedChangedParagraphs({ beforeText, afterText, color }) {
+  const after = String(afterText || '')
+  if (!after.trim()) return 'Aucun texte disponible.'
+  const beforeKeys = new Set(splitAuditParagraphs(beforeText).map(paragraph => normalizeAuditText(paragraph)))
+  const paragraphs = splitAuditParagraphs(after)
+  if (paragraphs.length === 0) return after
+  return (
+    <>
+      {paragraphs.map((paragraph, index) => {
+        const changed = !beforeKeys.has(normalizeAuditText(paragraph))
+        return (
+          <span key={index}>
+            {changed ? (
+              <mark style={{
+                color: '#f8fafc',
+                background: color === '#3b82f6' ? 'rgba(59,130,246,0.38)' : 'rgba(239,68,68,0.38)',
+                borderRadius: '4px',
+                padding: '1px 3px',
+              }}>
+                {paragraph}
+              </mark>
+            ) : paragraph}
+            {index < paragraphs.length - 1 ? '\n\n' : ''}
+          </span>
+        )
+      })}
+    </>
+  )
 }
 
 function BudgetCalibrationAuditView({ artifacts }) {
