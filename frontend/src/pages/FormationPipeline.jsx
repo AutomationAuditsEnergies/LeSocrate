@@ -1678,51 +1678,50 @@ function KnowledgeBaseAuditView({ kb, job }) {
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-      <AuditInfoPanel
-        icon="psychology"
-        title="Enrichissement Knowledge Base"
-        detail={`RNCP ${job.rncp_code || '?'} · ${formatAuditNumber(stats.completed ?? entries.length)} compétence(s) enrichie(s) · ${formatAuditNumber(stats.total_words || 0)} mots.`}
-      >
-        <AuditKeyValueGrid rows={[
-          ['Total compétences', stats.total ?? entries.length],
-          ['Complétées', stats.completed ?? entries.filter(e => e.status === 'completed').length],
-          ['Erreurs', stats.error ?? 0],
-          ['Mots enrichis', formatAuditNumber(stats.total_words || 0)],
-        ]} />
-      </AuditInfoPanel>
-      {entries.slice(0, 12).map((entry, index) => (
-        <details key={entry.id || entry.competence_index || index} open={index === 0} style={{
-          background: 'rgba(15,23,42,0.48)',
-          border: '1px solid rgba(148,163,184,0.14)',
-          borderRadius: '10px',
-          overflow: 'hidden',
+    <div>
+      <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', marginBottom: '14px' }}>
+        <div style={{
+          padding: '10px 16px', borderRadius: '10px',
+          background: 'rgba(16,185,129,0.08)',
+          border: '1px solid rgba(16,185,129,0.25)',
         }}>
-          <summary style={{ cursor: 'pointer', listStyle: 'none', padding: '13px 14px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap' }}>
-              <span style={{ color: '#e2e8f0', fontWeight: 900 }}>
-                {entry.competence_title || entry.title || `Compétence ${index + 1}`}
-              </span>
-              <span style={{ color: '#94a3b8', fontSize: '12px' }}>
-                {formatAuditNumber(entry.word_count || countAuditWords(entry.definition_pedagogique || ''))} mots
-              </span>
-            </div>
-          </summary>
-          <div style={{ padding: '12px', borderTop: '1px solid rgba(148,163,184,0.10)' }}>
-            <AuditTextBlock text={[
-              entry.definition_pedagogique,
-              entry.contexte_terrain,
-              formatKbList('Études de cas', entry.etudes_de_cas),
-              formatKbList('Pièges fréquents', entry.pieges_frequents),
-            ].filter(Boolean).join('\n\n')} empty="Aucun contenu détaillé disponible pour cette compétence." />
+          <div style={{ fontSize: '22px', fontWeight: 700, color: '#34d399' }}>
+            {stats.completed ?? entries.filter(e => e.status === 'completed').length}
           </div>
-        </details>
-      ))}
-      {entries.length > 12 && (
-        <div style={{ color: '#94a3b8', fontSize: '12px' }}>
-          Aperçu limité aux 12 premières compétences pour garder la modale lisible.
+          <div style={{ fontSize: '11px', color: '#64748b', marginTop: 2 }}>compétences enrichies</div>
         </div>
-      )}
+        <div style={{
+          padding: '10px 16px', borderRadius: '10px',
+          background: 'rgba(139,92,246,0.08)',
+          border: '1px solid rgba(139,92,246,0.25)',
+        }}>
+          <div style={{ fontSize: '22px', fontWeight: 700, color: '#a78bfa' }}>
+            {Number(stats.total_words || 0) >= 1000 ? `${(Number(stats.total_words || 0) / 1000).toFixed(1)}k` : (stats.total_words || 0)}
+          </div>
+          <div style={{ fontSize: '11px', color: '#64748b', marginTop: 2 }}>mots dans la KB</div>
+        </div>
+        {Number(stats.error || 0) > 0 && (
+          <div style={{
+            padding: '10px 16px', borderRadius: '10px',
+            background: 'rgba(239,68,68,0.08)',
+            border: '1px solid rgba(239,68,68,0.25)',
+          }}>
+            <div style={{ fontSize: '22px', fontWeight: 700, color: '#f87171' }}>{stats.error}</div>
+            <div style={{ fontSize: '11px', color: '#64748b', marginTop: 2 }}>compétences en erreur</div>
+          </div>
+        )}
+      </div>
+
+      <details style={{ marginBottom: '14px' }} open>
+        <summary style={{ cursor: 'pointer', fontSize: '13px', color: '#a78bfa', marginBottom: '10px' }}>
+          Voir le détail des compétences enrichies ({entries.length})
+        </summary>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '10px', maxHeight: '620px', overflowY: 'auto' }}>
+          {entries.map((entry, index) => (
+            <KnowledgeBaseEntryDetails key={entry.id || entry.competence_index || index} entry={entry} />
+          ))}
+        </div>
+      </details>
     </div>
   )
 }
@@ -1745,7 +1744,9 @@ function GlobalProgramAuditView({ job }) {
       title="Programme global"
       detail={`${formatAuditNumber(countAuditWords(text))} mots · validation ${job.global_program_validated ? 'effectuée' : 'en attente'}.`}
     >
-      <AuditTextBlock text={text} />
+      <div style={{ background: 'rgba(15,23,42,0.6)', borderRadius: '10px', padding: '16px', maxHeight: '560px', overflowY: 'auto', fontSize: '13px', color: '#cbd5e1', lineHeight: '1.6', whiteSpace: 'pre-wrap', fontFamily: 'monospace' }}>
+        {text}
+      </div>
     </AuditInfoPanel>
   )
 }
@@ -1764,62 +1765,175 @@ function DailyProgramsAuditView({ job }) {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-      <AuditInfoPanel
-        icon="calendar_view_week"
-        title="Découpage par journée"
-        detail={`${programs.length} journée${programs.length > 1 ? 's' : ''} · validation ${job.daily_programs_validated ? 'effectuée' : 'en attente'}.`}
-      >
-        <AuditKeyValueGrid rows={[
-          ['Journées prévues', job.nb_days || programs.length],
-          ['Journées générées', programs.length],
-          ['Source', job.daily_programs_generated_via || 'api'],
-        ]} />
-      </AuditInfoPanel>
-      {programs.map((day, index) => {
-        const courses = Array.isArray(day.courses) ? day.courses : Array.isArray(day.modules) ? day.modules : []
-        return (
-          <details key={day.day_number || index} open={index === 0} style={{
-            background: 'rgba(15,23,42,0.48)',
-            border: '1px solid rgba(148,163,184,0.14)',
-            borderRadius: '10px',
-            overflow: 'hidden',
-          }}>
-            <summary style={{ cursor: 'pointer', listStyle: 'none', padding: '13px 14px' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap' }}>
-                <span style={{ color: '#e2e8f0', fontWeight: 900 }}>
-                  Journée {day.day_number || index + 1} · {day.title || day.day_title || 'Programme journée'}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap' }}>
+        <span style={{ fontSize: '13px', color: '#94a3b8' }}>
+          {programs.length} journées générées. Validation {job.daily_programs_validated ? 'effectuée' : 'en attente'}.
+        </span>
+        <span style={S.tag(job.daily_programs_validated ? 'green' : 'violet')}>
+          <Icon name={job.daily_programs_validated ? 'check' : 'calendar_view_week'} />
+          {job.daily_programs_validated ? 'Journées validées' : `${job.nb_days || programs.length} jours prévus`}
+        </span>
+      </div>
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+        {programs.map((day, index) => (
+          <DailyProgramAuditDay key={day.day_number || index} day={day} index={index} initiallyOpen={index === 0} />
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function KnowledgeBaseEntryDetails({ entry }) {
+  return (
+    <details style={{
+      borderRadius: '8px',
+      background: 'rgba(15,23,42,0.5)',
+      borderLeft: `3px solid ${entry.status === 'completed' ? '#34d399' : entry.status === 'error' ? '#f87171' : '#64748b'}`,
+    }}>
+      <summary style={{ cursor: 'pointer', padding: '10px 14px', listStyle: 'none' }}>
+        <div style={{ color: '#cbd5e1', fontWeight: 500, fontSize: '13px' }}>{entry.competence_title || entry.title || 'Compétence'}</div>
+        <div style={{ color: '#64748b', marginTop: 2, fontSize: '11px' }}>
+          {entry.bloc || 'Bloc non renseigné'} · {entry.status === 'completed' ? `${entry.total_words || entry.word_count || 0} mots` : entry.status}
+          {entry.error_message && <span style={{ color: '#f87171' }}> — {entry.error_message}</span>}
+        </div>
+      </summary>
+      {entry.status === 'completed' && (
+        <div style={{ padding: '4px 14px 16px 14px', fontSize: '12px', color: '#cbd5e1', lineHeight: 1.6 }}>
+          {entry.definition_pedagogique && (
+            <div style={{ marginTop: '10px' }}>
+              <div style={kbSectionTitleStyle}>Définition pédagogique</div>
+              <div style={{ whiteSpace: 'pre-wrap' }}>{entry.definition_pedagogique}</div>
+            </div>
+          )}
+          {entry.contexte_terrain && (
+            <div style={{ marginTop: '12px' }}>
+              <div style={kbSectionTitleStyle}>Contexte terrain</div>
+              <div style={{ whiteSpace: 'pre-wrap' }}>{entry.contexte_terrain}</div>
+            </div>
+          )}
+          {Array.isArray(entry.etudes_de_cas) && entry.etudes_de_cas.length > 0 && (
+            <div style={{ marginTop: '12px' }}>
+              <div style={kbSectionTitleStyle}>Études de cas ({entry.etudes_de_cas.length})</div>
+              {entry.etudes_de_cas.map((cas, idx) => (
+                <div key={idx} style={{ marginBottom: '10px', padding: '8px 12px', background: 'rgba(139,92,246,0.06)', borderLeft: '2px solid rgba(139,92,246,0.4)', borderRadius: '4px' }}>
+                  <div style={{ fontWeight: 600, color: '#e2e8f0', marginBottom: '4px' }}>{cas.titre || cas.title || `Cas ${idx + 1}`}</div>
+                  {cas.situation && <div><strong style={{ color: '#94a3b8' }}>Situation :</strong> {cas.situation}</div>}
+                  {cas.enjeu && <div style={{ marginTop: '3px' }}><strong style={{ color: '#94a3b8' }}>Enjeu :</strong> {cas.enjeu}</div>}
+                  {cas.resolution_attendue && <div style={{ marginTop: '3px' }}><strong style={{ color: '#94a3b8' }}>Résolution :</strong> {cas.resolution_attendue}</div>}
+                  {cas.variantes && <div style={{ marginTop: '3px' }}><strong style={{ color: '#94a3b8' }}>Variantes :</strong> {cas.variantes}</div>}
+                </div>
+              ))}
+            </div>
+          )}
+          {Array.isArray(entry.pieges_frequents) && entry.pieges_frequents.length > 0 && (
+            <div style={{ marginTop: '12px' }}>
+              <div style={kbSectionTitleStyle}>Pièges fréquents ({entry.pieges_frequents.length})</div>
+              {entry.pieges_frequents.map((p, idx) => (
+                <div key={idx} style={{ marginBottom: '8px', padding: '8px 12px', background: 'rgba(239,68,68,0.05)', borderLeft: '2px solid rgba(239,68,68,0.35)', borderRadius: '4px' }}>
+                  <div style={{ fontWeight: 600, color: '#e2e8f0', marginBottom: '3px' }}>{p.piege || p.title || `Piège ${idx + 1}`}</div>
+                  {p.pourquoi_frequent && <div><strong style={{ color: '#94a3b8' }}>Pourquoi :</strong> {p.pourquoi_frequent}</div>}
+                  {p.comment_eviter && <div style={{ marginTop: '3px' }}><strong style={{ color: '#94a3b8' }}>Comment éviter :</strong> {p.comment_eviter}</div>}
+                </div>
+              ))}
+            </div>
+          )}
+          {entry.vocabulaire_metier && Object.keys(entry.vocabulaire_metier).length > 0 && (
+            <div style={{ marginTop: '12px' }}>
+              <div style={kbSectionTitleStyle}>Vocabulaire métier ({Object.keys(entry.vocabulaire_metier).length})</div>
+              <dl style={{ margin: 0 }}>
+                {Object.entries(entry.vocabulaire_metier).map(([terme, def], idx) => (
+                  <div key={idx} style={{ marginBottom: '6px' }}>
+                    <dt style={{ display: 'inline', fontWeight: 600, color: '#34d399' }}>{terme}</dt>
+                    <dd style={{ display: 'inline', margin: 0, marginLeft: '6px', color: '#cbd5e1' }}>: {def}</dd>
+                  </div>
+                ))}
+              </dl>
+            </div>
+          )}
+          {Array.isArray(entry.liens_connexes) && entry.liens_connexes.length > 0 && (
+            <div style={{ marginTop: '12px', color: '#64748b', fontSize: '11px', fontStyle: 'italic' }}>
+              Liens connexes : {entry.liens_connexes.join(', ')}
+            </div>
+          )}
+        </div>
+      )}
+    </details>
+  )
+}
+
+const kbSectionTitleStyle = {
+  color: '#a78bfa',
+  fontWeight: 600,
+  fontSize: '11px',
+  textTransform: 'uppercase',
+  letterSpacing: '0.05em',
+  marginBottom: '4px',
+}
+
+function DailyProgramAuditDay({ day, index, initiallyOpen }) {
+  const subParts = Array.isArray(day.sub_parts)
+    ? day.sub_parts
+    : Array.isArray(day.courses)
+      ? day.courses.map(course => ({
+          name: course.course_title || course.title,
+          content: course.module_content || course.description || course.objective,
+        }))
+      : Array.isArray(day.modules)
+        ? day.modules
+        : []
+
+  return (
+    <details open={initiallyOpen} style={{ background: 'rgba(15,23,42,0.5)', borderRadius: '10px', border: '1px solid rgba(99,102,241,0.15)', overflow: 'hidden' }}>
+      <summary style={{ cursor: 'pointer', listStyle: 'none' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', padding: '12px 16px' }}>
+          <div style={{ minWidth: 0 }}>
+            <span style={{ fontWeight: 600, fontSize: '14px', color: '#e2e8f0' }}>Jour {day.day_number || index + 1}</span>
+            <span style={{ color: '#64748b', fontSize: '13px', marginLeft: '10px' }}>{day.title || day.day_title || 'Programme journée'}</span>
+          </div>
+          <span style={{ fontSize: '12px', color: '#64748b', whiteSpace: 'nowrap' }}>{subParts.length} modules</span>
+        </div>
+      </summary>
+
+      <div style={{ padding: '10px 16px 14px', borderTop: '1px solid rgba(99,102,241,0.12)' }}>
+        {subParts.length > 0 ? (
+          <>
+            <div style={{ fontSize: '12px', color: '#64748b', marginBottom: '12px' }}>
+              {subParts.map((sp, si) => (
+                <span key={si} style={{ display: 'inline-block', background: 'rgba(139,92,246,0.08)', border: '1px solid rgba(139,92,246,0.15)', borderRadius: '6px', padding: '2px 8px', margin: '2px', fontSize: '11px', color: '#a78bfa' }}>
+                  {sp.name || sp.course_title || sp.title || `Module ${si + 1}`}
                 </span>
-                <span style={{ color: '#94a3b8', fontSize: '12px' }}>
-                  {courses.length} thème{courses.length > 1 ? 's' : ''}
-                </span>
-              </div>
-            </summary>
-            <div style={{ padding: '12px', borderTop: '1px solid rgba(148,163,184,0.10)', display: 'flex', flexDirection: 'column', gap: '10px' }}>
-              {day.objective && <AuditTextBlock text={day.objective} />}
-              {courses.length > 0 ? courses.map((course, courseIndex) => (
-                <div key={course.course_number || courseIndex} style={{
+              ))}
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '10px' }}>
+              {subParts.map((sp, si) => (
+                <div key={si} style={{
                   padding: '10px 11px',
                   borderRadius: '8px',
                   background: 'rgba(2,6,23,0.34)',
                   border: '1px solid rgba(148,163,184,0.10)',
                 }}>
-                  <div style={{ color: '#e2e8f0', fontWeight: 800, fontSize: '13px' }}>
-                    Thème {course.course_number || courseIndex + 1} · {course.course_title || course.title || 'Sans titre'}
+                  <div style={{ color: '#e2e8f0', fontWeight: 800, fontSize: '12.5px' }}>
+                    {sp.name || sp.course_title || sp.title || `Module ${si + 1}`}
                   </div>
-                  {(course.module_content || course.description || course.objective) && (
+                  {(sp.content || sp.module_content || sp.description || sp.objective) && (
                     <div style={{ color: '#94a3b8', fontSize: '12px', lineHeight: 1.55, marginTop: '6px' }}>
-                      {course.module_content || course.description || course.objective}
+                      {sp.content || sp.module_content || sp.description || sp.objective}
                     </div>
                   )}
                 </div>
-              )) : (
-                <AuditTextBlock text={JSON.stringify(day, null, 2)} />
-              )}
+              ))}
             </div>
-          </details>
-        )
-      })}
-    </div>
+          </>
+        ) : (
+          <AuditEmptyState
+            icon="info"
+            title="Aucun module lisible"
+            detail="La journée existe, mais elle ne contient pas de liste sub_parts/courses exploitable."
+          />
+        )}
+      </div>
+    </details>
   )
 }
 
@@ -1890,15 +2004,6 @@ function parseDailyProgramsForAudit(raw) {
   } catch {
     return []
   }
-}
-
-function formatKbList(title, value) {
-  if (!Array.isArray(value) || value.length === 0) return ''
-  return `${title}\n${value.map(item => {
-    if (typeof item === 'string') return `- ${item}`
-    if (item && typeof item === 'object') return `- ${item.titre || item.title || item.nom || ''} ${item.description || item.detail || item.contenu || ''}`.trim()
-    return `- ${String(item)}`
-  }).join('\n')}`
 }
 
 function SlidesDeckAuditView({ decks }) {
