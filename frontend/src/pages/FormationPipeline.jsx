@@ -1181,6 +1181,7 @@ function PipelineVisualMap({ job, currentStep, autoPilotState, contentFolders, d
       title: 'Initialisation RNCP et plateforme',
       detail: `Job ${job.job_label || `#${job.id}`} créé, plateforme cible verrouillée.`,
       icon: 'search',
+      auditMode: 'job_init',
       done: currentStep > 0 || autoPassed('start'),
       active: currentStep === 0 || autoActive('start'),
     },
@@ -1189,6 +1190,7 @@ function PipelineVisualMap({ job, currentStep, autoPilotState, contentFolders, d
       title: 'Téléchargement REAC',
       detail: 'Sources officielles récupérées avant enrichissement métier.',
       icon: 'download',
+      auditMode: 'reac',
       done: Boolean(job.reac_available) || currentStep > 1 || autoPassed('reac'),
       active: job.status === 'reac_fetching' || autoActive('reac'),
     },
@@ -1197,6 +1199,7 @@ function PipelineVisualMap({ job, currentStep, autoPilotState, contentFolders, d
       title: 'Enrichissement Knowledge Base',
       detail: 'Compétences, cas terrain, pièges fréquents et vocabulaire métier.',
       icon: 'psychology',
+      auditMode: 'kb',
       done: (job.kb_total || 0) > 0 || currentStep > 2 || autoPassed('kb'),
       active: job.status === 'kb_building' || autoActive('kb'),
     },
@@ -1205,6 +1208,7 @@ function PipelineVisualMap({ job, currentStep, autoPilotState, contentFolders, d
       title: 'Programme global',
       detail: 'Architecture complète de la formation à partir du REAC enrichi.',
       icon: 'auto_stories',
+      auditMode: 'global_program',
       done: Boolean(job.global_program_validated) || currentStep > 3 || autoPassed('global'),
       active: job.status === 'global_generating' || autoActive('global'),
     },
@@ -1213,6 +1217,7 @@ function PipelineVisualMap({ job, currentStep, autoPilotState, contentFolders, d
       title: 'Programmes journée',
       detail: 'Découpage pédagogique par journées, thèmes et chapitres.',
       icon: 'calendar_view_week',
+      auditMode: 'daily_programs',
       done: Boolean(job.daily_programs_validated) || currentStep > 4 || autoPassed('daily'),
       active: job.status === 'daily_splitting' || autoActive('daily'),
     },
@@ -1405,7 +1410,7 @@ function pipelineStageStatusLabel(stage) {
 }
 
 function PipelineStepAuditModal({ job, stage, index, folders, events, onClose }) {
-  const [payload, setPayload] = useState({ artifacts: [], reports: [], slideDecks: [] })
+  const [payload, setPayload] = useState({ artifacts: [], reports: [], slideDecks: [], kb: null })
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
 
@@ -1421,8 +1426,19 @@ function PipelineStepAuditModal({ job, stage, index, folders, events, onClose })
       const artifacts = []
       const reports = []
       const slideDecks = []
+      let kb = null
 
       try {
+        if (stage.auditMode === 'kb') {
+          try {
+            const resp = await fetch(apiUrl(`/api/formation/${job.id}/kb`), { credentials: 'include' })
+            const data = await resp.json()
+            kb = resp.ok ? { entries: data.entries || [], stats: data.stats || {}, error: '' } : { entries: [], stats: {}, error: data.error || 'Knowledge Base indisponible' }
+          } catch {
+            kb = { entries: [], stats: {}, error: 'Erreur réseau Knowledge Base' }
+          }
+        }
+
         if (artifactNames.length > 0) {
           const artifactResults = await Promise.all(
             folderList.flatMap(folder =>
@@ -1484,7 +1500,7 @@ function PipelineStepAuditModal({ job, stage, index, folders, events, onClose })
           slideDecks.push(...deckResults)
         }
 
-        if (!cancelled) setPayload({ artifacts, reports, slideDecks })
+        if (!cancelled) setPayload({ artifacts, reports, slideDecks, kb })
       } catch (e) {
         if (!cancelled) setError('Impossible de charger le détail de cette étape.')
       } finally {
@@ -1545,6 +1561,21 @@ function PipelineStepAuditModal({ job, stage, index, folders, events, onClose })
           {loading && <div style={{ color: '#94a3b8', fontSize: '13px' }}>Chargement du détail…</div>}
           {error && <div style={{ color: '#f87171', fontSize: '13px' }}><Icon name="error" /> {error}</div>}
 
+          {!loading && stage.auditMode === 'job_init' && (
+            <JobInitializationAuditView job={job} folders={folderList} />
+          )}
+          {!loading && stage.auditMode === 'reac' && (
+            <ReacAuditView job={job} />
+          )}
+          {!loading && stage.auditMode === 'kb' && (
+            <KnowledgeBaseAuditView kb={payload.kb} job={job} />
+          )}
+          {!loading && stage.auditMode === 'global_program' && (
+            <GlobalProgramAuditView job={job} />
+          )}
+          {!loading && stage.auditMode === 'daily_programs' && (
+            <DailyProgramsAuditView job={job} />
+          )}
           {!loading && stage.auditMode === 'ethical_micro' && (
             <EthicalMicroAuditView artifacts={payload.artifacts} />
           )}
@@ -1566,7 +1597,7 @@ function PipelineStepAuditModal({ job, stage, index, folders, events, onClose })
           {!loading && stage.auditMode === 'slides' && (
             <SlidesDeckAuditView decks={payload.slideDecks} />
           )}
-          {!loading && stage.auditMode !== 'ethical_micro' && stage.auditMode !== 'section_generation' && stage.auditMode !== 'plan_adherence' && stage.auditMode !== 'budget_calibration' && stage.auditMode !== 'volume_safety' && stage.auditMode !== 'review_report' && stage.auditMode !== 'slides' && (
+          {!loading && stage.auditMode !== 'job_init' && stage.auditMode !== 'reac' && stage.auditMode !== 'kb' && stage.auditMode !== 'global_program' && stage.auditMode !== 'daily_programs' && stage.auditMode !== 'ethical_micro' && stage.auditMode !== 'section_generation' && stage.auditMode !== 'plan_adherence' && stage.auditMode !== 'budget_calibration' && stage.auditMode !== 'volume_safety' && stage.auditMode !== 'review_report' && stage.auditMode !== 'slides' && (
             <ArtifactAuditView artifacts={payload.artifacts} stage={stage} />
           )}
 
@@ -1584,6 +1615,290 @@ function AuditStatCard({ label, value, color }) {
       <div style={{ color, fontSize: '21px', fontWeight: 800 }}>{value}</div>
     </div>
   )
+}
+
+function JobInitializationAuditView({ job, folders }) {
+  const rows = [
+    ['Job', job.job_label || `#${job.id}`],
+    ['Titre professionnel', job.tp_name || 'Non renseigné'],
+    ['RNCP', job.rncp_code ? `RNCP ${job.rncp_code}` : 'Non renseigné'],
+    ['Plateforme', job.platform_id ? `#${job.platform_id}` : 'Non liée'],
+    ['Durée', `${job.total_hours || 0}h · ${job.nb_days || 0} journée${Number(job.nb_days || 0) > 1 ? 's' : ''}`],
+    ['Statut actuel', job.status || 'Inconnu'],
+    ['Dossiers cours', folders.length],
+  ]
+
+  return (
+    <AuditInfoPanel
+      icon="search"
+      title="Initialisation du module"
+      detail="Cette étape pose le contexte durable du module : RNCP, titre professionnel, durée cible, plateforme et nombre de journées attendues."
+    >
+      <AuditKeyValueGrid rows={rows} />
+    </AuditInfoPanel>
+  )
+}
+
+function ReacAuditView({ job }) {
+  const rows = [
+    ['REAC', job.reac_available ? 'Téléchargé' : 'Non disponible'],
+    ['Taille REAC', `${formatAuditNumber(job.reac_length || 0)} caractères`],
+    ['Référentiel de certification', `${formatAuditNumber(job.rc_length || 0)} caractères`],
+    ['Fiches ROME', `${formatAuditNumber(job.rome_length || 0)} caractères`],
+    ['Source', job.reac_available ? 'France Compétences / extraction backend' : 'En attente de récupération'],
+  ]
+
+  return (
+    <AuditInfoPanel
+      icon="download"
+      title="Sources RNCP récupérées"
+      detail="Le texte brut du REAC n'est pas affiché ici pour garder la modale légère ; l'API expose les tailles et la disponibilité des sources."
+    >
+      <AuditKeyValueGrid rows={rows} />
+    </AuditInfoPanel>
+  )
+}
+
+function KnowledgeBaseAuditView({ kb, job }) {
+  const entries = Array.isArray(kb?.entries) ? kb.entries : []
+  const stats = kb?.stats || {}
+
+  if (kb?.error) {
+    return <AuditEmptyState icon="error" title="Knowledge Base indisponible" detail={kb.error} />
+  }
+
+  if (!entries.length) {
+    return (
+      <AuditEmptyState
+        icon="psychology"
+        title="Aucune compétence enrichie visible"
+        detail="La Knowledge Base n'a pas encore tourné, ou aucune entrée exploitable n'a été renvoyée par l'API."
+      />
+    )
+  }
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+      <AuditInfoPanel
+        icon="psychology"
+        title="Enrichissement Knowledge Base"
+        detail={`RNCP ${job.rncp_code || '?'} · ${formatAuditNumber(stats.completed ?? entries.length)} compétence(s) enrichie(s) · ${formatAuditNumber(stats.total_words || 0)} mots.`}
+      >
+        <AuditKeyValueGrid rows={[
+          ['Total compétences', stats.total ?? entries.length],
+          ['Complétées', stats.completed ?? entries.filter(e => e.status === 'completed').length],
+          ['Erreurs', stats.error ?? 0],
+          ['Mots enrichis', formatAuditNumber(stats.total_words || 0)],
+        ]} />
+      </AuditInfoPanel>
+      {entries.slice(0, 12).map((entry, index) => (
+        <details key={entry.id || entry.competence_index || index} open={index === 0} style={{
+          background: 'rgba(15,23,42,0.48)',
+          border: '1px solid rgba(148,163,184,0.14)',
+          borderRadius: '10px',
+          overflow: 'hidden',
+        }}>
+          <summary style={{ cursor: 'pointer', listStyle: 'none', padding: '13px 14px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap' }}>
+              <span style={{ color: '#e2e8f0', fontWeight: 900 }}>
+                {entry.competence_title || entry.title || `Compétence ${index + 1}`}
+              </span>
+              <span style={{ color: '#94a3b8', fontSize: '12px' }}>
+                {formatAuditNumber(entry.word_count || countAuditWords(entry.definition_pedagogique || ''))} mots
+              </span>
+            </div>
+          </summary>
+          <div style={{ padding: '12px', borderTop: '1px solid rgba(148,163,184,0.10)' }}>
+            <AuditTextBlock text={[
+              entry.definition_pedagogique,
+              entry.contexte_terrain,
+              formatKbList('Études de cas', entry.etudes_de_cas),
+              formatKbList('Pièges fréquents', entry.pieges_frequents),
+            ].filter(Boolean).join('\n\n')} empty="Aucun contenu détaillé disponible pour cette compétence." />
+          </div>
+        </details>
+      ))}
+      {entries.length > 12 && (
+        <div style={{ color: '#94a3b8', fontSize: '12px' }}>
+          Aperçu limité aux 12 premières compétences pour garder la modale lisible.
+        </div>
+      )}
+    </div>
+  )
+}
+
+function GlobalProgramAuditView({ job }) {
+  const text = job.global_program || ''
+  if (!text.trim()) {
+    return (
+      <AuditEmptyState
+        icon="auto_stories"
+        title="Programme global non disponible"
+        detail="Le programme global n'a pas encore été généré ou n'est pas renvoyé par l'API du job."
+      />
+    )
+  }
+
+  return (
+    <AuditInfoPanel
+      icon="auto_stories"
+      title="Programme global"
+      detail={`${formatAuditNumber(countAuditWords(text))} mots · validation ${job.global_program_validated ? 'effectuée' : 'en attente'}.`}
+    >
+      <AuditTextBlock text={text} />
+    </AuditInfoPanel>
+  )
+}
+
+function DailyProgramsAuditView({ job }) {
+  const programs = parseDailyProgramsForAudit(job.daily_programs)
+  if (!programs.length) {
+    return (
+      <AuditEmptyState
+        icon="calendar_view_week"
+        title="Programmes journée non disponibles"
+        detail="Le découpage journée n'a pas encore été généré ou le JSON daily_programs est vide."
+      />
+    )
+  }
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+      <AuditInfoPanel
+        icon="calendar_view_week"
+        title="Découpage par journée"
+        detail={`${programs.length} journée${programs.length > 1 ? 's' : ''} · validation ${job.daily_programs_validated ? 'effectuée' : 'en attente'}.`}
+      >
+        <AuditKeyValueGrid rows={[
+          ['Journées prévues', job.nb_days || programs.length],
+          ['Journées générées', programs.length],
+          ['Source', job.daily_programs_generated_via || 'api'],
+        ]} />
+      </AuditInfoPanel>
+      {programs.map((day, index) => {
+        const courses = Array.isArray(day.courses) ? day.courses : Array.isArray(day.modules) ? day.modules : []
+        return (
+          <details key={day.day_number || index} open={index === 0} style={{
+            background: 'rgba(15,23,42,0.48)',
+            border: '1px solid rgba(148,163,184,0.14)',
+            borderRadius: '10px',
+            overflow: 'hidden',
+          }}>
+            <summary style={{ cursor: 'pointer', listStyle: 'none', padding: '13px 14px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap' }}>
+                <span style={{ color: '#e2e8f0', fontWeight: 900 }}>
+                  Journée {day.day_number || index + 1} · {day.title || day.day_title || 'Programme journée'}
+                </span>
+                <span style={{ color: '#94a3b8', fontSize: '12px' }}>
+                  {courses.length} thème{courses.length > 1 ? 's' : ''}
+                </span>
+              </div>
+            </summary>
+            <div style={{ padding: '12px', borderTop: '1px solid rgba(148,163,184,0.10)', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+              {day.objective && <AuditTextBlock text={day.objective} />}
+              {courses.length > 0 ? courses.map((course, courseIndex) => (
+                <div key={course.course_number || courseIndex} style={{
+                  padding: '10px 11px',
+                  borderRadius: '8px',
+                  background: 'rgba(2,6,23,0.34)',
+                  border: '1px solid rgba(148,163,184,0.10)',
+                }}>
+                  <div style={{ color: '#e2e8f0', fontWeight: 800, fontSize: '13px' }}>
+                    Thème {course.course_number || courseIndex + 1} · {course.course_title || course.title || 'Sans titre'}
+                  </div>
+                  {(course.module_content || course.description || course.objective) && (
+                    <div style={{ color: '#94a3b8', fontSize: '12px', lineHeight: 1.55, marginTop: '6px' }}>
+                      {course.module_content || course.description || course.objective}
+                    </div>
+                  )}
+                </div>
+              )) : (
+                <AuditTextBlock text={JSON.stringify(day, null, 2)} />
+              )}
+            </div>
+          </details>
+        )
+      })}
+    </div>
+  )
+}
+
+function AuditInfoPanel({ icon, title, detail, children }) {
+  return (
+    <div style={{
+      padding: '14px',
+      background: 'rgba(15,23,42,0.48)',
+      border: '1px solid rgba(148,163,184,0.14)',
+      borderRadius: '10px',
+    }}>
+      <div style={{ color: '#e2e8f0', fontWeight: 900, fontSize: '14px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+        <Icon name={icon} /> {title}
+      </div>
+      {detail && (
+        <div style={{ color: '#94a3b8', fontSize: '12px', lineHeight: 1.5, marginTop: '6px', marginBottom: children ? '12px' : 0 }}>
+          {detail}
+        </div>
+      )}
+      {children}
+    </div>
+  )
+}
+
+function AuditKeyValueGrid({ rows }) {
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', gap: '8px' }}>
+      {(rows || []).map(([label, value]) => (
+        <div key={label} style={{
+          padding: '9px 10px',
+          background: 'rgba(2,6,23,0.34)',
+          border: '1px solid rgba(148,163,184,0.10)',
+          borderRadius: '8px',
+        }}>
+          <div style={{ color: '#94a3b8', fontSize: '10.5px', marginBottom: '3px' }}>{label}</div>
+          <div style={{ color: '#e2e8f0', fontSize: '12.5px', fontWeight: 800 }}>{value ?? '—'}</div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function AuditTextBlock({ text, empty = 'Aucun texte disponible.' }) {
+  return (
+    <div style={{
+      color: '#cbd5e1',
+      fontSize: '12px',
+      lineHeight: 1.62,
+      whiteSpace: 'pre-wrap',
+      background: 'rgba(2,6,23,0.42)',
+      border: '1px solid rgba(148,163,184,0.10)',
+      borderRadius: '8px',
+      padding: '12px',
+      maxHeight: '520px',
+      overflow: 'auto',
+    }}>
+      {String(text || '').trim() || empty}
+    </div>
+  )
+}
+
+function parseDailyProgramsForAudit(raw) {
+  if (Array.isArray(raw)) return raw
+  if (!raw) return []
+  try {
+    const parsed = JSON.parse(raw)
+    return Array.isArray(parsed) ? parsed : []
+  } catch {
+    return []
+  }
+}
+
+function formatKbList(title, value) {
+  if (!Array.isArray(value) || value.length === 0) return ''
+  return `${title}\n${value.map(item => {
+    if (typeof item === 'string') return `- ${item}`
+    if (item && typeof item === 'object') return `- ${item.titre || item.title || item.nom || ''} ${item.description || item.detail || item.contenu || ''}`.trim()
+    return `- ${String(item)}`
+  }).join('\n')}`
 }
 
 function SlidesDeckAuditView({ decks }) {
