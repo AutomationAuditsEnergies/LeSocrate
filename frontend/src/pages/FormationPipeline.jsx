@@ -1227,6 +1227,7 @@ function PipelineVisualMap({ job, currentStep, autoPilotState, contentFolders, d
       detail: 'Validation structure, budgets, cours 7, ouvertures et conclusions.',
       icon: 'schema',
       artifacts: ['content-plan.json'],
+      auditMode: 'plan_json',
       done: allContentCompleted || autoPassed('content'),
       active: contentActive,
     },
@@ -1236,6 +1237,7 @@ function PipelineVisualMap({ job, currentStep, autoPilotState, contentFolders, d
       detail: 'Exemples, conseils, pièges, comparaisons et templates associés au plan.',
       icon: 'account_tree',
       artifacts: ['content-plan.json'],
+      auditMode: 'slide_beats',
       done: allContentCompleted || autoPassed('content'),
       active: contentActive,
     },
@@ -1576,6 +1578,12 @@ function PipelineStepAuditModal({ job, stage, index, folders, events, onClose })
           {!loading && stage.auditMode === 'daily_programs' && (
             <DailyProgramsAuditView job={job} />
           )}
+          {!loading && stage.auditMode === 'plan_json' && (
+            <PlanJsonAuditView artifacts={payload.artifacts} />
+          )}
+          {!loading && stage.auditMode === 'slide_beats' && (
+            <SlideBeatsAuditView artifacts={payload.artifacts} />
+          )}
           {!loading && stage.auditMode === 'ethical_micro' && (
             <EthicalMicroAuditView artifacts={payload.artifacts} />
           )}
@@ -1597,7 +1605,7 @@ function PipelineStepAuditModal({ job, stage, index, folders, events, onClose })
           {!loading && stage.auditMode === 'slides' && (
             <SlidesDeckAuditView decks={payload.slideDecks} />
           )}
-          {!loading && stage.auditMode !== 'job_init' && stage.auditMode !== 'reac' && stage.auditMode !== 'kb' && stage.auditMode !== 'global_program' && stage.auditMode !== 'daily_programs' && stage.auditMode !== 'ethical_micro' && stage.auditMode !== 'section_generation' && stage.auditMode !== 'plan_adherence' && stage.auditMode !== 'budget_calibration' && stage.auditMode !== 'volume_safety' && stage.auditMode !== 'review_report' && stage.auditMode !== 'slides' && (
+          {!loading && stage.auditMode !== 'job_init' && stage.auditMode !== 'reac' && stage.auditMode !== 'kb' && stage.auditMode !== 'global_program' && stage.auditMode !== 'daily_programs' && stage.auditMode !== 'plan_json' && stage.auditMode !== 'slide_beats' && stage.auditMode !== 'ethical_micro' && stage.auditMode !== 'section_generation' && stage.auditMode !== 'plan_adherence' && stage.auditMode !== 'budget_calibration' && stage.auditMode !== 'volume_safety' && stage.auditMode !== 'review_report' && stage.auditMode !== 'slides' && (
             <ArtifactAuditView artifacts={payload.artifacts} stage={stage} />
           )}
 
@@ -3819,6 +3827,543 @@ function HighlightedText({ text, highlights, color }) {
         <span key={index}>{part.text}</span>
       ))}
     </>
+  )
+}
+
+function PlanJsonAuditView({ artifacts }) {
+  const days = buildPlanJsonDays(artifacts)
+  if (days.length === 0) {
+    return (
+      <AuditEmptyState
+        icon="schema"
+        title="Aucun plan structuré lisible"
+        detail="L'artefact content-plan.json n'est pas encore disponible, ou il ne contient pas de structured_course_plan exploitable."
+      />
+    )
+  }
+
+  const totals = days.reduce((acc, day) => {
+    acc.courses += day.courses.length
+    acc.words += day.courses.reduce((sum, course) => sum + Number(course.target_words || 0), 0)
+    acc.sections += day.courses.reduce((sum, course) => sum + plannedSectionsForCourse(course).length, 0)
+    acc.slides += day.courses.reduce((sum, course) =>
+      sum + plannedSectionsForCourse(course).reduce((sectionSum, section) => sectionSum + slideBeatsForSection(section.plan).length, 0),
+    0)
+    return acc
+  }, { courses: 0, words: 0, sections: 0, slides: 0 })
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+      <div style={{
+        padding: '12px 14px',
+        background: 'rgba(139,92,246,0.08)',
+        border: '1px solid rgba(139,92,246,0.24)',
+        borderRadius: '10px',
+        color: '#ddd6fe',
+        fontSize: '12px',
+        lineHeight: 1.5,
+      }}>
+        <strong>Lecture de l'étape 6.</strong> Cette vue transforme le plan JSON verrouillé en plan pédagogique lisible : journées, thèmes, budgets, chapitres, contraintes et anchors slides prévus.
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '10px' }}>
+        <AuditStatCard label="Journées" value={days.length} color="#a78bfa" />
+        <AuditStatCard label="Thèmes" value={totals.courses} color="#38bdf8" />
+        <AuditStatCard label="Sections" value={totals.sections} color="#34d399" />
+        <AuditStatCard label="Slides prévues" value={totals.slides} color="#f59e0b" />
+        <AuditStatCard label="Budget mots" value={formatAuditNumber(totals.words)} color="#60a5fa" />
+      </div>
+
+      {days.map((day, index) => (
+        <PlanJsonDayAudit key={day.folder?.folder_id || index} day={day} initiallyOpen={index === 0} />
+      ))}
+    </div>
+  )
+}
+
+function buildPlanJsonDays(artifacts) {
+  return (artifacts || [])
+    .filter(item => item.ok && item.artifact && item.name === 'content-plan.json')
+    .map(item => {
+      const plan = item.artifact.structured_course_plan || item.artifact.course_plan || {}
+      const courses = Array.isArray(plan.courses)
+        ? plan.courses
+        : Array.isArray(item.artifact.courses)
+          ? item.artifact.courses
+          : []
+      return { folder: item.folder || {}, plan, courses }
+    })
+    .filter(day => day.courses.length > 0)
+    .sort((a, b) =>
+      Number(a.folder?.position ?? a.folder?.folder_position ?? a.folder?.folder_id ?? 0) -
+      Number(b.folder?.position ?? b.folder?.folder_position ?? b.folder?.folder_id ?? 0),
+    )
+}
+
+function PlanJsonDayAudit({ day, initiallyOpen }) {
+  const targetWords = day.courses.reduce((sum, course) => sum + Number(course.target_words || 0), 0)
+  const sections = day.courses.reduce((sum, course) => sum + plannedSectionsForCourse(course).length, 0)
+  const slides = day.courses.reduce((sum, course) =>
+    sum + plannedSectionsForCourse(course).reduce((sectionSum, section) => sectionSum + slideBeatsForSection(section.plan).length, 0),
+  0)
+
+  return (
+    <details open={initiallyOpen} style={{
+      background: 'rgba(15,23,42,0.48)',
+      border: '1px solid rgba(148,163,184,0.14)',
+      borderRadius: '12px',
+      overflow: 'hidden',
+    }}>
+      <summary style={{ cursor: 'pointer', listStyle: 'none', padding: '14px 16px', borderBottom: '1px solid rgba(148,163,184,0.12)' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', alignItems: 'center', flexWrap: 'wrap' }}>
+          <span style={{ color: '#e2e8f0', fontWeight: 900 }}>
+            <Icon name="calendar_view_week" /> {folderDisplayName(day.folder)}
+          </span>
+          <span style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+            <SmallMetric label="Thèmes" value={day.courses.length} />
+            <SmallMetric label="Sections" value={sections} />
+            <SmallMetric label="Slides" value={slides} />
+            <SmallMetric label="Budget" value={`${formatAuditNumber(targetWords)} mots`} />
+          </span>
+        </div>
+      </summary>
+      <div style={{ padding: '14px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+        {day.courses.map((course, index) => (
+          <PlanJsonCourseAudit key={course.course_number || index} course={course} initiallyOpen={index === 0} />
+        ))}
+      </div>
+    </details>
+  )
+}
+
+function PlanJsonCourseAudit({ course, initiallyOpen }) {
+  const sections = plannedSectionsForCourse(course)
+  const targetWords = Number(course.target_words || 0)
+  const slides = sections.reduce((sum, section) => sum + slideBeatsForSection(section.plan).length, 0)
+  const constraints = collectPlanConstraints(course)
+
+  return (
+    <details open={initiallyOpen} style={{
+      background: 'rgba(2,6,23,0.34)',
+      border: '1px solid rgba(148,163,184,0.12)',
+      borderRadius: '10px',
+      overflow: 'hidden',
+    }}>
+      <summary style={{ cursor: 'pointer', listStyle: 'none', padding: '13px 14px' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', alignItems: 'flex-start', flexWrap: 'wrap' }}>
+          <div style={{ minWidth: 0 }}>
+            <div style={{ color: '#94a3b8', fontSize: '11px', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+              Thème {course.course_number || '?'} · {courseKindLabel(course.course_kind)}
+            </div>
+            <div style={{ color: '#e2e8f0', fontWeight: 900, fontSize: '15px', marginTop: '3px', lineHeight: 1.35 }}>
+              {course.course_title || 'Thème sans titre'}
+            </div>
+          </div>
+          <span style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+            <SmallMetric label="Budget" value={`${formatAuditNumber(targetWords)} mots`} />
+            <SmallMetric label="Sections" value={sections.length} />
+            <SmallMetric label="Slides" value={slides} />
+          </span>
+        </div>
+      </summary>
+      <div style={{ borderTop: '1px solid rgba(148,163,184,0.10)', padding: '12px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+        {constraints.length > 0 && (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '10px' }}>
+            {constraints.map((constraint, index) => (
+              <PlanConstraintCard key={`${constraint.title}-${index}`} constraint={constraint} />
+            ))}
+          </div>
+        )}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+          {sections.map((section, index) => (
+            <PlanJsonSectionAudit key={`${section.kind}-${section.partNumber || index}`} section={section} />
+          ))}
+        </div>
+      </div>
+    </details>
+  )
+}
+
+function PlanJsonSectionAudit({ section }) {
+  const plan = section.plan || {}
+  const targetWords = Number(plan.target_words || 0)
+  const mustInclude = Array.isArray(plan.must_include) ? plan.must_include : []
+  const mustAvoid = Array.isArray(plan.must_avoid) ? plan.must_avoid : []
+  const slideBeats = slideBeatsForSection(plan)
+
+  return (
+    <div style={{
+      border: '1px solid rgba(148,163,184,0.12)',
+      borderRadius: '10px',
+      background: 'rgba(15,23,42,0.50)',
+      overflow: 'hidden',
+    }}>
+      <div style={{
+        padding: '11px 12px',
+        borderBottom: '1px solid rgba(148,163,184,0.10)',
+        display: 'flex',
+        justifyContent: 'space-between',
+        gap: '10px',
+        flexWrap: 'wrap',
+      }}>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ color: sectionKindColor(section.kind), fontSize: '11px', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+            {sectionKindLabel(section.kind, section.partNumber)}
+          </div>
+          <div style={{ color: '#e2e8f0', fontWeight: 800, fontSize: '13px', marginTop: '2px' }}>
+            {section.title || 'Section'}
+          </div>
+        </div>
+        <span style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+          <SmallMetric label="Budget" value={targetWords ? `${formatAuditNumber(targetWords)} mots` : 'non fixé'} />
+          <SmallMetric label="À couvrir" value={mustInclude.length} />
+          <SmallMetric label="À éviter" value={mustAvoid.length} />
+          <SmallMetric label="Slides" value={slideBeats.length} />
+        </span>
+      </div>
+      <div style={{ padding: '12px', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: '12px' }}>
+        <PlanListBlock title="À couvrir" items={mustInclude} color="#34d399" empty="Aucune contrainte obligatoire." />
+        <PlanListBlock title="À éviter" items={mustAvoid} color="#fb7185" empty="Aucun interdit spécifique." />
+        <div style={{ minWidth: 0 }}>
+          <div style={{ color: '#93c5fd', fontSize: '11px', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '8px' }}>
+            Slides prévues
+          </div>
+          {slideBeats.length === 0 ? (
+            <div style={{ padding: '12px', color: '#64748b', fontSize: '12px', background: 'rgba(2,6,23,0.32)', border: '1px dashed rgba(148,163,184,0.14)', borderRadius: '8px' }}>
+              Section uniquement orale.
+            </div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+              {slideBeats.map((beat, index) => (
+                <PlanSlideBeatCard key={beat.beat_id || index} beat={beat} index={index} />
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function PlanListBlock({ title, items, color, empty }) {
+  return (
+    <div style={{ minWidth: 0 }}>
+      <div style={{ color, fontSize: '11px', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '8px' }}>
+        {title}
+      </div>
+      {items.length === 0 ? (
+        <div style={{ color: '#64748b', fontSize: '12px', padding: '10px', borderRadius: '8px', background: 'rgba(2,6,23,0.28)', border: '1px dashed rgba(148,163,184,0.12)' }}>
+          {empty}
+        </div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+          {items.map((item, index) => (
+            <div key={index} style={{ color: '#cbd5e1', fontSize: '12px', lineHeight: 1.45, padding: '8px 9px', background: `${color}10`, borderLeft: `2px solid ${color}88`, borderRadius: '7px' }}>
+              {String(item)}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function PlanSlideBeatCard({ beat, index }) {
+  const anchor = beat.slide_anchor || {}
+  return (
+    <div style={{ background: 'rgba(30,41,59,0.44)', border: '1px solid rgba(96,165,250,0.18)', borderRadius: '9px', padding: '10px' }}>
+      <div style={{ color: '#93c5fd', fontSize: '11px', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+        Slide {index + 1} · {anchor.template_type || beat.type || 'template'}
+      </div>
+      <div style={{ color: '#e2e8f0', fontWeight: 800, fontSize: '12px', marginTop: '4px', lineHeight: 1.35 }}>
+        {beat.role || anchor.visual_goal || 'Moment pédagogique prévu'}
+      </div>
+      {anchor.visual_goal && (
+        <div style={{ color: '#94a3b8', fontSize: '11px', lineHeight: 1.45, marginTop: '6px' }}>
+          {anchor.visual_goal}
+        </div>
+      )}
+      {anchor.spoken_requirement && (
+        <div style={{ marginTop: '8px', color: '#dbeafe', fontSize: '11px', lineHeight: 1.45, padding: '7px 8px', background: 'rgba(59,130,246,0.10)', borderRadius: '7px' }}>
+          {anchor.spoken_requirement}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function PlanConstraintCard({ constraint }) {
+  return (
+    <div style={{ padding: '10px 11px', borderRadius: '9px', background: 'rgba(2,6,23,0.34)', border: `1px solid ${constraint.color}33` }}>
+      <div style={{ color: constraint.color, fontSize: '11px', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '5px' }}>
+        {constraint.title}
+      </div>
+      <div style={{ color: '#cbd5e1', fontSize: '12px', lineHeight: 1.45 }}>
+        {constraint.value}
+      </div>
+    </div>
+  )
+}
+
+function collectPlanConstraints(course = {}) {
+  const constraints = []
+  if (course.course_kind) constraints.push({ title: 'Type de cours', value: courseKindLabel(course.course_kind), color: '#a78bfa' })
+  if (Number(course.course_number || 0) === 7) constraints.push({ title: 'Cours 7', value: 'Contrôle attendu des transitions, Q/R et conclusion de journée.', color: '#f59e0b' })
+  if (course.opening?.must_include?.length) constraints.push({ title: 'Ouverture', value: `${course.opening.must_include.length} point(s) obligatoires`, color: '#38bdf8' })
+  if (course.course_conclusion?.must_avoid?.length) constraints.push({ title: 'Conclusion', value: `${course.course_conclusion.must_avoid.length} interdit(s) à respecter`, color: '#fb7185' })
+  if (course.day_conclusion) constraints.push({ title: 'Fin de journée', value: 'Conclusion globale prévue dans ce thème.', color: '#34d399' })
+  return constraints
+}
+
+function SlideBeatsAuditView({ artifacts }) {
+  const days = buildSlideBeatDays(artifacts)
+  if (days.length === 0) {
+    return (
+      <AuditEmptyState
+        icon="account_tree"
+        title="Aucun teaching beat exploitable"
+        detail="L'artefact content-plan.json n'est pas encore disponible, ou aucun slide_anchor activé n'a été trouvé dans le plan."
+      />
+    )
+  }
+
+  const totals = days.reduce((acc, day) => {
+    acc.courses += day.courses.length
+    acc.sections += day.sections.length
+    acc.beats += day.beats.length
+    for (const beat of day.beats) {
+      const template = beat.anchor.template_type || beat.beat.type || 'template'
+      acc.templates[template] = (acc.templates[template] || 0) + 1
+    }
+    return acc
+  }, { courses: 0, sections: 0, beats: 0, templates: {} })
+  const topTemplates = Object.entries(totals.templates)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 6)
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+      <div style={{
+        padding: '12px 14px',
+        background: 'rgba(59,130,246,0.08)',
+        border: '1px solid rgba(96,165,250,0.24)',
+        borderRadius: '10px',
+        color: '#bfdbfe',
+        fontSize: '12px',
+        lineHeight: 1.5,
+      }}>
+        <strong>Lecture de l'étape 7.</strong> Cette vue isole les moments visuels prévus par le plan : teaching beats, anchors slides, templates, objectifs visuels, exigences orales et champs suggérés.
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '10px' }}>
+        <AuditStatCard label="Journées" value={days.length} color="#a78bfa" />
+        <AuditStatCard label="Thèmes" value={totals.courses} color="#38bdf8" />
+        <AuditStatCard label="Sections avec slides" value={totals.sections} color="#34d399" />
+        <AuditStatCard label="Anchors slides" value={totals.beats} color="#f59e0b" />
+      </div>
+
+      {topTemplates.length > 0 && (
+        <div style={{
+          display: 'flex',
+          gap: '8px',
+          flexWrap: 'wrap',
+          padding: '12px',
+          borderRadius: '10px',
+          border: '1px solid rgba(148,163,184,0.12)',
+          background: 'rgba(15,23,42,0.38)',
+        }}>
+          {topTemplates.map(([template, count]) => (
+            <span key={template} style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '6px',
+              padding: '6px 9px',
+              borderRadius: '999px',
+              color: '#dbeafe',
+              background: 'rgba(59,130,246,0.12)',
+              border: '1px solid rgba(96,165,250,0.22)',
+              fontSize: '11px',
+              fontWeight: 900,
+            }}>
+              {template} <span style={{ color: '#93c5fd' }}>{count}</span>
+            </span>
+          ))}
+        </div>
+      )}
+
+      {days.map((day, index) => (
+        <SlideBeatDayAudit key={day.folder?.folder_id || index} day={day} initiallyOpen={index === 0} />
+      ))}
+    </div>
+  )
+}
+
+function buildSlideBeatDays(artifacts) {
+  return buildPlanJsonDays(artifacts).map(day => {
+    const sections = []
+    const beats = []
+    for (const course of day.courses) {
+      for (const section of plannedSectionsForCourse(course)) {
+        const sectionBeats = slideBeatsForSection(section.plan).map((beat, index) => ({
+          beat,
+          anchor: beat.slide_anchor || {},
+          index,
+          course,
+          section,
+        }))
+        if (sectionBeats.length > 0) {
+          sections.push({ course, section, beats: sectionBeats })
+          beats.push(...sectionBeats)
+        }
+      }
+    }
+    return { ...day, sections, beats }
+  }).filter(day => day.beats.length > 0)
+}
+
+function SlideBeatDayAudit({ day, initiallyOpen }) {
+  const templates = Array.from(new Set(day.beats.map(item => item.anchor.template_type || item.beat.type || 'template')))
+  return (
+    <details open={initiallyOpen} style={{
+      background: 'rgba(15,23,42,0.48)',
+      border: '1px solid rgba(148,163,184,0.14)',
+      borderRadius: '12px',
+      overflow: 'hidden',
+    }}>
+      <summary style={{ cursor: 'pointer', listStyle: 'none', padding: '14px 16px', borderBottom: '1px solid rgba(148,163,184,0.12)' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', alignItems: 'center', flexWrap: 'wrap' }}>
+          <span style={{ color: '#e2e8f0', fontWeight: 900 }}>
+            <Icon name="calendar_view_week" /> {folderDisplayName(day.folder)}
+          </span>
+          <span style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+            <SmallMetric label="Sections" value={day.sections.length} />
+            <SmallMetric label="Slides" value={day.beats.length} />
+            <SmallMetric label="Templates" value={templates.length} />
+          </span>
+        </div>
+      </summary>
+
+      <div style={{ padding: '14px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+        {day.sections.map((entry, index) => (
+          <SlideBeatSectionAudit key={`${entry.course.course_number}-${entry.section.kind}-${entry.section.partNumber || index}`} entry={entry} />
+        ))}
+      </div>
+    </details>
+  )
+}
+
+function SlideBeatSectionAudit({ entry }) {
+  const { course, section, beats } = entry
+  return (
+    <div style={{
+      border: '1px solid rgba(96,165,250,0.16)',
+      borderRadius: '10px',
+      background: 'rgba(2,6,23,0.34)',
+      overflow: 'hidden',
+    }}>
+      <div style={{
+        padding: '12px 13px',
+        borderBottom: '1px solid rgba(148,163,184,0.10)',
+        display: 'flex',
+        justifyContent: 'space-between',
+        gap: '10px',
+        flexWrap: 'wrap',
+      }}>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ color: '#93c5fd', fontSize: '11px', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+            Thème {course.course_number || '?'} · {sectionKindLabel(section.kind, section.partNumber)}
+          </div>
+          <div style={{ color: '#e2e8f0', fontWeight: 900, fontSize: '14px', marginTop: '3px', lineHeight: 1.35 }}>
+            {course.course_title || 'Thème sans titre'}
+          </div>
+          <div style={{ color: '#94a3b8', fontSize: '12px', marginTop: '3px' }}>
+            {section.title || 'Section'} · {beats.length} slide{beats.length > 1 ? 's' : ''} prévue{beats.length > 1 ? 's' : ''}
+          </div>
+        </div>
+        <SmallMetric label="Budget section" value={section.plan?.target_words ? `${formatAuditNumber(section.plan.target_words)} mots` : 'non fixé'} />
+      </div>
+
+      <div style={{ padding: '12px', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '12px' }}>
+        {beats.map((item, index) => (
+          <SlideBeatAnchorCard key={item.beat.beat_id || item.anchor.anchor_id || index} item={item} index={index} />
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function SlideBeatAnchorCard({ item, index }) {
+  const { beat, anchor } = item
+  const fields = anchor.fields_hint || {}
+  const fieldItems = Array.isArray(fields.items) ? fields.items : []
+  return (
+    <div style={{
+      background: 'rgba(15,23,42,0.64)',
+      border: '1px solid rgba(96,165,250,0.20)',
+      borderRadius: '10px',
+      overflow: 'hidden',
+    }}>
+      <div style={{ padding: '11px 12px', borderBottom: '1px solid rgba(148,163,184,0.10)' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', alignItems: 'flex-start' }}>
+          <div style={{ minWidth: 0 }}>
+            <div style={{ color: '#93c5fd', fontSize: '11px', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+              Slide {index + 1} · {anchor.template_type || beat.type || 'template'}
+            </div>
+            <div style={{ color: '#e2e8f0', fontWeight: 900, fontSize: '13px', lineHeight: 1.35, marginTop: '4px' }}>
+              {beat.role || anchor.visual_goal || 'Moment pédagogique prévu'}
+            </div>
+          </div>
+          {anchor.anchor_id && (
+            <span style={{ color: '#64748b', fontSize: '10px', fontWeight: 800, whiteSpace: 'nowrap' }}>
+              {anchor.anchor_id}
+            </span>
+          )}
+        </div>
+      </div>
+
+      <div style={{ padding: '11px 12px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+        <SlideBeatInfoBlock title="Objectif visuel" text={anchor.visual_goal || beat.visual_goal} color="#38bdf8" />
+        <SlideBeatInfoBlock title="Exigence orale" text={anchor.spoken_requirement || beat.spoken_requirement} color="#34d399" />
+        <SlideBeatInfoBlock title="Résumé pédagogique" text={beat.summary || beat.event_summary || beat.description} color="#f59e0b" />
+
+        {(fields.text || fieldItems.length > 0) && (
+          <div>
+            <div style={{ color: '#c4b5fd', fontSize: '11px', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '7px' }}>
+              Champs suggérés
+            </div>
+            {fields.text && (
+              <div style={{ color: '#ddd6fe', fontSize: '12px', lineHeight: 1.45, padding: '8px 9px', background: 'rgba(139,92,246,0.10)', borderRadius: '8px', marginBottom: fieldItems.length ? '7px' : 0 }}>
+                {fields.text}
+              </div>
+            )}
+            {fieldItems.length > 0 && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                {fieldItems.slice(0, 5).map((field, fieldIndex) => (
+                  <div key={fieldIndex} style={{ color: '#cbd5e1', fontSize: '12px', lineHeight: 1.4, padding: '7px 8px', background: 'rgba(2,6,23,0.32)', borderRadius: '7px' }}>
+                    <strong style={{ color: '#bfdbfe' }}>{field.title || `Élément ${fieldIndex + 1}`}</strong>
+                    {field.description ? ` — ${field.description}` : ''}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function SlideBeatInfoBlock({ title, text, color }) {
+  if (!text) return null
+  return (
+    <div>
+      <div style={{ color, fontSize: '11px', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '5px' }}>
+        {title}
+      </div>
+      <div style={{ color: '#cbd5e1', fontSize: '12px', lineHeight: 1.45, padding: '8px 9px', background: `${color}10`, borderLeft: `2px solid ${color}88`, borderRadius: '7px' }}>
+        {text}
+      </div>
+    </div>
   )
 }
 
