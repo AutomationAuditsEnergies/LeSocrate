@@ -50,6 +50,7 @@ PACE_PROFILES = {
 }
 
 SUPPORTED_TEMPLATES = {
+    "context",
     "reflection",
     "casestudy",
     "facilitator",
@@ -94,6 +95,7 @@ TEMPLATE_ALIASES = {
 }
 
 EVENT_TYPES = {
+    "filler",
     "recap",
     "story",
     "definition",
@@ -1101,6 +1103,7 @@ def _generate_batch(blocks: list[dict], source_title: str, model: str, pace_prof
 
 
 def _build_final_slide(slide: dict, block: dict, slide_number: int) -> dict:
+    slide_kind = slide.get("slide_kind") or ("anchor" if slide.get("slide_anchor_id") else "generated")
     return {
         "slide_id": f"script-s{slide_number + 1:03d}-b{block['source_block_id'] + 1:03d}",
         "trigger_time": None,
@@ -1112,6 +1115,8 @@ def _build_final_slide(slide: dict, block: dict, slide_number: int) -> dict:
         "slide_anchor_id": slide.get("slide_anchor_id"),
         "beat_id": slide.get("beat_id"),
         "anchor_role": slide.get("anchor_role"),
+        "slide_kind": slide_kind,
+        "transition_effect": slide.get("transition_effect") or ("swipe-left-to-right" if slide_kind == "anchor" else "fade"),
         "source_text": block["text"],
         "source_ref": {
             "source_block_id": block["source_block_id"],
@@ -1126,6 +1131,143 @@ def _build_final_slide(slide: dict, block: dict, slide_number: int) -> dict:
         "importance": slide.get("importance", 3),
         **({"fallback_reason": slide["fallback_reason"]} if slide.get("fallback_reason") else {}),
     }
+
+
+def _slide_word_range(slide: dict) -> tuple[int, int] | None:
+    source_ref = slide.get("source_ref") or {}
+    try:
+        start = int(source_ref.get("word_start"))
+        end = int(source_ref.get("word_end"))
+    except (TypeError, ValueError):
+        return None
+    if end <= start:
+        return None
+    return start, end
+
+
+def _blocks_for_word_range(source_blocks: list[dict], start: int, end: int) -> list[dict]:
+    return [
+        block
+        for block in source_blocks
+        if int(block.get("word_end") or 0) > start and int(block.get("word_start") or 0) < end
+    ]
+
+
+def _chapter_label_for_blocks(blocks: list[dict]) -> str:
+    names = []
+    seen = set()
+    for block in blocks:
+        name = str(block.get("sub_part_name") or "").strip()
+        if not name or name in seen:
+            continue
+        names.append(name)
+        seen.add(name)
+        if len(names) >= 3:
+            break
+    return " · ".join(names) if names else "Séquence en cours"
+
+
+def _text_for_word_range(blocks: list[dict], start: int, end: int) -> str:
+    excerpts = []
+    for block in blocks:
+        block_start = int(block.get("word_start") or 0)
+        words = str(block.get("text") or "").split()
+        local_start = max(0, start - block_start)
+        local_end = min(len(words), end - block_start)
+        if local_end > local_start:
+            excerpts.append(" ".join(words[local_start:local_end]))
+    return "\n\n".join(excerpts).strip()
+
+
+def _build_context_slide(source: dict, source_blocks: list[dict], start: int, end: int, slide_number: int) -> dict | None:
+    gap_blocks = _blocks_for_word_range(source_blocks, start, end)
+    if not gap_blocks:
+        return None
+
+    source_text = _text_for_word_range(gap_blocks, start, end)
+    word_count = max(0, end - start)
+    chapter = _chapter_label_for_blocks(gap_blocks)
+    first = gap_blocks[0]
+    last = gap_blocks[-1]
+    source_refs = []
+    for block in gap_blocks:
+        source_refs.extend(block.get("source_refs") or [])
+
+    return {
+        "slide_id": f"script-s{slide_number + 1:03d}-context-w{start:05d}",
+        "trigger_time": None,
+        "end_time": None,
+        "template_type": "context",
+        "data": {
+            "formation_name": source.get("program_title") or source.get("folder_name") or "Formation",
+            "chapter": chapter,
+            "label": source.get("folder_name") or "",
+        },
+        "event_type": "filler",
+        "event_summary": f"Contexte visuel pendant : {chapter}",
+        "slide_anchor_id": None,
+        "beat_id": "",
+        "anchor_role": "",
+        "slide_kind": "context",
+        "transition_effect": "fade",
+        "source_text": source_text,
+        "source_ref": {
+            "source_block_id": first["source_block_id"],
+            "word_start": start,
+            "word_end": end,
+            "word_count": word_count,
+            "sub_part_index": first.get("sub_part_index"),
+            "sub_part_name": chapter,
+            "segments": source_refs,
+            "slide_anchors": [],
+            "context_gap": True,
+            "source_block_start": first.get("source_block_id"),
+            "source_block_end": last.get("source_block_id"),
+        },
+        "importance": 1,
+    }
+
+
+def _insert_context_slides_for_gaps(final_slides: list[dict], source_blocks: list[dict], source: dict, total_words: int) -> tuple[list[dict], int]:
+    if not final_slides:
+        context = _build_context_slide(source, source_blocks, 0, total_words, 0)
+        return ([context] if context else []), 1 if context else 0
+
+    ordered = sorted(final_slides, key=lambda slide: (_slide_word_range(slide) or (10**12, 10**12))[0])
+    with_context = []
+    cursor = 0
+    inserted = 0
+
+    for slide in ordered:
+        word_range = _slide_word_range(slide)
+        if not word_range:
+            continue
+        start, end = word_range
+        if start > cursor:
+            context = _build_context_slide(source, source_blocks, cursor, start, len(with_context))
+            if context:
+                with_context.append(context)
+                inserted += 1
+        slide["slide_kind"] = "anchor" if slide.get("slide_anchor_id") else "generated"
+        slide["transition_effect"] = "swipe-left-to-right" if slide["slide_kind"] == "anchor" else "fade"
+        with_context.append(slide)
+        cursor = max(cursor, end)
+
+    if total_words > cursor:
+        context = _build_context_slide(source, source_blocks, cursor, total_words, len(with_context))
+        if context:
+            with_context.append(context)
+            inserted += 1
+
+    for idx, slide in enumerate(with_context):
+        old_id = slide.get("slide_id") or f"script-s{idx + 1:03d}"
+        if slide.get("slide_kind") == "context":
+            slide["slide_id"] = f"script-s{idx + 1:03d}-context"
+        else:
+            suffix = old_id.split("-b", 1)[1] if "-b" in old_id else f"{idx + 1:03d}"
+            slide["slide_id"] = f"script-s{idx + 1:03d}-b{suffix}"
+
+    return with_context, inserted
 
 
 def _cap_planned_slides(slides: list[dict], max_slides: int) -> tuple[list[dict], int]:
@@ -1257,6 +1399,12 @@ def generate_slides_from_script(
             }
         )
 
+    dropped_unanchored = 0
+    if slide_anchors:
+        before_anchor_filter = len(planned)
+        planned = [slide for slide in planned if slide.get("slide_anchor_id")]
+        dropped_unanchored = before_anchor_filter - len(planned)
+
     planned, dropped_by_cap = _cap_planned_slides(planned, max_slides)
 
     block_by_id = {block["source_block_id"]: block for block in source_blocks}
@@ -1265,6 +1413,14 @@ def generate_slides_from_script(
         block = block_by_id.get(slide["source_block_id"])
         if block:
             final_slides.append(_build_final_slide(slide, block, slide_idx))
+    context_slides_inserted = 0
+    if slide_anchors:
+        final_slides, context_slides_inserted = _insert_context_slides_for_gaps(
+            final_slides,
+            source_blocks,
+            source,
+            total_words,
+        )
 
     timeline = [
         {
@@ -1274,6 +1430,8 @@ def generate_slides_from_script(
             "summary": slide["event_summary"],
             "slide_anchor_id": slide.get("slide_anchor_id"),
             "beat_id": slide.get("beat_id"),
+            "slide_kind": slide.get("slide_kind"),
+            "transition_effect": slide.get("transition_effect"),
             "start_time": None,
             "end_time": None,
             "source_block_id": slide["source_ref"]["source_block_id"],
@@ -1318,7 +1476,9 @@ def generate_slides_from_script(
             "context_words": effective_words_per_slide,
             "max_slides": max_slides,
             "slides_generated": len(final_slides),
+            "context_slides_inserted": context_slides_inserted,
             "slides_dropped_by_cap": dropped_by_cap,
+            "slides_dropped_unanchored": dropped_unanchored,
             "llm_batches": len(batches_debug),
             "model": model,
         },
@@ -1337,6 +1497,19 @@ def generate_slides_from_script(
                     "content_hint": slide["event_summary"],
                 }
                 for slide in planned
+            ],
+            "final_slides": [
+                {
+                    "slide_id": slide.get("slide_id"),
+                    "slide_kind": slide.get("slide_kind"),
+                    "transition_effect": slide.get("transition_effect"),
+                    "template": slide.get("template_type"),
+                    "event_type": slide.get("event_type"),
+                    "slide_anchor_id": slide.get("slide_anchor_id"),
+                    "word_start": (slide.get("source_ref") or {}).get("word_start"),
+                    "word_end": (slide.get("source_ref") or {}).get("word_end"),
+                }
+                for slide in final_slides
             ],
             "batches": batches_debug,
         },

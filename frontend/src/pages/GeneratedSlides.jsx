@@ -163,6 +163,8 @@ export default function GeneratedSlides() {
     };
 
     switch (slide.template_type) {
+      case 'context':
+        return <ContextSlideTemplate {...slide.data} {...commonProps} />;
       case 'playful':
         return <PlayfulTemplate {...slide.data} {...commonProps} />;
       case 'reflection':
@@ -205,6 +207,39 @@ export default function GeneratedSlides() {
         );
     }
   };
+
+  const ContextSlideTemplate = ({ formation_name, chapter, label, badge = "TP-CRCD", brandName = "SALES HACKING" }) => (
+    <div style={{
+      width: '90vw',
+      maxWidth: '1200px',
+      aspectRatio: '16 / 9',
+      background: '#f8fafc',
+      color: '#0f172a',
+      fontFamily: 'Inter, Poppins, system-ui, sans-serif',
+      display: 'flex',
+      flexDirection: 'column',
+      padding: '3rem 3.5rem',
+      boxSizing: 'border-box',
+      boxShadow: '0 25px 50px -12px rgba(0,0,0,0.25)',
+    }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', color: '#64748b', fontSize: '1rem', fontWeight: 800 }}>
+        <span>{badge}</span>
+        <span>{brandName}</span>
+      </div>
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
+        <div style={{ color: '#dc2626', fontSize: '1rem', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '1rem' }}>
+          {label || 'Séquence en cours'}
+        </div>
+        <div style={{ fontSize: 'clamp(2rem, 4vw, 4.2rem)', lineHeight: 1.08, fontWeight: 900, maxWidth: '860px' }}>
+          {formation_name || 'Formation'}
+        </div>
+        <div style={{ marginTop: '1.6rem', height: '3px', width: '88px', background: '#dc2626', borderRadius: '999px' }} />
+        <div style={{ marginTop: '1.6rem', fontSize: 'clamp(1.4rem, 2.7vw, 2.8rem)', lineHeight: 1.25, fontWeight: 800, color: '#334155', maxWidth: '820px' }}>
+          {chapter || 'Chapitre en cours'}
+        </div>
+      </div>
+    </div>
+  );
 
   const formatTime = (seconds) => {
     if (seconds === undefined || seconds === null) return '--:--';
@@ -1061,7 +1096,12 @@ export default function GeneratedSlides() {
 
           {/* La slide */}
           <div style={{ marginBottom: '1.5rem' }}>
-            {renderSlide(slides[currentSlide])}
+            <div
+              key={slides[currentSlide].slide_id || currentSlide}
+              className={`slide-transition-preview ${slides[currentSlide].transition_effect === 'fade' ? 'slide-transition-fade' : 'slide-transition-swipe'}`}
+            >
+              {renderSlide(slides[currentSlide])}
+            </div>
           </div>
 
           {/* Navigation */}
@@ -1161,6 +1201,23 @@ export default function GeneratedSlides() {
       <style>{`
         @keyframes spin {
           to { transform: rotate(360deg); }
+        }
+        @keyframes slideSwipeIn {
+          from { opacity: 0; transform: translateX(-42px); }
+          to { opacity: 1; transform: translateX(0); }
+        }
+        @keyframes slideFadeIn {
+          from { opacity: 0; }
+          to { opacity: 1; }
+        }
+        .slide-transition-preview {
+          will-change: opacity, transform;
+        }
+        .slide-transition-swipe {
+          animation: slideSwipeIn 420ms cubic-bezier(0.2, 0.8, 0.2, 1);
+        }
+        .slide-transition-fade {
+          animation: slideFadeIn 360ms ease-out;
         }
       `}</style>
     </div>

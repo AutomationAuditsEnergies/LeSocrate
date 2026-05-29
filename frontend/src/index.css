@@ -170,3 +170,10 @@ audio.visually-hidden {
   50% { transform: scale(0.4); opacity: 0.3; }
   100% { transform: scale(1); opacity: 1; }
 }
+
+.pipeline-slide-preview-scope > [class$="-slide-container"] {
+  width: 100% !important;
+  max-width: none !important;
+  height: 100% !important;
+  box-shadow: none !important;
+}

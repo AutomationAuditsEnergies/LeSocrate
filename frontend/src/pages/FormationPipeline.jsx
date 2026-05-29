@@ -1,5 +1,18 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { apiUrl } from '../api'
+import ReflectionTemplate from '../components/slides/templates/ReflectionTemplate'
+import CaseStudyTemplate from '../components/slides/templates/CaseStudyTemplate'
+import FacilitatorTemplate from '../components/slides/templates/FacilitatorTemplate'
+import ChartTemplate from '../components/slides/templates/ChartTemplate'
+import StatsTemplate from '../components/slides/templates/StatsTemplate'
+import StoryTemplate from '../components/slides/templates/StoryTemplate'
+import RecapTemplate from '../components/slides/templates/RecapTemplate'
+import AnalogyTemplate from '../components/slides/templates/AnalogyTemplate'
+import WarningTemplate from '../components/slides/templates/WarningTemplate'
+import TipTemplate from '../components/slides/templates/TipTemplate'
+import OpinionTemplate from '../components/slides/templates/OpinionTemplate'
+import TransitionTemplate from '../components/slides/templates/TransitionTemplate'
+import PlayfulTemplate from '../components/slides/templates/PlayfulTemplate'
 
 const Icon = ({ name, className = '', style = {} }) => (
   <span className={`material-icons ${className}`} style={{ fontSize: 'inherit', ...style }}>{name}</span>
@@ -42,8 +55,8 @@ function statusToStep(status, job = null) {
   //    le status. audio_error / audio_launched / tts_launched / etc. ne ────
   //    peuvent pas faire régresser au-delà de ce qui a été validé. ─────────
 
-  // Étape 7 (synthèse TTS audio)
-  if (AUDIO_DONE_STATUSES.has(status)) return 7
+  // L'audio est désormais une action par dossier, pas une étape de fabrication.
+  if (AUDIO_DONE_STATUSES.has(status)) return 6
   if (AUDIO_ACTIVE_STATUSES.has(status)) return 6
   if (status === 'text_ready') return 6
 
@@ -88,8 +101,7 @@ const STEP_LABELS = [
   { icon: 'psychology', label: 'Enrichissement KB' },
   { icon: 'auto_stories', label: 'Programme global' },
   { icon: 'calendar_view_week', label: 'Programmes journée' },
-  { icon: 'edit_note', label: 'Génération cours' },
-  { icon: 'slideshow', label: 'Slides + audio' },
+  { icon: 'slideshow', label: 'Texte + slides' },
 ]
 
 const AUTO_PILOT_STEP_LABELS = {
@@ -130,11 +142,10 @@ const AUTO_PILOT_ORDER_INDEX = AUTO_PILOT_ORDER.reduce((acc, key, idx) => {
 }, {})
 
 // ─── Connecteurs visuels entre étapes du pipeline ─────────────────────────────
-// Matérialise le flux de données : RNCP → REAC → split (API/CC) → ... → merge → TTS.
-// Trois primitives :
+// Matérialise le flux de données : RNCP → REAC → split (API/CC) → texte + slides.
+// Deux primitives :
 //   - FlowArrowDown : flèche verticale ↓ entre 2 cards consécutives.
 //   - FlowSplit     : Y-fork qui part d'un tronc commun vers les 2 colonnes.
-//   - FlowMerge     : Y-merge inverse qui rejoint les 2 colonnes vers un tronc.
 const FLOW_COLOR = 'rgba(167, 139, 250, 0.35)'  // violet sobre cohérent avec l'accent
 const FLOW_STROKE = 2
 
@@ -222,57 +233,6 @@ function FlowSplit({ color = FLOW_COLOR }) {
         position: 'absolute',
         right: 'calc(25% - 10px)', top: `${stem + drop}px`,
         transform: 'translateX(50%)',
-        width: 0, height: 0,
-        borderLeft: '5px solid transparent',
-        borderRight: '5px solid transparent',
-        borderTop: `${arrow}px solid ${color}`,
-      }}/>
-    </div>
-  )
-}
-
-// Y-merge (2 → 1) : symétrique inverse de FlowSplit. Les 2 colonnes remontent
-// vers une barre horizontale, qui descend en tronc central avec une seule tête.
-function FlowMerge({ color = FLOW_COLOR }) {
-  const drop = 22
-  const stem = 18
-  const arrow = 7
-  const total = drop + stem + arrow
-  return (
-    <div style={{ position: 'relative', height: `${total}px`, margin: '4px 0' }}>
-      {/* montée gauche */}
-      <div style={{
-        position: 'absolute',
-        left: `calc(25% - 10px - ${FLOW_STROKE / 2}px)`, top: 0,
-        width: `${FLOW_STROKE}px`, height: `${drop}px`,
-        background: color,
-      }}/>
-      {/* montée droite */}
-      <div style={{
-        position: 'absolute',
-        right: `calc(25% - 10px - ${FLOW_STROKE / 2}px)`, top: 0,
-        width: `${FLOW_STROKE}px`, height: `${drop}px`,
-        background: color,
-      }}/>
-      {/* barre horizontale */}
-      <div style={{
-        position: 'absolute',
-        left: 'calc(25% - 10px)', right: 'calc(25% - 10px)',
-        top: `${drop}px`, height: `${FLOW_STROKE}px`,
-        background: color,
-      }}/>
-      {/* tronc central descendant */}
-      <div style={{
-        position: 'absolute',
-        left: '50%', top: `${drop}px`,
-        width: `${FLOW_STROKE}px`, height: `${stem}px`,
-        background: color, transform: 'translateX(-50%)',
-      }}/>
-      {/* tête de flèche bas */}
-      <div style={{
-        position: 'absolute',
-        left: '50%', top: `${drop + stem}px`,
-        transform: 'translateX(-50%)',
         width: 0, height: 0,
         borderLeft: '5px solid transparent',
         borderRight: '5px solid transparent',
@@ -1180,7 +1140,7 @@ function PipelineStagePill({ stage, index, onClick }) {
   )
 }
 
-function PipelineVisualMap({ job, currentStep, autoPilotState, contentFolders, volumeAudit: _volumeAudit, diagnostic }) {
+function PipelineVisualMap({ job, currentStep, autoPilotState, contentFolders, diagnostic }) {
   const [auditStage, setAuditStage] = useState(null)
   if (!job) return null
 
@@ -1204,15 +1164,12 @@ function PipelineVisualMap({ job, currentStep, autoPilotState, contentFolders, v
     return completed > 0 && processed >= completed
   })
   const allSlidesGenerated = folders.length > 0 && folders.every(f => (f.slide_count || 0) > 0)
-  const audioPlanned = Boolean(autoPilotState?.generate_audio || job.auto_pilot_generate_audio)
   const textReady = TEXT_AVAILABLE_STATUSES.has(job.status)
-  const audioDone = AUDIO_DONE_STATUSES.has(job.status)
-  const audioActive = AUDIO_ACTIVE_STATUSES.has(job.status) || autoActive('audio')
   const planAdherenceDone = hasCompletedPipelineEvent(events, e => e.step === 'plan_adherence_review') ||
     allContentCompleted || allReviewed || autoPassed('content')
   const finalBudgetDone = hasCompletedPipelineEvent(events, e => e.step === 'word_budget_review') ||
-    Boolean(job.auto_pilot_post_review_docs_done) || audioDone
-  const postDocsDone = Boolean(job.auto_pilot_post_review_docs_done) || audioDone ||
+    Boolean(job.auto_pilot_post_review_docs_done)
+  const postDocsDone = Boolean(job.auto_pilot_post_review_docs_done) ||
     (textReady && allReviewed && !autoActive('post_review_docs'))
   const slidesDone = allSlidesGenerated || hasCompletedPipelineEvent(events, e => e.step === 'slides' && e.event_type === 'step_completed') ||
     autoPassed('slides')
@@ -1339,7 +1296,7 @@ function PipelineVisualMap({ job, currentStep, autoPilotState, contentFolders, v
     {
       key: 'post_review_docs',
       title: 'Texte validé, Word 2 et audio-plan',
-      detail: 'Assemblage du texte validé localement et artefacts prêts pour slides puis audio.',
+      detail: 'Assemblage du texte validé localement et artefacts prêts pour les slides.',
       icon: 'description',
       artifacts: ['content-reviewed-scripts.json', 'content-audio-plan.json', 'content-script-plan.json'],
       done: postDocsDone || finalBudgetDone || autoPassed('post_review_docs'),
@@ -1350,26 +1307,16 @@ function PipelineVisualMap({ job, currentStep, autoPilotState, contentFolders, v
       title: 'Slides anchor-first',
       detail: 'Deck généré depuis les anchors du JSON, puis persisté par journée.',
       icon: 'slideshow',
+      auditMode: 'slides',
       done: slidesDone,
       active: autoActive('slides'),
     },
     {
-      key: 'audio',
-      title: 'TTS et synchronisation slides',
-      detail: audioPlanned
-        ? 'Synthèse audio avec timings slides/audio et génération des fichiers MP3.'
-        : 'Disponible après le texte et les slides ; non lancé automatiquement sans option audio.',
-      icon: 'record_voice_over',
-      done: audioDone,
-      active: audioActive,
-      optional: !audioPlanned,
-    },
-    {
       key: 'done',
       title: 'Finalisation',
-      detail: audioPlanned ? 'Module validé, voix mise à jour et health-check final.' : 'Texte, Word 2 et slides prêts ; audio lançable séparément.',
+      detail: 'Texte, Word 2 et slides prêts ; audio lançable séparément depuis chaque journée.',
       icon: 'inventory_2',
-      done: audioDone || (autoDone && !audioPlanned),
+      done: slidesDone || autoDone,
       active: autoActive('done'),
     },
   ]
@@ -1390,7 +1337,7 @@ function PipelineVisualMap({ job, currentStep, autoPilotState, contentFolders, v
       </div>
       <div style={{ fontSize: '12px', color: '#94a3b8', lineHeight: 1.45, marginBottom: '14px' }}>
         Cette carte montre le vrai trajet de fabrication : plan structuré, génération par sections,
-        adhérence au plan, calibrage budget, micro-review éthique, artefacts, reviews, slides anchor-first, puis audio si activé.
+        adhérence au plan, calibrage budget, micro-review éthique, artefacts, reviews, puis slides anchor-first.
       </div>
       <div style={{
         display: 'grid',
@@ -1458,7 +1405,7 @@ function pipelineStageStatusLabel(stage) {
 }
 
 function PipelineStepAuditModal({ job, stage, index, folders, events, onClose }) {
-  const [payload, setPayload] = useState({ artifacts: [], reports: [] })
+  const [payload, setPayload] = useState({ artifacts: [], reports: [], slideDecks: [] })
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
 
@@ -1473,6 +1420,7 @@ function PipelineStepAuditModal({ job, stage, index, folders, events, onClose })
       setError('')
       const artifacts = []
       const reports = []
+      const slideDecks = []
 
       try {
         if (artifactNames.length > 0) {
@@ -1513,7 +1461,30 @@ function PipelineStepAuditModal({ job, stage, index, folders, events, onClose })
           reports.push(...reportResults)
         }
 
-        if (!cancelled) setPayload({ artifacts, reports })
+        if (stage.auditMode === 'slides') {
+          const deckResults = await Promise.all(
+            folderList.map(async folder => {
+              try {
+                const resp = await fetch(
+                  apiUrl(`/api/slides/data?folder_id=${encodeURIComponent(folder.folder_id)}`),
+                  { credentials: 'include' },
+                )
+                const data = await resp.json()
+                return {
+                  folder,
+                  ok: resp.ok && data.status === 'success',
+                  deck: data.status === 'success' ? data : null,
+                  error: data.message || data.error || '',
+                }
+              } catch (e) {
+                return { folder, ok: false, deck: null, error: 'Erreur réseau' }
+              }
+            }),
+          )
+          slideDecks.push(...deckResults)
+        }
+
+        if (!cancelled) setPayload({ artifacts, reports, slideDecks })
       } catch (e) {
         if (!cancelled) setError('Impossible de charger le détail de cette étape.')
       } finally {
@@ -1526,6 +1497,7 @@ function PipelineStepAuditModal({ job, stage, index, folders, events, onClose })
 
   const loadedArtifacts = payload.artifacts.filter(item => item.ok && item.artifact)
   const loadedReports = payload.reports.filter(item => item.ok && item.report)
+  const loadedSlideDecks = payload.slideDecks.filter(item => item.ok && item.deck)
   const patchStats = computeAuditPatchStats(payload)
 
   return (
@@ -1565,6 +1537,7 @@ function PipelineStepAuditModal({ job, stage, index, folders, events, onClose })
             <AuditStatCard label="Événements" value={stageEvents.length} color="#94a3b8" />
             <AuditStatCard label="Artefacts" value={loadedArtifacts.length} color="#38bdf8" />
             <AuditStatCard label="Rapports" value={loadedReports.length} color="#34d399" />
+            <AuditStatCard label="Decks slides" value={loadedSlideDecks.length} color="#f59e0b" />
             <AuditStatCard label="Patches appliqués" value={patchStats.applied} color="#60a5fa" />
             <AuditStatCard label="Patches rejetés" value={patchStats.rejected} color="#fb923c" />
           </div>
@@ -1590,7 +1563,10 @@ function PipelineStepAuditModal({ job, stage, index, folders, events, onClose })
           {!loading && stage.auditMode === 'review_report' && (
             <ReviewReportsAuditView reports={payload.reports} />
           )}
-          {!loading && stage.auditMode !== 'ethical_micro' && stage.auditMode !== 'section_generation' && stage.auditMode !== 'plan_adherence' && stage.auditMode !== 'budget_calibration' && stage.auditMode !== 'volume_safety' && stage.auditMode !== 'review_report' && (
+          {!loading && stage.auditMode === 'slides' && (
+            <SlidesDeckAuditView decks={payload.slideDecks} />
+          )}
+          {!loading && stage.auditMode !== 'ethical_micro' && stage.auditMode !== 'section_generation' && stage.auditMode !== 'plan_adherence' && stage.auditMode !== 'budget_calibration' && stage.auditMode !== 'volume_safety' && stage.auditMode !== 'review_report' && stage.auditMode !== 'slides' && (
             <ArtifactAuditView artifacts={payload.artifacts} stage={stage} />
           )}
 
@@ -1608,6 +1584,352 @@ function AuditStatCard({ label, value, color }) {
       <div style={{ color, fontSize: '21px', fontWeight: 800 }}>{value}</div>
     </div>
   )
+}
+
+function SlidesDeckAuditView({ decks }) {
+  const loaded = (decks || []).filter(item => item.ok && item.deck)
+
+  if (!loaded.length) {
+    return (
+      <AuditEmptyState
+        icon="slideshow"
+        title="Aucun deck slides disponible"
+        detail="La génération slides n'a pas encore persisté de deck pour les dossiers de ce job."
+      />
+    )
+  }
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+      <div style={{
+        padding: '12px 14px',
+        background: 'rgba(245,158,11,0.08)',
+        border: '1px solid rgba(245,158,11,0.24)',
+        borderRadius: '10px',
+        color: '#fde68a',
+        fontSize: '12px',
+        lineHeight: 1.5,
+      }}>
+        <strong>Lecture de l'étape slides.</strong> Sélectionnez une slide : la modale affiche le passage source délimité du texte final à gauche et l'image de la slide générée à droite. La référence mots vient de la fenêtre source attachée à la slide.
+      </div>
+      {loaded.map((item, index) => (
+        <SlideDeckDayAudit
+          key={item.folder?.folder_id || index}
+          folder={item.folder}
+          deck={item.deck}
+          initiallyOpen={index === 0}
+        />
+      ))}
+    </div>
+  )
+}
+
+function SlideDeckDayAudit({ folder, deck, initiallyOpen }) {
+  const [open, setOpen] = useState(Boolean(initiallyOpen))
+  const [selectedSlideIndex, setSelectedSlideIndex] = useState(0)
+  const slides = Array.isArray(deck?.slides) ? deck.slides : []
+  const stats = deck?.stats || {}
+  const activeSlideIndex = slides.length ? Math.min(selectedSlideIndex, slides.length - 1) : 0
+  const activeSlide = slides[activeSlideIndex]
+
+  return (
+    <div style={{ border: '1px solid rgba(148,163,184,0.16)', borderRadius: '10px', overflow: 'hidden', background: 'rgba(15,23,42,0.38)' }}>
+      <button
+        type="button"
+        onClick={() => setOpen(value => !value)}
+        style={{
+          width: '100%',
+          padding: '13px 15px',
+          background: 'rgba(30,41,59,0.72)',
+          border: 'none',
+          color: '#e2e8f0',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          cursor: 'pointer',
+          textAlign: 'left',
+        }}
+      >
+        <span style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0 }}>
+          <Icon name={open ? 'expand_less' : 'expand_more'} />
+          <span style={{ fontWeight: 800 }}>{folderDisplayName(folder)}</span>
+          <span style={{ color: '#94a3b8', fontSize: '12px' }}>{slides.length} slides</span>
+        </span>
+        <span style={{ color: '#94a3b8', fontSize: '12px' }}>
+          {stats.generation_mode || deck.generation_mode || 'script'}
+        </span>
+      </button>
+
+      {open && (
+        <div style={{ padding: '14px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+          {slides.length === 0 ? (
+            <AuditEmptyState
+              icon="slideshow"
+              title="Deck vide"
+              detail="Le deck a été trouvé, mais il ne contient aucune slide exploitable."
+            />
+          ) : (
+            <>
+              <div style={{
+                display: 'flex',
+                gap: '8px',
+                overflowX: 'auto',
+                padding: '2px 0 8px',
+              }}>
+                {slides.map((slide, index) => {
+                  const selected = index === activeSlideIndex
+                  return (
+                    <button
+                      key={slide.slide_id || index}
+                      type="button"
+                      onClick={() => setSelectedSlideIndex(index)}
+                      style={{
+                        flex: '0 0 auto',
+                        minWidth: '118px',
+                        padding: '8px 10px',
+                        borderRadius: '8px',
+                        border: `1px solid ${selected ? 'rgba(245,158,11,0.56)' : 'rgba(148,163,184,0.14)'}`,
+                        background: selected ? 'rgba(245,158,11,0.12)' : 'rgba(15,23,42,0.52)',
+                        color: selected ? '#fde68a' : '#cbd5e1',
+                        cursor: 'pointer',
+                        textAlign: 'left',
+                      }}
+                    >
+                      <div style={{ fontSize: '11px', fontWeight: 900 }}>Slide {index + 1}</div>
+                      <div style={{ fontSize: '10px', color: selected ? '#fcd34d' : '#94a3b8', marginTop: '3px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                        {slide.template_type || 'template'}
+                      </div>
+                    </button>
+                  )
+                })}
+              </div>
+              <SlideSourcePreviewRow slide={activeSlide} index={activeSlideIndex} />
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function SlideSourcePreviewRow({ slide, index }) {
+  const sourceRef = slide.source_ref || {}
+  const sourceText = normalizeWhitespace(slide.source_text || '')
+  const sourceRange = sourceRef.word_start !== undefined || sourceRef.word_end !== undefined
+    ? `mots ${sourceRef.word_start ?? '--'}-${sourceRef.word_end ?? '--'}`
+    : 'fenêtre source'
+
+  return (
+    <div style={{
+      display: 'grid',
+      gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 380px), 1fr))',
+      gap: '16px',
+      alignItems: 'stretch',
+      padding: '14px',
+      border: '1px solid rgba(148,163,184,0.14)',
+      borderRadius: '10px',
+      background: 'rgba(2,6,23,0.32)',
+    }}>
+      <div style={{
+        borderRadius: '8px',
+        border: '1px solid rgba(148,163,184,0.14)',
+        background: 'rgba(15,23,42,0.75)',
+        overflow: 'hidden',
+        minHeight: '260px',
+        display: 'flex',
+        flexDirection: 'column',
+      }}>
+        <div style={{
+          padding: '10px 12px',
+          borderBottom: '1px solid rgba(148,163,184,0.12)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: '10px',
+        }}>
+          <div style={{ color: '#e2e8f0', fontWeight: 800, fontSize: '13px' }}>
+            Texte final délimité · slide {index + 1}
+          </div>
+          <div style={{ color: '#94a3b8', fontSize: '11px', whiteSpace: 'nowrap' }}>
+            {sourceRange}
+          </div>
+        </div>
+        <div style={{ padding: '12px', color: '#cbd5e1', fontSize: '12px', lineHeight: 1.65, overflow: 'auto', maxHeight: '420px' }}>
+          {sourceRef.sub_part_name && (
+            <div style={{ color: '#93c5fd', fontSize: '11px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '8px' }}>
+              {sourceRef.sub_part_name}
+            </div>
+          )}
+          {slide.slide_anchor_id && (
+            <div style={{ color: '#fde68a', fontSize: '11px', marginBottom: '8px' }}>
+              Anchor: <strong>{slide.slide_anchor_id}</strong>{slide.beat_id ? ` · ${slide.beat_id}` : ''}
+            </div>
+          )}
+          {slide.event_summary && (
+            <div style={{
+              marginBottom: '10px',
+              padding: '8px 9px',
+              border: '1px solid rgba(96,165,250,0.18)',
+              borderRadius: '7px',
+              background: 'rgba(59,130,246,0.08)',
+              color: '#bfdbfe',
+              fontSize: '11px',
+              lineHeight: 1.45,
+            }}>
+              Idée visualisée : {slide.event_summary}
+            </div>
+          )}
+          <div>{sourceText || 'Passage source non disponible.'}</div>
+        </div>
+      </div>
+
+      <div style={{
+        borderRadius: '8px',
+        border: '1px solid rgba(148,163,184,0.14)',
+        background: '#020617',
+        overflow: 'hidden',
+        minHeight: '260px',
+        display: 'flex',
+        flexDirection: 'column',
+      }}>
+        <div style={{
+          padding: '10px 12px',
+          borderBottom: '1px solid rgba(148,163,184,0.12)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: '10px',
+        }}>
+          <div style={{ color: '#e2e8f0', fontWeight: 800, fontSize: '13px' }}>
+            Image de la slide générée
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', minWidth: 0 }}>
+            {slide.event_type && (
+              <span style={{
+                color: '#c4b5fd',
+                background: 'rgba(139,92,246,0.13)',
+                border: '1px solid rgba(139,92,246,0.22)',
+                borderRadius: '999px',
+                padding: '2px 7px',
+                fontSize: '10px',
+                fontWeight: 800,
+                whiteSpace: 'nowrap',
+              }}>
+                {slide.event_type}
+              </span>
+            )}
+            <span style={{ color: '#94a3b8', fontSize: '11px', whiteSpace: 'nowrap' }}>
+              {slide.template_type || 'template'}
+            </span>
+          </div>
+        </div>
+        <SlidePreviewFrame slide={slide} />
+      </div>
+    </div>
+  )
+}
+
+function SlidePreviewFrame({ slide }) {
+  return (
+    <div style={{ padding: '14px', display: 'flex', alignItems: 'center', justifyContent: 'center', flex: 1, overflow: 'hidden' }}>
+      <div style={{
+        width: '100%',
+        maxWidth: '720px',
+        aspectRatio: '16 / 9',
+        flex: '0 1 720px',
+        borderRadius: '6px',
+        overflow: 'hidden',
+        boxShadow: '0 16px 40px rgba(0,0,0,0.35)',
+      }} className="pipeline-slide-preview-scope">
+        {renderPipelineSlidePreview(slide)}
+      </div>
+    </div>
+  )
+}
+
+function renderPipelineSlidePreview(slide = {}) {
+  const commonProps = {
+    badge: 'TP-CRCD',
+    brandName: 'SALES HACKING',
+  }
+  const props = { ...(slide.data || {}), ...commonProps }
+
+  switch (slide.template_type) {
+    case 'context':
+      return <ContextSlidePreview {...props} />
+    case 'reflection':
+      return <ReflectionTemplate {...props} />
+    case 'casestudy':
+      return <CaseStudyTemplate {...props} />
+    case 'facilitator':
+      return <FacilitatorTemplate {...props} />
+    case 'chart':
+      return <ChartTemplate {...props} />
+    case 'stats':
+      return <StatsTemplate {...props} />
+    case 'story':
+      return <StoryTemplate {...props} />
+    case 'recap':
+      return <RecapTemplate {...props} />
+    case 'analogy':
+      return <AnalogyTemplate {...props} />
+    case 'warning':
+      return <WarningTemplate {...props} />
+    case 'tip':
+      return <TipTemplate {...props} />
+    case 'opinion':
+      return <OpinionTemplate {...props} />
+    case 'transition':
+      return <TransitionTemplate {...props} />
+    case 'playful':
+      return <PlayfulTemplate {...props} />
+    default:
+      return (
+        <div style={{ width: '100%', height: '100%', background: '#f8fafc', color: '#0f172a', padding: '48px', fontFamily: 'Inter, system-ui, sans-serif' }}>
+          <div style={{ fontSize: '42px', fontWeight: 800, marginBottom: '18px' }}>
+            Template non reconnu
+          </div>
+          <div style={{ fontSize: '24px' }}>{slide.template_type || 'inconnu'}</div>
+        </div>
+      )
+  }
+}
+
+function ContextSlidePreview({ formation_name, chapter, label, badge = 'TP-CRCD', brandName = 'SALES HACKING' }) {
+  return (
+    <div style={{
+      width: '100%',
+      height: '100%',
+      background: '#f8fafc',
+      color: '#0f172a',
+      fontFamily: 'Inter, system-ui, sans-serif',
+      display: 'flex',
+      flexDirection: 'column',
+      padding: '36px 44px',
+      boxSizing: 'border-box',
+    }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', color: '#64748b', fontSize: '16px', fontWeight: 800 }}>
+        <span>{badge}</span>
+        <span>{brandName}</span>
+      </div>
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
+        <div style={{ color: '#dc2626', fontSize: '18px', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '18px' }}>
+          {label || 'Séquence en cours'}
+        </div>
+        <div style={{ fontSize: '42px', lineHeight: 1.08, fontWeight: 900, maxWidth: '820px' }}>
+          {formation_name || 'Formation'}
+        </div>
+        <div style={{ marginTop: '24px', height: '3px', width: '88px', background: '#dc2626', borderRadius: '999px' }} />
+        <div style={{ marginTop: '24px', fontSize: '28px', lineHeight: 1.25, fontWeight: 800, color: '#334155', maxWidth: '780px' }}>
+          {chapter || 'Chapitre en cours'}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function normalizeWhitespace(text) {
+  return String(text || '').replace(/\s+/g, ' ').trim()
 }
 
 function computeAuditPatchStats(payload) {
@@ -3928,9 +4250,9 @@ export default function FormationPipeline() {
   const [reportFolder, setReportFolder] = useState(null)           // rapport conformité stricte
   const [humanizationReportFolder, setHumanizationReportFolder] = useState(null)  // ancien rapport humanisation, affiché seulement pour les jobs legacy
 
-  // États étape 6 — Synthèse audio Fish Audio
-  const [launchingAudio, setLaunchingAudio] = useState(false)
+  // Audio à la demande par journée
   const [audioError, setAudioError] = useState('')
+  const [folderAudioRunning, setFolderAudioRunning] = useState({})
   const [continuingAfterTextFolders, setContinuingAfterTextFolders] = useState({})
   const [continueAfterTextError, setContinueAfterTextError] = useState('')
   const [continueAfterTextNotice, setContinueAfterTextNotice] = useState('')
@@ -4609,48 +4931,42 @@ export default function FormationPipeline() {
     }
   }
 
-  // ─── Étape 6 — lancement de la synthèse audio Fish Audio ──────────────────
-  // 3 modes de synthèse audio dans l'étape 7 :
-  // - mock=true       → MP3 silence 1s, test gratuit (ne produit aucun audio réel)
-  // - basicTts=true   → Edge TTS (voix basique gratuite) — vraie voix, utile
-  //                      pour vérifier le flux et écouter le texte sans payer Fish
-  // - (par défaut)    → Fish Audio S2-Pro (voix studio payante)
-  const handleLaunchAudio = async (mock = false, basicTts = false, syncSlides = false, autoGenerateSlides = false, parallelFolders = 1) => {
-    setLaunchingAudio(true)
+  const handleLaunchFolderAudio = async (folder, ttsMode = 'gtts') => {
+    if (!folder?.folder_id) return
     setAudioError('')
-    setPipelineDiagnostic(null)
+    setFolderAudioRunning(prev => ({ ...prev, [folder.folder_id]: true }))
     try {
-      const body = {
-        mock,
-        basic_tts: basicTts,
-        sync_slides: syncSlides,
-        auto_generate_slides: autoGenerateSlides,
-      }
-      // Parallélisation activée uniquement pour Edge TTS / mock (Fish reste séquentiel).
-      // Le backend hard-cap aussi côté serveur en cas de basic_tts=false.
-      if (parallelFolders > 1 && (basicTts || mock)) {
-        body.parallel_folders = parallelFolders
-      }
-      const resp = await fetch(apiUrl(`/api/formation/${selectedJobId}/launch-audio`), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify(body),
-      })
+      const resp = await fetch(
+        apiUrl(`/api/formation/${selectedJobId}/content/${folder.folder_id}/generate-audio`),
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({
+            tts_mode: ttsMode,
+            force_all: true,
+            sync_slides: true,
+            auto_generate_slides: true,
+          }),
+        },
+      )
       const data = await resp.json()
-      if (data.error) setAudioError(data.error)
-      else {
+      if (!resp.ok || data.error) {
+        setAudioError(data.error || `Erreur ${resp.status}`)
+      } else {
         await fetchJob(selectedJobId)
-        await fetchJobs()
-        // Re-fetch le module : son champ voice_type vient d'être mis à jour
-        // par le backend (cf. launch_audio → UPDATE formation_modules).
+        await fetchContentFolders(selectedJobId)
         await fetchLinkedModule(selectedJobId)
         await fetchPipelineDiagnostic(selectedJobId, { silent: true })
       }
     } catch (e) {
-      setAudioError('Erreur réseau')
+      setAudioError('Erreur réseau audio')
     } finally {
-      setLaunchingAudio(false)
+      setFolderAudioRunning(prev => {
+        const next = { ...prev }
+        delete next[folder.folder_id]
+        return next
+      })
     }
   }
 
@@ -4733,16 +5049,16 @@ export default function FormationPipeline() {
   // `text_ready` est l'état normal après la pipeline texte. Les anciens jobs
   // peuvent encore rester en `tts_launched`; dans les deux cas, si tous les
   // dossiers sont complétés, l'étape texte est terminée.
-  // On avance currentStep à 6 pour que l'UI reflète l'état réel : étape 5 OK,
-  // étape 6 active (bouton "Lancer le TTS" disponible).
+  // On avance currentStep à 6 pour que l'UI reflète l'état réel :
+  // texte + slides prêts, audio disponible ensuite par dossier.
   let currentStep = job ? statusToStep(job.status, job) : -1
   if (['text_ready', 'tts_launched'].includes(job?.status) && allContentCompleted) {
     currentStep = 6
   }
   // Détection "stale running" : Azure App Service peut redémarrer le backend
-  // (déploiement GitHub Actions, scaling, etc.) en plein run TTS → les greenlets
+  // (déploiement GitHub Actions, scaling, etc.) en plein run audio → les greenlets
   // meurent silencieusement et le job reste figé en `audio_running` à vie.
-  // Sans détection, l'UI bloque les boutons "Relancer" indéfiniment.
+  // Sans détection, l'UI bloque les boutons audio de journée indéfiniment.
   // Heuristique : si statut=audio_running mais aucun event audio depuis > 3 min,
   // on considère que la pipeline est morte et on permet la relance.
   const STALE_AUDIO_RUN_MS = 3 * 60 * 1000
@@ -4757,10 +5073,7 @@ export default function FormationPipeline() {
     && _lastAudioEventAt !== null
     && (Date.now() - _lastAudioEventAt) > STALE_AUDIO_RUN_MS
   )
-  const audioStaleMinutes = audioStale && _lastAudioEventAt
-    ? Math.floor((Date.now() - _lastAudioEventAt) / 60000)
-    : 0
-  const audioBusy = launchingAudio || (AUDIO_ACTIVE_STATUSES.has(job?.status) && !audioStale)
+  const audioBusy = AUDIO_ACTIVE_STATUSES.has(job?.status) && !audioStale
   const selectedPipelineModel = pipelineModelLabel(job?.auto_pilot_model)
 
   // ─── Render ───────────────────────────────────────────────────────────────
@@ -4979,7 +5292,6 @@ export default function FormationPipeline() {
               currentStep={currentStep}
               autoPilotState={autoPilotState}
               contentFolders={contentFolders}
-              volumeAudit={volumeAudit}
               diagnostic={pipelineDiagnostic}
             />
 
@@ -5588,6 +5900,7 @@ export default function FormationPipeline() {
                       const belongsToSelectedJob = !folder.formation_job_id || folder.formation_job_id === selectedJobId
                       const canUseFolder = isDone && belongsToSelectedJob
                       const continuingAfterText = !!continuingAfterTextFolders[folder.folder_id]
+                      const folderAudioBusy = !!folderAudioRunning[folder.folder_id] || audioBusy
                       return (
                         <div key={folder.folder_id} style={{
                           background: 'rgba(15,23,42,0.5)',
@@ -5777,6 +6090,54 @@ export default function FormationPipeline() {
                                 </div>
                               </div>
 
+                              {/* ── Zone 2 : Audio + synchro slides à la demande ── */}
+                              <div style={{
+                                padding: '8px 10px',
+                                borderRadius: '8px',
+                                background: 'rgba(251, 146, 60, 0.05)',
+                                border: '1px solid rgba(251, 146, 60, 0.22)',
+                              }}>
+                                <div style={{
+                                  fontSize: '10px',
+                                  fontWeight: 700,
+                                  color: '#fb923c',
+                                  textTransform: 'uppercase',
+                                  letterSpacing: '0.08em',
+                                  marginBottom: '6px',
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  gap: '5px',
+                                }}>
+                                  <Icon name="record_voice_over" style={{ fontSize: '12px' }} /> Audio journée + synchro slides
+                                </div>
+                                <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center' }}>
+                                  <button
+                                    style={{ ...S.btn('ghost'), padding: '6px 12px', fontSize: '12px', borderColor: 'rgba(251,146,60,0.35)', color: '#fb923c' }}
+                                    disabled={!canUseFolder || folderAudioBusy}
+                                    onClick={() => handleLaunchFolderAudio(folder, 'gtts')}
+                                    title={canUseFolder ? 'Génère l’audio Edge TTS de cette journée et synchronise les slides sur ce texte' : 'Texte de journée requis'}
+                                  >
+                                    <Icon name={folderAudioBusy ? 'hourglass_empty' : 'graphic_eq'} /> {folderAudioBusy ? 'Audio…' : 'Edge + synchro'}
+                                  </button>
+                                  <button
+                                    style={{ ...S.btn('neutral'), padding: '6px 12px', fontSize: '12px', border: '1px dashed #64748b' }}
+                                    disabled={!canUseFolder || folderAudioBusy}
+                                    onClick={() => handleLaunchFolderAudio(folder, 'mock')}
+                                    title="Mode test : MP3 silence, timings et synchro sans coût TTS"
+                                  >
+                                    <Icon name="science" /> Test silence
+                                  </button>
+                                  <button
+                                    style={{ ...S.btn('success'), padding: '6px 12px', fontSize: '12px' }}
+                                    disabled={!canUseFolder || folderAudioBusy}
+                                    onClick={() => handleLaunchFolderAudio(folder, 'fish_audio')}
+                                    title="Génère l’audio Fish Audio payant de cette journée et synchronise les slides"
+                                  >
+                                    <Icon name="slideshow" /> Fish + synchro
+                                  </button>
+                                </div>
+                              </div>
+
                               {/* ── Reprendre depuis une étape ─────────────── */}
                               {(() => {
                                 const isOpen = !!resumeExpanded[folder.folder_id]
@@ -5839,11 +6200,9 @@ export default function FormationPipeline() {
                                         </div>
                                         <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
                                           {[
-                                            { step: 'content', label: 'Génération texte', icon: 'text_fields', title: 'Purge les segments et régénère le texte depuis zéro, puis enchaîne plan JSON, adhérence plan, calibrage budget, micro-éthique, reviews, slides et TTS' },
-                                            { step: 'review', label: 'Conformité locale', icon: 'rule', title: 'Lance conformité locale par morceau + Word 2 + slides + TTS' },
-                                            { step: 'slides', label: 'Slides', icon: 'slideshow', title: 'Saute les reviews — supprime le deck slides existant, régénère les slides puis lance le TTS' },
-                                            { step: 'tts', label: 'TTS', icon: 'record_voice_over', title: 'Saute tout — conserve les slides existantes et relance uniquement le TTS dessus' },
-                                            { step: 'tts_fast', label: 'TTS — pipeline presque instantanée', icon: 'bolt', title: 'Mode test uniquement — conserve les slides existantes, relance le TTS Edge avec parallélisation/cache, sans modifier le chemin TTS normal' },
+                                            { step: 'content', label: 'Génération texte', icon: 'text_fields', title: 'Purge les segments et régénère le texte depuis zéro, puis enchaîne plan JSON, adhérence plan, calibrage budget, micro-éthique, reviews et slides' },
+                                            { step: 'review', label: 'Conformité locale', icon: 'rule', title: 'Lance conformité locale par morceau + Word 2 + slides' },
+                                            { step: 'slides', label: 'Slides', icon: 'slideshow', title: 'Saute les reviews — supprime le deck slides existant et régénère les slides' },
                                           ].map(({ step, label, icon, title }) => (
                                             <button
                                               key={step}
@@ -5948,6 +6307,11 @@ export default function FormationPipeline() {
                         Reprise aval : {continueAfterTextNotice}
                       </div>
                     )}
+                    {audioError && (
+                      <div style={{ fontSize: '13px', color: '#f87171', marginTop: '4px' }}>
+                        Audio journée : {audioError}
+                      </div>
+                    )}
                     {contentFolders.length === 0 && (
                       <div style={{ fontSize: '13px', color: '#64748b' }}>Chargement de l'état des journées…</div>
                     )}
@@ -6021,219 +6385,6 @@ export default function FormationPipeline() {
 
             </div>{/* fin du grid dual API / Claude Code */}
 
-            {/* ─── Connecteur fin-pipeline : merge des 2 colonnes vers TTS ── */}
-            {DUAL_COLUMN_ENABLED ? <FlowMerge /> : <FlowArrowDown />}
-
-            {/* ── Étape 7 : Slides synchronisées + synthèse TTS ── */}
-            <StepBlock stepIndex={6} currentStep={currentStep} status={job.status} title="Slides synchronisées & synthèse TTS" icon="record_voice_over">
-              {AUDIO_DONE_STATUSES.has(job.status) || AUDIO_ACTIVE_STATUSES.has(job.status) ? (
-                <div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px', color: AUDIO_ACTIVE_STATUSES.has(job.status) ? '#fbbf24' : '#34d399', fontSize: '15px', fontWeight: 600, marginBottom: '12px' }}>
-                    <Icon name={AUDIO_ACTIVE_STATUSES.has(job.status) ? 'hourglass_empty' : 'check_circle'} />{' '}
-                    {AUDIO_ACTIVE_STATUSES.has(job.status) ? 'Synthèse audio en cours' : 'Synthèse audio terminée'}
-                  </div>
-                  <div style={{ fontSize: '14px', color: '#94a3b8', marginBottom: '16px' }}>
-                    {contentFolders.length || job.nb_days} dossiers cours dans la plateforme{' '}
-                    <strong style={{ color: '#a78bfa' }}>{job.platform_name || `#${job.platform_id}`}</strong>.
-                    Le diagnostic ci-dessous suit les événements audio, les erreurs et l'état des segments.
-                  </div>
-
-                  {/* Module persistant créé à la fin de la pipeline — matérialise le
-                      principe "1 RNCP = 1 module durable" : ce module est sélectionnable
-                      dans la modale "Nouvelle plateforme" pour créer des promos. */}
-                  {linkedModule && (
-                    <div style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '12px',
-                      padding: '14px 16px',
-                      marginBottom: '16px',
-                      borderRadius: '10px',
-                      background: 'linear-gradient(135deg, rgba(139, 92, 246, 0.12), rgba(139, 92, 246, 0.04))',
-                      border: '1px solid rgba(139, 92, 246, 0.35)',
-                    }}>
-                      <Icon name="inventory_2" className="text-2xl" style={{ color: '#a78bfa' }} />
-                      <div style={{ flex: 1 }}>
-                        <div style={{ fontSize: '13px', color: '#a78bfa', fontWeight: 600, marginBottom: '2px' }}>
-                          <Icon name="check" className="text-sm" /> Module créé et disponible
-                        </div>
-                        <div style={{ fontSize: '15px', color: '#e2e8f0', fontWeight: 600 }}>
-                          {linkedModule.tp_name} — RNCP {linkedModule.rncp_code || '?'} — <span style={{ color: '#a78bfa' }}>{linkedModule.version}</span>
-                        </div>
-                        {linkedModule.voice_type && (
-                          <div style={{ fontSize: '12px', marginTop: '4px' }}>
-                            <Icon name="record_voice_over" style={{ fontSize: '13px', color: voiceColor(linkedModule.voice_type) }} />{' '}
-                            <span style={{ color: '#94a3b8' }}>Voix actuelle des MP3 :</span>{' '}
-                            <strong style={{ color: voiceColor(linkedModule.voice_type) }}>{voiceLabel(linkedModule.voice_type)}</strong>
-                          </div>
-                        )}
-                        <div style={{ fontSize: '12px', color: '#94a3b8', marginTop: '2px' }}>
-                          Ce module peut désormais être sélectionné dans "Nouvelle plateforme" pour créer autant de promos que nécessaire sans relancer la pipeline.
-                          {linkedModule.voice_type && ' Relancer le TTS avec une voix différente met à jour les MP3 et la voix du module en place.'}
-                        </div>
-                      </div>
-                    </div>
-                  )}
-
-                  {audioStale && (
-                    <div style={{
-                      fontSize: '13px',
-                      color: '#fef3c7',
-                      backgroundColor: 'rgba(234, 88, 12, 0.18)',
-                      border: '1px solid rgba(234, 88, 12, 0.55)',
-                      borderRadius: '10px',
-                      padding: '12px 14px',
-                      marginBottom: '12px',
-                      lineHeight: 1.55,
-                    }}>
-                      <div style={{ fontWeight: 700, color: '#fdba74', marginBottom: '4px' }}>
-                        <Icon name="warning" style={{ fontSize: '15px' }} /> Pipeline probablement interrompue
-                      </div>
-                      Le job est marqué <strong>« en cours »</strong> mais aucun événement audio n'a été émis depuis <strong>{audioStaleMinutes} min</strong>. Cause typique : redémarrage Azure App Service (déploiement, scaling) qui tue les greenlets en plein run sans nettoyer le statut DB.
-                      <br />
-                      Les boutons « Relancer » ci-dessous sont activés — un nouveau run remplacera proprement l'ancien. Pour éviter ce cas, évite de pousser du code pendant qu'une pipeline tourne.
-                    </div>
-                  )}
-
-                  {/* Bouton relancer : utile quand le précédent run a échoué
-                      ou si on veut re-générer les MP3 suite à une édition de texte.
-                      3 voies : silence (0€), Edge TTS (0€, vraie voix basique), Fish Audio (payant).
-                      Tous les boutons utilisent force_all=True côté backend (cf. launch-audio
-                      route, défaut True) → INTÉGRALITÉ des MP3 régénérée, pas juste les dirty. */}
-                  <div style={{
-                    fontSize: '13px',
-                    color: '#cbd5e1',
-                    backgroundColor: 'rgba(139, 92, 246, 0.08)',
-                    border: '1px solid rgba(139, 92, 246, 0.25)',
-                    borderRadius: '10px',
-                    padding: '12px 14px',
-                    marginBottom: '12px',
-                    lineHeight: 1.55,
-                  }}>
-                    <div style={{ fontWeight: 600, color: '#e2e8f0', marginBottom: '4px' }}>
-                      <Icon name="info" style={{ fontSize: '15px', color: '#a78bfa' }} />{' '}
-                      Régénération <strong>complète</strong> par défaut
-                    </div>
-                    Chaque clic réécrit <strong>tous</strong> les MP3 des {contentFolders.length || job.nb_days} journées (19 MP3/jour = {(contentFolders.length || job.nb_days) * 19} fichiers au total : cours + Q&amp;A + pauses), pas seulement les segments marqués <em>dirty</em>.
-                    Le <code style={{ color: '#a78bfa' }}>course_script_plan.json</code> et <code style={{ color: '#a78bfa' }}>audio_sync.timings</code> sont réécrits alignés sur les nouveaux MP3 — indispensable pour que les annotations Script TTS pointent au bon endroit.
-                    <div style={{ marginTop: '6px', fontSize: '12px', color: '#fb923c' }}>
-                      ⚡ <strong>Edge TTS</strong> : journées en <strong>parallèle</strong> (~40% plus rapide). Pas de carryover de surplus runtime-fit entre journées dans ce mode.
-                      <br/>
-                      💰 <strong>Fish Audio</strong> : reste séquentiel (coût + rate limit), avec cooldown 30s entre journées.
-                    </div>
-                  </div>
-                  <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
-                    <button
-                      style={{ ...S.btn('neutral'), border: '1px dashed #64748b' }}
-                      onClick={() => handleLaunchAudio(true, false)}
-                      disabled={audioBusy || !allContentCompleted}
-                      title={`Régénération COMPLÈTE en mode mock (silence 1s par MP3). 0€. ~1 min pour ${contentFolders.length || job.nb_days} journées. Utile pour valider le flux pipeline sans produire d'audio.`}
-                    >
-                      <Icon name="refresh" /> {audioBusy ? '…' : `Relancer TTS test silence (${contentFolders.length || job.nb_days} journées · 0€)`}
-                    </button>
-                    <button
-                      style={{ ...S.btn('ghost'), borderColor: 'rgba(251,146,60,0.35)', color: '#fb923c' }}
-                      onClick={() => handleLaunchAudio(false, true, false, false, contentFolders.length || job.nb_days)}
-                      disabled={audioBusy || !allContentCompleted}
-                      title={`Régénération COMPLÈTE via Microsoft Edge TTS (voix basique, vraie voix synthétique). 0€. ⚡ Journées en PARALLÈLE (1 greenlet/journée), pas de cooldown. Estimer ~8-12 min pour ${contentFolders.length || job.nb_days} journées (au lieu de ~15-20 min en séquentiel). Pas de carryover de surplus runtime-fit entre journées en mode parallèle.`}
-                    >
-                      <Icon name="graphic_eq" /> {audioBusy ? '…' : `⚡ Relancer Edge TTS voix basique (${contentFolders.length || job.nb_days} journées en parallèle · 0€ · ~10 min)`}
-                    </button>
-                    <button
-                      style={{ ...S.btn('ghost'), borderColor: 'rgba(167,139,250,0.4)', color: '#a78bfa' }}
-                      onClick={() => handleLaunchAudio(false, true, true, true, contentFolders.length || job.nb_days)}
-                      disabled={audioBusy || !allContentCompleted}
-                      title={`Régénération COMPLÈTE Edge TTS avec génération de slides + timings slide↔audio. 0€. ⚡ Journées en PARALLÈLE. Estimer ~15-18 min pour ${contentFolders.length || job.nb_days} journées (au lieu de ~25-30 min en séquentiel). Pas de carryover entre journées en mode parallèle.`}
-                    >
-                      <Icon name="slideshow" /> {audioBusy ? '…' : `⚡ Relancer slides + Edge TTS (${contentFolders.length || job.nb_days} journées en parallèle · 0€ · ~17 min)`}
-                    </button>
-                    <button
-                      style={S.btn('success')}
-                      onClick={() => handleLaunchAudio(false, false)}
-                      disabled={audioBusy || !allContentCompleted}
-                      title={`Régénération COMPLÈTE Fish Audio S2-Pro (voix studio production). ~9$/journée = ~${9 * (contentFolders.length || job.nb_days)}$ total. Estimer ~1h-1h30 par journée. ÉTAPE IRRÉVERSIBLE côté facturation.`}
-                    >
-                      <Icon name="refresh" /> {audioBusy ? 'Lancement…' : `Relancer TTS payant (${contentFolders.length || job.nb_days} journées · ~${9 * (contentFolders.length || job.nb_days)}$ · ~${(contentFolders.length || job.nb_days) * 75} min)`}
-                    </button>
-                    <button
-                      style={S.btn('success')}
-                      onClick={() => handleLaunchAudio(false, false, true, true)}
-                      disabled={audioBusy || !allContentCompleted}
-                      title={`Régénération COMPLÈTE Fish Audio avec slides + timings. ~9$/journée + temps de découpage slide-par-slide. Pour ${contentFolders.length || job.nb_days} journées : ~${9 * (contentFolders.length || job.nb_days)}$ et ~${(contentFolders.length || job.nb_days) * 100} min.`}
-                    >
-                      <Icon name="slideshow" /> {audioBusy ? 'Lancement…' : `Relancer TTS slides payant (${contentFolders.length || job.nb_days} journées · ~${9 * (contentFolders.length || job.nb_days)}$)`}
-                    </button>
-                  </div>
-                  {audioError && (
-                    <div style={{ fontSize: '12px', color: '#f87171', marginTop: '8px' }}>{audioError}</div>
-                  )}
-                </div>
-              ) : (
-                <div>
-	                  <p style={{ fontSize: '14px', color: '#94a3b8', marginBottom: '8px' }}>
-	                    Lance les slides synchronisées puis la synthèse <strong style={{ color: '#a78bfa' }}>Fish Audio S2-Pro</strong> pour toutes les journées : 19 MP3 par jour (cours + Q&A + pauses).
-	                  </p>
-                  <p style={{ fontSize: '13px', color: '#475569', marginBottom: '16px' }}>
-                    Compter ~1h à 2h par journée. Étape irréversible côté facturation Fish Audio — vérifiez d'abord les textes via "Voir" ou "PDF" ci-dessus.
-                  </p>
-                  <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
-                    <button
-                      style={S.btn('success')}
-                      onClick={() => handleLaunchAudio(false, false)}
-                      disabled={audioBusy || !allContentCompleted}
-                    >
-                      <Icon name="record_voice_over" /> {audioBusy ? 'Lancement…' : `Lancer le TTS (${contentFolders.length || job.nb_days} journées)`}
-                    </button>
-                    <button
-                      style={{ ...S.btn('ghost'), borderColor: 'rgba(251,146,60,0.35)', color: '#fb923c' }}
-                      onClick={() => handleLaunchAudio(false, true, false, false, contentFolders.length || job.nb_days)}
-                      disabled={audioBusy || !allContentCompleted}
-                      title="Synthèse via Edge TTS (Microsoft Edge, gratuit, voix basique). ⚡ Journées en parallèle. Utile pour écouter le rendu sans payer Fish Audio."
-                    >
-                      <Icon name="graphic_eq" /> {audioBusy ? '…' : `⚡ Edge TTS voix basique (${contentFolders.length || job.nb_days} journées en parallèle)`}
-                    </button>
-                    <button
-                      style={{ ...S.btn('ghost'), borderColor: 'rgba(167,139,250,0.4)', color: '#a78bfa' }}
-                      onClick={() => handleLaunchAudio(false, true, true, true, contentFolders.length || job.nb_days)}
-                      disabled={audioBusy || !allContentCompleted}
-                      title="Test complet sans Fish Audio : génère les slides si besoin, synthétise via Edge TTS, concatène par slide et stocke les timings. ⚡ Journées en parallèle."
-                    >
-                      <Icon name="slideshow" /> {audioBusy ? '…' : `⚡ Slides + Edge TTS (${contentFolders.length || job.nb_days} journées en parallèle)`}
-                    </button>
-                    <button
-                      style={{ ...S.btn('neutral'), border: '1px dashed #64748b' }}
-                      onClick={() => handleLaunchAudio(true, false)}
-                      disabled={audioBusy || !allContentCompleted}
-                      title="Mode test : génère des MP3 de silence 1s au lieu d'appeler Fish Audio. 0 € de coût, permet de tester le flux jusqu'à la diffusion sans consommer ton budget TTS."
-                    >
-                      <Icon name="science" /> {audioBusy ? '…' : 'TTS test silence (gratuit)'}
-                    </button>
-                    <button
-                      style={S.btn('success')}
-                      onClick={() => handleLaunchAudio(false, false, true, true)}
-                      disabled={audioBusy || !allContentCompleted}
-                      title="Synthèse payante Fish Audio avec génération des slides si besoin, découpage par slides et stockage des timings."
-                    >
-                      <Icon name="slideshow" /> {audioBusy ? 'Lancement…' : 'TTS slides payant'}
-                    </button>
-                  </div>
-                  {!allContentCompleted && (
-                    <div style={{ fontSize: '12px', color: '#f87171', marginTop: '8px' }}>
-                      Toutes les journées doivent avoir leur texte généré pour lancer la synthèse.
-                    </div>
-                  )}
-                  {audioError && (
-                    <div style={{ fontSize: '12px', color: '#f87171', marginTop: '8px' }}>{audioError}</div>
-                  )}
-                </div>
-              )}
-              <PipelineDiagnosticPanel
-                diagnostic={pipelineDiagnostic}
-                loading={pipelineDiagnosticLoading}
-                error={pipelineDiagnosticError}
-                onRefresh={() => fetchPipelineDiagnostic(selectedJobId)}
-              />
-            </StepBlock>
           </>
         )}
       </div>

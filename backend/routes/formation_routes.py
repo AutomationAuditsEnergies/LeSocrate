@@ -2758,11 +2758,9 @@ def generate_folder_audio(job_id, folder_id):
             )
             n_dirty = _count_dirty_segments_for_job(job_id)
             finalize_result = None
-            if n_dirty == 0:
-                finalize_result = _finalize_audio_ready_state(job_id, voice_type)
-                update_job(job_id, status="audio_completed", error_message=None)
-            else:
-                update_job(job_id, status="text_ready", error_message=None)
+            # L'audio d'une journée est une action d'exploitation à la demande :
+            # elle ne clôture pas la pipeline de fabrication du module.
+            update_job(job_id, status="text_ready", error_message=None)
             log_pipeline_event(
                 job_id,
                 "audio_folder_completed",
@@ -2775,12 +2773,13 @@ def generate_folder_audio(job_id, folder_id):
                 data={
                     "voice_type": voice_type,
                     "remaining_dirty_segments": n_dirty,
-                    "finalized": bool(finalize_result),
+                    "finalized": False,
                     "finalize_result": finalize_result,
+                    "single_folder": True,
                 },
             )
         except Exception as e:
-            update_job(job_id, status="audio_error", error_message=f"folder {folder_id}: {str(e)[:500]}")
+            update_job(job_id, status="text_ready", error_message=f"audio folder {folder_id}: {str(e)[:500]}")
             try:
                 from services.formation_observability_service import log_pipeline_event
                 log_pipeline_event(
