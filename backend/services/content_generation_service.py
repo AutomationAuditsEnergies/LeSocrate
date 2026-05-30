@@ -1654,6 +1654,11 @@ def _structured_course_min_words(word_budget: int) -> int:
     return max(0, int(int(word_budget or 0) * ratio))
 
 
+def _structured_section_min_words(word_budget: int) -> int:
+    ratio = _env_float("FORMATION_STRUCTURED_SECTION_MIN_RATIO", 0.985, min_value=0.90, max_value=1.0)
+    return max(0, int(int(word_budget or 0) * ratio))
+
+
 def _course_audio_block_plan(playlist_spec=None, *, folder_position=None) -> list[dict]:
     if playlist_spec is None:
         from services.playlist_tts_service import PLAYLIST_SPEC as playlist_spec
@@ -6153,6 +6158,305 @@ def _structured_course_budget_status(course_plan: dict, text: str) -> dict:
     }
 
 
+def _structured_section_budget_status(section: dict, text: str) -> dict:
+    target_words = int(section.get("target_words") or 0)
+    words = count_tts_spoken_words(text)
+    min_words = _structured_section_min_words(target_words) if target_words else 0
+    max_words = target_words
+    if target_words <= 0:
+        status = "unknown"
+        ok = True
+        delta = 0
+    elif words < min_words:
+        status = "too_short"
+        ok = False
+        delta = min_words - words
+    elif words > max_words:
+        status = "too_long"
+        ok = False
+        delta = words - max_words
+    else:
+        status = "ok"
+        ok = True
+        delta = 0
+    return {
+        "ok": ok,
+        "status": status,
+        "words": words,
+        "min_words": min_words,
+        "max_words": max_words,
+        "target_words": target_words,
+        "delta": delta,
+    }
+
+
+def _build_structured_section_budget_prompt(
+    *,
+    job: dict,
+    course_plan: dict,
+    section: dict,
+    current_text: str,
+    status: dict,
+    module_content: str,
+    direction: str,
+) -> str:
+    budget_contract = load_budget_rewrite_contract()
+    section_label = _section_label(section)
+    action = (
+        "réduire cette section sans perdre ses idées essentielles"
+        if direction == "shorten"
+        else "enrichir cette section avec de vraies valeurs ajoutées pédagogiques"
+    )
+    if direction == "shorten":
+        direction_rules = (
+            "- Supprime les répétitions, les reformulations faibles et les exemples trop longs.\n"
+            "- Préserve les notions, les transitions utiles et la fonction de la section.\n"
+        )
+    else:
+        direction_rules = (
+            "- Ajoute de vraies notions utiles : nuance métier, méthode concrète, erreur fréquente, contre-exemple, mini-cas fictif, clarification ou lien terrain.\n"
+            "- Ne rends pas le texte simplement plus verbeux : chaque ajout doit avoir une valeur pédagogique identifiable.\n"
+            "- Respecte les teaching beats et les anchors/slides du plan : enrichis ce qui est prévu, ne crée pas une trajectoire parallèle.\n"
+            "- Ne modifie pas le plan JSON et ne déplace pas le rôle de cette section vers une autre section.\n"
+        )
+    return f"""Tu calibres une section d'un cours audio TTS Fish Audio.
+
+CONTRAT DE RÉÉCRITURE BUDGET :
+{budget_contract}
+
+Mission : {action}.
+Tu dois réécrire uniquement la section demandée, pas le cours complet.
+Le texte final doit être oral, fluide, TTS-ready, sans markdown ni titre écrit.
+
+Budget section :
+- Section : {section_label}
+- Cible : {status.get('target_words')} mots parlés
+- Plage acceptée : {status.get('min_words')} à {status.get('max_words')} mots parlés
+- Texte actuel : {status.get('words')} mots
+- Écart à corriger : {status.get('delta')} mots
+
+Plan complet verrouillé :
+{json.dumps(course_plan, ensure_ascii=False, indent=2)}
+
+Section verrouillée à calibrer :
+{json.dumps(section, ensure_ascii=False, indent=2)}
+
+Frontière stricte de cette section :
+{_structured_section_scope_guard(section)}
+
+Moments pédagogiques internes à couvrir :
+{_section_teaching_beats_prompt(section)}
+
+Contexte utile :
+- Titre professionnel : {job.get('program_title') or ''}
+- Intitulé journée : {job.get('folder_name') or ''}
+
+Contenu source à utiliser si tu ajoutes des notions :
+{_compact_words(module_content or job.get('program_text') or '', 4500)}
+
+Contraintes absolues :
+- Ne mentionne jamais budget mots, fichier, durée, horaire, créneau, planning ou découpage technique.
+- N'utilise jamais le mot "bloc" devant les élèves.
+- Les exemples non sourcés doivent être fictifs ou hypothétiques.
+- Pour une partie de développement, ne refais pas l'accueil, le cadrage de journée ou le plan global.
+- Pour une conclusion, récapitule sans ouvrir un nouveau développement.
+- Après une annonce Q/R, tchat ou fin de partie, aucun nouveau développement.
+- Le résultat doit finir entre {status.get('min_words')} et {status.get('max_words')} mots parlés.
+{direction_rules}
+
+Texte actuel de la section :
+{current_text}
+
+Réponds uniquement avec le texte oral calibré de cette section."""
+
+
+def _calibrate_structured_section_text(
+    *,
+    job: dict,
+    course_plan: dict,
+    section: dict,
+    text: str,
+    module_content: str,
+    model=None,
+) -> tuple[str, dict]:
+    current_text = _sanitize_learner_facing_text(text)
+    history = []
+    changed = False
+    max_iterations = _env_int("FORMATION_STRUCTURED_SECTION_CALIBRATION_ITERATIONS", 4, min_value=1)
+    max_iterations = min(8, max_iterations)
+
+    for iteration in range(1, max_iterations + 1):
+        status = _structured_section_budget_status(section, current_text)
+        history.append({
+            "iteration": iteration,
+            "status": status["status"],
+            "words": status["words"],
+            "delta": status["delta"],
+        })
+        if status["ok"]:
+            return current_text, {
+                **status,
+                "changed": changed,
+                "iterations": iteration - 1,
+                "fallback": None,
+                "history": history,
+            }
+
+        direction = "shorten" if status["status"] == "too_long" else "expand"
+        prompt = _build_structured_section_budget_prompt(
+            job=job,
+            course_plan=course_plan,
+            section=section,
+            current_text=current_text,
+            status=status,
+            module_content=module_content,
+            direction=direction,
+        )
+        try:
+            raw = _anthropic_post(
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=_structured_generation_max_tokens(int(section.get("target_words") or 600)),
+                model=model,
+            )
+            candidate = _sanitize_learner_facing_text(_clean_llm_text(raw))
+            target_words = int(section.get("target_words") or 0)
+            if target_words > 0 and count_tts_spoken_words(candidate) > target_words:
+                candidate = _trim_text_to_max_spoken_words(candidate, target_words)
+            candidate_words = count_tts_spoken_words(candidate)
+            current_words = count_tts_spoken_words(current_text)
+            min_candidate_words = min(120, max(20, int(current_words * 0.45)))
+            if not candidate or candidate_words < min_candidate_words:
+                logger.warning(
+                    "PIPELINE_SECTION_BUDGET_CALIBRATION_REJECTED_EMPTY course=%s section=%s iteration=%s",
+                    course_plan.get("course_number"),
+                    _section_label(section),
+                    iteration,
+                )
+                break
+            if direction == "expand" and candidate_words <= current_words:
+                logger.warning(
+                    "PIPELINE_SECTION_BUDGET_CALIBRATION_NO_EXPANSION course=%s section=%s iteration=%s before=%s after=%s",
+                    course_plan.get("course_number"),
+                    _section_label(section),
+                    iteration,
+                    current_words,
+                    candidate_words,
+                )
+                break
+            if candidate.strip() != current_text.strip():
+                current_text = candidate
+                changed = True
+                logger.info(
+                    "PIPELINE_SECTION_BUDGET_CALIBRATION_ITER course=%s section=%s iteration=%s direction=%s words=%s",
+                    course_plan.get("course_number"),
+                    _section_label(section),
+                    iteration,
+                    direction,
+                    candidate_words,
+                )
+                continue
+            break
+        except Exception as exc:
+            logger.warning(
+                "PIPELINE_SECTION_BUDGET_CALIBRATION_LLM_FAILED course=%s section=%s iteration=%s error=%s",
+                course_plan.get("course_number"),
+                _section_label(section),
+                iteration,
+                str(exc)[:300],
+            )
+            break
+
+    final_status = _structured_section_budget_status(section, current_text)
+    fallback = None
+    if final_status["status"] == "too_long":
+        current_text = _trim_text_to_max_spoken_words(current_text, final_status["max_words"])
+        changed = True
+        fallback = "trim_to_max_words"
+        final_status = _structured_section_budget_status(section, current_text)
+
+    return current_text, {
+        **final_status,
+        "changed": changed,
+        "iterations": len(history),
+        "fallback": fallback,
+        "history": history,
+    }
+
+
+def _section_key(section: dict) -> tuple:
+    return (section.get("kind"), int(section.get("part_number") or 0))
+
+
+def _section_plan_by_key(course_plan: dict) -> dict[tuple, dict]:
+    return {_section_key(section): section for section in _structured_sections_for_course(course_plan)}
+
+
+def _join_structured_section_records(sections: list[dict]) -> str:
+    return "\n\n".join((section.get("text") or "").strip() for section in sections if (section.get("text") or "").strip()).strip()
+
+
+def _calibrate_structured_course_sections(
+    *,
+    job: dict,
+    course_plan: dict,
+    draft: dict,
+    module_content: str,
+    model=None,
+) -> tuple[str, dict]:
+    plan_sections = _section_plan_by_key(course_plan)
+    calibrated_sections = []
+    section_results = []
+    changed = False
+
+    for record in draft.get("sections") or []:
+        section = {**plan_sections.get(_section_key(record), {}), **record}
+        before_text = record.get("text") or ""
+        before_words = count_tts_spoken_words(before_text)
+        calibrated_text, calibration = _calibrate_structured_section_text(
+            job=job,
+            course_plan=course_plan,
+            section=section,
+            text=before_text,
+            module_content=module_content,
+            model=model,
+        )
+        after_words = count_tts_spoken_words(calibrated_text)
+        changed = changed or calibrated_text.strip() != before_text.strip() or bool(calibration.get("changed"))
+        calibrated_record = {
+            **record,
+            "text": calibrated_text,
+            "word_count": after_words,
+            "before_word_count": before_words,
+            "calibration": calibration,
+        }
+        calibrated_sections.append(calibrated_record)
+        section_results.append({
+            "kind": record.get("kind"),
+            "label": record.get("label") or _section_label(section),
+            "part_number": record.get("part_number"),
+            "title": record.get("title"),
+            "target_words": int(section.get("target_words") or 0),
+            "before_words": before_words,
+            "after_words": after_words,
+            "delta_words": after_words - before_words,
+            "status": calibration.get("status"),
+            "min_words": calibration.get("min_words"),
+            "max_words": calibration.get("max_words"),
+            "changed": bool(calibrated_text.strip() != before_text.strip() or calibration.get("changed")),
+            "calibration": calibration,
+        })
+
+    course_text = _join_structured_section_records(calibrated_sections)
+    course_status = _structured_course_budget_status(course_plan, course_text)
+    return course_text, {
+        **course_status,
+        "changed": changed,
+        "mode": "section_budget_calibration",
+        "sections": section_results,
+        "calibrated_sections": calibrated_sections,
+    }
+
+
 def _exact_repetition_issues(text: str, *, max_issues: int = 3) -> list[dict]:
     paragraphs = [
         p.strip()
@@ -7239,11 +7543,53 @@ def _run_structured_content_generation(
     def _calibrate_draft(body_result: dict) -> dict:
         draft = body_result["draft"]
         course_plan = draft["course_plan"]
-        calibrated_text, calibration = _calibrate_structured_course_text(
-            course_plan,
-            draft["course_text"],
-            model=model,
+        module_content = body_result.get("module_content") or ""
+        draft_sections_text = _join_structured_section_records(draft.get("sections") or [])
+        source_drift = bool(
+            draft_sections_text
+            and (draft.get("course_text") or "").strip()
+            and draft_sections_text.strip() != (draft.get("course_text") or "").strip()
         )
+        if draft.get("sections"):
+            calibrated_text, calibration = _calibrate_structured_course_sections(
+                job=job,
+                course_plan=course_plan,
+                draft=draft,
+                module_content=module_content,
+                model=model,
+            )
+            calibration["source_sections_drifted_from_course_text"] = source_drift
+        else:
+            calibrated_text, calibration = _calibrate_structured_course_text(
+                course_plan,
+                draft["course_text"],
+                model=model,
+            )
+        if calibration.get("status") in {"too_short", "too_long"}:
+            fallback_text, fallback_calibration = _calibrate_structured_course_text(
+                course_plan,
+                calibrated_text,
+                model=model,
+            )
+            fallback_calibration["mode"] = "course_budget_safety_net"
+            calibration["course_safety_net"] = fallback_calibration
+            if fallback_text.strip() != calibrated_text.strip():
+                calibrated_text = fallback_text
+                calibration = {
+                    **fallback_calibration,
+                    "primary_section_calibration": calibration,
+                    "source_sections_drifted_from_course_text": source_drift,
+                }
+        final_status = _structured_course_budget_status(course_plan, calibrated_text)
+        if not final_status.get("ok") and str(os.getenv("FORMATION_STRUCTURED_CALIBRATION_STRICT", "1")).strip().lower() not in {"0", "false", "no", "off"}:
+            raise ValueError(
+                "Calibrage budget texte insuffisant "
+                f"cours={course_plan.get('course_number')} "
+                f"status={final_status.get('status')} "
+                f"words={final_status.get('words')} "
+                f"target={final_status.get('target_words')} "
+                f"min={final_status.get('min_words')}"
+            )
         calibrated_words = count_tts_spoken_words(calibrated_text)
         course_number = int(course_plan.get("course_number") or body_result.get("course_number") or 0)
         return {
@@ -7254,6 +7600,7 @@ def _run_structured_content_generation(
             "course_text": calibrated_text,
             "words": calibrated_words,
             "calibration": calibration,
+            "sections": calibration.get("calibrated_sections") or draft.get("sections") or [],
             "plan_adherence": body_result.get("plan_adherence"),
             "draft": draft,
         }
@@ -7290,7 +7637,7 @@ def _run_structured_content_generation(
             "plan_adherence": _compact_plan_adherence_result(result.get("plan_adherence")),
             "before_text": before_text,
             "after_text": calibrated_text,
-            "sections": draft.get("sections") or [],
+            "sections": result.get("sections") or draft.get("sections") or [],
             "structured_plan": course_plan,
         })
 
