@@ -15,6 +15,8 @@ avant de retenter (plutôt qu'un sleep aveugle qui cascade en 429).
 import os
 import shutil
 import subprocess
+import threading
+from contextlib import contextmanager
 from datetime import datetime, timezone
 
 import requests as _http
@@ -25,6 +27,8 @@ logger = get_logger(__name__)
 
 ANTHROPIC_DEFAULT_MODEL = "claude-sonnet-4-20250514"
 DEEPSEEK_DEFAULT_MODEL = "deepseek-v4-flash"
+_LLM_SEMAPHORES = {}
+_LLM_SEMAPHORES_LOCK = threading.Lock()
 
 
 def default_model() -> str:
@@ -99,6 +103,78 @@ def _provider_config(model: str) -> dict:
         "api_key": os.getenv("ANTHROPIC_API_KEY"),
         "missing_key": "ANTHROPIC_API_KEY",
     }
+
+
+def _int_env(name: str, default: int) -> int:
+    try:
+        return int(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+
+
+def _deepseek_concurrency_limit(model: str) -> int:
+    model_lower = (model or "").lower()
+    generic = os.getenv("DEEPSEEK_MAX_CONCURRENT")
+    if "v4-pro" in model_lower:
+        default = _int_env("DEEPSEEK_MAX_CONCURRENT", 450)
+        return max(1, min(500, _int_env("DEEPSEEK_V4_PRO_MAX_CONCURRENT", default)))
+    if "v4-flash" in model_lower:
+        default = _int_env("DEEPSEEK_MAX_CONCURRENT", 2200)
+        return max(1, min(2500, _int_env("DEEPSEEK_V4_FLASH_MAX_CONCURRENT", default)))
+    if generic:
+        return max(1, _int_env("DEEPSEEK_MAX_CONCURRENT", 450))
+    return 450
+
+
+def _provider_concurrency_limit(provider: str, model: str) -> int:
+    if provider == "DeepSeek":
+        return _deepseek_concurrency_limit(model)
+    return max(0, _int_env("ANTHROPIC_MAX_CONCURRENT", 0))
+
+
+def _new_semaphore(limit: int):
+    try:
+        from eventlet.semaphore import Semaphore
+        return Semaphore(limit)
+    except Exception:
+        return threading.BoundedSemaphore(limit)
+
+
+def _get_llm_semaphore(provider: str, model: str, limit: int):
+    key = (provider, model, limit)
+    with _LLM_SEMAPHORES_LOCK:
+        sem = _LLM_SEMAPHORES.get(key)
+        if sem is None:
+            sem = _new_semaphore(limit)
+            _LLM_SEMAPHORES[key] = sem
+        return sem
+
+
+@contextmanager
+def _llm_concurrency_slot(provider: str, model: str):
+    limit = _provider_concurrency_limit(provider, model)
+    if limit <= 0:
+        yield
+        return
+    sem = _get_llm_semaphore(provider, model, limit)
+    sem.acquire()
+    try:
+        yield
+    finally:
+        sem.release()
+
+
+def _deepseek_user_id() -> str:
+    raw = (
+        os.getenv("DEEPSEEK_USER_ID")
+        or os.getenv("FORMATION_LLM_USER_ID")
+        or os.getenv("LLM_USER_ID")
+        or ""
+    ).strip()
+    if not raw:
+        return ""
+    safe = "".join(ch for ch in raw if ch.isalnum() or ch in "-_")
+    return safe[:512]
 
 
 class AnthropicRateLimitError(Exception):
@@ -243,6 +319,9 @@ def post_message(messages, max_tokens=8000, model=None, timeout=600) -> str:
         "messages": messages,
     }
     if config["provider"] == "DeepSeek":
+        user_id = _deepseek_user_id()
+        if user_id:
+            payload["metadata"] = {"user_id": user_id}
         thinking = os.environ.get("DEEPSEEK_THINKING", "disabled").strip().lower()
         if thinking in ("enabled", "disabled"):
             payload["thinking"] = {"type": thinking}
@@ -250,16 +329,17 @@ def post_message(messages, max_tokens=8000, model=None, timeout=600) -> str:
         if thinking == "enabled" and effort in ("high", "max"):
             payload["output_config"] = {"effort": effort}
 
-    resp = _http.post(
-        config["url"],
-        headers={
-            "x-api-key": config["api_key"],
-            "anthropic-version": "2023-06-01",
-            "content-type": "application/json",
-        },
-        json=payload,
-        timeout=timeout,
-    )
+    with _llm_concurrency_slot(config["provider"], model):
+        resp = _http.post(
+            config["url"],
+            headers={
+                "x-api-key": config["api_key"],
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json",
+            },
+            json=payload,
+            timeout=timeout,
+        )
 
     if resp.status_code == 429:
         wait = parse_retry_after(resp)

@@ -62,6 +62,15 @@ _PIPELINE_MODEL_ALIASES = {
 _PIPELINE_MODEL_CHOICES = set(_PIPELINE_MODEL_ALIASES)
 
 
+def _formation_content_day_workers(default: int = 1) -> int:
+    """Nombre de journees de contenu generees en parallele par l'auto-pilot API."""
+    try:
+        workers = int(os.getenv("FORMATION_CONTENT_DAY_WORKERS", str(default)))
+    except (TypeError, ValueError):
+        workers = default
+    return max(1, min(52, workers))
+
+
 def _normalize_pipeline_model_choice(raw, default=None):
     """Normalise le choix UI persistant de l'auto-pilot."""
     value = (raw or default or "").strip().lower()
@@ -4498,13 +4507,14 @@ def _execute_ap_step(job_id: int, step: str, job: dict) -> None:
         if use_cc:
             execute_mission_locally(job_id, "content", cc_model)
         else:
-            # Mode API : génération synchrone folder par folder (1 à la fois).
-            # Pas de thread background : run_content_generation est appelé directement
+            # Mode API : génération synchrone par folder, avec concurrence bornée.
+            # Pas de thread background durable : run_content_generation reste appelé
             # dans le greenlet auto-pilot — résiste aux restarts Azure car :
             #   - folder existant mais job running/idle → run reprend les segments manquants
             #   - folder existant + job completed → skip via done_set
             #   - aucun thread mort possible (pas de thread du tout)
             import json as _json
+            import eventlet as _eventlet
             from services.content_generation_service import run_content_generation, get_job_from_db
             from services.formation_pipeline_service import (
                 _format_day_program_text,
@@ -4543,6 +4553,7 @@ def _execute_ap_step(job_id: int, step: str, job: dict) -> None:
                     ],
                 )
 
+            day_tasks = []
             for idx, day_data in enumerate(daily_programs):
                 day_data = _normalize_day_audio_slots(day_data)
                 folder_name = expected_course_folder_name(day_data, idx + 1)
@@ -4581,11 +4592,56 @@ def _execute_ap_step(job_id: int, step: str, job: dict) -> None:
                     conn.commit()
                     conn.close()
 
-                # 3. Générer synchronement dans ce greenlet (run_content_generation
-                #    lit les segments déjà complétés → idempotent, reprend où ça s'est arrêté)
-                logger.info(f"🤖   Génération Jour {day_num} (folder {folder_id})…")
-                run_content_generation(folder_id, model=api_model)
-                logger.info(f"🤖   ✓ Jour {day_num} terminé (folder {folder_id})")
+                day_tasks.append({"day_num": day_num, "folder_id": folder_id})
+
+            day_workers = min(_formation_content_day_workers(), max(1, len(day_tasks) or 1))
+            logger.info(
+                "PIPELINE_CONTENT_DAY_PARALLEL_CONFIG job=%s workers=%s days=%s",
+                job_id,
+                day_workers,
+                len(day_tasks),
+            )
+
+            def _run_content_day(task: dict) -> dict:
+                day_num = task["day_num"]
+                folder_id = task["folder_id"]
+                try:
+                    # run_content_generation lit les segments déjà complétés :
+                    # idempotent, reprise naturelle si un folder avait déjà démarré.
+                    logger.info(f"🤖   Génération Jour {day_num} (folder {folder_id})…")
+                    run_content_generation(folder_id, model=api_model)
+                    logger.info(f"🤖   ✓ Jour {day_num} terminé (folder {folder_id})")
+                    return {"ok": True, "day_num": day_num, "folder_id": folder_id}
+                except Exception as exc:
+                    logger.exception(
+                        "PIPELINE_CONTENT_DAY_FAILED job=%s day=%s folder=%s",
+                        job_id,
+                        day_num,
+                        folder_id,
+                    )
+                    return {
+                        "ok": False,
+                        "day_num": day_num,
+                        "folder_id": folder_id,
+                        "error": str(exc)[:500],
+                    }
+
+            if day_workers <= 1:
+                day_results = [_run_content_day(task) for task in day_tasks]
+            else:
+                pool = _eventlet.GreenPool(size=day_workers)
+                greenlets = [pool.spawn(_run_content_day, task) for task in day_tasks]
+                day_results = [greenlet.wait() for greenlet in greenlets]
+
+            failed_days = [result for result in day_results if not result.get("ok")]
+            if failed_days:
+                raise RuntimeError(
+                    "Génération contenu échouée sur journées : "
+                    + ", ".join(
+                        f"J{result['day_num']} folder={result['folder_id']} ({result.get('error')})"
+                        for result in failed_days
+                    )
+                )
 
         logger.info(f"🤖 ✓ Contenu généré job {job_id}")
 
