@@ -2283,6 +2283,10 @@ function renderPipelineSlidePreview(slide = {}) {
   const props = { ...(slide.data || {}), ...commonProps }
 
   switch (slide.template_type) {
+    case 'welcome':
+      return <WelcomeSlidePreview {...props} />
+    case 'day_program':
+      return <DayProgramSlidePreview {...props} />
     case 'context':
       return <ContextSlidePreview {...props} />
     case 'reflection':
@@ -2321,6 +2325,75 @@ function renderPipelineSlidePreview(slide = {}) {
         </div>
       )
   }
+}
+
+function WelcomeSlidePreview({ title = 'Bienvenue', subtitle, formation_name, day_label, badge = 'TP-CRCD', brandName = 'SALES HACKING' }) {
+  return (
+    <div style={{
+      width: '100%',
+      height: '100%',
+      background: '#f8fafc',
+      color: '#0f172a',
+      fontFamily: 'Inter, system-ui, sans-serif',
+      display: 'flex',
+      flexDirection: 'column',
+      padding: '36px 44px',
+      boxSizing: 'border-box',
+    }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', color: '#64748b', fontSize: '16px', fontWeight: 800 }}>
+        <span>{badge}</span>
+        <span>{brandName}</span>
+      </div>
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
+        <div style={{ color: '#dc2626', fontSize: '18px', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '18px' }}>
+          {day_label || subtitle || 'Journée de formation'}
+        </div>
+        <div style={{ fontSize: '58px', lineHeight: 1, fontWeight: 950 }}>
+          {title}
+        </div>
+        <div style={{ marginTop: '24px', height: '3px', width: '88px', background: '#dc2626', borderRadius: '999px' }} />
+        <div style={{ marginTop: '24px', fontSize: '30px', lineHeight: 1.18, fontWeight: 850, color: '#334155', maxWidth: '820px' }}>
+          {formation_name || subtitle || 'Formation'}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function DayProgramSlidePreview({ title = 'Programme de la journée', items = [], day_label, formation_name, badge = 'TP-CRCD', brandName = 'SALES HACKING' }) {
+  const safeItems = Array.isArray(items) && items.length ? items.slice(0, 7) : ['Accueil et objectifs', 'Thèmes clés', 'Synthèse et questions']
+  return (
+    <div style={{
+      width: '100%',
+      height: '100%',
+      background: '#f8fafc',
+      color: '#0f172a',
+      fontFamily: 'Inter, system-ui, sans-serif',
+      display: 'flex',
+      flexDirection: 'column',
+      padding: '34px 44px',
+      boxSizing: 'border-box',
+    }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', color: '#64748b', fontSize: '16px', fontWeight: 800 }}>
+        <span>{badge}</span>
+        <span>{brandName}</span>
+      </div>
+      <div style={{ marginTop: '26px', color: '#dc2626', fontSize: '16px', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+        {day_label || formation_name || 'Séquence du jour'}
+      </div>
+      <div style={{ marginTop: '10px', fontSize: '42px', lineHeight: 1.05, fontWeight: 950 }}>
+        {title}
+      </div>
+      <div style={{ marginTop: '24px', display: 'grid', gap: '8px', maxWidth: '820px' }}>
+        {safeItems.map((item, index) => (
+          <div key={index} style={{ display: 'grid', gridTemplateColumns: '36px 1fr', gap: '12px', alignItems: 'center', padding: '10px 12px', background: '#eef2f7', borderLeft: '4px solid #dc2626', borderRadius: '8px' }}>
+            <div style={{ color: '#dc2626', fontWeight: 950, fontSize: '16px' }}>{String(index + 1).padStart(2, '0')}</div>
+            <div style={{ fontSize: '18px', fontWeight: 800, color: '#334155', lineHeight: 1.2 }}>{item}</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
 }
 
 function ContextSlidePreview({ formation_name, chapter, label, badge = 'TP-CRCD', brandName = 'SALES HACKING' }) {
@@ -4340,8 +4413,14 @@ function SlideBeatAnchorCard({ item, index }) {
               <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                 {fieldItems.slice(0, 5).map((field, fieldIndex) => (
                   <div key={fieldIndex} style={{ color: '#cbd5e1', fontSize: '12px', lineHeight: 1.4, padding: '7px 8px', background: 'rgba(2,6,23,0.32)', borderRadius: '7px' }}>
-                    <strong style={{ color: '#bfdbfe' }}>{field.title || `Élément ${fieldIndex + 1}`}</strong>
-                    {field.description ? ` — ${field.description}` : ''}
+                    {typeof field === 'string' ? (
+                      field
+                    ) : (
+                      <>
+                        <strong style={{ color: '#bfdbfe' }}>{field.title || `Élément ${fieldIndex + 1}`}</strong>
+                        {field.description ? ` — ${field.description}` : ''}
+                      </>
+                    )}
                   </div>
                 ))}
               </div>

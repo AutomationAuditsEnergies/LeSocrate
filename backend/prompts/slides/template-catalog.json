@@ -3,6 +3,37 @@
   "principle": "Le template visualise une intention pédagogique réelle. Il ne doit jamais imposer artificiellement une forme au cours.",
   "templates": [
     {
+      "template_id": "welcome",
+      "families": ["welcome", "day_welcome", "opening"],
+      "use_when": "Le cours accueille les apprenants au début d'une journée de formation.",
+      "avoid_when": "Le passage ne correspond pas à un accueil ou une ouverture de journée.",
+      "requires": {
+        "formation_name": "nom de la formation",
+        "day_label": "Journée X"
+      },
+      "schema": {
+        "title": "Bienvenue",
+        "subtitle": "Journée X",
+        "formation_name": "nom du TP",
+        "day_label": "Journée X"
+      }
+    },
+    {
+      "template_id": "day_program",
+      "families": ["day_program", "agenda", "program"],
+      "use_when": "Le cours annonce les grands thèmes ou chapitres de la journée.",
+      "avoid_when": "Le passage ne liste pas le programme du jour.",
+      "requires": {
+        "items_min": 2,
+        "items_max": 7
+      },
+      "schema": {
+        "title": "Programme de la journée",
+        "day_label": "Journée X",
+        "items": "2-7 thèmes courts dans l'ordre"
+      }
+    },
+    {
       "template_id": "reflection",
       "families": ["concept", "definition", "key_message"],
       "use_when": "Une idée centrale, une définition ou un principe doit être retenu.",

@@ -628,6 +628,10 @@ def _merge_unique_strings(*values) -> list[str]:
 
 
 _BEAT_TYPE_TO_TEMPLATE = {
+    "welcome": "welcome",
+    "day_welcome": "welcome",
+    "day_program": "day_program",
+    "agenda": "day_program",
     "definition": "reflection",
     "concept": "reflection",
     "key_message": "reflection",
@@ -658,6 +662,8 @@ _BEAT_TYPE_TO_TEMPLATE = {
     "opinion": "opinion",
 }
 _SUPPORTED_SLIDE_TEMPLATES = {
+    "welcome",
+    "day_program",
     "reflection",
     "casestudy",
     "facilitator",
@@ -783,6 +789,102 @@ def _normalize_teaching_beats(raw_part: dict, *, course_number: int, part_number
         })
 
     return normalized
+
+
+def _opening_structure_teaching_beats(
+    *,
+    course_number: int,
+    day_number: int | None,
+    job: dict,
+    sub_parts: list,
+    is_first_day: bool,
+) -> list[dict]:
+    if course_number != 1:
+        return []
+
+    formation_name = (
+        job.get("program_title")
+        or job.get("tp_name")
+        or job.get("title")
+        or "formation"
+    )
+    day_label = f"Journée {day_number}" if day_number else "Journée"
+    day_title = job.get("folder_name") or day_label
+    program_items = [
+        _strip_internal_schedule_from_label(str(item or "")).strip()
+        for item in (sub_parts or [])[:7]
+    ]
+    program_items = [item for item in program_items if item]
+    welcome_requirement = (
+        f"Accueillir les apprenants en disant clairement qu'ils entrent dans la {day_label.lower()} "
+        f"de la formation {formation_name}, avec une formule orale simple et chaleureuse."
+    )
+    if is_first_day:
+        welcome_requirement = (
+            f"Accueillir les apprenants au lancement de la formation {formation_name}, puis situer "
+            f"cette première journée avec une formule orale simple et chaleureuse."
+        )
+
+    return [
+        {
+            "beat_id": "c1opening-welcome",
+            "type": "welcome",
+            "role": "accueillir la journée de formation",
+            "spoken_requirement": welcome_requirement,
+            "slide_anchor": {
+                "enabled": True,
+                "anchor_id": "day-opening-welcome-slide",
+                "template_type": "welcome",
+                "visual_goal": "installer immédiatement le cadre de la journée et le nom de la formation",
+                "items_expected": None,
+                "fields_hint": {
+                    "formation_name": formation_name,
+                    "day_label": day_label,
+                    "title": "Bienvenue",
+                    "subtitle": day_title,
+                },
+            },
+        },
+        {
+            "beat_id": "c1opening-day-program",
+            "type": "day_program",
+            "role": "annoncer le programme du jour",
+            "spoken_requirement": (
+                "Présenter les grands thèmes de la journée dans leur ordre pédagogique, sans parler "
+                "d'horaires, de durées, de créneaux ou de planning."
+            ),
+            "slide_anchor": {
+                "enabled": True,
+                "anchor_id": "day-opening-program-slide",
+                "template_type": "day_program",
+                "visual_goal": "donner une carte claire des thèmes de la journée avant le premier contenu",
+                "items_expected": len(program_items) or None,
+                "fields_hint": {
+                    "title": "Programme de la journée",
+                    "day_label": day_label,
+                    "formation_name": formation_name,
+                    "items": program_items,
+                },
+            },
+        },
+    ]
+
+
+def _merge_opening_teaching_beats(forced: list[dict], existing: list[dict]) -> list[dict]:
+    merged = []
+    seen = set()
+    for beat in [*(forced or []), *(existing or [])]:
+        if not isinstance(beat, dict):
+            continue
+        beat_id = str(beat.get("beat_id") or "").strip()
+        anchor = beat.get("slide_anchor") if isinstance(beat.get("slide_anchor"), dict) else {}
+        anchor_id = str(anchor.get("anchor_id") or "").strip()
+        key = anchor_id or beat_id or str(len(merged))
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(beat)
+    return merged[:5]
 
 
 def _next_playlist_item_after_index(playlist_spec, idx: int):
@@ -1214,6 +1316,16 @@ def _normalize_structured_course_plans(raw_plan: dict, *, job: dict, playlist_it
             ]
         opening["must_include"] = _merge_unique_strings(opening.get("must_include"), forced_opening_include)
         opening["must_avoid"] = _merge_unique_strings(opening.get("must_avoid"), forced_opening_avoid)
+        opening["teaching_beats"] = _merge_opening_teaching_beats(
+            _opening_structure_teaching_beats(
+                course_number=course_number,
+                day_number=day_number,
+                job=job,
+                sub_parts=sub_parts,
+                is_first_day=bool(day_number == 1),
+            ),
+            opening.get("teaching_beats") if isinstance(opening.get("teaching_beats"), list) else [],
+        )
 
         parts = []
         for idx in range(parts_count):
@@ -1390,6 +1502,7 @@ Contraintes générales :
 - Les exemples non sourcés doivent être explicitement fictifs.
 - Pour chaque partie de développement, crée des `teaching_beats` : 2 à 4 moments pédagogiques structurants qui guideront le texte.
 - Chaque teaching beat doit avoir : beat_id, type, role, spoken_requirement, slide_anchor.
+- Dans `opening` du cours interne 1, prévois explicitement les moments structurels d'accueil et d'annonce du programme du jour : ils correspondent aux templates `welcome` et `day_program`.
 - Un slide_anchor n'est activé que si le moment mérite vraiment une visualisation. N'active pas une slide pour une simple transition orale.
 - Le texte final ne doit jamais dire "slide", "PowerPoint", "template", "anchor" ou "teaching beat". Ces anchors sont internes.
 - Choisis les templates uniquement dans le catalogue fourni. Ne force pas une roue, une checklist ou des étapes si le contenu ne s'y prête pas.
@@ -1428,7 +1541,7 @@ Réponds UNIQUEMENT en JSON valide :
       "course_number": 1,
       "course_title": "...",
       "pedagogical_role": "...",
-      "opening": {{"type": "...", "must_include": [], "must_avoid": []}},
+      "opening": {{"type": "...", "must_include": [], "must_avoid": [], "teaching_beats": []}},
       "learning_objectives": ["..."],
       "parts": [
         {{
@@ -1445,7 +1558,7 @@ Réponds UNIQUEMENT en JSON valide :
               "spoken_requirement": "ce que le texte oral devra couvrir naturellement",
               "slide_anchor": {{
                 "enabled": true,
-                "template_type": "reflection|casestudy|facilitator|stats|story|recap|analogy|warning|tip|opinion|transition|chart",
+                "template_type": "welcome|day_program|reflection|casestudy|facilitator|stats|story|recap|analogy|warning|tip|opinion|transition|chart",
                 "visual_goal": "ce que la slide doit aider à retenir",
                 "items_expected": null,
                 "fields_hint": {{}}
@@ -2680,7 +2793,7 @@ def _synthesize_course_audio_synced_to_slides(
         - Si `prepended_chunks` est explicitement fourni, il est préfixé en
           tête de la file avec une amorce IA.
         - N'ajoute plus de conclusion runtime : la fin du cours appartient au
-          texte calibré en amont, puis à l'humanisation/review.
+          texte calibré en amont, puis à la conformité locale.
 
     Mode classique (Fish Audio sync slides, ou basic_tts sans runtime_fit) :
         - Comportement d'origine inchangé : génère tous les chunks slide.
@@ -3742,7 +3855,8 @@ def _build_course_blocs_from_segments(
         word_budget = _estimated_words_budget_for_course(target_sec, api_speed)
 
         if bloc_num == 7:
-            # Bloc 7 absorbe le reste : si ça dépasse son budget, c'est volume_safety qui doit alerter
+            # Bloc 7 absorbe le reste : si ça dépasse son budget, le calibrage
+            # budget texte en amont doit corriger avant conformité et audio.
             end_w = total_words
         else:
             target_w = round(total_words * cumulative_duration / total_duration)
@@ -4217,10 +4331,10 @@ def run_audio_block_word_calibration(
     force: bool = False,
     stage: str = "",
 ) -> dict:
-    """Calibre les 7 blocs audio au nombre de mots prévu au lieu de bloquer.
+    """Legacy : calibre les 7 blocs audio au nombre de mots prévu.
 
-    Cette passe est volontairement entre humanisation et conformité stricte :
-    elle peut modifier le texte, donc elle invalide ensuite la conformité.
+    Cette passe n'est plus appelée par le flux API actif. Le calibrage de volume
+    se fait désormais avant conformité, directement dans la génération structurée.
     """
     from services.playlist_tts_service import PLAYLIST_SPEC
 
@@ -5166,7 +5280,7 @@ def _save_segment_db(job_id, sub_idx, sub_part_name, passe, text):
     word_count = len(text.split())
     conn = get_db_connection()
     cursor = conn.cursor()
-    # Un texte nouveau/réécrit doit repasser par humanisation + conformité.
+    # Un texte nouveau/réécrit doit repasser par conformité locale.
     cursor.execute("""
         INSERT OR REPLACE INTO content_generation_segments
             (job_id, sub_part_index, sub_part_name, passe, status,
@@ -5183,7 +5297,7 @@ def _save_segment_db(job_id, sub_idx, sub_part_name, passe, text):
 def mark_segment_modified(job_id: int, sub_idx: int, passe: int) -> None:
     """
     Marque un segment comme modifié : doit être re-synthétisé par le TTS
-    (dirty=1), re-passé par humanisation + conformité, et ses anciennes erreurs
+    (dirty=1), re-passé par conformité locale, et ses anciennes erreurs
     reviewer invalidées.
 
     À appeler depuis TOUS les endroits où `text_content` change :
@@ -9740,7 +9854,7 @@ def _compact_plan_adherence_result(result: dict | None) -> dict | None:
 
 
 def run_plan_adherence_review(folder_id, on_progress=None, model=None, force: bool = False):
-    """Review dédiée manuelle : adhérence au plan verrouillé avant humanisation.
+    """Review dédiée manuelle : adhérence au plan verrouillé avant budget.
 
     La génération structurée l'exécute désormais plus tôt, juste après les
     sections et avant le calibrage budget. Cette fonction reste disponible

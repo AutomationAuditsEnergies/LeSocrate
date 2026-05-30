@@ -163,6 +163,10 @@ export default function GeneratedSlides() {
     };
 
     switch (slide.template_type) {
+      case 'welcome':
+        return <WelcomeSlideTemplate {...slide.data} {...commonProps} />;
+      case 'day_program':
+        return <DayProgramSlideTemplate {...slide.data} {...commonProps} />;
       case 'context':
         return <ContextSlideTemplate {...slide.data} {...commonProps} />;
       case 'playful':
@@ -240,6 +244,77 @@ export default function GeneratedSlides() {
       </div>
     </div>
   );
+
+  const WelcomeSlideTemplate = ({ title = "Bienvenue", subtitle, formation_name, day_label, badge = "TP-CRCD", brandName = "SALES HACKING" }) => (
+    <div style={{
+      width: '90vw',
+      maxWidth: '1200px',
+      aspectRatio: '16 / 9',
+      background: '#f8fafc',
+      color: '#0f172a',
+      fontFamily: 'Inter, Poppins, system-ui, sans-serif',
+      display: 'flex',
+      flexDirection: 'column',
+      padding: '3rem 3.5rem',
+      boxSizing: 'border-box',
+      boxShadow: '0 25px 50px -12px rgba(0,0,0,0.25)',
+    }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', color: '#64748b', fontSize: '1rem', fontWeight: 800 }}>
+        <span>{badge}</span>
+        <span>{brandName}</span>
+      </div>
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
+        <div style={{ color: '#dc2626', fontSize: '1.05rem', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '1rem' }}>
+          {day_label || subtitle || 'Journée de formation'}
+        </div>
+        <div style={{ fontSize: 'clamp(3rem, 6vw, 6rem)', lineHeight: 1, fontWeight: 950 }}>
+          {title}
+        </div>
+        <div style={{ marginTop: '1.6rem', height: '3px', width: '96px', background: '#dc2626', borderRadius: '999px' }} />
+        <div style={{ marginTop: '1.7rem', fontSize: 'clamp(1.5rem, 3vw, 3rem)', lineHeight: 1.18, fontWeight: 850, color: '#334155', maxWidth: '900px' }}>
+          {formation_name || subtitle || 'Formation'}
+        </div>
+      </div>
+    </div>
+  );
+
+  const DayProgramSlideTemplate = ({ title = "Programme de la journée", items = [], day_label, formation_name, badge = "TP-CRCD", brandName = "SALES HACKING" }) => {
+    const safeItems = Array.isArray(items) && items.length ? items.slice(0, 7) : ['Accueil et objectifs', 'Thèmes clés', 'Synthèse et questions'];
+    return (
+      <div style={{
+        width: '90vw',
+        maxWidth: '1200px',
+        aspectRatio: '16 / 9',
+        background: '#f8fafc',
+        color: '#0f172a',
+        fontFamily: 'Inter, Poppins, system-ui, sans-serif',
+        display: 'flex',
+        flexDirection: 'column',
+        padding: '3rem 3.5rem',
+        boxSizing: 'border-box',
+        boxShadow: '0 25px 50px -12px rgba(0,0,0,0.25)',
+      }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', color: '#64748b', fontSize: '1rem', fontWeight: 800 }}>
+          <span>{badge}</span>
+          <span>{brandName}</span>
+        </div>
+        <div style={{ marginTop: '2rem', color: '#dc2626', fontSize: '1rem', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+          {day_label || formation_name || 'Séquence du jour'}
+        </div>
+        <div style={{ marginTop: '0.75rem', fontSize: 'clamp(2.4rem, 4.4vw, 4.4rem)', lineHeight: 1.05, fontWeight: 950 }}>
+          {title}
+        </div>
+        <div style={{ marginTop: '2rem', display: 'grid', gridTemplateColumns: '1fr', gap: '0.65rem', maxWidth: '980px' }}>
+          {safeItems.map((item, index) => (
+            <div key={index} style={{ display: 'grid', gridTemplateColumns: '42px 1fr', gap: '0.85rem', alignItems: 'center', padding: '0.8rem 1rem', background: '#eef2f7', borderLeft: '4px solid #dc2626', borderRadius: '8px' }}>
+              <div style={{ color: '#dc2626', fontWeight: 950, fontSize: '1.15rem' }}>{String(index + 1).padStart(2, '0')}</div>
+              <div style={{ fontSize: 'clamp(1rem, 1.7vw, 1.55rem)', fontWeight: 800, color: '#334155', lineHeight: 1.25 }}>{item}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  };
 
   const formatTime = (seconds) => {
     if (seconds === undefined || seconds === null) return '--:--';

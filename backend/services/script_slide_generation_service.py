@@ -51,6 +51,8 @@ PACE_PROFILES = {
 
 SUPPORTED_TEMPLATES = {
     "context",
+    "welcome",
+    "day_program",
     "reflection",
     "casestudy",
     "facilitator",
@@ -65,6 +67,10 @@ SUPPORTED_TEMPLATES = {
     "chart",
 }
 TEMPLATE_ALIASES = {
+    "welcome": "welcome",
+    "day_welcome": "welcome",
+    "day_program": "day_program",
+    "agenda": "day_program",
     "definition": "reflection",
     "concept": "reflection",
     "key_message": "reflection",
@@ -96,6 +102,8 @@ TEMPLATE_ALIASES = {
 
 EVENT_TYPES = {
     "filler",
+    "welcome",
+    "day_program",
     "recap",
     "story",
     "definition",
@@ -596,6 +604,34 @@ def _extract_slide_anchors_from_plan(plan: dict | None) -> list[dict]:
         if not isinstance(course, dict):
             continue
         course_number = _safe_int(course.get("course_number"), 0, 0, 10**6)
+        opening = course.get("opening") if isinstance(course.get("opening"), dict) else {}
+        for order, beat in enumerate(opening.get("teaching_beats") or [], start=1):
+            if not isinstance(beat, dict):
+                continue
+            slide_anchor = beat.get("slide_anchor") if isinstance(beat.get("slide_anchor"), dict) else {}
+            if not slide_anchor.get("enabled"):
+                continue
+            template_type = _canonical_template(
+                slide_anchor.get("template_type")
+                or slide_anchor.get("template_family")
+                or beat.get("type")
+            )
+            anchors.append({
+                "anchor_id": str(slide_anchor.get("anchor_id") or f"c{course_number}opening-b{order}-slide"),
+                "beat_id": str(beat.get("beat_id") or f"c{course_number}opening-b{order}"),
+                "course_number": course_number,
+                "course_title": course.get("course_title") or "",
+                "part_number": 0,
+                "part_title": "Introduction",
+                "beat_order": order,
+                "beat_type": str(beat.get("type") or "welcome"),
+                "role": beat.get("role") or "",
+                "spoken_requirement": beat.get("spoken_requirement") or "",
+                "template_type": template_type,
+                "visual_goal": slide_anchor.get("visual_goal") or "",
+                "items_expected": slide_anchor.get("items_expected"),
+                "fields_hint": slide_anchor.get("fields_hint") if isinstance(slide_anchor.get("fields_hint"), dict) else {},
+            })
         for part in course.get("parts") or []:
             if not isinstance(part, dict):
                 continue
@@ -657,6 +693,13 @@ def _assign_slide_anchors_to_source_blocks(source_blocks: list[dict], anchors: l
             course_anchors,
             key=lambda item: (int(item.get("part_number") or 0), int(item.get("beat_order") or 0)),
         )
+        opening_anchors = [anchor for anchor in course_anchors if int(anchor.get("part_number") or 0) == 0]
+        body_anchors = [anchor for anchor in course_anchors if int(anchor.get("part_number") or 0) != 0]
+        if opening_anchors:
+            blocks[0]["slide_anchors"].extend(opening_anchors)
+        course_anchors = body_anchors
+        if not course_anchors:
+            continue
         if len(blocks) == 1:
             blocks[0]["slide_anchors"].extend(course_anchors)
             continue
@@ -938,6 +981,30 @@ def _normalize_slide_data(template: str, data: dict, fallback_title: str, fallba
     title = _as_text(data.get("title"), fallback_title)[:90]
     text = _as_text(data.get("text") or data.get("description"), fallback_text)[:420]
 
+    if template == "welcome":
+        return {
+            "title": _as_text(data.get("title"), "Bienvenue")[:60],
+            "subtitle": _as_text(data.get("subtitle") or data.get("day_label"), fallback_title)[:120],
+            "formation_name": _as_text(data.get("formation_name"), fallback_text)[:120],
+            "day_label": _as_text(data.get("day_label"), "")[:40],
+        }
+
+    if template == "day_program":
+        items = []
+        for item in _limit_list(data.get("items") or data.get("points"), 7):
+            if isinstance(item, dict):
+                label = _as_text(item.get("title") or item.get("label"), "")
+            else:
+                label = _as_text(item, "")
+            if label:
+                items.append(label[:120])
+        return {
+            "title": _as_text(data.get("title"), "Programme de la journée")[:80],
+            "formation_name": _as_text(data.get("formation_name"), "")[:120],
+            "day_label": _as_text(data.get("day_label"), "")[:40],
+            "items": items or [_shorten(fallback_text, 90)],
+        }
+
     if template == "casestudy":
         cases = []
         for item in _limit_list(data.get("cases"), 3):
@@ -1044,7 +1111,9 @@ def _normalize_slide(raw: dict, block: dict) -> dict:
 
     fallback_title = _fallback_title(block)
     fallback_text = _shorten(block.get("text", ""), 260)
-    data = _normalize_slide_data(template, raw.get("data") or {}, fallback_title, fallback_text)
+    raw_data = raw.get("data") if isinstance(raw.get("data"), dict) else {}
+    anchor_fields = (anchor or {}).get("fields_hint") if isinstance((anchor or {}).get("fields_hint"), dict) else {}
+    data = _normalize_slide_data(template, {**anchor_fields, **raw_data}, fallback_title, fallback_text)
 
     return {
         "source_block_id": block["source_block_id"],
