@@ -873,13 +873,25 @@ def _opening_structure_teaching_beats(
 def _merge_opening_teaching_beats(forced: list[dict], existing: list[dict]) -> list[dict]:
     merged = []
     seen = set()
-    for beat in [*(forced or []), *(existing or [])]:
+
+    def structural_key(beat: dict) -> str:
+        anchor = beat.get("slide_anchor") if isinstance(beat.get("slide_anchor"), dict) else {}
+        template_type = _slide_template_for_beat(
+            beat.get("type"),
+            anchor.get("template_type") or anchor.get("template_family") or beat.get("template_type"),
+        )
+        if template_type in {"welcome", "day_program"}:
+            return f"template:{template_type}"
+        beat_id = str(beat.get("beat_id") or "").strip()
+        anchor_id = str(anchor.get("anchor_id") or "").strip()
+        return anchor_id or beat_id or f"beat:{len(merged)}"
+
+    # Prefer the model's opening beats when they already cover the required
+    # structure. Forced beats are a fallback, not extra slides.
+    for beat in [*(existing or []), *(forced or [])]:
         if not isinstance(beat, dict):
             continue
-        beat_id = str(beat.get("beat_id") or "").strip()
-        anchor = beat.get("slide_anchor") if isinstance(beat.get("slide_anchor"), dict) else {}
-        anchor_id = str(anchor.get("anchor_id") or "").strip()
-        key = anchor_id or beat_id or str(len(merged))
+        key = structural_key(beat)
         if key in seen:
             continue
         seen.add(key)
