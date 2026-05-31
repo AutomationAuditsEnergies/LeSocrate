@@ -5263,6 +5263,44 @@ def run_auto_pilot(job_id):
     }), 202
 
 
+@formation_bp.route("/api/formation/<int:job_id>/run-auto/stop", methods=["POST"])
+def stop_auto_pilot(job_id):
+    """Stoppe l'auto-pilot persistant pour un job.
+
+    Arrêt coopératif : désactive la reprise/watchdog et libère le lock. Une
+    étape déjà en cours peut finir son appel courant, mais ne respawnera pas.
+    """
+    if not _require_admin():
+        return jsonify({"error": "Non autorisé"}), 403
+
+    job = get_job(job_id)
+    if not job:
+        return jsonify({"error": "Job introuvable"}), 404
+
+    update_job(
+        job_id,
+        auto_pilot_enabled=0,
+        auto_pilot_step="stopped",
+        auto_pilot_error=None,
+        auto_pilot_locked_at=None,
+        auto_pilot_lock_owner=None,
+    )
+    try:
+        from services.formation_observability_service import log_pipeline_event
+        log_pipeline_event(
+            job_id,
+            "pipeline_stopped",
+            step=job.get("auto_pilot_step") or "unknown",
+            status="stopped",
+            model=job.get("auto_pilot_model"),
+            message="Auto-pilot stoppé manuellement",
+        )
+    except Exception:
+        pass
+    logger.warning("🤖 Auto-pilot job %s stoppé manuellement", job_id)
+    return jsonify({"ok": True, "status": "stopped"}), 200
+
+
 @formation_bp.route("/api/formation/<int:job_id>/run-auto/status", methods=["GET"])
 def auto_pilot_status(job_id):
     """État de l'auto-pilot lu depuis la DB (résiste aux restarts)."""

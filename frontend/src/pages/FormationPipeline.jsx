@@ -5374,6 +5374,7 @@ export default function FormationPipeline() {
 
   // ─── Auto-pilot : statut + polling pendant l'orchestration auto ────────────
   const [autoPilotState, setAutoPilotState] = useState(null)  // {step, status, error?, ...} ou null
+  const [stopAutoPilotBusy, setStopAutoPilotBusy] = useState(false)
 
   const fetchAutoPilotStatus = useCallback(async (jobId) => {
     if (!jobId) return
@@ -5383,6 +5384,32 @@ export default function FormationPipeline() {
       setAutoPilotState(data && data.status && data.status !== 'idle' ? data : null)
     } catch (e) { /* silent */ }
   }, [])
+
+  const stopAutoPilot = useCallback(async () => {
+    if (!selectedJobId || stopAutoPilotBusy) return
+    const ok = window.confirm(`Stopper l'auto-pilot du job #${selectedJobId} ?`)
+    if (!ok) return
+    setStopAutoPilotBusy(true)
+    try {
+      const resp = await fetch(apiUrl(`/api/formation/${selectedJobId}/run-auto/stop`), {
+        method: 'POST',
+        credentials: 'include',
+      })
+      const data = await resp.json().catch(() => ({}))
+      if (!resp.ok) {
+        alert(data.error || "Impossible de stopper l'auto-pilot")
+        return
+      }
+      setAutoPilotState(null)
+      await fetchAutoPilotStatus(selectedJobId)
+      await fetchJob(selectedJobId)
+      await fetchJobs()
+    } catch {
+      alert("Erreur réseau lors de l'arrêt de l'auto-pilot")
+    } finally {
+      setStopAutoPilotBusy(false)
+    }
+  }, [fetchAutoPilotStatus, fetchJob, fetchJobs, selectedJobId, stopAutoPilotBusy])
 
   const fetchPipelineDiagnostic = useCallback(async (jobId, { silent = false } = {}) => {
     if (!jobId) return
@@ -6119,6 +6146,10 @@ export default function FormationPipeline() {
   )
   const audioBusy = AUDIO_ACTIVE_STATUSES.has(job?.status) && !audioStale
   const selectedPipelineModel = pipelineModelLabel(job?.auto_pilot_model)
+  const canStopAutoPilot = Boolean(
+    (job?.auto_pilot_enabled && job?.auto_pilot_step !== 'done') ||
+    ['running', 'starting', 'error'].includes(autoPilotState?.status)
+  )
 
   // ─── Render ───────────────────────────────────────────────────────────────
   return (
@@ -6179,18 +6210,37 @@ export default function FormationPipeline() {
                     {job.rome_length > 0 && <span style={{ color: '#34d399', marginLeft: 6 }}>✓ ROME {(job.rome_length / 1000).toFixed(0)}k</span>}
                   </div>
                 </div>
-                <span style={S.tag(
-                  AUDIO_DONE_STATUSES.has(job.status) ? 'green'
-                  : AUDIO_ACTIVE_STATUSES.has(job.status) ? 'amber'
-                  : (job.status === 'error' || job.status === 'audio_error') ? 'red'
-                  : 'violet'
-                )}>
-                  {AUDIO_DONE_STATUSES.has(job.status)
-                    ? 'Clôturée'
-                    : AUDIO_ACTIVE_STATUSES.has(job.status)
-                      ? 'Audio en cours'
-                    : job.status?.replace(/_/g, ' ')}
-                </span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                  {canStopAutoPilot && (
+                    <button
+                      type="button"
+                      style={{
+                        ...S.btn('ghost'),
+                        borderColor: 'rgba(248,113,113,0.42)',
+                        color: '#fca5a5',
+                        padding: '7px 12px',
+                        fontSize: '12px',
+                        opacity: stopAutoPilotBusy ? 0.65 : 1,
+                      }}
+                      disabled={stopAutoPilotBusy}
+                      onClick={stopAutoPilot}
+                    >
+                      <Icon name="stop_circle" /> {stopAutoPilotBusy ? 'Arrêt…' : 'Stopper auto-pilot'}
+                    </button>
+                  )}
+                  <span style={S.tag(
+                    AUDIO_DONE_STATUSES.has(job.status) ? 'green'
+                    : AUDIO_ACTIVE_STATUSES.has(job.status) ? 'amber'
+                    : (job.status === 'error' || job.status === 'audio_error') ? 'red'
+                    : 'violet'
+                  )}>
+                    {AUDIO_DONE_STATUSES.has(job.status)
+                      ? 'Clôturée'
+                      : AUDIO_ACTIVE_STATUSES.has(job.status)
+                        ? 'Audio en cours'
+                      : job.status?.replace(/_/g, ' ')}
+                  </span>
+                </div>
               </div>
               {job.error_message && (
                 <div style={{ marginTop: '12px', padding: '10px 14px', background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: '8px', fontSize: '13px', color: '#f87171' }}>
