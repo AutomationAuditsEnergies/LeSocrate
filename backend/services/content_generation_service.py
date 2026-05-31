@@ -201,9 +201,9 @@ def _edge_tts_fast_workers() -> int:
 def _fish_audio_course_workers() -> int:
     """Nombre de blocs cours Fish Audio lancés en parallèle dans une journée."""
     try:
-        workers = int(os.getenv("FISH_AUDIO_COURSE_WORKERS", "2"))
+        workers = int(os.getenv("FISH_AUDIO_COURSE_WORKERS", "5"))
     except (TypeError, ValueError):
-        workers = 2
+        workers = 5
     return max(1, min(workers, 7))
 
 
