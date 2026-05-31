@@ -3,7 +3,7 @@ import os
 import time
 import requests as http_requests
 from datetime import datetime, timedelta, timezone
-from flask import Blueprint, request, session, jsonify, Response
+from flask import Blueprint, request, session, jsonify, Response, stream_with_context
 from azure.storage.blob import BlobServiceClient, generate_blob_sas, BlobSasPermissions
 from azure.core.exceptions import ResourceExistsError
 from config import FRANCE_TZ
@@ -3362,15 +3362,26 @@ def create_hr_blueprint(socketio):
         try:
             platform_id = _get_platform_id_for_folder(folder_id)
             blob_path = _get_audio_blob_path(platform_id, folder_id, filename)
-            from services.azure_blob_service import download_blob, CONTAINER_AUDIOS
-            audio_bytes = download_blob(CONTAINER_AUDIOS, blob_path)
-            total_size = len(audio_bytes)
+            from services.azure_blob_service import CONTAINER_AUDIOS
+
+            cs = os.environ.get("AZURE_TTS_STORAGE_CONNECTION_STRING")
+            if not cs:
+                return jsonify({"success": False, "error": "AZURE_TTS_STORAGE_CONNECTION_STRING manquant"}), 500
+
+            blob_service_client = BlobServiceClient.from_connection_string(cs)
+            blob_client = blob_service_client.get_blob_client(container=CONTAINER_AUDIOS, blob=blob_path)
+            total_size = blob_client.get_blob_properties().size
             content_disposition = f'inline; filename="{os.path.basename(filename)}"'
+
+            def _stream_blob(offset=None, length=None):
+                downloader = blob_client.download_blob(offset=offset, length=length)
+                for chunk in downloader.chunks():
+                    yield chunk
 
             range_header = request.headers.get("Range")
             if not range_header:
                 return Response(
-                    audio_bytes,
+                    stream_with_context(_stream_blob()),
                     mimetype="audio/mpeg",
                     headers={
                         "Content-Disposition": content_disposition,
@@ -3407,16 +3418,15 @@ def create_hr_blueprint(socketio):
                     headers={"Content-Range": f"bytes */{total_size}"},
                 )
 
-            chunk = audio_bytes[start:end + 1]
             return Response(
-                chunk,
+                stream_with_context(_stream_blob(offset=start, length=end - start + 1)),
                 status=206,
                 mimetype="audio/mpeg",
                 headers={
                     "Content-Disposition": content_disposition,
                     "Accept-Ranges": "bytes",
                     "Content-Range": f"bytes {start}-{end}/{total_size}",
-                    "Content-Length": str(len(chunk)),
+                    "Content-Length": str(end - start + 1),
                     "Cache-Control": "no-store",
                 },
             )

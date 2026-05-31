@@ -52,45 +52,27 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
 
   const audioUrlRef = useRef(null)   // URL audio courante (mise à jour après cut/replace)
 
-  const revokeAudioObjectUrl = useCallback(() => {
-    if (audioUrlRef.current?.startsWith('blob:')) {
-      URL.revokeObjectURL(audioUrlRef.current)
-    }
+  const clearAudioUrl = useCallback(() => {
     audioUrlRef.current = null
   }, [])
 
-  // Charge l'audio via un fetch authentifié explicite. Sur Azure SWA, le player
-  // ne renvoie pas toujours les cookies/headers attendus, ce qui remonte en
-  // "Failed to fetch" sans message utile.
-  const loadAudioObjectUrl = useCallback(async () => {
-    revokeAudioObjectUrl()
+  const audioFetchHeaders = useCallback(() => {
     const token = localStorage.getItem('auth_token')
     const platformId = getPlatformId()
-    const resp = await fetch(
-      apiUrl(`/api/hr/cours-folders/${folderId}/audio-stream/${filename}?v=${Date.now()}`),
-      {
-        credentials: 'include',
-        headers: {
-          ...(token ? { 'X-Auth-Token': token } : {}),
-          'X-Platform-Id': platformId,
-        },
-      }
-    )
-    if (!resp.ok) {
-      let detail = `HTTP ${resp.status}`
-      try {
-        const data = await resp.json()
-        detail = data?.error || detail
-      } catch (_) {
-        // ignore: réponse non-JSON
-      }
-      throw new Error(detail)
+    return {
+      ...(token ? { 'X-Auth-Token': token } : {}),
+      'X-Platform-Id': platformId,
     }
-    const blob = await resp.blob()
-    const objectUrl = URL.createObjectURL(blob)
-    audioUrlRef.current = objectUrl
-    return objectUrl
-  }, [folderId, filename])
+  }, [])
+
+  // Donner une URL backend directement à WaveSurfer évite le double chargement
+  // fetch -> Blob -> WaveSurfer. Le backend streame le MP3 et supporte Range.
+  const buildAudioStreamUrl = useCallback(() => {
+    clearAudioUrl()
+    const url = apiUrl(`/api/hr/cours-folders/${folderId}/audio-stream/${encodeURIComponent(filename)}?v=${Date.now()}`)
+    audioUrlRef.current = url
+    return url
+  }, [clearAudioUrl, folderId, filename])
 
   // ── Init WaveSurfer ──
   useEffect(() => {
@@ -117,6 +99,10 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
       autoScroll: true,
       fillParent: true,
       blobMimeType: 'audio/mpeg',
+      fetchParams: {
+        credentials: 'include',
+        headers: audioFetchHeaders(),
+      },
       plugins: [regions],
     })
     wsRef.current = ws
@@ -152,9 +138,7 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
     const waveEl = waveRef.current
     waveEl?.addEventListener('wheel', handleWheel, { passive: false })
 
-    // Charger via le backend : le Blob Azure direct peut répondre 200 tout en
-    // échouant côté JS si CORS n'est pas configuré sur le compte Storage.
-    Promise.resolve(loadAudioObjectUrl())
+    Promise.resolve(buildAudioStreamUrl())
       .then(url => { if (!cancelled) return ws.load(url) })
       .catch(e => {
         if (cancelled) return
@@ -199,10 +183,10 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
       waveEl?.removeEventListener('wheel', handleWheel)
       ws.destroy()
       stopStitchedPlayback()
-      revokeAudioObjectUrl()
+      clearAudioUrl()
       bugRegionRefsRef.current = []
     }
-  }, [darkMode, loadAudioObjectUrl, revokeAudioObjectUrl])
+  }, [audioFetchHeaders, buildAudioStreamUrl, clearAudioUrl, darkMode])
 
   // Changer la couleur de la région selon le mode
   useEffect(() => {
@@ -263,10 +247,10 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
     clearBugRegions()
     try {
       const resp = await fetch(
-        apiUrl(`/api/hr/cours-folders/${folderId}/audio/${filename}/detect-bugs`),
+        apiUrl(`/api/hr/cours-folders/${folderId}/audio/${encodeURIComponent(filename)}/detect-bugs`),
         {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...audioFetchHeaders() },
           body: JSON.stringify({ seuil: 3.0, duree_min: 0.3 }),
           credentials: 'include',
         }
@@ -394,10 +378,10 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
     setError(null)
     try {
       const resp = await fetch(
-        apiUrl(`/api/hr/cours-folders/${folderId}/audio/${filename}/cut`),
+        apiUrl(`/api/hr/cours-folders/${folderId}/audio/${encodeURIComponent(filename)}/cut`),
         {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...audioFetchHeaders() },
           body: JSON.stringify({ start_ms: Math.round(region.start), end_ms: Math.round(region.end) }),
           credentials: 'include',
         }
@@ -409,7 +393,7 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
         // Recharger depuis une nouvelle SAS URL (le blob a changé)
         setTimeout(async () => {
           try {
-            const freshUrl = await loadAudioObjectUrl()
+            const freshUrl = buildAudioStreamUrl()
             setLoading(true)
             wsRef.current?.load(freshUrl)
           } catch (e) { /* ignore */ }
@@ -434,10 +418,10 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
     setPreviewAudio(null)
     try {
       const resp = await fetch(
-        apiUrl(`/api/hr/cours-folders/${folderId}/audio/${filename}/replace-preview`),
+        apiUrl(`/api/hr/cours-folders/${folderId}/audio/${encodeURIComponent(filename)}/replace-preview`),
         {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...audioFetchHeaders() },
           body: JSON.stringify({ text: replaceText }),
           credentials: 'include',
         }
@@ -473,10 +457,10 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
     setError(null)
     try {
       const resp = await fetch(
-        apiUrl(`/api/hr/cours-folders/${folderId}/audio/${filename}/replace-confirm`),
+        apiUrl(`/api/hr/cours-folders/${folderId}/audio/${encodeURIComponent(filename)}/replace-confirm`),
         {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...audioFetchHeaders() },
           body: JSON.stringify({
             preview_id: previewId,
             start_ms: Math.round(region.start),
@@ -492,7 +476,7 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
         setReplaceText('')
         setTimeout(async () => {
           try {
-            const freshUrl = await loadAudioObjectUrl()
+            const freshUrl = buildAudioStreamUrl()
             setLoading(true)
             wsRef.current?.load(freshUrl)
           } catch (e) { /* ignore */ }
