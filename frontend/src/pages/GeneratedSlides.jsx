@@ -22,6 +22,76 @@ import PracticeExerciseTemplate from '../components/slides/templates/PracticeExe
 import BeforeAfterTemplate from '../components/slides/templates/BeforeAfterTemplate';
 import { DeckWelcome, DeckAgenda } from '../components/slides/templates/DeckTemplates';
 
+const normalizeSourceText = (text = '') => String(text || '').replace(/\s+/g, ' ').trim();
+
+function getSlideSourceExcerpt(slide = {}) {
+  const sourceRef = slide.source_ref || {};
+  const sourceText = normalizeSourceText(slide.source_text || '');
+  const quote = normalizeSourceText(sourceRef.source_quote || slide.source_quote || '');
+  if (quote) return quote;
+
+  const words = sourceText.split(/\s+/).filter(Boolean);
+  const sourceStart = Number(sourceRef.word_start || 0);
+  const highlightStart = Number(sourceRef.highlight_word_start);
+  const highlightEnd = Number(sourceRef.highlight_word_end);
+
+  if (
+    words.length &&
+    Number.isFinite(highlightStart) &&
+    Number.isFinite(highlightEnd) &&
+    highlightEnd > highlightStart
+  ) {
+    const localStart = Math.max(0, Math.min(words.length, highlightStart - sourceStart));
+    const localEnd = Math.max(localStart + 1, Math.min(words.length, highlightEnd - sourceStart));
+    return words.slice(localStart, localEnd).join(' ');
+  }
+
+  return sourceText;
+}
+
+function renderHighlightedCourseSource(slide = {}) {
+  const sourceText = normalizeSourceText(slide.source_text || '');
+  if (!sourceText) return 'Texte source non disponible';
+
+  const sourceRef = slide.source_ref || {};
+  const excerpt = getSlideSourceExcerpt(slide);
+  const directIndex = excerpt ? sourceText.indexOf(excerpt) : -1;
+
+  if (directIndex >= 0 && excerpt.length) {
+    return (
+      <>
+        {sourceText.slice(0, directIndex)}
+        <mark>{sourceText.slice(directIndex, directIndex + excerpt.length)}</mark>
+        {sourceText.slice(directIndex + excerpt.length)}
+      </>
+    );
+  }
+
+  const words = sourceText.split(/\s+/).filter(Boolean);
+  const sourceStart = Number(sourceRef.word_start || 0);
+  const highlightStart = Number(sourceRef.highlight_word_start);
+  const highlightEnd = Number(sourceRef.highlight_word_end);
+
+  if (
+    !words.length ||
+    !Number.isFinite(highlightStart) ||
+    !Number.isFinite(highlightEnd) ||
+    highlightEnd <= highlightStart
+  ) {
+    return sourceText;
+  }
+
+  const localStart = Math.max(0, Math.min(words.length, highlightStart - sourceStart));
+  const localEnd = Math.max(localStart + 1, Math.min(words.length, highlightEnd - sourceStart));
+
+  return words.map((word, index) => (
+    <React.Fragment key={`${word}-${index}`}>
+      {index > 0 ? ' ' : ''}
+      {index >= localStart && index < localEnd ? <mark>{word}</mark> : word}
+    </React.Fragment>
+  ));
+}
+
 export default function GeneratedSlides() {
   const initialParams = new URLSearchParams(window.location.search);
   const [slides, setSlides] = useState([]);
@@ -40,10 +110,15 @@ export default function GeneratedSlides() {
   const [showTimeline, setShowTimeline] = useState(false);
   const [pipelineDebug, setPipelineDebug] = useState(null);
   const [showPipeline, setShowPipeline] = useState(false);
+  const [sourceView, setSourceView] = useState('slide');
 
   useEffect(() => {
     fetchExistingSlides();
   }, []);
+
+  useEffect(() => {
+    setSourceView('slide');
+  }, [currentSlide]);
 
   const fetchExistingSlides = async () => {
     try {
@@ -1264,7 +1339,7 @@ export default function GeneratedSlides() {
               cursor: 'pointer',
               padding: '0.5rem'
             }}>
-              {isScriptMode ? 'Voir le bloc source du cours' : "Voir le texte source (transcription de l'evenement)"}
+              {isScriptMode ? 'Voir le contenu utilise par la slide' : "Voir le texte source (transcription de l'evenement)"}
             </summary>
             <div style={{
               backgroundColor: '#2d2d44',
@@ -1280,6 +1355,30 @@ export default function GeneratedSlides() {
               }}>
                 {slides[currentSlide].event_summary}
               </p>
+              {isScriptMode && (
+                <div style={{
+                  display: 'flex',
+                  justifyContent: 'flex-end',
+                  marginBottom: '0.75rem'
+                }}>
+                  <button
+                    onClick={() => setSourceView(sourceView === 'slide' ? 'course' : 'slide')}
+                    style={{
+                      border: '1px solid rgba(129,212,250,0.35)',
+                      backgroundColor: sourceView === 'course' ? 'rgba(129,212,250,0.16)' : 'transparent',
+                      color: '#81D4FA',
+                      borderRadius: '6px',
+                      padding: '0.35rem 0.65rem',
+                      cursor: 'pointer',
+                      fontFamily: 'Poppins, sans-serif',
+                      fontSize: '0.78rem',
+                      fontWeight: 700
+                    }}
+                  >
+                    {sourceView === 'slide' ? 'Voir tout le cours' : 'Voir seulement la slide'}
+                  </button>
+                </div>
+              )}
               <p style={{
                 fontFamily: 'Poppins, sans-serif',
                 color: '#ccc',
@@ -1287,7 +1386,11 @@ export default function GeneratedSlides() {
                 lineHeight: 1.6,
                 margin: 0
               }}>
-                {slides[currentSlide].source_text || 'Texte source non disponible'}
+                {isScriptMode && sourceView === 'slide'
+                  ? getSlideSourceExcerpt(slides[currentSlide]) || 'Texte source non disponible'
+                  : isScriptMode
+                    ? renderHighlightedCourseSource(slides[currentSlide])
+                    : slides[currentSlide].source_text || 'Texte source non disponible'}
               </p>
             </div>
           </details>
@@ -1309,6 +1412,12 @@ export default function GeneratedSlides() {
         }
         .slide-transition-preview {
           will-change: opacity, transform;
+        }
+        mark {
+          background: rgba(250, 204, 21, 0.22);
+          color: #fef3c7;
+          border-radius: 3px;
+          padding: 0 2px;
         }
         .slide-transition-swipe {
           animation: slideSwipeIn 420ms cubic-bezier(0.2, 0.8, 0.2, 1);
