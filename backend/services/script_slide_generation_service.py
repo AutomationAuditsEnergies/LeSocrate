@@ -918,6 +918,8 @@ RÈGLES:
 - Le JSON de plan peut orienter le choix, mais le texte final reste le contrôle : une slide doit correspondre à ce qui est vraiment dit.
 - Le deck doit être lisible: titres courts, contenu très synthétique, aucun pavé.
 - Si deux idées sont proches, regroupe-les. Si une fenêtre répète une idée déjà traitée, saute-la.
+- Pour chaque slide, ajoute `source_quote`: une citation exacte, copiée mot pour mot depuis la fenêtre source, qui justifie cette slide.
+- `source_quote` doit être courte mais suffisante pour localiser la slide dans le texte: idéalement 15 à 60 mots.
 - Réponds uniquement en JSON valide.
 
 CATALOGUE TEMPLATES:
@@ -950,6 +952,7 @@ FORMAT EXACT:
       "template_type": "reflection",
       "event_type": "concept",
       "event_summary": "Phrase courte décrivant l'idée source",
+      "source_quote": "Citation exacte du passage source qui correspond à cette slide",
       "importance": 4,
       "data": {{"title": "...", "text": "..."}}
     }}
@@ -966,6 +969,25 @@ FENÊTRES DE CONTEXTE:
 def _as_text(value, fallback: str = "") -> str:
     text = str(value or fallback).strip()
     return text or fallback
+
+
+def _quote_word_offsets(block_text: str, quote: str) -> tuple[int, int] | None:
+    quote_norm = re.sub(r"\s+", " ", quote or "").strip()
+    block_norm = re.sub(r"\s+", " ", block_text or "").strip()
+    if not quote_norm or not block_norm:
+        return None
+
+    pos = block_norm.find(quote_norm)
+    if pos < 0:
+        return None
+
+    before = block_norm[:pos].strip()
+    quote_words = quote_norm.split()
+    start = len(before.split()) if before else 0
+    end = start + len(quote_words)
+    if end <= start:
+        return None
+    return start, end
 
 
 def _limit_list(value, max_len: int) -> list:
@@ -1125,6 +1147,7 @@ def _normalize_slide(raw: dict, block: dict) -> dict:
         "slide_anchor_id": slide_anchor_id or (anchor or {}).get("anchor_id"),
         "beat_id": _as_text(raw.get("beat_id"), (anchor or {}).get("beat_id") or "")[:100],
         "anchor_role": (anchor or {}).get("role") or "",
+        "source_quote": _as_text(raw.get("source_quote"), "")[:900],
     }
 
 
@@ -1173,6 +1196,24 @@ def _generate_batch(blocks: list[dict], source_title: str, model: str, pace_prof
 
 def _build_final_slide(slide: dict, block: dict, slide_number: int) -> dict:
     slide_kind = slide.get("slide_kind") or ("anchor" if slide.get("slide_anchor_id") else "generated")
+    source_ref = {
+        "source_block_id": block["source_block_id"],
+        "word_start": block["word_start"],
+        "word_end": block["word_end"],
+        "word_count": block["word_count"],
+        "sub_part_index": block.get("sub_part_index"),
+        "sub_part_name": block.get("sub_part_name"),
+        "segments": block.get("source_refs", []),
+        "slide_anchors": block.get("slide_anchors") or [],
+    }
+    quote = slide.get("source_quote") or ""
+    quote_offsets = _quote_word_offsets(block.get("text", ""), quote)
+    if quote_offsets:
+        local_start, local_end = quote_offsets
+        source_ref["highlight_word_start"] = block["word_start"] + local_start
+        source_ref["highlight_word_end"] = block["word_start"] + local_end
+        source_ref["source_quote"] = quote
+
     return {
         "slide_id": f"script-s{slide_number + 1:03d}-b{block['source_block_id'] + 1:03d}",
         "trigger_time": None,
@@ -1187,16 +1228,7 @@ def _build_final_slide(slide: dict, block: dict, slide_number: int) -> dict:
         "slide_kind": slide_kind,
         "transition_effect": slide.get("transition_effect") or ("swipe-left-to-right" if slide_kind == "anchor" else "fade"),
         "source_text": block["text"],
-        "source_ref": {
-            "source_block_id": block["source_block_id"],
-            "word_start": block["word_start"],
-            "word_end": block["word_end"],
-            "word_count": block["word_count"],
-            "sub_part_index": block.get("sub_part_index"),
-            "sub_part_name": block.get("sub_part_name"),
-            "segments": block.get("source_refs", []),
-            "slide_anchors": block.get("slide_anchors") or [],
-        },
+        "source_ref": source_ref,
         "importance": slide.get("importance", 3),
         **({"fallback_reason": slide["fallback_reason"]} if slide.get("fallback_reason") else {}),
     }

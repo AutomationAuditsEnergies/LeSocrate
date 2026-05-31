@@ -2139,7 +2139,7 @@ function SlideDeckDayAudit({ folder, deck, initiallyOpen }) {
                   )
                 })}
               </div>
-              <SlideSourcePreviewRow slide={activeSlide} index={activeSlideIndex} />
+              <SlideSourcePreviewRow slide={activeSlide} index={activeSlideIndex} slides={slides} />
             </>
           )}
         </div>
@@ -2148,12 +2148,110 @@ function SlideDeckDayAudit({ folder, deck, initiallyOpen }) {
   )
 }
 
-function SlideSourcePreviewRow({ slide, index }) {
+function getSharedSourceKey(slide) {
+  const ref = slide?.source_ref || {}
+  return [
+    ref.source_block_id ?? 'block',
+    ref.word_start ?? 'start',
+    ref.word_end ?? 'end',
+  ].join(':')
+}
+
+function getSlideSourceHighlight(slide, index, slides, sourceText) {
+  const words = normalizeWhitespace(sourceText || '').split(/\s+/).filter(Boolean)
+  const sourceRef = slide?.source_ref || {}
+  const sourceStart = Number(sourceRef.word_start || 0)
+  if (words.length === 0) {
+    return { start: 0, end: 0, globalStart: sourceStart, globalEnd: sourceStart, sharedCount: 0 }
+  }
+
+  const exactStart = Number(sourceRef.highlight_word_start)
+  const exactEnd = Number(sourceRef.highlight_word_end)
+  if (Number.isFinite(exactStart) && Number.isFinite(exactEnd) && exactEnd > exactStart) {
+    const start = Math.max(0, Math.min(words.length, exactStart - sourceStart))
+    const end = Math.max(start + 1, Math.min(words.length, exactEnd - sourceStart))
+    return {
+      start,
+      end,
+      globalStart: sourceStart + start,
+      globalEnd: sourceStart + end,
+      sharedCount: 1,
+      exact: true,
+    }
+  }
+
+  const key = getSharedSourceKey(slide)
+  const shared = (slides || [])
+    .map((candidate, candidateIndex) => ({ slide: candidate, index: candidateIndex }))
+    .filter(item => getSharedSourceKey(item.slide) === key)
+    .sort((a, b) => a.index - b.index)
+
+  if (shared.length <= 1) {
+    return {
+      start: 0,
+      end: words.length,
+      globalStart: sourceStart,
+      globalEnd: sourceStart + words.length,
+      sharedCount: 1,
+      exact: false,
+    }
+  }
+
+  const sharedIndex = Math.max(0, shared.findIndex(item => item.index === index))
+  const start = Math.round(sharedIndex * words.length / shared.length)
+  const end = Math.max(start + 1, Math.round((sharedIndex + 1) * words.length / shared.length))
+
+  return {
+    start,
+    end: Math.min(words.length, end),
+    globalStart: sourceStart + start,
+    globalEnd: sourceStart + Math.min(words.length, end),
+    sharedCount: shared.length,
+    exact: false,
+  }
+}
+
+function HighlightedSourceText({ text, highlight }) {
+  const words = normalizeWhitespace(text || '').split(/\s+/).filter(Boolean)
+  if (!words.length) return <div>Passage source non disponible.</div>
+
+  const start = Math.max(0, Math.min(words.length, highlight?.start ?? 0))
+  const end = Math.max(start, Math.min(words.length, highlight?.end ?? words.length))
+  const before = words.slice(0, start).join(' ')
+  const selected = words.slice(start, end).join(' ')
+  const after = words.slice(end).join(' ')
+
+  return (
+    <div>
+      {before && <span>{before} </span>}
+      {selected && (
+        <mark style={{
+          background: 'rgba(250,204,21,0.22)',
+          color: '#fef3c7',
+          border: '1px solid rgba(250,204,21,0.28)',
+          borderRadius: '6px',
+          padding: '1px 3px',
+          boxDecorationBreak: 'clone',
+          WebkitBoxDecorationBreak: 'clone',
+        }}>
+          {selected}
+        </mark>
+      )}
+      {after && <span> {after}</span>}
+    </div>
+  )
+}
+
+function SlideSourcePreviewRow({ slide, index, slides = [] }) {
   const sourceRef = slide.source_ref || {}
   const sourceText = normalizeWhitespace(slide.source_text || '')
+  const highlight = getSlideSourceHighlight(slide, index, slides, sourceText)
   const sourceRange = sourceRef.word_start !== undefined || sourceRef.word_end !== undefined
     ? `mots ${sourceRef.word_start ?? '--'}-${sourceRef.word_end ?? '--'}`
     : 'fenêtre source'
+  const highlightRange = highlight.sharedCount > 1
+    ? `surligné ${highlight.globalStart}-${highlight.globalEnd} · fenêtre partagée par ${highlight.sharedCount} slides`
+    : `surligné ${highlight.globalStart}-${highlight.globalEnd}${highlight.exact ? ' · citation exacte' : ''}`
 
   return (
     <div style={{
@@ -2215,7 +2313,15 @@ function SlideSourcePreviewRow({ slide, index }) {
               Idée visualisée : {slide.event_summary}
             </div>
           )}
-          <div>{sourceText || 'Passage source non disponible.'}</div>
+          <div style={{
+            marginBottom: '10px',
+            color: '#facc15',
+            fontSize: '11px',
+            fontWeight: 800,
+          }}>
+            Passage correspondant à la slide {index + 1} : {highlightRange}
+          </div>
+          <HighlightedSourceText text={sourceText} highlight={highlight} />
         </div>
       </div>
 
