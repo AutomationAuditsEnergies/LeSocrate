@@ -2000,6 +2000,22 @@ def _silent_mp3_approx_no_ffmpeg(duration_sec: float) -> tuple[bytes, float]:
     return concat_mp3_bytes([one_sec] * repeat), one_sec_duration * repeat
 
 
+def _pad_course_mp3_to_duration_no_ffprobe(
+    audio_bytes: bytes,
+    voice_duration_sec: float,
+    target_duration_sec: int | float,
+) -> tuple[bytes, float]:
+    """Pad course MP3 without pydub/ffprobe by concatenating MP3 frame streams."""
+    from services.basic_tts_service import concat_mp3_bytes
+
+    target_duration_sec = float(target_duration_sec or 0)
+    voice_duration_sec = max(0.0, float(voice_duration_sec or 0.0))
+    start_bytes, start_duration = _silent_mp3_approx_no_ffmpeg(_COURSE_START_SILENCE_SECONDS)
+    end_duration_target = max(0.0, target_duration_sec - start_duration - voice_duration_sec)
+    end_bytes, end_duration = _silent_mp3_approx_no_ffmpeg(end_duration_target)
+    return concat_mp3_bytes([start_bytes, audio_bytes, end_bytes]), start_duration + voice_duration_sec + end_duration
+
+
 def _edge_muted_padding_audio(duration_sec: float, on_progress=None) -> tuple[bytes, float]:
     """Return Edge-compatible muted padding for course MP3 concatenation."""
     if duration_sec <= 0:
@@ -4840,7 +4856,12 @@ def _synthesize_course_audio_to_fit(
         actual_reading = _fish_actual_reading_summary(timestamp_meta, input_text=bloc["text"])
     else:
         audio_bytes = convert_to_speech(bloc["text"], speed=api_speed)
-    raw_duration = measure_duration_ms(audio_bytes) / 1000
+    raw_duration = float((actual_reading or {}).get("audio_duration_sec") or 0.0)
+    if not raw_duration:
+        try:
+            raw_duration = _mp3_duration_seconds_no_ffprobe(audio_bytes)
+        except Exception:
+            raw_duration = measure_duration_ms(audio_bytes) / 1000
     attempts.append({
         "kind": "api_timestamped" if actual_reading else "api",
         "speed": api_speed,
@@ -4849,10 +4870,10 @@ def _synthesize_course_audio_to_fit(
     })
 
     if raw_duration <= max_voice_sec:
-        final_bytes = pad_audio_to_duration(
+        final_bytes, _final_duration = _pad_course_mp3_to_duration_no_ffprobe(
             audio_bytes,
+            raw_duration,
             target_sec,
-            truncate_overflow=False,
         )
         return final_bytes, raw_duration, f"api_speed={api_speed}", attempts
 
@@ -9918,7 +9939,10 @@ def generate_audio_from_script(
                 # Estimation fallback : ~1 KB/s pour un MP3 mono 32 kbps
                 final_duration = len(final_bytes) / 4000
         else:
-            final_duration = _measure_duration_ms(final_bytes) / 1000
+            try:
+                final_duration = _mp3_duration_seconds_no_ffprobe(final_bytes)
+            except Exception:
+                final_duration = target_sec
         _assert_audio_duration_within_slot(filename, final_duration, target_sec)
         blob_path = f"{azure_prefix}{filename}"
         upload_blob(CONTAINER_AUDIOS, blob_path, final_bytes)
