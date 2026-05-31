@@ -198,6 +198,15 @@ def _edge_tts_fast_workers() -> int:
     return max(1, min(workers, 6))
 
 
+def _fish_audio_course_workers() -> int:
+    """Nombre de blocs cours Fish Audio lancés en parallèle dans une journée."""
+    try:
+        workers = int(os.getenv("FISH_AUDIO_COURSE_WORKERS", "7"))
+    except (TypeError, ValueError):
+        workers = 7
+    return max(1, min(workers, 7))
+
+
 def _edge_tts_fast_cache_enabled() -> bool:
     value = (os.getenv("EDGE_TTS_FAST_TEST_CACHE", "true") or "").strip().lower()
     return value not in {"0", "false", "no", "off"}
@@ -4938,6 +4947,46 @@ def _synthesize_course_audio_to_fit(
         "Audio non uploadé pour éviter une coupure en pleine phrase."
     )
 
+
+def _synthesize_fish_course_audio_observe(
+    bloc,
+    convert_to_speech,
+    measure_duration_ms,
+    convert_to_speech_with_timestamps=None,
+):
+    """
+    Génère Fish Audio tel quel et mesure la durée réelle.
+    Utilisé pour lancer les cours d'une journée en parallèle sans réduire le
+    texte ni rejeter un bloc parce qu'il dépasse son créneau théorique.
+    """
+    api_speed = _course_tts_speed()
+    actual_reading = None
+    if convert_to_speech_with_timestamps and _fish_timestamp_alignment_enabled():
+        audio_bytes, timestamp_meta = convert_to_speech_with_timestamps(
+            bloc["text"],
+            speed=api_speed,
+            format="mp3",
+        )
+        actual_reading = _fish_actual_reading_summary(timestamp_meta, input_text=bloc["text"])
+    else:
+        audio_bytes = convert_to_speech(bloc["text"], speed=api_speed)
+
+    raw_duration = float((actual_reading or {}).get("audio_duration_sec") or 0.0)
+    if not raw_duration:
+        try:
+            raw_duration = _mp3_duration_seconds_no_ffprobe(audio_bytes)
+        except Exception:
+            raw_duration = measure_duration_ms(audio_bytes) / 1000
+
+    attempts = [{
+        "kind": "api_observe_timestamped" if actual_reading else "api_observe",
+        "speed": api_speed,
+        "duration": raw_duration,
+        "actual_reading": actual_reading,
+    }]
+    return audio_bytes, raw_duration, f"fish_observe_speed={api_speed}", attempts
+
+
 # Prompt général de génération du contenu de formation.
 # Il reste dans backend/prompts/ pour être embarqué dans l'artifact de déploiement
 # backend — le workflow ne package que ./backend/.
@@ -9166,7 +9215,7 @@ def generate_audio_from_script(
                             skipped_reason=None, opening_rewritten=False,
                             opening_text="", opening_original_start="",
                             runtime_conclusions=None, runtime_ai_decisions=None,
-                            target_plan=None):
+                            actual_reading=None, target_plan=None):
         target = course_script_plan if target_plan is None else target_plan
         target.append(
             _serialize_course_bloc(
@@ -9181,8 +9230,187 @@ def generate_audio_from_script(
                 opening_original_start=opening_original_start,
                 runtime_conclusions=runtime_conclusions,
                 runtime_ai_decisions=runtime_ai_decisions,
+                actual_reading=actual_reading,
             )
         )
+
+    def _parallel_fish_course_worker(item_idx, filename, duration_sec, bloc_num):
+        step = item_idx + 1
+        item_started_at = time.time()
+        bloc = blocs_by_number.get(bloc_num)
+        audio_bloc = bloc
+        opening_rewritten = False
+        opening_text = ""
+        opening_original_start = ""
+        try:
+            logger.info(
+                "PIPELINE_AUDIO_ITEM_START formation_job_id=%s content_job_id=%s folder_id=%s item=%s/%s filename=%s type=cours bloc=%s target_sec=%s parallel_fish=true",
+                formation_job_id,
+                job_id,
+                folder_id,
+                step,
+                len(playlist_items),
+                filename,
+                bloc_num,
+                duration_sec,
+            )
+            if not bloc:
+                return {
+                    "item_idx": item_idx,
+                    "status": "skipped",
+                    "skipped_reason": "bloc_missing",
+                    "filename": filename,
+                    "bloc_num": bloc_num,
+                    "duration_ms": int((time.time() - item_started_at) * 1000),
+                }
+            if not bloc.get("dirty"):
+                return {
+                    "item_idx": item_idx,
+                    "status": "skipped",
+                    "skipped_reason": "clean_bloc",
+                    "filename": filename,
+                    "bloc": bloc,
+                    "bloc_num": bloc_num,
+                    "duration_ms": int((time.time() - item_started_at) * 1000),
+                }
+            if not (bloc.get("text") or "").strip():
+                return {
+                    "item_idx": item_idx,
+                    "status": "skipped",
+                    "skipped_reason": "empty_text",
+                    "filename": filename,
+                    "bloc": bloc,
+                    "bloc_num": bloc_num,
+                    "duration_ms": int((time.time() - item_started_at) * 1000),
+                }
+
+            if _course_opening_transitions_enabled():
+                from services.break_transition_service import nearest_course_bloc
+                prev_course = nearest_course_bloc(playlist_items, item_idx, -1)
+                prev_bloc_text = ""
+                if prev_course and prev_course in blocs_by_number:
+                    prev_data = blocs_by_number.get(prev_course) or {}
+                    prev_bloc_text = prev_data.get("text") or ""
+                _progress(
+                    step,
+                    len(playlist_items),
+                    f"Bloc {bloc['bloc_number']}/7 — intro IA + Fish parallèle...",
+                )
+                rewritten_text, opening_meta = _rewrite_course_opening_for_audio(
+                    bloc,
+                    playlist_items,
+                    item_idx,
+                    model=llm_model,
+                    previous_excerpt=_tail_words(prev_bloc_text, 220),
+                )
+                if rewritten_text and rewritten_text != (bloc.get("text") or "").strip():
+                    audio_bloc = dict(bloc)
+                    audio_bloc["text"] = rewritten_text
+                    audio_bloc["word_count"] = len(rewritten_text.split())
+                    opening_rewritten = True
+                    opening_text = (opening_meta or {}).get("opening_text") or ""
+                    opening_original_start = (opening_meta or {}).get("original_start") or ""
+
+            _progress(
+                step,
+                len(playlist_items),
+                f"Bloc {bloc['bloc_number']}/7 — Fish Audio parallèle ({len(audio_bloc['text'].split())} mots)...",
+            )
+            final_bytes, voice_duration, fit_method, attempts = _synthesize_fish_course_audio_observe(
+                audio_bloc,
+                convert_to_speech,
+                _measure_duration_ms,
+                convert_to_speech_with_timestamps=convert_to_speech_with_timestamps,
+            )
+            actual_reading = _actual_reading_from_attempts(attempts)
+            final_duration = float(voice_duration)
+            blob_path = f"{azure_prefix}{filename}"
+            upload_blob(CONTAINER_AUDIOS, blob_path, final_bytes)
+            logger.info(
+                "PIPELINE_AUDIO_ITEM_DONE formation_job_id=%s content_job_id=%s folder_id=%s filename=%s type=cours bloc=%s final_duration=%.1f words=%s duration_ms=%s parallel_fish=true",
+                formation_job_id,
+                job_id,
+                folder_id,
+                filename,
+                bloc["bloc_number"],
+                final_duration,
+                len((audio_bloc.get("text") or "").split()),
+                int((time.time() - item_started_at) * 1000),
+            )
+            return {
+                "item_idx": item_idx,
+                "status": "generated",
+                "filename": filename,
+                "bloc": bloc,
+                "audio_bloc": audio_bloc,
+                "voice_duration": voice_duration,
+                "final_duration": final_duration,
+                "fit_method": fit_method,
+                "attempts": attempts,
+                "actual_reading": actual_reading,
+                "opening_rewritten": opening_rewritten,
+                "opening_text": opening_text,
+                "opening_original_start": opening_original_start,
+                "duration_ms": int((time.time() - item_started_at) * 1000),
+            }
+        except Exception as exc:
+            logger.exception(
+                "PIPELINE_AUDIO_ITEM_FAILED formation_job_id=%s content_job_id=%s folder_id=%s filename=%s bloc=%s parallel_fish=true",
+                formation_job_id,
+                job_id,
+                folder_id,
+                filename,
+                bloc_num,
+            )
+            return {
+                "item_idx": item_idx,
+                "status": "error",
+                "filename": filename,
+                "bloc_num": bloc_num,
+                "error": str(exc),
+                "duration_ms": int((time.time() - item_started_at) * 1000),
+            }
+
+    parallel_fish_course_results = {}
+    fish_course_workers = _fish_audio_course_workers()
+    parallel_fish_courses_enabled = (
+        not mock
+        and not basic_tts
+        and not sync_slides
+        and fish_course_workers > 1
+    )
+    if parallel_fish_courses_enabled:
+        dirty_course_items = [
+            (idx, filename, duration_sec, bloc_num)
+            for idx, (filename, duration_sec, file_type, bloc_num) in enumerate(playlist_items)
+            if file_type == "cours"
+            and (blocs_by_number.get(bloc_num) or {}).get("dirty")
+            and ((blocs_by_number.get(bloc_num) or {}).get("text") or "").strip()
+        ]
+        if len(dirty_course_items) > 1:
+            import eventlet as _ev
+            workers = min(fish_course_workers, len(dirty_course_items))
+            logger.info(
+                "PIPELINE_AUDIO_FISH_PARALLEL_COURSES formation_job_id=%s content_job_id=%s folder_id=%s courses=%s workers=%s",
+                formation_job_id,
+                job_id,
+                folder_id,
+                len(dirty_course_items),
+                workers,
+            )
+            _progress(
+                0,
+                len(playlist_items),
+                f"Fish Audio — génération parallèle de {len(dirty_course_items)} cours ({workers} workers)...",
+            )
+            pool = _ev.GreenPool(size=workers)
+            pile = _ev.GreenPile(pool)
+            for args in dirty_course_items:
+                pile.spawn(_parallel_fish_course_worker, *args)
+            for result in pile:
+                parallel_fish_course_results[result["item_idx"]] = result
+        else:
+            parallel_fish_courses_enabled = False
 
     for item_idx, (filename, duration_sec, file_type, bloc_num) in enumerate(playlist_items):
         step = item_idx + 1
@@ -9380,6 +9608,95 @@ def generate_audio_from_script(
                 int((time.time() - item_started_at) * 1000),
             )
             skipped.append(filename)
+            continue
+
+        parallel_result = parallel_fish_course_results.get(item_idx)
+        if parallel_result:
+            if parallel_result.get("status") == "error":
+                raise RuntimeError(
+                    f"Fish Audio parallèle échoué pour {filename}: "
+                    f"{parallel_result.get('error') or 'erreur inconnue'}"
+                )
+            if parallel_result.get("status") != "generated":
+                skipped_reason = parallel_result.get("skipped_reason") or "parallel_skip"
+                logger.info(f"   ⏭️ Bloc {bloc['bloc_number']} ({filename}) : {skipped_reason}")
+                _record_course_bloc(
+                    bloc,
+                    status="preserved" if skipped_reason == "clean_bloc" else "skipped",
+                    text=bloc.get("text", ""),
+                    skipped_reason=skipped_reason,
+                )
+                _record_course_bloc(
+                    bloc,
+                    status="planned" if skipped_reason == "clean_bloc" else "skipped",
+                    text=bloc.get("text", ""),
+                    skipped_reason=skipped_reason,
+                    target_plan=planned_course_script_plan,
+                )
+                skipped.append(filename)
+                continue
+
+            audio_bloc = parallel_result["audio_bloc"]
+            voice_duration = float(parallel_result.get("voice_duration") or 0.0)
+            final_duration = float(parallel_result.get("final_duration") or voice_duration)
+            fit_method = parallel_result.get("fit_method") or "fish_observe_parallel"
+            attempts = parallel_result.get("attempts") or []
+            actual_reading = parallel_result.get("actual_reading")
+            if actual_reading:
+                audio_bloc["actual_reading"] = actual_reading
+                bloc["actual_reading"] = actual_reading
+                logger.info(
+                    "PIPELINE_AUDIO_ACTUAL_READING formation_job_id=%s content_job_id=%s "
+                    "folder_id=%s bloc=%s input_words=%s fish_words=%s voice_duration=%.1f "
+                    "wpm=%.1f words_per_hour=%.0f",
+                    formation_job_id,
+                    job_id,
+                    folder_id,
+                    bloc["bloc_number"],
+                    actual_reading.get("input_spoken_word_count"),
+                    actual_reading.get("fish_segment_word_count"),
+                    float(actual_reading.get("audio_duration_sec") or 0.0),
+                    float(actual_reading.get("words_per_minute") or 0.0),
+                    float(actual_reading.get("words_per_hour") or 0.0),
+                )
+            logger.info(
+                f"   ✅ Bloc {bloc['bloc_number']} ({filename}) : Fish parallèle terminé "
+                f"({final_duration:.1f}s, {fit_method})"
+            )
+            _progress(
+                step,
+                len(playlist_items),
+                f"Bloc {bloc['bloc_number']}/7 — terminé Fish parallèle ({final_duration:.1f}s)",
+            )
+            _record_course_bloc(
+                audio_bloc,
+                status="planned",
+                text=audio_bloc.get("text", ""),
+                final_duration_sec=round(final_duration, 3),
+                opening_rewritten=parallel_result.get("opening_rewritten", False),
+                opening_text=parallel_result.get("opening_text") or "",
+                opening_original_start=parallel_result.get("opening_original_start") or "",
+                actual_reading=actual_reading,
+                target_plan=planned_course_script_plan,
+            )
+            _record_course_bloc(
+                bloc,
+                status="generated",
+                text=audio_bloc.get("text", ""),
+                final_duration_sec=round(final_duration, 3),
+                opening_rewritten=parallel_result.get("opening_rewritten", False),
+                opening_text=parallel_result.get("opening_text") or "",
+                opening_original_start=parallel_result.get("opening_original_start") or "",
+                actual_reading=actual_reading,
+            )
+            generated.append(filename)
+            seg_keys = [
+                (segments[i]["sub_idx"], segments[i]["passe"])
+                for i in bloc["contributing_seg_indices"]
+                if segments[i]["dirty"]
+            ]
+            if seg_keys:
+                _mark_content_segments_clean(job_id, seg_keys)
             continue
 
         audio_bloc = bloc
