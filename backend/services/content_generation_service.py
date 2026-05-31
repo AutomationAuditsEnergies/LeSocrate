@@ -201,10 +201,30 @@ def _edge_tts_fast_workers() -> int:
 def _fish_audio_course_workers() -> int:
     """Nombre de blocs cours Fish Audio lancés en parallèle dans une journée."""
     try:
-        workers = int(os.getenv("FISH_AUDIO_COURSE_WORKERS", "7"))
+        workers = int(os.getenv("FISH_AUDIO_COURSE_WORKERS", "2"))
     except (TypeError, ValueError):
-        workers = 7
+        workers = 2
     return max(1, min(workers, 7))
+
+
+def _fish_audio_429_retry_config() -> dict:
+    try:
+        max_retries = int(os.getenv("FISH_AUDIO_429_MAX_RETRIES", "4"))
+    except (TypeError, ValueError):
+        max_retries = 4
+    try:
+        base_wait = float(os.getenv("FISH_AUDIO_429_BASE_WAIT_SEC", "45"))
+    except (TypeError, ValueError):
+        base_wait = 45.0
+    try:
+        max_wait = float(os.getenv("FISH_AUDIO_429_MAX_WAIT_SEC", "240"))
+    except (TypeError, ValueError):
+        max_wait = 240.0
+    return {
+        "max_retries": max(0, max_retries),
+        "base_wait_sec": max(1.0, base_wait),
+        "max_wait_sec": max(1.0, max_wait),
+    }
 
 
 def _edge_tts_fast_cache_enabled() -> bool:
@@ -4961,15 +4981,39 @@ def _synthesize_fish_course_audio_observe(
     """
     api_speed = _course_tts_speed()
     actual_reading = None
-    if convert_to_speech_with_timestamps and _fish_timestamp_alignment_enabled():
-        audio_bytes, timestamp_meta = convert_to_speech_with_timestamps(
-            bloc["text"],
-            speed=api_speed,
-            format="mp3",
-        )
-        actual_reading = _fish_actual_reading_summary(timestamp_meta, input_text=bloc["text"])
-    else:
-        audio_bytes = convert_to_speech(bloc["text"], speed=api_speed)
+    retry_config = _fish_audio_429_retry_config()
+    retry_attempt = 0
+    while True:
+        try:
+            if convert_to_speech_with_timestamps and _fish_timestamp_alignment_enabled():
+                audio_bytes, timestamp_meta = convert_to_speech_with_timestamps(
+                    bloc["text"],
+                    speed=api_speed,
+                    format="mp3",
+                )
+                actual_reading = _fish_actual_reading_summary(timestamp_meta, input_text=bloc["text"])
+            else:
+                audio_bytes = convert_to_speech(bloc["text"], speed=api_speed)
+            break
+        except Exception as exc:
+            error_text = str(exc)
+            is_rate_limited = "429" in error_text or "too many requests" in error_text.lower()
+            if not is_rate_limited or retry_attempt >= retry_config["max_retries"]:
+                raise
+            retry_attempt += 1
+            wait_sec = min(
+                retry_config["max_wait_sec"],
+                retry_config["base_wait_sec"] * (2 ** (retry_attempt - 1)),
+            )
+            logger.warning(
+                "PIPELINE_AUDIO_FISH_429_RETRY bloc=%s attempt=%s/%s wait_sec=%.1f error=%s",
+                bloc.get("bloc_number"),
+                retry_attempt,
+                retry_config["max_retries"],
+                wait_sec,
+                error_text[:220],
+            )
+            time.sleep(wait_sec)
 
     raw_duration = float((actual_reading or {}).get("audio_duration_sec") or 0.0)
     if not raw_duration:
@@ -4983,6 +5027,7 @@ def _synthesize_fish_course_audio_observe(
         "speed": api_speed,
         "duration": raw_duration,
         "actual_reading": actual_reading,
+        "rate_limit_retries": retry_attempt,
     }]
     return audio_bytes, raw_duration, f"fish_observe_speed={api_speed}", attempts
 
