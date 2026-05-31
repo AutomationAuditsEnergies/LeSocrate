@@ -171,9 +171,15 @@ audio.visually-hidden {
   100% { transform: scale(1); opacity: 1; }
 }
 
-.pipeline-slide-preview-scope > [class$="-slide-container"] {
+.pipeline-slide-preview-scope > * {
   width: 100% !important;
   max-width: none !important;
   height: 100% !important;
+  min-height: 0 !important;
   box-shadow: none !important;
+}
+
+.pipeline-slide-preview-scope .deck-slide {
+  width: 100% !important;
+  max-width: none !important;
 }

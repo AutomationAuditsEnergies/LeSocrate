@@ -41,10 +41,35 @@ import LearningPathTemplate from '../components/slides/templates/LearningPathTem
 import PracticeExerciseTemplate from '../components/slides/templates/PracticeExerciseTemplate';
 import SelfManagementTemplate from '../components/slides/templates/SelfManagementTemplate';
 import SignalRadarTemplate from '../components/slides/templates/SignalRadarTemplate';
+import { DeckAgenda, DeckPause, DeckQA, DeckWelcome } from '../components/slides/templates/DeckTemplates';
 
 const P = { badge: 'TP-CRCD', brandName: 'SALES HACKING' };
 
 const GROUPS = [
+  {
+    label: 'Deck fourni',
+    items: [
+      { type: 'welcome', label: '01 Intro formation', data: { title: "L'IA dans vos", formation_name: 'opérations.', subtitle: 'Sept séances pour transformer vos process internes en machines reproductibles.', day_label: 'MODULE 03 — CHAPITRE 01' } },
+      { type: 'reflection', label: '02 Big statement', data: { title: "Vous n'avez pas un problème d'outils. Vous avez un problème de processus.", text: "Et c'est une bonne nouvelle." } },
+      { type: 'definition', label: '03 Definition', data: { term: 'Opération.', eyebrow: 'Vocabulaire #01', definition: "Un système répétable qui produit un résultat prévisible — sans dépendre d'une personne en particulier.", isItems: ['RÉPÉTABLE', 'MESURABLE', 'DÉLÉGABLE', 'DOCUMENTÉ'] } },
+      { type: 'comparison', label: '04 Diagnostic', data: { title: 'Équipe épuisée vs autonome.', cols: [{ label: 'État actuel', items: ['Tout passe par 2 personnes', 'Aucun process écrit', '3h/jour en Slack', 'Erreurs qui se répètent'] }, { label: 'Objectif 7 semaines', items: ['Décisions distribuées', '12 SOPs documentées', 'Slack divisé par 4', 'Erreurs trackées + résolues'] }] } },
+      { type: 'warning', label: '05 Mistake', data: { title: 'Automatiser le chaos.', text: "Brancher une IA sur un process bancal multiplie le désordre à la vitesse de la machine. Documentez d'abord, automatisez ensuite." } },
+      { type: 'casestudy', label: '06 Case study', data: { title: 'Atelier Mirabel', cases: [{ title: '−72% heures admin/mois', desc: 'Baisse du temps passé sur les tâches administratives répétitives.' }, { title: '4,8k€ économisés', desc: 'Gains mesurés sur le premier trimestre.' }, { title: '12 semaines', desc: 'Retour sur investissement avant généralisation.' }] } },
+      { type: 'steps', label: '07 Process', data: { title: '4 étapes pour rendre un process délégable.', steps: [{ title: 'Observer', desc: 'Filmer 5 fois la tâche réelle.' }, { title: 'Découper', desc: 'Identifier décisions, actions répétables et exceptions.' }, { title: 'Automatiser', desc: "Brancher l'IA uniquement sur les segments stables." }, { title: 'Mesurer', desc: 'Définir 1 KPI par étape.' }] } },
+      { type: 'checklist', label: '08 Checklist', data: { title: 'Votre devoir maison.', points: ['Identifier 1 process qui prend plus de 4h/semaine.', 'Filmer la tâche en conditions réelles.', 'Découper en 5 à 8 étapes nommées au verbe.'] } },
+      { type: 'recap', label: '09 Recap', data: { title: "Ce qu'on retient.", points: ["Process avant outils : l'outil amplifie ce qui existe.", 'Filmer la réalité : observer avant de prescrire.', 'Mesurer ou tâtonner : 1 chiffre par étape.'] } },
+      { type: 'transition', label: '10 Transition', data: { title: 'On passe à la pratique.', from_topic: 'FIN DE CHAPITRE', to_topic: 'Module 04 · Mardi 21h' } },
+      { type: 'pause', label: '11 Pause', data: { title: 'Pause.', duration: '5 minutes.', subtitle: "notez ce qui vous a marqué jusqu'ici." } },
+      { type: 'qa', label: '12 Q&A', data: { title: 'On répond à tout.' } },
+      { type: 'day_program', label: '13 Agenda', data: { title: 'Au programme.', formation_name: '7 sujets · 42 minutes · 3 livrables à repartir avec.', items: ['Intro & Postulat', 'Définition Opération', 'Méthode O.D.A.M.', 'Cas client — Atelier Mirabel', 'Exercice pratique'] } },
+      { type: 'quotable', label: '14 Quote', data: { quote: "On a doublé la capacité de l'équipe sans recruter. Le secret ? Arrêter de tout faire passer par nous." } },
+      { type: 'exercise', label: '15 Exercise', data: { title: 'Cartographier un process.', duration: '12 minutes', objective: 'Choisissez une tâche répétitive que votre équipe fait chaque semaine.', steps: [{ title: 'Nommer la tâche', desc: 'Un verbe + un objet.' }, { title: 'Lister les étapes réelles', desc: 'Ce que vous faites vraiment.' }, { title: 'Identifier la décision critique', desc: 'Le moment où seule une personne peut choisir.' }, { title: 'Poster dans le canal', desc: 'Format libre, puis débrief ensemble.' }] } },
+      { type: 'stats', label: '16 Stats', data: { title: "L'automatisation, en chiffres.", description: 'Source · McKinsey 2024', stats: [{ number: '45%', label: 'Des tâches actuelles automatisables' }, { number: '3,2×', label: 'Productivité gagnée sur process documentés' }, { number: '−62%', label: "D'erreurs après 90 jours de SOP" }, { number: '11h', label: 'Économisées par semaine' }] } },
+      { type: 'warning', label: '17 Warning', data: { title: 'Ne jamais scaler le chaos.', text: "Brancher de l'IA sur un process non documenté ne résout rien : ça multiplie les bugs à la vitesse de la machine." } },
+      { type: 'comparison', label: '18 Comparison', data: { title: 'Avant vs après.', cols: [{ label: 'Avant O.D.A.M.', items: ['Toujours les mêmes 2 personnes', '4–6 semaines en moyenne', 'Erreurs régulières et non tracées', 'Partielle, risquée'] }, { label: 'Après O.D.A.M.', items: ['Arbre décisionnel documenté', '7–10 jours avec SOPs', 'Tracées, analysées, corrigées', 'Sur segments stables mesurés'] }] } },
+      { type: 'tip', label: '19 Tip', data: { title: 'Commencer par observer.', text: "Avant d'écrire un seul process, filmez ou notez ce qui se passe vraiment — pas ce que vous croyez qui se passe." } },
+    ],
+  },
   {
     label: 'Existants',
     items: [
@@ -120,6 +145,10 @@ const renderSlide = (item) => {
   const d = item.data || {};
   switch (item.type) {
     // — Existants —
+    case 'welcome': return <DeckWelcome {...d} {...P} />;
+    case 'day_program': return <DeckAgenda {...d} {...P} />;
+    case 'pause': return <DeckPause {...d} {...P} />;
+    case 'qa': return <DeckQA {...d} {...P} />;
     case 'playful': return <PlayfulTemplate {...d} {...P} />;
     case 'reflection': return <ReflectionTemplate {...d} {...P} />;
     case 'casestudy': return <CaseStudyTemplate {...d} {...P} />;

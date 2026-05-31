@@ -13,6 +13,14 @@ import WarningTemplate from '../components/slides/templates/WarningTemplate';
 import TipTemplate from '../components/slides/templates/TipTemplate';
 import OpinionTemplate from '../components/slides/templates/OpinionTemplate';
 import TransitionTemplate from '../components/slides/templates/TransitionTemplate';
+import DefinitionTemplate from '../components/slides/templates/DefinitionTemplate';
+import ComparisonTemplate from '../components/slides/templates/ComparisonTemplate';
+import StepsTemplate from '../components/slides/templates/StepsTemplate';
+import ChecklistTemplate from '../components/slides/templates/ChecklistTemplate';
+import QuotableTemplate from '../components/slides/templates/QuotableTemplate';
+import PracticeExerciseTemplate from '../components/slides/templates/PracticeExerciseTemplate';
+import BeforeAfterTemplate from '../components/slides/templates/BeforeAfterTemplate';
+import { DeckWelcome, DeckAgenda } from '../components/slides/templates/DeckTemplates';
 
 export default function GeneratedSlides() {
   const initialParams = new URLSearchParams(window.location.search);
@@ -164,11 +172,25 @@ export default function GeneratedSlides() {
 
     switch (slide.template_type) {
       case 'welcome':
-        return <WelcomeSlideTemplate {...slide.data} {...commonProps} />;
+        return <DeckWelcome {...slide.data} {...commonProps} />;
       case 'day_program':
-        return <DayProgramSlideTemplate {...slide.data} {...commonProps} />;
+        return <DeckAgenda {...slide.data} {...commonProps} />;
       case 'context':
         return <ContextSlideTemplate {...slide.data} {...commonProps} />;
+      case 'definition':
+        return <DefinitionTemplate {...slide.data} {...commonProps} />;
+      case 'comparison':
+        return <ComparisonTemplate {...slide.data} {...commonProps} />;
+      case 'beforeafter':
+        return <BeforeAfterTemplate {...slide.data} {...commonProps} />;
+      case 'steps':
+        return <StepsTemplate {...slide.data} {...commonProps} />;
+      case 'checklist':
+        return <ChecklistTemplate {...slide.data} {...commonProps} />;
+      case 'quotable':
+        return <QuotableTemplate {...slide.data} {...commonProps} />;
+      case 'exercise':
+        return <PracticeExerciseTemplate {...slide.data} {...commonProps} />;
       case 'playful':
         return <PlayfulTemplate {...slide.data} {...commonProps} />;
       case 'reflection':
