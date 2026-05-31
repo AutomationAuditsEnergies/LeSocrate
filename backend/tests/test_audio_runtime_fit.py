@@ -99,6 +99,69 @@ class FishAudioWordBudgetCalibrationTest(unittest.TestCase):
         with patch.dict(os.environ, {}, clear=True):
             self.assertAlmostEqual(cgs._course_words_per_minute(), 165.7)
 
+    def test_actual_reading_summary_exposes_wpm_and_text_read(self):
+        meta = {
+            "provider": "fish_audio",
+            "endpoint": "stream_with_timestamp",
+            "model": "s2-pro",
+            "format": "mp3",
+            "speed": 0.9,
+            "audio_duration_sec": 30,
+            "spoken_word_count": 90,
+            "words_per_minute": 180,
+            "text_read": "Bonjour tout le monde",
+            "timeline": [{"text": "Bonjour", "start": 0, "end": 0.3}],
+            "chunks": [{"chunk_seq": 0}],
+        }
+
+        summary = cgs._fish_actual_reading_summary(
+            meta,
+            input_text="Bonjour [pause] tout le monde",
+        )
+
+        self.assertEqual(summary["input_spoken_word_count"], 4)
+        self.assertEqual(summary["fish_segment_word_count"], 90)
+        self.assertEqual(summary["words_per_minute"], 180)
+        self.assertEqual(summary["words_per_hour"], 10800)
+        self.assertEqual(summary["text_read"], "Bonjour tout le monde")
+
+    def test_actual_reading_from_attempts_aggregates_slide_chunks(self):
+        attempts = [
+            {
+                "kind": "fish_audio_timestamped_speed=0.9",
+                "actual_reading": {
+                    "audio_duration_sec": 10,
+                    "input_spoken_word_count": 20,
+                    "fish_segment_word_count": 20,
+                    "words_per_minute": 120,
+                    "text_read": "premier chunk",
+                    "timeline": [{"text": "premier", "start": 0, "end": 0.5}],
+                    "audio_start_sec": 17,
+                },
+            },
+            {
+                "kind": "fish_audio_timestamped_speed=0.9",
+                "actual_reading": {
+                    "audio_duration_sec": 20,
+                    "input_spoken_word_count": 40,
+                    "fish_segment_word_count": 40,
+                    "words_per_minute": 120,
+                    "text_read": "deuxième chunk",
+                    "timeline": [{"text": "deuxième", "start": 0, "end": 0.5}],
+                    "audio_start_sec": 27,
+                },
+            },
+        ]
+
+        actual = cgs._actual_reading_from_attempts(attempts)
+
+        self.assertEqual(actual["input_spoken_word_count"], 60)
+        self.assertEqual(actual["fish_segment_word_count"], 60)
+        self.assertEqual(actual["audio_duration_sec"], 30)
+        self.assertEqual(actual["words_per_minute"], 120)
+        self.assertEqual(actual["timeline"][0]["start"], 17)
+        self.assertEqual(actual["timeline"][1]["start"], 27)
+
     def test_audio_block_markers_are_not_counted_as_spoken_words(self):
         text = "<<<BLOC_AUDIO_1>>>\n\nBonjour [pause] à tous."
 

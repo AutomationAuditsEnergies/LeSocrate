@@ -289,6 +289,12 @@ def _course_preflight_safety():
     )
 
 
+def _fish_timestamp_alignment_enabled() -> bool:
+    """Utilise Fish Audio SSE timestampé pour mesurer le cours réellement lu."""
+    value = (os.getenv("FORMATION_FISH_TIMESTAMP_ALIGNMENT", "true") or "").strip().lower()
+    return value not in {"0", "false", "no", "off"}
+
+
 def _course_words_per_minute():
     """Fish Audio calibrated rate for the configured voice/speed."""
     return _env_float(
@@ -2300,6 +2306,51 @@ def _runtime_ai_decisions_from_attempts(attempts: list) -> list:
     ]
 
 
+def _actual_reading_from_attempts(attempts: list) -> dict | None:
+    """Récupère les métriques Fish timestampées produites pendant le TTS."""
+    actual_items = []
+    for attempt in attempts or []:
+        actual = attempt.get("actual_reading") if isinstance(attempt, dict) else None
+        if isinstance(actual, dict) and actual.get("audio_duration_sec"):
+            actual_items.append(actual)
+    if not actual_items:
+        return None
+    if len(actual_items) == 1:
+        return actual_items[0]
+
+    input_words = sum(int(item.get("input_spoken_word_count") or 0) for item in actual_items)
+    fish_words = sum(int(item.get("fish_segment_word_count") or 0) for item in actual_items)
+    duration_sec = sum(float(item.get("audio_duration_sec") or 0.0) for item in actual_items)
+    wpm = fish_words / (duration_sec / 60.0) if duration_sec > 0 and fish_words > 0 else 0.0
+    timeline = []
+    for item in actual_items:
+        offset = float(item.get("audio_start_sec") or 0.0)
+        for segment in item.get("timeline") or []:
+            clone = dict(segment)
+            clone["start"] = round(float(clone.get("start") or 0.0) + offset, 3)
+            clone["end"] = round(float(clone.get("end") or 0.0) + offset, 3)
+            timeline.append(clone)
+    return {
+        "provider": actual_items[0].get("provider") or "fish_audio",
+        "endpoint": actual_items[0].get("endpoint") or "",
+        "model": actual_items[0].get("model") or "",
+        "format": actual_items[0].get("format") or "",
+        "speed": actual_items[0].get("speed"),
+        "audio_duration_sec": round(duration_sec, 3),
+        "input_spoken_word_count": input_words,
+        "fish_segment_word_count": fish_words,
+        "words_per_minute": round(wpm, 3),
+        "words_per_hour": round(wpm * 60.0, 1) if wpm else 0.0,
+        "text_read": " ".join((item.get("text_read") or "").strip() for item in actual_items if (item.get("text_read") or "").strip()),
+        "timeline": timeline,
+        "chunks": [
+            chunk
+            for item in actual_items
+            for chunk in (item.get("chunks") or [])
+        ],
+    }
+
+
 def _build_slide_audio_chunks(bloc: dict, slides: list) -> list:
     """Partition a course bloc into text chunks driven by slide start markers."""
     bloc_start = int(bloc.get("start_w") or 0)
@@ -2827,7 +2878,7 @@ def _synthesize_course_audio_synced_to_slides(
             consumed_chunks,
         )
     """
-    from services.tts_service import convert_to_speech
+    from services.tts_service import convert_to_speech, convert_to_speech_with_timestamps
 
     target_sec = int(bloc["target_sec"])
     final_silence_sec = _course_final_silence_sec()
@@ -3054,9 +3105,22 @@ def _synthesize_course_audio_synced_to_slides(
             audio_bytes, duration_sec, cache_hit = _synthesize_basic_measured(text, progress_prefix)
             mode = "gtts_fast_cache" if cache_hit else "gtts_fast" if fast_tts_pipeline else "gtts"
         else:
-            audio_bytes = convert_to_speech(text, speed=api_speed)
+            chunk_actual_reading = None
+            if _fish_timestamp_alignment_enabled():
+                audio_bytes, timestamp_meta = convert_to_speech_with_timestamps(
+                    text,
+                    speed=api_speed,
+                    format="mp3",
+                )
+                chunk_actual_reading = _fish_actual_reading_summary(timestamp_meta, input_text=text)
+            else:
+                audio_bytes = convert_to_speech(text, speed=api_speed)
             segment = AudioSegment.from_mp3(io.BytesIO(audio_bytes))
-            mode = f"fish_audio_speed={api_speed}"
+            mode = (
+                f"fish_audio_timestamped_speed={api_speed}"
+                if chunk_actual_reading
+                else f"fish_audio_speed={api_speed}"
+            )
 
         if not basic_tts:
             duration_sec = len(segment) / 1000
@@ -3131,7 +3195,13 @@ def _synthesize_course_audio_synced_to_slides(
         else:
             full_audio += segment
         cursor_sec = end_sec
-        attempts.append({"kind": mode, "chunk": chunk_idx + 1, "duration": duration_sec})
+        attempt_record = {"kind": mode, "chunk": chunk_idx + 1, "duration": duration_sec}
+        if not basic_tts and not mock and "chunk_actual_reading" in locals() and chunk_actual_reading:
+            chunk_actual_reading = dict(chunk_actual_reading)
+            chunk_actual_reading["audio_start_sec"] = round(start_sec, 3)
+            chunk_actual_reading["audio_end_sec"] = round(end_sec, 3)
+            attempt_record["actual_reading"] = chunk_actual_reading
+        attempts.append(attempt_record)
         _emit(
             f"Bloc {bloc['bloc_number']}/7 — slide audio {chunk_idx + 1}/{len(chunks)} OK "
             f"({duration_sec:.1f}s)"
@@ -4700,7 +4770,39 @@ def _apply_closing_transitions(blocs, api_speed, model=None, playlist_items=None
             bloc["word_count"] = new_word_count
 
 
-def _synthesize_course_audio_to_fit(bloc, convert_to_speech, measure_duration_ms, pad_audio_to_duration):
+def _fish_actual_reading_summary(metadata: dict | None, *, input_text: str = "") -> dict:
+    """Résumé compact de l'alignement Fish, stockable dans le plan audio."""
+    metadata = metadata or {}
+    duration_sec = float(metadata.get("audio_duration_sec") or 0.0)
+    spoken_words = int(metadata.get("spoken_word_count") or 0)
+    input_words = count_tts_spoken_words(input_text)
+    wpm = float(metadata.get("words_per_minute") or 0.0)
+    if not wpm and duration_sec > 0 and input_words > 0:
+        wpm = input_words / (duration_sec / 60.0)
+    return {
+        "provider": metadata.get("provider") or "fish_audio",
+        "endpoint": metadata.get("endpoint") or "",
+        "model": metadata.get("model") or "",
+        "format": metadata.get("format") or "",
+        "speed": metadata.get("speed"),
+        "audio_duration_sec": round(duration_sec, 3),
+        "input_spoken_word_count": int(input_words),
+        "fish_segment_word_count": int(spoken_words),
+        "words_per_minute": round(wpm, 3),
+        "words_per_hour": round(wpm * 60.0, 1) if wpm else 0.0,
+        "text_read": metadata.get("text_read") or "",
+        "timeline": metadata.get("timeline") or [],
+        "chunks": metadata.get("chunks") or [],
+    }
+
+
+def _synthesize_course_audio_to_fit(
+    bloc,
+    convert_to_speech,
+    measure_duration_ms,
+    pad_audio_to_duration,
+    convert_to_speech_with_timestamps=None,
+):
     """
     Génère un bloc cours sans troncature brutale.
     Par défaut, on n'accélère pas la voix : si le texte est manifestement trop
@@ -4728,9 +4830,23 @@ def _synthesize_course_audio_to_fit(bloc, convert_to_speech, measure_duration_ms
             "ou réduire ce bloc avant synthèse."
         )
 
-    audio_bytes = convert_to_speech(bloc["text"], speed=api_speed)
+    actual_reading = None
+    if convert_to_speech_with_timestamps and _fish_timestamp_alignment_enabled():
+        audio_bytes, timestamp_meta = convert_to_speech_with_timestamps(
+            bloc["text"],
+            speed=api_speed,
+            format="mp3",
+        )
+        actual_reading = _fish_actual_reading_summary(timestamp_meta, input_text=bloc["text"])
+    else:
+        audio_bytes = convert_to_speech(bloc["text"], speed=api_speed)
     raw_duration = measure_duration_ms(audio_bytes) / 1000
-    attempts.append({"kind": "api", "speed": api_speed, "duration": raw_duration})
+    attempts.append({
+        "kind": "api_timestamped" if actual_reading else "api",
+        "speed": api_speed,
+        "duration": raw_duration,
+        "actual_reading": actual_reading,
+    })
 
     if raw_duration <= max_voice_sec:
         final_bytes = pad_audio_to_duration(
@@ -9682,6 +9798,7 @@ def generate_audio_from_script(
                         convert_to_speech,
                         _measure_duration_ms,
                         _pad_audio_to_duration,
+                        convert_to_speech_with_timestamps=convert_to_speech_with_timestamps,
                     )
                     if tts_errors:
                         attempts = [
@@ -9751,9 +9868,28 @@ def generate_audio_from_script(
                     next_playlist_item=_next_playlist_item_after(playlist_items, item_idx),
                 )
                 fit_method = f"{fit_method}, basic_runtime_fallback_after_ai_reduce"
-            if len(attempts) > 1:
-                logger.info(f"   🔁 Bloc {bloc['bloc_number']} ajusté localement ({fit_method})")
-            logger.info(f"   TTS voix : {voice_duration:.1f}s ({fit_method}, cible : {target_sec}s)")
+        if len(attempts) > 1:
+            logger.info(f"   🔁 Bloc {bloc['bloc_number']} ajusté localement ({fit_method})")
+        logger.info(f"   TTS voix : {voice_duration:.1f}s ({fit_method}, cible : {target_sec}s)")
+
+        actual_reading = _actual_reading_from_attempts(attempts)
+        if actual_reading:
+            audio_bloc["actual_reading"] = actual_reading
+            bloc["actual_reading"] = actual_reading
+            logger.info(
+                "PIPELINE_AUDIO_ACTUAL_READING formation_job_id=%s content_job_id=%s "
+                "folder_id=%s bloc=%s input_words=%s fish_words=%s voice_duration=%.1f "
+                "wpm=%.1f words_per_hour=%.0f",
+                formation_job_id,
+                job_id,
+                folder_id,
+                bloc["bloc_number"],
+                actual_reading.get("input_spoken_word_count"),
+                actual_reading.get("fish_segment_word_count"),
+                float(actual_reading.get("audio_duration_sec") or 0.0),
+                float(actual_reading.get("words_per_minute") or 0.0),
+                float(actual_reading.get("words_per_hour") or 0.0),
+            )
 
         if not mock:
             _assert_course_voice_duration_within_deadline(
@@ -9825,6 +9961,7 @@ def generate_audio_from_script(
             opening_rewritten=opening_rewritten,
             opening_text=opening_text,
             opening_original_start=opening_original_start,
+            actual_reading=actual_reading,
             target_plan=planned_course_script_plan,
         )
         _record_course_bloc(
@@ -9837,6 +9974,7 @@ def generate_audio_from_script(
             opening_original_start=opening_original_start,
             runtime_conclusions=runtime_conclusions,
             runtime_ai_decisions=runtime_ai_decisions,
+            actual_reading=actual_reading,
         )
         generated.append(filename)
 
@@ -9980,6 +10118,7 @@ def _serialize_course_bloc(
     opening_original_start: str = "",
     runtime_conclusions: list | None = None,
     runtime_ai_decisions: list | None = None,
+    actual_reading: dict | None = None,
 ) -> dict:
     from services.playlist_tts_service import COURS_DURATIONS_MIN
 
@@ -10004,6 +10143,7 @@ def _serialize_course_bloc(
         "closing_words": int(bloc.get("closing_words") or 0),
         "runtime_conclusions": runtime_conclusions,
         "runtime_ai_decisions": runtime_ai_decisions,
+        "actual_reading": actual_reading or bloc.get("actual_reading") or None,
         "opening_rewritten": bool(opening_rewritten),
         "opening_text": opening_text or "",
         "opening_original_start": opening_original_start or "",

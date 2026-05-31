@@ -3218,6 +3218,8 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
                     planned: 'Prévu',
                     skipped: 'Ignoré',
                   }[active.status] || active.status
+                  const actualReading = active.actual_reading || null
+                  const actualReadText = actualReading?.text_read || ''
                   const conclusionBlocks = []
                   if (active.closing_text) {
                     conclusionBlocks.push({ label: 'Conclusion de partie', text: active.closing_text })
@@ -3272,6 +3274,37 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
                       {active.overflow_unresolved && (
                         <div className="rounded-xl px-4 py-3 text-xs" style={{ backgroundColor: darkMode ? '#431407' : '#fff7ed', border: `1px solid ${darkMode ? '#7c2d12' : '#fed7aa'}`, color: darkMode ? '#fdba74' : '#c2410c' }}>
                           Ce bloc dépasse encore le budget de {active.overflow_words?.toLocaleString('fr-FR')} mots dans la prévisualisation.
+                        </div>
+                      )}
+
+                      {actualReading && (
+                        <div className="rounded-xl overflow-hidden" style={{ border: `1px solid ${colors.border}` }}>
+                          <div className="px-4 py-2 flex items-center gap-2" style={{ backgroundColor: darkMode ? '#064e3b' : '#ecfdf5' }}>
+                            <Icon name="graphic_eq" style={{ color: '#059669', fontSize: '16px' }} />
+                            <span className="text-xs font-bold" style={{ color: '#059669' }}>Cours audio réellement lu</span>
+                          </div>
+                          <div className="p-4 space-y-3" style={{ backgroundColor: colors.cardBg }}>
+                            <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                              {[
+                                { label: 'Mots input', value: actualReading.input_spoken_word_count },
+                                { label: 'Mots Fish', value: actualReading.fish_segment_word_count },
+                                { label: 'Mots/min', value: actualReading.words_per_minute ? Math.round(actualReading.words_per_minute) : null },
+                                { label: 'Mots/heure', value: actualReading.words_per_hour ? Math.round(actualReading.words_per_hour) : null },
+                              ].map((metric) => (
+                                <div key={metric.label} className="rounded-lg px-3 py-2" style={{ backgroundColor: colors.innerBg, border: `1px solid ${colors.border}` }}>
+                                  <p className="text-[10px] uppercase tracking-wide" style={{ color: colors.textMuted }}>{metric.label}</p>
+                                  <p className="text-sm font-bold" style={{ color: colors.text }}>
+                                    {metric.value != null ? Number(metric.value).toLocaleString('fr-FR') : '—'}
+                                  </p>
+                                </div>
+                              ))}
+                            </div>
+                            {actualReadText && (
+                              <p className="text-xs leading-relaxed whitespace-pre-wrap" style={{ color: colors.text, fontFamily: 'monospace' }}>
+                                {actualReadText}
+                              </p>
+                            )}
+                          </div>
                         </div>
                       )}
 
