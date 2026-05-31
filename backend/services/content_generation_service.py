@@ -8940,7 +8940,7 @@ def generate_audio_from_script(
     from services.playlist_tts_service import (
         COURS_DURATIONS_MIN, PLAYLIST_SPEC, _pad_audio_to_duration, _measure_duration_ms
     )
-    from services.tts_service import convert_to_speech
+    from services.tts_service import convert_to_speech, convert_to_speech_with_timestamps
     from services.azure_blob_service import upload_blob, CONTAINER_AUDIOS
 
     def _progress(step, total, msg):
