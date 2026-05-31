@@ -13,6 +13,14 @@ import TipTemplate from '../components/slides/templates/TipTemplate'
 import OpinionTemplate from '../components/slides/templates/OpinionTemplate'
 import TransitionTemplate from '../components/slides/templates/TransitionTemplate'
 import PlayfulTemplate from '../components/slides/templates/PlayfulTemplate'
+import DefinitionTemplate from '../components/slides/templates/DefinitionTemplate'
+import ComparisonTemplate from '../components/slides/templates/ComparisonTemplate'
+import StepsTemplate from '../components/slides/templates/StepsTemplate'
+import ChecklistTemplate from '../components/slides/templates/ChecklistTemplate'
+import QuotableTemplate from '../components/slides/templates/QuotableTemplate'
+import PracticeExerciseTemplate from '../components/slides/templates/PracticeExerciseTemplate'
+import BeforeAfterTemplate from '../components/slides/templates/BeforeAfterTemplate'
+import { DeckAgenda, DeckWelcome } from '../components/slides/templates/DeckTemplates'
 
 const Icon = ({ name, className = '', style = {} }) => (
   <span className={`material-icons ${className}`} style={{ fontSize: 'inherit', ...style }}>{name}</span>
@@ -2258,18 +2266,55 @@ function SlideSourcePreviewRow({ slide, index }) {
 }
 
 function SlidePreviewFrame({ slide }) {
+  const frameRef = useRef(null)
+  const [frameWidth, setFrameWidth] = useState(720)
+  const stageWidth = 1200
+  const stageHeight = 675
+  const scale = Math.min(1, frameWidth / stageWidth)
+
+  useEffect(() => {
+    if (!frameRef.current) return undefined
+    const updateWidth = () => {
+      const width = frameRef.current?.clientWidth || 720
+      setFrameWidth(width)
+    }
+    updateWidth()
+    const observer = new ResizeObserver(updateWidth)
+    observer.observe(frameRef.current)
+    return () => observer.disconnect()
+  }, [])
+
   return (
     <div style={{ padding: '14px', display: 'flex', alignItems: 'center', justifyContent: 'center', flex: 1, overflow: 'hidden' }}>
-      <div style={{
-        width: '100%',
-        maxWidth: '720px',
-        aspectRatio: '16 / 9',
-        flex: '0 1 720px',
-        borderRadius: '6px',
-        overflow: 'hidden',
-        boxShadow: '0 16px 40px rgba(0,0,0,0.35)',
-      }} className="pipeline-slide-preview-scope">
-        {renderPipelineSlidePreview(slide)}
+      <div
+        ref={frameRef}
+        style={{
+          width: '100%',
+          maxWidth: '720px',
+          aspectRatio: '16 / 9',
+          flex: '0 1 720px',
+          borderRadius: '6px',
+          overflow: 'hidden',
+          boxShadow: '0 16px 40px rgba(0,0,0,0.35)',
+          position: 'relative',
+          background: '#020617',
+        }}
+        className="pipeline-slide-preview-scope"
+      >
+        <div
+          className="pipeline-slide-preview-stage"
+          style={{
+            width: `${stageWidth}px`,
+            height: `${stageHeight}px`,
+            transform: `scale(${scale})`,
+            transformOrigin: 'top left',
+            position: 'absolute',
+            top: 0,
+            left: 0,
+          }}
+        >
+          {renderPipelineSlidePreview(slide)}
+        </div>
       </div>
     </div>
   )
@@ -2284,11 +2329,25 @@ function renderPipelineSlidePreview(slide = {}) {
 
   switch (slide.template_type) {
     case 'welcome':
-      return <WelcomeSlidePreview {...props} />
+      return <DeckWelcome {...props} />
     case 'day_program':
-      return <DayProgramSlidePreview {...props} />
+      return <DeckAgenda {...props} />
     case 'context':
       return <ContextSlidePreview {...props} />
+    case 'definition':
+      return <DefinitionTemplate {...props} />
+    case 'comparison':
+      return <ComparisonTemplate {...props} />
+    case 'beforeafter':
+      return <BeforeAfterTemplate {...props} />
+    case 'steps':
+      return <StepsTemplate {...props} />
+    case 'checklist':
+      return <ChecklistTemplate {...props} />
+    case 'quotable':
+      return <QuotableTemplate {...props} />
+    case 'exercise':
+      return <PracticeExerciseTemplate {...props} />
     case 'reflection':
       return <ReflectionTemplate {...props} />
     case 'casestudy':

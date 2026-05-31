@@ -171,15 +171,15 @@ audio.visually-hidden {
   100% { transform: scale(1); opacity: 1; }
 }
 
-.pipeline-slide-preview-scope > * {
-  width: 100% !important;
+.pipeline-slide-preview-stage > * {
+  width: 1200px !important;
   max-width: none !important;
-  height: 100% !important;
+  height: 675px !important;
   min-height: 0 !important;
   box-shadow: none !important;
 }
 
-.pipeline-slide-preview-scope .deck-slide {
-  width: 100% !important;
+.pipeline-slide-preview-stage .deck-slide {
+  width: 1200px !important;
   max-width: none !important;
 }
