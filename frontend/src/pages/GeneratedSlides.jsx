@@ -24,94 +24,89 @@ import { DeckWelcome, DeckAgenda } from '../components/slides/templates/DeckTemp
 
 const normalizeSourceText = (text = '') => String(text || '').replace(/\s+/g, ' ').trim();
 
-function getSlideDataText(slide = {}) {
-  const data = slide.data || {};
-  const parts = [
-    slide.event_summary,
-    data.title,
-    data.subtitle,
-    data.definition,
-    data.description,
-    data.quote,
-    data.question,
-    data.statement,
-    ...(Array.isArray(data.items) ? data.items : []),
-    ...(Array.isArray(data.steps) ? data.steps.map(step => step?.title || step?.label || step?.text || step) : []),
-    ...(Array.isArray(data.points) ? data.points.map(point => point?.title || point?.label || point?.text || point) : []),
-  ];
-
-  return normalizeSourceText(
-    parts
-      .map(part => (typeof part === 'string' ? part : ''))
-      .filter(Boolean)
-      .join(' ')
-  );
+function getSharedSourceKey(slide = {}) {
+  const ref = slide.source_ref || {};
+  return [
+    ref.source_block_id ?? 'block',
+    ref.word_start ?? 'start',
+    ref.word_end ?? 'end',
+  ].join(':');
 }
 
-function getSlideSourceExcerpt(slide = {}) {
+function getSlideSourceHighlight(slide = {}, index = 0, slides = [], sourceText = '') {
   const sourceRef = slide.source_ref || {};
-  const sourceText = normalizeSourceText(slide.source_text || '');
-  const quote = normalizeSourceText(sourceRef.source_quote || slide.source_quote || '');
-  if (quote) return quote;
-
-  const words = sourceText.split(/\s+/).filter(Boolean);
+  const words = normalizeSourceText(sourceText).split(/\s+/).filter(Boolean);
   const sourceStart = Number(sourceRef.word_start || 0);
+  if (!words.length) {
+    return { start: 0, end: 0, sharedCount: 0, exact: false };
+  }
+
   const highlightStart = Number(sourceRef.highlight_word_start);
   const highlightEnd = Number(sourceRef.highlight_word_end);
-
   if (
-    words.length &&
     Number.isFinite(highlightStart) &&
     Number.isFinite(highlightEnd) &&
     highlightEnd > highlightStart
   ) {
     const localStart = Math.max(0, Math.min(words.length, highlightStart - sourceStart));
     const localEnd = Math.max(localStart + 1, Math.min(words.length, highlightEnd - sourceStart));
-    return words.slice(localStart, localEnd).join(' ');
+    return { start: localStart, end: localEnd, sharedCount: 1, exact: true };
   }
 
-  return getSlideDataText(slide);
+  const key = getSharedSourceKey(slide);
+  const shared = (slides || [])
+    .map((candidate, candidateIndex) => ({ slide: candidate, index: candidateIndex }))
+    .filter(item => getSharedSourceKey(item.slide) === key)
+    .sort((a, b) => a.index - b.index);
+
+  if (shared.length <= 1) {
+    return { start: 0, end: words.length, sharedCount: 1, exact: false };
+  }
+
+  const sharedIndex = Math.max(0, shared.findIndex(item => item.index === index));
+  const start = Math.round(sharedIndex * words.length / shared.length);
+  const end = Math.max(start + 1, Math.round((sharedIndex + 1) * words.length / shared.length));
+  return { start, end: Math.min(words.length, end), sharedCount: shared.length, exact: false };
 }
 
-function renderHighlightedCourseSource(slide = {}) {
+function getSlideSourceExcerpt(slide = {}, index = 0, slides = []) {
+  const sourceRef = slide.source_ref || {};
+  const sourceText = normalizeSourceText(slide.source_text || '');
+  const quote = normalizeSourceText(sourceRef.source_quote || slide.source_quote || '');
+  if (quote) return quote;
+
+  const words = sourceText.split(/\s+/).filter(Boolean);
+  const highlight = getSlideSourceHighlight(slide, index, slides, sourceText);
+  return words.slice(highlight.start, highlight.end).join(' ');
+}
+
+function renderHighlightedCourseSource(slide = {}, index = 0, slides = []) {
   const sourceText = normalizeSourceText(slide.source_text || '');
   if (!sourceText) return 'Texte source non disponible';
 
   const sourceRef = slide.source_ref || {};
-  const excerpt = getSlideSourceExcerpt(slide);
-  const directIndex = excerpt ? sourceText.indexOf(excerpt) : -1;
-
-  if (directIndex >= 0 && excerpt.length) {
+  const quote = normalizeSourceText(sourceRef.source_quote || slide.source_quote || '');
+  const directIndex = quote ? sourceText.indexOf(quote) : -1;
+  if (directIndex >= 0 && quote.length) {
     return (
       <>
         {sourceText.slice(0, directIndex)}
-        <mark>{sourceText.slice(directIndex, directIndex + excerpt.length)}</mark>
-        {sourceText.slice(directIndex + excerpt.length)}
+        <mark>{sourceText.slice(directIndex, directIndex + quote.length)}</mark>
+        {sourceText.slice(directIndex + quote.length)}
       </>
     );
   }
 
   const words = sourceText.split(/\s+/).filter(Boolean);
-  const sourceStart = Number(sourceRef.word_start || 0);
-  const highlightStart = Number(sourceRef.highlight_word_start);
-  const highlightEnd = Number(sourceRef.highlight_word_end);
-
-  if (
-    !words.length ||
-    !Number.isFinite(highlightStart) ||
-    !Number.isFinite(highlightEnd) ||
-    highlightEnd <= highlightStart
-  ) {
+  const highlight = getSlideSourceHighlight(slide, index, slides, sourceText);
+  if (!words.length || highlight.end <= highlight.start) {
     return sourceText;
   }
-
-  const localStart = Math.max(0, Math.min(words.length, highlightStart - sourceStart));
-  const localEnd = Math.max(localStart + 1, Math.min(words.length, highlightEnd - sourceStart));
 
   return words.map((word, index) => (
     <React.Fragment key={`${word}-${index}`}>
       {index > 0 ? ' ' : ''}
-      {index >= localStart && index < localEnd ? <mark>{word}</mark> : word}
+      {index >= highlight.start && index < highlight.end ? <mark>{word}</mark> : word}
     </React.Fragment>
   ));
 }
@@ -134,14 +129,14 @@ export default function GeneratedSlides() {
   const [showTimeline, setShowTimeline] = useState(false);
   const [pipelineDebug, setPipelineDebug] = useState(null);
   const [showPipeline, setShowPipeline] = useState(false);
-  const [sourceView, setSourceView] = useState('slide');
+  const [sourceView, setSourceView] = useState('course');
 
   useEffect(() => {
     fetchExistingSlides();
   }, []);
 
   useEffect(() => {
-    setSourceView('slide');
+    setSourceView('course');
   }, [currentSlide]);
 
   const fetchExistingSlides = async () => {
@@ -1363,7 +1358,7 @@ export default function GeneratedSlides() {
               cursor: 'pointer',
               padding: '0.5rem'
             }}>
-              {isScriptMode ? 'Voir le contenu utilise par la slide' : "Voir le texte source (transcription de l'evenement)"}
+              {isScriptMode ? 'Voir le cours source' : "Voir le texte source (transcription de l'evenement)"}
             </summary>
             <div style={{
               backgroundColor: '#2d2d44',
@@ -1386,7 +1381,7 @@ export default function GeneratedSlides() {
                   marginBottom: '0.75rem'
                 }}>
                   <button
-                    onClick={() => setSourceView(sourceView === 'slide' ? 'course' : 'slide')}
+                    onClick={() => setSourceView(sourceView === 'course' ? 'slide' : 'course')}
                     style={{
                       border: '1px solid rgba(129,212,250,0.35)',
                       backgroundColor: sourceView === 'course' ? 'rgba(129,212,250,0.16)' : 'transparent',
@@ -1399,7 +1394,7 @@ export default function GeneratedSlides() {
                       fontWeight: 700
                     }}
                   >
-                    {sourceView === 'slide' ? 'Voir tout le cours' : 'Voir seulement la slide'}
+                    {sourceView === 'course' ? 'Voir seulement la slide' : 'Voir tout le cours'}
                   </button>
                 </div>
               )}
@@ -1411,9 +1406,9 @@ export default function GeneratedSlides() {
                 margin: 0
               }}>
                 {isScriptMode && sourceView === 'slide'
-                  ? getSlideSourceExcerpt(slides[currentSlide]) || 'Texte source non disponible'
+                  ? getSlideSourceExcerpt(slides[currentSlide], currentSlide, slides) || 'Texte source non disponible'
                   : isScriptMode
-                    ? renderHighlightedCourseSource(slides[currentSlide])
+                    ? renderHighlightedCourseSource(slides[currentSlide], currentSlide, slides)
                     : slides[currentSlide].source_text || 'Texte source non disponible'}
               </p>
             </div>
