@@ -24,6 +24,30 @@ import { DeckWelcome, DeckAgenda } from '../components/slides/templates/DeckTemp
 
 const normalizeSourceText = (text = '') => String(text || '').replace(/\s+/g, ' ').trim();
 
+function getSlideDataText(slide = {}) {
+  const data = slide.data || {};
+  const parts = [
+    slide.event_summary,
+    data.title,
+    data.subtitle,
+    data.definition,
+    data.description,
+    data.quote,
+    data.question,
+    data.statement,
+    ...(Array.isArray(data.items) ? data.items : []),
+    ...(Array.isArray(data.steps) ? data.steps.map(step => step?.title || step?.label || step?.text || step) : []),
+    ...(Array.isArray(data.points) ? data.points.map(point => point?.title || point?.label || point?.text || point) : []),
+  ];
+
+  return normalizeSourceText(
+    parts
+      .map(part => (typeof part === 'string' ? part : ''))
+      .filter(Boolean)
+      .join(' ')
+  );
+}
+
 function getSlideSourceExcerpt(slide = {}) {
   const sourceRef = slide.source_ref || {};
   const sourceText = normalizeSourceText(slide.source_text || '');
@@ -46,7 +70,7 @@ function getSlideSourceExcerpt(slide = {}) {
     return words.slice(localStart, localEnd).join(' ');
   }
 
-  return sourceText;
+  return getSlideDataText(slide);
 }
 
 function renderHighlightedCourseSource(slide = {}) {
