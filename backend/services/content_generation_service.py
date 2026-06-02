@@ -74,6 +74,18 @@ NUM_SUB_PARTS = 7
 _COURSE_START_SILENCE_SECONDS = 17
 # Fish Audio S2-Pro mesuré sur 72,2 min / 11 959 mots à speed=0.90.
 _DEFAULT_TTS_WORDS_PER_MINUTE = 165.7
+# Calibration Fish Audio observée sur les MP3 cours générés avec la voix
+# actuelle. Objectif : viser la durée finale affichée à ~slot - 75s
+# (ex. 43m30-44m00 pour un fichier de 45 min).
+_DEFAULT_TTS_WPM_BY_BLOC = {
+    1: 199.9,  # 36:16 -> ~43:45
+    2: 197.7,  # 36:40 -> ~43:45
+    3: 198.5,  # 44:52 -> ~53:45
+    4: 207.4,  # 34:57 -> ~43:45
+    5: 194.8,  # 49:58 -> ~58:45
+    6: 213.9,  # 45:30 -> ~58:45
+    7: 208.3,  # 38:47 -> ~48:45
+}
 _COURSE_CONCLUSION_START_MARGIN_SECONDS = 0
 # Marge utilisée pour calculer moins de mots que la durée théorique.
 # Elle ne coupe pas l'audio final : elle réduit seulement la parole générée.
@@ -334,6 +346,44 @@ def _course_words_per_minute():
     )
 
 
+def _course_wpm_by_bloc_overrides() -> dict[int, float]:
+    raw = (os.getenv("FORMATION_TTS_WPM_BY_BLOC") or "").strip()
+    if not raw:
+        return {}
+    overrides: dict[int, float] = {}
+    for part in raw.split(","):
+        key, sep, value = part.partition(":")
+        if not sep:
+            continue
+        try:
+            bloc = int(key.strip())
+            wpm = float(value.strip())
+        except (TypeError, ValueError):
+            continue
+        if 1 <= bloc <= 7 and 100 <= wpm <= 260:
+            overrides[bloc] = wpm
+    return overrides
+
+
+def _course_words_per_minute_for_bloc(bloc_number=None) -> float:
+    """Cadence Fish par cours.
+
+    `FORMATION_TTS_WORDS_PER_MINUTE` reste un override global. Sans override
+    global, on applique la calibration par bloc issue des MP3 réels.
+    `FORMATION_TTS_WPM_BY_BLOC` peut surcharger finement, ex:
+    `1:198,2:196,3:197`.
+    """
+    global_wpm = _course_words_per_minute()
+    if abs(global_wpm - _DEFAULT_TTS_WORDS_PER_MINUTE) > 0.001:
+        return global_wpm
+    try:
+        bloc = int(bloc_number or 0)
+    except (TypeError, ValueError):
+        bloc = 0
+    overrides = _course_wpm_by_bloc_overrides()
+    return float(overrides.get(bloc, _DEFAULT_TTS_WPM_BY_BLOC.get(bloc, global_wpm)))
+
+
 def _content_parallel_subpart_workers(default: int = 7) -> int:
     """Nombre de cours générés en parallèle."""
     try:
@@ -381,12 +431,18 @@ def _course_final_silence_sec():
     )
 
 
-def _words_budget_for_speaking_window(target_sec: int, stop_before_end_sec: float) -> int:
+def _words_budget_for_speaking_window(
+    target_sec: int,
+    stop_before_end_sec: float,
+    *,
+    words_per_minute: float | None = None,
+) -> int:
     voice_seconds = max(
         0.0,
         float(target_sec) - float(stop_before_end_sec) - _COURSE_START_SILENCE_SECONDS,
     )
-    return int((voice_seconds / 60.0) * _course_words_per_minute() * _course_preflight_safety())
+    wpm = float(words_per_minute if words_per_minute is not None else _course_words_per_minute())
+    return int((voice_seconds / 60.0) * wpm * _course_preflight_safety())
 
 
 def _course_speech_deadline_sec(target_sec: int | float) -> float:
@@ -399,18 +455,22 @@ def _course_voice_window_sec(target_sec: int | float) -> float:
     return max(0.0, _course_speech_deadline_sec(target_sec) - _COURSE_START_SILENCE_SECONDS)
 
 
-def _estimated_words_budget_for_course(target_sec, api_speed):
+def _estimated_words_budget_for_course(target_sec, api_speed, bloc_number=None):
     """Total words allowed for spoken content, stopping before final silence."""
-    return _words_budget_for_speaking_window(target_sec, _course_final_silence_sec())
+    return _words_budget_for_speaking_window(
+        target_sec,
+        _course_final_silence_sec(),
+        words_per_minute=_course_words_per_minute_for_bloc(bloc_number),
+    )
 
 
-def _estimated_main_words_budget_for_course(target_sec, api_speed):
+def _estimated_main_words_budget_for_course(target_sec, api_speed, bloc_number=None):
     """Words allowed for the canonical course block text.
 
     Conclusions and transitions are now part of the generated/calibrated block
     itself, so there is no separate runtime conclusion reserve.
     """
-    return _estimated_words_budget_for_course(target_sec, api_speed)
+    return _estimated_words_budget_for_course(target_sec, api_speed, bloc_number)
 
 
 def count_tts_spoken_words(text: str | None) -> int:
@@ -457,7 +517,7 @@ def get_course_day_word_budget(playlist_spec=None) -> dict:
     speakable_seconds = 0.0
     for filename, duration_sec, bloc_num in course_items:
         voice_window = _course_voice_window_sec(duration_sec)
-        words = _estimated_words_budget_for_course(duration_sec, _DEFAULT_TTS_SPEED)
+        words = _estimated_words_budget_for_course(duration_sec, _DEFAULT_TTS_SPEED, bloc_num)
         target_words += words
         speakable_seconds += voice_window
         per_course.append({
@@ -465,6 +525,7 @@ def get_course_day_word_budget(playlist_spec=None) -> dict:
             "bloc_number": bloc_num,
             "duration_sec": duration_sec,
             "speakable_sec": round(voice_window, 3),
+            "words_per_minute": round(_course_words_per_minute_for_bloc(bloc_num), 3),
             "target_words": words,
         })
 
@@ -481,7 +542,10 @@ def get_course_day_word_budget(playlist_spec=None) -> dict:
         "target_words": int(target_words),
         "min_words": int(min_words),
         "max_words": int(max_words),
-        "words_per_minute": float(_course_words_per_minute()),
+        "words_per_minute": (
+            round((target_words / (speakable_seconds / 60.0)), 3)
+            if speakable_seconds > 0 else float(_course_words_per_minute())
+        ),
         "course_seconds": int(sum(item[1] for item in course_items)),
         "speakable_seconds": round(speakable_seconds, 3),
         "start_silence_sec": int(_COURSE_START_SILENCE_SECONDS),
@@ -1716,7 +1780,7 @@ def _course_audio_block_plan(playlist_spec=None, *, folder_position=None) -> lis
         if file_type != "cours":
             continue
         target_sec = int(duration_sec or 0)
-        word_budget = _estimated_words_budget_for_course(target_sec, api_speed)
+        word_budget = _estimated_words_budget_for_course(target_sec, api_speed, bloc_num)
         min_words = _block_min_words(word_budget)
         next_item = _next_playlist_item_after_index(playlist_spec, idx)
         blocks.append({
@@ -2930,7 +2994,11 @@ def _synthesize_course_audio_synced_to_slides(
     speech_deadline_sec = _course_speech_deadline_sec(target_sec)
     api_speed = _course_tts_speed()
     word_count = bloc.get("word_count") or len((bloc.get("text") or "").split())
-    word_budget = _estimated_words_budget_for_course(target_sec, api_speed)
+    word_budget = _estimated_words_budget_for_course(
+        target_sec,
+        api_speed,
+        bloc.get("bloc_number"),
+    )
 
     # Garde-fou Fish Audio : préserve le comportement existant.
     if not mock and not basic_tts and word_budget > 0 and word_count > word_budget:
@@ -3909,8 +3977,8 @@ def _build_course_blocs_from_marked_blocks(
         target_sec = int(duration_sec or 0)
         text = marked_blocks.get(bloc_num, "").strip()
         words = count_tts_spoken_words(text)
-        word_budget = _estimated_words_budget_for_course(target_sec, api_speed)
-        main_word_budget = _estimated_main_words_budget_for_course(target_sec, api_speed)
+        word_budget = _estimated_words_budget_for_course(target_sec, api_speed, bloc_num)
+        main_word_budget = _estimated_main_words_budget_for_course(target_sec, api_speed, bloc_num)
         blocs.append({
             "bloc_number": bloc_num,
             "text": text,
@@ -3983,8 +4051,8 @@ def _build_course_blocs_from_segments(
             (spec[1] for spec in playlist_spec if spec[3] == bloc_num and spec[2] == "cours"),
             duration * 60
         )
-        main_word_budget = _estimated_main_words_budget_for_course(target_sec, api_speed)
-        word_budget = _estimated_words_budget_for_course(target_sec, api_speed)
+        main_word_budget = _estimated_main_words_budget_for_course(target_sec, api_speed, bloc_num)
+        word_budget = _estimated_words_budget_for_course(target_sec, api_speed, bloc_num)
 
         if bloc_num == 7:
             # Bloc 7 absorbe le reste : si ça dépasse son budget, le calibrage
@@ -4865,7 +4933,11 @@ def _synthesize_course_audio_to_fit(
     api_speed = _course_tts_speed()
     attempts = []
     word_count = bloc.get("word_count") or len(bloc["text"].split())
-    word_budget = _estimated_words_budget_for_course(target_sec, api_speed)
+    word_budget = _estimated_words_budget_for_course(
+        target_sec,
+        api_speed,
+        bloc.get("bloc_number"),
+    )
 
     if word_budget > 0 and word_count > word_budget:
         raise ValueError(

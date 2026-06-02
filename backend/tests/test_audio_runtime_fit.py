@@ -99,6 +99,23 @@ class FishAudioWordBudgetCalibrationTest(unittest.TestCase):
         with patch.dict(os.environ, {}, clear=True):
             self.assertAlmostEqual(cgs._course_words_per_minute(), 165.7)
 
+    def test_default_course_budget_uses_bloc_calibration_from_fish_audio_samples(self):
+        playlist = [
+            ("cours_9h00_9h45.mp3", 2700, "cours", 1),
+            ("cours_16h00_17h00.mp3", 3600, "cours", 6),
+        ]
+
+        with patch.dict(os.environ, {}, clear=True), patch.object(
+            cgs, "_course_preflight_safety", return_value=1.0
+        ), patch.object(cgs, "_course_final_silence_sec", return_value=120.0):
+            budget = cgs.get_course_day_word_budget(playlist)
+
+        expected_c1 = int(((2700 - 120 - 17) / 60) * 199.9)
+        expected_c6 = int(((3600 - 120 - 17) / 60) * 213.9)
+        self.assertEqual(budget["target_words"], expected_c1 + expected_c6)
+        self.assertEqual(budget["course_items"][0]["target_words"], expected_c1)
+        self.assertEqual(budget["course_items"][1]["target_words"], expected_c6)
+
     def test_actual_reading_summary_exposes_wpm_and_text_read(self):
         meta = {
             "provider": "fish_audio",
