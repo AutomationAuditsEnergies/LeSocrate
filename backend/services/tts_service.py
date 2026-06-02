@@ -238,6 +238,7 @@ def convert_to_speech_with_timestamps(
     if response.status_code != 200:
         raise Exception(f"Erreur API fish.audio timestamp ({response.status_code}): {response.text[:500]}")
 
+    response.encoding = "utf-8"
     audio_chunks = []
     alignment_by_chunk = {}
     for line in response.iter_lines(decode_unicode=True):

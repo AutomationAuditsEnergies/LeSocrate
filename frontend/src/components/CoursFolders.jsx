@@ -2086,8 +2086,9 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
           <div
             className="w-full overflow-hidden rounded-2xl shadow-2xl flex flex-col"
             style={{
-              maxWidth: '1040px',
-              maxHeight: '90vh',
+              maxWidth: '1280px',
+              width: 'min(1280px, calc(100vw - 32px))',
+              height: 'min(88vh, 960px)',
               backgroundColor: colors.cardBg,
               border: `1px solid ${colors.border}`,
             }}
@@ -2742,7 +2743,7 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
                 )}
               </div>
 
-              <div className="flex-1 overflow-y-auto p-5 space-y-4">
+              <div className="flex-1 min-w-0 overflow-y-auto p-5 space-y-4">
                 {(() => {
                   if (scriptActiveBreak) {
                     const br = (contentScriptModal.breaks || []).find(b => b.filename === scriptActiveBreak)
@@ -2895,6 +2896,9 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
                   }[active.status] || active.status
                   const actualReading = active.actual_reading || null
                   const actualReadText = actualReading?.text_read || ''
+                  const actualReadPreview = actualReadText.length > 1200
+                    ? `${actualReadText.slice(0, 1200).trimEnd()}...`
+                    : actualReadText
                   const isEditingCourse = editingSegment?.type === 'course' && editingSegment.bloc_number === active.bloc_number
                   const isGeneratingCourse = playlistJob?.status === 'running' && playlistJob.filename === active.filename
                   const conclusionBlocks = []
@@ -2906,7 +2910,7 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
                   })
                   return (
                     <>
-                      <div className="flex items-start gap-3 pb-3" style={{ borderBottom: `1px solid ${colors.border}` }}>
+                      <div className="flex flex-wrap items-start gap-3 pb-3" style={{ borderBottom: `1px solid ${colors.border}` }}>
                         <span className="text-sm font-bold px-2.5 py-0.5 rounded-full" style={{ backgroundColor: darkMode ? '#334155' : '#e2e8f0', color: colors.textSecondary }}>
                           Cours {active.bloc_number}
                         </span>
@@ -2923,7 +2927,39 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
                             audio {Math.round(active.final_duration_sec / 60)} min
                           </span>
                         )}
-                        <div className="flex items-center gap-1.5">
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          {isEditingCourse ? (
+                            <>
+                              <button
+                                type="button"
+                                onClick={handleCancelEdit}
+                                disabled={savingEdit}
+                                className="rounded-lg px-3 py-1.5 text-xs font-semibold"
+                                style={{ border: `1px solid ${colors.border}`, color: colors.textSecondary, backgroundColor: colors.cardBg }}
+                              >
+                                Annuler
+                              </button>
+                              <button
+                                type="button"
+                                onClick={handleSaveCourseBlocEdit}
+                                disabled={savingEdit}
+                                className="rounded-lg px-3 py-1.5 text-xs font-semibold"
+                                style={{ backgroundColor: colors.text, color: colors.cardBg }}
+                              >
+                                {savingEdit ? 'Enregistrement...' : 'Enregistrer'}
+                              </button>
+                            </>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => handleStartCourseBlocEdit(active)}
+                              className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold"
+                              style={{ border: `1px solid ${colors.border}`, color: colors.textSecondary, backgroundColor: colors.cardBg }}
+                            >
+                              <Icon name="edit" style={{ fontSize: '15px' }} />
+                              Modifier
+                            </button>
+                          )}
                           <button
                             type="button"
                             onClick={() => handleGeneratePlaylistItem(active.filename, 'gtts')}
@@ -2979,11 +3015,42 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
                         </div>
                       )}
 
+                      <div className="rounded-xl overflow-hidden" style={{ border: `1px solid ${colors.border}` }}>
+                        <div className="px-4 py-2 flex items-center justify-between gap-3" style={{ backgroundColor: darkMode ? '#0f172a' : '#f8fafc' }}>
+                          <span className="text-xs font-bold" style={{ color: colors.textSecondary }}>
+                            Texte complet du cours audio
+                          </span>
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs" style={{ color: colors.textMuted }}>
+                              budget {(active.word_budget || 0).toLocaleString('fr-FR')} mots
+                            </span>
+                          </div>
+                        </div>
+                        <div className="px-4 py-3" style={{ backgroundColor: colors.cardBg }}>
+                          {isEditingCourse ? (
+                            <textarea
+                              value={editText}
+                              onChange={e => setEditText(e.target.value)}
+                              rows={24}
+                              className="w-full resize-y rounded-lg p-3 text-xs leading-relaxed outline-none"
+                              style={{ backgroundColor: colors.innerBg, color: colors.text, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace', border: `1px solid ${colors.border}` }}
+                            />
+                          ) : (
+                            <p
+                              className="text-xs leading-relaxed whitespace-pre-wrap"
+                              style={{ color: colors.text, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace' }}
+                            >
+                              {active.text || 'Aucun texte pour ce cours.'}
+                            </p>
+                          )}
+                        </div>
+                      </div>
+
                       {actualReading && (
-                        <div className="rounded-xl overflow-hidden" style={{ border: `1px solid ${colors.border}` }}>
+                        <div className="rounded-xl overflow-hidden" style={{ border: `1px solid ${darkMode ? '#166534' : '#bbf7d0'}` }}>
                           <div className="px-4 py-2 flex items-center gap-2" style={{ backgroundColor: darkMode ? '#064e3b' : '#ecfdf5' }}>
                             <Icon name="graphic_eq" style={{ color: '#059669', fontSize: '16px' }} />
-                            <span className="text-xs font-bold" style={{ color: '#059669' }}>Cours audio réellement lu</span>
+                            <span className="text-xs font-bold" style={{ color: '#059669' }}>Résumé du dernier audio lu</span>
                           </div>
                           <div className="p-4 space-y-3" style={{ backgroundColor: colors.cardBg }}>
                             <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
@@ -3002,8 +3069,16 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
                               ))}
                             </div>
                             {actualReadText && (
-                              <p className="text-xs leading-relaxed whitespace-pre-wrap" style={{ color: colors.text, fontFamily: 'monospace' }}>
-                                {actualReadText}
+                              <p
+                                className="max-h-40 overflow-y-auto rounded-lg p-3 text-xs leading-relaxed whitespace-pre-wrap"
+                                style={{
+                                  backgroundColor: colors.innerBg,
+                                  border: `1px solid ${colors.border}`,
+                                  color: colors.textSecondary,
+                                  fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
+                                }}
+                              >
+                                {actualReadPreview}
                               </p>
                             )}
                           </div>
@@ -3029,68 +3104,6 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
                         </div>
                       )}
 
-                      <div className="rounded-xl overflow-hidden" style={{ border: `1px solid ${colors.border}` }}>
-                        <div className="px-4 py-2 flex items-center justify-between" style={{ backgroundColor: darkMode ? '#0f172a' : '#f8fafc' }}>
-	                          <span className="text-xs font-bold" style={{ color: colors.textSecondary }}>
-	                            Texte complet du cours audio
-	                          </span>
-                          <div className="flex items-center gap-2">
-                            <span className="text-xs" style={{ color: colors.textMuted }}>
-                              budget {(active.word_budget || 0).toLocaleString('fr-FR')} mots
-                            </span>
-                            {isEditingCourse ? (
-                              <>
-                                <button
-                                  type="button"
-                                  onClick={handleCancelEdit}
-                                  disabled={savingEdit}
-                                  className="rounded-lg px-2.5 py-1 text-xs font-semibold"
-                                  style={{ border: `1px solid ${colors.border}`, color: colors.textSecondary, backgroundColor: colors.cardBg }}
-                                >
-                                  Annuler
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={handleSaveCourseBlocEdit}
-                                  disabled={savingEdit}
-                                  className="rounded-lg px-2.5 py-1 text-xs font-semibold"
-                                  style={{ backgroundColor: colors.text, color: colors.cardBg }}
-                                >
-                                  {savingEdit ? 'Enregistrement...' : 'Enregistrer'}
-                                </button>
-                              </>
-                            ) : (
-                              <button
-                                type="button"
-                                onClick={() => handleStartCourseBlocEdit(active)}
-                                className="flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-semibold"
-                                style={{ border: `1px solid ${colors.border}`, color: colors.textSecondary, backgroundColor: colors.cardBg }}
-                              >
-                                <Icon name="edit" style={{ fontSize: '15px' }} />
-                                Modifier
-                              </button>
-                            )}
-                          </div>
-                        </div>
-                        <div className="px-4 py-3" style={{ backgroundColor: colors.cardBg }}>
-                          {isEditingCourse ? (
-                            <textarea
-                              value={editText}
-                              onChange={e => setEditText(e.target.value)}
-                              rows={24}
-                              className="w-full resize-y rounded-lg p-3 text-xs leading-relaxed outline-none"
-                              style={{ backgroundColor: colors.innerBg, color: colors.text, fontFamily: 'monospace', border: `1px solid ${colors.border}` }}
-                            />
-                          ) : (
-                            <p
-                              className="text-xs leading-relaxed whitespace-pre-wrap"
-                              style={{ color: colors.text, fontFamily: 'monospace' }}
-                            >
-                              {active.text || 'Aucun texte pour ce cours.'}
-                            </p>
-                          )}
-                        </div>
-                      </div>
                     </>
                   )
                 })()}
