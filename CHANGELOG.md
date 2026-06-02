@@ -4,13 +4,16 @@
 
 ### fix(slides): chevauchement du titre sur la slide "Programme journée"
 
-La slide `deck-program7` (`DeckTemplates.css`) utilisait des tailles en
-`clamp(..., vw, ...)` au lieu des px fixes du design d'origine. Comme une
-slide est un canevas fixe 1920×1080 mis à l'échelle par `deck-stage`, les
-unités `vw` (relatives à la fenêtre, pas au canevas) cassaient les
-proportions : le `<h1>` débordait de sa colonne et chevauchait la timeline
-de droite. Restauration des valeurs px exactes du `deck.html`
-(font 104/27/35px, gap 120px, padding 0 140px, pastilles 74px).
+Le conteneur `.deck-slide` n'est pas un canevas fixe 1920×1080 mais un
+cadre fluide (`width: 90vw; max-width: 1200px`). Les dimensions
+structurelles de `deck-program7` avaient bien été réduites à cette échelle
+(gap 75, padding 88, pastilles 46px…), mais les `max` des `clamp()` de
+police étaient restés aux valeurs du design 1920 d'origine
+(`104px`/`27px`/`35px`) — soit ~1,6× trop gros pour un cadre de 1200px. Le
+`<h1>` débordait donc de sa colonne et chevauchait la timeline. Correctif :
+caler les `max` de police à la proportion du canevas 1200px
+(h1 `65px`, sous-titre `17px`, items `22px`) et resserrer le `max-width`
+du paragraphe (600→375px).
 
 ## 2026-05-20
 
