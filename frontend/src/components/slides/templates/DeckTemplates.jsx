@@ -22,6 +22,20 @@ const AccentTitle = ({ title, fallback, accentLast = true, className = '' }) => 
   return <span className={className}>{words.join(' ')} <span className="deck-coral">{last}</span></span>;
 };
 
+const renderProgramSubtitle = (subtitle) => {
+  const text = subtitle || "Une journée dédiée aux fondamentaux de l'échange à distance — du premier contact jusqu'à l'empreinte que l'on laisse après.";
+  const highlight = "fondamentaux de l'échange à distance";
+  const index = text.indexOf(highlight);
+  if (index < 0) return text;
+  return (
+    <>
+      {text.slice(0, index)}
+      <b>{highlight}</b>
+      {text.slice(index + highlight.length)}
+    </>
+  );
+};
+
 export const DeckWelcome = ({ title = 'Bienvenue', formation_name, subtitle, day_label, badge, brandName }) => (
   <DeckSlide type="INTRO_FORMATION" page="01" className="deck-intro" badge={badge} brandName={brandName}>
     <div className="deck-intro-wrap">
@@ -82,6 +96,7 @@ export const DeckDayProgram7Steps = ({
   const brandParts = String(brandName || 'SALES HACKING').split(/\s+/);
   const brandHead = brandParts[0] || 'Sales';
   const brandTail = brandParts.slice(1).join(' ') || 'Hacking';
+  const eyebrow = day_label ? (String(day_label).trim().startsWith('—') ? day_label : `— ${day_label}`) : '— Feuille de route';
 
   return (
     <div className="deck-slide deck-program7">
@@ -90,15 +105,12 @@ export const DeckDayProgram7Steps = ({
           <span className="deck-brand-mark">{brandHead}</span>
           <span className="deck-brand-tag">{brandTail}</span>
         </div>
-        <div className="deck-rec"><span />EN DIRECT · {badge || 'TP-CRCD'}</div>
-        <div className="deck-pages"><b>02</b> / 19</div>
-        <div className="deck-section">TYPE · DAY_PROGRAM</div>
       </div>
 
       <div className="deck-program7-left">
-        <span className="deck-eyebrow">{day_label || 'Feuille de route'}</span>
+        <span className="deck-eyebrow">{eyebrow}</span>
         <h1>{title === 'Programme de la journée.' ? <>Programme<br />de la <span>journée.</span></> : <AccentTitle title={title} fallback="Programme de la journée." />}</h1>
-        <p>{subtitle || "Une journée dédiée aux fondamentaux de l'échange à distance, du premier contact jusqu'à l'empreinte que l'on laisse après."}</p>
+        <p>{renderProgramSubtitle(subtitle)}</p>
       </div>
 
       <div className="deck-program7-list">
