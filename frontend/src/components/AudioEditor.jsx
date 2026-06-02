@@ -87,8 +87,8 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
 
     const ws = WaveSurfer.create({
       container: waveRef.current,
-      waveColor: darkMode ? '#6d28d9' : '#a78bfa',
-      progressColor: darkMode ? '#c4b5fd' : '#7c3aed',
+      waveColor: darkMode ? '#475569' : '#cbd5e1',
+      progressColor: darkMode ? '#cbd5e1' : '#334155',
       cursorColor: '#f59e0b',
       barWidth: 2,
       barGap: 1,
@@ -159,7 +159,7 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
     ws.on('finish', () => setPlaying(false))
 
     // Permettre la création de régions par drag
-    regions.enableDragSelection({ color: 'rgba(124, 58, 237, 0.25)' })
+    regions.enableDragSelection({ color: darkMode ? 'rgba(203, 213, 225, 0.25)' : 'rgba(51, 65, 85, 0.18)' })
 
     regions.on('region-created', (r) => {
       // Supprimer seulement la région utilisateur précédente (pas les régions bugs)
@@ -193,7 +193,7 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
     activeRegionRef.current?.setOptions({
       color: mode === 'cut'
         ? 'rgba(239, 68, 68, 0.25)'
-        : 'rgba(124, 58, 237, 0.25)',
+        : darkMode ? 'rgba(203, 213, 225, 0.25)' : 'rgba(51, 65, 85, 0.18)',
     })
   }, [mode])
 
@@ -492,52 +492,55 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
     }
   }
 
-  const bg = darkMode ? '#0f0a1f' : '#faf5ff'
-  const border = darkMode ? '#2d1b69' : '#ede9fe'
-  const textPrimary = darkMode ? '#e9d5ff' : '#1e1b4b'
-  const textMuted = darkMode ? '#7c3aed' : '#9333ea'
-  const headerBg = '#6d28d9'
+  const border = colors.border
+  const textPrimary = colors.text
+  const textMuted = colors.textMuted
+  const panelBg = darkMode ? '#111827' : '#f8fafc'
+  const actionBg = colors.text
+  const actionText = colors.cardBg
 
   return (
-    <div
-      className="fixed inset-0 z-[70] flex items-center justify-center p-4"
-      style={{ backgroundColor: 'rgba(0,0,0,0.8)' }}
-      onClick={onClose}
-    >
-      <div
-        className="w-full rounded-2xl shadow-2xl flex flex-col overflow-hidden"
-        style={{ maxWidth: '820px', maxHeight: '90vh', backgroundColor: bg }}
-        onClick={e => e.stopPropagation()}
-      >
+    <div className="flex min-h-0 flex-col" style={{ backgroundColor: colors.cardBg }}>
         {/* Header */}
         <div
-          className="flex items-center justify-between px-5 py-3 flex-shrink-0"
-          style={{ backgroundColor: headerBg }}
+          className="flex items-center justify-between gap-3 border-b px-5 py-3 flex-shrink-0"
+          style={{ backgroundColor: panelBg, borderColor: colors.border }}
         >
-          <div className="flex items-center gap-3 text-white">
-            <Icon name="cut" style={{ fontSize: '20px' }} />
-            <div>
-              <p className="text-sm font-bold">{filename}</p>
-              <p className="text-xs" style={{ color: '#ddd6fe' }}>
+          <button
+            type="button"
+            onClick={onClose}
+            className="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors"
+            style={{ backgroundColor: colors.cardBg, border: `1px solid ${colors.border}`, color: colors.textSecondary }}
+          >
+            <Icon name="arrow_back" style={{ fontSize: '16px' }} />
+            Retour aux audios
+          </button>
+          <div className="flex min-w-0 flex-1 items-center gap-3">
+            <span
+              className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg"
+              style={{ backgroundColor: colors.innerBg, color: colors.textSecondary, border: `1px solid ${colors.border}` }}
+            >
+              <Icon name="content_cut" style={{ fontSize: '18px' }} />
+            </span>
+            <div className="min-w-0">
+              <p className="truncate text-sm font-bold" style={{ color: colors.text }}>{filename}</p>
+              <p className="text-xs" style={{ color: colors.textMuted }}>
                 Éditeur audio · {formatTime(duration)}
               </p>
             </div>
           </div>
-          <button onClick={onClose} className="text-white hover:bg-white/20 rounded-full p-1">
-            <Icon name="close" style={{ fontSize: '22px' }} />
-          </button>
         </div>
 
         {/* Corps */}
-        <div className="flex-1 overflow-y-auto p-5 space-y-4">
+        <div className="max-h-[calc(92vh-112px)] flex-1 overflow-y-auto p-5 space-y-4">
 
           {/* Waveform */}
           <div
             className="rounded-xl p-3 relative"
-            style={{ backgroundColor: darkMode ? '#1a0a3a' : '#f3e8ff', border: `1px solid ${border}` }}
+            style={{ backgroundColor: colors.innerBg, border: `1px solid ${border}` }}
           >
             {loading && (
-              <div className="absolute inset-0 flex items-center justify-center rounded-xl" style={{ backgroundColor: darkMode ? '#1a0a3a' : '#f3e8ff' }}>
+              <div className="absolute inset-0 flex items-center justify-center rounded-xl" style={{ backgroundColor: colors.innerBg }}>
                 <div className="flex items-center gap-2" style={{ color: textMuted }}>
                   <Icon name="hourglass_empty" style={{ fontSize: '20px' }} />
                   <span className="text-sm">Chargement de l'audio...</span>
@@ -558,14 +561,14 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
               onClick={togglePlay}
               disabled={loading}
               className="flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
-              style={{ backgroundColor: '#7c3aed' }}
+              style={{ backgroundColor: actionBg, color: actionText }}
             >
               <Icon name={playing ? 'pause' : 'play_arrow'} style={{ fontSize: '18px' }} />
               {playing ? 'Pause' : 'Écouter'}
             </button>
 
             {region && (
-              <div className="flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-medium" style={{ backgroundColor: darkMode ? '#2d1b69' : '#ede9fe', color: '#7c3aed' }}>
+              <div className="flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-medium" style={{ backgroundColor: colors.innerBg, border: `1px solid ${colors.border}`, color: colors.textSecondary }}>
                 <Icon name="crop_free" style={{ fontSize: '14px' }} />
                 Sélection : {formatTime(region.start)} → {formatTime(region.end)}
                 <span style={{ color: textMuted }}>({formatTime(region.end - region.start)})</span>
@@ -588,7 +591,7 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
               onClick={handleDetectBugs}
               disabled={loading || analyzing}
               className="flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-semibold disabled:opacity-50 transition-all"
-              style={{ backgroundColor: analyzing ? '#78350f' : '#92400e', color: '#fef3c7', border: '1px solid #d97706' }}
+              style={{ backgroundColor: darkMode ? '#431407' : '#fff7ed', color: darkMode ? '#fdba74' : '#92400e', border: `1px solid ${darkMode ? '#7c2d12' : '#fed7aa'}` }}
             >
               <Icon name={analyzing ? 'hourglass_empty' : 'troubleshoot'} style={{ fontSize: '16px' }} />
               {analyzing ? 'Analyse en cours...' : 'Détecter les bugs vocaux'}
@@ -622,9 +625,9 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
                 onClick={() => { setMode(m); setError(null) }}
                 className="flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-semibold transition-all"
                 style={{
-                  backgroundColor: mode === m ? '#7c3aed' : (darkMode ? '#1a0a3a' : '#f3e8ff'),
-                  color: mode === m ? 'white' : textMuted,
-                  border: `1px solid ${mode === m ? '#7c3aed' : border}`,
+                  backgroundColor: mode === m ? actionBg : colors.innerBg,
+                  color: mode === m ? actionText : colors.textSecondary,
+                  border: `1px solid ${mode === m ? actionBg : border}`,
                 }}
               >
                 <Icon name={m === 'cut' ? 'content_cut' : 'edit'} style={{ fontSize: '16px' }} />
@@ -667,7 +670,7 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
                 placeholder="Écrivez ici le texte qui sera lu par la voix TTS à la place de la région sélectionnée..."
                 className="w-full rounded-xl p-3 text-sm resize-y outline-none"
                 style={{
-                  backgroundColor: darkMode ? '#0f0a1f' : '#fff',
+                  backgroundColor: colors.innerBg,
                   color: textPrimary,
                   border: `1px solid ${border}`,
                 }}
@@ -677,7 +680,7 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
                   onClick={handlePreviewTTS}
                   disabled={!replaceText.trim() || generating}
                   className="flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-semibold disabled:opacity-50"
-                  style={{ backgroundColor: darkMode ? '#2d1b69' : '#ede9fe', color: '#7c3aed' }}
+                  style={{ backgroundColor: colors.innerBg, color: colors.textSecondary, border: `1px solid ${colors.border}` }}
                 >
                   <Icon name={generating ? 'hourglass_empty' : 'hearing'} style={{ fontSize: '16px' }} />
                   {generating ? 'Génération TTS...' : previewId ? 'Réécouter le clip' : 'Prévisualiser la voix'}
@@ -700,7 +703,7 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
                       onClick={handleReplaceConfirm}
                       disabled={saving}
                       className="flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-bold text-white disabled:opacity-50"
-                      style={{ backgroundColor: '#7c3aed' }}
+                      style={{ backgroundColor: actionBg, color: actionText }}
                     >
                       <Icon name="check" style={{ fontSize: '16px' }} />
                       {saving ? 'Application...' : 'Confirmer le remplacement'}
@@ -729,7 +732,6 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
             </div>
           )}
         </div>
-      </div>
     </div>
   )
 }

@@ -1678,9 +1678,9 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
         {/* Modal Header */}
         <div className="flex items-center justify-between gap-4 border-b px-5 py-3" style={{ borderColor: colors.border, backgroundColor: colors.cardBg }}>
           <div className="flex min-w-0 items-center gap-2.5">
-            <Icon name="folder_special" style={{ color: colors.textMuted, fontSize: '18px', flexShrink: 0 }} />
+            <Icon name={audioEditorFile ? 'content_cut' : 'folder_special'} style={{ color: colors.textMuted, fontSize: '18px', flexShrink: 0 }} />
             <h3 className="truncate text-[15px] font-semibold leading-6" style={{ color: colors.text }}>
-              {view === 'folders' ? `Cours - ${platformName}` : selectedFolder?.name}
+              {audioEditorFile ? audioEditorFile : view === 'folders' ? `Cours - ${platformName}` : selectedFolder?.name}
             </h3>
           </div>
           <button
@@ -1694,8 +1694,16 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
         </div>
 
         {/* Modal Body */}
-        <div className="overflow-y-auto p-5" style={{ maxHeight: 'calc(92vh - 58px)', backgroundColor: darkMode ? colors.bg : '#ffffff' }}>
-          {view === 'folders' ? (
+        <div className={audioEditorFile ? 'overflow-hidden p-0' : 'overflow-y-auto p-5'} style={{ maxHeight: 'calc(92vh - 58px)', backgroundColor: darkMode ? colors.bg : '#ffffff' }}>
+          {audioEditorFile && selectedFolder ? (
+            <AudioEditor
+              folderId={selectedFolder.id}
+              filename={audioEditorFile}
+              darkMode={darkMode}
+              colors={colors}
+              onClose={() => setAudioEditorFile(null)}
+            />
+          ) : view === 'folders' ? (
             <>
               {showCreateFolderForm ? (
                 <form
@@ -1968,10 +1976,10 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
                               <button
                                 onClick={() => setAudioEditorFile(item.filename)}
                                 title="Éditer cet audio (couper / remplacer)"
-                                className="flex-shrink-0 rounded-md p-1.5 transition-colors"
-                                style={{ backgroundColor: colors.cardBg, border: `1px solid ${colors.border}`, color: colors.textSecondary }}
+                                className="inline-flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg transition-colors"
+                                style={{ backgroundColor: colors.innerBg, border: `1px solid ${colors.border}`, color: colors.textSecondary }}
                               >
-                                <Icon name="cut" style={{ fontSize: '14px' }} />
+                                <Icon name="content_cut" style={{ fontSize: '16px' }} />
                               </button>
                             )}
                           </div>
@@ -3190,16 +3198,6 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
             </div>
           </div>
         </div>
-      )}
-
-      {audioEditorFile && selectedFolder && (
-        <AudioEditor
-          folderId={selectedFolder.id}
-          filename={audioEditorFile}
-          darkMode={darkMode}
-          colors={colors}
-          onClose={() => setAudioEditorFile(null)}
-        />
       )}
 
       {deleteConfirm && (
