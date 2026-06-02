@@ -1,5 +1,17 @@
 # Changelog
 
+## 2026-06-02
+
+### fix(slides): chevauchement du titre sur la slide "Programme journée"
+
+La slide `deck-program7` (`DeckTemplates.css`) utilisait des tailles en
+`clamp(..., vw, ...)` au lieu des px fixes du design d'origine. Comme une
+slide est un canevas fixe 1920×1080 mis à l'échelle par `deck-stage`, les
+unités `vw` (relatives à la fenêtre, pas au canevas) cassaient les
+proportions : le `<h1>` débordait de sa colonne et chevauchait la timeline
+de droite. Restauration des valeurs px exactes du `deck.html`
+(font 104/27/35px, gap 120px, padding 0 140px, pastilles 74px).
+
 ## 2026-05-20
 
 ### fix(audio-editor): seek arbitraire cassé sur la waveform

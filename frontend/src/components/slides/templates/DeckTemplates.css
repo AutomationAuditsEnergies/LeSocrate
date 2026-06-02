@@ -171,8 +171,8 @@
 .deck-program7 {
   display: grid;
   grid-template-columns: .82fr 1.18fr;
-  gap: 75px;
-  padding: 0 88px;
+  gap: 120px;
+  padding: 0 140px;
   align-items: center;
   box-sizing: border-box;
 }
@@ -180,7 +180,7 @@
 .deck-program7-left .deck-eyebrow { display: block; margin-bottom: 24px; }
 .deck-program7-left h1 {
   font-family: Archivo Black, Archivo, sans-serif;
-  font-size: clamp(58px, 8vw, 104px);
+  font-size: 104px;
   line-height: .9;
   letter-spacing: -.025em;
   text-transform: uppercase;
@@ -190,14 +190,14 @@
 .deck-program7-left p {
   font-family: Archivo, Inter, sans-serif;
   font-weight: 400;
-  font-size: clamp(17px, 2.2vw, 27px);
+  font-size: 27px;
   line-height: 1.45;
   color: rgba(255,255,255,.72);
   margin: 38px 0 0;
   max-width: 600px;
 }
 .deck-program7-left p b { color: #fff; font-weight: 700; }
-.deck-program7-list { padding-left: 56px; }
+.deck-program7-list { padding-left: 90px; }
 .deck-program7-list ol {
   list-style: none;
   margin: 0;
@@ -207,30 +207,30 @@
 .deck-program7-list ol::before {
   content: "";
   position: absolute;
-  left: 23px;
-  top: 30px;
-  bottom: 30px;
+  left: 37px;
+  top: 48px;
+  bottom: 48px;
   width: 2px;
   background: linear-gradient(180deg, var(--coral), rgba(255,255,255,.14));
 }
 .deck-program7-list li {
   display: grid;
-  grid-template-columns: 46px 1fr;
+  grid-template-columns: 74px 1fr;
   align-items: center;
-  gap: 21px;
-  padding: 7px 0;
+  gap: 34px;
+  padding: 12px 0;
   position: relative;
 }
 .deck-program7-list .n {
-  width: 46px;
-  height: 46px;
+  width: 74px;
+  height: 74px;
   border-radius: 50%;
   background: #0a1351;
   border: 2px solid rgba(255,255,255,.22);
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  font: 500 14px/1 JetBrains Mono, monospace;
+  font: 500 23px/1 JetBrains Mono, monospace;
   color: var(--dim);
   position: relative;
   z-index: 1;
@@ -238,7 +238,7 @@
 .deck-program7-list .t {
   font-family: Archivo, Inter, sans-serif;
   font-weight: 600;
-  font-size: clamp(21px, 2.8vw, 35px);
+  font-size: 35px;
   color: rgba(255,255,255,.9);
   letter-spacing: -.01em;
   line-height: 1.05;
