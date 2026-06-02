@@ -61,6 +61,9 @@ def _bool_arg(name, default=False):
     return str(raw).strip().lower() in {"1", "true", "yes", "on"}
 
 
+_FINAL_SCRIPT_DOC_WHERE = "(cd.doc_type = 'final_script' OR cd.original_name LIKE 'cours_genere_%.txt')"
+
+
 def _summarize_blobs(container_client, *, max_items=None, timeout_seconds=None):
     """Résumé borné d'un container Azure pour éviter de bloquer le dashboard RH."""
     max_items = max_items or HR_DASHBOARD_BLOB_MAX_ITEMS
@@ -577,16 +580,16 @@ def create_hr_blueprint(socketio):
 
                 # 2. Cloner les documents liés
                 cursor.execute(
-                    """SELECT filename, original_name, status, audio_filename
+                    """SELECT filename, original_name, status, audio_filename, COALESCE(doc_type, 'source')
                        FROM cours_documents WHERE folder_id = ?""",
                     (src_fid,),
                 )
-                for filename, original_name, status, audio_filename in cursor.fetchall():
+                for filename, original_name, status, audio_filename, doc_type in cursor.fetchall():
                     cursor.execute(
                         """INSERT INTO cours_documents
-                           (folder_id, filename, original_name, status, audio_filename)
-                           VALUES (?, ?, ?, ?, ?)""",
-                        (new_fid, filename, original_name, status, audio_filename),
+                           (folder_id, filename, original_name, status, audio_filename, doc_type)
+                           VALUES (?, ?, ?, ?, ?, ?)""",
+                        (new_fid, filename, original_name, status, audio_filename, doc_type),
                     )
             conn.commit()
             conn.close()
@@ -1848,8 +1851,17 @@ def create_hr_blueprint(socketio):
         try:
             conn = get_db_connection()
             cursor = conn.cursor()
-            cursor.execute("""
-                SELECT cf.id, cf.name, cf.created_at, COUNT(cd.id) as document_count, cf.position
+            cursor.execute(f"""
+                SELECT
+                    cf.id,
+                    cf.name,
+                    cf.created_at,
+                    CASE
+                        WHEN SUM(CASE WHEN {_FINAL_SCRIPT_DOC_WHERE} THEN 1 ELSE 0 END) > 0
+                        THEN 1
+                        ELSE COUNT(cd.id)
+                    END as document_count,
+                    cf.position
                 FROM cours_folders cf
                 LEFT JOIN cours_documents cd ON cf.id = cd.folder_id
                 WHERE cf.platform_id = ?
@@ -1991,10 +2003,26 @@ def create_hr_blueprint(socketio):
         try:
             conn = get_db_connection()
             cursor = conn.cursor()
-            cursor.execute("""
+            cursor.execute(f"""
                 SELECT id, filename, original_name, status, audio_filename, created_at
                 FROM cours_documents
                 WHERE folder_id = ?
+                  AND (
+                    NOT EXISTS (
+                        SELECT 1
+                        FROM cours_documents cd
+                        WHERE cd.folder_id = cours_documents.folder_id
+                          AND {_FINAL_SCRIPT_DOC_WHERE}
+                    )
+                    OR id = (
+                        SELECT cd.id
+                        FROM cours_documents cd
+                        WHERE cd.folder_id = cours_documents.folder_id
+                          AND {_FINAL_SCRIPT_DOC_WHERE}
+                        ORDER BY cd.created_at DESC, cd.id DESC
+                        LIMIT 1
+                    )
+                  )
                 ORDER BY created_at DESC
             """, (folder_id,))
             docs = [{"id": row[0], "filename": row[1], "original_name": row[2], "status": row[3], "audio_filename": row[4], "created_at": row[5]} for row in cursor.fetchall()]
@@ -2048,7 +2076,7 @@ def create_hr_blueprint(socketio):
 
                 # Créer l'entrée DB (filename = blob path dans le container)
                 cursor.execute(
-                    "INSERT INTO cours_documents (folder_id, filename, original_name, status) VALUES (?, ?, ?, 'uploaded')",
+                    "INSERT INTO cours_documents (folder_id, filename, original_name, doc_type, status) VALUES (?, ?, ?, 'source', 'uploaded')",
                     (folder_id, blob_path, file.filename)
                 )
                 doc_id = cursor.lastrowid
@@ -2203,9 +2231,25 @@ def create_hr_blueprint(socketio):
             cursor = conn.cursor()
 
             # Récupérer les documents sans audio
-            cursor.execute("""
+            cursor.execute(f"""
                 SELECT id FROM cours_documents
                 WHERE folder_id = ? AND audio_filename IS NULL
+                  AND (
+                    NOT EXISTS (
+                        SELECT 1
+                        FROM cours_documents cd
+                        WHERE cd.folder_id = cours_documents.folder_id
+                          AND {_FINAL_SCRIPT_DOC_WHERE}
+                    )
+                    OR id = (
+                        SELECT cd.id
+                        FROM cours_documents cd
+                        WHERE cd.folder_id = cours_documents.folder_id
+                          AND {_FINAL_SCRIPT_DOC_WHERE}
+                        ORDER BY cd.created_at DESC, cd.id DESC
+                        LIMIT 1
+                    )
+                  )
             """, (folder_id,))
             docs = [{"id": row[0]} for row in cursor.fetchall()]
             conn.close()
@@ -2232,10 +2276,26 @@ def create_hr_blueprint(socketio):
         try:
             conn = get_db_connection()
             cursor = conn.cursor()
-            cursor.execute("""
+            cursor.execute(f"""
                 SELECT id, original_name, status
                 FROM cours_documents
                 WHERE folder_id = ?
+                  AND (
+                    NOT EXISTS (
+                        SELECT 1
+                        FROM cours_documents cd
+                        WHERE cd.folder_id = cours_documents.folder_id
+                          AND {_FINAL_SCRIPT_DOC_WHERE}
+                    )
+                    OR id = (
+                        SELECT cd.id
+                        FROM cours_documents cd
+                        WHERE cd.folder_id = cours_documents.folder_id
+                          AND {_FINAL_SCRIPT_DOC_WHERE}
+                        ORDER BY cd.created_at DESC, cd.id DESC
+                        LIMIT 1
+                    )
+                  )
                 ORDER BY created_at DESC
             """, (folder_id,))
             docs = [{"id": row[0], "name": row[1], "status": row[2]} for row in cursor.fetchall()]
@@ -4175,9 +4235,25 @@ def create_hr_blueprint(socketio):
                 conn = get_db_connection()
                 cursor = conn.cursor()
 
-                cursor.execute("""
+                cursor.execute(f"""
                     SELECT id FROM cours_documents
                     WHERE folder_id = ? AND audio_filename IS NULL AND status != 'processing'
+                      AND (
+                        NOT EXISTS (
+                            SELECT 1
+                            FROM cours_documents cd
+                            WHERE cd.folder_id = cours_documents.folder_id
+                              AND {_FINAL_SCRIPT_DOC_WHERE}
+                        )
+                        OR id = (
+                            SELECT cd.id
+                            FROM cours_documents cd
+                            WHERE cd.folder_id = cours_documents.folder_id
+                              AND {_FINAL_SCRIPT_DOC_WHERE}
+                            ORDER BY cd.created_at DESC, cd.id DESC
+                            LIMIT 1
+                        )
+                      )
                     LIMIT 1
                 """, (folder_id,))
                 row = cursor.fetchone()

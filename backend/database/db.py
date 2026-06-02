@@ -267,6 +267,7 @@ def init_database():
             folder_id INTEGER NOT NULL,
             filename TEXT NOT NULL,
             original_name TEXT NOT NULL,
+            doc_type TEXT DEFAULT 'source',
             status TEXT DEFAULT 'uploaded',
             audio_filename TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -274,6 +275,16 @@ def init_database():
         )
         """
         )
+        try:
+            cursor.execute("ALTER TABLE cours_documents ADD COLUMN doc_type TEXT DEFAULT 'source'")
+            logger.info("✅ Colonne doc_type ajoutée à cours_documents")
+        except Exception:
+            pass  # Colonne déjà présente
+        cursor.execute("""
+            UPDATE cours_documents
+            SET doc_type = 'final_script'
+            WHERE original_name LIKE 'cours_genere_%.txt'
+        """)
         logger.info("✅ Table cours_documents créée/vérifiée")
 
         # Table des jobs de génération de contenu TTS-direct

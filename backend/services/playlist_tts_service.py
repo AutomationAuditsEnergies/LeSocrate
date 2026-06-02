@@ -461,6 +461,30 @@ def _build_contextual_break_audio(
         return _get_recycled_qa_pause(filename)
 
 
+def _fetch_effective_cours_documents(cursor, folder_id):
+    """Retourne le script final unique s'il existe, sinon les documents sources."""
+    cursor.execute(
+        """
+        SELECT id, filename, original_name
+        FROM cours_documents
+        WHERE folder_id = ?
+          AND (doc_type = 'final_script' OR original_name LIKE 'cours_genere_%.txt')
+        ORDER BY created_at DESC, id DESC
+        LIMIT 1
+        """,
+        (folder_id,),
+    )
+    final_doc = cursor.fetchone()
+    if final_doc:
+        return [final_doc]
+
+    cursor.execute(
+        "SELECT id, filename, original_name FROM cours_documents WHERE folder_id = ? ORDER BY id",
+        (folder_id,),
+    )
+    return cursor.fetchall()
+
+
 def count_words_in_folder(platform_id, folder_id):
     """
     Compte les mots de tous les PDFs d'un dossier.
@@ -469,11 +493,7 @@ def count_words_in_folder(platform_id, folder_id):
     from database.db import get_db_connection
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute(
-        "SELECT id, filename, original_name FROM cours_documents WHERE folder_id = ? ORDER BY id",
-        (folder_id,)
-    )
-    documents = cursor.fetchall()
+    documents = _fetch_effective_cours_documents(cursor, folder_id)
     conn.close()
 
     if not documents:
@@ -588,11 +608,7 @@ def generate_playlist_for_folder(platform_id, folder_id, progress_callback=None,
     from database.db import get_db_connection
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute(
-        "SELECT id, filename, original_name FROM cours_documents WHERE folder_id = ? ORDER BY id",
-        (folder_id,)
-    )
-    documents = cursor.fetchall()
+    documents = _fetch_effective_cours_documents(cursor, folder_id)
     conn.close()
 
     if not documents:

@@ -46,9 +46,6 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState(null)
   const [status, setStatus] = useState(null)
-  const [analyzing, setAnalyzing] = useState(false)
-  const [bugRegions, setBugRegions] = useState([])    // [{start, end, severity}] en secondes
-  const bugRegionRefsRef = useRef([])                 // instances WaveSurfer Region pour cleanup
 
   const audioUrlRef = useRef(null)   // URL audio courante (mise à jour après cut/replace)
 
@@ -162,7 +159,6 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
     regions.enableDragSelection({ color: darkMode ? 'rgba(203, 213, 225, 0.25)' : 'rgba(51, 65, 85, 0.18)' })
 
     regions.on('region-created', (r) => {
-      // Supprimer seulement la région utilisateur précédente (pas les régions bugs)
       if (activeRegionRef.current) {
         activeRegionRef.current.remove()
       }
@@ -184,7 +180,6 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
       ws.destroy()
       stopStitchedPlayback()
       clearAudioUrl()
-      bugRegionRefsRef.current = []
     }
   }, [audioFetchHeaders, buildAudioStreamUrl, clearAudioUrl, darkMode])
 
@@ -224,8 +219,19 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
     }
   }
 
+  const restartFromBeginning = async () => {
+    const ws = wsRef.current
+    if (!ws) return
+    try {
+      ws.seekTo(0)
+      setCurrentTime(0)
+      await ws.play()
+    } catch (_) {
+      setCurrentTime(0)
+    }
+  }
+
   const clearRegion = () => {
-    // Ne supprimer que la région utilisateur, pas les régions bugs
     if (activeRegionRef.current) {
       activeRegionRef.current.remove()
       activeRegionRef.current = null
@@ -233,61 +239,6 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
     setRegion(null)
     setPreviewId(null)
     setPreviewAudio(null)
-  }
-
-  const clearBugRegions = () => {
-    bugRegionRefsRef.current.forEach(r => { try { r.remove() } catch (e) {} })
-    bugRegionRefsRef.current = []
-    setBugRegions([])
-  }
-
-  const handleDetectBugs = async () => {
-    setAnalyzing(true)
-    setError(null)
-    clearBugRegions()
-    try {
-      const resp = await fetch(
-        apiUrl(`/api/hr/cours-folders/${folderId}/audio/${encodeURIComponent(filename)}/detect-bugs`),
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', ...audioFetchHeaders() },
-          body: JSON.stringify({ seuil: 3.0, duree_min: 0.3 }),
-          credentials: 'include',
-        }
-      )
-      const data = await resp.json()
-      if (!data.success) {
-        setError(data.error || 'Erreur lors de l\'analyse')
-        return
-      }
-      setBugRegions(data.bugs)
-      // Ajouter les régions colorées sur la waveform
-      const refs = []
-      data.bugs.forEach(bug => {
-        const color = bug.severity >= 3
-          ? 'rgba(239, 68, 68, 0.30)'    // rouge vif → bug sévère
-          : bug.severity === 2
-          ? 'rgba(251, 146, 60, 0.30)'   // orange → bug modéré
-          : 'rgba(250, 204, 21, 0.25)'   // jaune → anomalie légère
-        const r = regionsRef.current?.addRegion({
-          start: bug.start,
-          end: bug.end,
-          color,
-          drag: false,
-          resize: false,
-        })
-        if (r) refs.push(r)
-      })
-      bugRegionRefsRef.current = refs
-      if (data.bugs.length === 0) {
-        setStatus('✅ Aucune anomalie détectée dans cet audio.')
-        setTimeout(() => setStatus(null), 4000)
-      }
-    } catch (e) {
-      setError('Erreur réseau lors de l\'analyse')
-    } finally {
-      setAnalyzing(false)
-    }
   }
 
   // ── Écoute splicée côté client (Web Audio API) ──
@@ -515,19 +466,10 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
             <Icon name="arrow_back" style={{ fontSize: '16px' }} />
             Retour aux audios
           </button>
-          <div className="flex min-w-0 flex-1 items-center gap-3">
-            <span
-              className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg"
-              style={{ backgroundColor: colors.innerBg, color: colors.textSecondary, border: `1px solid ${colors.border}` }}
-            >
-              <Icon name="content_cut" style={{ fontSize: '18px' }} />
-            </span>
-            <div className="min-w-0">
-              <p className="truncate text-sm font-bold" style={{ color: colors.text }}>{filename}</p>
-              <p className="text-xs" style={{ color: colors.textMuted }}>
-                Éditeur audio · {formatTime(duration)}
-              </p>
-            </div>
+          <div className="min-w-0 flex-1 text-right">
+            <p className="truncate text-xs font-medium" style={{ color: colors.textMuted }}>
+              {formatTime(currentTime)} / {formatTime(duration)}
+            </p>
           </div>
         </div>
 
@@ -555,8 +497,8 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
             </div>
           </div>
 
-          {/* Contrôles lecture */}
-          <div className="flex items-center gap-3">
+          {/* Actions */}
+          <div className="flex flex-wrap items-center gap-2">
             <button
               onClick={togglePlay}
               disabled={loading}
@@ -567,58 +509,16 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
               {playing ? 'Pause' : 'Écouter'}
             </button>
 
-            {region && (
-              <div className="flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-medium" style={{ backgroundColor: colors.innerBg, border: `1px solid ${colors.border}`, color: colors.textSecondary }}>
-                <Icon name="crop_free" style={{ fontSize: '14px' }} />
-                Sélection : {formatTime(region.start)} → {formatTime(region.end)}
-                <span style={{ color: textMuted }}>({formatTime(region.end - region.start)})</span>
-                <button onClick={clearRegion} className="ml-1 hover:opacity-70">
-                  <Icon name="close" style={{ fontSize: '14px' }} />
-                </button>
-              </div>
-            )}
-
-            {!region && !loading && (
-              <p className="text-xs" style={{ color: textMuted }}>
-                Faites glisser sur la forme d'onde pour sélectionner une région
-              </p>
-            )}
-          </div>
-
-          {/* Détection bugs */}
-          <div className="flex items-center gap-3 flex-wrap">
             <button
-              onClick={handleDetectBugs}
-              disabled={loading || analyzing}
-              className="flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-semibold disabled:opacity-50 transition-all"
-              style={{ backgroundColor: darkMode ? '#431407' : '#fff7ed', color: darkMode ? '#fdba74' : '#92400e', border: `1px solid ${darkMode ? '#7c2d12' : '#fed7aa'}` }}
+              onClick={restartFromBeginning}
+              disabled={loading}
+              className="flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-semibold disabled:opacity-50"
+              style={{ backgroundColor: colors.innerBg, color: colors.textSecondary, border: `1px solid ${colors.border}` }}
             >
-              <Icon name={analyzing ? 'hourglass_empty' : 'troubleshoot'} style={{ fontSize: '16px' }} />
-              {analyzing ? 'Analyse en cours...' : 'Détecter les bugs vocaux'}
+              <Icon name="replay" style={{ fontSize: '16px' }} />
+              Depuis le début
             </button>
 
-            {bugRegions.length > 0 && (
-              <div className="flex items-center gap-2">
-                <span className="text-xs font-medium px-3 py-1.5 rounded-lg" style={{ backgroundColor: 'rgba(239,68,68,0.15)', color: '#f87171' }}>
-                  {bugRegions.length} anomalie{bugRegions.length > 1 ? 's' : ''} détectée{bugRegions.length > 1 ? 's' : ''}
-                  {' '}·{' '}
-                  <span style={{ color: '#ef4444' }}>■</span> sévère{' '}
-                  <span style={{ color: '#fb923c' }}>■</span> modéré{' '}
-                  <span style={{ color: '#facc15' }}>■</span> léger
-                </span>
-                <button
-                  onClick={clearBugRegions}
-                  className="text-xs px-2 py-1 rounded-lg hover:opacity-70"
-                  style={{ color: textMuted }}
-                >
-                  <Icon name="close" style={{ fontSize: '13px' }} /> Effacer
-                </button>
-              </div>
-            )}
-          </div>
-
-          {/* Mode toggle */}
-          <div className="flex gap-2">
             {['cut', 'replace'].map(m => (
               <button
                 key={m}
@@ -634,6 +534,23 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
                 {m === 'cut' ? 'Couper' : 'Remplacer'}
               </button>
             ))}
+
+            {region && (
+              <div className="ml-auto flex items-center gap-2 rounded-xl px-3 py-2 text-xs font-medium" style={{ backgroundColor: colors.innerBg, border: `1px solid ${colors.border}`, color: colors.textSecondary }}>
+                <Icon name="crop_free" style={{ fontSize: '14px' }} />
+                Sélection : {formatTime(region.start)} → {formatTime(region.end)}
+                <span style={{ color: textMuted }}>({formatTime(region.end - region.start)})</span>
+                <button onClick={clearRegion} className="ml-1 hover:opacity-70">
+                  <Icon name="close" style={{ fontSize: '14px' }} />
+                </button>
+              </div>
+            )}
+
+            {!region && !loading && (
+              <p className="ml-auto text-xs" style={{ color: textMuted }}>
+                Faites glisser sur la forme d'onde pour sélectionner une région
+              </p>
+            )}
           </div>
 
           {/* Panel Cut */}

@@ -5729,7 +5729,12 @@ def _assemble_and_upload(folder_id, platform_id, job_id):
     vers Azure comme document .txt dans le dossier.
     Retourne le nombre total de mots.
     """
-    from services.azure_blob_service import upload_blob, CONTAINER_DOCUMENTS
+    from services.azure_blob_service import (
+        CONTAINER_AUDIOS,
+        CONTAINER_DOCUMENTS,
+        delete_blob,
+        upload_blob,
+    )
 
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -5755,19 +5760,43 @@ def _assemble_and_upload(folder_id, platform_id, job_id):
     full_text = _strip_audio_block_markers("\n\n".join(final_parts))
     total_words = count_tts_spoken_words(full_text)
 
-    # Chemin blob unique
+    # Chemin blob unique pour éviter de laisser une version partielle écraser
+    # la dernière version valide en cas d'échec d'upload.
     file_uuid = uuid_mod.uuid4()
     blob_path = f"platform-{platform_id}/folder-{folder_id}/{file_uuid}.txt"
-    original_name = f"cours_genere_{uuid_mod.uuid4().hex[:6]}.txt"
+    original_name = "script_tts_final.txt"
 
     upload_blob(CONTAINER_DOCUMENTS, blob_path, full_text.encode("utf-8"))
 
-    # Enregistrer comme document dans la DB
+    # Remplacer les anciennes versions finales du script TTS pour garder un seul
+    # document exploitable par cours.
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("""
-        INSERT INTO cours_documents (folder_id, filename, original_name, status)
-        VALUES (?, ?, ?, 'uploaded')
+        SELECT id, filename, audio_filename
+        FROM cours_documents
+        WHERE folder_id = ?
+          AND (doc_type = 'final_script' OR original_name LIKE 'cours_genere_%.txt')
+    """, (folder_id,))
+    old_final_docs = cursor.fetchall()
+    for _doc_id, old_filename, old_audio_filename in old_final_docs:
+        try:
+            delete_blob(CONTAINER_DOCUMENTS, old_filename)
+        except Exception as e:
+            logger.warning(f"⚠️ Ancien script final non supprimé ({old_filename}): {e}")
+        if old_audio_filename:
+            try:
+                delete_blob(CONTAINER_AUDIOS, old_audio_filename)
+            except Exception as e:
+                logger.warning(f"⚠️ Ancien audio final non supprimé ({old_audio_filename}): {e}")
+    cursor.execute("""
+        DELETE FROM cours_documents
+        WHERE folder_id = ?
+          AND (doc_type = 'final_script' OR original_name LIKE 'cours_genere_%.txt')
+    """, (folder_id,))
+    cursor.execute("""
+        INSERT INTO cours_documents (folder_id, filename, original_name, doc_type, status)
+        VALUES (?, ?, ?, 'final_script', 'uploaded')
     """, (folder_id, blob_path, original_name))
     conn.commit()
     conn.close()
