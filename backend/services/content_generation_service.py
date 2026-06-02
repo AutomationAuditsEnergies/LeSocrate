@@ -730,6 +730,9 @@ _BEAT_TYPE_TO_TEMPLATE = {
     "welcome": "welcome",
     "day_welcome": "welcome",
     "day_program": "day_program",
+    "day_program_7_steps": "day_program_7_steps",
+    "program_7_steps": "day_program_7_steps",
+    "roadmap_7_steps": "day_program_7_steps",
     "agenda": "day_program",
     "definition": "reflection",
     "concept": "reflection",
@@ -763,6 +766,7 @@ _BEAT_TYPE_TO_TEMPLATE = {
 _SUPPORTED_SLIDE_TEMPLATES = {
     "welcome",
     "day_program",
+    "day_program_7_steps",
     "reflection",
     "casestudy",
     "facilitator",
@@ -956,13 +960,15 @@ def _opening_structure_teaching_beats(
             "slide_anchor": {
                 "enabled": True,
                 "anchor_id": "day-opening-program-slide",
-                "template_type": "day_program",
+                "template_type": "day_program_7_steps",
                 "visual_goal": "donner une carte claire des thèmes de la journée avant le premier contenu",
                 "items_expected": len(program_items) or None,
                 "fields_hint": {
-                    "title": "Programme de la journée",
+                    "title": "Programme de la journée.",
+                    "subtitle": "Une journée dédiée aux fondamentaux de l'échange à distance.",
                     "day_label": day_label,
                     "formation_name": formation_name,
+                    "active_item": 1,
                     "items": program_items,
                 },
             },
@@ -980,7 +986,7 @@ def _merge_opening_teaching_beats(forced: list[dict], existing: list[dict]) -> l
             beat.get("type"),
             anchor.get("template_type") or anchor.get("template_family") or beat.get("template_type"),
         )
-        if template_type in {"welcome", "day_program"}:
+        if template_type in {"welcome", "day_program", "day_program_7_steps"}:
             return f"template:{template_type}"
         beat_id = str(beat.get("beat_id") or "").strip()
         anchor_id = str(anchor.get("anchor_id") or "").strip()
@@ -1620,7 +1626,7 @@ Contraintes générales :
   "Prenons un exemple fictif..." ou "Supposons que..." suffit.
 - Pour chaque partie de développement, crée des `teaching_beats` : 2 à 4 moments pédagogiques structurants qui guideront le texte.
 - Chaque teaching beat doit avoir : beat_id, type, role, spoken_requirement, slide_anchor.
-- Dans `opening` du cours interne 1, prévois explicitement les moments structurels d'accueil et d'annonce du programme du jour : ils correspondent aux templates `welcome` et `day_program`.
+- Dans `opening` du cours interne 1, prévois explicitement les moments structurels d'accueil et d'annonce du programme du jour : ils correspondent aux templates `welcome` et `day_program_7_steps`.
 - Un slide_anchor n'est activé que si le moment mérite vraiment une visualisation. N'active pas une slide pour une simple transition orale.
 - Le texte final ne doit jamais dire "slide", "PowerPoint", "template", "anchor" ou "teaching beat". Ces anchors sont internes.
 - Choisis les templates uniquement dans le catalogue fourni. Ne force pas une roue, une checklist ou des étapes si le contenu ne s'y prête pas.
@@ -1676,7 +1682,7 @@ Réponds UNIQUEMENT en JSON valide :
               "spoken_requirement": "ce que le texte oral devra couvrir naturellement",
               "slide_anchor": {{
                 "enabled": true,
-                "template_type": "welcome|day_program|reflection|casestudy|facilitator|stats|story|recap|analogy|warning|tip|opinion|transition|chart",
+                "template_type": "welcome|day_program|day_program_7_steps|reflection|casestudy|facilitator|stats|story|recap|analogy|warning|tip|opinion|transition|chart",
                 "visual_goal": "ce que la slide doit aider à retenir",
                 "items_expected": null,
                 "fields_hint": {{}}

@@ -34,6 +34,23 @@
       }
     },
     {
+      "template_id": "day_program_7_steps",
+      "families": ["day_program_7_steps", "day_program", "agenda", "program", "roadmap"],
+      "use_when": "Le cours annonce explicitement les sept grands thèmes d'une journée complète de formation.",
+      "avoid_when": "Le passage ne donne pas exactement une feuille de route de journée en sept parties.",
+      "requires": {
+        "items_min": 7,
+        "items_max": 7
+      },
+      "schema": {
+        "title": "Programme de la journée.",
+        "subtitle": "phrase courte qui résume l'axe de la journée",
+        "day_label": "Journée X",
+        "active_item": "numéro de l'étape active, 1 par défaut",
+        "items": "exactement 7 thèmes courts dans l'ordre"
+      }
+    },
+    {
       "template_id": "reflection",
       "families": ["concept", "definition", "key_message"],
       "use_when": "Une idée centrale, une définition ou un principe doit être retenu.",

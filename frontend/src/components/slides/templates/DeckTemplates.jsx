@@ -59,6 +59,62 @@ export const DeckAgenda = ({ title = 'Au programme.', items = [], day_label, for
   );
 };
 
+export const DeckDayProgram7Steps = ({
+  title = 'Programme de la journée.',
+  subtitle,
+  items = [],
+  day_label,
+  active_item = 1,
+  badge,
+  brandName = 'SALES HACKING',
+}) => {
+  const sourceItems = Array.isArray(items) ? items : [];
+  const safeItems = (sourceItems.length ? sourceItems : [
+    'Communiquer sans visuel',
+    'Le ton de la voix',
+    'Le rythme de synchronisation',
+    "Humaniser l'écrit asynchrone",
+    'La première minute',
+    "L'écoute active",
+    "L'empreinte après contact",
+  ]).slice(0, 7);
+  const activeIndex = Math.max(0, Math.min(6, Number(active_item || 1) - 1));
+  const brandParts = String(brandName || 'SALES HACKING').split(/\s+/);
+  const brandHead = brandParts[0] || 'Sales';
+  const brandTail = brandParts.slice(1).join(' ') || 'Hacking';
+
+  return (
+    <div className="deck-slide deck-program7">
+      <div className="deck-chrome">
+        <div className="deck-brand">
+          <span className="deck-brand-mark">{brandHead}</span>
+          <span className="deck-brand-tag">{brandTail}</span>
+        </div>
+        <div className="deck-rec"><span />EN DIRECT · {badge || 'TP-CRCD'}</div>
+        <div className="deck-pages"><b>02</b> / 19</div>
+        <div className="deck-section">TYPE · DAY_PROGRAM</div>
+      </div>
+
+      <div className="deck-program7-left">
+        <span className="deck-eyebrow">{day_label || 'Feuille de route'}</span>
+        <h1>{title === 'Programme de la journée.' ? <>Programme<br />de la <span>journée.</span></> : <AccentTitle title={title} fallback="Programme de la journée." />}</h1>
+        <p>{subtitle || "Une journée dédiée aux fondamentaux de l'échange à distance, du premier contact jusqu'à l'empreinte que l'on laisse après."}</p>
+      </div>
+
+      <div className="deck-program7-list">
+        <ol>
+          {safeItems.map((item, i) => (
+            <li className={i === activeIndex ? 'start' : ''} key={i}>
+              <span className="n">{String(i + 1).padStart(2, '0')}</span>
+              <span className="t">{typeof item === 'string' ? item : item.title}</span>
+            </li>
+          ))}
+        </ol>
+      </div>
+    </div>
+  );
+};
+
 export const DeckStatement = ({ title = 'Une idée à retenir', text, badge, brandName }) => (
   <DeckSlide type="BIG_STATEMENT" page="02" className="deck-big" badge={badge} brandName={brandName}>
     <div>

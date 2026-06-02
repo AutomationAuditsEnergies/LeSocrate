@@ -53,6 +53,7 @@ SUPPORTED_TEMPLATES = {
     "context",
     "welcome",
     "day_program",
+    "day_program_7_steps",
     "reflection",
     "casestudy",
     "facilitator",
@@ -70,6 +71,9 @@ TEMPLATE_ALIASES = {
     "welcome": "welcome",
     "day_welcome": "welcome",
     "day_program": "day_program",
+    "day_program_7_steps": "day_program_7_steps",
+    "program_7_steps": "day_program_7_steps",
+    "roadmap_7_steps": "day_program_7_steps",
     "agenda": "day_program",
     "definition": "reflection",
     "concept": "reflection",
@@ -104,6 +108,7 @@ EVENT_TYPES = {
     "filler",
     "welcome",
     "day_program",
+    "day_program_7_steps",
     "recap",
     "story",
     "definition",
@@ -1011,21 +1016,26 @@ def _normalize_slide_data(template: str, data: dict, fallback_title: str, fallba
             "day_label": _as_text(data.get("day_label"), "")[:40],
         }
 
-    if template == "day_program":
+    if template in {"day_program", "day_program_7_steps"}:
+        max_items = 7 if template == "day_program_7_steps" else 7
         items = []
-        for item in _limit_list(data.get("items") or data.get("points"), 7):
+        for item in _limit_list(data.get("items") or data.get("points"), max_items):
             if isinstance(item, dict):
                 label = _as_text(item.get("title") or item.get("label"), "")
             else:
                 label = _as_text(item, "")
             if label:
                 items.append(label[:120])
-        return {
+        normalized = {
             "title": _as_text(data.get("title"), "Programme de la journée")[:80],
+            "subtitle": _as_text(data.get("subtitle") or data.get("description"), "")[:180],
             "formation_name": _as_text(data.get("formation_name"), "")[:120],
             "day_label": _as_text(data.get("day_label"), "")[:40],
             "items": items or [_shorten(fallback_text, 90)],
         }
+        if template == "day_program_7_steps":
+            normalized["active_item"] = _safe_int(data.get("active_item"), 1, 1, 7)
+        return normalized
 
     if template == "casestudy":
         cases = []

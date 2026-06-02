@@ -20,7 +20,7 @@ import ChecklistTemplate from '../components/slides/templates/ChecklistTemplate'
 import QuotableTemplate from '../components/slides/templates/QuotableTemplate'
 import PracticeExerciseTemplate from '../components/slides/templates/PracticeExerciseTemplate'
 import BeforeAfterTemplate from '../components/slides/templates/BeforeAfterTemplate'
-import { DeckAgenda, DeckWelcome } from '../components/slides/templates/DeckTemplates'
+import { DeckAgenda, DeckDayProgram7Steps, DeckWelcome } from '../components/slides/templates/DeckTemplates'
 
 const Icon = ({ name, className = '', style = {} }) => (
   <span className={`material-icons ${className}`} style={{ fontSize: 'inherit', ...style }}>{name}</span>
@@ -2438,6 +2438,8 @@ function renderPipelineSlidePreview(slide = {}) {
       return <DeckWelcome {...props} />
     case 'day_program':
       return <DeckAgenda {...props} />
+    case 'day_program_7_steps':
+      return <DeckDayProgram7Steps {...props} />
     case 'context':
       return <ContextSlidePreview {...props} />
     case 'definition':
