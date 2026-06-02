@@ -1,3 +1,5 @@
+@import url("https://fonts.googleapis.com/css2?family=Archivo+Black&family=Archivo:wght@400;500;600;700;800;900&family=Manrope:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&family=Caveat:wght@600;700&display=swap");
+
 .deck-slide {
   --bg-0: #050a26;
   --bg-1: #0c1a5e;
@@ -34,7 +36,7 @@
 .deck-slide > * { position: relative; z-index: 2; }
 .deck-chrome { position: absolute; inset: 0; z-index: 5; pointer-events: none; }
 .deck-brand { position: absolute; top: 32px; left: 50px; display: flex; align-items: flex-end; gap: 7px; }
-.deck-brand-mark { font-family: Archivo Black, Archivo, Inter, sans-serif; font-size: 19px; line-height: .9; }
+.deck-brand-mark { font-family: Caveat, cursive; font-weight: 700; color: #fff; font-size: 19px; line-height: 1; transform: translateY(-1px) rotate(-6deg); }
 .deck-brand-tag { font-family: Caveat, cursive; color: var(--coral); font-size: 22px; line-height: 1; transform: rotate(-6deg); }
 .deck-rec { position: absolute; top: 34px; right: 50px; display: inline-flex; align-items: center; gap: 8px; font: 500 8px/1 JetBrains Mono, monospace; color: var(--dim); letter-spacing: .18em; }
 .deck-rec span { width: 6px; height: 6px; border-radius: 999px; background: var(--coral); box-shadow: 0 0 0 3px rgba(255,93,108,.18); }

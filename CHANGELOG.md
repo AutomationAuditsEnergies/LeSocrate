@@ -15,6 +15,14 @@ caler les `max` de police à la proportion du canevas 1200px
 (h1 `65px`, sous-titre `17px`, items `22px`) et resserrer le `max-width`
 du paragraphe (600→375px).
 
+Cause racine complémentaire : les polices du design (`Archivo Black`,
+`Archivo`, `Manrope`, `JetBrains Mono`, `Caveat`) n'étaient chargées nulle
+part — le projet n'importait que Fredoka/Poppins — donc tout `DeckTemplates`
+retombait sur une police de substitution (titre, numéros mono, logo
+manuscrit perdus). Ajout de l'`@import` Google Fonts en tête de
+`DeckTemplates.css`. Correction aussi du logo « Sales » qui était en
+`Archivo Black` au lieu de `Caveat` (manuscrit) comme dans le design.
+
 ## 2026-05-20
 
 ### fix(audio-editor): seek arbitraire cassé sur la waveform
