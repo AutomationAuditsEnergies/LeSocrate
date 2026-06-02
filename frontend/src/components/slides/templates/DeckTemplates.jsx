@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useLayoutEffect, useRef, useState } from 'react';
 import './DeckTemplates.css';
 
 const splitTitle = (title = '', fallback = '') => String(title || fallback).split(/\s+/);
@@ -34,6 +34,25 @@ const renderProgramSubtitle = (subtitle) => {
       {text.slice(index + highlight.length)}
     </>
   );
+};
+
+const useSlideStageScale = () => {
+  const ref = useRef(null);
+  const [scale, setScale] = useState(0.625);
+
+  useLayoutEffect(() => {
+    if (!ref.current) return undefined;
+    const update = () => {
+      const width = ref.current?.clientWidth || 1200;
+      setScale(width / 1920);
+    };
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(ref.current);
+    return () => observer.disconnect();
+  }, []);
+
+  return [ref, scale];
 };
 
 export const DeckWelcome = ({ title = 'Bienvenue', formation_name, subtitle, day_label, badge, brandName }) => (
@@ -80,7 +99,7 @@ export const DeckDayProgram7Steps = ({
   day_label,
   active_item = 1,
   badge,
-  brandName = 'SALES HACKING',
+  brandName = 'Sales hacking',
 }) => {
   const sourceItems = Array.isArray(items) ? items : [];
   const safeItems = (sourceItems.length ? sourceItems : [
@@ -93,36 +112,41 @@ export const DeckDayProgram7Steps = ({
     "L'empreinte après contact",
   ]).slice(0, 7);
   const activeIndex = Math.max(0, Math.min(6, Number(active_item || 1) - 1));
-  const brandParts = String(brandName || 'SALES HACKING').split(/\s+/);
-  const brandHead = brandParts[0] || 'Sales';
-  const brandTail = brandParts.slice(1).join(' ') || 'Hacking';
+  const normalizedBrandName = String(brandName || 'Sales hacking').trim();
+  const isSalesHackingBrand = normalizedBrandName.toLowerCase() === 'sales hacking';
+  const brandParts = normalizedBrandName.split(/\s+/);
+  const brandHead = isSalesHackingBrand ? 'Sales' : (brandParts[0] || 'Sales');
+  const brandTail = isSalesHackingBrand ? 'hacking' : (brandParts.slice(1).join(' ') || 'hacking');
   const eyebrow = day_label ? (String(day_label).trim().startsWith('—') ? day_label : `— ${day_label}`) : '— Feuille de route';
+  const [shellRef, scale] = useSlideStageScale();
 
   return (
-    <div className="deck-slide deck-program7">
-      <div className="deck-chrome">
-        <div className="deck-brand">
-          <span className="deck-brand-mark">{brandHead}</span>
-          <span className="deck-brand-tag">{brandTail}</span>
+    <div className="deck-program7-shell" ref={shellRef}>
+      <section className="deck-program7-stage" style={{ transform: `scale(${scale})` }}>
+        <div className="deck-chrome">
+          <div className="deck-brand">
+            <span className="deck-brand-mark">{brandHead}</span>
+            <span className="deck-brand-tag">{brandTail}</span>
+          </div>
         </div>
-      </div>
 
-      <div className="deck-program7-left">
-        <span className="deck-eyebrow">{eyebrow}</span>
-        <h1>{title === 'Programme de la journée.' ? <>Programme<br />de la <span>journée.</span></> : <AccentTitle title={title} fallback="Programme de la journée." />}</h1>
-        <p>{renderProgramSubtitle(subtitle)}</p>
-      </div>
+        <div className="deck-program7-left">
+          <span className="deck-eyebrow">{eyebrow}</span>
+          <h1>{title === 'Programme de la journée.' ? <>Programme<br />de la <span>journée.</span></> : <AccentTitle title={title} fallback="Programme de la journée." />}</h1>
+          <p>{renderProgramSubtitle(subtitle)}</p>
+        </div>
 
-      <div className="deck-program7-list">
-        <ol>
-          {safeItems.map((item, i) => (
-            <li className={i === activeIndex ? 'start' : ''} key={i}>
-              <span className="n">{String(i + 1).padStart(2, '0')}</span>
-              <span className="t">{typeof item === 'string' ? item : item.title}</span>
-            </li>
-          ))}
-        </ol>
-      </div>
+        <div className="deck-program7-list">
+          <ol>
+            {safeItems.map((item, i) => (
+              <li className={i === activeIndex ? 'start' : ''} key={i}>
+                <span className="n">{String(i + 1).padStart(2, '0')}</span>
+                <span className="t">{typeof item === 'string' ? item : item.title}</span>
+              </li>
+            ))}
+          </ol>
+        </div>
+      </section>
     </div>
   );
 };

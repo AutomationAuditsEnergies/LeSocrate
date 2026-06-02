@@ -2432,12 +2432,13 @@ function renderPipelineSlidePreview(slide = {}) {
     brandName: 'SALES HACKING',
   }
   const props = { ...(slide.data || {}), ...commonProps }
+  const isSevenStepDayProgram = Array.isArray(slide.data?.items) && slide.data.items.length === 7
 
   switch (slide.template_type) {
     case 'welcome':
       return <DeckWelcome {...props} />
     case 'day_program':
-      return <DeckAgenda {...props} />
+      return isSevenStepDayProgram ? <DeckDayProgram7Steps {...props} /> : <DeckAgenda {...props} />
     case 'day_program_7_steps':
       return <DeckDayProgram7Steps {...props} />
     case 'context':

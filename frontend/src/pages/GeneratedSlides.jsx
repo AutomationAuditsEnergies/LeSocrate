@@ -263,12 +263,15 @@ export default function GeneratedSlides() {
       badge: "TP-CRCD",
       brandName: "SALES HACKING"
     };
+    const isSevenStepDayProgram = Array.isArray(slide.data?.items) && slide.data.items.length === 7;
 
     switch (slide.template_type) {
       case 'welcome':
         return <DeckWelcome {...slide.data} {...commonProps} />;
       case 'day_program':
-        return <DeckAgenda {...slide.data} {...commonProps} />;
+        return isSevenStepDayProgram
+          ? <DeckDayProgram7Steps {...slide.data} {...commonProps} />
+          : <DeckAgenda {...slide.data} {...commonProps} />;
       case 'day_program_7_steps':
         return <DeckDayProgram7Steps {...slide.data} {...commonProps} />;
       case 'context':
