@@ -2925,6 +2925,61 @@ def create_hr_blueprint(socketio):
 
         return jsonify({"success": True, "new_word_count": new_word_count, "new_total_words": new_total}), 200
 
+    @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/content-job/course-bloc", methods=["PATCH"])
+    def patch_content_course_bloc(folder_id):
+        """Modifie le texte d'un cours audio avant génération TTS."""
+        denied = _require_admin()
+        if denied:
+            return denied
+
+        data = request.get_json() or {}
+        bloc_number = data.get("bloc_number")
+        if bloc_number is None:
+            return jsonify({"success": False, "error": "bloc_number est requis"}), 400
+
+        try:
+            from services.content_generation_service import update_course_script_bloc_text
+
+            result = update_course_script_bloc_text(
+                folder_id,
+                int(bloc_number),
+                data.get("text") or "",
+            )
+            return jsonify({"success": True, **result}), 200
+        except ValueError as e:
+            return jsonify({"success": False, "error": str(e)}), 400
+        except Exception as e:
+            logger.error(f"❌ Erreur update course bloc script: {e}")
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/content-job/break", methods=["PATCH"])
+    def patch_content_break_text(folder_id):
+        """Modifie le texte d'un Q&A ou d'une pause pour les prochaines générations."""
+        denied = _require_admin()
+        if denied:
+            return denied
+
+        data = request.get_json() or {}
+        filename = data.get("filename")
+        if not filename:
+            return jsonify({"success": False, "error": "filename est requis"}), 400
+
+        try:
+            from services.content_generation_service import update_course_script_break_text
+
+            result = update_course_script_break_text(
+                folder_id,
+                filename,
+                data.get("intro") or "",
+                data.get("outro") or "",
+            )
+            return jsonify({"success": True, **result}), 200
+        except ValueError as e:
+            return jsonify({"success": False, "error": str(e)}), 400
+        except Exception as e:
+            logger.error(f"❌ Erreur update break script: {e}")
+            return jsonify({"success": False, "error": str(e)}), 500
+
     # ─── Pipeline playlist complète (19 fichiers) ─────────────────────────
 
     # État global de la pipeline playlist (par folder_id)
@@ -3135,7 +3190,7 @@ def create_hr_blueprint(socketio):
                 voice_type = "fish_audio"
 
             use_basic_tts = voice_type == "gtts"
-            voice_label = "gTTS / Edge" if voice_type == "gtts" else "Fish Audio" if voice_type == "fish_audio" else "Mock"
+            voice_label = "gTTS" if voice_type == "gtts" else "Fish Audio" if voice_type == "fish_audio" else "Mock"
 
             # Initialiser le job après validation pour éviter les jobs bloqués en cas de 400.
             _playlist_jobs[folder_id] = {
@@ -3207,6 +3262,118 @@ def create_hr_blueprint(socketio):
 
         except Exception as e:
             logger.error(f"❌ Erreur generate_playlist: {e}")
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/generate-playlist-item", methods=["POST"])
+    def generate_playlist_item(folder_id):
+        """Lance la génération d'un seul fichier MP3 de la playlist."""
+        denied = _require_admin()
+        if denied:
+            return denied
+
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute("SELECT platform_id FROM cours_folders WHERE id = ?", (folder_id,))
+            row = cursor.fetchone()
+            conn.close()
+
+            if not row:
+                return jsonify({"success": False, "error": "Dossier introuvable"}), 404
+
+            if folder_id in _playlist_jobs and _playlist_jobs[folder_id].get("status") == "running":
+                return jsonify({
+                    "success": False,
+                    "error": "Une génération est déjà en cours pour ce dossier"
+                }), 409
+
+            req_body = request.get_json(silent=True) or {}
+            filename = os.path.basename(str(req_body.get("filename") or "").split("?", 1)[0])
+            if not filename:
+                return jsonify({"success": False, "error": "filename est requis"}), 400
+
+            requested_voice_type_raw = str(req_body.get("voice_type") or "").strip().lower()
+            voice_aliases = {
+                "gtts": "gtts",
+                "edge": "gtts",
+                "edge_tts": "gtts",
+                "basic": "gtts",
+                "basic_tts": "gtts",
+                "fish": "fish_audio",
+                "fish_audio": "fish_audio",
+                "fishaudio": "fish_audio",
+            }
+            voice_type = voice_aliases.get(requested_voice_type_raw)
+            if not voice_type:
+                return jsonify({
+                    "success": False,
+                    "error": "Moteur audio inconnu. Utilise 'gtts' ou 'fish_audio'."
+                }), 400
+
+            from services.content_generation_service import get_job_from_db as _get_cjob
+            content_job = _get_cjob(folder_id)
+            has_script = bool(content_job and content_job.get("status") == "completed")
+            if not has_script:
+                return jsonify({
+                    "success": False,
+                    "error": "Génère d'abord le script texte du dossier avant de lancer l'audio."
+                }), 400
+
+            voice_label = "gTTS" if voice_type == "gtts" else "Fish Audio"
+            _playlist_jobs[folder_id] = {
+                "status": "running",
+                "step": 0,
+                "total_steps": 1,
+                "message": f"Démarrage {filename} en {voice_label}...",
+                "result": None,
+                "voice_type": voice_type,
+                "filename": filename,
+            }
+
+            def _run_playlist_item(folder_id, filename, voice_type, voice_label):
+                try:
+                    def on_progress(step, total, message):
+                        _playlist_jobs[folder_id].update({
+                            "step": step,
+                            "total_steps": total,
+                            "message": message,
+                        })
+
+                    from services.content_generation_service import generate_audio_from_script
+                    result_audio = generate_audio_from_script(
+                        folder_id,
+                        on_progress=on_progress,
+                        force_all=True,
+                        basic_tts=(voice_type == "gtts"),
+                        target_filename=filename,
+                    )
+                    result = {
+                        "status": "completed",
+                        "generated": result_audio["generated"],
+                        "skipped": result_audio["skipped"],
+                        "source": "script",
+                        "voice_type": voice_type,
+                        "filename": filename,
+                    }
+                    _playlist_jobs[folder_id].update({
+                        "status": "completed",
+                        "result": result,
+                        "message": f"✅ {filename} généré en {voice_label}",
+                    })
+                except Exception as e:
+                    logger.error(f"❌ Génération item playlist échouée: {e}")
+                    _playlist_jobs[folder_id].update({
+                        "status": "error",
+                        "message": str(e),
+                    })
+
+            import eventlet
+            eventlet.spawn(_run_playlist_item, folder_id, filename, voice_type, voice_label)
+
+            return jsonify({"success": True, "message": "Génération fichier démarrée"}), 202
+
+        except Exception as e:
+            logger.error(f"❌ Erreur generate_playlist_item: {e}")
             return jsonify({"success": False, "error": str(e)}), 500
 
     @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/playlist-script", methods=["GET"])

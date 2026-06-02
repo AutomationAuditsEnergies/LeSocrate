@@ -776,9 +776,10 @@ _SUPPORTED_SLIDE_TEMPLATES = {
     "transition",
     "chart",
 }
-_ETHICAL_MICRO_RULE_IDS = list(range(1, 17))
-_ETHICAL_MICRO_RULESET_VERSION = "2026-05-25-ethical-micro-v1"
+_ETHICAL_MICRO_RULE_IDS = [14, 15]
+_ETHICAL_MICRO_RULESET_VERSION = "2026-05-31-ethical-micro-v3-minimal"
 _ETHICAL_MICRO_RULES_CACHE = {"mtime": None, "text": ""}
+_ETHICAL_LEXICAL_TERMS_CACHE = {"mtime": None, "data": None}
 
 
 def _load_slide_template_catalog() -> dict:
@@ -1538,7 +1539,11 @@ def _normalize_structured_course_plans(raw_plan: dict, *, job: dict, playlist_it
                     "Le mot course/cours désigne une unité interne. Dans le texte "
                     "apprenant, préférer thème, partie, chapitre, séquence ou axe."
                 ),
-                "examples_policy": "Les exemples non sourcés doivent être explicitement fictifs.",
+                "examples_policy": (
+                    "Les exemples non sourcés doivent être fictifs ou hypothétiques "
+                    "avec une formulation naturelle. 'Imaginons...' ou 'Supposons que...' "
+                    "suffit quand l'hypothèse est claire."
+                ),
                 "schedule_policy": (
                     "Les horaires, durées et créneaux sont internes. Le formateur "
                     "présente la progression pédagogique sans les mentionner."
@@ -1610,7 +1615,9 @@ Contraintes générales :
 - Cours internes 2 à 6 : reprise naturelle cohérente avec le vocal précédent de fin de pause/Q/R, rappel bref de la partie précédente, lien avec le nouveau thème, objectif/axes, conclusion + Q/R.
 - Cours interne 7 : conclusion de la dernière partie, conclusion globale de journée, amorce prochaine séance, bonne semaine/à la semaine prochaine, puis mention douce du tchat.
 - Si c'est la dernière journée de formation, le cours 7 doit souhaiter bonne continuation au lieu d'annoncer la prochaine séance.
-- Les exemples non sourcés doivent être explicitement fictifs.
+- Les exemples non sourcés doivent être fictifs ou hypothétiques avec une
+  formulation naturelle. "Imaginons...", "Imaginez qu'un client...",
+  "Prenons un exemple fictif..." ou "Supposons que..." suffit.
 - Pour chaque partie de développement, crée des `teaching_beats` : 2 à 4 moments pédagogiques structurants qui guideront le texte.
 - Chaque teaching beat doit avoir : beat_id, type, role, spoken_requirement, slide_anchor.
 - Dans `opening` du cours interne 1, prévois explicitement les moments structurels d'accueil et d'annonce du programme du jour : ils correspondent aux templates `welcome` et `day_program`.
@@ -1761,12 +1768,12 @@ def _block_min_words(word_budget: int) -> int:
 
 
 def _structured_course_min_words(word_budget: int) -> int:
-    ratio = _env_float("FORMATION_STRUCTURED_COURSE_MIN_RATIO", 0.985, min_value=0.90, max_value=1.0)
+    ratio = _env_float("FORMATION_STRUCTURED_COURSE_MIN_RATIO", 0.95, min_value=0.90, max_value=1.0)
     return max(0, int(int(word_budget or 0) * ratio))
 
 
 def _structured_section_min_words(word_budget: int) -> int:
-    ratio = _env_float("FORMATION_STRUCTURED_SECTION_MIN_RATIO", 0.985, min_value=0.90, max_value=1.0)
+    ratio = _env_float("FORMATION_STRUCTURED_SECTION_MIN_RATIO", 0.94, min_value=0.90, max_value=1.0)
     return max(0, int(int(word_budget or 0) * ratio))
 
 
@@ -5838,7 +5845,12 @@ Contraintes absolues :
 - Pour une introduction seulement : ton naturel, posé, proche de "Bien. Maintenant que le cadre général est posé, on peut entrer dans le premier grand thème." Ne recopie pas cette phrase systématiquement. Pour une partie de développement, n'utilise pas ce modèle : entre directement dans l'axe demandé.
 - Oral professionnel, clair, chaleureux, sans vocabulaire littéraire excessif.
 - Pas de markdown, pas de titre écrit, pas de liste administrative froide.
-- Les exemples non sourcés doivent être présentés comme fictifs ou hypothétiques.
+- Les exemples non sourcés doivent être présentés comme fictifs ou hypothétiques
+  avec une formulation naturelle. Si le texte dit déjà "Imaginons..." ou
+  "Supposons que...", n'ajoute pas de phrase méta lourde.
+- Ne fabrique pas de punchline artificielle et ne durcis pas une formulation
+  prudente simplement pour produire plus d'impact. Une nuance comme "peut
+  paraître" ou "peut donner l'impression" est correcte si elle sert le sens.
 - Ne termine jamais le cours précédent.
 - Ne devance pas une section suivante.
 - Si cette section est une introduction, elle doit annoncer le plan avant tout exemple, avec une formulation naturelle du type : "Pour avancer progressivement, on va suivre trois grands axes. D'abord... Ensuite... Et enfin...".
@@ -6074,7 +6086,7 @@ def _load_ethical_micro_rules_text() -> str:
         _ETHICAL_MICRO_RULES_CACHE["text"] = rules_text
         return rules_text
     except Exception as exc:
-        logger.warning("⚠️ Règles micro-éthique JSON indisponibles, fallback règles #1-#16: %s", exc)
+        logger.warning("⚠️ Règles micro-éthique JSON indisponibles, fallback règles #14/#15: %s", exc)
         return _extract_rules_for_group(_load_review_rules(), _ETHICAL_MICRO_RULE_IDS)
 
 
@@ -6091,7 +6103,7 @@ def _build_ethical_micro_review_prompt(*, course_plan: dict, section: dict, sect
 CONTRAT :
 {contract}
 
-Tu vérifies uniquement les règles #1 à #16 du scope ethics_compliance.
+Tu vérifies uniquement les règles #14 et #15 du scope ethics_compliance.
 Ignore tout le reste : style oral, humanisation, plan, budget, structure, slides,
 anchors, templates, horaires, transitions, répétitions ou préférence éditoriale.
 
@@ -6109,7 +6121,7 @@ Format de sortie strict, JSON valide uniquement :
     {{
       "original": "phrase EXACTE à remplacer, copie verbatim",
       "replacement": "correction minimale, même sens pédagogique",
-      "rule_violated": "#1",
+      "rule_violated": "#14",
       "reason": "raison brève"
     }}
   ]
@@ -6120,8 +6132,8 @@ Contraintes impératives :
 - `original` doit être trouvable tel quel dans le texte, une seule fois.
 - `replacement` corrige uniquement la violation éthique, sans enrichir, sans restructurer, sans changer la pédagogie.
 - N'ajoute pas de nouvelle idée, pas de nouveau chapitre, pas de mention de slide/PowerPoint/template/anchor/teaching beat.
-- Si la section est conforme pour #1 à #16, renvoie exactement {{"patches": []}}.
-- `rule_violated` doit être un numéro parmi #1 à #16.
+- Si la section est conforme pour #14 et #15, renvoie exactement {{"patches": []}}.
+- `rule_violated` doit être "#14" ou "#15".
 
 RÈGLES ÉTHIQUES À VÉRIFIER :
 {rules_text}
@@ -6130,6 +6142,317 @@ TEXTE DE LA SECTION :
 {section_text}
 
 JSON :"""
+
+
+def _ethical_lexical_scan_enabled() -> bool:
+    value = str(os.getenv("FORMATION_ETHICAL_LEXICAL_SCAN_ENABLED", "1")).strip().lower()
+    return value not in {"0", "false", "no", "off"}
+
+
+def _load_ethical_lexical_terms() -> dict:
+    path = _prompt_file_path("reviews", "ethical-lexical-terms.json")
+    try:
+        mtime = os.path.getmtime(path)
+        if _ETHICAL_LEXICAL_TERMS_CACHE["mtime"] == mtime and _ETHICAL_LEXICAL_TERMS_CACHE["data"]:
+            return _ETHICAL_LEXICAL_TERMS_CACHE["data"]
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if not isinstance(data.get("rules"), list):
+            raise ValueError("clé rules absente")
+        _ETHICAL_LEXICAL_TERMS_CACHE["mtime"] = mtime
+        _ETHICAL_LEXICAL_TERMS_CACHE["data"] = data
+        return data
+    except Exception as exc:
+        logger.warning("⚠️ Liste lexicale éthique indisponible: %s", exc)
+        return {"version": "missing", "rules": []}
+
+
+def _ethical_lexical_pattern(term: str):
+    escaped = re.escape(str(term or "").strip())
+    if not escaped:
+        return None
+    escaped = escaped.replace(r"\ ", r"\s+")
+    return re.compile(r"(?<![\wÀ-ÿ-])" + escaped + r"(?![\wÀ-ÿ-])", re.IGNORECASE)
+
+
+def _ethical_lexical_excerpt(text: str, start: int, end: int, window: int = 170) -> str:
+    source = text or ""
+    left = max(0, int(start or 0) - window)
+    right = min(len(source), int(end or 0) + window)
+    excerpt = re.sub(r"\s+", " ", source[left:right]).strip()
+    return _compact_words(excerpt, 58)
+
+
+def _ethical_lexical_assurance_allowed(text: str, start: int, end: int) -> bool:
+    window = (text or "")[max(0, start - 90): min(len(text or ""), end + 90)].lower()
+    confidence_markers = [
+        "prendre de l'assurance",
+        "prend de l'assurance",
+        "gagner en assurance",
+        "gagne en assurance",
+        "avec assurance",
+        "avoir de l'assurance",
+        "a de l'assurance",
+        "manque d'assurance",
+        "assurance personnelle",
+        "parler avec assurance",
+        "répondre avec assurance",
+        "plus d'assurance",
+        "son assurance",
+        "ton assurance",
+    ]
+    sector_markers = [
+        "contrat",
+        "souscrire",
+        "prime",
+        "police",
+        "sinistre",
+        "assureur",
+        "assuré",
+        "assurantiel",
+        "banque",
+        "bancaire",
+        "crédit",
+        "emprunt",
+    ]
+    return any(marker in window for marker in confidence_markers) and not any(
+        marker in window for marker in sector_markers
+    )
+
+
+def _ethical_lexical_match_allowed(term: str, text: str, start: int, end: int) -> bool:
+    normalized = re.sub(r"\s+", " ", str(term or "").strip().lower())
+    if normalized == "assurance":
+        return _ethical_lexical_assurance_allowed(text, start, end)
+    return False
+
+
+def _scan_ethical_lexical_findings(text: str, *, max_findings: int | None = None) -> list[dict]:
+    if not _ethical_lexical_scan_enabled() or not (text or "").strip():
+        return []
+    data = _load_ethical_lexical_terms()
+    limit = max_findings or _env_int("FORMATION_ETHICAL_LEXICAL_MAX_FINDINGS", 8, min_value=1)
+    findings = []
+    seen = set()
+    for rule in data.get("rules") or []:
+        if not isinstance(rule, dict):
+            continue
+        try:
+            rule_id = int(rule.get("rule_id") or 0)
+        except Exception:
+            continue
+        if rule_id not in _ETHICAL_MICRO_RULE_IDS:
+            continue
+        label = str(rule.get("label") or f"Règle #{rule_id}").strip()
+        for term in rule.get("terms") or []:
+            pattern = _ethical_lexical_pattern(str(term or ""))
+            if pattern is None:
+                continue
+            for match in pattern.finditer(text or ""):
+                if _ethical_lexical_match_allowed(str(term), text, match.start(), match.end()):
+                    continue
+                key = (rule_id, match.start(), match.end(), match.group(0).lower())
+                if key in seen:
+                    continue
+                seen.add(key)
+                findings.append({
+                    "rule_id": rule_id,
+                    "rule": f"#{rule_id}",
+                    "rule_label": label,
+                    "term": str(term),
+                    "match": match.group(0),
+                    "start": match.start(),
+                    "end": match.end(),
+                    "excerpt": _ethical_lexical_excerpt(text, match.start(), match.end()),
+                })
+                if len(findings) >= limit:
+                    return findings
+    return findings
+
+
+def _build_ethical_lexical_rewrite_prompt(
+    *,
+    course_plan: dict,
+    section: dict,
+    section_text: str,
+    findings: list[dict],
+) -> str:
+    finding_rules = sorted({int(f.get("rule_id") or 0) for f in findings if f.get("rule_id")})
+    rules_text = _extract_rules_for_group(_load_review_rules(), finding_rules) if finding_rules else ""
+    max_patches = min(
+        len(findings),
+        _env_int("FORMATION_ETHICAL_LEXICAL_MAX_PATCHES", _ethical_micro_max_patches(section), min_value=1),
+    )
+    return f"""Tu es reviewer de conformité ÉTHIQUE en passe lexicale déterministe.
+
+La micro-conformité IA a déjà été passée. Le scan déterministe a ensuite trouvé
+des termes interdits qui restent dans le texte oral. Tu dois corriger les
+passages détectés en reformulant la situation, l'exemple ou l'explication.
+
+Important :
+- Ne supprime jamais seulement le mot interdit.
+- Remplace le passage par une formulation naturelle qui change le contexte si nécessaire.
+- Garde le même objectif pédagogique.
+- Ne crée pas de nouvelle partie, slide, ancre, template ou métadonnée.
+- `original` doit être une phrase ou un court passage EXACT, copié du texte.
+- `replacement` doit être entendable par les apprenants et conforme aux règles #14 et #15.
+- Maximum {max_patches} patches.
+
+Contexte pédagogique :
+- Cours interne : {course_plan.get('course_number')} / 7
+- Titre : {course_plan.get('course_title') or ''}
+- Section : {_section_label(section)}
+
+Détections lexicales à traiter :
+{json.dumps(findings[:max_patches], ensure_ascii=False, indent=2)}
+
+Règles concernées :
+{rules_text}
+
+Format de sortie strict, JSON valide uniquement :
+{{
+  "patches": [
+    {{
+      "original": "phrase ou passage EXACT à remplacer",
+      "replacement": "reformulation contextuelle conforme",
+      "rule_violated": "#2",
+      "reason": "terme interdit détecté et contexte reformulé"
+    }}
+  ]
+}}
+
+TEXTE DE LA SECTION :
+{section_text}
+
+JSON :"""
+
+
+def _lexical_patch_meta(patch: dict, findings: list[dict]) -> dict:
+    enriched = {**(patch or {})}
+    enriched["source"] = "ethical_lexical_scan"
+    original = str(enriched.get("original") or "")
+    matched_finding = None
+    for finding in findings:
+        if str(finding.get("match") or "").lower() in original.lower():
+            matched_finding = finding
+            break
+    if matched_finding:
+        enriched["term"] = matched_finding.get("match") or matched_finding.get("term")
+        enriched["lexical_rule_id"] = matched_finding.get("rule_id")
+    return enriched
+
+
+def _residual_lexical_rejection(finding: dict) -> dict:
+    return {
+        "original": finding.get("excerpt") or finding.get("match") or "",
+        "replacement": "",
+        "rule_violated": finding.get("rule") or f"#{finding.get('rule_id') or '?'}",
+        "reason": (
+            f"Terme lexical interdit encore détecté après repasse : "
+            f"{finding.get('match') or finding.get('term')}"
+        ),
+        "source": "ethical_lexical_scan",
+        "term": finding.get("match") or finding.get("term"),
+        "lexical_rule_id": finding.get("rule_id"),
+        "reject_reason": "residual_after_lexical_rewrite",
+    }
+
+
+def _run_ethical_lexical_rewrite_for_section(
+    *,
+    job: dict,
+    course_plan: dict,
+    section: dict,
+    section_text: str,
+    model=None,
+) -> dict:
+    findings = _scan_ethical_lexical_findings(section_text)
+    if not findings:
+        return {
+            "text": section_text,
+            "findings": [],
+            "residual_findings": [],
+            "applied": [],
+            "rejected": [],
+            "error": "",
+        }
+
+    prompt = _build_ethical_lexical_rewrite_prompt(
+        course_plan=course_plan,
+        section=section,
+        section_text=section_text,
+        findings=findings,
+    )
+    max_tokens = _env_int("FORMATION_ETHICAL_LEXICAL_REWRITE_MAX_TOKENS", 1800, min_value=500)
+    try:
+        raw = _anthropic_post(
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=max_tokens,
+            model=model,
+        )
+    except Exception as exc:
+        rejected = [_residual_lexical_rejection(f) for f in findings]
+        for item in rejected:
+            item["reject_reason"] = f"lexical_rewrite_error: {str(exc)[:180]}"
+        logger.warning(
+            "PIPELINE_ETHICAL_LEXICAL_REWRITE_ERROR formation_job_id=%s content_job_id=%s course=%s section=%s error=%s",
+            job.get("formation_job_id"),
+            job.get("id"),
+            course_plan.get("course_number"),
+            _section_label(section),
+            str(exc)[:220],
+        )
+        return {
+            "text": section_text,
+            "findings": findings,
+            "residual_findings": findings,
+            "applied": [],
+            "rejected": rejected,
+            "error": str(exc),
+        }
+
+    patches, parse_error = _parse_patches_response(raw)
+    if parse_error:
+        rejected = [_residual_lexical_rejection(f) for f in findings]
+        for item in rejected:
+            item["reject_reason"] = f"lexical_parse_error: {parse_error[:180]}"
+        return {
+            "text": section_text,
+            "findings": findings,
+            "residual_findings": findings,
+            "applied": [],
+            "rejected": rejected,
+            "error": parse_error,
+        }
+
+    scoped_patches = [
+        _lexical_patch_meta(patch, findings)
+        for patch in patches
+        if (_patch_rule_number(patch) in _ETHICAL_MICRO_RULE_IDS)
+    ]
+    max_patches = min(
+        len(findings),
+        _env_int("FORMATION_ETHICAL_LEXICAL_MAX_PATCHES", _ethical_micro_max_patches(section), min_value=1),
+    )
+    scoped_patches = scoped_patches[:max_patches]
+    candidate, applied, rejected = _apply_patches(section_text, scoped_patches)
+    candidate, applied, budget_rejected = _apply_review_budget_guard(
+        section_text,
+        candidate,
+        applied,
+        "compliance",
+    )
+    rejected = rejected + budget_rejected
+    residual_findings = _scan_ethical_lexical_findings(candidate)
+    rejected = rejected + [_residual_lexical_rejection(f) for f in residual_findings]
+    return {
+        "text": candidate,
+        "findings": findings,
+        "residual_findings": residual_findings,
+        "applied": applied,
+        "rejected": rejected,
+        "error": "",
+    }
 
 
 def _patch_rule_number(patch: dict) -> int | None:
@@ -6150,6 +6473,9 @@ def _micro_review_patch_for_report(patch: dict, status: str) -> dict:
         "replacement": str((patch or {}).get("replacement") or ""),
         "status": status,
         "reject_reason": (patch or {}).get("reject_reason"),
+        "source": (patch or {}).get("source") or "ethical_micro_review",
+        "term": (patch or {}).get("term"),
+        "lexical_rule_id": (patch or {}).get("lexical_rule_id"),
     }
 
 
@@ -6172,11 +6498,15 @@ def _ethical_micro_review_record(
     proposed: int = 0,
     applied: list | None = None,
     rejected: list | None = None,
+    lexical_findings: list | None = None,
+    lexical_residual_findings: list | None = None,
     error: str | None = None,
     duration_ms: int | None = None,
 ) -> dict:
     applied = applied or []
     rejected = rejected or []
+    lexical_findings = lexical_findings or []
+    lexical_residual_findings = lexical_residual_findings or []
     return {
         "course_number": int(course_plan.get("course_number") or 0),
         "course_title": course_plan.get("course_title") or f"Cours {course_plan.get('course_number') or '?'}",
@@ -6193,6 +6523,10 @@ def _ethical_micro_review_record(
         "original_text": original_text or "",
         "final_text": final_text if final_text is not None else (original_text or ""),
         "error": str(error or "")[:700],
+        "lexical_findings": lexical_findings,
+        "lexical_findings_count": len(lexical_findings),
+        "lexical_residual_findings": lexical_residual_findings,
+        "lexical_residual_count": len(lexical_residual_findings),
         "duration_ms": duration_ms,
         "rules_scope": "ethics_compliance",
         "rules": [f"#{rid}" for rid in _ETHICAL_MICRO_RULE_IDS],
@@ -6210,6 +6544,8 @@ def _ethical_micro_review_summary(records: list[dict]) -> dict:
         "patches_proposed": sum(int(r.get("proposed") or 0) for r in records),
         "patches_applied": sum(int(r.get("patches_applied") or 0) for r in records),
         "patches_rejected": sum(int(r.get("patches_rejected") or 0) for r in records),
+        "lexical_findings": sum(int(r.get("lexical_findings_count") or 0) for r in records),
+        "lexical_residual_findings": sum(int(r.get("lexical_residual_count") or 0) for r in records),
     }
 
 
@@ -6309,7 +6645,69 @@ def _run_ethical_micro_review_for_section(
         for patch in patches
         if (_patch_rule_number(patch) in _ETHICAL_MICRO_RULE_IDS)
     ][:max_patches]
-    if not scoped_patches:
+    candidate = section_text
+    applied = []
+    rejected = []
+    if scoped_patches:
+        candidate, applied, rejected = _apply_patches(section_text, scoped_patches)
+        candidate, applied, budget_rejected = _apply_review_budget_guard(
+            section_text,
+            candidate,
+            applied,
+            "compliance",
+        )
+        rejected = rejected + budget_rejected
+
+    lexical_result = _run_ethical_lexical_rewrite_for_section(
+        job=job,
+        course_plan=course_plan,
+        section=section,
+        section_text=candidate,
+        model=model,
+    )
+    lexical_findings = lexical_result.get("findings") or []
+    lexical_residual_findings = lexical_result.get("residual_findings") or []
+    if lexical_result.get("applied"):
+        candidate = lexical_result.get("text") or candidate
+    applied = applied + list(lexical_result.get("applied") or [])
+    rejected = rejected + list(lexical_result.get("rejected") or [])
+    proposed_count = len(scoped_patches) + len(lexical_findings)
+
+    if applied:
+        logger.info(
+            "PIPELINE_ETHICAL_MICRO_REVIEW_PATCHED formation_job_id=%s content_job_id=%s course=%s section=%s proposed=%s applied=%s rejected=%s lexical=%s residual=%s duration_ms=%s",
+            job.get("formation_job_id"),
+            job.get("id"),
+            course_plan.get("course_number"),
+            _section_label(section),
+            proposed_count,
+            len(applied),
+            len(rejected),
+            len(lexical_findings),
+            len(lexical_residual_findings),
+            int((time.time() - started) * 1000),
+        )
+        _record_ethical_micro_review(
+            job,
+            _ethical_micro_review_record(
+                job=job,
+                course_plan=course_plan,
+                section=section,
+                status="patched",
+                original_text=section_text,
+                final_text=candidate,
+                proposed=proposed_count,
+                applied=applied,
+                rejected=rejected,
+                lexical_findings=lexical_findings,
+                lexical_residual_findings=lexical_residual_findings,
+                error=lexical_result.get("error") or "",
+                duration_ms=int((time.time() - started) * 1000),
+            ),
+        )
+        return _sanitize_learner_facing_text(candidate)
+
+    if not rejected and not proposed_count:
         logger.info(
             "PIPELINE_ETHICAL_MICRO_REVIEW_CLEAN formation_job_id=%s content_job_id=%s course=%s section=%s duration_ms=%s",
             job.get("formation_job_id"),
@@ -6332,51 +6730,16 @@ def _run_ethical_micro_review_for_section(
         )
         return section_text
 
-    candidate, applied, rejected = _apply_patches(section_text, scoped_patches)
-    candidate, applied, budget_rejected = _apply_review_budget_guard(
-        section_text,
-        candidate,
-        applied,
-        "compliance",
-    )
-    rejected = rejected + budget_rejected
-    if applied:
-        logger.info(
-            "PIPELINE_ETHICAL_MICRO_REVIEW_PATCHED formation_job_id=%s content_job_id=%s course=%s section=%s proposed=%s applied=%s rejected=%s duration_ms=%s",
-            job.get("formation_job_id"),
-            job.get("id"),
-            course_plan.get("course_number"),
-            _section_label(section),
-            len(scoped_patches),
-            len(applied),
-            len(rejected),
-            int((time.time() - started) * 1000),
-        )
-        _record_ethical_micro_review(
-            job,
-            _ethical_micro_review_record(
-                job=job,
-                course_plan=course_plan,
-                section=section,
-                status="patched",
-                original_text=section_text,
-                final_text=candidate,
-                proposed=len(scoped_patches),
-                applied=applied,
-                rejected=rejected,
-                duration_ms=int((time.time() - started) * 1000),
-            ),
-        )
-        return _sanitize_learner_facing_text(candidate)
-
     logger.info(
-        "PIPELINE_ETHICAL_MICRO_REVIEW_REJECTED formation_job_id=%s content_job_id=%s course=%s section=%s proposed=%s rejected=%s duration_ms=%s",
+        "PIPELINE_ETHICAL_MICRO_REVIEW_REJECTED formation_job_id=%s content_job_id=%s course=%s section=%s proposed=%s rejected=%s lexical=%s residual=%s duration_ms=%s",
         job.get("formation_job_id"),
         job.get("id"),
         course_plan.get("course_number"),
         _section_label(section),
-        len(scoped_patches),
+        proposed_count,
         len(rejected),
+        len(lexical_findings),
+        len(lexical_residual_findings),
         int((time.time() - started) * 1000),
     )
     _record_ethical_micro_review(
@@ -6387,8 +6750,11 @@ def _run_ethical_micro_review_for_section(
             section=section,
             status="rejected",
             original_text=section_text,
-            proposed=len(scoped_patches),
+            proposed=proposed_count,
             rejected=rejected,
+            lexical_findings=lexical_findings,
+            lexical_residual_findings=lexical_residual_findings,
+            error=lexical_result.get("error") or "",
             duration_ms=int((time.time() - started) * 1000),
         ),
     )
@@ -6572,7 +6938,9 @@ Contenu source à utiliser si tu ajoutes des notions :
 Contraintes absolues :
 - Ne mentionne jamais budget mots, fichier, durée, horaire, créneau, planning ou découpage technique.
 - N'utilise jamais le mot "bloc" devant les élèves.
-- Les exemples non sourcés doivent être fictifs ou hypothétiques.
+- Les exemples non sourcés doivent être fictifs ou hypothétiques avec une
+  formulation naturelle. Si le texte dit déjà "Imaginons..." ou "Supposons que...",
+  n'ajoute pas de phrase méta lourde.
 - Pour une partie de développement, ne refais pas l'accueil, le cadrage de journée ou le plan global.
 - Pour une conclusion, récapitule sans ouvrir un nouveau développement.
 - Après une annonce Q/R, tchat ou fin de partie, aucun nouveau développement.
@@ -6710,6 +7078,242 @@ def _join_structured_section_records(sections: list[dict]) -> str:
     return "\n\n".join((section.get("text") or "").strip() for section in sections if (section.get("text") or "").strip()).strip()
 
 
+def _build_structured_course_deficit_repair_prompt(
+    *,
+    job: dict,
+    course_plan: dict,
+    section: dict,
+    current_text: str,
+    module_content: str,
+    additional_words: int,
+    max_words: int,
+) -> str:
+    target_after = min(max_words, count_tts_spoken_words(current_text) + max(0, additional_words))
+    min_after = max(1, min(max_words, int(target_after * 0.94)))
+    return f"""Tu répares une section trop courte d'un cours audio professionnel.
+
+Objectif : enrichir la section avec de nouvelles idées utiles, sans changer son périmètre.
+Tu dois réécrire la section complète, pas seulement ajouter un paragraphe.
+
+Section à enrichir : {_section_label(section)}
+Ajout attendu : environ {additional_words} mots parlés utiles.
+Plage finale visée pour cette section : {min_after} à {max_words} mots parlés.
+
+Plan verrouillé du cours :
+{json.dumps(course_plan, ensure_ascii=False, indent=2)}
+
+Section verrouillée :
+{json.dumps(section, ensure_ascii=False, indent=2)}
+
+Frontière stricte :
+{_structured_section_scope_guard(section)}
+
+Moments pédagogiques à couvrir :
+{_section_teaching_beats_prompt(section)}
+
+Contenu source à exploiter :
+{_compact_words(module_content or job.get('program_text') or '', 4500)}
+
+Ajoute seulement des éléments pertinents parmi :
+- une nuance métier concrète ;
+- une erreur fréquente et sa correction ;
+- un mini-cas fictif ou hypothétique ;
+- un contre-exemple ;
+- une méthode opérationnelle ;
+- une clarification de vocabulaire ;
+- un lien avec les pratiques terrain.
+
+Contraintes :
+- Ne mentionne jamais budget mots, fichier, durée, horaire, créneau, planning ou découpage technique.
+- N'utilise jamais le mot "bloc" devant les élèves.
+- Ne refais pas l'accueil, l'introduction globale, le plan de journée ou la conclusion.
+- Ne crée pas de nouveau thème hors du plan.
+- Ne remplis pas avec du bavardage : chaque ajout doit apporter une valeur pédagogique identifiable.
+- Oral fluide, TTS-ready, sans markdown ni titre écrit.
+
+Texte actuel :
+{current_text}
+
+Réponds uniquement avec la section complète enrichie."""
+
+
+def _repair_structured_course_word_deficit(
+    *,
+    job: dict,
+    course_plan: dict,
+    calibrated_sections: list[dict],
+    module_content: str,
+    model=None,
+) -> tuple[str, list[dict], dict | None]:
+    """Rattrape un cours encore trop court après le calibrage standard.
+
+    La réparation est volontairement ciblée sur les sections de développement :
+    on préfère ajouter de la valeur pédagogique dans les axes plutôt que gonfler
+    artificiellement l'ouverture ou la conclusion.
+    """
+    current_sections = [dict(section) for section in calibrated_sections]
+    attempts = []
+    max_attempts = _env_int("FORMATION_STRUCTURED_COURSE_DEFICIT_REPAIR_MAX_ATTEMPTS", 10, min_value=0)
+    max_attempts = min(20, max_attempts)
+    max_stalled_per_section = _env_int("FORMATION_STRUCTURED_COURSE_DEFICIT_REPAIR_MAX_STALLED_PER_SECTION", 2, min_value=1)
+    if max_attempts <= 0:
+        return _join_structured_section_records(current_sections), current_sections, None
+
+    stalled_by_key = {}
+    for attempt_no in range(1, max_attempts + 1):
+        course_text = _join_structured_section_records(current_sections)
+        status = _structured_course_budget_status(course_plan, course_text)
+        if status.get("status") != "too_short":
+            break
+
+        missing = int(status.get("min_words") or 0) - int(status.get("words") or 0)
+        if missing <= 0:
+            break
+
+        candidates = []
+        for idx, record in enumerate(current_sections):
+            if record.get("kind") != "part":
+                continue
+            current_words = count_tts_spoken_words(record.get("text") or "")
+            max_words = int(record.get("target_words") or record.get("max_words") or 0)
+            if max_words <= 0:
+                continue
+            room = max_words - current_words
+            if room >= 60:
+                key = _section_key(record)
+                if stalled_by_key.get(key, 0) >= max_stalled_per_section:
+                    continue
+                candidates.append({
+                    "idx": idx,
+                    "key": key,
+                    "record": record,
+                    "current_words": current_words,
+                    "max_words": max_words,
+                    "room": room,
+                    "stalled": stalled_by_key.get(key, 0),
+                    "fill_ratio": current_words / max_words if max_words else 1.0,
+                })
+
+        if not candidates:
+            attempts.append({
+                "attempt": attempt_no,
+                "status": status,
+                "missing_words": missing,
+                "error": "no_expandable_part_section",
+            })
+            break
+
+        candidates.sort(key=lambda item: (item["stalled"], item["fill_ratio"], -item["room"]))
+        candidate = candidates[0]
+        planned_words = min(candidate["room"], max(120, int(missing * 1.18) + 30))
+        attempt = {
+            "attempt": attempt_no,
+            "status_before": status,
+            "missing_words": missing,
+            "planned_words": planned_words,
+            "sections": [],
+        }
+
+        record = candidate["record"]
+        section_plan = _section_plan_by_key(course_plan).get(_section_key(record), {})
+        section = {**section_plan, **record}
+        before_text = record.get("text") or ""
+        before_words = count_tts_spoken_words(before_text)
+        try:
+            raw = _anthropic_post(
+                messages=[{
+                    "role": "user",
+                    "content": _build_structured_course_deficit_repair_prompt(
+                        job=job,
+                        course_plan=course_plan,
+                        section=section,
+                        current_text=before_text,
+                        module_content=module_content,
+                        additional_words=planned_words,
+                        max_words=candidate["max_words"],
+                    ),
+                }],
+                max_tokens=_structured_generation_max_tokens(candidate["max_words"]),
+                model=model,
+            )
+            repaired = _sanitize_learner_facing_text(_clean_llm_text(raw))
+            if candidate["max_words"] > 0 and count_tts_spoken_words(repaired) > candidate["max_words"]:
+                repaired = _trim_text_to_max_spoken_words(repaired, candidate["max_words"])
+            after_words = count_tts_spoken_words(repaired)
+            min_gain = max(20, min(80, int(planned_words * 0.18)))
+            if not repaired or after_words <= before_words or (after_words - before_words) < min_gain:
+                stalled_by_key[candidate["key"]] = stalled_by_key.get(candidate["key"], 0) + 1
+                attempt["sections"].append({
+                    "label": record.get("label") or _section_label(section),
+                    "before_words": before_words,
+                    "after_words": after_words,
+                    "changed": False,
+                    "reason": "insufficient_growth",
+                    "min_gain": min_gain,
+                })
+            else:
+                updated = {
+                    **record,
+                    "text": repaired,
+                    "word_count": after_words,
+                    "deficit_repair_before_words": before_words,
+                }
+                current_sections[candidate["idx"]] = updated
+                gained = after_words - before_words
+                attempt["sections"].append({
+                    "label": record.get("label") or _section_label(section),
+                    "before_words": before_words,
+                    "after_words": after_words,
+                    "gained_words": gained,
+                    "changed": True,
+                })
+                logger.info(
+                    "PIPELINE_COURSE_DEFICIT_REPAIR_ATTEMPT course=%s attempt=%s section=%s before=%s after=%s missing=%s",
+                    course_plan.get("course_number"),
+                    attempt_no,
+                    record.get("label") or _section_label(section),
+                    before_words,
+                    after_words,
+                    missing,
+                )
+        except Exception as exc:
+            stalled_by_key[candidate["key"]] = stalled_by_key.get(candidate["key"], 0) + 1
+            attempt["sections"].append({
+                "label": record.get("label") or _section_label(section),
+                "before_words": before_words,
+                "changed": False,
+                "error": str(exc)[:300],
+            })
+            logger.warning(
+                "PIPELINE_COURSE_DEFICIT_REPAIR_FAILED course=%s attempt=%s section=%s error=%s",
+                course_plan.get("course_number"),
+                attempt_no,
+                record.get("label") or _section_label(section),
+                str(exc)[:300],
+            )
+
+        attempt["status_after"] = _structured_course_budget_status(
+            course_plan,
+            _join_structured_section_records(current_sections),
+        )
+        attempts.append(attempt)
+        if attempt["status_after"].get("ok"):
+            break
+
+    final_text = _join_structured_section_records(current_sections)
+    final_status = _structured_course_budget_status(course_plan, final_text)
+    repair = {
+        "mode": "course_deficit_repair",
+        "changed": final_text.strip() != _join_structured_section_records(calibrated_sections).strip(),
+        "status": final_status.get("status"),
+        "words": final_status.get("words"),
+        "min_words": final_status.get("min_words"),
+        "target_words": final_status.get("target_words"),
+        "attempts": attempts,
+    }
+    return final_text, current_sections, repair
+
+
 def _calibrate_structured_course_sections(
     *,
     job: dict,
@@ -6763,12 +7367,46 @@ def _calibrate_structured_course_sections(
 
     course_text = _join_structured_section_records(calibrated_sections)
     course_status = _structured_course_budget_status(course_plan, course_text)
+    deficit_repair = None
+    if course_status.get("status") == "too_short":
+        repaired_text, repaired_sections, deficit_repair = _repair_structured_course_word_deficit(
+            job=job,
+            course_plan=course_plan,
+            calibrated_sections=calibrated_sections,
+            module_content=module_content,
+            model=model,
+        )
+        repaired_status = _structured_course_budget_status(course_plan, repaired_text)
+        if repaired_text.strip() != course_text.strip():
+            changed = True
+            calibrated_sections = repaired_sections
+            course_text = repaired_text
+            course_status = repaired_status
+            repaired_by_key = {_section_key(section): section for section in calibrated_sections}
+            for section_result in section_results:
+                repaired_section = repaired_by_key.get(
+                    (section_result.get("kind"), int(section_result.get("part_number") or 0))
+                )
+                if not repaired_section:
+                    continue
+                after_words = count_tts_spoken_words(repaired_section.get("text") or "")
+                status = _structured_section_budget_status(repaired_section, repaired_section.get("text") or "")
+                section_result["after_words"] = after_words
+                section_result["delta_words"] = after_words - int(section_result.get("before_words") or 0)
+                section_result["status"] = status.get("status")
+                section_result["min_words"] = status.get("min_words")
+                section_result["max_words"] = status.get("max_words")
+                section_result["changed"] = bool(section_result["delta_words"])
+                if repaired_section.get("deficit_repair_before_words") is not None:
+                    section_result["deficit_repaired"] = True
+
     return course_text, {
         **course_status,
         "changed": changed,
         "mode": "section_budget_calibration",
         "sections": section_results,
         "calibrated_sections": calibrated_sections,
+        "deficit_repair": deficit_repair,
     }
 
 
@@ -7897,14 +8535,30 @@ def _run_structured_content_generation(
                 }
         final_status = _structured_course_budget_status(course_plan, calibrated_text)
         if not final_status.get("ok") and str(os.getenv("FORMATION_STRUCTURED_CALIBRATION_STRICT", "1")).strip().lower() not in {"0", "false", "no", "off"}:
-            raise ValueError(
-                "Calibrage budget texte insuffisant "
-                f"cours={course_plan.get('course_number')} "
-                f"status={final_status.get('status')} "
-                f"words={final_status.get('words')} "
-                f"target={final_status.get('target_words')} "
-                f"min={final_status.get('min_words')}"
-            )
+            if final_status.get("status") == "too_short" and str(os.getenv("FORMATION_STRUCTURED_ALLOW_RESIDUAL_TOO_SHORT", "1")).strip().lower() not in {"0", "false", "no", "off"}:
+                calibration["accepted_residual_shortfall"] = True
+                calibration["accepted_residual_shortfall_words"] = max(
+                    0,
+                    int(final_status.get("min_words") or 0) - int(final_status.get("words") or 0),
+                )
+                logger.warning(
+                    "PIPELINE_COURSE_BUDGET_SHORTFALL_ACCEPTED formation_job_id=%s content_job_id=%s course=%s words=%s min=%s target=%s",
+                    job.get("formation_job_id"),
+                    job.get("id"),
+                    course_plan.get("course_number"),
+                    final_status.get("words"),
+                    final_status.get("min_words"),
+                    final_status.get("target_words"),
+                )
+            else:
+                raise ValueError(
+                    "Calibrage budget texte insuffisant "
+                    f"cours={course_plan.get('course_number')} "
+                    f"status={final_status.get('status')} "
+                    f"words={final_status.get('words')} "
+                    f"target={final_status.get('target_words')} "
+                    f"min={final_status.get('min_words')}"
+                )
         calibrated_words = count_tts_spoken_words(calibrated_text)
         course_number = int(course_plan.get("course_number") or body_result.get("course_number") or 0)
         return {
@@ -8871,6 +9525,7 @@ def _build_contextual_break_audio(
     llm_model: str | None = None,
     on_progress=None,
     use_runtime_consumed_text: bool = False,
+    break_overrides: dict | None = None,
 ):
     """Génère un Q&A/pause contextuel, fallback vers audioqapause si nécessaire."""
     from services.playlist_tts_service import (
@@ -8961,6 +9616,24 @@ def _build_contextual_break_audio(
 
     if mock:
         return _generate_silence_mp3(1), "mock"
+
+    manual_break = (break_overrides or {}).get(filename)
+    if manual_break:
+        intro = (manual_break.get("intro") or "").strip()
+        outro = (manual_break.get("outro") or "").strip()
+        _emit(f"{filename} — texte manuel...")
+        if basic_tts:
+            audio_bytes, final_duration = _build_timed_edge_break_audio(
+                intro,
+                outro,
+                duration_sec,
+                on_progress=lambda msg: _emit(f"{filename} — {msg}"),
+            )
+            _emit(
+                f"{filename} — Edge TTS manuel calé ({final_duration:.1f}s/{duration_sec}s)"
+            )
+            return audio_bytes, "manual_edge_timed"
+        return _build_pause_audio(intro, outro, duration_sec), "manual_fish"
 
     contextual_basic_tts = os.getenv("BASIC_TTS_CONTEXTUAL_BREAKS", "false").lower() in {
         "1",
@@ -9103,6 +9776,7 @@ def generate_audio_from_script(
     slide_model=None,
     llm_model=None,
     fast_tts_pipeline=False,
+    target_filename=None,
 ):
     """
     Génère (ou régénère) la playlist MP3 depuis le script TTS stocké en DB :
@@ -9149,11 +9823,13 @@ def generate_audio_from_script(
     platform_id = job["platform_id"]
     job_id = job["id"]
     formation_job_id = job.get("formation_job_id")
+    saved_script_plan = _load_saved_course_script_plan(platform_id, folder_id) or {}
+    target_filename = os.path.basename((target_filename or "").split("?", 1)[0]) or None
     assert_course_day_word_budget(folder_id, context="audio_generation")
     started_at = time.time()
     logger.info(
         "PIPELINE_AUDIO_START formation_job_id=%s content_job_id=%s folder_id=%s platform_id=%s force_all=%s mock=%s basic_tts=%s "
-        "sync_slides=%s auto_generate_slides=%s slide_max_slides=%s slide_pace=%s llm_model=%s fast_tts_pipeline=%s",
+        "sync_slides=%s auto_generate_slides=%s slide_max_slides=%s slide_pace=%s llm_model=%s fast_tts_pipeline=%s target_filename=%s",
         formation_job_id,
         job_id,
         folder_id,
@@ -9167,6 +9843,7 @@ def generate_audio_from_script(
         slide_pace,
         llm_model,
         bool(fast_tts_pipeline),
+        target_filename,
     )
     if next_folder_id is None:
         next_folder_id = _find_next_folder_id(platform_id, folder_id)
@@ -9269,13 +9946,21 @@ def generate_audio_from_script(
         is_last_folder=is_last_folder,
         model=llm_model,
     )
+    _apply_course_bloc_overrides(blocs, saved_script_plan.get("course_bloc_overrides"))
+    playlist_items = _playlist_items_for_platform(platform_id)
+    if target_filename:
+        matching_item = next((item for item in playlist_items if item[0] == target_filename), None)
+        if not matching_item:
+            raise ValueError(f"Fichier audio introuvable dans la playlist : {target_filename}")
+        if matching_item[2] == "cours":
+            selected_bloc = next((b for b in blocs if int(b.get("bloc_number") or 0) == int(matching_item[3] or 0)), None)
+            if selected_bloc:
+                selected_bloc["dirty"] = True
     if carryover_out:
         logger.info(
             f"🔁 Folder {folder_id} : {len(carryover_out.split())} mots reportés "
             f"vers folder {next_folder_id}"
         )
-
-    playlist_items = _playlist_items_for_platform(platform_id)
 
     # Les fins de blocs sont désormais portées par le texte calibré en amont.
     # On n'ajoute plus de closing au moment de l'audio.
@@ -9501,6 +10186,7 @@ def generate_audio_from_script(
             (idx, filename, duration_sec, bloc_num)
             for idx, (filename, duration_sec, file_type, bloc_num) in enumerate(playlist_items)
             if file_type == "cours"
+            and (not target_filename or filename == target_filename)
             and (blocs_by_number.get(bloc_num) or {}).get("dirty")
             and ((blocs_by_number.get(bloc_num) or {}).get("text") or "").strip()
         ]
@@ -9530,6 +10216,8 @@ def generate_audio_from_script(
             parallel_fish_courses_enabled = False
 
     for item_idx, (filename, duration_sec, file_type, bloc_num) in enumerate(playlist_items):
+        if target_filename and filename != target_filename:
+            continue
         step = item_idx + 1
         bloc = blocs_by_number.get(bloc_num)
         item_started_at = time.time()
@@ -9587,6 +10275,7 @@ def generate_audio_from_script(
                 llm_model=llm_model,
                 on_progress=lambda msg: _progress(step, len(playlist_items), msg),
                 use_runtime_consumed_text=runtime_fit_enabled,
+                break_overrides=saved_script_plan.get("break_overrides"),
             )
             try:
                 final_duration = _mp3_duration_seconds_no_ffprobe(final_bytes)
@@ -10513,6 +11202,12 @@ def generate_audio_from_script(
         "course_blocs": course_script_plan,
         "planned_course_blocs": planned_course_script_plan,
     }
+    if saved_script_plan.get("course_bloc_overrides"):
+        audio_plan_payload["course_bloc_overrides"] = saved_script_plan.get("course_bloc_overrides")
+    if saved_script_plan.get("break_overrides"):
+        audio_plan_payload["break_overrides"] = saved_script_plan.get("break_overrides")
+    if saved_script_plan.get("structured_course_plan"):
+        audio_plan_payload["structured_course_plan"] = saved_script_plan.get("structured_course_plan")
     _save_course_script_plan(platform_id, folder_id, audio_plan_payload)
     _save_content_artifact(
         platform_id,
@@ -10695,6 +11390,112 @@ def _save_course_script_plan(platform_id: int, folder_id: int, payload: dict) ->
         )
     except Exception as e:
         logger.warning(f"⚠️ Sauvegarde plan script cours impossible folder={folder_id}: {e}")
+
+
+def update_course_script_bloc_text(folder_id: int, bloc_number: int, text: str) -> dict:
+    job = get_job_from_db(folder_id)
+    if not job:
+        raise ValueError("Aucun job pour ce dossier")
+
+    platform_id = job["platform_id"]
+    saved = _load_saved_course_script_plan(platform_id, folder_id) or {
+        "platform_id": platform_id,
+        "folder_id": folder_id,
+        "content_job_id": job["id"],
+    }
+    course_blocs = saved.get("course_blocs") or saved.get("planned_course_blocs") or _build_course_blocs_preview(folder_id, job)
+    target = None
+    for bloc in course_blocs:
+        if int(bloc.get("bloc_number") or 0) == int(bloc_number):
+            target = bloc
+            break
+    if not target:
+        raise ValueError("Cours audio introuvable")
+
+    clean_text = (text or "").strip()
+    word_count = count_tts_spoken_words(clean_text)
+    target.update({
+        "text": clean_text,
+        "word_count": word_count,
+        "manual_edited": True,
+        "edited_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    })
+    saved["course_blocs"] = course_blocs
+    overrides = saved.get("course_bloc_overrides") or {}
+    overrides[str(int(bloc_number))] = {
+        "text": clean_text,
+        "word_count": word_count,
+        "edited_at": target["edited_at"],
+    }
+    saved["course_bloc_overrides"] = overrides
+    _save_course_script_plan(platform_id, folder_id, saved)
+    return {"bloc": target, "word_count": word_count}
+
+
+def update_course_script_break_text(folder_id: int, filename: str, intro: str, outro: str) -> dict:
+    job = get_job_from_db(folder_id)
+    if not job:
+        raise ValueError("Aucun job pour ce dossier")
+
+    platform_id = job["platform_id"]
+    saved = _load_saved_course_script_plan(platform_id, folder_id) or {
+        "platform_id": platform_id,
+        "folder_id": folder_id,
+        "content_job_id": job["id"],
+    }
+    breaks = _build_breaks_for_ui(platform_id)
+    target = next((br for br in breaks if br.get("filename") == filename), None)
+    if not target:
+        raise ValueError("Q&A ou pause introuvable")
+
+    override = {
+        "intro": (intro or "").strip(),
+        "outro": (outro or "").strip(),
+        "edited_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    }
+    overrides = saved.get("break_overrides") or {}
+    overrides[filename] = override
+    saved["break_overrides"] = overrides
+    _save_course_script_plan(platform_id, folder_id, saved)
+    target.update(override)
+    target["manual_edited"] = True
+    return {"break": target}
+
+
+def _apply_course_bloc_overrides(blocs: list, overrides: dict | None) -> list:
+    overrides = overrides or {}
+    if not overrides:
+        return blocs
+    for bloc in blocs:
+        key = str(int(bloc.get("bloc_number") or 0))
+        override = overrides.get(key) or {}
+        text = (override.get("text") or "").strip()
+        if not text:
+            continue
+        bloc["text"] = text
+        bloc["word_count"] = count_tts_spoken_words(text)
+        bloc["dirty"] = True
+        bloc["manual_edited"] = True
+    return blocs
+
+
+def _apply_break_overrides(breaks: list, overrides: dict | None) -> list:
+    overrides = overrides or {}
+    if not overrides:
+        return breaks
+    merged = []
+    for br in breaks:
+        override = overrides.get(br.get("filename")) or {}
+        if override:
+            br = {
+                **br,
+                "intro": override.get("intro", br.get("intro") or ""),
+                "outro": override.get("outro", br.get("outro") or ""),
+                "manual_edited": True,
+                "edited_at": override.get("edited_at"),
+            }
+        merged.append(br)
+    return merged
 
 
 def _structured_plan_from_artifacts(platform_id: int, folder_id: int) -> dict:
@@ -11115,13 +11916,16 @@ def get_course_script_plan_for_ui(folder_id: int, job: dict | None = None) -> di
             "content_artifacts": [],
         }
 
-    breaks = _build_breaks_for_ui(job["platform_id"])
+    saved = _load_saved_course_script_plan(job["platform_id"], folder_id)
+    breaks = _apply_break_overrides(
+        _build_breaks_for_ui(job["platform_id"]),
+        (saved or {}).get("break_overrides"),
+    )
     content_artifacts = _content_artifacts_for_ui(job["platform_id"], folder_id)
 
     dirty_info = get_script_dirty_blocs(folder_id)
     dirty_blocs = int(dirty_info.get("dirty_blocs", 0) or 0)
     total_blocs = int(dirty_info.get("total_blocs", 7) or 7)
-    saved = _load_saved_course_script_plan(job["platform_id"], folder_id)
     if saved and (saved.get("course_blocs") or saved.get("planned_course_blocs")):
         if dirty_blocs:
             note = (
@@ -11278,40 +12082,28 @@ def _env_int(name: str, default: int, min_value: int = 1) -> int:
 _REVIEW_CHUNK_WORDS = _env_int("FORMATION_REVIEW_CHUNK_WORDS", 1500, min_value=300)
 _REVIEW_CHUNK_CONCURRENCY = _env_int("FORMATION_REVIEW_CHUNK_CONCURRENCY", 2, min_value=1)
 _REVIEW_MAX_ATTEMPTS = 3
-_REVIEW_RULESET_VERSION = "2026-05-25-compliance-v7-ethical-micro-split"
+_REVIEW_RULESET_VERSION = "2026-05-31-compliance-v8-minimal"
 _HUMANIZATION_RULESET_VERSION = "2026-05-23-humanisation-v9-polish-only"
 _REVIEW_SIGNATURE_COLUMNS_READY = False
 
 _COMPLIANCE_REVIEW_RULE_GROUPS = [
     {
-        "id": "ethique_culturelle",
-        "label": "Éthique culturelle",
-        "rules": [1, 2, 3, 9, 14],
-        "description": "Spirituel/religieux, alcool/musique/banques, fêtes, humour, respect des tiers",
-    },
-    {
-        "id": "ethique_commerciale",
-        "label": "Éthique commerciale",
-        "rules": [4, 5, 6, 7, 8],
-        "description": "Manipulation, closing manipulatoire, flirt/séduction, chance/destin, célébrités",
-    },
-    {
-        "id": "legal_integrite",
-        "label": "Légal et intégrité",
-        "rules": [10, 11, 12, 13, 15, 16],
-        "description": "Cohérence interne, discrimination, RGPD, promesses irréalistes, détresse, conseils médicaux/juridiques",
+        "id": "ethique_minimale",
+        "label": "Éthique minimale",
+        "rules": [14, 15],
+        "description": "Respect des tiers et protection des publics vulnérables",
     },
     {
         "id": "anti_hallucination",
         "label": "Anti-hallucination",
-        "rules": [17, 18, 19, 20],
-        "description": "Exemples fictifs, chiffres non sourcés, expressions de prudence, posture pédagogique",
+        "rules": [17, 18],
+        "description": "Anti-hallucination générale et patterns interdits",
     },
     {
         "id": "style_oral_tts",
-        "label": "Style oral TTS et architecture pédagogique",
-        "rules": [21, 22, 23, 24, 25, 26, 27, 28],
-        "description": "Fusion syntaxique, guillemets, posture dialogale, punchlines, cours à distance, énumérations, registre oral, architecture visible",
+        "label": "Style oral TTS",
+        "rules": [22],
+        "description": "Zéro guillemet de discours direct rapporté",
     },
 ]
 
@@ -11329,19 +12121,8 @@ _REVIEW_RULE_GROUPS = _COMPLIANCE_REVIEW_RULE_GROUPS
 _RULES_CACHE = {"mtime": 0, "text": ""}
 
 
-def _ethical_micro_replaces_final_compliance() -> bool:
-    value = str(os.getenv("FORMATION_ETHICAL_MICRO_REPLACES_FINAL_COMPLIANCE", "1")).strip().lower()
-    return value not in {"0", "false", "no", "off"}
-
-
 def _compliance_review_groups_for_final_pass() -> list[dict]:
-    if not (_ethical_micro_review_enabled() and _ethical_micro_replaces_final_compliance()):
-        return _COMPLIANCE_REVIEW_RULE_GROUPS
-    return [
-        group
-        for group in _COMPLIANCE_REVIEW_RULE_GROUPS
-        if not all(int(rule) in _ETHICAL_MICRO_RULE_IDS for rule in group.get("rules") or [])
-    ]
+    return _COMPLIANCE_REVIEW_RULE_GROUPS
 
 
 def _load_review_rules() -> str:
@@ -11704,7 +12485,7 @@ def _review_group_chunks(current_text: str, rules_text: str, group: dict, model=
 
 def _build_review_prompt(segment_text: str, rules_text: str) -> str:
     return f"""Tu es un reviewer éditorial. Tu reçois un extrait de cours oral \
-généré par un autre Claude, et les règles #1 à #28 que ce cours doit \
+généré par un autre Claude, et les règles actives que ce cours doit \
 respecter. Ton unique rôle : identifier les passages qui VIOLENT une règle, \
 et proposer une correction minimale.
 
@@ -11718,7 +12499,7 @@ Format de sortie strict (JSON valide, rien d'autre avant ou après) :
     {{
       "original": "phrase EXACTE à remplacer (copie verbatim, 3 à 40 mots)",
       "replacement": "phrase corrigée, même esprit, même registre oral",
-      "rule_violated": "#27",
+      "rule_violated": "#22",
       "reason": "explication brève (1 phrase)"
     }}
   ]
@@ -11733,7 +12514,7 @@ plusieurs fois.
 de contenu, sans raccourcir ni allonger au-delà du strict nécessaire.
 - Ne corrige QUE les vraies violations des règles ci-dessous. Pas de \
 préférence stylistique personnelle.
-- `rule_violated` = numéro de règle (ex: "#1", "#7", "#21", "#27").
+- `rule_violated` = numéro de règle active (ex: "#14", "#15", "#17", "#18", "#22").
 
 ─── RÈGLES À FAIRE RESPECTER ───
 {rules_text}
@@ -12366,9 +13147,8 @@ def run_humanization_review(folder_id, on_progress=None, model=None, force: bool
 def run_content_review(folder_id, on_progress=None, model=None, force: bool = False):
     """Conformité locale par segment après calibrage budget.
 
-    Si la micro-review éthique est active, les règles #1-#16 sont traitées
-    pendant la génération structurée ; cette passe garde les autres scopes
-    en patches ciblés, avec garde-fou budget.
+    Passe finale de conformité sur les règles actives minimales :
+    #14, #15, #17, #18 et #22.
     """
     return _run_content_review_pass(
         folder_id,
