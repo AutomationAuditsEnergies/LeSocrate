@@ -403,8 +403,8 @@ def _structured_course_parallel_workers(default: int = 3) -> int:
 
 
 def _structured_beat_first_enabled() -> bool:
-    """Génère les sections teaching beat par teaching beat quand le plan le permet."""
-    value = str(os.getenv("FORMATION_STRUCTURED_BEAT_FIRST_ENABLED", "1")).strip().lower()
+    """Expérience désactivée par défaut : trop instable pour la qualité orale."""
+    value = str(os.getenv("FORMATION_STRUCTURED_BEAT_FIRST_ENABLED", "0")).strip().lower()
     return value not in {"0", "false", "no", "off"}
 
 

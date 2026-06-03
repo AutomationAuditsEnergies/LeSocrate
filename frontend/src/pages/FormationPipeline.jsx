@@ -2538,7 +2538,7 @@ function BeatFirstIterationPanel({
             <Icon name="restart_alt" /> Itérer depuis le plan verrouillé
           </div>
           <div style={{ color: '#cbd5e1', fontSize: '13px', lineHeight: 1.55, maxWidth: '78ch' }}>
-            Relance les journées à partir de la génération texte : le plan JSON, les teaching beats et les anchors slides sont conservés. Le mode rapide s'arrête après les slides pour vérifier l'alignement sans attendre l'audio.
+            Relance les journées à partir de la génération texte stable : le plan JSON, les teaching beats et les anchors slides restent utilisés comme cadre. Le mode rapide s'arrête après les slides pour vérifier l'alignement sans attendre l'audio.
           </div>
         </div>
         <span style={{ ...S.tag(readyCount > 0 ? 'violet' : 'amber'), alignSelf: 'flex-start' }}>
@@ -2554,8 +2554,8 @@ function BeatFirstIterationPanel({
       }}>
         {[
           ['Plan source', 'Plan JSON verrouillé existant'],
-          ['Unité générée', 'Teaching beat, avec contexte précédent et suivant'],
-          ['Sortie rapide', 'Texte beat-first et slides régénérées, sans audio'],
+          ['Unité générée', 'Section complète, avec teaching beats en contexte'],
+          ['Sortie rapide', 'Texte stable et slides régénérées, sans audio'],
         ].map(([label, detail]) => (
           <div key={label} style={{
             padding: '10px 12px',
@@ -2601,10 +2601,10 @@ function BeatFirstIterationPanel({
           style={{ ...S.btn('primary'), opacity: disabled ? 0.65 : 1 }}
           disabled={disabled}
           onClick={onRestart}
-          title={readyCount > 0 ? 'Relance depuis la génération texte beat-first pour les journées prêtes' : 'Aucune journée texte prête pour cette reprise'}
+          title={readyCount > 0 ? 'Relance depuis la génération texte stable pour les journées prêtes' : 'Aucune journée texte prête pour cette reprise'}
         >
           <Icon name={running ? 'hourglass_empty' : 'play_arrow'} />
-          {running ? 'Relance en cours…' : mode === 'fast' ? 'Tester texte + slides' : 'Relancer complet'}
+          {running ? 'Relance en cours…' : mode === 'fast' ? 'Tester texte stable + slides' : 'Relancer complet'}
         </button>
       </div>
 
