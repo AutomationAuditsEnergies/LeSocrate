@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """
 Generate slide previews from the final generated course script.
 
@@ -635,6 +637,8 @@ def _extract_slide_anchors_from_plan(plan: dict | None) -> list[dict]:
                 "template_type": template_type,
                 "visual_goal": slide_anchor.get("visual_goal") or "",
                 "items_expected": slide_anchor.get("items_expected"),
+                "must_cover": slide_anchor.get("must_cover") or "",
+                "must_not_cover": slide_anchor.get("must_not_cover") or "",
                 "fields_hint": slide_anchor.get("fields_hint") if isinstance(slide_anchor.get("fields_hint"), dict) else {},
             })
         for part in course.get("parts") or []:
@@ -666,6 +670,8 @@ def _extract_slide_anchors_from_plan(plan: dict | None) -> list[dict]:
                     "template_type": template_type,
                     "visual_goal": slide_anchor.get("visual_goal") or "",
                     "items_expected": slide_anchor.get("items_expected"),
+                    "must_cover": slide_anchor.get("must_cover") or "",
+                    "must_not_cover": slide_anchor.get("must_not_cover") or "",
                     "fields_hint": slide_anchor.get("fields_hint") if isinstance(slide_anchor.get("fields_hint"), dict) else {},
                 })
     return anchors
@@ -896,6 +902,8 @@ def _prompt_for_blocks(blocks: list[dict], source_title: str, pace_profile: dict
                     "template_type": anchor.get("template_type"),
                     "visual_goal": anchor.get("visual_goal"),
                     "items_expected": anchor.get("items_expected"),
+                    "must_cover": anchor.get("must_cover"),
+                    "must_not_cover": anchor.get("must_not_cover"),
                     "fields_hint": anchor.get("fields_hint") or {},
                 }
                 for anchor in block.get("slide_anchors") or []
@@ -914,6 +922,11 @@ RÈGLES:
 - Si une fenêtre contient `slide_anchors`, ils sont le plan prioritaire : crée les slides depuis ces anchors si le texte source couvre réellement leur intention.
 - Si un anchor n'est pas couvert par le texte source, ignore-le au lieu d'inventer.
 - Quand tu utilises un anchor, recopie exactement `slide_anchor_id` et `beat_id` dans la slide générée.
+- Un anchor correspond à une intention pédagogique précise, pas à toute la fenêtre.
+- Pour chaque anchor utilisé, choisis `source_quote` dans la portion exacte du texte qui réalise cette intention.
+- Ne rattache jamais une slide au passage d'un anchor voisin parce qu'il contient des mots proches, une image répétée ou le même thème général.
+- Si deux anchors voisins sont présents, vérifie leur ordre narratif : la première slide doit pointer vers le premier mouvement oral, la deuxième vers le mouvement oral suivant.
+- `analogy` s'utilise seulement quand le passage raconte une situation hors métier pour expliquer une notion. Un passage qui commence par "Imaginez que..." peut être une analogie si la scène imaginée n'est pas le métier lui-même. Un exemple client/conseiller/usager, même fictif, relève plutôt de `casestudy`, `reflection`, `warning` ou d'un autre template compatible.
 - Si aucun anchor n'est disponible pour une fenêtre, sélectionne les thèmes, points et idées pédagogiques qui méritent vraiment un visuel.
 - Tu peux produire 0, 1 ou plusieurs slides par fenêtre selon la densité réelle des idées.
 - Maximum {max_batch_slides} slides pour tout ce batch.
@@ -937,7 +950,7 @@ TEMPLATES AUTORISÉS ET SCHÉMAS:
 - stats: data={{"title":"3-6 mots","description":"1 phrase","stats":[{{"number":"chiffre"}}],"columns":["phrase courte","phrase courte"]}}
 - story: data={{"title":"3-6 mots","narrative":"1-2 phrases","moral":"1 phrase"}}
 - recap: data={{"title":"3-6 mots","points":["point court","point court","point court"]}}
-- analogy: data={{"title":"3-6 mots","concept":"2-4 mots","comparison":"2-4 mots","text":"1-2 phrases"}}
+- analogy: data={{"title":"5-10 mots","analogy_label":"situation concrète, 2-5 mots","concept_label":"notion métier, 2-5 mots","text":"1 phrase courte","takeaway":"1 phrase clé","image_prompt":"prompt PNG sans texte ni humains","image_alt":"description accessible"}}
 - warning: data={{"title":"3-6 mots","text":"1-2 phrases"}}
 - tip: data={{"title":"3-6 mots","text":"1-2 phrases"}}
 - opinion: data={{"title":"3-6 mots","text":"1-2 phrases"}}
@@ -1079,11 +1092,26 @@ def _normalize_slide_data(template: str, data: dict, fallback_title: str, fallba
         return {"title": title, "points": points or [text]}
 
     if template == "analogy":
+        analogy_label = _as_text(data.get("analogy_label") or data.get("comparison"), "Situation concrète")[:80]
+        concept_label = _as_text(data.get("concept_label") or data.get("concept"), "Notion métier")[:80]
         return {
             "title": title,
-            "concept": _as_text(data.get("concept"), "Concept")[:40],
-            "comparison": _as_text(data.get("comparison"), "Repère")[:40],
+            "analogy_label": analogy_label,
+            "concept_label": concept_label,
+            "concept": concept_label,
+            "comparison": analogy_label,
             "text": text,
+            "takeaway": _as_text(data.get("takeaway"), "Moins il y a de repères, plus le cerveau interprète.")[:180],
+            "image_url": _as_text(data.get("image_url"), "")[:500],
+            "image_prompt": _as_text(
+                data.get("image_prompt"),
+                (
+                    f"Illustration PNG 16:9, no text, no humans, no faces, no silhouettes, "
+                    f"no characters. Professional sober visual analogy: {analogy_label}. "
+                    f"Clean editorial style, institutional training, readable composition."
+                ),
+            )[:600],
+            "image_alt": _as_text(data.get("image_alt"), f"Illustration de l'analogie : {analogy_label}")[:180],
         }
 
     if template == "transition":
@@ -1132,6 +1160,9 @@ def _normalize_slide(raw: dict, block: dict) -> dict:
     }
     slide_anchor_id = str(raw.get("slide_anchor_id") or raw.get("anchor_id") or "").strip()
     anchor = anchor_by_id.get(slide_anchor_id)
+    if not anchor and not slide_anchor_id and len(anchor_by_id) == 1:
+        anchor = next(iter(anchor_by_id.values()))
+        slide_anchor_id = str(anchor.get("anchor_id") or "")
     template = _canonical_template(
         raw.get("template_type") or raw.get("template") or (anchor or {}).get("template_type"),
         fallback="reflection",
@@ -1396,28 +1427,26 @@ def _cap_planned_slides(slides: list[dict], max_slides: int) -> tuple[list[dict]
     return capped, len(slides) - len(capped)
 
 
-def generate_slides_from_script(
-    folder_id: int,
+def _run_slide_generation_from_source(
+    source: dict,
     *,
     job_id: int | None = None,
-    platform_id: int | None = None,
     max_slides: int = DEFAULT_MAX_SLIDES,
     pace: str = "normal",
     target_words_per_slide: int | None = None,
     batch_size: int = DEFAULT_BATCH_SIZE,
     model: str | None = None,
+    content_plan: dict | None = None,
+    persist: bool = True,
 ) -> dict:
     started_at = time.time()
-    folder_id = _safe_int(folder_id, 0, 1, 10**9)
-    if folder_id <= 0:
-        raise ValueError("folder_id est requis")
+    folder_id = source.get("folder_id")
 
     max_slides = _safe_int(max_slides, DEFAULT_MAX_SLIDES, 5, 140)
     pace_config = _pace_profile(pace)
     batch_size = _safe_int(batch_size, DEFAULT_BATCH_SIZE, 1, 10)
     model = model or default_model()
 
-    source = _load_script_source(folder_id, job_id=job_id, platform_id=platform_id)
     units, total_words = _build_text_units(source["segments"], max_unit_words=900)
     average_words_cap = max(180, math.ceil(total_words / max(1, max_slides)))
     context_words = _safe_int(
@@ -1432,7 +1461,8 @@ def generate_slides_from_script(
         target_words=context_words,
         max_slides=max_slides,
     )
-    content_plan = _load_content_plan(source)
+    if content_plan is None and not source.get("preview_only"):
+        content_plan = _load_content_plan(source)
     slide_anchors = _extract_slide_anchors_from_plan(content_plan)
     _assign_slide_anchors_to_source_blocks(source_blocks, slide_anchors)
 
@@ -1575,7 +1605,7 @@ def generate_slides_from_script(
             "folder_id": source["folder_id"],
             "folder_name": source["folder_name"],
             "job_id": job_id,
-            "source": "content_generation_segments",
+            "source": "preview_text" if source.get("preview_only") else "content_generation_segments",
             "content_plan_source": CONTENT_PLAN_BLOB if content_plan else None,
             "source_words": total_words,
             "source_segments": len(source["segments"]),
@@ -1625,22 +1655,163 @@ def generate_slides_from_script(
             "batches": batches_debug,
         },
     }
-    deck_id = _persist_script_slide_deck(
-        source,
-        result,
-        pace=pace_config["label"],
-        max_slides=max_slides,
-        model=model,
-    )
-    result["stats"]["deck_id"] = deck_id
-    result["pipeline_debug"]["deck_id"] = deck_id
+    deck_id = None
+    if persist:
+        deck_id = _persist_script_slide_deck(
+            source,
+            result,
+            pace=pace_config["label"],
+            max_slides=max_slides,
+            model=model,
+        )
+        result["stats"]["deck_id"] = deck_id
+        result["pipeline_debug"]["deck_id"] = deck_id
+    else:
+        result["stats"]["preview_only"] = True
+        result["pipeline_debug"]["preview_only"] = True
     logger.info(
-        "PIPELINE_SLIDES_DONE folder=%s content_job=%s deck_id=%s slides=%s dropped_by_cap=%s duration_ms=%s",
+        "PIPELINE_SLIDES_DONE folder=%s content_job=%s deck_id=%s preview=%s slides=%s dropped_by_cap=%s duration_ms=%s",
         folder_id,
         source.get("content_job_id"),
         deck_id,
+        bool(source.get("preview_only")),
         len(final_slides),
         dropped_by_cap,
         int((time.time() - started_at) * 1000),
     )
     return result
+
+
+def preview_slides_from_text(
+    text: str,
+    *,
+    title: str = "Prévisualisation passage",
+    template_type: str | None = None,
+    visual_goal: str | None = None,
+    fields_hint: dict | None = None,
+    max_slides: int = 8,
+    pace: str = "dense",
+    model: str | None = None,
+) -> dict:
+    clean_text = _strip_tts_tags(text or "")
+    if len(clean_text.split()) < 20:
+        raise ValueError("Collez un passage d'au moins 20 mots pour générer une prévisualisation")
+    if len(clean_text) > 30000:
+        raise ValueError("Passage trop long pour le mode temporaire : limitez à environ 30 000 caractères")
+
+    anchor = None
+    template = _canonical_template(template_type, fallback="")
+    if template:
+        anchor = {
+            "anchor_id": "preview-anchor-1",
+            "beat_id": "preview-beat-1",
+            "course_number": 1,
+            "course_title": title,
+            "part_number": 1,
+            "part_title": "Passage isolé",
+            "beat_order": 1,
+            "beat_type": template,
+            "role": visual_goal or "",
+            "spoken_requirement": "",
+            "template_type": template,
+            "visual_goal": visual_goal or "",
+            "items_expected": None,
+            "must_cover": "",
+            "must_not_cover": "",
+            "fields_hint": fields_hint if isinstance(fields_hint, dict) else {},
+        }
+
+    source = {
+        "folder_id": 0,
+        "folder_name": "Prévisualisation temporaire",
+        "platform_id": 0,
+        "content_job_id": 0,
+        "formation_job_id": None,
+        "program_title": _as_text(title, "Prévisualisation passage")[:120],
+        "content_status": "preview",
+        "total_words_declared": len(clean_text.split()),
+        "preview_only": True,
+        "segments": [
+            {
+                "segment_id": 0,
+                "sub_part_index": 0,
+                "sub_part_name": "Passage isolé",
+                "passe": 1,
+                "text": clean_text,
+                "word_count": len(clean_text.split()),
+                "reviewed": False,
+                "dirty": False,
+            }
+        ],
+    }
+
+    content_plan = None
+    if anchor:
+        content_plan = {
+            "courses": [
+                {
+                    "course_number": 1,
+                    "course_title": title,
+                    "parts": [
+                        {
+                            "part_number": 1,
+                            "title": "Passage isolé",
+                            "teaching_beats": [
+                                {
+                                    "beat_id": anchor["beat_id"],
+                                    "type": template,
+                                    "role": visual_goal or "",
+                                    "spoken_requirement": "",
+                                    "slide_anchor": {
+                                        "enabled": True,
+                                        "anchor_id": anchor["anchor_id"],
+                                        "template_type": template,
+                                        "visual_goal": visual_goal or "",
+                                        "items_expected": None,
+                                        "fields_hint": anchor["fields_hint"],
+                                    },
+                                }
+                            ],
+                        }
+                    ],
+                }
+            ]
+        }
+
+    return _run_slide_generation_from_source(
+        source,
+        job_id=None,
+        max_slides=max_slides,
+        pace=pace,
+        model=model,
+        content_plan=content_plan,
+        persist=False,
+    )
+
+
+def generate_slides_from_script(
+    folder_id: int,
+    *,
+    job_id: int | None = None,
+    platform_id: int | None = None,
+    max_slides: int = DEFAULT_MAX_SLIDES,
+    pace: str = "normal",
+    target_words_per_slide: int | None = None,
+    batch_size: int = DEFAULT_BATCH_SIZE,
+    model: str | None = None,
+) -> dict:
+    folder_id = _safe_int(folder_id, 0, 1, 10**9)
+    if folder_id <= 0:
+        raise ValueError("folder_id est requis")
+
+    source = _load_script_source(folder_id, job_id=job_id, platform_id=platform_id)
+    return _run_slide_generation_from_source(
+        source,
+        job_id=job_id,
+        max_slides=max_slides,
+        pace=pace,
+        target_words_per_slide=target_words_per_slide,
+        batch_size=batch_size,
+        model=model,
+        persist=True,
+    )

@@ -205,12 +205,15 @@ L'evenement: {event_summary}
 Source: {source_text}
 
 Genere:
-- title: la metaphore en 3-5 mots (ex: "Le cerveau comme un muscle")
-- concept: le concept explique (2-4 mots)
-- comparison: l'element de comparaison (2-4 mots)
-- text: explication de l'analogie en 2-3 phrases
+- title: la metaphore ou image mentale en 5-10 mots
+- analogy_label: la situation concrete hors metier (2-5 mots)
+- concept_label: la notion metier mise en parallele (2-5 mots)
+- text: explication de l'analogie en 1 phrase courte
+- takeaway: phrase cle finale
+- image_prompt: prompt PNG 16:9 sans texte, sans humains, sans visages, sans silhouettes, sans personnages
+- image_alt: description accessible de l'image
 
-JSON: {{"title": "...", "concept": "...", "comparison": "...", "text": "..."}}""",
+JSON: {{"title": "...", "analogy_label": "...", "concept_label": "...", "text": "...", "takeaway": "...", "image_prompt": "...", "image_alt": "..."}}""",
 
     "warning": """Cree le contenu pour une slide de type "warning" (piege a eviter).
 L'evenement: {event_summary}

@@ -8,6 +8,7 @@ from services.slide_generation_service import (
 from services.script_slide_generation_service import (
     generate_slides_from_script,
     get_latest_script_slide_deck,
+    preview_slides_from_text,
 )
 from utils.logger import get_logger
 
@@ -239,6 +240,77 @@ def generate_from_script():
         return jsonify({
             "status": "error",
             "message": f"Erreur lors de la génération depuis script: {str(e)}"
+        }), 500
+
+
+@slides_bp.route("/preview-from-text", methods=["POST"])
+def preview_from_text():
+    """
+    Mode temporaire d'itération rapide : génère des slides depuis un passage collé,
+    sans relancer la pipeline et sans persister de deck.
+
+    Body:
+        {
+            "text": "...",                 # requis
+            "title": "Passage brouillard", # optionnel
+            "template_type": "analogy",    # optionnel, force un anchor temporaire
+            "visual_goal": "...",          # optionnel
+            "fields_hint": {},             # optionnel
+            "max_slides": 8,
+            "pace": "dense",
+            "model": "sonnet"
+        }
+    """
+    global _generated_slides, _generation_error, _generation_stats, _generation_timeline
+    global _transcription_full, _pipeline_debug, _generation_mode
+
+    try:
+        if not session.get("is_admin", False):
+            return jsonify({"status": "error", "message": "Non autorisé"}), 403
+
+        data = request.get_json() or {}
+        text = data.get("text") or ""
+        result = preview_slides_from_text(
+            text,
+            title=data.get("title") or "Prévisualisation passage",
+            template_type=data.get("template_type"),
+            visual_goal=data.get("visual_goal"),
+            fields_hint=data.get("fields_hint") if isinstance(data.get("fields_hint"), dict) else None,
+            max_slides=data.get("max_slides", 8),
+            pace=data.get("pace", "dense"),
+            model=data.get("model"),
+        )
+
+        _generated_slides = result["slides"]
+        _generation_stats = result["stats"]
+        _generation_timeline = result["timeline"]
+        _pipeline_debug = result.get("pipeline_debug", {})
+        _transcription_full = text
+        _generation_mode = "script_preview"
+        _generation_error = None
+
+        return jsonify({
+            "status": "success",
+            "generation_mode": _generation_mode,
+            "slides_count": len(_generated_slides),
+            "slides": _generated_slides,
+            "stats": _generation_stats,
+            "timeline": _generation_timeline,
+            "pipeline_debug": _pipeline_debug,
+        })
+
+    except ValueError as e:
+        logger.error(f"Erreur de validation preview slides: {e}")
+        _generation_error = str(e)
+        return jsonify({"status": "error", "message": str(e)}), 400
+    except Exception as e:
+        logger.error(f"Erreur preview slides depuis texte: {e}")
+        import traceback
+        traceback.print_exc()
+        _generation_error = str(e)
+        return jsonify({
+            "status": "error",
+            "message": f"Erreur preview slides depuis texte: {str(e)}",
         }), 500
 
 

@@ -149,17 +149,21 @@
     },
     {
       "template_id": "analogy",
-      "families": ["analogy", "metaphor"],
-      "use_when": "Le cours compare une notion abstraite à une image simple pour la rendre mémorisable.",
-      "avoid_when": "La comparaison est forcée ou absente du texte.",
+      "families": ["analogy", "metaphor", "imagine", "mental_image"],
+      "use_when": "Le cours compare une notion abstraite à une situation hors métier, image simple, scène introduite par Imaginez que, ou métaphore explicite pour la rendre mémorisable.",
+      "avoid_when": "Le passage est un exemple métier client/conseiller/usager, un cas fictif professionnel, une définition conceptuelle ou une règle à retenir. Ne pas choisir analogy seulement parce qu'un mot imagé comme brouillard, piloter ou signal apparaît dans le texte.",
       "requires": {
-        "text": "concept + comparaison + explication"
+        "text": "1 phrase d'explication courte",
+        "image": "une illustration PNG possible sans humain, visage, silhouette ni personnage"
       },
       "schema": {
-        "title": "3-6 mots",
-        "concept": "2-4 mots",
-        "comparison": "2-4 mots",
-        "text": "1-2 phrases"
+        "title": "5-10 mots",
+        "analogy_label": "situation concrète hors métier, 2-5 mots",
+        "concept_label": "notion métier mise en parallèle, 2-5 mots",
+        "text": "1 phrase courte",
+        "takeaway": "1 phrase clé finale",
+        "image_prompt": "prompt court pour générer un PNG illustratif sans texte ni humains",
+        "image_alt": "description accessible de l'image"
       }
     },
     {

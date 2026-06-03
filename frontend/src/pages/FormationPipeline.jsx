@@ -2498,6 +2498,155 @@ function renderPipelineSlidePreview(slide = {}) {
   }
 }
 
+const PASSAGE_LAB_TEMPLATES = [
+  { value: '', label: 'Auto' },
+  { value: 'analogy', label: 'Analogy' },
+  { value: 'reflection', label: 'Reflection' },
+  { value: 'casestudy', label: 'Case study' },
+  { value: 'warning', label: 'Warning' },
+  { value: 'tip', label: 'Tip' },
+  { value: 'transition', label: 'Transition' },
+]
+
+function PassageSlideLab({
+  value,
+  onChange,
+  onGenerate,
+  loading,
+  error,
+  result,
+  defaultModelLabel,
+}) {
+  const slides = result?.slides || []
+  const stats = result?.stats || {}
+  const update = (patch) => onChange(prev => ({ ...prev, ...patch }))
+
+  return (
+    <div style={{
+      ...S.card,
+      borderColor: 'rgba(245,158,11,0.28)',
+      background: 'rgba(15,23,42,0.72)',
+      marginBottom: '24px',
+    }}>
+      <div style={{ ...S.cardTitle, color: '#fbbf24', marginBottom: '10px' }}>
+        <Icon name="science" /> Laboratoire temporaire · passage vers slides
+      </div>
+      <div style={{ color: '#cbd5e1', fontSize: '13px', lineHeight: 1.55, marginBottom: '14px' }}>
+        Colle un extrait du cours pour tester le découpage et le template sans relancer la pipeline. Le résultat est une prévisualisation non sauvegardée.
+      </div>
+
+      <div style={{
+        display: 'grid',
+        gridTemplateColumns: 'minmax(0, 1.4fr) minmax(220px, 0.8fr)',
+        gap: '12px',
+        alignItems: 'end',
+      }}>
+        <label style={S.label}>
+          Titre de test
+          <input
+            style={{ ...S.input, marginTop: '6px' }}
+            value={value.title}
+            onChange={e => update({ title: e.target.value })}
+            placeholder="Passage brouillard"
+          />
+        </label>
+        <label style={S.label}>
+          Template visé
+          <select
+            style={{ ...S.input, marginTop: '6px' }}
+            value={value.templateType}
+            onChange={e => update({ templateType: e.target.value })}
+          >
+            {PASSAGE_LAB_TEMPLATES.map(item => (
+              <option key={item.value || 'auto'} value={item.value}>{item.label}</option>
+            ))}
+          </select>
+        </label>
+      </div>
+
+      <label style={{ ...S.label, marginTop: '10px' }}>
+        Objectif visuel
+        <input
+          style={{ ...S.input, marginTop: '6px' }}
+          value={value.visualGoal}
+          onChange={e => update({ visualGoal: e.target.value })}
+          placeholder="Ce que la slide doit aider à retenir"
+        />
+      </label>
+
+      <label style={{ ...S.label, marginTop: '10px' }}>
+        Passage source
+        <textarea
+          style={{ ...S.input, minHeight: '170px', resize: 'vertical', marginTop: '6px', lineHeight: 1.55 }}
+          value={value.text}
+          onChange={e => update({ text: e.target.value })}
+          placeholder="Colle ici uniquement le passage à tester..."
+        />
+      </label>
+
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: '10px',
+        flexWrap: 'wrap',
+        marginTop: '12px',
+      }}>
+        <label style={{ ...S.label, margin: 0, minWidth: '110px' }}>
+          Max slides
+          <input
+            type="number"
+            min="5"
+            max="20"
+            style={{ ...S.input, marginTop: '6px', width: '110px' }}
+            value={value.maxSlides}
+            onChange={e => update({ maxSlides: Number(e.target.value || 8) })}
+          />
+        </label>
+        <label style={{ ...S.label, margin: 0, minWidth: '180px' }}>
+          Modèle
+          <select
+            style={{ ...S.input, marginTop: '6px' }}
+            value={value.model}
+            onChange={e => update({ model: e.target.value })}
+          >
+            <option value="">Pipeline actuel ({defaultModelLabel || 'défaut'})</option>
+            <option value="claude-sonnet-4-20250514">Sonnet</option>
+            <option value="claude-haiku-4-5-20251001">Haiku</option>
+            <option value="deepseek-v4-pro">DeepSeek Pro</option>
+          </select>
+        </label>
+        <button
+          type="button"
+          style={{ ...S.btn('primary'), alignSelf: 'end', opacity: loading ? 0.7 : 1 }}
+          disabled={loading || value.text.trim().split(/\s+/).length < 20}
+          onClick={onGenerate}
+        >
+          <Icon name={loading ? 'hourglass_empty' : 'slideshow'} /> {loading ? 'Génération…' : 'Prévisualiser ce passage'}
+        </button>
+        {stats.slides_generated !== undefined && (
+          <span style={{ ...S.tag('amber'), alignSelf: 'end' }}>
+            {stats.slides_generated} slide{stats.slides_generated > 1 ? 's' : ''} · {stats.generation_mode}
+          </span>
+        )}
+      </div>
+
+      {error && (
+        <div style={{ marginTop: '12px', padding: '10px 12px', borderRadius: '8px', background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.24)', color: '#fca5a5', fontSize: '13px' }}>
+          {error}
+        </div>
+      )}
+
+      {slides.length > 0 && (
+        <div style={{ marginTop: '18px', display: 'grid', gap: '14px' }}>
+          {slides.map((slide, index) => (
+            <SlideSourcePreviewRow key={slide.slide_id || index} slide={slide} index={index} slides={slides} />
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function WelcomeSlidePreview({ title = 'Bienvenue', subtitle, formation_name, day_label, badge = 'TP-CRCD', brandName = 'SALES HACKING' }) {
   return (
     <div style={{
@@ -5484,6 +5633,17 @@ export default function FormationPipeline() {
   const [pipelineDiagnostic, setPipelineDiagnostic] = useState(null)
   const [pipelineDiagnosticLoading, setPipelineDiagnosticLoading] = useState(false)
   const [pipelineDiagnosticError, setPipelineDiagnosticError] = useState('')
+  const [passageLab, setPassageLab] = useState({
+    text: '',
+    title: 'Passage brouillard',
+    templateType: 'analogy',
+    visualGoal: "Faire comprendre que l'absence de signaux visuels pousse le client à interpréter.",
+    maxSlides: 8,
+    model: '',
+  })
+  const [passageLabResult, setPassageLabResult] = useState(null)
+  const [passageLabLoading, setPassageLabLoading] = useState(false)
+  const [passageLabError, setPassageLabError] = useState('')
 
   // Module persistant lié à ce job (créé automatiquement à la fin de la pipeline).
   // Fetché depuis /api/hr/formation-modules, filtré par source_pipeline_job_id.
@@ -6049,6 +6209,38 @@ export default function FormationPipeline() {
     }
   }
 
+  const handlePreviewPassageSlides = async () => {
+    setPassageLabError('')
+    setPassageLabResult(null)
+    setPassageLabLoading(true)
+    try {
+      const resp = await fetch(apiUrl('/api/slides/preview-from-text'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({
+          text: passageLab.text,
+          title: passageLab.title,
+          template_type: passageLab.templateType || null,
+          visual_goal: passageLab.visualGoal,
+          max_slides: passageLab.maxSlides,
+          pace: 'dense',
+          model: passageLab.model || job?.auto_pilot_model || undefined,
+        }),
+      })
+      const data = await resp.json().catch(() => ({}))
+      if (!resp.ok || data.status === 'error') {
+        setPassageLabError(data.message || `Erreur ${resp.status}`)
+        return
+      }
+      setPassageLabResult(data)
+    } catch {
+      setPassageLabError('Erreur réseau pendant la prévisualisation')
+    } finally {
+      setPassageLabLoading(false)
+    }
+  }
+
   // ─── Missions Claude Code (Phase 3) — export / import manuel ──────────────
   // Spec : memoire/03-decisions/pipeline-dual-api-et-claude-code.md
   // Le backend écrit des fichiers dans review_queue/<job>/<step>/, l'utilisateur
@@ -6236,6 +6428,8 @@ export default function FormationPipeline() {
     setSafetyError('')
     setPipelineDiagnostic(null)
     setPipelineDiagnosticError('')
+    setPassageLabResult(null)
+    setPassageLabError('')
     setAutoPilotState(null)
     setLinkedModule(null)
     setPendingMissions({})
@@ -6596,6 +6790,16 @@ export default function FormationPipeline() {
                 Mission : {missionError}
               </div>
             )}
+
+            <PassageSlideLab
+              value={passageLab}
+              onChange={setPassageLab}
+              onGenerate={handlePreviewPassageSlides}
+              loading={passageLabLoading}
+              error={passageLabError}
+              result={passageLabResult}
+              defaultModelLabel={selectedPipelineModel}
+            />
 
             {/* ── Étape 1 : Init (affichage seul, déjà fait) ── */}
             <StepBlock stepIndex={0} currentStep={currentStep} status={job.status} title="Recherche RNCP & initialisation" icon="search">
