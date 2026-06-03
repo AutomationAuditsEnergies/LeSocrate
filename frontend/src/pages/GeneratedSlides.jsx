@@ -20,7 +20,7 @@ import ChecklistTemplate from '../components/slides/templates/ChecklistTemplate'
 import QuotableTemplate from '../components/slides/templates/QuotableTemplate';
 import PracticeExerciseTemplate from '../components/slides/templates/PracticeExerciseTemplate';
 import BeforeAfterTemplate from '../components/slides/templates/BeforeAfterTemplate';
-import { DeckWelcome, DeckAgenda, DeckDayProgram7Steps } from '../components/slides/templates/DeckTemplates';
+import { DeckWelcome, DeckAgenda, DeckChapterOpener, DeckDayProgram7Steps } from '../components/slides/templates/DeckTemplates';
 
 const normalizeSourceText = (text = '') => String(text || '').replace(/\s+/g, ' ').trim();
 
@@ -274,6 +274,9 @@ export default function GeneratedSlides() {
           : <DeckAgenda {...slide.data} {...commonProps} />;
       case 'day_program_7_steps':
         return <DeckDayProgram7Steps {...slide.data} {...commonProps} />;
+      case 'chapter_opener':
+      case 'chapter_intro':
+        return <DeckChapterOpener {...slide.data} {...commonProps} />;
       case 'context':
         return <ContextSlideTemplate {...slide.data} {...commonProps} />;
       case 'definition':

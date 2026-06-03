@@ -111,6 +111,60 @@ export const DeckWelcome = ({
   );
 };
 
+export const DeckChapterOpener = ({
+  chapter_label,
+  chapter,
+  title = "L'obstacle invisible",
+  axes,
+  items,
+  points,
+  brandName = 'Sales hacking',
+}) => {
+  const [shellRef, scale] = useSlideStageScale();
+  const { brandHead, brandTail } = getDeckBrandParts(brandName);
+  const cleanChapterLabel = String(chapter_label || chapter || 'Chapitre 1').replace(/\s*:$/, '');
+  const sourceAxes = Array.isArray(axes) ? axes : (Array.isArray(items) ? items : (Array.isArray(points) ? points : []));
+  const safeAxes = (sourceAxes.length ? sourceAxes : [
+    {
+      title: 'Le brouillard de la distance',
+      desc: 'Quand le client ne voit pas, son cerveau complète.',
+    },
+    {
+      title: 'Les biais de perception',
+      desc: 'Un silence, un ton ou un rythme devient un message.',
+    },
+  ]).slice(0, 2);
+
+  return (
+    <div className="deck-chapter-shell" ref={shellRef}>
+      <section className="deck-chapter-stage" style={{ transform: `scale(${scale})` }}>
+        <div className="deck-chrome">
+          <div className="deck-brand">
+            <span className="deck-brand-mark">{brandHead}</span>
+            <span className="deck-brand-tag">{brandTail}</span>
+          </div>
+        </div>
+
+        <div className="deck-chapter-left">
+          <h1><span className="deck-chapter-label">{cleanChapterLabel} :</span> <span className="deck-chapter-name">{title}</span></h1>
+        </div>
+
+        <div className="deck-chapter-axes">
+          {safeAxes.map((axis, index) => (
+            <div className="deck-chapter-axis" key={index}>
+              <span className="deck-chapter-num">{String(index + 1).padStart(2, '0')}</span>
+              <div className="deck-chapter-content">
+                <span className="deck-chapter-axis-title">{typeof axis === 'string' ? axis : axis.title}</span>
+                <span className="deck-chapter-axis-desc">{typeof axis === 'string' ? '' : (axis.desc || axis.description || axis.text)}</span>
+              </div>
+            </div>
+          ))}
+        </div>
+      </section>
+    </div>
+  );
+};
+
 export const DeckAgenda = ({ title = 'Au programme.', items = [], day_label, formation_name, badge, brandName }) => {
   const sourceItems = Array.isArray(items) ? items : [];
   const safeItems = sourceItems.length ? sourceItems.slice(0, 6) : ['Accueil et objectifs', 'Notions clés', 'Mise en pratique', 'Synthèse'];
