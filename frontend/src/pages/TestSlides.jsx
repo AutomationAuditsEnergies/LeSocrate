@@ -49,7 +49,7 @@ const GROUPS = [
   {
     label: 'Deck fourni',
     items: [
-      { type: 'welcome', label: '01 Intro formation', data: { title: "L'IA dans vos", formation_name: 'opérations.', subtitle: 'Sept séances pour transformer vos process internes en machines reproductibles.', day_label: 'MODULE 03 — CHAPITRE 01' } },
+      { type: 'welcome', label: '01 Bienvenue · exact', data: { title: 'Bienvenue', formation_name: 'Titre professionnel CRCD', day_label: 'Journée 1', meta_note: 'Relation client à distance' } },
       { type: 'day_program_7_steps', label: '02 Programme journée · exact', data: { title: 'Programme de la journée.', subtitle: "Une journée dédiée aux fondamentaux de l'échange à distance — du premier contact jusqu'à l'empreinte que l'on laisse après.", day_label: 'Feuille de route', active_item: 1, items: ['Communiquer sans visuel', 'Le ton de la voix', 'Le rythme de synchronisation', "Humaniser l'écrit asynchrone", 'La première minute', "L'écoute active", "L'empreinte après contact"] } },
       { type: 'reflection', label: '02 Big statement', data: { title: "Vous n'avez pas un problème d'outils. Vous avez un problème de processus.", text: "Et c'est une bonne nouvelle." } },
       { type: 'definition', label: '03 Definition', data: { term: 'Opération.', eyebrow: 'Vocabulaire #01', definition: "Un système répétable qui produit un résultat prévisible — sans dépendre d'une personne en particulier.", isItems: ['RÉPÉTABLE', 'MESURABLE', 'DÉLÉGABLE', 'DOCUMENTÉ'] } },

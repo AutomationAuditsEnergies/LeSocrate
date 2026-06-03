@@ -3,6 +3,29 @@ import './DeckTemplates.css';
 
 const splitTitle = (title = '', fallback = '') => String(title || fallback).split(/\s+/);
 
+const getDeckBrandParts = (brandName = 'Sales hacking') => {
+  const normalizedBrandName = String(brandName || 'Sales hacking').trim();
+  const isSalesHackingBrand = normalizedBrandName.toLowerCase() === 'sales hacking';
+  const brandParts = normalizedBrandName.split(/\s+/);
+  return {
+    brandHead: isSalesHackingBrand ? 'Sales' : (brandParts[0] || 'Sales'),
+    brandTail: isSalesHackingBrand ? 'hacking' : (brandParts.slice(1).join(' ') || 'hacking'),
+  };
+};
+
+const renderWelcomeFormationName = (formationName = 'Titre professionnel CRCD') => {
+  const text = String(formationName || 'Titre professionnel CRCD').trim();
+  const crcdMatch = text.match(/\bCRCD\b/i);
+  if (crcdMatch) {
+    const before = text.slice(0, crcdMatch.index).trim();
+    const crcd = text.slice(crcdMatch.index, crcdMatch.index + crcdMatch[0].length);
+    return <>{before || 'Titre professionnel'}<br /><span className="crl">{crcd.toUpperCase()}</span></>;
+  }
+  const words = text.split(/\s+/);
+  const last = words.pop();
+  return <>{words.join(' ')}<br /><span className="crl">{last}</span></>;
+};
+
 const DeckSlide = ({ children, type = 'TEMPLATE', page = '01', className = '', danger = false, badge = 'TP-CRCD', brandName = 'SALES HACKING' }) => (
   <div className={`deck-slide ${danger ? 'deck-slide--danger' : ''} ${className}`}>
     <div className="deck-chrome">
@@ -55,20 +78,38 @@ const useSlideStageScale = () => {
   return [ref, scale];
 };
 
-export const DeckWelcome = ({ title = 'Bienvenue', formation_name, subtitle, day_label, badge, brandName }) => (
-  <DeckSlide type="INTRO_FORMATION" page="01" className="deck-intro" badge={badge} brandName={brandName}>
-    <div className="deck-intro-wrap">
-      <div className="deck-meta-row">
-        <span>{day_label || 'JOURNEE DE FORMATION'}</span>
-        <i />
-        <span>{subtitle || 'SESSION EN DIRECT'}</span>
-      </div>
-      <h1>{title}<br /><span>{formation_name || subtitle || 'Formation'}</span></h1>
-      <p>{subtitle || 'Une session structurée pour transformer les notions clés en gestes professionnels concrets.'}</p>
-      <div className="deck-chips"><span>PRATIQUE</span><span>SYNTHÈSE</span><span>EN ÉQUIPE</span></div>
+export const DeckWelcome = ({
+  title = 'Bienvenue',
+  formation_name = 'Titre professionnel CRCD',
+  day_label = 'Journée 1',
+  meta_note = 'Relation client à distance',
+  brandName = 'Sales hacking',
+}) => {
+  const [shellRef, scale] = useSlideStageScale();
+  const { brandHead, brandTail } = getDeckBrandParts(brandName);
+
+  return (
+    <div className="deck-welcome-shell" ref={shellRef}>
+      <section className="deck-welcome-stage" style={{ transform: `scale(${scale})` }}>
+        <div className="deck-chrome">
+          <div className="deck-brand">
+            <span className="deck-brand-mark">{brandHead}</span>
+            <span className="deck-brand-tag">{brandTail}</span>
+          </div>
+        </div>
+
+        <div className="deck-welcome-meta-row">
+          <span className="deck-welcome-day">{day_label}</span>
+          <span className="deck-welcome-meta-bar" />
+          <span className="deck-welcome-meta-note">{meta_note}</span>
+        </div>
+
+        <h1>{title}</h1>
+        <div className="deck-welcome-title">{renderWelcomeFormationName(formation_name)}</div>
+      </section>
     </div>
-  </DeckSlide>
-);
+  );
+};
 
 export const DeckAgenda = ({ title = 'Au programme.', items = [], day_label, formation_name, badge, brandName }) => {
   const sourceItems = Array.isArray(items) ? items : [];
@@ -112,11 +153,7 @@ export const DeckDayProgram7Steps = ({
     "L'empreinte après contact",
   ]).slice(0, 7);
   const activeIndex = Math.max(0, Math.min(6, Number(active_item || 1) - 1));
-  const normalizedBrandName = String(brandName || 'Sales hacking').trim();
-  const isSalesHackingBrand = normalizedBrandName.toLowerCase() === 'sales hacking';
-  const brandParts = normalizedBrandName.split(/\s+/);
-  const brandHead = isSalesHackingBrand ? 'Sales' : (brandParts[0] || 'Sales');
-  const brandTail = isSalesHackingBrand ? 'hacking' : (brandParts.slice(1).join(' ') || 'hacking');
+  const { brandHead, brandTail } = getDeckBrandParts(brandName);
   const eyebrow = day_label ? (String(day_label).trim().startsWith('—') ? day_label : `— ${day_label}`) : '— Feuille de route';
   const [shellRef, scale] = useSlideStageScale();
 
