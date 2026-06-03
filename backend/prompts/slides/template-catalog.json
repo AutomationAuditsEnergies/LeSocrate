@@ -1,12 +1,38 @@
 {
-  "version": "slide-template-catalog-v1",
+  "version": "slide-template-catalog-v2",
   "principle": "Le template visualise une intention pédagogique réelle. Il ne doit jamais imposer artificiellement une forme au cours.",
+  "curation_policy": {
+    "source_of_truth": "Le texte final prime sur le plan. Les anchors du plan sont des indices forts, pas des obligations.",
+    "selection_rule": "Créer une slide seulement quand un visuel aide à comprendre, mémoriser, comparer, décider ou appliquer.",
+    "anti_overproduction": "Ne jamais transformer chaque grande idée en slide. Les transitions, reformulations et nuances purement orales peuvent rester sans visuel.",
+    "existing_template_only": "Pendant la pipeline, utiliser uniquement un template_id existant. Les templates manquants sont proposés dans le backlog."
+  },
   "templates": [
     {
       "template_id": "welcome",
       "families": ["welcome", "day_welcome", "opening"],
-      "use_when": "Le cours accueille les apprenants au début d'une journée de formation.",
-      "avoid_when": "Le passage ne correspond pas à un accueil ou une ouverture de journée.",
+      "visual_role": "Installer le cadre d'ouverture d'une journée de formation.",
+      "use_when": "Le passage accueille les apprenants au début d'une journée ou d'une séquence majeure.",
+      "avoid_when": "Le passage introduit une notion, un thème, un exercice ou une transition sans accueil explicite.",
+      "strong_signals": [
+        "bonjour, bienvenue, ouverture de journée",
+        "présentation du cadre général",
+        "premières secondes d'une journée"
+      ],
+      "weak_signals": [
+        "simple rappel après pause",
+        "transition vers un nouveau chapitre",
+        "phrase de politesse isolée"
+      ],
+      "selection_rules": [
+        "Utiliser au maximum une fois au début d'une journée.",
+        "Le titre doit rester très court et accueillant.",
+        "Ne pas ajouter de contenu pédagogique dense sur cette slide."
+      ],
+      "rejection_rules": [
+        "Refuser si le texte ne correspond pas à une vraie ouverture.",
+        "Refuser si le passage commence déjà une notion métier."
+      ],
       "requires": {
         "formation_name": "nom de la formation",
         "day_label": "Journée X"
@@ -16,13 +42,39 @@
         "subtitle": "Journée X",
         "formation_name": "nom du TP",
         "day_label": "Journée X"
-      }
+      },
+      "good_examples": [
+        "Bonjour à toutes et à tous, bienvenue dans cette première journée consacrée à l'accueil à distance."
+      ],
+      "bad_examples": [
+        "Nous allons maintenant voir comment qualifier une demande client."
+      ]
     },
     {
       "template_id": "day_program",
       "families": ["day_program", "agenda", "program"],
-      "use_when": "Le cours annonce les grands thèmes ou chapitres de la journée.",
-      "avoid_when": "Le passage ne liste pas le programme du jour.",
+      "visual_role": "Donner une carte mentale courte de la journée ou d'une grande séquence.",
+      "use_when": "Le passage annonce plusieurs grands thèmes ou chapitres dans un ordre clair.",
+      "avoid_when": "Le passage développe une seule idée, une méthode précise ou un exemple.",
+      "strong_signals": [
+        "annonce de programme",
+        "liste de 2 à 7 thèmes",
+        "progression de journée"
+      ],
+      "weak_signals": [
+        "énumération de détails non structurants",
+        "liste de conseils pratiques",
+        "récapitulatif de fin"
+      ],
+      "selection_rules": [
+        "Utiliser seulement si le texte donne vraiment plusieurs thèmes ordonnés.",
+        "Transformer les thèmes en libellés courts, pas en phrases longues.",
+        "Préférer ce template au recap quand le passage annonce l'avenir plutôt que résumer."
+      ],
+      "rejection_rules": [
+        "Refuser si le passage ne donne pas au moins deux items distincts.",
+        "Refuser si les items sont des micro-actions plutôt que des chapitres."
+      ],
       "requires": {
         "items_min": 2,
         "items_max": 7
@@ -31,13 +83,38 @@
         "title": "Programme de la journée",
         "day_label": "Journée X",
         "items": "2-7 thèmes courts dans l'ordre"
-      }
+      },
+      "good_examples": [
+        "Nous allons d'abord poser le cadre, puis travailler l'écoute active, ensuite la qualification, et enfin la restitution."
+      ],
+      "bad_examples": [
+        "Gardez en tête trois réflexes : écouter, reformuler, tracer."
+      ]
     },
     {
       "template_id": "day_program_7_steps",
       "families": ["day_program_7_steps", "day_program", "agenda", "program", "roadmap"],
-      "use_when": "Le cours annonce explicitement les sept grands thèmes d'une journée complète de formation.",
-      "avoid_when": "Le passage ne donne pas exactement une feuille de route de journée en sept parties.",
+      "visual_role": "Afficher une feuille de route complète en sept étapes.",
+      "use_when": "Le passage annonce explicitement les sept grands thèmes d'une journée complète.",
+      "avoid_when": "Le passage donne moins ou plus de sept parties, ou seulement une liste de conseils.",
+      "strong_signals": [
+        "sept étapes annoncées",
+        "journée complète structurée",
+        "progression pédagogique globale"
+      ],
+      "weak_signals": [
+        "liste de sept détails sans ordre pédagogique",
+        "récapitulatif d'une méthode en sept micro-actions"
+      ],
+      "selection_rules": [
+        "Utiliser uniquement avec exactement sept items.",
+        "Chaque item doit être un thème ou une étape majeure.",
+        "Garder les libellés homogènes et courts."
+      ],
+      "rejection_rules": [
+        "Refuser si le texte ne contient pas exactement sept repères.",
+        "Refuser si les sept items ne sont pas dans l'ordre."
+      ],
       "requires": {
         "items_min": 7,
         "items_max": 7
@@ -48,13 +125,40 @@
         "day_label": "Journée X",
         "active_item": "numéro de l'étape active, 1 par défaut",
         "items": "exactement 7 thèmes courts dans l'ordre"
-      }
+      },
+      "good_examples": [
+        "Cette journée suivra sept temps : le cadre, l'écoute, le questionnement, la reformulation, la traçabilité, les cas complexes et la synthèse."
+      ],
+      "bad_examples": [
+        "On verra plusieurs points importants au fil de la journée."
+      ]
     },
     {
       "template_id": "reflection",
       "families": ["concept", "definition", "key_message"],
-      "use_when": "Une idée centrale, une définition ou un principe doit être retenu.",
-      "avoid_when": "Le contenu contient une méthode en étapes, plusieurs cas, ou une liste de points.",
+      "visual_role": "Mettre en avant une idée centrale ou un principe à retenir.",
+      "use_when": "Une idée courte, une définition ou un principe doit être mémorisé comme repère.",
+      "avoid_when": "Le passage contient une méthode en étapes, plusieurs cas, une checklist ou une narration.",
+      "strong_signals": [
+        "définition claire",
+        "phrase pivot",
+        "principe général",
+        "distinction conceptuelle courte"
+      ],
+      "weak_signals": [
+        "idée trop abstraite sans formulation forte",
+        "passage qui demande une liste",
+        "exemple métier détaillé"
+      ],
+      "selection_rules": [
+        "Choisir seulement si une phrase du texte peut devenir un message clé.",
+        "La slide doit contenir 1 idée, pas 3 idées compressées.",
+        "Préférer reflection quand le meilleur visuel est une phrase mémorisable."
+      ],
+      "rejection_rules": [
+        "Refuser si la slide deviendrait un résumé vague.",
+        "Refuser si un template plus structuré correspond mieux au passage."
+      ],
       "requires": {
         "text": "1 à 2 phrases courtes",
         "items_min": 0,
@@ -63,13 +167,40 @@
       "schema": {
         "title": "3-6 mots",
         "text": "1-2 phrases"
-      }
+      },
+      "good_examples": [
+        "Adapter sa communication, ce n'est pas changer le fond : c'est choisir le bon contenant pour rendre le message accessible."
+      ],
+      "bad_examples": [
+        "Pour traiter un appel, il faut accueillir, identifier, questionner, reformuler puis tracer."
+      ]
     },
     {
       "template_id": "facilitator",
       "families": ["process", "method", "framework", "steps"],
-      "use_when": "Le cours présente une méthode, un enchaînement, une procédure ou des étapes d'action.",
-      "avoid_when": "Le contenu n'a pas au moins deux étapes distinctes.",
+      "visual_role": "Transformer une méthode ou une procédure en étapes actionnables.",
+      "use_when": "Le passage présente un enchaînement, une procédure, une méthode ou des étapes d'action.",
+      "avoid_when": "Le contenu n'a pas au moins deux étapes distinctes ou n'indique pas d'ordre.",
+      "strong_signals": [
+        "d'abord, ensuite, enfin",
+        "méthode en plusieurs temps",
+        "procédure métier",
+        "enchaînement d'actions"
+      ],
+      "weak_signals": [
+        "liste de notions sans ordre",
+        "principe unique",
+        "récit ou exemple isolé"
+      ],
+      "selection_rules": [
+        "Utiliser si le passage peut être découpé en 2 à 4 étapes nettes.",
+        "Chaque étape doit contenir un verbe d'action ou un repère opérationnel.",
+        "Préférer facilitator au recap quand l'ordre des actions compte."
+      ],
+      "rejection_rules": [
+        "Refuser si les étapes doivent être inventées.",
+        "Refuser si le texte ne donne qu'une intention générale sans procédure."
+      ],
       "requires": {
         "items_min": 2,
         "items_max": 4
@@ -77,13 +208,40 @@
       "schema": {
         "title": "3-6 mots",
         "steps": "2-4 étapes avec title, desc, icon, color"
-      }
+      },
+      "good_examples": [
+        "On commence par écouter sans interrompre, puis on reformule, ensuite on vérifie la compréhension, et seulement après on propose une réponse."
+      ],
+      "bad_examples": [
+        "L'écoute active est une posture importante dans la relation client."
+      ]
     },
     {
       "template_id": "recap",
       "families": ["checklist", "recap", "takeaways"],
-      "use_when": "Le cours donne plusieurs points à retenir, une checklist ou une synthèse actionnable.",
-      "avoid_when": "Le contenu est une seule idée ou un récit.",
+      "visual_role": "Regrouper plusieurs points à retenir ou réflexes pratiques.",
+      "use_when": "Le passage donne plusieurs points de vigilance, réflexes, critères ou éléments de synthèse.",
+      "avoid_when": "Le contenu est une seule idée, une méthode ordonnée ou un récit.",
+      "strong_signals": [
+        "plusieurs points à retenir",
+        "checklist",
+        "synthèse actionnable",
+        "critères de contrôle"
+      ],
+      "weak_signals": [
+        "liste sans valeur pédagogique",
+        "programme de journée",
+        "étapes obligatoirement ordonnées"
+      ],
+      "selection_rules": [
+        "Utiliser avec 2 à 4 points courts.",
+        "Préférer recap à facilitator quand l'ordre n'est pas essentiel.",
+        "Formuler chaque point comme un repère mémorisable."
+      ],
+      "rejection_rules": [
+        "Refuser si la liste dépasse 4 points sans hiérarchie.",
+        "Refuser si les points sont trop longs pour une slide."
+      ],
       "requires": {
         "items_min": 2,
         "items_max": 4
@@ -91,13 +249,40 @@
       "schema": {
         "title": "3-6 mots",
         "points": "2-4 points courts"
-      }
+      },
+      "good_examples": [
+        "À retenir : écouter avant de répondre, reformuler avant de conclure, tracer avant de passer au dossier suivant."
+      ],
+      "bad_examples": [
+        "Nous allons aborder trois grands chapitres dans la journée."
+      ]
     },
     {
       "template_id": "casestudy",
       "families": ["example", "case", "comparison"],
-      "use_when": "Le cours illustre une notion par un exemple fictif, un cas terrain ou une comparaison concrète.",
-      "avoid_when": "Le passage ne contient pas d'application concrète.",
+      "visual_role": "Ancrer une notion dans une situation concrète ou une comparaison métier.",
+      "use_when": "Le passage illustre une notion par un cas terrain, un exemple fictif professionnel ou une comparaison concrète.",
+      "avoid_when": "Le passage ne contient pas d'application concrète ou relève d'une métaphore hors métier.",
+      "strong_signals": [
+        "exemple client, conseiller, usager ou dossier",
+        "cas fictif mais professionnel",
+        "avant/après dans une situation métier",
+        "comparaison concrète entre deux comportements"
+      ],
+      "weak_signals": [
+        "métaphore hors métier",
+        "définition abstraite",
+        "conseil sans situation"
+      ],
+      "selection_rules": [
+        "Utiliser quand le passage permet de voir la notion dans une scène métier.",
+        "Limiter à 1 à 3 cas ou angles.",
+        "Préférer casestudy à analogy pour les exemples client/conseiller/usager."
+      ],
+      "rejection_rules": [
+        "Refuser si la scène doit être inventée.",
+        "Refuser si le passage ne donne aucun détail concret."
+      ],
       "requires": {
         "items_min": 1,
         "items_max": 3
@@ -105,39 +290,120 @@
       "schema": {
         "title": "3-6 mots",
         "cases": "1-3 cas avec title et desc"
-      }
+      },
+      "good_examples": [
+        "Un client dit simplement : je n'ai pas reçu ma facture. Selon la manière de questionner, on découvre soit un problème d'adresse, soit un problème de paiement."
+      ],
+      "bad_examples": [
+        "Imaginez une route sans panneau pour comprendre l'absence de repères."
+      ]
     },
     {
       "template_id": "warning",
       "families": ["warning", "mistake", "risk"],
-      "use_when": "Le cours signale un piège, une erreur fréquente ou un risque professionnel.",
-      "avoid_when": "Le passage donne un conseil positif sans piège clair.",
+      "visual_role": "Signaler un piège, une erreur fréquente ou un risque métier.",
+      "use_when": "Le passage signale une erreur, un risque, une confusion ou une mauvaise pratique à éviter.",
+      "avoid_when": "Le passage donne un conseil positif sans danger clair.",
+      "strong_signals": [
+        "attention, piège, risque",
+        "erreur fréquente",
+        "conséquence négative",
+        "ce qu'il ne faut pas faire"
+      ],
+      "weak_signals": [
+        "simple nuance",
+        "conseil positif",
+        "préférence pédagogique sans risque"
+      ],
+      "selection_rules": [
+        "Utiliser si le risque est explicite dans le texte.",
+        "La slide doit rendre le piège immédiatement visible.",
+        "Préférer warning à tip si l'enjeu est d'éviter une erreur."
+      ],
+      "rejection_rules": [
+        "Refuser si le risque doit être déduit trop indirectement.",
+        "Refuser si le passage est seulement informatif."
+      ],
       "requires": {
         "text": "1 à 2 phrases"
       },
       "schema": {
         "title": "3-6 mots",
         "text": "1-2 phrases"
-      }
+      },
+      "good_examples": [
+        "Le piège, c'est de répondre vite pour rassurer, sans avoir identifié la vraie demande."
+      ],
+      "bad_examples": [
+        "Une bonne pratique consiste à reformuler la demande."
+      ]
     },
     {
       "template_id": "tip",
       "families": ["tip", "advice", "good_practice"],
-      "use_when": "Le cours donne une astuce, un conseil pratique ou un réflexe métier immédiatement applicable.",
-      "avoid_when": "Le passage est théorique ou purement narratif.",
+      "visual_role": "Mettre en avant un conseil pratique immédiatement applicable.",
+      "use_when": "Le passage donne une astuce, un réflexe métier ou une bonne pratique concrète.",
+      "avoid_when": "Le passage est théorique, narratif ou centré sur un risque à éviter.",
+      "strong_signals": [
+        "conseil pratique",
+        "réflexe à appliquer",
+        "bonne pratique",
+        "formulation prête à utiliser"
+      ],
+      "weak_signals": [
+        "définition",
+        "mise en garde",
+        "programme ou transition"
+      ],
+      "selection_rules": [
+        "Utiliser si l'apprenant peut appliquer le conseil immédiatement.",
+        "Garder une formulation courte et opérationnelle.",
+        "Préférer tip à reflection quand le message est une action, pas un principe."
+      ],
+      "rejection_rules": [
+        "Refuser si le conseil est trop général.",
+        "Refuser si le texte ne donne pas d'action concrète."
+      ],
       "requires": {
         "text": "1 à 2 phrases"
       },
       "schema": {
         "title": "3-6 mots",
         "text": "1-2 phrases"
-      }
+      },
+      "good_examples": [
+        "Avant de répondre, reformulez en une phrase ce que vous avez compris de la demande."
+      ],
+      "bad_examples": [
+        "L'écoute active est une compétence importante."
+      ]
     },
     {
       "template_id": "story",
       "families": ["story", "scenario", "narrative"],
-      "use_when": "Le cours raconte une situation ou un mini-récit pour faire comprendre une idée.",
-      "avoid_when": "Le récit n'a pas de morale pédagogique claire.",
+      "visual_role": "Porter un mini-récit qui donne du relief à une idée.",
+      "use_when": "Le passage raconte une situation avec un début, une évolution et une morale pédagogique.",
+      "avoid_when": "Le passage donne seulement un exemple court ou une procédure.",
+      "strong_signals": [
+        "mini-récit",
+        "situation qui évolue",
+        "morale ou leçon explicite",
+        "scène racontée"
+      ],
+      "weak_signals": [
+        "cas métier très court",
+        "métaphore statique",
+        "simple exemple sans progression"
+      ],
+      "selection_rules": [
+        "Utiliser quand la narration est utile à la mémorisation.",
+        "Extraire une morale claire.",
+        "Préférer story à casestudy si l'intérêt est le déroulé narratif."
+      ],
+      "rejection_rules": [
+        "Refuser si le récit doit être inventé.",
+        "Refuser si aucune morale pédagogique n'apparaît."
+      ],
       "requires": {
         "text": "récit bref + morale"
       },
@@ -145,13 +411,40 @@
         "title": "3-6 mots",
         "narrative": "1-2 phrases",
         "moral": "1 phrase"
-      }
+      },
+      "good_examples": [
+        "Au début de l'appel, le conseiller croit que le problème est technique. Trois questions plus tard, il comprend que le vrai sujet est une incompréhension de contrat."
+      ],
+      "bad_examples": [
+        "Il faut poser des questions ouvertes."
+      ]
     },
     {
       "template_id": "analogy",
       "families": ["analogy", "metaphor", "imagine", "mental_image"],
-      "use_when": "Le cours compare une notion abstraite à une situation hors métier, image simple, scène introduite par Imaginez que, ou métaphore explicite pour la rendre mémorisable.",
-      "avoid_when": "Le passage est un exemple métier client/conseiller/usager, un cas fictif professionnel, une définition conceptuelle ou une règle à retenir. Ne pas choisir analogy seulement parce qu'un mot imagé comme brouillard, piloter ou signal apparaît dans le texte.",
+      "visual_role": "Rendre une notion abstraite mémorisable par une image hors métier.",
+      "use_when": "Le passage compare une notion abstraite à une situation hors métier, une image simple ou une métaphore explicite.",
+      "avoid_when": "Le passage est un exemple métier client/conseiller/usager, un cas fictif professionnel, une définition conceptuelle ou une règle à retenir.",
+      "strong_signals": [
+        "imaginez une scène hors métier",
+        "comparaison avec un objet, un lieu ou une situation quotidienne",
+        "métaphore explicite qui éclaire une notion"
+      ],
+      "weak_signals": [
+        "mot imagé isolé",
+        "exemple professionnel",
+        "concept sans scène visuelle"
+      ],
+      "selection_rules": [
+        "Utiliser seulement si la comparaison hors métier est dans le texte.",
+        "Nommer clairement les deux pôles : image concrète et notion métier.",
+        "Produire un image_prompt sans texte, sans humains, sans visages, sans silhouettes."
+      ],
+      "rejection_rules": [
+        "Refuser si l'analogie doit être inventée.",
+        "Refuser si le passage parle déjà d'un cas client ou conseiller.",
+        "Refuser si seul un mot comme brouillard, signal ou piloter apparaît sans vraie comparaison."
+      ],
       "requires": {
         "text": "1 phrase d'explication courte",
         "image": "une illustration PNG possible sans humain, visage, silhouette ni personnage"
@@ -164,13 +457,39 @@
         "takeaway": "1 phrase clé finale",
         "image_prompt": "prompt court pour générer un PNG illustratif sans texte ni humains",
         "image_alt": "description accessible de l'image"
-      }
+      },
+      "good_examples": [
+        "Imaginez une route sans panneau : chacun avance, mais personne n'est certain d'avoir compris la direction."
+      ],
+      "bad_examples": [
+        "Un client qui n'a pas reçu sa facture peut interpréter le silence comme un manque de suivi."
+      ]
     },
     {
       "template_id": "stats",
       "families": ["data", "numbers", "metric"],
-      "use_when": "Le cours contient des chiffres sourcés ou explicitement fournis dans le contenu.",
-      "avoid_when": "Aucun chiffre fiable n'est présent.",
+      "visual_role": "Mettre en avant un chiffre fiable présent dans le texte.",
+      "use_when": "Le passage contient des chiffres sourcés, explicitement fournis ou directement issus du contenu.",
+      "avoid_when": "Aucun chiffre fiable n'est présent ou le modèle devrait inventer une statistique.",
+      "strong_signals": [
+        "chiffre précis",
+        "pourcentage, volume, durée, nombre",
+        "donnée explicitement mentionnée"
+      ],
+      "weak_signals": [
+        "formulation vague comme souvent ou beaucoup",
+        "comparaison sans nombre",
+        "chiffre décoratif sans sens pédagogique"
+      ],
+      "selection_rules": [
+        "Utiliser seulement des nombres présents dans le texte.",
+        "Ne jamais créer de pourcentage ou de donnée externe.",
+        "Relier le chiffre à une conséquence pédagogique."
+      ],
+      "rejection_rules": [
+        "Refuser si le chiffre n'est pas explicitement fourni.",
+        "Refuser si la donnée n'aide pas la compréhension."
+      ],
       "requires": {
         "numbers_min": 1,
         "numbers_max": 3
@@ -180,13 +499,40 @@
         "description": "1 phrase",
         "stats": "1-3 nombres",
         "columns": "1-3 phrases courtes"
-      }
+      },
+      "good_examples": [
+        "Le référentiel prévoit sept blocs de compétences, mais notre journée se concentre sur le premier niveau de service."
+      ],
+      "bad_examples": [
+        "La plupart des clients veulent une réponse rapide."
+      ]
     },
     {
       "template_id": "chart",
       "families": ["chart", "evolution", "contrast"],
-      "use_when": "Le cours décrit une évolution, une progression ou une comparaison qui gagne à être visualisée.",
+      "visual_role": "Visualiser une progression, une comparaison ou un contraste.",
+      "use_when": "Le passage décrit une évolution, une progression, un avant/après ou une comparaison structurée.",
       "avoid_when": "Aucune structure de comparaison ou progression n'est présente.",
+      "strong_signals": [
+        "avant/après",
+        "progression en intensité",
+        "comparaison entre deux états",
+        "évolution dans le temps"
+      ],
+      "weak_signals": [
+        "simple définition",
+        "liste de points",
+        "donnée chiffrée isolée sans tendance"
+      ],
+      "selection_rules": [
+        "Utiliser si le passage gagne à être vu comme une trajectoire ou un contraste.",
+        "Ne pas inventer de données graphiques.",
+        "Mettre chartData à null si aucune donnée exploitable n'existe."
+      ],
+      "rejection_rules": [
+        "Refuser si la comparaison est trop vague.",
+        "Refuser si reflection ou casestudy explique mieux le passage."
+      ],
       "requires": {
         "description": "1 phrase",
         "chartData": "optionnel"
@@ -195,13 +541,39 @@
         "title": "3-6 mots",
         "description": "1 phrase",
         "chartData": "null si non disponible"
-      }
+      },
+      "good_examples": [
+        "On passe d'une réponse immédiate mais floue à une réponse un peu plus lente, mais traçable et fiable."
+      ],
+      "bad_examples": [
+        "L'accueil à distance demande de l'écoute."
+      ]
     },
     {
       "template_id": "transition",
       "families": ["transition", "chapter_shift"],
-      "use_when": "Le deck doit marquer un passage clair entre deux sujets.",
-      "avoid_when": "Le passage n'est qu'une phrase de liaison sans valeur visuelle.",
+      "visual_role": "Marquer un changement clair de chapitre ou de logique.",
+      "use_when": "Le passage bascule explicitement d'un sujet à un autre et ce changement mérite un repère visuel.",
+      "avoid_when": "Le passage n'est qu'une phrase de liaison sans valeur pédagogique.",
+      "strong_signals": [
+        "changement de chapitre",
+        "passage d'un thème à un autre",
+        "fin d'une grande partie puis ouverture d'une autre"
+      ],
+      "weak_signals": [
+        "phrase de transition courte",
+        "pause orale",
+        "simple annonce du point suivant"
+      ],
+      "selection_rules": [
+        "Utiliser rarement, seulement pour les grandes ruptures.",
+        "Remplir from_topic et to_topic avec des libellés courts.",
+        "Préférer ne rien produire si la transition orale suffit."
+      ],
+      "rejection_rules": [
+        "Refuser si la transition ne mérite pas une slide entière.",
+        "Refuser si le passage contient une idée pédagogique plus forte qu'une transition."
+      ],
       "requires": {
         "from_topic": "2-4 mots",
         "to_topic": "2-4 mots"
@@ -210,20 +582,53 @@
         "title": "3-6 mots",
         "from_topic": "2-4 mots",
         "to_topic": "2-4 mots"
-      }
+      },
+      "good_examples": [
+        "Maintenant que le cadre de l'accueil est posé, on peut passer au questionnement qui permet de qualifier la demande."
+      ],
+      "bad_examples": [
+        "Nous allons continuer."
+      ]
     },
     {
       "template_id": "opinion",
       "families": ["opinion", "stance", "trainer_point"],
-      "use_when": "Le formateur formule une prise de position pédagogique utile.",
-      "avoid_when": "Le passage rapporte un fait ou une méthode sans point de vue.",
+      "visual_role": "Afficher une prise de position pédagogique assumée.",
+      "use_when": "Le formateur formule un point de vue utile, une conviction pédagogique ou une position qui oriente la pratique.",
+      "avoid_when": "Le passage rapporte un fait, une définition ou une méthode sans point de vue.",
+      "strong_signals": [
+        "prise de position du formateur",
+        "conviction pédagogique",
+        "formulation assumée comme je veux que vous reteniez",
+        "angle critique ou arbitrage"
+      ],
+      "weak_signals": [
+        "fait neutre",
+        "règle métier",
+        "conseil opérationnel simple"
+      ],
+      "selection_rules": [
+        "Utiliser si la phrase porte une position claire et utile.",
+        "Ne pas transformer une règle neutre en opinion.",
+        "Préférer opinion à reflection quand l'intérêt est le point de vue du formateur."
+      ],
+      "rejection_rules": [
+        "Refuser si le passage ne contient pas de stance réelle.",
+        "Refuser si la phrase peut être rendue comme simple conseil ou principe."
+      ],
       "requires": {
         "text": "1 à 2 phrases"
       },
       "schema": {
         "title": "3-6 mots",
         "text": "1-2 phrases"
-      }
+      },
+      "good_examples": [
+        "À mon sens, la qualité d'un accueil ne se mesure pas à la vitesse de réponse, mais à la clarté laissée au client."
+      ],
+      "bad_examples": [
+        "La traçabilité permet de garder une trace de l'échange."
+      ]
     }
   ]
 }

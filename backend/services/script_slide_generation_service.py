@@ -11,6 +11,7 @@ slide. No timing is estimated in V1.
 
 import json
 import math
+import os
 import re
 import time
 from typing import Iterable
@@ -41,18 +42,34 @@ PACE_PROFILES = {
         "context_multiplier": 1.35,
         "max_slides_per_block": 3,
         "instruction": "Rythme soutenu: conserve les idées pratiques distinctes, sans transformer chaque détail en slide.",
+        "density_instruction": (
+            "Rythme soutenu: garde les moments pédagogiques distincts et utiles à l'action. "
+            "Une fenêtre peut produire plusieurs slides si elle contient plusieurs preuves textuelles fortes, "
+            "mais jamais une slide pour une simple reformulation."
+        ),
+        "selection_threshold": "moyen-haut",
     },
     "normal": {
         "label": "normal",
         "context_multiplier": 2.0,
         "max_slides_per_block": 2,
         "instruction": "Rythme normal: privilégie les thèmes et points pédagogiques forts.",
+        "density_instruction": (
+            "Rythme normal: sélectionne seulement les grandes idées, méthodes, pièges, exemples ou synthèses "
+            "qui aident vraiment la compréhension. La plupart des fenêtres doivent produire 0 ou 1 slide."
+        ),
+        "selection_threshold": "haut",
     },
     "synthesis": {
         "label": "synthesis",
         "context_multiplier": 3.0,
         "max_slides_per_block": 1,
         "instruction": "Rythme synthèse: ne garde que les thèmes majeurs et les pivots pédagogiques.",
+        "density_instruction": (
+            "Rythme synthèse: ne garde que les pivots majeurs du raisonnement. "
+            "Une slide doit changer la compréhension de l'apprenant ou poser un repère durable."
+        ),
+        "selection_threshold": "très haut",
     },
 }
 
@@ -214,10 +231,17 @@ def _template_catalog_for_prompt() -> str:
         templates.append({
             "template_id": template_id,
             "families": item.get("families") or [],
+            "visual_role": item.get("visual_role") or "",
             "use_when": item.get("use_when") or "",
             "avoid_when": item.get("avoid_when") or "",
+            "strong_signals": item.get("strong_signals") or [],
+            "weak_signals": item.get("weak_signals") or [],
+            "selection_rules": item.get("selection_rules") or [],
+            "rejection_rules": item.get("rejection_rules") or [],
             "requires": item.get("requires") or {},
             "schema": item.get("schema") or {},
+            "good_examples": item.get("good_examples") or [],
+            "bad_examples": item.get("bad_examples") or [],
         })
     return json.dumps(
         {
@@ -228,6 +252,11 @@ def _template_catalog_for_prompt() -> str:
         ensure_ascii=False,
         indent=2,
     )
+
+
+def _slide_curation_enabled() -> bool:
+    value = str(os.getenv("FORMATION_SLIDE_CURATION_ENABLED", "1")).strip().lower()
+    return value not in {"0", "false", "no", "off"}
 
 
 def _ensure_slide_deck_tables() -> None:
@@ -1086,13 +1115,35 @@ def _prompt_for_blocks(blocks: list[dict], source_title: str, pace_profile: dict
     ]
     anchors_count = sum(len(block.get("slide_anchors") or []) for block in blocks)
 
+    curation_enabled = _slide_curation_enabled()
+    curation_rules = """
+COUCHE DE CURATION IA:
+- Tu n'es pas en train de résumer mécaniquement le texte. Tu sélectionnes les moments qui gagnent vraiment à devenir visuels.
+- Le texte final est la source de vérité. Les `slide_anchors` du plan sont des indices pédagogiques forts, pas des obligations.
+- Si un anchor prévu ne correspond pas clairement au texte réel, ignore-le.
+- Si le texte réel contient un meilleur moment visuel non prévu par un anchor, tu peux le sélectionner.
+- Pendant cette génération, tu dois utiliser uniquement un `template_type` présent dans le catalogue autorisé.
+- Si tu estimes qu'un nouveau template serait meilleur, indique-le dans `ideal_template_gap`, mais garde `template_type` sur le meilleur template existant.
+- `ideal_template_gap.needed` vaut true seulement si le catalogue actuel force un compromis visible.
+""" if curation_enabled else ""
+    density_rules = f"""
+CADRAGE DU NOMBRE DE SLIDES:
+- Le maximum de {max_batch_slides} slides est un plafond, pas un objectif à remplir.
+- Seuil de sélection attendu: {pace_profile.get("selection_threshold")}.
+- {pace_profile.get("density_instruction") or pace_profile["instruction"]}
+- Ne crée pas de slide pour une simple phrase de liaison, une reformulation, une annonce administrative ou une idée déjà couverte.
+- Si deux passages portent la même idée pédagogique, garde seulement le passage le plus clair et le plus visuel.
+- Une slide doit être justifiée par une `source_quote` exacte. Sans citation exacte convaincante, ne crée pas la slide.
+- En cas de doute entre deux templates, choisis le template le plus simple qui respecte le texte. Ne force pas un template spectaculaire.
+"""
+
     return f"""Tu conçois des slides pédagogiques pour Le Socrate.
 
 Source: {source_title}
 
 RÈGLES:
 - Tu reçois des fenêtres de contexte. Elles servent à te donner le texte, pas à imposer le nombre de slides.
-- Si une fenêtre contient `slide_anchors`, ils sont le plan prioritaire : crée les slides depuis ces anchors si le texte source couvre réellement leur intention.
+- Si une fenêtre contient `slide_anchors`, ils t'indiquent l'intention initiale du plan. Utilise-les si le texte source couvre réellement leur intention.
 - Si un anchor n'est pas couvert par le texte source, ignore-le au lieu d'inventer.
 - Quand tu utilises un anchor, recopie exactement `slide_anchor_id` et `beat_id` dans la slide générée.
 - Un anchor correspond à une intention pédagogique précise, pas à toute la fenêtre.
@@ -1111,7 +1162,19 @@ RÈGLES:
 - Si deux idées sont proches, regroupe-les. Si une fenêtre répète une idée déjà traitée, saute-la.
 - Pour chaque slide, ajoute `source_quote`: une citation exacte, copiée mot pour mot depuis la fenêtre source, qui justifie cette slide.
 - `source_quote` doit être courte mais suffisante pour localiser la slide dans le texte: idéalement 15 à 60 mots.
+- Ajoute `curation_reason`: pourquoi ce passage mérite un visuel plutôt qu'un simple oral.
 - Réponds uniquement en JSON valide.
+
+{curation_rules}
+
+PROCESSUS OBLIGATOIRE:
+1. Lis toutes les fenêtres du batch et repère seulement les moments qui méritent vraiment un visuel.
+2. Vérifie chaque moment contre les `slide_anchors` éventuels: anchor couvert, anchor ignoré, ou moment non prévu mais meilleur.
+3. Pour chaque moment retenu, choisis le template existant depuis le catalogue en appliquant `use_when`, `avoid_when`, `strong_signals`, `weak_signals`, `selection_rules` et `rejection_rules`.
+4. Produis uniquement les slides retenues. Ne remplis pas le quota si le texte ne le justifie pas.
+5. Si le meilleur rendu demanderait un template absent, renseigne `ideal_template_gap`, mais utilise quand même le meilleur template existant.
+
+{density_rules}
 
 CATALOGUE TEMPLATES:
 {_template_catalog_for_prompt()}
@@ -1144,8 +1207,25 @@ FORMAT EXACT:
       "event_type": "concept",
       "event_summary": "Phrase courte décrivant l'idée source",
       "source_quote": "Citation exacte du passage source qui correspond à cette slide",
+      "curation_reason": "Pourquoi ce moment mérite une slide",
       "importance": 4,
+      "ideal_template_gap": {{
+        "needed": false,
+        "suggested_template_name": "",
+        "reason": "",
+        "design_prompt": "",
+        "fields": {{}}
+      }},
       "data": {{"title": "...", "text": "..."}}
+    }}
+  ],
+  "template_backlog": [
+    {{
+      "suggested_template_name": "Nom court du template idéal",
+      "reason": "Pourquoi les templates actuels sont insuffisants",
+      "design_prompt": "Brief de design réutilisable pour créer ce template plus tard",
+      "best_current_template": "reflection",
+      "fields": {{}}
     }}
   ]
 }}
@@ -1185,6 +1265,56 @@ def _limit_list(value, max_len: int) -> list:
     if not isinstance(value, list):
         return []
     return value[:max_len]
+
+
+def _normalize_template_gap(value: dict | None, selected_template: str) -> dict:
+    if not isinstance(value, dict):
+        value = {}
+    needed = bool(value.get("needed"))
+    suggested_name = _as_text(value.get("suggested_template_name") or value.get("name"), "")[:80]
+    reason = _as_text(value.get("reason"), "")[:360]
+    design_prompt = _as_text(value.get("design_prompt") or value.get("prompt"), "")[:900]
+    fields = value.get("fields") if isinstance(value.get("fields"), dict) else {}
+    if not suggested_name and not reason and not design_prompt:
+        needed = False
+    return {
+        "needed": needed,
+        "suggested_template_name": suggested_name,
+        "reason": reason,
+        "design_prompt": design_prompt,
+        "best_current_template": _canonical_template(
+            value.get("best_current_template") or value.get("current_template") or selected_template,
+            fallback=selected_template,
+        ),
+        "fields": fields,
+    }
+
+
+def _normalize_template_backlog(items: list, max_items: int = 12) -> list[dict]:
+    backlog = []
+    seen = set()
+    for item in _limit_list(items, max_items * 2):
+        if not isinstance(item, dict):
+            continue
+        selected_template = _canonical_template(item.get("best_current_template") or item.get("template_type"))
+        gap = _normalize_template_gap(
+            {
+                **item,
+                "needed": True,
+                "suggested_template_name": item.get("suggested_template_name") or item.get("name"),
+            },
+            selected_template,
+        )
+        if not gap["suggested_template_name"] or not gap["reason"]:
+            continue
+        key = gap["suggested_template_name"].strip().lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        backlog.append(gap)
+        if len(backlog) >= max_items:
+            break
+    return backlog
 
 
 def _normalize_slide_data(template: str, data: dict, fallback_title: str, fallback_text: str) -> dict:
@@ -1337,7 +1467,10 @@ def _normalize_slide(raw: dict, block: dict) -> dict:
         anchor = next(iter(anchor_by_id.values()))
         slide_anchor_id = str(anchor.get("anchor_id") or "")
     template = _canonical_template(
-        raw.get("template_type") or raw.get("template") or (anchor or {}).get("template_type"),
+        raw.get("template_type")
+        or raw.get("selected_existing_template")
+        or raw.get("template")
+        or (anchor or {}).get("template_type"),
         fallback="reflection",
     )
 
@@ -1356,16 +1489,18 @@ def _normalize_slide(raw: dict, block: dict) -> dict:
         "template_type": template,
         "event_type": event_type,
         "event_summary": _as_text(raw.get("event_summary"), fallback_title)[:180],
+        "curation_reason": _as_text(raw.get("curation_reason"), "")[:360],
         "importance": _safe_int(raw.get("importance"), 3, 1, 5),
         "data": data,
         "slide_anchor_id": slide_anchor_id or (anchor or {}).get("anchor_id"),
         "beat_id": _as_text(raw.get("beat_id"), (anchor or {}).get("beat_id") or "")[:100],
         "anchor_role": (anchor or {}).get("role") or "",
         "source_quote": _as_text(raw.get("source_quote"), "")[:900],
+        "ideal_template_gap": _normalize_template_gap(raw.get("ideal_template_gap"), template),
     }
 
 
-def _generate_batch(blocks: list[dict], source_title: str, model: str, pace_profile: dict, max_batch_slides: int) -> list[dict]:
+def _generate_batch(blocks: list[dict], source_title: str, model: str, pace_profile: dict, max_batch_slides: int) -> tuple[list[dict], dict]:
     prompt = _prompt_for_blocks(blocks, source_title, pace_profile, max_batch_slides)
     response = post_message(
         [{"role": "user", "content": prompt}],
@@ -1377,6 +1512,7 @@ def _generate_batch(blocks: list[dict], source_title: str, model: str, pace_prof
     raw_slides = parsed.get("slides", [])
     if not isinstance(raw_slides, list):
         raise ValueError("Réponse LLM sans tableau slides")
+    template_backlog = _normalize_template_backlog(parsed.get("template_backlog") if isinstance(parsed.get("template_backlog"), list) else [])
 
     block_by_id = {block["source_block_id"]: block for block in blocks}
     per_block_counts = {}
@@ -1403,9 +1539,16 @@ def _generate_batch(blocks: list[dict], source_title: str, model: str, pace_prof
         if len(slides) >= max_batch_slides:
             break
 
-    if not slides:
-        return [_fallback_slide(blocks[0], "empty_theme_batch")]
-    return slides
+    for slide in slides:
+        gap = slide.get("ideal_template_gap") or {}
+        if gap.get("needed") and gap.get("suggested_template_name") and gap.get("reason"):
+            template_backlog.extend(_normalize_template_backlog([gap], max_items=1))
+
+    return slides, {
+        "template_backlog": _normalize_template_backlog(template_backlog),
+        "raw_backlog_count": len(parsed.get("template_backlog") or []) if isinstance(parsed.get("template_backlog"), list) else 0,
+        "curation_enabled": _slide_curation_enabled(),
+    }
 
 
 def _build_final_slide(slide: dict, block: dict, slide_number: int) -> dict:
@@ -1444,6 +1587,8 @@ def _build_final_slide(slide: dict, block: dict, slide_number: int) -> dict:
         "source_text": block["text"],
         "source_ref": source_ref,
         "importance": slide.get("importance", 3),
+        "curation_reason": slide.get("curation_reason") or "",
+        "ideal_template_gap": slide.get("ideal_template_gap") or _normalize_template_gap(None, slide["template_type"]),
         **({"fallback_reason": slide["fallback_reason"]} if slide.get("fallback_reason") else {}),
     }
 
@@ -1672,6 +1817,7 @@ def _run_slide_generation_from_source(
 
     planned = []
     batches_debug = []
+    template_backlog = []
     for start in range(0, len(source_blocks), batch_size):
         batch = source_blocks[start : start + batch_size]
         batch_started_at = time.time()
@@ -1696,12 +1842,14 @@ def _run_slide_generation_from_source(
             batch_anchor_count,
         )
         try:
-            batch_slides = _generate_batch(batch, source["program_title"], model, pace_config, max_batch_slides)
+            batch_slides, curation_debug = _generate_batch(batch, source["program_title"], model, pace_config, max_batch_slides)
             status = "llm"
         except Exception as exc:
             logger.exception("PIPELINE_SLIDES_BATCH_ERROR folder=%s batch=%s-%s error=%s", folder_id, start, start + len(batch) - 1, exc)
-            batch_slides = [_fallback_slide(block, "batch_error") for block in batch]
+            batch_slides = []
+            curation_debug = {"template_backlog": [], "curation_enabled": _slide_curation_enabled()}
             status = "fallback"
+        template_backlog.extend(curation_debug.get("template_backlog") or [])
         logger.info(
             "PIPELINE_SLIDES_BATCH_DONE folder=%s content_job=%s batch=%s-%s status=%s slides=%s duration_ms=%s",
             folder_id,
@@ -1721,16 +1869,16 @@ def _run_slide_generation_from_source(
                 "max_slides": max_batch_slides,
                 "anchors": batch_anchor_count,
                 "status": status,
+                "curation": curation_debug,
             }
         )
 
     dropped_unanchored = 0
-    if slide_anchors:
-        before_anchor_filter = len(planned)
-        planned = [slide for slide in planned if slide.get("slide_anchor_id")]
-        dropped_unanchored = before_anchor_filter - len(planned)
+    if not planned and source_blocks and not slide_anchors:
+        planned = [_fallback_slide(source_blocks[0], "empty_curation_deck")]
 
     planned, dropped_by_cap = _cap_planned_slides(planned, max_slides)
+    template_backlog = _normalize_template_backlog(template_backlog)
 
     block_by_id = {block["source_block_id"]: block for block in source_blocks}
     final_slides = []
@@ -1785,7 +1933,7 @@ def _run_slide_generation_from_source(
         "slides": final_slides,
         "timeline": timeline,
         "stats": {
-            "generation_mode": "script_anchor_first" if slide_anchors else "script",
+            "generation_mode": "script_anchor_guided_curation" if slide_anchors else "script_curation",
             "folder_id": source["folder_id"],
             "folder_name": source["folder_name"],
             "job_id": job_id,
@@ -1807,12 +1955,15 @@ def _run_slide_generation_from_source(
             "context_slides_inserted": context_slides_inserted,
             "slides_dropped_by_cap": dropped_by_cap,
             "slides_dropped_unanchored": dropped_unanchored,
+            "slide_curation_enabled": _slide_curation_enabled(),
+            "template_backlog_count": len(template_backlog),
             "llm_batches": len(batches_debug),
             "model": model,
         },
         "pipeline_debug": {
-            "generation_mode": "script_anchor_first" if slide_anchors else "script",
+            "generation_mode": "script_anchor_guided_curation" if slide_anchors else "script_curation",
             "slide_anchors": slide_anchors,
+            "template_backlog": template_backlog,
             "source_blocks": source_block_debug,
             "slide_plan": [
                 {
@@ -1823,6 +1974,8 @@ def _run_slide_generation_from_source(
                     "event_type": slide["event_type"],
                     "title_hint": slide["data"].get("title", ""),
                     "content_hint": slide["event_summary"],
+                    "curation_reason": slide.get("curation_reason") or "",
+                    "ideal_template_gap": slide.get("ideal_template_gap") or {},
                 }
                 for slide in planned
             ],
@@ -1834,6 +1987,8 @@ def _run_slide_generation_from_source(
                     "template": slide.get("template_type"),
                     "event_type": slide.get("event_type"),
                     "slide_anchor_id": slide.get("slide_anchor_id"),
+                    "curation_reason": slide.get("curation_reason") or "",
+                    "ideal_template_gap": slide.get("ideal_template_gap") or {},
                     "word_start": (slide.get("source_ref") or {}).get("word_start"),
                     "word_end": (slide.get("source_ref") or {}).get("word_end"),
                 }
@@ -1857,12 +2012,13 @@ def _run_slide_generation_from_source(
         result["stats"]["preview_only"] = True
         result["pipeline_debug"]["preview_only"] = True
     logger.info(
-        "PIPELINE_SLIDES_DONE folder=%s content_job=%s deck_id=%s preview=%s slides=%s dropped_by_cap=%s duration_ms=%s",
+        "PIPELINE_SLIDES_DONE folder=%s content_job=%s deck_id=%s preview=%s slides=%s template_backlog=%s dropped_by_cap=%s duration_ms=%s",
         folder_id,
         source.get("content_job_id"),
         deck_id,
         bool(source.get("preview_only")),
         len(final_slides),
+        len(template_backlog),
         dropped_by_cap,
         int((time.time() - started_at) * 1000),
     )

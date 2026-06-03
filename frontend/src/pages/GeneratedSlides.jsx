@@ -116,7 +116,6 @@ export default function GeneratedSlides() {
   const [slides, setSlides] = useState([]);
   const [timeline, setTimeline] = useState([]);
   const [stats, setStats] = useState(null);
-  const [transcription, setTranscription] = useState('');
   const [currentSlide, setCurrentSlide] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -149,13 +148,12 @@ export default function GeneratedSlides() {
         setSlides(data.slides);
         setStats(data.stats || null);
         setTimeline(data.timeline || []);
-        setTranscription(data.transcription || '');
         setPipelineDebug(data.pipeline_debug || null);
         setGenerationMode(data.generation_mode || data.stats?.generation_mode || 'script');
         setStatus('success');
       }
     } catch (err) {
-      console.log('Pas de slides existantes');
+      console.log('Pas de slides existantes', err);
     }
   };
 
@@ -247,7 +245,6 @@ export default function GeneratedSlides() {
       setSlides([]);
       setTimeline([]);
       setStats(null);
-      setTranscription('');
       setPipelineDebug(null);
       setGenerationMode('script');
       setCurrentSlide(0);
@@ -471,6 +468,10 @@ export default function GeneratedSlides() {
   };
 
   const isScriptMode = (generationMode || '').startsWith('script') || (stats?.generation_mode || '').startsWith('script');
+  const templateBacklog = Array.isArray(pipelineDebug?.template_backlog)
+    ? pipelineDebug.template_backlog
+    : [];
+  const currentTemplateGap = slides[currentSlide]?.ideal_template_gap || null;
   const statsItems = stats
     ? (isScriptMode
       ? [
@@ -479,6 +480,7 @@ export default function GeneratedSlides() {
           { label: 'Sources', value: stats.source_blocks || 0 },
           { label: 'Rythme', value: stats.pace || slidePace },
           ...(stats.slide_anchors_found ? [{ label: 'Anchors', value: stats.slide_anchors_found }] : []),
+          ...(stats.template_backlog_count ? [{ label: 'Templates à créer', value: stats.template_backlog_count }] : []),
           { label: 'Slides max/jour', value: stats.max_slides || maxSlides },
           { label: 'Slides', value: stats.slides_generated || slides.length },
           ...(stats.audio_sync?.enabled ? [{ label: 'Sync audio', value: stats.audio_sync.mode || 'active' }] : [])
@@ -876,7 +878,7 @@ export default function GeneratedSlides() {
               marginBottom: '1rem'
             }}>
               {isScriptMode
-                ? 'Fenêtres de contexte construites depuis le texte final. Le LLM sélectionne ensuite les thèmes et idées fortes.'
+                ? 'Fenêtres construites depuis le texte final. Les anchors du plan restent visibles comme intentions, mais ne forcent pas la slide.'
                 : 'Analyse de la transcription pour identifier les evenements pedagogiques (story, definition, concept, example, etc.)'}
             </p>
             <div style={{
@@ -941,7 +943,7 @@ export default function GeneratedSlides() {
             </div>
           </div>
 
-          {/* Phase 2: Slideshow Planner */}
+          {/* Phase 2: Curation */}
           <div style={{
             backgroundColor: '#1E3A5F',
             borderRadius: '12px',
@@ -969,7 +971,7 @@ export default function GeneratedSlides() {
                 fontSize: '0.9rem',
                 fontWeight: 700
               }}>2</span>
-              Slideshow Planner (GPT-4)
+              {isScriptMode ? 'Curation IA texte + anchors' : 'Slideshow Planner (GPT-4)'}
               <span style={{ color: '#6B7280', fontSize: '0.9rem', fontWeight: 400 }}>
                 - {pipelineDebug.slide_plan?.length || 0} slides planifiees
               </span>
@@ -980,7 +982,9 @@ export default function GeneratedSlides() {
               fontSize: '0.85rem',
               marginBottom: '1rem'
             }}>
-              Decision: quels evenements meritent une slide ? Quel template utiliser ?
+              {isScriptMode
+                ? 'Décision: quels passages du texte final méritent un visuel, quel template existant utiliser, et quel template manque éventuellement.'
+                : 'Decision: quels evenements meritent une slide ? Quel template utiliser ?'}
             </p>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
               {pipelineDebug.slide_plan?.map((plan, i) => (
@@ -1033,12 +1037,129 @@ export default function GeneratedSlides() {
                     fontSize: '0.8rem',
                     flex: 1
                   }}>
-                    {plan.content_hint}
+                    {plan.curation_reason || plan.content_hint}
                   </span>
+                  {plan.ideal_template_gap?.needed && (
+                    <span style={{
+                      border: '1px solid rgba(245,158,11,0.45)',
+                      color: '#FBBF24',
+                      padding: '0.2rem 0.5rem',
+                      borderRadius: '4px',
+                      fontSize: '0.72rem',
+                      fontWeight: 700,
+                      whiteSpace: 'nowrap'
+                    }}>
+                      template idéal
+                    </span>
+                  )}
                 </div>
               ))}
             </div>
           </div>
+
+          {templateBacklog.length > 0 && (
+            <div style={{
+              backgroundColor: '#1E3A5F',
+              borderRadius: '12px',
+              padding: '1.5rem',
+              marginBottom: '1rem'
+            }}>
+              <h3 style={{
+                fontFamily: 'Fredoka, sans-serif',
+                color: '#FBBF24',
+                marginBottom: '1rem',
+                fontSize: '1.2rem',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.5rem'
+              }}>
+                <span style={{
+                  backgroundColor: '#FBBF24',
+                  color: '#111827',
+                  width: '28px',
+                  height: '28px',
+                  borderRadius: '50%',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  fontSize: '0.9rem',
+                  fontWeight: 700
+                }}>+</span>
+                Backlog templates
+                <span style={{ color: '#9CA3AF', fontSize: '0.9rem', fontWeight: 400 }}>
+                  - {templateBacklog.length} recommandations
+                </span>
+              </h3>
+              <p style={{
+                fontFamily: 'Poppins, sans-serif',
+                color: '#CBD5E1',
+                fontSize: '0.85rem',
+                marginBottom: '1rem'
+              }}>
+                Ces templates ne sont pas utilisés pendant la génération. La pipeline choisit un template existant, puis garde ici les manques à créer plus tard.
+              </p>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                {templateBacklog.map((item, i) => (
+                  <div key={`${item.suggested_template_name}-${i}`} style={{
+                    backgroundColor: '#0F172A',
+                    border: '1px solid rgba(251,191,36,0.24)',
+                    borderRadius: '8px',
+                    padding: '0.85rem'
+                  }}>
+                    <div style={{
+                      display: 'flex',
+                      gap: '0.75rem',
+                      alignItems: 'center',
+                      flexWrap: 'wrap',
+                      marginBottom: '0.45rem'
+                    }}>
+                      <span style={{
+                        fontFamily: 'Poppins, sans-serif',
+                        color: '#F8FAFC',
+                        fontWeight: 700,
+                        fontSize: '0.95rem'
+                      }}>
+                        {item.suggested_template_name}
+                      </span>
+                      <span style={{
+                        backgroundColor: '#374151',
+                        color: '#CBD5E1',
+                        padding: '0.18rem 0.45rem',
+                        borderRadius: '4px',
+                        fontSize: '0.72rem',
+                        fontWeight: 700
+                      }}>
+                        utilisé: {item.best_current_template}
+                      </span>
+                    </div>
+                    <p style={{
+                      fontFamily: 'Poppins, sans-serif',
+                      color: '#CBD5E1',
+                      fontSize: '0.82rem',
+                      lineHeight: 1.55,
+                      margin: '0 0 0.55rem'
+                    }}>
+                      {item.reason}
+                    </p>
+                    {item.design_prompt && (
+                      <pre style={{
+                        fontFamily: 'monospace',
+                        fontSize: '0.72rem',
+                        color: '#FDE68A',
+                        backgroundColor: '#111827',
+                        padding: '0.6rem',
+                        borderRadius: '6px',
+                        whiteSpace: 'pre-wrap',
+                        margin: 0
+                      }}>
+                        {item.design_prompt}
+                      </pre>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* Phase 3: Content Generation */}
           <div style={{
@@ -1224,8 +1345,8 @@ export default function GeneratedSlides() {
               <>
                 1. Lecture des segments DB
                 <br />2. Préparation des fenêtres de contexte
-                <br />3. Sélection des thèmes par batch
-                <br />4. Rendu templates React
+                <br />3. Curation IA texte + anchors
+                <br />4. Rendu avec templates existants
                 <br /><br />Cela peut prendre quelques minutes selon le nombre de slides.
               </>
             ) : (
@@ -1291,6 +1412,18 @@ export default function GeneratedSlides() {
             }}>
               Template: {slides[currentSlide].template_type}
             </span>
+            {currentTemplateGap?.needed && (
+              <span style={{
+                fontFamily: 'Poppins, sans-serif',
+                color: '#FBBF24',
+                fontSize: '0.82rem',
+                border: '1px solid rgba(251,191,36,0.35)',
+                borderRadius: '4px',
+                padding: '0.2rem 0.5rem'
+              }}>
+                Idéal: {currentTemplateGap.suggested_template_name}
+              </span>
+            )}
           </div>
 
           {/* La slide */}
@@ -1382,6 +1515,17 @@ export default function GeneratedSlides() {
               }}>
                 {slides[currentSlide].event_summary}
               </p>
+              {slides[currentSlide].curation_reason && (
+                <p style={{
+                  fontFamily: 'Poppins, sans-serif',
+                  color: '#FBBF24',
+                  fontSize: '0.8rem',
+                  lineHeight: 1.5,
+                  margin: '0 0 0.75rem'
+                }}>
+                  {slides[currentSlide].curation_reason}
+                </p>
+              )}
               {isScriptMode && (
                 <div style={{
                   display: 'flex',
