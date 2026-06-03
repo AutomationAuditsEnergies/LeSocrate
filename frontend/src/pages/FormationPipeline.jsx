@@ -2503,6 +2503,8 @@ function BeatFirstIterationPanel({
   selectedJobId,
   model,
   onModelChange,
+  mode,
+  onModeChange,
   running,
   error,
   notice,
@@ -2536,7 +2538,7 @@ function BeatFirstIterationPanel({
             <Icon name="restart_alt" /> Itérer depuis le plan verrouillé
           </div>
           <div style={{ color: '#cbd5e1', fontSize: '13px', lineHeight: 1.55, maxWidth: '78ch' }}>
-            Relance les journées à partir de la génération texte : le plan JSON, les teaching beats et les anchors slides sont conservés, puis le texte beat-first, les reviews et les slides sont régénérés.
+            Relance les journées à partir de la génération texte : le plan JSON, les teaching beats et les anchors slides sont conservés. Le mode rapide s'arrête après les slides pour vérifier l'alignement sans attendre l'audio.
           </div>
         </div>
         <span style={{ ...S.tag(readyCount > 0 ? 'violet' : 'amber'), alignSelf: 'flex-start' }}>
@@ -2553,7 +2555,7 @@ function BeatFirstIterationPanel({
         {[
           ['Plan source', 'Plan JSON verrouillé existant'],
           ['Unité générée', 'Teaching beat, avec contexte précédent et suivant'],
-          ['Sortie', 'Texte révisé, Word 2 et slides régénérées'],
+          ['Sortie rapide', 'Texte beat-first et slides régénérées, sans audio'],
         ].map(([label, detail]) => (
           <div key={label} style={{
             padding: '10px 12px',
@@ -2568,6 +2570,18 @@ function BeatFirstIterationPanel({
       </div>
 
       <div style={{ display: 'flex', alignItems: 'end', gap: '10px', flexWrap: 'wrap' }}>
+        <label style={{ ...S.label, margin: 0, minWidth: '220px' }}>
+          Mode
+          <select
+            style={{ ...S.input, marginTop: '6px' }}
+            value={mode}
+            onChange={e => onModeChange(e.target.value)}
+            disabled={running}
+          >
+            <option value="fast">Rapide · texte + slides</option>
+            <option value="full">Complet · reviews + audio</option>
+          </select>
+        </label>
         <label style={{ ...S.label, margin: 0, minWidth: '220px' }}>
           Modèle
           <select
@@ -2587,10 +2601,10 @@ function BeatFirstIterationPanel({
           style={{ ...S.btn('primary'), opacity: disabled ? 0.65 : 1 }}
           disabled={disabled}
           onClick={onRestart}
-          title={readyCount > 0 ? 'Relance texte beat-first, reviews et slides pour les journées prêtes' : 'Aucune journée texte prête pour cette reprise'}
+          title={readyCount > 0 ? 'Relance depuis la génération texte beat-first pour les journées prêtes' : 'Aucune journée texte prête pour cette reprise'}
         >
           <Icon name={running ? 'hourglass_empty' : 'play_arrow'} />
-          {running ? 'Relance en cours…' : 'Relancer texte + slides'}
+          {running ? 'Relance en cours…' : mode === 'fast' ? 'Tester texte + slides' : 'Relancer complet'}
         </button>
       </div>
 
@@ -5597,6 +5611,7 @@ export default function FormationPipeline() {
   const [beatFirstIterationRunning, setBeatFirstIterationRunning] = useState(false)
   const [beatFirstIterationError, setBeatFirstIterationError] = useState('')
   const [beatFirstIterationNotice, setBeatFirstIterationNotice] = useState('')
+  const [beatFirstIterationMode, setBeatFirstIterationMode] = useState('fast')
 
   // Module persistant lié à ce job (créé automatiquement à la fin de la pipeline).
   // Fetché depuis /api/hr/formation-modules, filtré par source_pipeline_job_id.
@@ -6176,6 +6191,7 @@ export default function FormationPipeline() {
     setBeatFirstIterationNotice('')
     setPipelineDiagnostic(null)
     const chosenModel = continueAfterTextModel || job?.auto_pilot_model || 'deepseek-v4-pro'
+    const fastMode = beatFirstIterationMode !== 'full'
     const startedFolders = []
     try {
       for (const folder of foldersToRestart) {
@@ -6191,6 +6207,9 @@ export default function FormationPipeline() {
               max_slides: 60,
               pace: 'normal',
               from_step: 'content',
+              iteration_mode: fastMode ? 'fast' : 'full',
+              skip_audio: fastMode,
+              skip_post_content_review: fastMode,
             }),
           },
         )
@@ -6206,7 +6225,7 @@ export default function FormationPipeline() {
         startedFolders.push(data.folder_id || folder.folder_id)
       }
       setBeatFirstIterationNotice(
-        `Relance lancée pour ${startedFolders.length} journée${startedFolders.length > 1 ? 's' : ''}. Le suivi se fait dans les cartes journées et le diagnostic pipeline.`,
+        `${fastMode ? 'Itération rapide' : 'Relance complète'} lancée pour ${startedFolders.length} journée${startedFolders.length > 1 ? 's' : ''}. Le suivi se fait dans les cartes journées et le diagnostic pipeline.`,
       )
       await fetchJob(selectedJobId)
       await fetchContentFolders(selectedJobId)
@@ -6775,6 +6794,8 @@ export default function FormationPipeline() {
               selectedJobId={selectedJobId}
               model={continueAfterTextModel}
               onModelChange={setContinueAfterTextModel}
+              mode={beatFirstIterationMode}
+              onModeChange={setBeatFirstIterationMode}
               running={beatFirstIterationRunning}
               error={beatFirstIterationError}
               notice={beatFirstIterationNotice}

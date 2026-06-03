@@ -3627,21 +3627,31 @@ def continue_after_text(job_id, folder_id):
     requested_folder_id = int(folder_id)
     _STEP_ORDER = ["review", "slides", "tts"]
     raw_from_step = data.get("from_step", "review")
+    fast_iteration = bool(
+        data.get("iteration_mode") == "fast"
+        or data.get("fast_iteration")
+        or data.get("skip_audio")
+    )
+    skip_audio = bool(data.get("skip_audio") or fast_iteration)
+    skip_post_content_review = bool(data.get("skip_post_content_review") or fast_iteration)
     fast_tts_pipeline = bool(raw_from_step == "tts_fast" or data.get("fast_tts_pipeline"))
     restart_from_content = (raw_from_step == "content")
     from_step = "tts" if raw_from_step == "tts_fast" else raw_from_step
     if from_step == "volume":
         from_step = "review"
     from_step = from_step if from_step in _STEP_ORDER else "review"
+    if restart_from_content and skip_post_content_review:
+        from_step = "slides"
     if from_step != "tts":
         fast_tts_pipeline = False
     from_step_idx = _STEP_ORDER.index(from_step)
 
     logger.info(
         "PIPELINE_RESUME_REQUEST formation_job_id=%s requested_folder_id=%s from_step=%s "
-        "raw_from_step=%s model=%s max_slides=%s pace=%s fast_tts_pipeline=%s prev_status=%s",
+        "raw_from_step=%s model=%s max_slides=%s pace=%s fast_tts_pipeline=%s "
+        "fast_iteration=%s skip_audio=%s skip_post_content_review=%s prev_status=%s",
         job_id, requested_folder_id, from_step, raw_from_step, model, max_slides, pace,
-        fast_tts_pipeline, job.get("status"),
+        fast_tts_pipeline, fast_iteration, skip_audio, skip_post_content_review, job.get("status"),
     )
 
     # Persiste le choix de modèle utilisé pour cette relance, pour que les
@@ -3782,6 +3792,9 @@ def continue_after_text(job_id, folder_id):
                     "from_step": from_step,
                     "raw_from_step": raw_from_step,
                     "fast_tts_pipeline": fast_tts_pipeline,
+                    "fast_iteration": fast_iteration,
+                    "skip_audio": skip_audio,
+                    "skip_post_content_review": skip_post_content_review,
                 },
             )
 
@@ -3990,6 +4003,112 @@ def continue_after_text(job_id, folder_id):
                     "from_step=%s — slides existantes conservées",
                     job_id, folder_id, from_step,
                 )
+
+            if skip_audio:
+                from services.script_slide_generation_service import generate_slides_from_script
+
+                slide_result = None
+                if from_step_idx <= 1:
+                    slides_started = time.time()
+                    logger.info(
+                        "PIPELINE_RESUME_STEP_SLIDES_GENERATE_START formation_job_id=%s folder_id=%s "
+                        "content_job_id=%s max_slides=%s pace=%s fast_iteration=%s",
+                        job_id, folder_id, reset_info["content_job_id"], max_slides, pace, fast_iteration,
+                    )
+                    log_pipeline_event(
+                        job_id,
+                        "slides_folder_started",
+                        step="slides",
+                        status="running",
+                        folder_id=folder_id,
+                        model=str(model) if model else None,
+                        message="Génération slides anchor-first démarrée",
+                        data={
+                            "content_job_id": reset_info["content_job_id"],
+                            "max_slides": max_slides,
+                            "pace": pace,
+                            "fast_iteration": fast_iteration,
+                            "skip_audio": True,
+                        },
+                    )
+                    slide_result = generate_slides_from_script(
+                        folder_id=folder_id,
+                        job_id=job_id,
+                        platform_id=reset_info["platform_id"],
+                        max_slides=max_slides,
+                        pace=pace,
+                        model=model,
+                    )
+                    logger.info(
+                        "PIPELINE_RESUME_STEP_SLIDES_GENERATE_DONE formation_job_id=%s folder_id=%s "
+                        "duration_ms=%s slides=%s source_alignment=%s",
+                        job_id,
+                        folder_id,
+                        int((time.time() - slides_started) * 1000),
+                        (slide_result.get("stats") or {}).get("slides_generated"),
+                        (slide_result.get("stats") or {}).get("source_alignment"),
+                    )
+                    log_pipeline_event(
+                        job_id,
+                        "slides_folder_completed",
+                        step="slides",
+                        status="completed",
+                        folder_id=folder_id,
+                        model=str(model) if model else None,
+                        duration_ms=int((time.time() - slides_started) * 1000),
+                        message="Génération slides anchor-first terminée",
+                        data={
+                            "content_job_id": reset_info["content_job_id"],
+                            "deck_id": (slide_result.get("stats") or {}).get("deck_id"),
+                            "slides_generated": (slide_result.get("stats") or {}).get("slides_generated"),
+                            "slide_anchors_found": (slide_result.get("stats") or {}).get("slide_anchors_found"),
+                            "source_alignment": (slide_result.get("stats") or {}).get("source_alignment"),
+                            "beat_aligned_segments": (slide_result.get("stats") or {}).get("beat_aligned_segments"),
+                            "beat_aligned_anchors": (slide_result.get("stats") or {}).get("beat_aligned_anchors"),
+                            "fast_iteration": fast_iteration,
+                            "skip_audio": True,
+                        },
+                    )
+
+                _finalize_text_ready_state(job_id)
+                update_job(job_id, status="text_ready", error_message=None)
+                logger.info(
+                    "PIPELINE_RESUME_RUN_DONE_NO_AUDIO formation_job_id=%s folder_id=%s from_step=%s "
+                    "total_duration_ms=%s fast_iteration=%s",
+                    job_id, folder_id, from_step, int((time.time() - started_at) * 1000), fast_iteration,
+                )
+                log_pipeline_event(
+                    job_id,
+                    "continue_after_text_completed",
+                    step="slides",
+                    status="completed",
+                    folder_id=folder_id,
+                    model=str(model) if model else None,
+                    duration_ms=int((time.time() - started_at) * 1000),
+                    message=(
+                        "Itération rapide terminée : texte beat-first et slides régénérés, audio non lancé"
+                        if fast_iteration
+                        else "Relance terminée sans audio"
+                    ),
+                    data={
+                        "skip_audio": True,
+                        "fast_iteration": fast_iteration,
+                        "from_step": from_step,
+                        "raw_from_step": raw_from_step,
+                        "slides": (slide_result or {}).get("stats") or {},
+                    },
+                )
+                _EXECUTION_STATE[state_key] = {
+                    "status": "done",
+                    "model": str(model),
+                    "folder_id": folder_id,
+                    "result": {
+                        "skip_audio": True,
+                        "fast_iteration": fast_iteration,
+                        "slides": (slide_result or {}).get("stats") or {},
+                    },
+                }
+                return
 
             # ── Étape 5 : TTS (toujours exécutée) ───────────────────────────
             tts_started = time.time()
