@@ -2498,149 +2498,110 @@ function renderPipelineSlidePreview(slide = {}) {
   }
 }
 
-const PASSAGE_LAB_TEMPLATES = [
-  { value: '', label: 'Auto' },
-  { value: 'analogy', label: 'Analogy' },
-  { value: 'reflection', label: 'Reflection' },
-  { value: 'casestudy', label: 'Case study' },
-  { value: 'warning', label: 'Warning' },
-  { value: 'tip', label: 'Tip' },
-  { value: 'transition', label: 'Transition' },
-]
-
-function PassageSlideLab({
-  value,
-  onChange,
-  onGenerate,
-  loading,
+function BeatFirstIterationPanel({
+  folders = [],
+  selectedJobId,
+  model,
+  onModelChange,
+  running,
   error,
-  result,
-  defaultModelLabel,
+  notice,
+  onRestart,
 }) {
-  const slides = result?.slides || []
-  const stats = result?.stats || {}
-  const update = (patch) => onChange(prev => ({ ...prev, ...patch }))
+  const readyFolders = folders.filter(folder =>
+    folder.content_status === 'completed' &&
+    (!folder.formation_job_id || Number(folder.formation_job_id) === Number(selectedJobId))
+  )
+  const readyCount = readyFolders.length
+  const totalCount = folders.length || 0
+  const disabled = running || readyCount === 0
 
   return (
     <div style={{
       ...S.card,
-      borderColor: 'rgba(245,158,11,0.28)',
+      borderColor: 'rgba(167,139,250,0.28)',
       background: 'rgba(15,23,42,0.72)',
       marginBottom: '24px',
     }}>
-      <div style={{ ...S.cardTitle, color: '#fbbf24', marginBottom: '10px' }}>
-        <Icon name="science" /> Laboratoire temporaire · passage vers slides
-      </div>
-      <div style={{ color: '#cbd5e1', fontSize: '13px', lineHeight: 1.55, marginBottom: '14px' }}>
-        Colle un extrait du cours pour tester le découpage et le template sans relancer la pipeline. Le résultat est une prévisualisation non sauvegardée.
+      <div style={{
+        display: 'flex',
+        alignItems: 'flex-start',
+        justifyContent: 'space-between',
+        gap: '14px',
+        flexWrap: 'wrap',
+        marginBottom: '12px',
+      }}>
+        <div style={{ minWidth: 0, flex: '1 1 360px' }}>
+          <div style={{ ...S.cardTitle, color: '#e2e8f0', marginBottom: '8px' }}>
+            <Icon name="restart_alt" /> Itérer depuis le plan verrouillé
+          </div>
+          <div style={{ color: '#cbd5e1', fontSize: '13px', lineHeight: 1.55, maxWidth: '78ch' }}>
+            Relance les journées à partir de la génération texte : le plan JSON, les teaching beats et les anchors slides sont conservés, puis le texte beat-first, les reviews et les slides sont régénérés.
+          </div>
+        </div>
+        <span style={{ ...S.tag(readyCount > 0 ? 'violet' : 'amber'), alignSelf: 'flex-start' }}>
+          {readyCount}/{totalCount || '—'} journée{readyCount > 1 ? 's' : ''} prête{readyCount > 1 ? 's' : ''}
+        </span>
       </div>
 
       <div style={{
         display: 'grid',
-        gridTemplateColumns: 'minmax(0, 1.4fr) minmax(220px, 0.8fr)',
-        gap: '12px',
-        alignItems: 'end',
+        gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+        gap: '10px',
+        marginBottom: '14px',
       }}>
-        <label style={S.label}>
-          Titre de test
-          <input
-            style={{ ...S.input, marginTop: '6px' }}
-            value={value.title}
-            onChange={e => update({ title: e.target.value })}
-            placeholder="Passage brouillard"
-          />
-        </label>
-        <label style={S.label}>
-          Template visé
-          <select
-            style={{ ...S.input, marginTop: '6px' }}
-            value={value.templateType}
-            onChange={e => update({ templateType: e.target.value })}
-          >
-            {PASSAGE_LAB_TEMPLATES.map(item => (
-              <option key={item.value || 'auto'} value={item.value}>{item.label}</option>
-            ))}
-          </select>
-        </label>
+        {[
+          ['Plan source', 'Plan JSON verrouillé existant'],
+          ['Unité générée', 'Teaching beat, avec contexte précédent et suivant'],
+          ['Sortie', 'Texte révisé, Word 2 et slides régénérées'],
+        ].map(([label, detail]) => (
+          <div key={label} style={{
+            padding: '10px 12px',
+            borderRadius: '8px',
+            border: '1px solid rgba(51,65,85,0.85)',
+            background: 'rgba(30,41,59,0.38)',
+          }}>
+            <div style={{ fontSize: '11px', color: '#94a3b8', marginBottom: '4px' }}>{label}</div>
+            <div style={{ fontSize: '13px', color: '#e2e8f0', lineHeight: 1.4 }}>{detail}</div>
+          </div>
+        ))}
       </div>
 
-      <label style={{ ...S.label, marginTop: '10px' }}>
-        Objectif visuel
-        <input
-          style={{ ...S.input, marginTop: '6px' }}
-          value={value.visualGoal}
-          onChange={e => update({ visualGoal: e.target.value })}
-          placeholder="Ce que la slide doit aider à retenir"
-        />
-      </label>
-
-      <label style={{ ...S.label, marginTop: '10px' }}>
-        Passage source
-        <textarea
-          style={{ ...S.input, minHeight: '170px', resize: 'vertical', marginTop: '6px', lineHeight: 1.55 }}
-          value={value.text}
-          onChange={e => update({ text: e.target.value })}
-          placeholder="Colle ici uniquement le passage à tester..."
-        />
-      </label>
-
-      <div style={{
-        display: 'flex',
-        alignItems: 'center',
-        gap: '10px',
-        flexWrap: 'wrap',
-        marginTop: '12px',
-      }}>
-        <label style={{ ...S.label, margin: 0, minWidth: '110px' }}>
-          Max slides
-          <input
-            type="number"
-            min="5"
-            max="20"
-            style={{ ...S.input, marginTop: '6px', width: '110px' }}
-            value={value.maxSlides}
-            onChange={e => update({ maxSlides: Number(e.target.value || 8) })}
-          />
-        </label>
-        <label style={{ ...S.label, margin: 0, minWidth: '180px' }}>
+      <div style={{ display: 'flex', alignItems: 'end', gap: '10px', flexWrap: 'wrap' }}>
+        <label style={{ ...S.label, margin: 0, minWidth: '220px' }}>
           Modèle
           <select
             style={{ ...S.input, marginTop: '6px' }}
-            value={value.model}
-            onChange={e => update({ model: e.target.value })}
+            value={model}
+            onChange={e => onModelChange(e.target.value)}
+            disabled={running}
           >
-            <option value="">Pipeline actuel ({defaultModelLabel || 'défaut'})</option>
-            <option value="claude-sonnet-4-20250514">Sonnet</option>
-            <option value="claude-haiku-4-5-20251001">Haiku</option>
             <option value="deepseek-v4-pro">DeepSeek Pro</option>
+            <option value="deepseek-v4-flash">DeepSeek Flash</option>
+            <option value="sonnet">Claude Sonnet</option>
+            <option value="haiku">Claude Haiku</option>
           </select>
         </label>
         <button
           type="button"
-          style={{ ...S.btn('primary'), alignSelf: 'end', opacity: loading ? 0.7 : 1 }}
-          disabled={loading || value.text.trim().split(/\s+/).length < 20}
-          onClick={onGenerate}
+          style={{ ...S.btn('primary'), opacity: disabled ? 0.65 : 1 }}
+          disabled={disabled}
+          onClick={onRestart}
+          title={readyCount > 0 ? 'Relance texte beat-first, reviews et slides pour les journées prêtes' : 'Aucune journée texte prête pour cette reprise'}
         >
-          <Icon name={loading ? 'hourglass_empty' : 'slideshow'} /> {loading ? 'Génération…' : 'Prévisualiser ce passage'}
+          <Icon name={running ? 'hourglass_empty' : 'play_arrow'} />
+          {running ? 'Relance en cours…' : 'Relancer texte + slides'}
         </button>
-        {stats.slides_generated !== undefined && (
-          <span style={{ ...S.tag('amber'), alignSelf: 'end' }}>
-            {stats.slides_generated} slide{stats.slides_generated > 1 ? 's' : ''} · {stats.generation_mode}
-          </span>
-        )}
       </div>
 
+      {notice && (
+        <div style={{ marginTop: '12px', padding: '10px 12px', borderRadius: '8px', background: 'rgba(16,185,129,0.08)', border: '1px solid rgba(16,185,129,0.22)', color: '#86efac', fontSize: '13px' }}>
+          {notice}
+        </div>
+      )}
       {error && (
         <div style={{ marginTop: '12px', padding: '10px 12px', borderRadius: '8px', background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.24)', color: '#fca5a5', fontSize: '13px' }}>
           {error}
-        </div>
-      )}
-
-      {slides.length > 0 && (
-        <div style={{ marginTop: '18px', display: 'grid', gap: '14px' }}>
-          {slides.map((slide, index) => (
-            <SlideSourcePreviewRow key={slide.slide_id || index} slide={slide} index={index} slides={slides} />
-          ))}
         </div>
       )}
     </div>
@@ -5633,17 +5594,9 @@ export default function FormationPipeline() {
   const [pipelineDiagnostic, setPipelineDiagnostic] = useState(null)
   const [pipelineDiagnosticLoading, setPipelineDiagnosticLoading] = useState(false)
   const [pipelineDiagnosticError, setPipelineDiagnosticError] = useState('')
-  const [passageLab, setPassageLab] = useState({
-    text: '',
-    title: 'Passage brouillard',
-    templateType: 'analogy',
-    visualGoal: "Faire comprendre que l'absence de signaux visuels pousse le client à interpréter.",
-    maxSlides: 8,
-    model: '',
-  })
-  const [passageLabResult, setPassageLabResult] = useState(null)
-  const [passageLabLoading, setPassageLabLoading] = useState(false)
-  const [passageLabError, setPassageLabError] = useState('')
+  const [beatFirstIterationRunning, setBeatFirstIterationRunning] = useState(false)
+  const [beatFirstIterationError, setBeatFirstIterationError] = useState('')
+  const [beatFirstIterationNotice, setBeatFirstIterationNotice] = useState('')
 
   // Module persistant lié à ce job (créé automatiquement à la fin de la pipeline).
   // Fetché depuis /api/hr/formation-modules, filtré par source_pipeline_job_id.
@@ -6209,35 +6162,60 @@ export default function FormationPipeline() {
     }
   }
 
-  const handlePreviewPassageSlides = async () => {
-    setPassageLabError('')
-    setPassageLabResult(null)
-    setPassageLabLoading(true)
+  const handleRestartBeatFirstIteration = async () => {
+    const foldersToRestart = contentFolders.filter(folder =>
+      folder.content_status === 'completed' &&
+      (!folder.formation_job_id || Number(folder.formation_job_id) === Number(selectedJobId))
+    )
+    if (foldersToRestart.length === 0) {
+      setBeatFirstIterationError('Aucune journée texte prête pour cette reprise.')
+      return
+    }
+    setBeatFirstIterationRunning(true)
+    setBeatFirstIterationError('')
+    setBeatFirstIterationNotice('')
+    setPipelineDiagnostic(null)
+    const chosenModel = continueAfterTextModel || job?.auto_pilot_model || 'deepseek-v4-pro'
+    const startedFolders = []
     try {
-      const resp = await fetch(apiUrl('/api/slides/preview-from-text'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({
-          text: passageLab.text,
-          title: passageLab.title,
-          template_type: passageLab.templateType || null,
-          visual_goal: passageLab.visualGoal,
-          max_slides: passageLab.maxSlides,
-          pace: 'dense',
-          model: passageLab.model || job?.auto_pilot_model || undefined,
-        }),
-      })
-      const data = await resp.json().catch(() => ({}))
-      if (!resp.ok || data.status === 'error') {
-        setPassageLabError(data.message || `Erreur ${resp.status}`)
-        return
+      for (const folder of foldersToRestart) {
+        setContinuingAfterTextFolders(prev => ({ ...prev, [folder.folder_id]: true }))
+        const resp = await fetch(
+          apiUrl(`/api/formation/${selectedJobId}/content/${folder.folder_id}/continue-after-text`),
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+            body: JSON.stringify({
+              model: chosenModel,
+              max_slides: 60,
+              pace: 'normal',
+              from_step: 'content',
+            }),
+          },
+        )
+        const data = await resp.json().catch(() => ({}))
+        if (!resp.ok || data.error) {
+          setContinuingAfterTextFolders(prev => {
+            const next = { ...prev }
+            delete next[folder.folder_id]
+            return next
+          })
+          throw new Error(data.error || `Erreur ${resp.status} sur Jour ${folder.day_number || folder.folder_id}`)
+        }
+        startedFolders.push(data.folder_id || folder.folder_id)
       }
-      setPassageLabResult(data)
-    } catch {
-      setPassageLabError('Erreur réseau pendant la prévisualisation')
+      setBeatFirstIterationNotice(
+        `Relance lancée pour ${startedFolders.length} journée${startedFolders.length > 1 ? 's' : ''}. Le suivi se fait dans les cartes journées et le diagnostic pipeline.`,
+      )
+      await fetchJob(selectedJobId)
+      await fetchContentFolders(selectedJobId)
+      await fetchVolumeAudit(selectedJobId)
+      await fetchPipelineDiagnostic(selectedJobId, { silent: true })
+    } catch (e) {
+      setBeatFirstIterationError(e?.message || 'Erreur réseau pendant la relance beat-first')
     } finally {
-      setPassageLabLoading(false)
+      setBeatFirstIterationRunning(false)
     }
   }
 
@@ -6428,8 +6406,9 @@ export default function FormationPipeline() {
     setSafetyError('')
     setPipelineDiagnostic(null)
     setPipelineDiagnosticError('')
-    setPassageLabResult(null)
-    setPassageLabError('')
+    setBeatFirstIterationRunning(false)
+    setBeatFirstIterationError('')
+    setBeatFirstIterationNotice('')
     setAutoPilotState(null)
     setLinkedModule(null)
     setPendingMissions({})
@@ -6791,14 +6770,15 @@ export default function FormationPipeline() {
               </div>
             )}
 
-            <PassageSlideLab
-              value={passageLab}
-              onChange={setPassageLab}
-              onGenerate={handlePreviewPassageSlides}
-              loading={passageLabLoading}
-              error={passageLabError}
-              result={passageLabResult}
-              defaultModelLabel={selectedPipelineModel}
+            <BeatFirstIterationPanel
+              folders={contentFolders}
+              selectedJobId={selectedJobId}
+              model={continueAfterTextModel}
+              onModelChange={setContinueAfterTextModel}
+              running={beatFirstIterationRunning}
+              error={beatFirstIterationError}
+              notice={beatFirstIterationNotice}
+              onRestart={handleRestartBeatFirstIteration}
             />
 
             {/* ── Étape 1 : Init (affichage seul, déjà fait) ── */}
