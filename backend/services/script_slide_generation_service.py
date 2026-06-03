@@ -16,7 +16,12 @@ import time
 from typing import Iterable
 
 from database.db import get_db_connection
-from services.content_pipeline.artifacts import CONTENT_PLAN_BLOB, load_content_artifact
+from services.content_pipeline.artifacts import (
+    CONTENT_COURSE_SCRIPTS_BLOB,
+    CONTENT_DRAFT_SECTIONS_BLOB,
+    CONTENT_PLAN_BLOB,
+    load_content_artifact,
+)
 from services.content_pipeline.prompts import load_prompt_file
 from utils.anthropic_client import default_model, post_message
 from utils.logger import get_logger
@@ -582,6 +587,121 @@ def _load_script_source(folder_id: int, job_id: int | None = None, platform_id: 
     }
 
 
+def _load_beat_sections_artifact(source: dict) -> dict | None:
+    def _load(filename: str) -> dict | None:
+        try:
+            artifact = load_content_artifact(
+                int(source["platform_id"]),
+                int(source["folder_id"]),
+                filename,
+            )
+        except Exception as exc:
+            logger.warning(
+                "PIPELINE_SLIDES_BEAT_SECTIONS_LOAD_ERROR file=%s folder=%s content_job=%s error=%s",
+                filename,
+                source.get("folder_id"),
+                source.get("content_job_id"),
+                str(exc)[:220],
+            )
+            return None
+        return artifact if isinstance(artifact, dict) else None
+
+    final_artifact = _load(CONTENT_COURSE_SCRIPTS_BLOB)
+    final_courses = final_artifact.get("courses") if isinstance(final_artifact, dict) else None
+    if isinstance(final_courses, list) and any(
+        isinstance(section, dict)
+        for course in final_courses
+        if isinstance(course, dict)
+        for section in (course.get("sections") or [])
+    ):
+        return final_artifact
+
+    try:
+        artifact = load_content_artifact(
+            int(source["platform_id"]),
+            int(source["folder_id"]),
+            CONTENT_DRAFT_SECTIONS_BLOB,
+        )
+    except Exception as exc:
+        logger.warning(
+            "PIPELINE_SLIDES_DRAFT_SECTIONS_LOAD_ERROR folder=%s content_job=%s error=%s",
+            source.get("folder_id"),
+            source.get("content_job_id"),
+            str(exc)[:220],
+        )
+        return None
+    return artifact if isinstance(artifact, dict) else None
+
+
+def _beat_aligned_segments_from_draft(source: dict) -> list[dict]:
+    artifact = _load_beat_sections_artifact(source)
+    if not artifact:
+        return []
+
+    segments = []
+    for course in artifact.get("courses") or []:
+        if not isinstance(course, dict):
+            continue
+        try:
+            course_number = int(course.get("course_number") or 0)
+        except (TypeError, ValueError):
+            course_number = 0
+        sub_part_index = max(0, course_number - 1)
+        course_title = course.get("course_title") or f"Cours {course_number or '?'}"
+        for section_index, section in enumerate(course.get("sections") or [], start=1):
+            if not isinstance(section, dict):
+                continue
+            alignment_status = str(section.get("beat_alignment_status") or "")
+            if alignment_status.startswith("lost_after_"):
+                continue
+            beat_texts = section.get("beat_texts") if isinstance(section.get("beat_texts"), list) else []
+            for beat in beat_texts:
+                if not isinstance(beat, dict):
+                    continue
+                text = _strip_tts_tags(beat.get("text") or "")
+                if not text:
+                    continue
+                word_count = len(text.split())
+                if not word_count:
+                    continue
+                anchor = beat.get("slide_anchor") if isinstance(beat.get("slide_anchor"), dict) else {}
+                segments.append({
+                    "segment_id": len(segments),
+                    "sub_part_index": sub_part_index,
+                    "sub_part_name": f"{course_title} · {section.get('label') or section.get('title') or f'Section {section_index}'}",
+                    "passe": 1,
+                    "text": text,
+                    "word_count": word_count,
+                    "reviewed": False,
+                    "dirty": False,
+                    "beat_id": beat.get("beat_id") or "",
+                    "beat_type": beat.get("type") or "",
+                    "beat_role": beat.get("role") or "",
+                    "spoken_requirement": beat.get("spoken_requirement") or "",
+                    "slide_anchor": anchor,
+                    "slide_anchor_id": beat.get("slide_anchor_id") or (anchor.get("anchor_id") if anchor.get("enabled") else None),
+                    "template_type": beat.get("template_type") or (anchor.get("template_type") if anchor.get("enabled") else None),
+                    "source_alignment": "draft_beat_aligned",
+                })
+
+    return segments
+
+
+def _prefer_beat_aligned_source(source: dict) -> dict:
+    segments = _beat_aligned_segments_from_draft(source)
+    anchored_count = sum(1 for item in segments if item.get("slide_anchor_id"))
+    if not segments or not anchored_count:
+        return source
+    return {
+        **source,
+        "segments": segments,
+        "beat_aligned": True,
+        "beat_aligned_segments": len(segments),
+        "beat_aligned_anchors": anchored_count,
+        "total_words_declared": sum(int(item.get("word_count") or 0) for item in segments),
+    }
+
+
 def _load_content_plan(source: dict) -> dict | None:
     try:
         artifact = load_content_artifact(
@@ -846,6 +966,59 @@ def _build_source_blocks(units: list[dict], total_words: int, target_words: int,
             end = min(start + 1, count)
         merged.append(_combine_blocks(raw_blocks[start:end], idx))
     return merged, effective_target
+
+
+def _build_beat_source_blocks(segments: list[dict]) -> tuple[list[dict], int]:
+    blocks = []
+    word_cursor = 0
+    for segment in segments:
+        words = str(segment.get("text") or "").split()
+        if not words:
+            continue
+        word_count = len(words)
+        anchor = segment.get("slide_anchor") if isinstance(segment.get("slide_anchor"), dict) else {}
+        slide_anchors = []
+        if anchor.get("enabled"):
+            slide_anchors.append({
+                "anchor_id": str(segment.get("slide_anchor_id") or anchor.get("anchor_id") or "").strip(),
+                "beat_id": str(segment.get("beat_id") or "").strip(),
+                "course_number": int(segment.get("sub_part_index") or 0) + 1,
+                "course_title": "",
+                "part_number": 0,
+                "part_title": segment.get("sub_part_name") or "",
+                "beat_order": len(blocks) + 1,
+                "beat_type": str(segment.get("beat_type") or "concept"),
+                "role": segment.get("beat_role") or "",
+                "spoken_requirement": segment.get("spoken_requirement") or "",
+                "template_type": _canonical_template(segment.get("template_type") or anchor.get("template_type")),
+                "visual_goal": anchor.get("visual_goal") or "",
+                "items_expected": anchor.get("items_expected"),
+                "must_cover": anchor.get("must_cover") or "",
+                "must_not_cover": anchor.get("must_not_cover") or "",
+                "fields_hint": anchor.get("fields_hint") if isinstance(anchor.get("fields_hint"), dict) else {},
+            })
+        blocks.append({
+            "source_block_id": len(blocks),
+            "word_start": word_cursor,
+            "word_end": word_cursor + word_count,
+            "word_count": word_count,
+            "sub_part_index": segment.get("sub_part_index"),
+            "sub_part_name": segment.get("sub_part_name"),
+            "text": segment.get("text") or "",
+            "source_refs": [{
+                "sub_part_index": segment.get("sub_part_index"),
+                "sub_part_name": segment.get("sub_part_name"),
+                "passe": segment.get("passe"),
+                "beat_id": segment.get("beat_id"),
+                "slide_anchor_id": segment.get("slide_anchor_id"),
+                "source_alignment": segment.get("source_alignment"),
+            }],
+            "slide_anchors": [item for item in slide_anchors if item.get("anchor_id")],
+            "beat_id": segment.get("beat_id"),
+            "source_alignment": segment.get("source_alignment"),
+        })
+        word_cursor += word_count
+    return blocks, word_cursor
 
 
 def _combine_units(units: list[dict], block_id: int) -> dict:
@@ -1447,24 +1620,35 @@ def _run_slide_generation_from_source(
     batch_size = _safe_int(batch_size, DEFAULT_BATCH_SIZE, 1, 10)
     model = model or default_model()
 
-    units, total_words = _build_text_units(source["segments"], max_unit_words=900)
-    average_words_cap = max(180, math.ceil(total_words / max(1, max_slides)))
-    context_words = _safe_int(
-        target_words_per_slide,
-        max(DEFAULT_CONTEXT_WORDS, int(average_words_cap * pace_config["context_multiplier"])),
-        700,
-        5000,
-    )
-    source_blocks, effective_words_per_slide = _build_source_blocks(
-        units,
-        total_words=total_words,
-        target_words=context_words,
-        max_slides=max_slides,
-    )
-    if content_plan is None and not source.get("preview_only"):
+    if source.get("beat_aligned"):
+        source_blocks, total_words = _build_beat_source_blocks(source["segments"])
+        effective_words_per_slide = 0
+    else:
+        units, total_words = _build_text_units(source["segments"], max_unit_words=900)
+        average_words_cap = max(180, math.ceil(total_words / max(1, max_slides)))
+        context_words = _safe_int(
+            target_words_per_slide,
+            max(DEFAULT_CONTEXT_WORDS, int(average_words_cap * pace_config["context_multiplier"])),
+            700,
+            5000,
+        )
+        source_blocks, effective_words_per_slide = _build_source_blocks(
+            units,
+            total_words=total_words,
+            target_words=context_words,
+            max_slides=max_slides,
+        )
+    if content_plan is None and not source.get("preview_only") and not source.get("beat_aligned"):
         content_plan = _load_content_plan(source)
     slide_anchors = _extract_slide_anchors_from_plan(content_plan)
-    _assign_slide_anchors_to_source_blocks(source_blocks, slide_anchors)
+    if source.get("beat_aligned"):
+        slide_anchors = [
+            anchor
+            for block in source_blocks
+            for anchor in (block.get("slide_anchors") or [])
+        ]
+    else:
+        _assign_slide_anchors_to_source_blocks(source_blocks, slide_anchors)
 
     if not source_blocks:
         raise ValueError("Aucun bloc source exploitable")
@@ -1606,9 +1790,12 @@ def _run_slide_generation_from_source(
             "folder_name": source["folder_name"],
             "job_id": job_id,
             "source": "preview_text" if source.get("preview_only") else "content_generation_segments",
+            "source_alignment": "draft_beat_aligned" if source.get("beat_aligned") else "text_windows",
             "content_plan_source": CONTENT_PLAN_BLOB if content_plan else None,
             "source_words": total_words,
             "source_segments": len(source["segments"]),
+            "beat_aligned_segments": source.get("beat_aligned_segments"),
+            "beat_aligned_anchors": source.get("beat_aligned_anchors"),
             "source_blocks": len(source_blocks),
             "source_windows": len(source_blocks),
             "slide_anchors_found": len(slide_anchors),
@@ -1804,7 +1991,9 @@ def generate_slides_from_script(
     if folder_id <= 0:
         raise ValueError("folder_id est requis")
 
-    source = _load_script_source(folder_id, job_id=job_id, platform_id=platform_id)
+    source = _prefer_beat_aligned_source(
+        _load_script_source(folder_id, job_id=job_id, platform_id=platform_id)
+    )
     return _run_slide_generation_from_source(
         source,
         job_id=job_id,

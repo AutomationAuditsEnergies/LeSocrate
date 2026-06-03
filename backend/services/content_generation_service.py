@@ -402,6 +402,12 @@ def _structured_course_parallel_workers(default: int = 3) -> int:
     return max(1, min(7, workers))
 
 
+def _structured_beat_first_enabled() -> bool:
+    """Génère les sections teaching beat par teaching beat quand le plan le permet."""
+    value = str(os.getenv("FORMATION_STRUCTURED_BEAT_FIRST_ENABLED", "1")).strip().lower()
+    return value not in {"0", "false", "no", "off"}
+
+
 def _runtime_intra_day_carryover_enabled() -> bool:
     """Autorise le report technique d'un reste audio vers le cours suivant.
 
@@ -5964,6 +5970,287 @@ def _section_teaching_beats_prompt(section: dict) -> str:
     return json.dumps(compact, ensure_ascii=False, indent=2)
 
 
+def _section_teaching_beats(section: dict) -> list[dict]:
+    beats = section.get("teaching_beats") if isinstance(section.get("teaching_beats"), list) else []
+    return [beat for beat in beats if isinstance(beat, dict)]
+
+
+def _beat_label(beat: dict, index: int) -> str:
+    role = str(beat.get("role") or "").strip()
+    spoken = str(beat.get("spoken_requirement") or "").strip()
+    return role or spoken or f"moment pédagogique {index + 1}"
+
+
+def _beat_word_budgets(section: dict, beats: list[dict]) -> list[int]:
+    target_words = max(160, int(section.get("target_words") or 500))
+    if not beats:
+        return []
+    weights = []
+    for beat in beats:
+        anchor = beat.get("slide_anchor") if isinstance(beat.get("slide_anchor"), dict) else {}
+        weight = 1.0
+        beat_type = str(beat.get("type") or "").lower()
+        if anchor.get("enabled"):
+            weight += 0.25
+        if beat_type in {"example", "story", "analogy", "case", "comparison"}:
+            weight += 0.2
+        if beat_type in {"transition", "recap"}:
+            weight -= 0.15
+        weights.append(max(0.55, weight))
+    total_weight = sum(weights) or len(beats)
+    raw = [max(80, int(round(target_words * weight / total_weight))) for weight in weights]
+    delta = target_words - sum(raw)
+    if raw:
+        raw[-1] = max(80, raw[-1] + delta)
+    return raw
+
+
+def _build_structured_beat_prompt(
+    *,
+    job: dict,
+    course_plan: dict,
+    section: dict,
+    beat: dict,
+    beat_index: int,
+    beats: list[dict],
+    target_words: int,
+    previous_course_summary: str,
+    generated_so_far: str,
+    section_so_far: str,
+    module_content: str,
+) -> str:
+    prompt_parts = load_section_prompt_parts()
+    base_style = prompt_parts["base_style"]
+    section_contract = prompt_parts["section_contract"]
+    min_words = max(60, int(target_words * 0.72))
+    max_words = max(min_words + 35, int(target_words * 1.18))
+    previous_beat = beats[beat_index - 1] if beat_index > 0 else None
+    next_beat = beats[beat_index + 1] if beat_index + 1 < len(beats) else None
+    anchor = beat.get("slide_anchor") if isinstance(beat.get("slide_anchor"), dict) else {}
+    scope_guard = _structured_section_scope_guard(section)
+    return f"""Tu écris UN MOMENT PÉDAGOGIQUE d'une section audio TTS-ready.
+
+Ce moment est une partie d'une section plus grande. Il doit s'enchaîner naturellement avec ce qui précède et préparer ce qui suit.
+
+SOCLE GÉNÉRAL À RESPECTER :
+{base_style}
+
+CONTRAT DE SECTION :
+{section_contract}
+
+Section complète demandée : {_section_label(section)}
+Frontière stricte de la section :
+{scope_guard}
+
+Moment pédagogique à écrire maintenant :
+{json.dumps({
+    "beat_index": beat_index + 1,
+    "beats_count": len(beats),
+    "beat_id": beat.get("beat_id"),
+    "type": beat.get("type"),
+    "role": beat.get("role"),
+    "spoken_requirement": beat.get("spoken_requirement"),
+    "slide_anchor": {
+        "enabled": bool(anchor.get("enabled")),
+        "template_type": anchor.get("template_type"),
+        "visual_goal": anchor.get("visual_goal"),
+        "items_expected": anchor.get("items_expected"),
+    },
+}, ensure_ascii=False, indent=2)}
+
+Budget de ce moment :
+- cible : {target_words} mots
+- plage acceptable : {min_words} à {max_words} mots
+
+Progression locale :
+- Moment précédent : {_beat_label(previous_beat, beat_index - 1) if previous_beat else "(début de section)"}
+- Moment suivant : {_beat_label(next_beat, beat_index + 1) if next_beat else "(fin de section)"}
+
+Contexte utile :
+- Titre professionnel : {job.get('program_title') or ''}
+- Intitulé journée : {job.get('folder_name') or ''}
+- Rappel cours précédent : {previous_course_summary or '(aucun)'}
+- Texte déjà généré avant cette section : {_compact_words(generated_so_far, 700) or '(début de la partie)'}
+- Texte déjà généré dans cette section : {_compact_words(section_so_far, 700) or '(début de section)'}
+
+Plan complet verrouillé de la partie interne :
+{json.dumps(course_plan, ensure_ascii=False, indent=2)}
+
+Section à laquelle appartient ce moment :
+{json.dumps(section, ensure_ascii=False, indent=2)}
+
+Contenu source à utiliser :
+{_compact_words(module_content or job.get('program_text') or '', 3600)}
+
+Contraintes absolues :
+- Écris seulement le texte oral de ce moment pédagogique.
+- Ne commence pas comme une nouvelle mini-introduction si ce n'est pas le premier moment.
+- Si ce moment suit un texte déjà généré, commence par une transition courte et naturelle, pas par un recap complet.
+- Ne termine pas toute la section si un moment suivant existe.
+- Ne mentionne jamais slide, PowerPoint, template, anchor ou teaching beat.
+- Ne mentionne jamais horaire, créneau, planning, durée, budget mots ou nom de fichier.
+- Oral professionnel, clair, fluide, sans markdown ni titre écrit.
+- Les exemples non sourcés doivent être explicitement fictifs ou hypothétiques, mais sans formule méta lourde.
+- Si le moment porte une slide, le texte doit couvrir précisément l'idée que la slide doit aider à retenir.
+
+Réponds uniquement avec le texte oral de ce moment."""
+
+
+def _generate_structured_beat_text(
+    *,
+    job: dict,
+    course_plan: dict,
+    section: dict,
+    beat: dict,
+    beat_index: int,
+    beats: list[dict],
+    target_words: int,
+    previous_course_summary: str,
+    generated_so_far: str,
+    section_so_far: str,
+    module_content: str,
+    model=None,
+) -> str:
+    prompt = _build_structured_beat_prompt(
+        job=job,
+        course_plan=course_plan,
+        section=section,
+        beat=beat,
+        beat_index=beat_index,
+        beats=beats,
+        target_words=target_words,
+        previous_course_summary=previous_course_summary,
+        generated_so_far=generated_so_far,
+        section_so_far=section_so_far,
+        module_content=module_content,
+    )
+    raw = _anthropic_post(
+        messages=[{"role": "user", "content": prompt}],
+        max_tokens=_structured_generation_max_tokens(target_words),
+        model=model,
+    )
+    return _fit_generated_section_to_budget(raw, target_words)
+
+
+def _generate_structured_section_beat_first(
+    *,
+    job: dict,
+    course_plan: dict,
+    section: dict,
+    previous_course_summary: str,
+    generated_so_far: str,
+    module_content: str,
+    model=None,
+) -> dict:
+    beats = _section_teaching_beats(section)
+    budgets = _beat_word_budgets(section, beats)
+    beat_records = []
+    section_texts = []
+    for index, beat in enumerate(beats):
+        beat_text = _generate_structured_beat_text(
+            job=job,
+            course_plan=course_plan,
+            section=section,
+            beat=beat,
+            beat_index=index,
+            beats=beats,
+            target_words=budgets[index],
+            previous_course_summary=previous_course_summary,
+            generated_so_far=generated_so_far,
+            section_so_far="\n\n".join(section_texts),
+            module_content=module_content,
+            model=model,
+        )
+        section_texts.append(beat_text)
+        anchor = beat.get("slide_anchor") if isinstance(beat.get("slide_anchor"), dict) else {}
+        beat_records.append({
+            "order": index + 1,
+            "beat_id": beat.get("beat_id"),
+            "type": beat.get("type"),
+            "role": beat.get("role"),
+            "spoken_requirement": beat.get("spoken_requirement"),
+            "target_words": budgets[index],
+            "word_count": count_tts_spoken_words(beat_text),
+            "text": beat_text,
+            "slide_anchor": anchor if isinstance(anchor, dict) else {},
+            "slide_anchor_id": anchor.get("anchor_id") if isinstance(anchor, dict) and anchor.get("enabled") else None,
+            "template_type": anchor.get("template_type") if isinstance(anchor, dict) and anchor.get("enabled") else None,
+        })
+    section_text = "\n\n".join(text for text in section_texts if text.strip()).strip()
+    return {
+        "text": section_text,
+        "beat_texts": beat_records,
+        "generation_mode": "beat_first",
+        "beat_count": len(beat_records),
+    }
+
+
+def _generate_structured_section_record(
+    *,
+    job: dict,
+    course_plan: dict,
+    section: dict,
+    previous_course_summary: str,
+    generated_so_far: str,
+    module_content: str,
+    model=None,
+) -> dict:
+    beats = _section_teaching_beats(section)
+    if _structured_beat_first_enabled() and beats:
+        try:
+            result = _generate_structured_section_beat_first(
+                job=job,
+                course_plan=course_plan,
+                section=section,
+                previous_course_summary=previous_course_summary,
+                generated_so_far=generated_so_far,
+                module_content=module_content,
+                model=model,
+            )
+        except Exception as exc:
+            logger.warning(
+                "⚠️ Génération beat-first ignorée course=%s section=%s: %s",
+                course_plan.get("course_number"),
+                _section_label(section),
+                str(exc)[:240],
+            )
+        else:
+            section_text = result["text"]
+            if _part_section_opening_leak_evidence(section, section_text):
+                repaired = _repair_part_section_opening_leak(
+                    job=job,
+                    course_plan=course_plan,
+                    section=section,
+                    section_text=section_text,
+                    module_content=module_content,
+                    model=model,
+                )
+                result["text"] = repaired
+                result["beat_alignment_status"] = (
+                    "lost_after_scope_repair"
+                    if repaired.strip() != section_text.strip()
+                    else "aligned"
+                )
+            else:
+                result["beat_alignment_status"] = "aligned"
+            return result
+
+    return {
+        "text": _generate_structured_section(
+            job=job,
+            course_plan=course_plan,
+            section=section,
+            previous_course_summary=previous_course_summary,
+            generated_so_far=generated_so_far,
+            module_content=module_content,
+            model=model,
+        ),
+        "beat_texts": [],
+        "generation_mode": "section_full",
+        "beat_alignment_status": "not_applicable",
+    }
+
+
 def _part_section_opening_leak_evidence(section: dict, text: str) -> str:
     if section.get("kind") != "part":
         return ""
@@ -7375,13 +7662,18 @@ def _calibrate_structured_course_sections(
             model=model,
         )
         after_words = count_tts_spoken_words(calibrated_text)
-        changed = changed or calibrated_text.strip() != before_text.strip() or bool(calibration.get("changed"))
+        text_changed = calibrated_text.strip() != before_text.strip()
+        changed = changed or text_changed or bool(calibration.get("changed"))
+        beat_alignment_status = record.get("beat_alignment_status")
+        if record.get("beat_texts") and text_changed:
+            beat_alignment_status = "lost_after_budget_calibration"
         calibrated_record = {
             **record,
             "text": calibrated_text,
             "word_count": after_words,
             "before_word_count": before_words,
             "calibration": calibration,
+            "beat_alignment_status": beat_alignment_status,
         }
         calibrated_sections.append(calibrated_record)
         section_results.append({
@@ -7947,6 +8239,11 @@ def _run_plan_adherence_on_generated_drafts(
 ) -> list[dict]:
     """Corrige l'adhérence au plan juste après génération, avant budget/conformité."""
     started_at = time.time()
+    generation_strategy = (
+        "parallel_body_then_late_opening_beat_first"
+        if _structured_beat_first_enabled()
+        else "parallel_body_then_late_opening"
+    )
     sorted_results = sorted(body_results, key=lambda item: int(item.get("course_number") or 0))
     total = len(sorted_results)
     course_records = []
@@ -8061,7 +8358,7 @@ def _run_plan_adherence_on_generated_drafts(
                     "budget_scope": "ignored_here_budget_calibration_runs_next",
                     "version": _PLAN_ADHERENCE_REVIEW_VERSION,
                     "structured_course_plan_version": plan.get("version"),
-                    "generation_strategy": "parallel_body_then_late_opening",
+                    "generation_strategy": generation_strategy,
                     "parallel_workers": workers,
                     "courses": course_records,
                 },
@@ -8101,7 +8398,7 @@ def _run_plan_adherence_on_generated_drafts(
                 "budget_scope": "ignored_here_budget_calibration_runs_next",
                 "version": _PLAN_ADHERENCE_REVIEW_VERSION,
                 "structured_course_plan_version": plan.get("version"),
-                "generation_strategy": "parallel_body_then_late_opening",
+                "generation_strategy": generation_strategy,
                 "parallel_workers": workers,
                 "duration_ms": duration_ms,
                 "courses": course_records,
@@ -8221,7 +8518,7 @@ def _generate_structured_course_body(
     )
     for section in _structured_body_sections_for_course(course_plan):
         label = _section_label(section)
-        section_text = _generate_structured_section(
+        section_generation = _generate_structured_section_record(
             job=job,
             course_plan=course_plan,
             section=section,
@@ -8230,6 +8527,7 @@ def _generate_structured_course_body(
             module_content=module_content,
             model=model,
         )
+        section_text = section_generation["text"]
         section_texts.append(section_text)
         section_records.append({
             "kind": section.get("kind"),
@@ -8239,6 +8537,9 @@ def _generate_structured_course_body(
             "target_words": int(section.get("target_words") or 0),
             "word_count": count_tts_spoken_words(section_text),
             "text": section_text,
+            "generation_mode": section_generation.get("generation_mode"),
+            "beat_alignment_status": section_generation.get("beat_alignment_status"),
+            "beat_texts": section_generation.get("beat_texts") or [],
             **_section_artifact_metadata(section),
         })
     body_text = "\n\n".join(s for s in section_texts if s.strip()).strip()
@@ -8274,7 +8575,7 @@ def _generate_late_opening_for_structured_course(
     course_plan = body_result["course_plan"]
     course_number = int(body_result.get("course_number") or 0)
     section = _structured_opening_section_for_course(course_plan)
-    opening_text = _generate_structured_section(
+    section_generation = _generate_structured_section_record(
         job=job,
         course_plan=course_plan,
         section=section,
@@ -8283,6 +8584,7 @@ def _generate_late_opening_for_structured_course(
         module_content=body_result.get("module_content") or "",
         model=model,
     )
+    opening_text = section_generation["text"]
     return {
         "course_number": course_number,
         "record": {
@@ -8294,6 +8596,9 @@ def _generate_late_opening_for_structured_course(
             "word_count": count_tts_spoken_words(opening_text),
             "text": opening_text,
             "generated_late": True,
+            "generation_mode": section_generation.get("generation_mode"),
+            "beat_alignment_status": section_generation.get("beat_alignment_status"),
+            "beat_texts": section_generation.get("beat_texts") or [],
             **_section_artifact_metadata(section),
         },
         "text": opening_text,
@@ -8312,7 +8617,7 @@ def _generate_late_day_conclusion_for_structured_course(
     if not section:
         return None
     course_number = int(body_result.get("course_number") or 0)
-    day_conclusion_text = _generate_structured_section(
+    section_generation = _generate_structured_section_record(
         job=job,
         course_plan=course_plan,
         section=section,
@@ -8321,6 +8626,7 @@ def _generate_late_day_conclusion_for_structured_course(
         module_content=body_result.get("module_content") or "",
         model=model,
     )
+    day_conclusion_text = section_generation["text"]
     return {
         "course_number": course_number,
         "record": {
@@ -8332,6 +8638,9 @@ def _generate_late_day_conclusion_for_structured_course(
             "word_count": count_tts_spoken_words(day_conclusion_text),
             "text": day_conclusion_text,
             "generated_late": True,
+            "generation_mode": section_generation.get("generation_mode"),
+            "beat_alignment_status": section_generation.get("beat_alignment_status"),
+            "beat_texts": section_generation.get("beat_texts") or [],
             **_section_artifact_metadata(section),
         },
         "text": day_conclusion_text,
@@ -8400,13 +8709,19 @@ def _run_structured_content_generation(
     )
     total_courses = len(course_plans)
     workers = _structured_course_parallel_workers()
+    generation_strategy = (
+        "parallel_body_then_late_opening_beat_first"
+        if _structured_beat_first_enabled()
+        else "parallel_body_then_late_opening"
+    )
     logger.info(
-        "PIPELINE_STRUCTURED_PARALLEL_CONFIG formation_job_id=%s content_job_id=%s folder_id=%s workers=%s courses=%s strategy=body_then_late_opening",
+        "PIPELINE_STRUCTURED_PARALLEL_CONFIG formation_job_id=%s content_job_id=%s folder_id=%s workers=%s courses=%s strategy=%s",
         job.get("formation_job_id"),
         job["id"],
         folder_id,
         workers,
         total_courses,
+        generation_strategy,
     )
 
     if on_progress:
@@ -8489,7 +8804,7 @@ def _run_structured_content_generation(
             "target_words": int(course_plan.get("target_words") or 0),
             "draft_word_count": draft["draft_word_count"],
             "sections": draft["sections"],
-            "generation_strategy": "parallel_body_then_late_opening",
+            "generation_strategy": generation_strategy,
         })
         body_result["draft"] = draft
 
@@ -8502,7 +8817,7 @@ def _run_structured_content_generation(
             "content_draft_sections",
             {
                 "structured_course_plan_version": plan.get("version"),
-                "generation_strategy": "parallel_body_then_late_opening",
+                "generation_strategy": generation_strategy,
                 "parallel_workers": workers,
                 "course_summaries": course_summaries,
                 "courses": draft_courses,
@@ -8654,7 +8969,7 @@ def _run_structured_content_generation(
             "content_budget_calibration",
             {
                 "structured_course_plan_version": plan.get("version"),
-                "generation_strategy": "parallel_body_then_late_opening",
+                "generation_strategy": generation_strategy,
                 "parallel_workers": workers,
                 "summary": {
                     "courses": len(budget_calibration_records),
@@ -8681,11 +8996,26 @@ def _run_structured_content_generation(
             section_text=calibrated_text,
             model=model,
         )
+        micro_changed = (final_text or "").strip() != (calibrated_text or "").strip()
+        sections = result.get("sections") or []
+        if micro_changed:
+            sections = [
+                {
+                    **section,
+                    "beat_alignment_status": (
+                        "lost_after_micro_review"
+                        if section.get("beat_texts")
+                        else section.get("beat_alignment_status")
+                    ),
+                }
+                for section in sections
+            ]
         return {
             **result,
             "course_text": final_text,
             "words": count_tts_spoken_words(final_text),
-            "micro_changed": (final_text or "").strip() != (calibrated_text or "").strip(),
+            "micro_changed": micro_changed,
+            "sections": sections,
             "post_micro_budget_status": _structured_course_budget_status(course_plan, final_text),
         }
 
@@ -8744,7 +9074,7 @@ def _run_structured_content_generation(
             "calibrated_word_count": int(result.get("calibrated_words") or 0),
             "micro_changed": bool(result.get("micro_changed")),
             "post_micro_budget_status": result.get("post_micro_budget_status"),
-            "generation_strategy": "parallel_body_then_late_opening",
+            "generation_strategy": generation_strategy,
         }
         generated_blocks.append(generated_block)
         course_scripts.append({
@@ -8759,8 +9089,9 @@ def _run_structured_content_generation(
             "calibrated_word_count": int(result.get("calibrated_words") or 0),
             "micro_changed": bool(result.get("micro_changed")),
             "post_micro_budget_status": result.get("post_micro_budget_status"),
+            "sections": result.get("sections") or [],
             "structured_plan": course_plan,
-            "generation_strategy": "parallel_body_then_late_opening",
+            "generation_strategy": generation_strategy,
             "previous_course_summary_used": course_summaries.get(course_number - 1, ""),
         })
         _update_job_db(job["id"], total_words=total_words, current_sub_part=course_number - 1, current_passe=1)
@@ -8786,7 +9117,7 @@ def _run_structured_content_generation(
             "content_course_scripts",
             {
                 "structured_course_plan_version": plan.get("version"),
-                "generation_strategy": "parallel_body_then_late_opening",
+                "generation_strategy": generation_strategy,
                 "parallel_workers": workers,
                 "course_summaries": course_summaries,
                 "courses": course_scripts,
@@ -8798,7 +9129,7 @@ def _run_structured_content_generation(
     payload = {
         "generated_at": datetime.utcnow().isoformat() + "Z",
         "mode": "structured_content_generation",
-        "generation_strategy": "parallel_body_then_late_opening",
+        "generation_strategy": generation_strategy,
         "parallel_workers": workers,
         "structured_course_plan": plan,
         "planned_course_blocs": generated_blocks,
