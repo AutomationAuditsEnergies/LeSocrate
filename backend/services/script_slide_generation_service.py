@@ -259,6 +259,11 @@ def _slide_curation_enabled() -> bool:
     return value not in {"0", "false", "no", "off"}
 
 
+def _context_gap_slides_enabled() -> bool:
+    value = str(os.getenv("FORMATION_SLIDE_CONTEXT_GAPS_ENABLED", "0")).strip().lower()
+    return value not in {"0", "false", "no", "off"}
+
+
 def _ensure_slide_deck_tables() -> None:
     """Persist generated decks so audio sync can run outside the request."""
     global _SLIDE_DECK_TABLES_READY
@@ -1553,23 +1558,35 @@ def _generate_batch(blocks: list[dict], source_title: str, model: str, pace_prof
 
 def _build_final_slide(slide: dict, block: dict, slide_number: int) -> dict:
     slide_kind = slide.get("slide_kind") or ("anchor" if slide.get("slide_anchor_id") else "generated")
+    source_text = block["text"]
     source_ref = {
         "source_block_id": block["source_block_id"],
         "word_start": block["word_start"],
         "word_end": block["word_end"],
         "word_count": block["word_count"],
+        "source_window_word_start": block["word_start"],
+        "source_window_word_end": block["word_end"],
+        "source_window_word_count": block["word_count"],
         "sub_part_index": block.get("sub_part_index"),
         "sub_part_name": block.get("sub_part_name"),
         "segments": block.get("source_refs", []),
         "slide_anchors": block.get("slide_anchors") or [],
+        "selection_method": "source_window",
     }
     quote = slide.get("source_quote") or ""
     quote_offsets = _quote_word_offsets(block.get("text", ""), quote)
     if quote_offsets:
         local_start, local_end = quote_offsets
-        source_ref["highlight_word_start"] = block["word_start"] + local_start
-        source_ref["highlight_word_end"] = block["word_start"] + local_end
+        quote_start = block["word_start"] + local_start
+        quote_end = block["word_start"] + local_end
+        source_ref["word_start"] = quote_start
+        source_ref["word_end"] = quote_end
+        source_ref["word_count"] = max(1, quote_end - quote_start)
+        source_ref["highlight_word_start"] = quote_start
+        source_ref["highlight_word_end"] = quote_end
         source_ref["source_quote"] = quote
+        source_ref["selection_method"] = "source_quote"
+        source_text = quote
 
     return {
         "slide_id": f"script-s{slide_number + 1:03d}-b{block['source_block_id'] + 1:03d}",
@@ -1584,7 +1601,7 @@ def _build_final_slide(slide: dict, block: dict, slide_number: int) -> dict:
         "anchor_role": slide.get("anchor_role"),
         "slide_kind": slide_kind,
         "transition_effect": slide.get("transition_effect") or ("swipe-left-to-right" if slide_kind == "anchor" else "fade"),
-        "source_text": block["text"],
+        "source_text": source_text,
         "source_ref": source_ref,
         "importance": slide.get("importance", 3),
         "curation_reason": slide.get("curation_reason") or "",
@@ -1644,7 +1661,7 @@ def _build_context_slide(source: dict, source_blocks: list[dict], start: int, en
     if not gap_blocks:
         return None
 
-    source_text = _text_for_word_range(gap_blocks, start, end)
+    source_text = _shorten(_text_for_word_range(gap_blocks, start, end), 1200)
     word_count = max(0, end - start)
     chapter = _chapter_label_for_blocks(gap_blocks)
     first = gap_blocks[0]
@@ -1689,6 +1706,9 @@ def _build_context_slide(source: dict, source_blocks: list[dict], start: int, en
 
 
 def _insert_context_slides_for_gaps(final_slides: list[dict], source_blocks: list[dict], source: dict, total_words: int) -> tuple[list[dict], int]:
+    if not _context_gap_slides_enabled() and final_slides:
+        return final_slides, 0
+
     if not final_slides:
         context = _build_context_slide(source, source_blocks, 0, total_words, 0)
         return ([context] if context else []), 1 if context else 0
