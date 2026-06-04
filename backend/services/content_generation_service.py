@@ -844,29 +844,129 @@ def _slide_template_for_beat(beat_type: str | None, requested: str | None = None
     return _BEAT_TYPE_TO_TEMPLATE.get(beat_key, "reflection")
 
 
+_GENERIC_BEAT_PATTERNS = (
+    "idée centrale",
+    "idee centrale",
+    "idée principale",
+    "idee principale",
+    "point pédagogique",
+    "point pedagogique",
+    "formulation orale concrète",
+    "formulation orale concrete",
+)
+
+
+def _compact_list_items(value, limit: int = 3) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    items = []
+    for item in value:
+        text = str(item or "").strip()
+        if text:
+            items.append(text)
+        if len(items) >= limit:
+            break
+    return items
+
+
+def _is_generic_beat_text(text: str | None) -> bool:
+    normalized = str(text or "").strip().lower()
+    if not normalized:
+        return True
+    return any(pattern in normalized for pattern in _GENERIC_BEAT_PATTERNS)
+
+
+def _part_context_for_fallback(raw_part: dict) -> dict:
+    title = str(raw_part.get("title") or raw_part.get("label") or "cette partie").strip()
+    function = str(raw_part.get("function") or raw_part.get("pedagogical_role") or "").strip()
+    must_include = _compact_list_items(raw_part.get("must_include"), limit=4)
+    first_focus = must_include[0] if must_include else title
+    second_focus = must_include[1] if len(must_include) > 1 else function or first_focus
+    return {
+        "title": title,
+        "function": function,
+        "must_include": must_include,
+        "first_focus": first_focus,
+        "second_focus": second_focus,
+    }
+
+
+def _fallback_teaching_beats_for_part(raw_part: dict) -> list[dict]:
+    context = _part_context_for_fallback(raw_part)
+    title = context["title"]
+    function = context["function"]
+    first_focus = context["first_focus"]
+    second_focus = context["second_focus"]
+    method_focus = second_focus if second_focus and second_focus != first_focus else first_focus
+    role_suffix = f" pour {function}" if function else ""
+    return [
+        {
+            "type": "concept",
+            "role": f"poser le repère métier spécifique de {title}",
+            "spoken_requirement": (
+                f"Expliquer concrètement {first_focus} en le reliant à la pratique professionnelle"
+                f"{role_suffix}. Ne pas rester au niveau d'une idée générale."
+            ),
+            "slide_anchor": {
+                "enabled": True,
+                "template_type": "reflection",
+                "visual_goal": f"faire retenir le repère pratique propre à {title}",
+                "must_cover": first_focus,
+                "must_not_cover": "une formulation générique sans contenu métier précis",
+            },
+        },
+        {
+            "type": "method",
+            "role": f"transformer {title} en action observable",
+            "spoken_requirement": (
+                f"Montrer comment appliquer {method_focus} dans une situation concrète, "
+                "avec un geste, une décision ou une vigilance directement utilisable."
+            ),
+            "slide_anchor": {
+                "enabled": True,
+                "template_type": "tip",
+                "visual_goal": f"ancrer l'action concrète à mener dans {title}",
+                "must_cover": method_focus,
+                "must_not_cover": "un simple rappel abstrait de l'idée principale",
+            },
+        },
+    ]
+
+
+def _contextualize_generic_beat(raw: dict, raw_part: dict, idx: int) -> dict:
+    context = _part_context_for_fallback(raw_part)
+    title = context["title"]
+    focus = context["must_include"][idx - 1] if idx - 1 < len(context["must_include"]) else context["first_focus"]
+    raw = {**raw}
+    anchor = raw.get("slide_anchor") if isinstance(raw.get("slide_anchor"), dict) else {}
+    anchor = {**anchor}
+    if _is_generic_beat_text(raw.get("role")):
+        raw["role"] = f"traiter précisément {focus} dans {title}"
+    if _is_generic_beat_text(raw.get("spoken_requirement")):
+        raw["spoken_requirement"] = (
+            f"Développer {focus} avec une explication métier concrète, un exemple ou une règle "
+            "d'action directement compréhensible par l'apprenant."
+        )
+    if _is_generic_beat_text(anchor.get("visual_goal")):
+        anchor["visual_goal"] = f"faire mémoriser {focus} dans le cadre de {title}"
+    if not str(anchor.get("must_cover") or "").strip():
+        anchor["must_cover"] = focus
+    if not str(anchor.get("must_not_cover") or "").strip():
+        anchor["must_not_cover"] = "une reformulation générique du titre sans contenu opérationnel"
+    raw["slide_anchor"] = anchor
+    return raw
+
+
 def _normalize_teaching_beats(raw_part: dict, *, course_number: int, part_number: int) -> list[dict]:
     raw_beats = raw_part.get("teaching_beats") if isinstance(raw_part.get("teaching_beats"), list) else []
     if not raw_beats:
-        raw_beats = [
-            {
-                "type": "concept",
-                "role": "poser l'idée centrale de cette partie",
-                "spoken_requirement": (
-                    "Présenter clairement l'idée principale de cette partie avec une formulation "
-                    "orale concrète et mémorisable."
-                ),
-                "slide_anchor": {
-                    "enabled": True,
-                    "template_type": "reflection",
-                    "visual_goal": "faire retenir l'idée centrale",
-                },
-            }
-        ]
+        raw_beats = _fallback_teaching_beats_for_part(raw_part)
 
     normalized = []
     for idx, raw in enumerate(raw_beats[:5], start=1):
         if not isinstance(raw, dict):
             continue
+        raw = _contextualize_generic_beat(raw, raw_part, idx)
         beat_type = str(raw.get("type") or raw.get("beat_type") or "concept").strip().lower()
         role = str(raw.get("role") or raw.get("intent") or "développer un point pédagogique").strip()
         spoken_requirement = str(
@@ -888,6 +988,8 @@ def _normalize_teaching_beats(raw_part: dict, *, course_number: int, part_number
             "template_type": template_type,
             "visual_goal": str(anchor.get("visual_goal") or "visualiser le point pédagogique").strip(),
             "items_expected": anchor.get("items_expected"),
+            "must_cover": str(anchor.get("must_cover") or "").strip(),
+            "must_not_cover": str(anchor.get("must_not_cover") or "").strip(),
             "fields_hint": anchor.get("fields_hint") if isinstance(anchor.get("fields_hint"), dict) else {},
         }
         normalized.append({
@@ -1632,6 +1734,10 @@ Contraintes générales :
   "Prenons un exemple fictif..." ou "Supposons que..." suffit.
 - Pour chaque partie de développement, crée des `teaching_beats` : 2 à 4 moments pédagogiques structurants qui guideront le texte.
 - Chaque teaching beat doit avoir : beat_id, type, role, spoken_requirement, slide_anchor.
+- Interdiction de beats paresseux ou génériques : n'écris jamais `role` ou `visual_goal` du type "poser l'idée centrale", "faire retenir l'idée centrale", "présenter l'idée principale" ou "visualiser le point pédagogique".
+- Chaque beat doit nommer le contenu métier précis à traiter : notion, geste, piège, méthode, exemple, comparaison ou décision observable. On doit comprendre ce que l'apprenant retient sans lire le titre de la partie.
+- Dans `spoken_requirement`, indique ce qui doit être dit concrètement à l'oral, pas seulement "présenter clairement".
+- Dans `slide_anchor.visual_goal`, formule le souvenir visuel spécifique à construire, pas une intention générale.
 - Dans `opening` du cours interne 1, prévois explicitement les moments structurels d'accueil et d'annonce du programme du jour : ils correspondent aux templates `welcome` et `day_program_7_steps`.
 - Un slide_anchor n'est activé que si le moment mérite vraiment une visualisation. N'active pas une slide pour une simple transition orale.
 - Le texte final ne doit jamais dire "slide", "PowerPoint", "template", "anchor" ou "teaching beat". Ces anchors sont internes.
@@ -5965,6 +6071,8 @@ def _section_teaching_beats_prompt(section: dict) -> str:
                 "template_type": anchor.get("template_type"),
                 "visual_goal": anchor.get("visual_goal"),
                 "items_expected": anchor.get("items_expected"),
+                "must_cover": anchor.get("must_cover"),
+                "must_not_cover": anchor.get("must_not_cover"),
             },
         })
     return json.dumps(compact, ensure_ascii=False, indent=2)
@@ -6055,6 +6163,8 @@ Moment pédagogique à écrire maintenant :
         "template_type": anchor.get("template_type"),
         "visual_goal": anchor.get("visual_goal"),
         "items_expected": anchor.get("items_expected"),
+        "must_cover": anchor.get("must_cover"),
+        "must_not_cover": anchor.get("must_not_cover"),
     },
 }, ensure_ascii=False, indent=2)}
 
