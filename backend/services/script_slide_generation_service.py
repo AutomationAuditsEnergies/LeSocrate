@@ -264,6 +264,11 @@ def _context_gap_slides_enabled() -> bool:
     return value not in {"0", "false", "no", "off"}
 
 
+def _section_slide_alignment_enabled() -> bool:
+    value = str(os.getenv("FORMATION_SECTION_SLIDE_ALIGNMENT_ENABLED", "1")).strip().lower()
+    return value not in {"0", "false", "no", "off"}
+
+
 def _ensure_slide_deck_tables() -> None:
     """Persist generated decks so audio sync can run outside the request."""
     global _SLIDE_DECK_TABLES_READY
@@ -874,6 +879,470 @@ def _assign_slide_anchors_to_source_blocks(source_blocks: list[dict], anchors: l
             blocks[block_idx]["slide_anchors"].append(anchor)
 
 
+def _anchor_sort_key(anchor: dict) -> tuple[int, int, str]:
+    return (
+        int(anchor.get("part_number") or 0),
+        int(anchor.get("beat_order") or 0),
+        str(anchor.get("anchor_id") or ""),
+    )
+
+
+def _section_part_number(section: dict, section_index: int) -> int:
+    kind = str(section.get("kind") or "").strip().lower()
+    if kind in {"opening", "intro", "introduction"}:
+        return 0
+    if section.get("part_number") is not None:
+        return _safe_int(section.get("part_number"), section_index, 0, 1000)
+    return section_index
+
+
+def _course_section_records_from_artifact(source: dict) -> list[dict]:
+    artifact = _load_beat_sections_artifact(source)
+    if not artifact:
+        return []
+
+    records = []
+    for course in artifact.get("courses") or []:
+        if not isinstance(course, dict):
+            continue
+        course_number = _safe_int(course.get("course_number"), 0, 0, 10**6)
+        if not course_number:
+            continue
+        course_title = course.get("course_title") or f"Cours {course_number}"
+        sub_part_index = max(0, course_number - 1)
+        for section_index, section in enumerate(course.get("sections") or [], start=1):
+            if not isinstance(section, dict):
+                continue
+            text = _strip_tts_tags(section.get("text") or "")
+            if not text:
+                continue
+            part_number = _section_part_number(section, section_index)
+            label = section.get("label") or section.get("title") or f"Section {section_index}"
+            records.append(
+                {
+                    "course_number": course_number,
+                    "course_title": course_title,
+                    "sub_part_index": sub_part_index,
+                    "sub_part_name": f"{course_title} · {label}",
+                    "section_index": section_index,
+                    "section_label": label,
+                    "part_number": part_number,
+                    "kind": section.get("kind") or "",
+                    "title": section.get("title") or label,
+                    "text": text,
+                }
+            )
+    return records
+
+
+def _split_text_for_alignment(text: str, max_unit_words: int, min_units: int) -> list[str]:
+    pieces = []
+    for paragraph in _split_paragraphs(text):
+        pieces.extend(_split_long_paragraph(paragraph, max_unit_words))
+    pieces = [piece.strip() for piece in pieces if piece.strip()]
+
+    while len(pieces) < min_units:
+        split_idx = -1
+        split_words = 0
+        for idx, piece in enumerate(pieces):
+            words = piece.split()
+            if len(words) > split_words:
+                split_idx = idx
+                split_words = len(words)
+        if split_idx < 0 or split_words <= 1:
+            break
+
+        words = pieces[split_idx].split()
+        mid = max(1, len(words) // 2)
+        left = " ".join(words[:mid]).strip()
+        right = " ".join(words[mid:]).strip()
+        if not left or not right:
+            break
+        pieces = pieces[:split_idx] + [left, right] + pieces[split_idx + 1 :]
+
+    return pieces
+
+
+def _section_alignment_units(section: dict, word_cursor: int, min_units: int = 0) -> tuple[list[dict], int]:
+    units = []
+    cursor = word_cursor
+    pieces = _split_text_for_alignment(section.get("text") or "", max_unit_words=90, min_units=min_units)
+    for unit_id, piece in enumerate(pieces):
+        words = piece.split()
+        if not words:
+            continue
+        units.append(
+            {
+                "unit_id": unit_id,
+                "text": piece,
+                "word_count": len(words),
+                "word_start": cursor,
+                "word_end": cursor + len(words),
+            }
+        )
+        cursor += len(words)
+    return units, cursor
+
+
+def _alignment_anchor_payload(anchor: dict) -> dict:
+    return {
+        "anchor_id": anchor.get("anchor_id"),
+        "beat_id": anchor.get("beat_id"),
+        "template_type": anchor.get("template_type"),
+        "beat_type": anchor.get("beat_type"),
+        "role": anchor.get("role"),
+        "visual_goal": anchor.get("visual_goal"),
+        "spoken_requirement": anchor.get("spoken_requirement"),
+        "must_cover": anchor.get("must_cover"),
+        "must_not_cover": anchor.get("must_not_cover"),
+        "fields_hint": anchor.get("fields_hint") or {},
+    }
+
+
+def _section_alignment_prompt(section: dict, units: list[dict], anchors: list[dict]) -> str:
+    payload_units = [
+        {
+            "unit_id": unit["unit_id"],
+            "word_count": unit["word_count"],
+            "text": _shorten(unit["text"], 950),
+        }
+        for unit in units
+    ]
+    payload_anchors = [_alignment_anchor_payload(anchor) for anchor in anchors]
+    return f"""Tu es un agent d'alignement chronologique texte -> slides.
+
+Objectif: découper le texte final d'une section en plages contiguës, une plage par slide prévue.
+
+RÈGLES NON NÉGOCIABLES:
+- Utilise exactement toutes les slides prévues: chaque `anchor_id` doit apparaître une seule fois.
+- Utilise toutes les unités de texte: aucune unité ne doit rester non attribuée.
+- Les plages doivent être contiguës, sans trou et sans chevauchement.
+- La première plage commence à `unit_start = 0`.
+- Chaque plage suivante commence exactement à `unit_end précédent + 1`.
+- La dernière plage se termine à `unit_end = {max(0, len(units) - 1)}`.
+- Tu peux réordonner les slides prévues si le texte le demande, mais tu ne peux jamais revenir à une slide déjà utilisée.
+- Exemple autorisé: B puis C puis A. Exemple interdit: A puis B puis A puis C.
+- N'utilise pas de cible de mots. Ne cherche pas à équilibrer artificiellement au mot près.
+- Pour choisir les bornes, lis surtout `visual_goal`, `spoken_requirement`, `must_cover`, `must_not_cover` et le contenu réel du texte.
+- Les phrases de liaison, transitions et nuances doivent être attachées à la slide la plus proche dans le flux oral.
+- Réponds uniquement en JSON valide.
+
+FORMAT EXACT:
+{{
+  "assignments": [
+    {{
+      "anchor_id": "id exact",
+      "unit_start": 0,
+      "unit_end": 2,
+      "fit_reason": "raison courte"
+    }}
+  ]
+}}
+
+SECTION:
+{json.dumps({
+    "course_number": section.get("course_number"),
+    "course_title": section.get("course_title"),
+    "section_label": section.get("section_label"),
+    "part_number": section.get("part_number"),
+}, ensure_ascii=False)}
+
+SLIDES PRÉVUES:
+{json.dumps(payload_anchors, ensure_ascii=False)}
+
+UNITÉS DE TEXTE:
+{json.dumps(payload_units, ensure_ascii=False)}
+"""
+
+
+def _fallback_section_assignments(anchors: list[dict], units: list[dict], reason: str) -> list[dict]:
+    if not anchors or not units:
+        return []
+    if len(units) < len(anchors):
+        anchors = anchors[: len(units)]
+    assignments = []
+    cursor = 0
+    total_units = len(units)
+    for idx, anchor in enumerate(anchors):
+        remaining_anchors = len(anchors) - idx
+        remaining_units = total_units - cursor
+        span = max(1, math.ceil(remaining_units / max(1, remaining_anchors)))
+        end = total_units - 1 if idx == len(anchors) - 1 else min(total_units - remaining_anchors, cursor + span - 1)
+        assignments.append(
+            {
+                "anchor_id": anchor.get("anchor_id"),
+                "unit_start": cursor,
+                "unit_end": end,
+                "fit_reason": reason,
+                "fallback": True,
+            }
+        )
+        cursor = end + 1
+    return assignments
+
+
+def _validate_section_assignments(raw: dict, anchors: list[dict], units: list[dict]) -> list[dict] | None:
+    assignments = raw.get("assignments") if isinstance(raw, dict) else None
+    if not isinstance(assignments, list) or len(assignments) != len(anchors):
+        return None
+    anchor_ids = {str(anchor.get("anchor_id") or "") for anchor in anchors if anchor.get("anchor_id")}
+    seen = set()
+    cursor = 0
+    normalized = []
+    last_unit_id = len(units) - 1
+
+    for item in assignments:
+        if not isinstance(item, dict):
+            return None
+        anchor_id = str(item.get("anchor_id") or "").strip()
+        if anchor_id not in anchor_ids or anchor_id in seen:
+            return None
+        try:
+            start = int(item.get("unit_start"))
+            end = int(item.get("unit_end"))
+        except (TypeError, ValueError):
+            return None
+        if start != cursor or end < start or end > last_unit_id:
+            return None
+        normalized.append(
+            {
+                "anchor_id": anchor_id,
+                "unit_start": start,
+                "unit_end": end,
+                "fit_reason": _as_text(item.get("fit_reason"), "")[:240],
+            }
+        )
+        seen.add(anchor_id)
+        cursor = end + 1
+
+    if seen != anchor_ids or cursor != len(units):
+        return None
+    return normalized
+
+
+def _align_section_to_slide_anchors(section: dict, units: list[dict], anchors: list[dict], model: str) -> tuple[list[dict], dict]:
+    ordered_anchors = sorted(anchors, key=_anchor_sort_key)
+    if not units or not ordered_anchors:
+        return [], {"status": "skipped"}
+    if len(units) < len(ordered_anchors):
+        return _fallback_section_assignments(ordered_anchors, units, "fallback_units_insufficient"), {
+            "status": "fallback",
+            "reason": "units_insufficient",
+        }
+
+    prompt = _section_alignment_prompt(section, units, ordered_anchors)
+    try:
+        response = post_message(
+            [{"role": "user", "content": prompt}],
+            max_tokens=2200,
+            model=model,
+            timeout=180,
+        )
+        parsed = _parse_json_object(response)
+        assignments = _validate_section_assignments(parsed, ordered_anchors, units)
+        if assignments:
+            return assignments, {"status": "llm", "assignments": len(assignments)}
+        logger.warning(
+            "PIPELINE_SLIDES_SECTION_ALIGNMENT_INVALID course=%s section=%s anchors=%s units=%s",
+            section.get("course_number"),
+            section.get("section_label"),
+            len(ordered_anchors),
+            len(units),
+        )
+    except Exception as exc:
+        logger.exception(
+            "PIPELINE_SLIDES_SECTION_ALIGNMENT_ERROR course=%s section=%s error=%s",
+            section.get("course_number"),
+            section.get("section_label"),
+            exc,
+        )
+
+    return _fallback_section_assignments(ordered_anchors, units, "fallback_invalid_alignment"), {
+        "status": "fallback",
+        "reason": "invalid_or_failed_alignment",
+    }
+
+
+def _section_alignment_block(
+    *,
+    block_id: int,
+    section: dict,
+    units: list[dict],
+    assignment: dict,
+    anchor: dict | None,
+    alignment_status: str,
+) -> dict:
+    selected = units[int(assignment["unit_start"]) : int(assignment["unit_end"]) + 1]
+    first = selected[0]
+    last = selected[-1]
+    text = "\n\n".join(unit["text"] for unit in selected if unit.get("text")).strip()
+    slide_anchors = [anchor] if isinstance(anchor, dict) and anchor.get("anchor_id") else []
+    return {
+        "source_block_id": block_id,
+        "word_start": first["word_start"],
+        "word_end": last["word_end"],
+        "word_count": sum(int(unit.get("word_count") or 0) for unit in selected),
+        "sub_part_index": section.get("sub_part_index"),
+        "sub_part_name": section.get("sub_part_name"),
+        "text": text,
+        "source_refs": [
+            {
+                "sub_part_index": section.get("sub_part_index"),
+                "sub_part_name": section.get("sub_part_name"),
+                "passe": 1,
+                "course_number": section.get("course_number"),
+                "part_number": section.get("part_number"),
+                "section_index": section.get("section_index"),
+                "section_label": section.get("section_label"),
+                "slide_anchor_id": assignment.get("anchor_id"),
+                "source_alignment": "section_slide_alignment",
+                "alignment_status": alignment_status,
+                "unit_start": assignment.get("unit_start"),
+                "unit_end": assignment.get("unit_end"),
+            }
+        ],
+        "slide_anchors": slide_anchors,
+        "source_alignment": "section_slide_alignment" if slide_anchors else "section_unanchored",
+        "section_alignment": {
+            "course_number": section.get("course_number"),
+            "part_number": section.get("part_number"),
+            "section_index": section.get("section_index"),
+            "section_label": section.get("section_label"),
+            "anchor_id": assignment.get("anchor_id"),
+            "unit_start": assignment.get("unit_start"),
+            "unit_end": assignment.get("unit_end"),
+            "fit_reason": assignment.get("fit_reason") or "",
+            "status": alignment_status,
+        },
+    }
+
+
+def _build_section_aligned_source_blocks(source: dict, anchors: list[dict], model: str) -> tuple[list[dict], int, dict] | None:
+    if not anchors:
+        return None
+
+    sections = _course_section_records_from_artifact(source)
+    if not sections:
+        return None
+
+    logger.info(
+        "PIPELINE_SLIDES_SECTION_ALIGNMENT_START folder=%s content_job=%s sections=%s anchors=%s model=%s",
+        source.get("folder_id"),
+        source.get("content_job_id"),
+        len(sections),
+        len(anchors),
+        model,
+    )
+
+    anchors_by_section: dict[tuple[int, int], list[dict]] = {}
+    for anchor in anchors:
+        key = (int(anchor.get("course_number") or 0), int(anchor.get("part_number") or 0))
+        anchors_by_section.setdefault(key, []).append(anchor)
+
+    blocks = []
+    alignment_debug = []
+    word_cursor = 0
+    aligned_anchor_count = 0
+
+    for section in sections:
+        key = (int(section.get("course_number") or 0), int(section.get("part_number") or 0))
+        section_anchors = sorted(anchors_by_section.get(key) or [], key=_anchor_sort_key)
+        units, word_cursor = _section_alignment_units(section, word_cursor, min_units=len(section_anchors))
+        if not units:
+            continue
+
+        if not section_anchors:
+            blocks.append(
+                _section_alignment_block(
+                    block_id=len(blocks),
+                    section=section,
+                    units=units,
+                    assignment={
+                        "anchor_id": "",
+                        "unit_start": 0,
+                        "unit_end": len(units) - 1,
+                        "fit_reason": "section_without_planned_slide",
+                    },
+                    anchor=None,
+                    alignment_status="unanchored",
+                )
+            )
+            continue
+
+        section_started_at = time.time()
+        logger.info(
+            "PIPELINE_SLIDES_SECTION_ALIGNMENT_SECTION_START folder=%s content_job=%s course=%s part=%s section=%s anchors=%s units=%s",
+            source.get("folder_id"),
+            source.get("content_job_id"),
+            section.get("course_number"),
+            section.get("part_number"),
+            section.get("section_label"),
+            len(section_anchors),
+            len(units),
+        )
+        assignments, debug = _align_section_to_slide_anchors(section, units, section_anchors, model)
+        anchor_by_id = {str(anchor.get("anchor_id") or ""): anchor for anchor in section_anchors}
+        for assignment in assignments:
+            anchor = anchor_by_id.get(str(assignment.get("anchor_id") or ""))
+            if not anchor:
+                continue
+            blocks.append(
+                _section_alignment_block(
+                    block_id=len(blocks),
+                    section=section,
+                    units=units,
+                    assignment=assignment,
+                    anchor=anchor,
+                    alignment_status=debug.get("status") or "unknown",
+                )
+            )
+            aligned_anchor_count += 1
+        alignment_debug.append(
+            {
+                "course_number": section.get("course_number"),
+                "part_number": section.get("part_number"),
+                "section_index": section.get("section_index"),
+                "section_label": section.get("section_label"),
+                "anchors": len(section_anchors),
+                "units": len(units),
+                "status": debug.get("status"),
+                "reason": debug.get("reason"),
+                "assignments": assignments,
+            }
+        )
+        logger.info(
+            "PIPELINE_SLIDES_SECTION_ALIGNMENT_SECTION_DONE folder=%s content_job=%s course=%s part=%s status=%s assignments=%s duration_ms=%s",
+            source.get("folder_id"),
+            source.get("content_job_id"),
+            section.get("course_number"),
+            section.get("part_number"),
+            debug.get("status"),
+            len(assignments),
+            int((time.time() - section_started_at) * 1000),
+        )
+
+    if not blocks or not aligned_anchor_count:
+        return None
+
+    logger.info(
+        "PIPELINE_SLIDES_SECTION_ALIGNMENT_DONE folder=%s content_job=%s blocks=%s aligned_anchors=%s sections=%s",
+        source.get("folder_id"),
+        source.get("content_job_id"),
+        len(blocks),
+        aligned_anchor_count,
+        len(alignment_debug),
+    )
+
+    return blocks, word_cursor, {
+        "enabled": True,
+        "sections": len(sections),
+        "aligned_sections": sum(1 for item in alignment_debug if item.get("anchors")),
+        "aligned_anchors": aligned_anchor_count,
+        "blocks": len(blocks),
+        "records": alignment_debug,
+    }
+
+
 def _split_long_paragraph(text: str, max_words: int) -> list[str]:
     words = text.split()
     if len(words) <= max_words:
@@ -1098,6 +1567,7 @@ def _prompt_for_blocks(blocks: list[dict], source_title: str, pace_profile: dict
             "source_block_id": block["source_block_id"],
             "sub_part_name": block.get("sub_part_name"),
             "word_count": block.get("word_count"),
+            "source_alignment": block.get("source_alignment") or "source_window",
             "text": _shorten(block.get("text", ""), 3600),
             "slide_anchors": [
                 {
@@ -1150,6 +1620,7 @@ RÈGLES:
 - Tu reçois des fenêtres de contexte. Elles servent à te donner le texte, pas à imposer le nombre de slides.
 - Si une fenêtre contient `slide_anchors`, ils t'indiquent l'intention initiale du plan. Utilise-les si le texte source couvre réellement leur intention.
 - Si un anchor n'est pas couvert par le texte source, ignore-le au lieu d'inventer.
+- Si `source_alignment` vaut `section_slide_alignment`, la fenêtre est déjà la plage chronologique exacte attribuée à l'unique slide prévue: produis exactement 1 slide pour cette fenêtre, utilise son unique anchor, et ne crée pas de deuxième slide.
 - Quand tu utilises un anchor, recopie exactement `slide_anchor_id` et `beat_id` dans la slide générée.
 - Un anchor correspond à une intention pédagogique précise, pas à toute la fenêtre.
 - Pour chaque anchor utilisé, choisis `source_quote` dans la portion exacte du texte qui réalise cette intention.
@@ -1442,18 +1913,27 @@ def _fallback_title(block: dict) -> str:
 
 
 def _fallback_slide(block: dict, reason: str = "fallback") -> dict:
+    anchor = None
+    anchors = block.get("slide_anchors") or []
+    if len(anchors) == 1 and isinstance(anchors[0], dict):
+        anchor = anchors[0]
     title = _fallback_title(block)
     text = _shorten(block.get("text", ""), 280)
+    template = _canonical_template((anchor or {}).get("template_type"), fallback="reflection")
     return {
         "source_block_id": block["source_block_id"],
-        "template_type": "reflection",
+        "template_type": template,
         "event_type": "concept",
         "event_summary": title,
         "importance": 2,
         "data": {"title": title, "text": text},
-        "slide_anchor_id": None,
-        "beat_id": "",
+        "slide_anchor_id": (anchor or {}).get("anchor_id"),
+        "beat_id": (anchor or {}).get("beat_id") or "",
+        "anchor_role": (anchor or {}).get("role") or "",
+        "source_quote": _shorten(block.get("text", ""), 700),
+        "curation_reason": reason,
         "fallback_reason": reason,
+        "ideal_template_gap": _normalize_template_gap(None, template),
     }
 
 
@@ -1533,16 +2013,32 @@ def _generate_batch(blocks: list[dict], source_title: str, model: str, pace_prof
         block = block_by_id.get(source_block_id)
         if not block:
             continue
-        per_block_limit = max(
-            pace_profile["max_slides_per_block"],
-            len(block.get("slide_anchors") or []),
-        )
+        if block.get("source_alignment") == "section_slide_alignment":
+            per_block_limit = 1
+        else:
+            per_block_limit = max(
+                pace_profile["max_slides_per_block"],
+                len(block.get("slide_anchors") or []),
+            )
         if per_block_counts.get(source_block_id, 0) >= per_block_limit:
             continue
         slides.append(_normalize_slide(raw, block))
         per_block_counts[source_block_id] = per_block_counts.get(source_block_id, 0) + 1
         if len(slides) >= max_batch_slides:
             break
+
+    strict_blocks = [
+        block
+        for block in blocks
+        if block.get("source_alignment") == "section_slide_alignment"
+        and block.get("slide_anchors")
+        and per_block_counts.get(block["source_block_id"], 0) == 0
+    ]
+    for block in strict_blocks:
+        if len(slides) >= max_batch_slides:
+            break
+        slides.append(_fallback_slide(block, "missing_strict_section_slide"))
+        per_block_counts[block["source_block_id"]] = 1
 
     for slide in slides:
         gap = slide.get("ideal_template_gap") or {}
@@ -1559,6 +2055,7 @@ def _generate_batch(blocks: list[dict], source_title: str, model: str, pace_prof
 def _build_final_slide(slide: dict, block: dict, slide_number: int) -> dict:
     slide_kind = slide.get("slide_kind") or ("anchor" if slide.get("slide_anchor_id") else "generated")
     source_text = block["text"]
+    source_alignment = block.get("source_alignment") or "source_window"
     source_ref = {
         "source_block_id": block["source_block_id"],
         "word_start": block["word_start"],
@@ -1571,7 +2068,8 @@ def _build_final_slide(slide: dict, block: dict, slide_number: int) -> dict:
         "sub_part_name": block.get("sub_part_name"),
         "segments": block.get("source_refs", []),
         "slide_anchors": block.get("slide_anchors") or [],
-        "selection_method": "source_window",
+        "selection_method": source_alignment,
+        "source_alignment": source_alignment,
     }
     quote = slide.get("source_quote") or ""
     quote_offsets = _quote_word_offsets(block.get("text", ""), quote)
@@ -1579,14 +2077,15 @@ def _build_final_slide(slide: dict, block: dict, slide_number: int) -> dict:
         local_start, local_end = quote_offsets
         quote_start = block["word_start"] + local_start
         quote_end = block["word_start"] + local_end
-        source_ref["word_start"] = quote_start
-        source_ref["word_end"] = quote_end
-        source_ref["word_count"] = max(1, quote_end - quote_start)
         source_ref["highlight_word_start"] = quote_start
         source_ref["highlight_word_end"] = quote_end
         source_ref["source_quote"] = quote
-        source_ref["selection_method"] = "source_quote"
-        source_text = quote
+        if source_alignment != "section_slide_alignment":
+            source_ref["word_start"] = quote_start
+            source_ref["word_end"] = quote_end
+            source_ref["word_count"] = max(1, quote_end - quote_start)
+            source_ref["selection_method"] = "source_quote"
+            source_text = quote
 
     return {
         "slide_id": f"script-s{slide_number + 1:03d}-b{block['source_block_id'] + 1:03d}",
@@ -1784,35 +2283,50 @@ def _run_slide_generation_from_source(
     pace_config = _pace_profile(pace)
     batch_size = _safe_int(batch_size, DEFAULT_BATCH_SIZE, 1, 10)
     model = model or default_model()
+    section_alignment_debug = {}
+
+    if content_plan is None and not source.get("preview_only") and not source.get("beat_aligned"):
+        content_plan = _load_content_plan(source)
+    slide_anchors = _extract_slide_anchors_from_plan(content_plan)
+    source_alignment_mode = "draft_beat_aligned" if source.get("beat_aligned") else "text_windows"
 
     if source.get("beat_aligned"):
         source_blocks, total_words = _build_beat_source_blocks(source["segments"])
         effective_words_per_slide = 0
     else:
-        units, total_words = _build_text_units(source["segments"], max_unit_words=900)
-        average_words_cap = max(180, math.ceil(total_words / max(1, max_slides)))
-        context_words = _safe_int(
-            target_words_per_slide,
-            max(DEFAULT_CONTEXT_WORDS, int(average_words_cap * pace_config["context_multiplier"])),
-            700,
-            5000,
-        )
-        source_blocks, effective_words_per_slide = _build_source_blocks(
-            units,
-            total_words=total_words,
-            target_words=context_words,
-            max_slides=max_slides,
-        )
-    if content_plan is None and not source.get("preview_only") and not source.get("beat_aligned"):
-        content_plan = _load_content_plan(source)
-    slide_anchors = _extract_slide_anchors_from_plan(content_plan)
+        aligned = None
+        if (
+            _section_slide_alignment_enabled()
+            and not source.get("preview_only")
+            and slide_anchors
+        ):
+            aligned = _build_section_aligned_source_blocks(source, slide_anchors, model)
+        if aligned:
+            source_blocks, total_words, section_alignment_debug = aligned
+            effective_words_per_slide = 0
+            source_alignment_mode = "section_slide_alignment"
+        else:
+            units, total_words = _build_text_units(source["segments"], max_unit_words=900)
+            average_words_cap = max(180, math.ceil(total_words / max(1, max_slides)))
+            context_words = _safe_int(
+                target_words_per_slide,
+                max(DEFAULT_CONTEXT_WORDS, int(average_words_cap * pace_config["context_multiplier"])),
+                700,
+                5000,
+            )
+            source_blocks, effective_words_per_slide = _build_source_blocks(
+                units,
+                total_words=total_words,
+                target_words=context_words,
+                max_slides=max_slides,
+            )
     if source.get("beat_aligned"):
         slide_anchors = [
             anchor
             for block in source_blocks
             for anchor in (block.get("slide_anchors") or [])
         ]
-    else:
+    elif source_alignment_mode != "section_slide_alignment":
         _assign_slide_anchors_to_source_blocks(source_blocks, slide_anchors)
 
     if not source_blocks:
@@ -1942,6 +2456,8 @@ def _run_slide_generation_from_source(
             "word_start": block["word_start"],
             "word_end": block["word_end"],
             "word_count": block["word_count"],
+            "source_alignment": block.get("source_alignment"),
+            "section_alignment": block.get("section_alignment") or {},
             "source_refs": block.get("source_refs", []),
             "slide_anchors": block.get("slide_anchors") or [],
             "excerpt": _shorten(block.get("text", ""), 360),
@@ -1958,7 +2474,7 @@ def _run_slide_generation_from_source(
             "folder_name": source["folder_name"],
             "job_id": job_id,
             "source": "preview_text" if source.get("preview_only") else "content_generation_segments",
-            "source_alignment": "draft_beat_aligned" if source.get("beat_aligned") else "text_windows",
+            "source_alignment": source_alignment_mode,
             "content_plan_source": CONTENT_PLAN_BLOB if content_plan else None,
             "source_words": total_words,
             "source_segments": len(source["segments"]),
@@ -1976,6 +2492,8 @@ def _run_slide_generation_from_source(
             "slides_dropped_by_cap": dropped_by_cap,
             "slides_dropped_unanchored": dropped_unanchored,
             "slide_curation_enabled": _slide_curation_enabled(),
+            "section_slide_alignment_enabled": _section_slide_alignment_enabled(),
+            "section_slide_alignment": section_alignment_debug,
             "template_backlog_count": len(template_backlog),
             "llm_batches": len(batches_debug),
             "model": model,
@@ -1983,6 +2501,7 @@ def _run_slide_generation_from_source(
         "pipeline_debug": {
             "generation_mode": "script_anchor_guided_curation" if slide_anchors else "script_curation",
             "slide_anchors": slide_anchors,
+            "section_slide_alignment": section_alignment_debug,
             "template_backlog": template_backlog,
             "source_blocks": source_block_debug,
             "slide_plan": [
