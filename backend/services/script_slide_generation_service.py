@@ -14,6 +14,7 @@ import math
 import os
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Iterable
 
 from database.db import get_db_connection
@@ -267,6 +268,10 @@ def _context_gap_slides_enabled() -> bool:
 def _section_slide_alignment_enabled() -> bool:
     value = str(os.getenv("FORMATION_SECTION_SLIDE_ALIGNMENT_ENABLED", "1")).strip().lower()
     return value not in {"0", "false", "no", "off"}
+
+
+def _section_slide_alignment_workers() -> int:
+    return _safe_int(os.getenv("FORMATION_SECTION_SLIDE_ALIGNMENT_WORKERS"), 4, 1, 8)
 
 
 def _ensure_slide_deck_tables() -> None:
@@ -1226,11 +1231,12 @@ def _build_section_aligned_source_blocks(source: dict, anchors: list[dict], mode
         return None
 
     logger.info(
-        "PIPELINE_SLIDES_SECTION_ALIGNMENT_START folder=%s content_job=%s sections=%s anchors=%s model=%s",
+        "PIPELINE_SLIDES_SECTION_ALIGNMENT_START folder=%s content_job=%s sections=%s anchors=%s workers=%s model=%s",
         source.get("folder_id"),
         source.get("content_job_id"),
         len(sections),
         len(anchors),
+        _section_slide_alignment_workers(),
         model,
     )
 
@@ -1239,17 +1245,96 @@ def _build_section_aligned_source_blocks(source: dict, anchors: list[dict], mode
         key = (int(anchor.get("course_number") or 0), int(anchor.get("part_number") or 0))
         anchors_by_section.setdefault(key, []).append(anchor)
 
-    blocks = []
-    alignment_debug = []
     word_cursor = 0
-    aligned_anchor_count = 0
+    prepared_sections = []
 
-    for section in sections:
+    for section_order, section in enumerate(sections):
         key = (int(section.get("course_number") or 0), int(section.get("part_number") or 0))
         section_anchors = sorted(anchors_by_section.get(key) or [], key=_anchor_sort_key)
         units, word_cursor = _section_alignment_units(section, word_cursor, min_units=len(section_anchors))
         if not units:
             continue
+        prepared_sections.append(
+            {
+                "section_order": section_order,
+                "section": section,
+                "units": units,
+                "anchors": section_anchors,
+            }
+        )
+
+    def _align_prepared_section(prepared: dict) -> tuple[int, list[dict], dict]:
+        section = prepared["section"]
+        units = prepared["units"]
+        section_anchors = prepared["anchors"]
+        section_started_at = time.time()
+        logger.info(
+            "PIPELINE_SLIDES_SECTION_ALIGNMENT_SECTION_START folder=%s content_job=%s course=%s part=%s section=%s anchors=%s units=%s",
+            source.get("folder_id"),
+            source.get("content_job_id"),
+            section.get("course_number"),
+            section.get("part_number"),
+            section.get("section_label"),
+            len(section_anchors),
+            len(units),
+        )
+        assignments, debug = _align_section_to_slide_anchors(section, units, section_anchors, model)
+        logger.info(
+            "PIPELINE_SLIDES_SECTION_ALIGNMENT_SECTION_DONE folder=%s content_job=%s course=%s part=%s status=%s assignments=%s duration_ms=%s",
+            source.get("folder_id"),
+            source.get("content_job_id"),
+            section.get("course_number"),
+            section.get("part_number"),
+            debug.get("status"),
+            len(assignments),
+            int((time.time() - section_started_at) * 1000),
+        )
+        return prepared["section_order"], assignments, debug
+
+    anchored_sections = [prepared for prepared in prepared_sections if prepared["anchors"]]
+    alignment_results: dict[int, tuple[list[dict], dict]] = {}
+    workers = min(_section_slide_alignment_workers(), max(1, len(anchored_sections)))
+    if anchored_sections and workers > 1:
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            future_map = {
+                executor.submit(_align_prepared_section, prepared): prepared
+                for prepared in anchored_sections
+            }
+            for future in as_completed(future_map):
+                prepared = future_map[future]
+                try:
+                    section_order, assignments, debug = future.result()
+                except Exception as exc:
+                    section = prepared["section"]
+                    logger.exception(
+                        "PIPELINE_SLIDES_SECTION_ALIGNMENT_FUTURE_ERROR folder=%s content_job=%s course=%s part=%s error=%s",
+                        source.get("folder_id"),
+                        source.get("content_job_id"),
+                        section.get("course_number"),
+                        section.get("part_number"),
+                        exc,
+                    )
+                    section_order = prepared["section_order"]
+                    assignments = _fallback_section_assignments(
+                        prepared["anchors"],
+                        prepared["units"],
+                        "fallback_parallel_alignment_error",
+                    )
+                    debug = {"status": "fallback", "reason": "parallel_alignment_error"}
+                alignment_results[section_order] = (assignments, debug)
+    else:
+        for prepared in anchored_sections:
+            section_order, assignments, debug = _align_prepared_section(prepared)
+            alignment_results[section_order] = (assignments, debug)
+
+    blocks = []
+    alignment_debug = []
+    aligned_anchor_count = 0
+
+    for prepared in prepared_sections:
+        section = prepared["section"]
+        units = prepared["units"]
+        section_anchors = prepared["anchors"]
 
         if not section_anchors:
             blocks.append(
@@ -1269,18 +1354,13 @@ def _build_section_aligned_source_blocks(source: dict, anchors: list[dict], mode
             )
             continue
 
-        section_started_at = time.time()
-        logger.info(
-            "PIPELINE_SLIDES_SECTION_ALIGNMENT_SECTION_START folder=%s content_job=%s course=%s part=%s section=%s anchors=%s units=%s",
-            source.get("folder_id"),
-            source.get("content_job_id"),
-            section.get("course_number"),
-            section.get("part_number"),
-            section.get("section_label"),
-            len(section_anchors),
-            len(units),
+        assignments, debug = alignment_results.get(
+            prepared["section_order"],
+            (
+                _fallback_section_assignments(section_anchors, units, "fallback_missing_parallel_result"),
+                {"status": "fallback", "reason": "missing_parallel_result"},
+            ),
         )
-        assignments, debug = _align_section_to_slide_anchors(section, units, section_anchors, model)
         anchor_by_id = {str(anchor.get("anchor_id") or ""): anchor for anchor in section_anchors}
         for assignment in assignments:
             anchor = anchor_by_id.get(str(assignment.get("anchor_id") or ""))
@@ -1310,16 +1390,6 @@ def _build_section_aligned_source_blocks(source: dict, anchors: list[dict], mode
                 "assignments": assignments,
             }
         )
-        logger.info(
-            "PIPELINE_SLIDES_SECTION_ALIGNMENT_SECTION_DONE folder=%s content_job=%s course=%s part=%s status=%s assignments=%s duration_ms=%s",
-            source.get("folder_id"),
-            source.get("content_job_id"),
-            section.get("course_number"),
-            section.get("part_number"),
-            debug.get("status"),
-            len(assignments),
-            int((time.time() - section_started_at) * 1000),
-        )
 
     if not blocks or not aligned_anchor_count:
         return None
@@ -1339,6 +1409,7 @@ def _build_section_aligned_source_blocks(source: dict, anchors: list[dict], mode
         "aligned_sections": sum(1 for item in alignment_debug if item.get("anchors")),
         "aligned_anchors": aligned_anchor_count,
         "blocks": len(blocks),
+        "workers": workers,
         "records": alignment_debug,
     }
 
