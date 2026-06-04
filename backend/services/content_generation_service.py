@@ -963,12 +963,15 @@ def _normalize_teaching_beats(raw_part: dict, *, course_number: int, part_number
         raw_beats = _fallback_teaching_beats_for_part(raw_part)
 
     normalized = []
+    part_context = _part_context_for_fallback(raw_part)
+    default_role = f"traiter précisément {part_context['first_focus']} dans {part_context['title']}"
+    default_visual_goal = f"faire mémoriser {part_context['first_focus']} dans le cadre de {part_context['title']}"
     for idx, raw in enumerate(raw_beats[:5], start=1):
         if not isinstance(raw, dict):
             continue
         raw = _contextualize_generic_beat(raw, raw_part, idx)
         beat_type = str(raw.get("type") or raw.get("beat_type") or "concept").strip().lower()
-        role = str(raw.get("role") or raw.get("intent") or "développer un point pédagogique").strip()
+        role = str(raw.get("role") or raw.get("intent") or default_role).strip()
         spoken_requirement = str(
             raw.get("spoken_requirement")
             or raw.get("requirement")
@@ -986,7 +989,7 @@ def _normalize_teaching_beats(raw_part: dict, *, course_number: int, part_number
             "enabled": enabled,
             "anchor_id": str(anchor.get("anchor_id") or f"{beat_id}-slide").strip(),
             "template_type": template_type,
-            "visual_goal": str(anchor.get("visual_goal") or "visualiser le point pédagogique").strip(),
+            "visual_goal": str(anchor.get("visual_goal") or default_visual_goal).strip(),
             "items_expected": anchor.get("items_expected"),
             "must_cover": str(anchor.get("must_cover") or "").strip(),
             "must_not_cover": str(anchor.get("must_not_cover") or "").strip(),
