@@ -5605,6 +5605,9 @@ export default function FormationPipeline() {
   const [continuingAfterTextFolders, setContinuingAfterTextFolders] = useState({})
   const [continueAfterTextError, setContinueAfterTextError] = useState('')
   const [continueAfterTextNotice, setContinueAfterTextNotice] = useState('')
+  const [slideIterationFolders, setSlideIterationFolders] = useState({})
+  const [slideIterationError, setSlideIterationError] = useState('')
+  const [slideIterationNotice, setSlideIterationNotice] = useState('')
   const [resumeExpanded, setResumeExpanded] = useState({})
   // Modèle utilisé pour la relance aval. Initialisé sur l'auto_pilot_model du
   // job courant si présent, sinon DeepSeek Pro (cas des jobs historiques sans
@@ -5992,6 +5995,46 @@ export default function FormationPipeline() {
     } catch {
       setContinueAfterTextError('Erreur réseau')
       setContinuingAfterTextFolders(prev => { const n = { ...prev }; delete n[folderId]; return n })
+    }
+  }
+
+  const handleRegenerateSlidesOnly = async (folder) => {
+    if (!folder?.folder_id) return
+    const folderId = folder.folder_id
+    setSlideIterationError('')
+    setSlideIterationNotice('')
+    setSlideIterationFolders(prev => ({ ...prev, [folderId]: true }))
+    try {
+      const resp = await fetch(apiUrl('/api/slides/generate-from-script'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({
+          folder_id: folderId,
+          job_id: selectedJobId,
+          max_slides: 60,
+          pace: 'normal',
+          model: continueAfterTextModel || job?.auto_pilot_model || 'deepseek-v4-pro',
+        }),
+      })
+      const data = await resp.json().catch(() => ({}))
+      if (!resp.ok || data.status !== 'success') {
+        setSlideIterationError(data.message || data.error || `Erreur ${resp.status}`)
+        return
+      }
+      setSlideIterationNotice(
+        `Curation + slides régénérées pour F${folderId} (${data.slides_count || 0} slides).`,
+      )
+      await fetchContentFolders(selectedJobId)
+      await fetchPipelineDiagnostic(selectedJobId, { silent: true })
+    } catch {
+      setSlideIterationError('Erreur réseau')
+    } finally {
+      setSlideIterationFolders(prev => {
+        const next = { ...prev }
+        delete next[folderId]
+        return next
+      })
     }
   }
 
@@ -7380,6 +7423,7 @@ export default function FormationPipeline() {
                       const belongsToSelectedJob = !folder.formation_job_id || folder.formation_job_id === selectedJobId
                       const canUseFolder = isDone && belongsToSelectedJob
                       const continuingAfterText = !!continuingAfterTextFolders[folder.folder_id]
+                      const slideIterationBusy = !!slideIterationFolders[folder.folder_id]
                       const folderAudioBusy = !!folderAudioRunning[folder.folder_id] || audioBusy
                       return (
                         <div key={folder.folder_id} style={{
@@ -7509,6 +7553,25 @@ export default function FormationPipeline() {
                                     title={canUseFolder ? 'Prévisualiser les slides générées depuis le texte' : 'En attente de génération ou dossier hors job'}
                                   >
                                     <Icon name="slideshow" /> Slides
+                                  </button>
+                                  <button
+                                    style={{
+                                      ...S.btn('ghost'),
+                                      padding: '6px 12px',
+                                      fontSize: '12px',
+                                      borderColor: slideIterationBusy ? 'rgba(96,165,250,0.18)' : 'rgba(96,165,250,0.42)',
+                                      color: slideIterationBusy ? '#64748b' : '#60a5fa',
+                                    }}
+                                    disabled={!canUseFolder || slideIterationBusy || continuingAfterText}
+                                    onClick={() => handleRegenerateSlidesOnly(folder)}
+                                    title={
+                                      canUseFolder
+                                        ? 'Relance uniquement la curation IA + génération du deck slides depuis le texte final. Ne relance ni texte, ni reviews, ni audio.'
+                                        : 'Texte de journée requis'
+                                    }
+                                  >
+                                    <Icon name={slideIterationBusy ? 'hourglass_empty' : 'filter_alt'} />{' '}
+                                    {slideIterationBusy ? 'Curation…' : 'Régénérer curation + slides'}
                                   </button>
                                   <button
                                     style={{ ...S.btn('primary'), padding: '6px 12px', fontSize: '12px' }}
@@ -7785,6 +7848,16 @@ export default function FormationPipeline() {
                     {continueAfterTextNotice && (
                       <div style={{ fontSize: '13px', color: '#fbbf24', marginTop: '4px' }}>
                         Reprise aval : {continueAfterTextNotice}
+                      </div>
+                    )}
+                    {slideIterationError && (
+                      <div style={{ fontSize: '13px', color: '#f87171', marginTop: '4px' }}>
+                        Itération slides : {slideIterationError}
+                      </div>
+                    )}
+                    {slideIterationNotice && (
+                      <div style={{ fontSize: '13px', color: '#34d399', marginTop: '4px' }}>
+                        Itération slides : {slideIterationNotice}
                       </div>
                     )}
                     {audioError && (
