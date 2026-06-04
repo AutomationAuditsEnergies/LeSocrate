@@ -408,6 +408,12 @@ def _structured_beat_first_enabled() -> bool:
     return value not in {"0", "false", "no", "off"}
 
 
+def _structured_plan_two_stage_enabled() -> bool:
+    """Plan global léger, puis enrichissement teaching beats par cours."""
+    value = str(os.getenv("FORMATION_STRUCTURED_PLAN_TWO_STAGE_ENABLED", "1")).strip().lower()
+    return value not in {"0", "false", "no", "off"}
+
+
 def _runtime_intra_day_carryover_enabled() -> bool:
     """Autorise le report technique d'un reste audio vers le cours suivant.
 
@@ -1680,11 +1686,19 @@ def _normalize_structured_course_plans(raw_plan: dict, *, job: dict, playlist_it
     }
 
 
-def _build_structured_course_plan_prompt(job: dict, playlist_items: list, sub_parts: list, module_contents: dict) -> str:
+def _build_structured_course_plan_prompt(
+    job: dict,
+    playlist_items: list,
+    sub_parts: list,
+    module_contents: dict,
+    *,
+    planning_mode: str = "full",
+) -> str:
     prompt_parts = load_planning_prompt_parts()
     base_style = prompt_parts["base_style"]
     plan_contract = prompt_parts["plan_contract"]
     slide_template_catalog = _slide_template_catalog_prompt()
+    skeleton_mode = planning_mode == "skeleton"
     block_plan = _course_audio_block_plan(playlist_items, folder_position=job.get("folder_position"))
     try:
         day_number = int(job.get("folder_position") or 0) + 1
@@ -1709,6 +1723,100 @@ def _build_structured_course_plan_prompt(job: dict, playlist_items: list, sub_pa
         for name, text in (module_contents or {}).items()
         if (text or "").strip()
     )
+    if skeleton_mode:
+        planning_pass_contract = """
+MODE DE CETTE PASSE : PLAN GLOBAL LÉGER
+- Ta mission ici est de construire la colonne vertébrale pédagogique de la journée.
+- Ne crée pas encore les `teaching_beats` détaillés ni les `slide_anchor` de chaque partie.
+- Concentre-toi sur : progression des 7 thèmes, parties, fonctions pédagogiques,
+  `must_include`, `must_avoid`, transitions et conclusions.
+- Les teaching beats et les slides seront créés ensuite par des appels IA séparés,
+  cours par cours, avec ce plan global en contexte.
+- Pour l'instant, laisse `teaching_beats` vide ou absent dans les parties.
+"""
+        teaching_beat_rules = """
+- Ne détaille pas les `teaching_beats` dans cette passe. Tu peux seulement définir
+  les objectifs et contraintes qui permettront de les créer ensuite proprement.
+- Pour chaque partie, `title`, `function`, `must_include` et `must_avoid` doivent être
+  assez spécifiques pour qu'un second agent puisse créer des moments visuels variés.
+"""
+        response_schema = """{
+  "courses": [
+    {
+      "course_number": 1,
+      "course_title": "...",
+      "pedagogical_role": "...",
+      "opening": {"type": "...", "must_include": [], "must_avoid": []},
+      "learning_objectives": ["..."],
+      "parts": [
+        {
+          "part_number": 1,
+          "title": "...",
+          "function": "...",
+          "must_include": [],
+          "must_avoid": [],
+          "transition_in": "...",
+          "transition_out": ""
+        }
+      ],
+      "course_conclusion": {"must_include": [], "must_avoid": []},
+      "day_conclusion": null
+    }
+  ]
+}"""
+    else:
+        planning_pass_contract = """
+MODE DE CETTE PASSE : PLAN GLOBAL COMPLET
+- Tu dois produire le plan complet, incluant les `teaching_beats` et les
+  `slide_anchor` de chaque partie.
+"""
+        teaching_beat_rules = """
+- Pour chaque partie de développement, crée des `teaching_beats` : 2 à 4 moments pédagogiques structurants qui guideront le texte.
+- Chaque teaching beat doit avoir : beat_id, type, role, spoken_requirement, slide_anchor.
+- Interdiction de beats paresseux ou génériques : n'écris jamais `role` ou `visual_goal` du type "poser l'idée centrale", "faire retenir l'idée centrale", "présenter l'idée principale" ou "visualiser le point pédagogique".
+- Chaque beat doit nommer le contenu métier précis à traiter : notion, geste, piège, méthode, exemple, comparaison ou décision observable. On doit comprendre ce que l'apprenant retient sans lire le titre de la partie.
+- Dans `spoken_requirement`, indique ce qui doit être dit concrètement à l'oral, pas seulement "présenter clairement".
+- Dans `slide_anchor.visual_goal`, formule le souvenir visuel spécifique à construire, pas une intention générale.
+"""
+        response_schema = """{
+  "courses": [
+    {
+      "course_number": 1,
+      "course_title": "...",
+      "pedagogical_role": "...",
+      "opening": {"type": "...", "must_include": [], "must_avoid": [], "teaching_beats": []},
+      "learning_objectives": ["..."],
+      "parts": [
+        {
+          "part_number": 1,
+          "title": "...",
+          "function": "...",
+          "must_include": [],
+          "must_avoid": [],
+          "teaching_beats": [
+            {
+              "beat_id": "c1p1b1",
+              "type": "concept|definition|process|method|example|comparison|warning|tip|story|analogy|data|recap|opinion",
+              "role": "fonction pédagogique du moment",
+              "spoken_requirement": "ce que le texte oral devra couvrir naturellement",
+              "slide_anchor": {
+                "enabled": true,
+                "template_type": "welcome|day_program|day_program_7_steps|reflection|casestudy|facilitator|stats|story|recap|analogy|warning|tip|opinion|transition|chart",
+                "visual_goal": "ce que la slide doit aider à retenir",
+                "items_expected": null,
+                "fields_hint": {}
+              }
+            }
+          ],
+          "transition_in": "...",
+          "transition_out": "..."
+        }
+      ],
+      "course_conclusion": {"must_include": [], "must_avoid": []},
+      "day_conclusion": null
+    }
+  ]
+}"""
     return f"""Tu es ingénieur pédagogique. Tu dois produire le PLAN JSON STRICT de 7 cours audio d'une journée.
 
 SOCLE GÉNÉRAL À RESPECTER :
@@ -1718,6 +1826,8 @@ CONTRAT DE PLANIFICATION :
 {plan_contract}
 
 Le plan est libre maintenant, mais il sera verrouillé ensuite : le texte final devra suivre ce plan.
+
+{planning_pass_contract}
 
 Contraintes générales :
 - Chaque cours a 2 à 4 parties, jamais moins, jamais plus.
@@ -1735,12 +1845,7 @@ Contraintes générales :
 - Les exemples non sourcés doivent être fictifs ou hypothétiques avec une
   formulation naturelle. "Imaginons...", "Imaginez qu'un client...",
   "Prenons un exemple fictif..." ou "Supposons que..." suffit.
-- Pour chaque partie de développement, crée des `teaching_beats` : 2 à 4 moments pédagogiques structurants qui guideront le texte.
-- Chaque teaching beat doit avoir : beat_id, type, role, spoken_requirement, slide_anchor.
-- Interdiction de beats paresseux ou génériques : n'écris jamais `role` ou `visual_goal` du type "poser l'idée centrale", "faire retenir l'idée centrale", "présenter l'idée principale" ou "visualiser le point pédagogique".
-- Chaque beat doit nommer le contenu métier précis à traiter : notion, geste, piège, méthode, exemple, comparaison ou décision observable. On doit comprendre ce que l'apprenant retient sans lire le titre de la partie.
-- Dans `spoken_requirement`, indique ce qui doit être dit concrètement à l'oral, pas seulement "présenter clairement".
-- Dans `slide_anchor.visual_goal`, formule le souvenir visuel spécifique à construire, pas une intention générale.
+{teaching_beat_rules}
 - Dans `opening` du cours interne 1, prévois explicitement les moments structurels d'accueil et d'annonce du programme du jour : ils correspondent aux templates `welcome` et `day_program_7_steps`.
 - Un slide_anchor n'est activé que si le moment mérite vraiment une visualisation. N'active pas une slide pour une simple transition orale.
 - Le texte final ne doit jamais dire "slide", "PowerPoint", "template", "anchor" ou "teaching beat". Ces anchors sont internes.
@@ -1774,49 +1879,355 @@ Catalogue interne des templates de slides :
 {slide_template_catalog}
 
 Réponds UNIQUEMENT en JSON valide :
+{response_schema}"""
+
+
+def _course_plan_without_teaching_beats(course_plan: dict) -> dict:
+    clean = json.loads(json.dumps(course_plan or {}, ensure_ascii=False))
+    opening = clean.get("opening") if isinstance(clean.get("opening"), dict) else {}
+    opening.pop("teaching_beats", None)
+    opening.pop("slide_anchors", None)
+    for part in clean.get("parts") or []:
+        if isinstance(part, dict):
+            part.pop("teaching_beats", None)
+            part.pop("slide_anchors", None)
+    return clean
+
+
+def _day_skeleton_for_enrichment(plan: dict) -> list[dict]:
+    skeleton = []
+    for course in plan.get("courses") or []:
+        if not isinstance(course, dict):
+            continue
+        skeleton.append({
+            "course_number": course.get("course_number"),
+            "course_title": course.get("course_title"),
+            "pedagogical_role": course.get("pedagogical_role"),
+            "learning_objectives": course.get("learning_objectives") or [],
+            "parts": [
+                {
+                    "part_number": part.get("part_number"),
+                    "title": part.get("title"),
+                    "function": part.get("function"),
+                    "must_include": part.get("must_include") or [],
+                    "must_avoid": part.get("must_avoid") or [],
+                }
+                for part in (course.get("parts") or [])
+                if isinstance(part, dict)
+            ],
+        })
+    return skeleton
+
+
+def _neighbor_course_summary(plan: dict, course_number: int, offset: int) -> dict | None:
+    wanted = int(course_number or 0) + int(offset or 0)
+    for course in plan.get("courses") or []:
+        if not isinstance(course, dict):
+            continue
+        try:
+            if int(course.get("course_number") or 0) != wanted:
+                continue
+        except Exception:
+            continue
+        return {
+            "course_number": course.get("course_number"),
+            "course_title": course.get("course_title"),
+            "pedagogical_role": course.get("pedagogical_role"),
+            "learning_objectives": course.get("learning_objectives") or [],
+            "parts": [
+                {
+                    "part_number": part.get("part_number"),
+                    "title": part.get("title"),
+                    "function": part.get("function"),
+                }
+                for part in (course.get("parts") or [])
+                if isinstance(part, dict)
+            ],
+        }
+    return None
+
+
+def _build_course_beats_enrichment_prompt(plan: dict, course_plan: dict, *, job: dict) -> str:
+    course_number = int(course_plan.get("course_number") or 0)
+    slide_template_catalog = _slide_template_catalog_prompt()
+    course_skeleton = _course_plan_without_teaching_beats(course_plan)
+    day_skeleton = _day_skeleton_for_enrichment(plan)
+    previous_course = _neighbor_course_summary(plan, course_number, -1)
+    next_course = _neighbor_course_summary(plan, course_number, 1)
+    return f"""Tu es un ingénieur pédagogique spécialisé dans le design des moments d'apprentissage et des slides.
+
+Tu enrichis UN SEUL cours d'une journée déjà planifiée.
+La colonne vertébrale globale est verrouillée : tu ne dois pas changer les titres, parties, budgets, `must_include` ou `must_avoid`.
+
+Objectif de cette passe :
+- Créer les `teaching_beats` précis de chaque partie de développement du cours cible.
+- Choisir les moments qui méritent une slide.
+- Associer un template existant pertinent à chaque `slide_anchor`.
+- Produire des objectifs visuels et exigences orales spécifiques au contenu métier.
+
+Règles de qualité obligatoires :
+- Pour chaque partie, crée 2 à 4 teaching beats.
+- Chaque beat doit traiter un contenu métier précis : notion, geste, piège, méthode, exemple, comparaison, décision observable ou synthèse opérationnelle.
+- Interdiction absolue des formulations paresseuses : "idée centrale", "idée principale", "point pédagogique", "présenter clairement", "faire retenir l'idée centrale".
+- `role` doit dire à quoi sert le moment dans la progression.
+- `spoken_requirement` doit décrire ce que l'oral devra concrètement couvrir.
+- `slide_anchor.visual_goal` doit indiquer le souvenir visuel spécifique à construire.
+- `slide_anchor.must_cover` doit nommer le contenu exact couvert par cette slide.
+- `slide_anchor.must_not_cover` doit indiquer ce que cette slide ne doit pas absorber, pour éviter les doublons.
+- Diversifie les types de beats et les templates quand le contenu le permet. Ne mets pas tout en `reflection`.
+- N'active pas une slide pour une simple liaison orale.
+- Si une partie contient plusieurs slides, elles doivent couvrir des mouvements distincts et non interchangeables.
+- Garde les beats dans l'ordre chronologique naturel de la partie.
+- Le texte final ne devra jamais prononcer "slide", "template", "anchor" ou "teaching beat".
+
+Contexte global de journée :
+{json.dumps(day_skeleton, ensure_ascii=False, indent=2)}
+
+Cours précédent :
+{json.dumps(previous_course or {}, ensure_ascii=False, indent=2)}
+
+Cours suivant :
+{json.dumps(next_course or {}, ensure_ascii=False, indent=2)}
+
+Cours cible à enrichir :
+{json.dumps(course_skeleton, ensure_ascii=False, indent=2)}
+
+Titre professionnel :
+{job.get('program_title') or ''}
+
+Intitulé journée :
+{job.get('folder_name') or ''}
+
+Catalogue interne des templates de slides :
+{slide_template_catalog}
+
+Réponds UNIQUEMENT en JSON valide.
+Ne renvoie que les parties et leurs teaching_beats, pas le plan complet.
+
+FORMAT EXACT :
 {{
-  "courses": [
+  "course_number": {course_number},
+  "parts": [
     {{
-      "course_number": 1,
-      "course_title": "...",
-      "pedagogical_role": "...",
-      "opening": {{"type": "...", "must_include": [], "must_avoid": [], "teaching_beats": []}},
-      "learning_objectives": ["..."],
-      "parts": [
+      "part_number": 1,
+      "teaching_beats": [
         {{
-          "part_number": 1,
-          "title": "...",
-          "function": "...",
-          "must_include": [],
-          "must_avoid": [],
-          "teaching_beats": [
-            {{
-              "beat_id": "c1p1b1",
-              "type": "concept|definition|process|method|example|comparison|warning|tip|story|analogy|data|recap|opinion",
-              "role": "fonction pédagogique du moment",
-              "spoken_requirement": "ce que le texte oral devra couvrir naturellement",
-              "slide_anchor": {{
-                "enabled": true,
-                "template_type": "welcome|day_program|day_program_7_steps|reflection|casestudy|facilitator|stats|story|recap|analogy|warning|tip|opinion|transition|chart",
-                "visual_goal": "ce que la slide doit aider à retenir",
-                "items_expected": null,
-                "fields_hint": {{}}
-              }}
-            }}
-          ],
-          "transition_in": "...",
-          "transition_out": "..."
+          "beat_id": "c{course_number}p1b1",
+          "type": "concept|definition|process|method|example|comparison|warning|tip|story|analogy|data|recap|opinion",
+          "role": "fonction pédagogique spécifique du moment",
+          "spoken_requirement": "ce que l'oral devra couvrir concrètement",
+          "slide_anchor": {{
+            "enabled": true,
+            "template_type": "reflection|casestudy|facilitator|stats|story|recap|analogy|warning|tip|opinion|transition|chart",
+            "visual_goal": "souvenir visuel spécifique à construire",
+            "items_expected": null,
+            "must_cover": "contenu précis couvert par la slide",
+            "must_not_cover": "contenu voisin à ne pas absorber",
+            "fields_hint": {{}}
+          }}
         }}
-      ],
-      "course_conclusion": {{"must_include": [], "must_avoid": []}},
-      "day_conclusion": null
+      ]
     }}
   ]
 }}"""
 
 
+def _parse_course_beats_enrichment(raw: str, course_number: int) -> dict:
+    data = _extract_llm_json(raw)
+    if isinstance(data.get("course"), dict):
+        data = data["course"]
+    if not isinstance(data.get("parts"), list):
+        raise ValueError(f"Enrichissement cours {course_number} invalide : parts absent")
+    return data
+
+
+def _merge_course_beats_enrichment(course_plan: dict, enrichment: dict) -> dict:
+    course_number = int(course_plan.get("course_number") or 0)
+    enriched_by_part = {}
+    for part in enrichment.get("parts") or []:
+        if not isinstance(part, dict):
+            continue
+        try:
+            enriched_by_part[int(part.get("part_number") or 0)] = part
+        except Exception:
+            continue
+
+    merged = {**course_plan}
+    merged_parts = []
+    enriched_parts_count = 0
+    enriched_beats_count = 0
+    for part in course_plan.get("parts") or []:
+        if not isinstance(part, dict):
+            continue
+        part_number = int(part.get("part_number") or len(merged_parts) + 1)
+        enriched_part = enriched_by_part.get(part_number) or {}
+        raw_beats = enriched_part.get("teaching_beats") if isinstance(enriched_part.get("teaching_beats"), list) else []
+        next_part = {**part}
+        if raw_beats:
+            next_part["teaching_beats"] = _normalize_teaching_beats(
+                {**part, "teaching_beats": raw_beats},
+                course_number=course_number,
+                part_number=part_number,
+            )
+            enriched_parts_count += 1
+            enriched_beats_count += len(next_part["teaching_beats"])
+        merged_parts.append(next_part)
+
+    merged["parts"] = merged_parts
+    merged["teaching_beats_enrichment"] = {
+        "status": "enriched" if enriched_parts_count else "fallback_existing",
+        "parts": enriched_parts_count,
+        "beats": enriched_beats_count,
+    }
+    return merged
+
+
+def _enrich_structured_course_plan_with_beats(*, plan: dict, course_plan: dict, job: dict, model=None) -> dict:
+    course_number = int(course_plan.get("course_number") or 0)
+    prompt = _build_course_beats_enrichment_prompt(plan, course_plan, job=job)
+    for attempt in range(2):
+        started_at = time.time()
+        try:
+            logger.info(
+                "PIPELINE_STRUCTURED_PLAN_ENRICH_COURSE_START formation_job_id=%s content_job_id=%s course=%s attempt=%s",
+                job.get("formation_job_id"),
+                job.get("id"),
+                course_number,
+                attempt + 1,
+            )
+            raw = _anthropic_post(
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=6500,
+                model=model,
+            )
+            enrichment = _parse_course_beats_enrichment(raw, course_number)
+            merged = _merge_course_beats_enrichment(course_plan, enrichment)
+            logger.info(
+                "PIPELINE_STRUCTURED_PLAN_ENRICH_COURSE_DONE formation_job_id=%s content_job_id=%s course=%s status=%s beats=%s duration_ms=%s",
+                job.get("formation_job_id"),
+                job.get("id"),
+                course_number,
+                (merged.get("teaching_beats_enrichment") or {}).get("status"),
+                (merged.get("teaching_beats_enrichment") or {}).get("beats"),
+                int((time.time() - started_at) * 1000),
+            )
+            return merged
+        except Exception as exc:
+            logger.warning(
+                "PIPELINE_STRUCTURED_PLAN_ENRICH_COURSE_WARN formation_job_id=%s content_job_id=%s course=%s attempt=%s error=%s",
+                job.get("formation_job_id"),
+                job.get("id"),
+                course_number,
+                attempt + 1,
+                str(exc)[:260],
+            )
+            if attempt == 1:
+                fallback = {**course_plan}
+                fallback["teaching_beats_enrichment"] = {
+                    "status": "fallback_existing",
+                    "reason": str(exc)[:260],
+                }
+                return fallback
+    return course_plan
+
+
+def _generate_structured_course_plan_two_stage(job: dict, playlist_items: list, sub_parts: list, module_contents: dict, model=None) -> dict:
+    logger.info(
+        "PIPELINE_STRUCTURED_PLAN_TWO_STAGE_SKELETON_START formation_job_id=%s content_job_id=%s folder=%s model=%s",
+        job.get("formation_job_id"),
+        job.get("id"),
+        job.get("folder_id"),
+        model or CLAUDE_MODEL,
+    )
+    started_at = time.time()
+    skeleton_prompt = _build_structured_course_plan_prompt(
+        job,
+        playlist_items,
+        sub_parts,
+        module_contents,
+        planning_mode="skeleton",
+    )
+    raw = _anthropic_post(
+        messages=[{"role": "user", "content": skeleton_prompt}],
+        max_tokens=7000,
+        model=model,
+    )
+    skeleton_plan = _normalize_structured_course_plans(
+        _parse_structured_course_plan(raw),
+        job=job,
+        playlist_items=playlist_items,
+        sub_parts=sub_parts,
+    )
+    logger.info(
+        "PIPELINE_STRUCTURED_PLAN_TWO_STAGE_SKELETON_DONE formation_job_id=%s content_job_id=%s courses=%s duration_ms=%s",
+        job.get("formation_job_id"),
+        job.get("id"),
+        len(skeleton_plan.get("courses") or []),
+        int((time.time() - started_at) * 1000),
+    )
+    workers = _structured_course_parallel_workers()
+    logger.info(
+        "PIPELINE_STRUCTURED_PLAN_TWO_STAGE_ENRICH_START formation_job_id=%s content_job_id=%s courses=%s workers=%s",
+        job.get("formation_job_id"),
+        job.get("id"),
+        len(skeleton_plan.get("courses") or []),
+        workers,
+    )
+    enriched_courses = _run_structured_parallel(
+        sorted(skeleton_plan.get("courses") or [], key=lambda item: int(item.get("course_number") or 0)),
+        lambda course_plan: _enrich_structured_course_plan_with_beats(
+            plan=skeleton_plan,
+            course_plan=course_plan,
+            job=job,
+            model=model,
+        ),
+        workers=workers,
+    )
+    enriched_courses = sorted(enriched_courses, key=lambda item: int(item.get("course_number") or 0))
+    total_beats = sum(
+        len(part.get("teaching_beats") or [])
+        for course in enriched_courses
+        for part in (course.get("parts") or [])
+        if isinstance(part, dict)
+    )
+    plan = {
+        **skeleton_plan,
+        "courses": enriched_courses,
+        "planning_strategy": "global_skeleton_then_parallel_course_beats",
+        "planning_enrichment": {
+            "workers": workers,
+            "courses": len(enriched_courses),
+            "beats": total_beats,
+        },
+    }
+    logger.info(
+        "PIPELINE_STRUCTURED_PLAN_TWO_STAGE_DONE formation_job_id=%s content_job_id=%s courses=%s beats=%s",
+        job.get("formation_job_id"),
+        job.get("id"),
+        len(enriched_courses),
+        total_beats,
+    )
+    return plan
+
+
 def _generate_structured_course_plan(job: dict, playlist_items: list, sub_parts: list, module_contents: dict, model=None) -> dict:
-    prompt = _build_structured_course_plan_prompt(job, playlist_items, sub_parts, module_contents)
+    if _structured_plan_two_stage_enabled():
+        for attempt in range(3):
+            try:
+                return _generate_structured_course_plan_two_stage(
+                    job,
+                    playlist_items,
+                    sub_parts,
+                    module_contents,
+                    model=model,
+                )
+            except Exception as e:
+                logger.warning("⚠️ Plan structuré deux niveaux tentative %s/3 échouée : %s", attempt + 1, str(e)[:300])
+                if attempt == 2:
+                    raise
+        raise ValueError("Plan structuré deux niveaux impossible")
+
+    prompt = _build_structured_course_plan_prompt(job, playlist_items, sub_parts, module_contents, planning_mode="full")
     for attempt in range(3):
         try:
             raw = _anthropic_post(
