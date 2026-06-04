@@ -215,7 +215,7 @@ class FishAudioWordBudgetCalibrationTest(unittest.TestCase):
         self.assertNotIn("<<<BLOC_AUDIO_", blocs[0]["text"])
         self.assertTrue(blocs[0]["audio_block_marked"])
 
-    def test_deterministic_block_calibration_fallback_hits_budget(self):
+    def test_block_calibration_fallback_keeps_text_untrimmed(self):
         overlong = " ".join(["mot"] * 120) + "."
         block = {
             "bloc_number": 1,
@@ -227,12 +227,17 @@ class FishAudioWordBudgetCalibrationTest(unittest.TestCase):
             "role": "test",
         }
 
-        trimmed = cgs._trim_text_to_max_spoken_words(overlong, 50)
-        self.assertLessEqual(cgs.count_tts_spoken_words(trimmed), 50)
+        with patch.object(cgs, "_anthropic_post", return_value=overlong):
+            calibrated, result = cgs._calibrate_single_audio_block(
+                block=block,
+                text=overlong,
+                max_iterations=1,
+            )
 
-        expanded = cgs._expand_text_to_min_spoken_words("texte court.", 40, 80)
-        status = cgs._audio_block_word_status(expanded, block)
-        self.assertTrue(status["ok"])
+        self.assertEqual(calibrated, overlong)
+        self.assertGreater(cgs.count_tts_spoken_words(calibrated), block["max_words"])
+        self.assertEqual(result["status"], "over_budget")
+        self.assertEqual(result["fallback"], "llm_only_over_budget_kept_untrimmed")
 
     def test_45_minute_budget_uses_single_canonical_block_budget(self):
         # 192 mots/min, 17s de silence initial.

@@ -4747,60 +4747,6 @@ def _clean_audio_block_rewrite(raw: str) -> str:
     return text.strip()
 
 
-def _trim_text_to_max_spoken_words(text: str, max_words: int) -> str:
-    """Raccourcit proprement en visant une frontière de paragraphe/phrase."""
-    text = (text or "").strip()
-    max_words = max(0, int(max_words or 0))
-    if max_words <= 0 or count_tts_spoken_words(text) <= max_words:
-        return text
-
-    kept = []
-    kept_words = 0
-    paragraphs = [p.strip() for p in re.split(r"\n{2,}", text) if p.strip()]
-    for paragraph in paragraphs:
-        para_words = count_tts_spoken_words(paragraph)
-        if kept_words + para_words <= max_words:
-            kept.append(paragraph)
-            kept_words += para_words
-            continue
-
-        sentences = [
-            s.strip()
-            for s in re.split(r"(?<=[.!?…])\s+", paragraph)
-            if s.strip()
-        ]
-        sentence_added = False
-        for sentence in sentences:
-            sent_words = count_tts_spoken_words(sentence)
-            if kept_words + sent_words <= max_words:
-                kept.append(sentence)
-                kept_words += sent_words
-                sentence_added = True
-            else:
-                break
-        if sentence_added or kept_words >= max_words:
-            break
-
-        # Dernier recours : coupe au mot si aucune phrase complète ne rentre.
-        remaining = max_words - kept_words
-        if remaining > 0:
-            raw_tokens = paragraph.split()
-            candidate = []
-            for token in raw_tokens:
-                candidate.append(token)
-                if count_tts_spoken_words(" ".join(candidate)) >= remaining:
-                    break
-            if candidate:
-                fragment = " ".join(candidate).strip()
-                if fragment and fragment[-1] not in ".!?…":
-                    fragment += "."
-                kept.append(fragment)
-        break
-
-    trimmed = "\n\n".join(kept).strip()
-    return trimmed or " ".join(text.split()[:max_words]).strip()
-
-
 _AUDIO_BLOCK_FILLERS = [
 ]
 
@@ -4902,7 +4848,7 @@ def _calibrate_single_audio_block(
     max_iterations: int = 4,
     day_context: str = "",
 ) -> tuple[str, dict]:
-    """Ajuste un bloc par IA puis fallback déterministe pour garantir le budget."""
+    """Ajuste un bloc par IA sans tronquer mécaniquement les fins de texte."""
     current_text = (text or "").strip()
     history = []
     changed = False
@@ -4970,9 +4916,13 @@ def _calibrate_single_audio_block(
     final_status = _audio_block_word_status(current_text, block)
     fallback = None
     if final_status["status"] == "over_budget":
-        current_text = _trim_text_to_max_spoken_words(current_text, final_status["max_words"])
-        changed = True
-        fallback = "trim_to_max_words"
+        fallback = "llm_only_over_budget_kept_untrimmed"
+        logger.warning(
+            "PIPELINE_AUDIO_BLOCK_CALIBRATION_OVER_BUDGET_UNTRIMMED bloc=%s words=%s max_words=%s",
+            block.get("bloc_number"),
+            final_status.get("words"),
+            final_status.get("max_words"),
+        )
     elif final_status["status"] == "under_budget":
         current_text = _expand_text_to_min_spoken_words(
             current_text,
@@ -6453,10 +6403,25 @@ def _structured_section_scope_guard(section: dict) -> str:
             "- Ne réannonce pas le thème général, la journée, l'objectif global ou le plan complet."
         )
     if kind == "course_conclusion":
+        must_include = section.get("must_include") or []
+        if isinstance(must_include, str):
+            must_include_text = must_include.lower()
+        elif isinstance(must_include, list):
+            must_include_text = " ".join(str(item) for item in must_include).lower()
+        else:
+            must_include_text = ""
+        qa_required = any(token in must_include_text for token in ("q/r", "q&a", "questions", "tchat"))
+        qa_instruction = (
+            "\n- Termine obligatoirement par l'annonce du temps de questions-réponses dans le tchat."
+            "\n- Cette annonce Q/R doit être la dernière phrase : aucun développement, exemple, synthèse ou remplissage après."
+            if qa_required
+            else ""
+        )
         return (
             "- Tu écris seulement la conclusion de cette partie interne.\n"
             "- Récapitule et ferme proprement avant le temps de questions-réponses.\n"
             "- Ne lance pas un nouveau thème et ne refais pas d'introduction."
+            f"{qa_instruction}"
         )
     if kind == "day_conclusion":
         return (
@@ -6850,8 +6815,14 @@ def _fit_generated_section_to_budget(text: str, target_words: int) -> str:
     if target_words <= 0:
         return text
     max_words = int(target_words * 1.14)
-    if count_tts_spoken_words(text) > max_words:
-        text = _trim_text_to_max_spoken_words(text, max_words)
+    words = count_tts_spoken_words(text)
+    if words > max_words:
+        logger.warning(
+            "PIPELINE_SECTION_FIT_OVER_BUDGET_UNTRIMMED words=%s max_words=%s target_words=%s",
+            words,
+            max_words,
+            target_words,
+        )
     return text.strip()
 
 
@@ -7848,9 +7819,6 @@ def _calibrate_structured_section_text(
                 model=model,
             )
             candidate = _sanitize_learner_facing_text(_clean_llm_text(raw))
-            target_words = int(section.get("target_words") or 0)
-            if target_words > 0 and count_tts_spoken_words(candidate) > target_words:
-                candidate = _trim_text_to_max_spoken_words(candidate, target_words)
             candidate_words = count_tts_spoken_words(candidate)
             current_words = count_tts_spoken_words(current_text)
             min_candidate_words = min(120, max(20, int(current_words * 0.45)))
@@ -7898,10 +7866,14 @@ def _calibrate_structured_section_text(
     final_status = _structured_section_budget_status(section, current_text)
     fallback = None
     if final_status["status"] == "too_long":
-        current_text = _trim_text_to_max_spoken_words(current_text, final_status["max_words"])
-        changed = True
-        fallback = "trim_to_max_words"
-        final_status = _structured_section_budget_status(section, current_text)
+        fallback = "llm_only_over_budget_kept_untrimmed"
+        logger.warning(
+            "PIPELINE_SECTION_BUDGET_CALIBRATION_OVER_BUDGET_UNTRIMMED course=%s section=%s words=%s max_words=%s",
+            course_plan.get("course_number"),
+            _section_label(section),
+            final_status.get("words"),
+            final_status.get("max_words"),
+        )
 
     return current_text, {
         **final_status,
@@ -8083,11 +8055,19 @@ def _repair_structured_course_word_deficit(
                 model=model,
             )
             repaired = _sanitize_learner_facing_text(_clean_llm_text(raw))
-            if candidate["max_words"] > 0 and count_tts_spoken_words(repaired) > candidate["max_words"]:
-                repaired = _trim_text_to_max_spoken_words(repaired, candidate["max_words"])
             after_words = count_tts_spoken_words(repaired)
             min_gain = max(20, min(80, int(planned_words * 0.18)))
-            if not repaired or after_words <= before_words or (after_words - before_words) < min_gain:
+            if candidate["max_words"] > 0 and after_words > candidate["max_words"]:
+                stalled_by_key[candidate["key"]] = stalled_by_key.get(candidate["key"], 0) + 1
+                attempt["sections"].append({
+                    "label": record.get("label") or _section_label(section),
+                    "before_words": before_words,
+                    "after_words": after_words,
+                    "changed": False,
+                    "reason": "over_budget_repair_rejected_untrimmed",
+                    "max_words": candidate["max_words"],
+                })
+            elif not repaired or after_words <= before_words or (after_words - before_words) < min_gain:
                 stalled_by_key[candidate["key"]] = stalled_by_key.get(candidate["key"], 0) + 1
                 attempt["sections"].append({
                     "label": record.get("label") or _section_label(section),
