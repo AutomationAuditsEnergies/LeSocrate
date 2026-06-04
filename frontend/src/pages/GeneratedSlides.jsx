@@ -20,7 +20,7 @@ import ChecklistTemplate from '../components/slides/templates/ChecklistTemplate'
 import QuotableTemplate from '../components/slides/templates/QuotableTemplate';
 import PracticeExerciseTemplate from '../components/slides/templates/PracticeExerciseTemplate';
 import BeforeAfterTemplate from '../components/slides/templates/BeforeAfterTemplate';
-import { DeckWelcome, DeckAgenda, DeckChapterOpener, DeckDayProgram7Steps } from '../components/slides/templates/DeckTemplates';
+import { DeckWelcome, DeckChapterOpener, DeckDayProgram7Steps, DeckProgramYear } from '../components/slides/templates/DeckTemplates';
 
 const normalizeSourceText = (text = '') => String(text || '').replace(/\s+/g, ' ').trim();
 
@@ -267,10 +267,13 @@ export default function GeneratedSlides() {
     switch (slide.template_type) {
       case 'welcome':
         return <DeckWelcome {...slide.data} {...commonProps} />;
+      case 'program_year':
+      case 'day_year':
+        return <DeckProgramYear {...slide.data} {...commonProps} />;
       case 'day_program':
         return isSevenStepDayProgram
           ? <DeckDayProgram7Steps {...slide.data} {...commonProps} />
-          : <DeckAgenda {...slide.data} {...commonProps} />;
+          : <DeckProgramYear {...slide.data} {...commonProps} />;
       case 'day_program_7_steps':
         return <DeckDayProgram7Steps {...slide.data} {...commonProps} />;
       case 'chapter_opener':

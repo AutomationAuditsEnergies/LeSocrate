@@ -741,11 +741,15 @@ def _merge_unique_strings(*values) -> list[str]:
 _BEAT_TYPE_TO_TEMPLATE = {
     "welcome": "welcome",
     "day_welcome": "welcome",
-    "day_program": "day_program",
+    "program_year": "program_year",
+    "day_year": "program_year",
+    "annual_program": "program_year",
+    "parcours_annuel": "program_year",
+    "day_program": "program_year",
     "day_program_7_steps": "day_program_7_steps",
     "program_7_steps": "day_program_7_steps",
     "roadmap_7_steps": "day_program_7_steps",
-    "agenda": "day_program",
+    "agenda": "program_year",
     "definition": "reflection",
     "concept": "reflection",
     "key_message": "reflection",
@@ -777,7 +781,8 @@ _BEAT_TYPE_TO_TEMPLATE = {
 }
 _SUPPORTED_SLIDE_TEMPLATES = {
     "welcome",
-    "day_program",
+    "program_year",
+    "day_year",
     "day_program_7_steps",
     "reflection",
     "casestudy",
@@ -1103,7 +1108,7 @@ def _merge_opening_teaching_beats(forced: list[dict], existing: list[dict]) -> l
             beat.get("type"),
             anchor.get("template_type") or anchor.get("template_family") or beat.get("template_type"),
         )
-        if template_type in {"welcome", "day_program", "day_program_7_steps"}:
+        if template_type in {"welcome", "program_year", "day_program", "day_program_7_steps"}:
             return f"template:{template_type}"
         beat_id = str(beat.get("beat_id") or "").strip()
         anchor_id = str(anchor.get("anchor_id") or "").strip()
@@ -1801,7 +1806,7 @@ MODE DE CETTE PASSE : PLAN GLOBAL COMPLET
               "spoken_requirement": "ce que le texte oral devra couvrir naturellement",
               "slide_anchor": {
                 "enabled": true,
-                "template_type": "welcome|day_program|day_program_7_steps|reflection|casestudy|facilitator|stats|story|recap|analogy|warning|tip|opinion|transition|chart",
+                "template_type": "welcome|program_year|day_program_7_steps|reflection|casestudy|facilitator|stats|story|recap|analogy|warning|tip|opinion|transition|chart",
                 "visual_goal": "ce que la slide doit aider à retenir",
                 "items_expected": null,
                 "fields_hint": {}

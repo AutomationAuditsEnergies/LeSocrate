@@ -20,7 +20,7 @@ import ChecklistTemplate from '../components/slides/templates/ChecklistTemplate'
 import QuotableTemplate from '../components/slides/templates/QuotableTemplate'
 import PracticeExerciseTemplate from '../components/slides/templates/PracticeExerciseTemplate'
 import BeforeAfterTemplate from '../components/slides/templates/BeforeAfterTemplate'
-import { DeckAgenda, DeckChapterOpener, DeckDayProgram7Steps, DeckWelcome } from '../components/slides/templates/DeckTemplates'
+import { DeckChapterOpener, DeckDayProgram7Steps, DeckProgramYear, DeckWelcome } from '../components/slides/templates/DeckTemplates'
 
 const Icon = ({ name, className = '', style = {} }) => (
   <span className={`material-icons ${className}`} style={{ fontSize: 'inherit', ...style }}>{name}</span>
@@ -2447,8 +2447,11 @@ function renderPipelineSlidePreview(slide = {}) {
   switch (slide.template_type) {
     case 'welcome':
       return <DeckWelcome {...props} />
+    case 'program_year':
+    case 'day_year':
+      return <DeckProgramYear {...props} />
     case 'day_program':
-      return isSevenStepDayProgram ? <DeckDayProgram7Steps {...props} /> : <DeckAgenda {...props} />
+      return isSevenStepDayProgram ? <DeckDayProgram7Steps {...props} /> : <DeckProgramYear {...props} />
     case 'day_program_7_steps':
       return <DeckDayProgram7Steps {...props} />
     case 'chapter_opener':

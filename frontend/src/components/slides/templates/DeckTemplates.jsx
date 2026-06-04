@@ -187,6 +187,69 @@ export const DeckAgenda = ({ title = 'Au programme.', items = [], day_label, for
   );
 };
 
+export const DeckProgramYear = ({
+  title = "Programme de l'année.",
+  subtitle = "Deux grands ensembles de compétences qui se complètent pour tenir toutes les facettes du poste.",
+  phases,
+  items = [],
+  day_label,
+  formation_name,
+  badge,
+  brandName = 'Sales hacking',
+}) => {
+  const sourcePhases = Array.isArray(phases) && phases.length ? phases : items;
+  const safePhases = (Array.isArray(sourcePhases) && sourcePhases.length ? sourcePhases : [
+    {
+      title: 'Assistance et relation client à distance',
+      desc: 'Accueillir, écouter, comprendre et résoudre les demandes clients, quel que soit le canal utilisé.',
+    },
+    {
+      title: 'Actions commerciales en relation client à distance',
+      desc: "Identifier un besoin, éveiller un intérêt et proposer une solution adaptée avec éthique et justesse.",
+    },
+  ]).slice(0, 2);
+  const { brandHead, brandTail } = getDeckBrandParts(brandName);
+  const [shellRef, scale] = useSlideStageScale();
+
+  return (
+    <div className="deck-year-shell" ref={shellRef}>
+      <section className="deck-year-stage" style={{ transform: `scale(${scale})` }}>
+        <div className="deck-chrome">
+          <div className="deck-brand">
+            <span className="deck-brand-mark">{brandHead}</span>
+            <span className="deck-brand-tag">{brandTail}</span>
+          </div>
+          <div className="deck-year-rec"><span />EN DIRECT · {badge || 'TP-CRCD'}</div>
+          <div className="deck-year-pages"><b>02</b> / 19</div>
+          <div className="deck-year-section">TYPE · PARCOURS</div>
+        </div>
+
+        <div className="deck-year-left">
+          <span>{day_label || formation_name || 'Parcours annuel'}</span>
+          <h1>{title === "Programme de l'année." ? <>Programme<br />de <em>l&apos;année.</em></> : <AccentTitle title={title} fallback="Programme de l'année." />}</h1>
+          <p>{subtitle}</p>
+        </div>
+
+        <div className="deck-year-phases">
+          {safePhases.map((phase, index) => {
+            const phaseTitle = typeof phase === 'string' ? phase : phase.title;
+            const phaseDesc = typeof phase === 'string' ? '' : (phase.desc || phase.description || phase.text || '');
+            return (
+              <article key={index}>
+                <div className="deck-year-index">0{index + 1}</div>
+                <div>
+                  <strong>{phaseTitle}</strong>
+                  {phaseDesc && <p>{phaseDesc}</p>}
+                </div>
+              </article>
+            );
+          })}
+        </div>
+      </section>
+    </div>
+  );
+};
+
 export const DeckDayProgram7Steps = ({
   title = 'Programme de la journée.',
   subtitle,

@@ -51,44 +51,46 @@
       ]
     },
     {
-      "template_id": "day_program",
-      "families": ["day_program", "agenda", "program"],
-      "visual_role": "Donner une carte mentale courte de la journée ou d'une grande séquence.",
-      "use_when": "Le passage annonce plusieurs grands thèmes ou chapitres dans un ordre clair.",
-      "avoid_when": "Le passage développe une seule idée, une méthode précise ou un exemple.",
+      "template_id": "program_year",
+      "families": ["program_year", "day_year", "annual_program", "parcours_annuel", "program"],
+      "visual_role": "Donner une vision annuelle courte des deux grandes phases de la formation.",
+      "use_when": "Le passage présente le parcours annuel ou les deux grands blocs de compétences de la formation.",
+      "avoid_when": "Le passage annonce les thèmes d'une seule journée, développe une seule idée, une méthode précise ou un exemple.",
       "strong_signals": [
-        "annonce de programme",
-        "liste de 2 à 7 thèmes",
-        "progression de journée"
+        "programme annuel",
+        "parcours annuel",
+        "deux grands modules",
+        "deux grands ensembles de compétences",
+        "deux piliers"
       ],
       "weak_signals": [
         "énumération de détails non structurants",
         "liste de conseils pratiques",
-        "récapitulatif de fin"
+        "progression de journée"
       ],
       "selection_rules": [
-        "Utiliser seulement si le texte donne vraiment plusieurs thèmes ordonnés.",
-        "Transformer les thèmes en libellés courts, pas en phrases longues.",
-        "Préférer ce template au recap quand le passage annonce l'avenir plutôt que résumer."
+        "Utiliser seulement si le texte donne une vision d'ensemble de l'année ou de la formation complète.",
+        "Faire apparaître exactement deux grandes phases quand le passage oppose assistance/relation client et actions commerciales.",
+        "Ne pas remplacer le template day_program_7_steps, réservé aux sept thèmes de la journée."
       ],
       "rejection_rules": [
-        "Refuser si le passage ne donne pas au moins deux items distincts.",
-        "Refuser si les items sont des micro-actions plutôt que des chapitres."
+        "Refuser si le passage ne parle que du programme d'une journée.",
+        "Refuser si le passage ne donne pas deux phases ou deux blocs annuels distincts."
       ],
       "requires": {
         "items_min": 2,
-        "items_max": 7
+        "items_max": 2
       },
       "schema": {
-        "title": "Programme de la journée",
-        "day_label": "Journée X",
-        "items": "2-7 thèmes courts dans l'ordre"
+        "title": "Programme de l'année",
+        "day_label": "Parcours annuel",
+        "phases": "2 phases annuelles avec title et desc"
       },
       "good_examples": [
-        "Nous allons d'abord poser le cadre, puis travailler l'écoute active, ensuite la qualification, et enfin la restitution."
+        "Le titre professionnel est structuré autour de deux grands ensembles : l'assistance et la relation client à distance, puis les actions commerciales en relation client à distance."
       ],
       "bad_examples": [
-        "Gardez en tête trois réflexes : écouter, reformuler, tracer."
+        "Aujourd'hui, nous allons travailler sept thèmes dans l'ordre pédagogique de la journée."
       ]
     },
     {

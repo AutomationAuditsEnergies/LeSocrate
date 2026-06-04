@@ -41,7 +41,7 @@ import LearningPathTemplate from '../components/slides/templates/LearningPathTem
 import PracticeExerciseTemplate from '../components/slides/templates/PracticeExerciseTemplate';
 import SelfManagementTemplate from '../components/slides/templates/SelfManagementTemplate';
 import SignalRadarTemplate from '../components/slides/templates/SignalRadarTemplate';
-import { DeckAgenda, DeckChapterOpener, DeckDayProgram7Steps, DeckPause, DeckQA, DeckWelcome } from '../components/slides/templates/DeckTemplates';
+import { DeckChapterOpener, DeckDayProgram7Steps, DeckPause, DeckProgramYear, DeckQA, DeckWelcome } from '../components/slides/templates/DeckTemplates';
 
 const P = { badge: 'TP-CRCD', brandName: 'SALES HACKING' };
 
@@ -50,6 +50,7 @@ const GROUPS = [
     label: 'Deck fourni',
     items: [
       { type: 'welcome', label: '01 Bienvenue · exact', data: { title: 'Bienvenue', formation_name: 'Titre professionnel CRCD', day_label: 'Journée 1', meta_note: 'Relation client à distance' } },
+      { type: 'program_year', label: '02 Programme annuel · deux phases', data: { title: "Programme de l'année.", subtitle: 'Deux grands ensembles de compétences qui se complètent pour tenir toutes les facettes du poste.', day_label: 'Parcours annuel', phases: [{ title: 'Assistance et relation client à distance', desc: 'Accueillir, écouter, comprendre et résoudre les demandes clients, quel que soit le canal utilisé.' }, { title: 'Actions commerciales en relation client à distance', desc: "Identifier un besoin, éveiller un intérêt et proposer une solution adaptée avec éthique et justesse." }] } },
       { type: 'day_program_7_steps', label: '02 Programme journée · exact', data: { title: 'Programme de la journée.', subtitle: "Une journée dédiée aux fondamentaux de l'échange à distance — du premier contact jusqu'à l'empreinte que l'on laisse après.", day_label: 'Feuille de route', active_item: 1, items: ['Communiquer sans visuel', 'Le ton de la voix', 'Le rythme de synchronisation', "Humaniser l'écrit asynchrone", 'La première minute', "L'écoute active", "L'empreinte après contact"] } },
       { type: 'chapter_opener', label: '03 Chapitre 1 · exact', data: { chapter_label: 'Chapitre 1', title: "L'obstacle invisible", axes: [{ title: 'Le brouillard de la distance', desc: 'Quand le client ne voit pas, son cerveau complète.' }, { title: 'Les biais de perception', desc: 'Un silence, un ton ou un rythme devient un message.' }] } },
       { type: 'reflection', label: '02 Big statement', data: { title: "Vous n'avez pas un problème d'outils. Vous avez un problème de processus.", text: "Et c'est une bonne nouvelle." } },
@@ -63,7 +64,6 @@ const GROUPS = [
       { type: 'transition', label: '10 Transition', data: { title: 'On passe à la pratique.', from_topic: 'FIN DE CHAPITRE', to_topic: 'Module 04 · Mardi 21h' } },
       { type: 'pause', label: '11 Pause', data: { title: 'Pause.', duration: '5 minutes.', subtitle: "notez ce qui vous a marqué jusqu'ici." } },
       { type: 'qa', label: '12 Q&A', data: { title: 'On répond à tout.' } },
-      { type: 'day_program', label: '13 Agenda legacy', data: { title: 'Au programme.', formation_name: '7 sujets · 42 minutes · 3 livrables à repartir avec.', items: ['Intro & Postulat', 'Définition Opération', 'Méthode O.D.A.M.', 'Cas client — Atelier Mirabel', 'Exercice pratique'] } },
       { type: 'quotable', label: '14 Quote', data: { quote: "On a doublé la capacité de l'équipe sans recruter. Le secret ? Arrêter de tout faire passer par nous." } },
       { type: 'exercise', label: '15 Exercise', data: { title: 'Cartographier un process.', duration: '12 minutes', objective: 'Choisissez une tâche répétitive que votre équipe fait chaque semaine.', steps: [{ title: 'Nommer la tâche', desc: 'Un verbe + un objet.' }, { title: 'Lister les étapes réelles', desc: 'Ce que vous faites vraiment.' }, { title: 'Identifier la décision critique', desc: 'Le moment où seule une personne peut choisir.' }, { title: 'Poster dans le canal', desc: 'Format libre, puis débrief ensemble.' }] } },
       { type: 'stats', label: '16 Stats', data: { title: "L'automatisation, en chiffres.", description: 'Source · McKinsey 2024', stats: [{ number: '45%', label: 'Des tâches actuelles automatisables' }, { number: '3,2×', label: 'Productivité gagnée sur process documentés' }, { number: '−62%', label: "D'erreurs après 90 jours de SOP" }, { number: '11h', label: 'Économisées par semaine' }] } },
@@ -148,7 +148,9 @@ const renderSlide = (item) => {
   switch (item.type) {
     // — Existants —
     case 'welcome': return <DeckWelcome {...d} {...P} />;
-    case 'day_program': return <DeckAgenda {...d} {...P} />;
+    case 'program_year':
+    case 'day_year': return <DeckProgramYear {...d} {...P} />;
+    case 'day_program': return <DeckProgramYear {...d} {...P} />;
     case 'day_program_7_steps': return <DeckDayProgram7Steps {...d} {...P} />;
     case 'chapter_opener': return <DeckChapterOpener {...d} {...P} />;
     case 'pause': return <DeckPause {...d} {...P} />;
