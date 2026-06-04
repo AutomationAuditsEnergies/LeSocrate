@@ -767,6 +767,76 @@ def _load_content_plan(source: dict) -> dict | None:
     return plan if isinstance(plan, dict) else None
 
 
+_GENERIC_ANCHOR_PATTERNS = (
+    "idée centrale",
+    "idee centrale",
+    "idée principale",
+    "idee principale",
+    "point pédagogique",
+    "point pedagogique",
+    "formulation orale concrète",
+    "formulation orale concrete",
+)
+
+
+def _is_generic_anchor_text(text: str | None) -> bool:
+    normalized = str(text or "").strip().lower()
+    if not normalized:
+        return True
+    return any(pattern in normalized for pattern in _GENERIC_ANCHOR_PATTERNS)
+
+
+def _first_nonempty_list_item(value, fallback: str = "") -> str:
+    if isinstance(value, list):
+        for item in value:
+            text = str(item or "").strip()
+            if text:
+                return text
+    return fallback
+
+
+def _anchor_focus_for_section(section: dict, beat: dict, fallback_title: str) -> str:
+    anchor = beat.get("slide_anchor") if isinstance(beat.get("slide_anchor"), dict) else {}
+    return (
+        str(anchor.get("must_cover") or "").strip()
+        or _first_nonempty_list_item(section.get("must_include"), "")
+        or str(beat.get("role") or "").strip()
+        or fallback_title
+    )
+
+
+def _repair_anchor_context(
+    *,
+    section: dict,
+    beat: dict,
+    anchor: dict,
+    fallback_part_title: str,
+) -> tuple[str, str, str, str, str]:
+    section_title = str(section.get("title") or fallback_part_title or "cette section").strip()
+    focus = _anchor_focus_for_section(section, beat, section_title)
+    role = str(beat.get("role") or "").strip()
+    spoken = str(beat.get("spoken_requirement") or "").strip()
+    visual_goal = str(anchor.get("visual_goal") or "").strip()
+    must_cover = str(anchor.get("must_cover") or "").strip()
+    must_not_cover = str(anchor.get("must_not_cover") or "").strip()
+
+    if _is_generic_anchor_text(role):
+        role = f"traiter précisément {focus} dans {section_title}"
+    if _is_generic_anchor_text(spoken):
+        spoken = (
+            f"Développer {focus} avec une explication métier concrète, un exemple ou "
+            "une règle d'action directement utilisable."
+        )
+    if _is_generic_anchor_text(visual_goal):
+        visual_goal = f"faire mémoriser {focus} dans le cadre de {section_title}"
+    if not must_cover:
+        must_cover = focus
+    if not must_not_cover:
+        must_not_cover = "une reformulation générique du titre sans contenu opérationnel"
+
+    return role, spoken, visual_goal, must_cover, must_not_cover
+
+
 def _extract_slide_anchors_from_plan(plan: dict | None) -> list[dict]:
     anchors = []
     if not isinstance(plan, dict):
@@ -782,6 +852,12 @@ def _extract_slide_anchors_from_plan(plan: dict | None) -> list[dict]:
             slide_anchor = beat.get("slide_anchor") if isinstance(beat.get("slide_anchor"), dict) else {}
             if not slide_anchor.get("enabled"):
                 continue
+            role, spoken, visual_goal, must_cover, must_not_cover = _repair_anchor_context(
+                section=opening,
+                beat=beat,
+                anchor=slide_anchor,
+                fallback_part_title="Introduction",
+            )
             template_type = _canonical_template(
                 slide_anchor.get("template_type")
                 or slide_anchor.get("template_family")
@@ -796,13 +872,13 @@ def _extract_slide_anchors_from_plan(plan: dict | None) -> list[dict]:
                 "part_title": "Introduction",
                 "beat_order": order,
                 "beat_type": str(beat.get("type") or "welcome"),
-                "role": beat.get("role") or "",
-                "spoken_requirement": beat.get("spoken_requirement") or "",
+                "role": role,
+                "spoken_requirement": spoken,
                 "template_type": template_type,
-                "visual_goal": slide_anchor.get("visual_goal") or "",
+                "visual_goal": visual_goal,
                 "items_expected": slide_anchor.get("items_expected"),
-                "must_cover": slide_anchor.get("must_cover") or "",
-                "must_not_cover": slide_anchor.get("must_not_cover") or "",
+                "must_cover": must_cover,
+                "must_not_cover": must_not_cover,
                 "fields_hint": slide_anchor.get("fields_hint") if isinstance(slide_anchor.get("fields_hint"), dict) else {},
             })
         for part in course.get("parts") or []:
@@ -815,6 +891,12 @@ def _extract_slide_anchors_from_plan(plan: dict | None) -> list[dict]:
                 slide_anchor = beat.get("slide_anchor") if isinstance(beat.get("slide_anchor"), dict) else {}
                 if not slide_anchor.get("enabled"):
                     continue
+                role, spoken, visual_goal, must_cover, must_not_cover = _repair_anchor_context(
+                    section=part,
+                    beat=beat,
+                    anchor=slide_anchor,
+                    fallback_part_title=part.get("title") or "",
+                )
                 template_type = _canonical_template(
                     slide_anchor.get("template_type")
                     or slide_anchor.get("template_family")
@@ -829,13 +911,13 @@ def _extract_slide_anchors_from_plan(plan: dict | None) -> list[dict]:
                     "part_title": part.get("title") or "",
                     "beat_order": order,
                     "beat_type": str(beat.get("type") or "concept"),
-                    "role": beat.get("role") or "",
-                    "spoken_requirement": beat.get("spoken_requirement") or "",
+                    "role": role,
+                    "spoken_requirement": spoken,
                     "template_type": template_type,
-                    "visual_goal": slide_anchor.get("visual_goal") or "",
+                    "visual_goal": visual_goal,
                     "items_expected": slide_anchor.get("items_expected"),
-                    "must_cover": slide_anchor.get("must_cover") or "",
-                    "must_not_cover": slide_anchor.get("must_not_cover") or "",
+                    "must_cover": must_cover,
+                    "must_not_cover": must_not_cover,
                     "fields_hint": slide_anchor.get("fields_hint") if isinstance(slide_anchor.get("fields_hint"), dict) else {},
                 })
     return anchors
