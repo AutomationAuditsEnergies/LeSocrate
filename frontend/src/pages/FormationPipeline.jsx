@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { apiUrl } from '../api'
 import ReflectionTemplate from '../components/slides/templates/ReflectionTemplate'
 import CaseStudyTemplate from '../components/slides/templates/CaseStudyTemplate'
@@ -5596,6 +5596,7 @@ export default function FormationPipeline() {
   const [ttsResult, setTtsResult] = useState(null)
   const [contentFolders, setContentFolders] = useState([])
   const [viewingFolder, setViewingFolder] = useState(null)    // folder object affiché en modal
+  const [slide2Folder, setSlide2Folder] = useState(null)      // audit texte ↔ slides
   const [reportFolder, setReportFolder] = useState(null)           // rapport conformité stricte
   const [humanizationReportFolder, setHumanizationReportFolder] = useState(null)  // ancien rapport humanisation, affiché seulement pour les jobs legacy
 
@@ -6466,6 +6467,7 @@ export default function FormationPipeline() {
   const resetJobScopedState = () => {
     setContentFolders([])
     setViewingFolder(null)
+    setSlide2Folder(null)
     setReportFolder(null)
     setTtsResult(null)
     setAudioError('')
@@ -7556,6 +7558,18 @@ export default function FormationPipeline() {
                                     <Icon name="slideshow" /> Slides
                                   </button>
                                   <button
+                                    style={{ ...S.btn('neutral'), padding: '6px 12px', fontSize: '12px' }}
+                                    disabled={!canUseFolder || !(folder.slide_count || 0)}
+                                    onClick={() => setSlide2Folder(folder)}
+                                    title={
+                                      canUseFolder && (folder.slide_count || 0)
+                                        ? 'Auditer la correspondance texte surligné et slides'
+                                        : 'Slides requises'
+                                    }
+                                  >
+                                    <Icon name="splitscreen" /> Slide2
+                                  </button>
+                                  <button
                                     style={{
                                       ...S.btn('ghost'),
                                       padding: '6px 12px',
@@ -7948,6 +7962,14 @@ export default function FormationPipeline() {
           jobId={selectedJobId}
           folder={viewingFolder}
           onClose={() => setViewingFolder(null)}
+        />
+      )}
+
+      {slide2Folder && (
+        <Slide2AlignmentModal
+          jobId={selectedJobId}
+          folder={slide2Folder}
+          onClose={() => setSlide2Folder(null)}
         />
       )}
 
@@ -8406,6 +8428,723 @@ function ReviewReportModal({ jobId, folder, onClose, reportEndpoint = 'review-re
               </div>
             </>
           )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+
+const SLIDE2_HIGHLIGHT_COLORS = [
+  '#60a5fa',
+  '#34d399',
+  '#fbbf24',
+  '#fb923c',
+  '#f472b6',
+  '#a78bfa',
+  '#2dd4bf',
+  '#f87171',
+  '#c084fc',
+  '#38bdf8',
+]
+
+function stripSlide2TtsTags(text) {
+  return String(text || '')
+    .replace(/\[[^[\]\n]{1,50}\]/g, '')
+    .replace(/[ \t]{2,}/g, ' ')
+    .replace(/\n[ \t]+/g, '\n')
+    .trim()
+}
+
+function splitSlide2Words(text) {
+  return String(text || '').trim().split(/\s+/).filter(Boolean)
+}
+
+function getSlide2CourseText(course = {}) {
+  const sectionTexts = Array.isArray(course.sections)
+    ? course.sections
+        .map(section => stripSlide2TtsTags(section?.text || section?.script || section?.content || ''))
+        .filter(Boolean)
+    : []
+
+  if (sectionTexts.length) return sectionTexts.join('\n\n')
+  return stripSlide2TtsTags(course.text || course.script || course.content || course.module_content || '')
+}
+
+function buildSlide2Courses(artifact, fallbackText = '') {
+  let rawCourses = []
+  if (Array.isArray(artifact?.courses)) rawCourses = artifact.courses
+  else if (Array.isArray(artifact)) rawCourses = artifact
+  else if (artifact?.text) rawCourses = [{ course_number: 1, course_title: artifact.course_title || 'Cours', text: artifact.text }]
+
+  if (!rawCourses.length && fallbackText) {
+    rawCourses = [{ course_number: 1, course_title: 'Texte complet', text: fallbackText }]
+  }
+
+  let cursor = 0
+  return rawCourses
+    .map((course, index) => {
+      const text = getSlide2CourseText(course)
+      const wordCount = splitSlide2Words(text).length
+      const courseNumber = Number(course.course_number || course.number || course.index || index + 1)
+      const item = {
+        courseNumber,
+        title: course.course_title || course.title || course.name || `Cours ${courseNumber}`,
+        text,
+        wordStart: cursor,
+        wordEnd: cursor + wordCount,
+        wordCount,
+      }
+      cursor += wordCount
+      return item
+    })
+    .filter(course => course.text && course.wordCount > 0)
+}
+
+function getSlide2Range(slide = {}) {
+  const ref = slide.source_ref || {}
+  const start = Number(ref.word_start)
+  const end = Number(ref.word_end)
+  if (Number.isFinite(start) && Number.isFinite(end) && end > start) {
+    return { start, end }
+  }
+
+  const windowStart = Number(ref.source_window_word_start)
+  const windowEnd = Number(ref.source_window_word_end)
+  if (Number.isFinite(windowStart) && Number.isFinite(windowEnd) && windowEnd > windowStart) {
+    return { start: windowStart, end: windowEnd }
+  }
+
+  return null
+}
+
+function getSlide2CourseNumberFromRef(slide = {}) {
+  const ref = slide.source_ref || {}
+  if (Number.isFinite(Number(ref.sub_part_index))) return Number(ref.sub_part_index) + 1
+  const segments = Array.isArray(ref.segments) ? ref.segments : []
+  const firstSegment = segments.find(segment =>
+    Number.isFinite(Number(segment?.course_number)) || Number.isFinite(Number(segment?.sub_part_index))
+  )
+  if (!firstSegment) return null
+  if (Number.isFinite(Number(firstSegment.course_number))) return Number(firstSegment.course_number)
+  return Number(firstSegment.sub_part_index) + 1
+}
+
+function findSlide2QuoteRange(courseText, quote) {
+  const quoteWords = splitSlide2Words(stripSlide2TtsTags(quote))
+  if (!quoteWords.length) return null
+
+  const courseWords = splitSlide2Words(courseText)
+  if (!courseWords.length || quoteWords.length > courseWords.length) return null
+
+  const normalizedCourse = courseWords.join(' ')
+  const normalizedQuote = quoteWords.join(' ')
+  const charIndex = normalizedCourse.indexOf(normalizedQuote)
+  if (charIndex < 0) return null
+
+  const beforeWords = splitSlide2Words(normalizedCourse.slice(0, charIndex)).length
+  return {
+    start: beforeWords,
+    end: beforeWords + quoteWords.length,
+  }
+}
+
+function buildSlide2Assignments(courses = [], slides = []) {
+  const byCourse = new Map(courses.map(course => [course.courseNumber, []]))
+
+  slides.forEach((slide, slideIndex) => {
+    const range = getSlide2Range(slide)
+    let matched = false
+
+    if (range) {
+      courses.forEach(course => {
+        const start = Math.max(range.start, course.wordStart)
+        const end = Math.min(range.end, course.wordEnd)
+        if (end <= start) return
+        matched = true
+        const color = SLIDE2_HIGHLIGHT_COLORS[slideIndex % SLIDE2_HIGHLIGHT_COLORS.length]
+        byCourse.get(course.courseNumber)?.push({
+          slide,
+          slideIndex,
+          slideNumber: slideIndex + 1,
+          start: start - course.wordStart,
+          end: end - course.wordStart,
+          color,
+        })
+      })
+    }
+
+    if (matched) return
+
+    const courseNumber = getSlide2CourseNumberFromRef(slide)
+    const course = courses.find(item => item.courseNumber === courseNumber)
+    if (!course) return
+
+    const ref = slide.source_ref || {}
+    const fallbackQuote = ref.source_quote || slide.source_quote || slide.source_text || ''
+    const localRange = findSlide2QuoteRange(course.text, fallbackQuote)
+    if (!localRange) return
+
+    const color = SLIDE2_HIGHLIGHT_COLORS[slideIndex % SLIDE2_HIGHLIGHT_COLORS.length]
+    byCourse.get(course.courseNumber)?.push({
+      slide,
+      slideIndex,
+      slideNumber: slideIndex + 1,
+      start: localRange.start,
+      end: localRange.end,
+      color,
+      fallback: true,
+    })
+  })
+
+  byCourse.forEach((items, courseNumber) => {
+    byCourse.set(
+      courseNumber,
+      items
+        .filter(item => item.end > item.start)
+        .sort((a, b) => a.start - b.start || a.slideIndex - b.slideIndex),
+    )
+  })
+
+  return byCourse
+}
+
+function countSlide2CoveredWords(wordCount, assignments = []) {
+  if (!wordCount) return 0
+  const covered = new Array(wordCount).fill(false)
+  assignments.forEach(item => {
+    const start = Math.max(0, Math.min(wordCount, item.start))
+    const end = Math.max(start, Math.min(wordCount, item.end))
+    for (let index = start; index < end; index += 1) covered[index] = true
+  })
+  return covered.filter(Boolean).length
+}
+
+function getSlide2Title(slide = {}, index = 0) {
+  const data = slide.data || {}
+  return data.title || data.headline || data.label || slide.event_summary || `Slide ${index + 1}`
+}
+
+function getSlide2AssignmentForWord(assignments, wordIndex) {
+  return assignments.find(item => wordIndex >= item.start && wordIndex < item.end) || null
+}
+
+function buildSlide2TextChunks(text, assignments = []) {
+  const tokens = String(text || '').split(/(\s+)/)
+  const chunks = []
+  let wordIndex = 0
+  let current = null
+
+  const flush = () => {
+    if (current && current.text) chunks.push(current)
+    current = null
+  }
+
+  tokens.forEach(token => {
+    if (!token) return
+    const isSpace = /^\s+$/.test(token)
+    const assignment = isSpace ? current?.assignment || null : getSlide2AssignmentForWord(assignments, wordIndex)
+    const key = assignment ? `slide-${assignment.slideIndex}` : 'plain'
+
+    if (!current || current.key !== key) {
+      flush()
+      current = { key, assignment, text: '' }
+    }
+
+    current.text += token
+    if (!isSpace) wordIndex += 1
+  })
+
+  flush()
+  return chunks
+}
+
+function Slide2HighlightedText({ text, assignments, selectedSlideIndex, onSelectSlide }) {
+  const chunks = useMemo(() => buildSlide2TextChunks(text, assignments), [text, assignments])
+
+  return (
+    <div style={{
+      fontFamily: "'Fira Code', 'Menlo', 'Consolas', monospace",
+      fontSize: '12px',
+      lineHeight: 1.72,
+      color: '#cbd5e1',
+      whiteSpace: 'pre-wrap',
+      wordBreak: 'break-word',
+    }}>
+      {chunks.map((chunk, index) => {
+        if (!chunk.assignment) return <span key={index}>{chunk.text}</span>
+        const active = chunk.assignment.slideIndex === selectedSlideIndex
+        return (
+          <span
+            key={index}
+            role="button"
+            tabIndex={0}
+            onClick={() => onSelectSlide(chunk.assignment.slideIndex)}
+            onKeyDown={event => {
+              if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault()
+                onSelectSlide(chunk.assignment.slideIndex)
+              }
+            }}
+            title={`Slide ${chunk.assignment.slideNumber}`}
+            style={{
+              cursor: 'pointer',
+              borderRadius: '4px',
+              padding: '1px 2px',
+              background: active ? `${chunk.assignment.color}44` : `${chunk.assignment.color}24`,
+              boxShadow: active ? `0 0 0 1px ${chunk.assignment.color}` : 'none',
+              color: active ? '#f8fafc' : '#dbeafe',
+              transition: 'background 0.15s, box-shadow 0.15s',
+            }}
+          >
+            {chunk.text}
+          </span>
+        )
+      })}
+    </div>
+  )
+}
+
+function Slide2AlignmentModal({ jobId, folder, onClose }) {
+  const [courses, setCourses] = useState([])
+  const [slides, setSlides] = useState([])
+  const [stats, setStats] = useState(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  const [selectedCourseNumber, setSelectedCourseNumber] = useState(null)
+  const [selectedSlideIndex, setSelectedSlideIndex] = useState(null)
+
+  useEffect(() => {
+    let cancelled = false
+
+    async function load() {
+      setLoading(true)
+      setError('')
+
+      try {
+        const [slidesResp, artifactResp] = await Promise.all([
+          fetch(apiUrl(`/api/slides/data?folder_id=${encodeURIComponent(folder.folder_id)}`), { credentials: 'include' }),
+          fetch(
+            apiUrl(`/api/formation/${jobId}/content/${folder.folder_id}/artifact/content-course-scripts.json`),
+            { credentials: 'include' },
+          ),
+        ])
+
+        const messages = []
+        let loadedSlides = []
+        let loadedStats = null
+        let artifact = null
+        let fallbackText = ''
+
+        const slidesData = await slidesResp.json().catch(() => ({}))
+        if (slidesResp.ok && slidesData.status === 'success' && Array.isArray(slidesData.slides)) {
+          loadedSlides = slidesData.slides
+          loadedStats = slidesData.stats || null
+        } else {
+          messages.push(slidesData.message || slidesData.error || 'Deck slides indisponible')
+        }
+
+        const artifactData = await artifactResp.json().catch(() => ({}))
+        if (artifactResp.ok && artifactData.artifact) {
+          artifact = artifactData.artifact
+        } else {
+          const textResp = await fetch(
+            apiUrl(`/api/formation/${jobId}/content/${folder.folder_id}/text`),
+            { credentials: 'include' },
+          )
+          const textData = await textResp.json().catch(() => ({}))
+          if (textResp.ok && textData.text) {
+            fallbackText = stripSlide2TtsTags(textData.text)
+          } else {
+            messages.push(artifactData.error || textData.error || 'Texte source indisponible')
+          }
+        }
+
+        const builtCourses = buildSlide2Courses(artifact, fallbackText)
+        if (!builtCourses.length) messages.push('Aucun cours exploitable pour le surlignage')
+
+        if (cancelled) return
+        setSlides(loadedSlides)
+        setStats(loadedStats)
+        setCourses(builtCourses)
+        setSelectedCourseNumber(prev => (
+          builtCourses.some(course => course.courseNumber === prev)
+            ? prev
+            : builtCourses[0]?.courseNumber || null
+        ))
+        setSelectedSlideIndex(prev => (
+          Number.isInteger(prev) && loadedSlides[prev] ? prev : 0
+        ))
+        setError(messages.join(' · '))
+      } catch {
+        if (!cancelled) setError('Erreur réseau pendant le chargement Slide2')
+      } finally {
+        if (!cancelled) setLoading(false)
+      }
+    }
+
+    load()
+    return () => { cancelled = true }
+  }, [jobId, folder.folder_id])
+
+  const assignmentsByCourse = useMemo(() => buildSlide2Assignments(courses, slides), [courses, slides])
+  const selectedCourse = courses.find(course => course.courseNumber === selectedCourseNumber) || courses[0] || null
+  const selectedAssignments = selectedCourse ? assignmentsByCourse.get(selectedCourse.courseNumber) || [] : []
+
+  useEffect(() => {
+    if (!courses.length) return
+    if (!selectedCourse) {
+      setSelectedCourseNumber(courses[0].courseNumber)
+    }
+  }, [courses, selectedCourse])
+
+  useEffect(() => {
+    if (!selectedAssignments.length) return
+    if (!selectedAssignments.some(item => item.slideIndex === selectedSlideIndex)) {
+      setSelectedSlideIndex(selectedAssignments[0].slideIndex)
+    }
+  }, [selectedAssignments, selectedSlideIndex])
+
+  const effectiveSlideIndex = Number.isInteger(selectedSlideIndex)
+    ? selectedSlideIndex
+    : selectedAssignments[0]?.slideIndex ?? 0
+  const selectedSlide = slides[effectiveSlideIndex] || null
+  const coveredWords = selectedCourse ? countSlide2CoveredWords(selectedCourse.wordCount, selectedAssignments) : 0
+  const coveragePct = selectedCourse?.wordCount
+    ? Math.round((coveredWords / selectedCourse.wordCount) * 100)
+    : 0
+
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: 'fixed',
+        inset: 0,
+        background: 'rgba(0,0,0,0.72)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        zIndex: 1000,
+        padding: '18px',
+      }}
+    >
+      <div
+        onClick={event => event.stopPropagation()}
+        style={{
+          width: 'min(1560px, 96vw)',
+          height: '90vh',
+          background: '#0f172a',
+          border: '1px solid rgba(139,92,246,0.28)',
+          borderRadius: '16px',
+          overflow: 'hidden',
+          display: 'flex',
+          flexDirection: 'column',
+          color: '#e2e8f0',
+        }}
+      >
+        <div style={{
+          padding: '16px 20px',
+          borderBottom: '1px solid rgba(99,102,241,0.18)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: '14px',
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px', minWidth: 0 }}>
+            <div style={{
+              width: '40px',
+              height: '40px',
+              borderRadius: '10px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              background: 'rgba(139,92,246,0.14)',
+              color: '#a78bfa',
+              flexShrink: 0,
+            }}>
+              <Icon name="splitscreen" />
+            </div>
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontSize: '16px', fontWeight: 700, color: '#e2e8f0' }}>
+                Slide2 · Alignement texte / slides
+              </div>
+              <div style={{ fontSize: '12px', color: '#94a3b8', marginTop: '2px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                Jour {folder.day_number} — {folder.day_title} · {slides.length || folder.slide_count || 0} slides
+                {stats?.source_word_count ? ` · ${Number(stats.source_word_count).toLocaleString('fr-FR')} mots source` : ''}
+              </div>
+            </div>
+          </div>
+          <button
+            onClick={onClose}
+            style={{ ...S.btn('neutral'), padding: '6px 10px', fontSize: '12px', flexShrink: 0 }}
+          >
+            <Icon name="close" />
+          </button>
+        </div>
+
+        <div style={{
+          flex: 1,
+          minHeight: 0,
+          display: 'grid',
+          gridTemplateColumns: '240px minmax(420px, 1fr) minmax(360px, 520px)',
+          gap: '0',
+        }}>
+          <aside style={{
+            borderRight: '1px solid rgba(99,102,241,0.16)',
+            background: 'rgba(15,23,42,0.72)',
+            padding: '14px',
+            overflow: 'auto',
+          }}>
+            <div style={{
+              fontSize: '10px',
+              fontWeight: 800,
+              color: '#94a3b8',
+              textTransform: 'uppercase',
+              letterSpacing: '0.14em',
+              marginBottom: '10px',
+            }}>
+              Cours de la journée
+            </div>
+            {loading && <div style={{ color: '#64748b', fontSize: '12px' }}>Chargement…</div>}
+            {!loading && courses.map(course => {
+              const assignments = assignmentsByCourse.get(course.courseNumber) || []
+              const covered = countSlide2CoveredWords(course.wordCount, assignments)
+              const pct = course.wordCount ? Math.round((covered / course.wordCount) * 100) : 0
+              const active = course.courseNumber === selectedCourse?.courseNumber
+              return (
+                <button
+                  key={course.courseNumber}
+                  onClick={() => setSelectedCourseNumber(course.courseNumber)}
+                  style={{
+                    width: '100%',
+                    textAlign: 'left',
+                    padding: '10px 11px',
+                    marginBottom: '8px',
+                    borderRadius: '10px',
+                    border: `1px solid ${active ? 'rgba(139,92,246,0.5)' : 'rgba(51,65,85,0.85)'}`,
+                    background: active ? 'rgba(139,92,246,0.12)' : 'rgba(30,41,59,0.42)',
+                    color: '#e2e8f0',
+                    cursor: 'pointer',
+                  }}
+                >
+                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', marginBottom: '4px' }}>
+                    <span style={{ fontSize: '12px', fontWeight: 700 }}>Cours {course.courseNumber}</span>
+                    <span style={{ fontSize: '11px', color: assignments.length ? '#60a5fa' : '#64748b' }}>
+                      {assignments.length} slide{assignments.length > 1 ? 's' : ''}
+                    </span>
+                  </div>
+                  <div style={{
+                    fontSize: '12px',
+                    color: '#cbd5e1',
+                    lineHeight: 1.35,
+                    marginBottom: '8px',
+                  }}>
+                    {course.title}
+                  </div>
+                  <div style={{ height: '4px', background: 'rgba(15,23,42,0.9)', borderRadius: '999px', overflow: 'hidden' }}>
+                    <div style={{
+                      width: `${pct}%`,
+                      height: '100%',
+                      background: pct >= 98 ? '#34d399' : pct >= 70 ? '#fbbf24' : '#f87171',
+                    }} />
+                  </div>
+                  <div style={{ marginTop: '5px', fontSize: '10px', color: '#94a3b8' }}>
+                    {pct}% couvert · {course.wordCount.toLocaleString('fr-FR')} mots
+                  </div>
+                </button>
+              )
+            })}
+          </aside>
+
+          <main style={{
+            minWidth: 0,
+            minHeight: 0,
+            display: 'flex',
+            flexDirection: 'column',
+            borderRight: '1px solid rgba(99,102,241,0.16)',
+          }}>
+            <div style={{
+              padding: '14px 16px',
+              borderBottom: '1px solid rgba(99,102,241,0.16)',
+              background: 'rgba(15,23,42,0.58)',
+            }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', alignItems: 'flex-start', marginBottom: '10px' }}>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontSize: '14px', fontWeight: 700, color: '#e2e8f0' }}>
+                    {selectedCourse ? `Cours ${selectedCourse.courseNumber} · ${selectedCourse.title}` : 'Texte source'}
+                  </div>
+                  <div style={{ fontSize: '11px', color: '#94a3b8', marginTop: '2px' }}>
+                    {selectedAssignments.length} slide{selectedAssignments.length > 1 ? 's' : ''} liée{selectedAssignments.length > 1 ? 's' : ''} · {coveredWords.toLocaleString('fr-FR')}/{selectedCourse?.wordCount?.toLocaleString('fr-FR') || 0} mots couverts
+                  </div>
+                </div>
+                <span style={{
+                  ...S.tag(coveragePct >= 98 ? 'green' : coveragePct >= 70 ? 'amber' : 'red'),
+                  flexShrink: 0,
+                }}>
+                  {coveragePct}% couvert
+                </span>
+              </div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                {selectedAssignments.map(item => (
+                  <button
+                    key={`${item.slideIndex}-${item.start}-${item.end}`}
+                    onClick={() => setSelectedSlideIndex(item.slideIndex)}
+                    style={{
+                      border: `1px solid ${item.color}`,
+                      background: item.slideIndex === effectiveSlideIndex ? `${item.color}30` : 'rgba(15,23,42,0.7)',
+                      color: '#e2e8f0',
+                      borderRadius: '999px',
+                      padding: '4px 8px',
+                      fontSize: '11px',
+                      fontWeight: 700,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Slide {item.slideNumber}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div style={{
+              flex: 1,
+              minHeight: 0,
+              overflow: 'auto',
+              padding: '18px',
+              background: '#020617',
+            }}>
+              {loading && <div style={{ color: '#64748b' }}>Chargement du texte…</div>}
+              {error && (
+                <div style={{
+                  color: '#fca5a5',
+                  background: 'rgba(127,29,29,0.22)',
+                  border: '1px solid rgba(248,113,113,0.25)',
+                  borderRadius: '8px',
+                  padding: '10px 12px',
+                  fontSize: '12px',
+                  marginBottom: '14px',
+                }}>
+                  {error}
+                </div>
+              )}
+              {selectedCourse && (
+                <Slide2HighlightedText
+                  text={selectedCourse.text}
+                  assignments={selectedAssignments}
+                  selectedSlideIndex={effectiveSlideIndex}
+                  onSelectSlide={setSelectedSlideIndex}
+                />
+              )}
+            </div>
+          </main>
+
+          <aside style={{
+            minWidth: 0,
+            minHeight: 0,
+            display: 'flex',
+            flexDirection: 'column',
+            background: 'rgba(15,23,42,0.76)',
+          }}>
+            <div style={{
+              padding: '14px 16px',
+              borderBottom: '1px solid rgba(99,102,241,0.16)',
+              display: 'flex',
+              alignItems: 'flex-start',
+              justifyContent: 'space-between',
+              gap: '10px',
+            }}>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontSize: '12px', color: '#94a3b8', fontWeight: 700 }}>
+                  {selectedSlide ? `Slide ${effectiveSlideIndex + 1}/${slides.length}` : 'Slide'}
+                </div>
+                <div style={{
+                  fontSize: '14px',
+                  color: '#e2e8f0',
+                  fontWeight: 700,
+                  lineHeight: 1.35,
+                  marginTop: '3px',
+                }}>
+                  {selectedSlide ? getSlide2Title(selectedSlide, effectiveSlideIndex) : 'Aucune slide sélectionnée'}
+                </div>
+              </div>
+              {selectedSlide && (
+                <span style={{
+                  ...S.tag('violet'),
+                  flexShrink: 0,
+                  maxWidth: '160px',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                }}>
+                  {selectedSlide.template_type}
+                </span>
+              )}
+            </div>
+
+            <div style={{ minHeight: 0, flex: '0 0 auto', background: '#020617' }}>
+              {selectedSlide ? (
+                <SlidePreviewFrame slide={selectedSlide} />
+              ) : (
+                <div style={{ padding: '24px', color: '#64748b', fontSize: '13px' }}>Aperçu indisponible</div>
+              )}
+            </div>
+
+            <div style={{
+              minHeight: 0,
+              flex: 1,
+              overflow: 'auto',
+              padding: '14px 16px',
+              borderTop: '1px solid rgba(99,102,241,0.16)',
+            }}>
+              {selectedSlide && (
+                <>
+                  <div style={{
+                    fontSize: '10px',
+                    color: '#94a3b8',
+                    fontWeight: 800,
+                    textTransform: 'uppercase',
+                    letterSpacing: '0.12em',
+                    marginBottom: '8px',
+                  }}>
+                    Source slide
+                  </div>
+                  <div style={{
+                    padding: '10px 12px',
+                    borderRadius: '8px',
+                    border: '1px solid rgba(51,65,85,0.85)',
+                    background: 'rgba(30,41,59,0.44)',
+                    color: '#cbd5e1',
+                    fontSize: '12px',
+                    lineHeight: 1.55,
+                    marginBottom: '10px',
+                  }}>
+                    {selectedSlide.event_summary || selectedSlide.curation_reason || 'Résumé non disponible'}
+                  </div>
+                  <div style={{
+                    fontSize: '11px',
+                    color: '#94a3b8',
+                    display: 'grid',
+                    gridTemplateColumns: 'auto 1fr',
+                    gap: '5px 10px',
+                  }}>
+                    <span>Alignement</span>
+                    <span style={{ color: '#cbd5e1' }}>{selectedSlide.source_ref?.source_alignment || selectedSlide.source_ref?.selection_method || '—'}</span>
+                    <span>Bloc source</span>
+                    <span style={{ color: '#cbd5e1' }}>{selectedSlide.source_ref?.source_block_id ?? '—'}</span>
+                    <span>Mots</span>
+                    <span style={{ color: '#cbd5e1' }}>
+                      {selectedSlide.source_ref?.word_start ?? '—'} → {selectedSlide.source_ref?.word_end ?? '—'}
+                    </span>
+                    {selectedSlide.slide_anchor_id && (
+                      <>
+                        <span>Anchor</span>
+                        <span style={{ color: '#cbd5e1', wordBreak: 'break-all' }}>{selectedSlide.slide_anchor_id}</span>
+                      </>
+                    )}
+                  </div>
+                </>
+              )}
+            </div>
+          </aside>
         </div>
       </div>
     </div>
