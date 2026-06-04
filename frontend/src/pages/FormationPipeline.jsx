@@ -6012,6 +6012,7 @@ export default function FormationPipeline() {
         body: JSON.stringify({
           folder_id: folderId,
           job_id: selectedJobId,
+          platform_id: folder.platform_id || job?.platform_id || null,
           max_slides: 60,
           pace: 'normal',
           model: continueAfterTextModel || job?.auto_pilot_model || 'deepseek-v4-pro',
@@ -7549,7 +7550,7 @@ export default function FormationPipeline() {
                                   <button
                                     style={{ ...S.btn('neutral'), padding: '6px 12px', fontSize: '12px' }}
                                     disabled={!canUseFolder}
-                                    onClick={() => window.open(`/generated-slides?job_id=${selectedJobId}&folder_id=${folder.folder_id}`, '_blank')}
+                                    onClick={() => window.open(`/generated-slides?job_id=${selectedJobId}&folder_id=${folder.folder_id}&platform_id=${folder.platform_id || job?.platform_id || ''}`, '_blank')}
                                     title={canUseFolder ? 'Prévisualiser les slides générées depuis le texte' : 'En attente de génération ou dossier hors job'}
                                   >
                                     <Icon name="slideshow" /> Slides

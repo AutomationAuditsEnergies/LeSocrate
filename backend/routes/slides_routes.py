@@ -168,6 +168,7 @@ def generate_from_script():
         {
             "folder_id": 123,          # requis
             "job_id": 7,               # optionnel, vérifie la cohérence plateforme
+            "platform_id": 36,         # optionnel, prioritaire sur la session admin
             "max_slides": 60,          # cap de densité V1
             "pace": "normal",          # dense|normal|synthesis
             "model": "sonnet"          # optionnel
@@ -186,12 +187,13 @@ def generate_from_script():
         max_slides = data.get("max_slides", 60)
         pace = data.get("pace", "normal")
         model = data.get("model")
-        platform_id = session.get("platform_id")
+        platform_id = data.get("platform_id") or session.get("platform_id")
 
         logger.info(
-            "Demande génération slides depuis script folder=%s job=%s max_slides=%s",
+            "Demande génération slides depuis script folder=%s job=%s platform=%s max_slides=%s",
             folder_id,
             job_id,
+            platform_id,
             max_slides,
         )
 

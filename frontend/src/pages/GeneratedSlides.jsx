@@ -123,6 +123,7 @@ export default function GeneratedSlides() {
   const [generationMode, setGenerationMode] = useState('script');
   const [folderId, setFolderId] = useState(initialParams.get('folder_id') || '');
   const [jobId, setJobId] = useState(initialParams.get('job_id') || '');
+  const [platformId] = useState(initialParams.get('platform_id') || '');
   const [maxSlides, setMaxSlides] = useState(initialParams.get('max_slides') || '60');
   const [slidePace, setSlidePace] = useState(initialParams.get('pace') || 'normal');
   const [showTimeline, setShowTimeline] = useState(false);
@@ -172,6 +173,7 @@ export default function GeneratedSlides() {
         body: JSON.stringify({
           folder_id: folderId ? Number(folderId) : null,
           job_id: jobId ? Number(jobId) : null,
+          platform_id: platformId ? Number(platformId) : null,
           max_slides: Number(maxSlides) || 60,
           pace: slidePace
         })
