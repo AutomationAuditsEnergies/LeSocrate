@@ -77,6 +77,8 @@ PACE_PROFILES = {
 SUPPORTED_TEMPLATES = {
     "context",
     "welcome",
+    "chapter_opener",
+    "chapter_intro",
     "program_year",
     "day_year",
     "day_program_7_steps",
@@ -96,6 +98,9 @@ SUPPORTED_TEMPLATES = {
 TEMPLATE_ALIASES = {
     "welcome": "welcome",
     "day_welcome": "welcome",
+    "chapter_opener": "chapter_opener",
+    "chapter_intro": "chapter_opener",
+    "theme_opening": "chapter_opener",
     "program_year": "program_year",
     "day_year": "program_year",
     "annual_program": "program_year",
@@ -137,6 +142,8 @@ TEMPLATE_ALIASES = {
 EVENT_TYPES = {
     "filler",
     "welcome",
+    "chapter_opener",
+    "chapter_intro",
     "program_year",
     "day_year",
     "day_program",
@@ -877,6 +884,7 @@ def _extract_slide_anchors_from_plan(plan: dict | None) -> list[dict]:
                 "course_title": course.get("course_title") or "",
                 "part_number": 0,
                 "part_title": "Introduction",
+                "section_kind": "opening",
                 "beat_order": order,
                 "beat_type": str(beat.get("type") or "welcome"),
                 "role": role,
@@ -916,6 +924,7 @@ def _extract_slide_anchors_from_plan(plan: dict | None) -> list[dict]:
                     "course_title": course.get("course_title") or "",
                     "part_number": part_number,
                     "part_title": part.get("title") or "",
+                    "section_kind": "part",
                     "beat_order": order,
                     "beat_type": str(beat.get("type") or "concept"),
                     "role": role,
@@ -927,6 +936,43 @@ def _extract_slide_anchors_from_plan(plan: dict | None) -> list[dict]:
                     "must_not_cover": must_not_cover,
                     "fields_hint": slide_anchor.get("fields_hint") if isinstance(slide_anchor.get("fields_hint"), dict) else {},
                 })
+        course_conclusion = course.get("course_conclusion") if isinstance(course.get("course_conclusion"), dict) else {}
+        for order, beat in enumerate(course_conclusion.get("teaching_beats") or [], start=1):
+            if not isinstance(beat, dict):
+                continue
+            slide_anchor = beat.get("slide_anchor") if isinstance(beat.get("slide_anchor"), dict) else {}
+            if not slide_anchor.get("enabled"):
+                continue
+            role, spoken, visual_goal, must_cover, must_not_cover = _repair_anchor_context(
+                section=course_conclusion,
+                beat=beat,
+                anchor=slide_anchor,
+                fallback_part_title="Conclusion du cours",
+            )
+            template_type = _canonical_template(
+                slide_anchor.get("template_type")
+                or slide_anchor.get("template_family")
+                or beat.get("type")
+            )
+            anchors.append({
+                "anchor_id": str(slide_anchor.get("anchor_id") or f"c{course_number}conclusion-b{order}-slide"),
+                "beat_id": str(beat.get("beat_id") or f"c{course_number}conclusion-b{order}"),
+                "course_number": course_number,
+                "course_title": course.get("course_title") or "",
+                "part_number": 900,
+                "part_title": "Conclusion du cours",
+                "section_kind": "course_conclusion",
+                "beat_order": order,
+                "beat_type": str(beat.get("type") or "recap"),
+                "role": role,
+                "spoken_requirement": spoken,
+                "template_type": template_type,
+                "visual_goal": visual_goal,
+                "items_expected": slide_anchor.get("items_expected"),
+                "must_cover": must_cover,
+                "must_not_cover": must_not_cover,
+                "fields_hint": slide_anchor.get("fields_hint") if isinstance(slide_anchor.get("fields_hint"), dict) else {},
+            })
     return anchors
 
 
@@ -958,19 +1004,34 @@ def _assign_slide_anchors_to_source_blocks(source_blocks: list[dict], anchors: l
             key=lambda item: (int(item.get("part_number") or 0), int(item.get("beat_order") or 0)),
         )
         opening_anchors = [anchor for anchor in course_anchors if int(anchor.get("part_number") or 0) == 0]
-        body_anchors = [anchor for anchor in course_anchors if int(anchor.get("part_number") or 0) != 0]
+        conclusion_anchors = [
+            anchor for anchor in course_anchors
+            if anchor.get("section_kind") == "course_conclusion" or int(anchor.get("part_number") or 0) >= 900
+        ]
+        body_anchors = [
+            anchor for anchor in course_anchors
+            if int(anchor.get("part_number") or 0) != 0
+            and anchor.get("section_kind") != "course_conclusion"
+            and int(anchor.get("part_number") or 0) < 900
+        ]
         if opening_anchors:
             blocks[0]["slide_anchors"].extend(opening_anchors)
         course_anchors = body_anchors
         if not course_anchors:
+            if conclusion_anchors:
+                blocks[-1]["slide_anchors"].extend(conclusion_anchors)
             continue
         if len(blocks) == 1:
             blocks[0]["slide_anchors"].extend(course_anchors)
+            if conclusion_anchors:
+                blocks[0]["slide_anchors"].extend(conclusion_anchors)
             continue
         total = max(1, len(course_anchors))
         for idx, anchor in enumerate(course_anchors):
             block_idx = min(len(blocks) - 1, int((idx + 0.5) * len(blocks) / total))
             blocks[block_idx]["slide_anchors"].append(anchor)
+        if conclusion_anchors:
+            blocks[-1]["slide_anchors"].extend(conclusion_anchors)
 
 
 def _anchor_sort_key(anchor: dict) -> tuple[int, int, str]:
@@ -1817,7 +1878,8 @@ CATALOGUE TEMPLATES:
 
 TEMPLATES AUTORISÉS ET SCHÉMAS:
 - reflection: data={{"title":"3-6 mots","text":"1-2 phrases"}}
-- casestudy: data={{"title":"3-6 mots","cases":[{{"title":"court","desc":"1 phrase"}}]}} avec 2-3 cases
+- chapter_opener: data={{"chapter_label":"Chapitre X","title":"titre du thème","axes":[{{"title":"axe court","desc":"optionnel"}}]}}
+- casestudy: data={{"title":"3-6 mots","eyebrow":"contexte","cases":[{{"tag":"01 · Canal","title":"court","desc":"1 phrase","example":"optionnel"}}]}} avec autant de cases que le texte justifie
 - facilitator: data={{"title":"3-6 mots","steps":[{{"title":"court","desc":"1 phrase","icon":"target|gear|flash|flag","color":"orange|purple|lime|blue"}}]}} avec 2-4 steps
 - stats: data={{"title":"3-6 mots","description":"1 phrase","stats":[{{"number":"chiffre"}}],"columns":["phrase courte","phrase courte"]}}
 - story: data={{"title":"3-6 mots","narrative":"1-2 phrases","moral":"1 phrase"}}
@@ -1830,7 +1892,7 @@ TEMPLATES AUTORISÉS ET SCHÉMAS:
 - chart: data={{"title":"3-6 mots","description":"1 phrase","chartData":null}}
 
 Choisis `event_type` parmi:
-recap, story, definition, concept, example, process, comparison, data, analogy, warning, tip, opinion, transition.
+chapter_opener, recap, story, definition, concept, example, process, comparison, data, analogy, warning, tip, opinion, transition.
 
 FORMAT EXACT:
 {{
@@ -1968,6 +2030,23 @@ def _normalize_slide_data(template: str, data: dict, fallback_title: str, fallba
             "day_label": _as_text(data.get("day_label"), "")[:40],
         }
 
+    if template == "chapter_opener":
+        axes = []
+        for item in _limit_list(data.get("axes") or data.get("items") or data.get("points"), 4):
+            if isinstance(item, dict):
+                axis_title = _as_text(item.get("title") or item.get("label"), "")
+                axis_desc = _as_text(item.get("desc") or item.get("description") or item.get("text"), "")
+            else:
+                axis_title = _as_text(item, "")
+                axis_desc = ""
+            if axis_title:
+                axes.append({"title": axis_title[:80], "desc": axis_desc[:160]})
+        return {
+            "chapter_label": _as_text(data.get("chapter_label") or data.get("chapter"), "Chapitre")[:40],
+            "title": _as_text(data.get("title"), fallback_title)[:90],
+            "axes": axes or [{"title": _shorten(fallback_text, 70), "desc": ""}],
+        }
+
     if template in {"program_year", "day_program", "day_program_7_steps"}:
         max_items = 7 if template == "day_program_7_steps" else 2
         items = []
@@ -2010,10 +2089,23 @@ def _normalize_slide_data(template: str, data: dict, fallback_title: str, fallba
 
     if template == "casestudy":
         cases = []
-        for item in _limit_list(data.get("cases"), 3):
+        for item in _limit_list(data.get("cases") or data.get("items") or data.get("points"), 6):
             if isinstance(item, dict):
-                cases.append({"title": _as_text(item.get("title"), "Point clé")[:50], "desc": _as_text(item.get("desc"), fallback_text)[:180]})
-        return {"title": title, "cases": cases or [{"title": "Point clé", "desc": text}]}
+                cases.append({
+                    "tag": _as_text(item.get("tag") or item.get("label"), "")[:40],
+                    "title": _as_text(item.get("title"), "Point clé")[:60],
+                    "desc": _as_text(item.get("desc") or item.get("description") or item.get("text"), fallback_text)[:220],
+                    "example": _as_text(item.get("example") or item.get("quote"), "")[:160],
+                })
+            else:
+                label = _as_text(item, "")
+                if label:
+                    cases.append({"title": label[:60], "desc": "", "tag": "", "example": ""})
+        return {
+            "title": title,
+            "eyebrow": _as_text(data.get("eyebrow"), "Analyse comparative")[:60],
+            "cases": cases or [{"title": "Point clé", "desc": text, "tag": "", "example": ""}],
+        }
 
     if template == "facilitator":
         steps = []

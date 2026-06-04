@@ -136,15 +136,58 @@
       ]
     },
     {
+      "template_id": "chapter_opener",
+      "families": ["chapter_opener", "chapter_intro", "theme_opening"],
+      "visual_role": "Ouvrir un chapitre ou un grand thème avec son titre et ses axes principaux.",
+      "use_when": "Le passage annonce un nouveau chapitre, un nouveau thème, son objectif ou son plan oral en axes.",
+      "avoid_when": "Le passage est un récap du cours précédent, une méthode détaillée, une checklist ou un exemple.",
+      "strong_signals": [
+        "nouveau chapitre",
+        "nouveau thème",
+        "objectif de cette partie",
+        "plan oral en axes",
+        "ce que nous allons travailler"
+      ],
+      "weak_signals": [
+        "simple transition",
+        "rappel du cours précédent",
+        "liste de conseils"
+      ],
+      "selection_rules": [
+        "Utiliser après la feuille de route de journée pour ouvrir le premier chapitre.",
+        "Utiliser après un recap au début d'un cours suivant pour annoncer le nouveau thème.",
+        "Ne pas utiliser facilitator pour cette fonction d'ouverture."
+      ],
+      "rejection_rules": [
+        "Refuser si le passage rappelle seulement ce qui vient d'être vu.",
+        "Refuser si aucun titre de thème ou axe n'est annoncé."
+      ],
+      "requires": {
+        "items_min": 1,
+        "items_max": 4
+      },
+      "schema": {
+        "chapter_label": "Chapitre X",
+        "title": "titre du chapitre ou thème",
+        "axes": "1-4 axes avec title et desc optionnelle"
+      },
+      "good_examples": [
+        "On entre maintenant dans le premier grand thème : la posture de service. Nous allons voir l'intention, les codes d'accueil et les premiers réflexes professionnels."
+      ],
+      "bad_examples": [
+        "La partie précédente nous a permis de retenir trois points importants."
+      ]
+    },
+    {
       "template_id": "reflection",
-      "families": ["concept", "definition", "key_message"],
-      "visual_role": "Mettre en avant une idée centrale ou un principe à retenir.",
-      "use_when": "Une idée courte, une définition ou un principe doit être mémorisé comme repère.",
+      "families": ["concept", "key_message"],
+      "visual_role": "Mettre en avant une idée centrale, un principe fort ou une phrase pivot que l'apprenant doit retenir.",
+      "use_when": "Le passage oral contient une idée courte, une distinction importante ou un principe mémorisable. La slide ne doit pas résumer tout le paragraphe : elle doit isoler le message clé.",
       "avoid_when": "Le passage contient une méthode en étapes, plusieurs cas, une checklist ou une narration.",
       "strong_signals": [
-        "définition claire",
         "phrase pivot",
         "principe général",
+        "idée centrale",
         "distinction conceptuelle courte"
       ],
       "weak_signals": [
@@ -182,7 +225,7 @@
       "families": ["process", "method", "framework", "steps"],
       "visual_role": "Transformer une méthode ou une procédure en étapes actionnables.",
       "use_when": "Le passage présente un enchaînement, une procédure, une méthode ou des étapes d'action.",
-      "avoid_when": "Le contenu n'a pas au moins deux étapes distinctes ou n'indique pas d'ordre.",
+      "avoid_when": "Le contenu n'a pas au moins deux étapes distinctes, n'indique pas d'ordre, récapitule un cours précédent ou ouvre simplement un nouveau chapitre.",
       "strong_signals": [
         "d'abord, ensuite, enfin",
         "méthode en plusieurs temps",
@@ -197,7 +240,8 @@
       "selection_rules": [
         "Utiliser si le passage peut être découpé en 2 à 4 étapes nettes.",
         "Chaque étape doit contenir un verbe d'action ou un repère opérationnel.",
-        "Préférer facilitator au recap quand l'ordre des actions compte."
+        "Préférer facilitator au recap quand l'ordre des actions compte.",
+        "Ne pas utiliser facilitator pour un récap de début de cours ou une annonce de chapitre."
       ],
       "rejection_rules": [
         "Refuser si les étapes doivent être inventées.",
@@ -222,12 +266,14 @@
       "template_id": "recap",
       "families": ["checklist", "recap", "takeaways"],
       "visual_role": "Regrouper plusieurs points à retenir ou réflexes pratiques.",
-      "use_when": "Le passage donne plusieurs points de vigilance, réflexes, critères ou éléments de synthèse.",
+      "use_when": "Le passage donne plusieurs points de vigilance, réflexes, critères, éléments de synthèse, rappelle brièvement le cours précédent ou récapitule le cours avant conclusion/Q/R.",
       "avoid_when": "Le contenu est une seule idée, une méthode ordonnée ou un récit.",
       "strong_signals": [
         "plusieurs points à retenir",
+        "rappel du cours précédent",
         "checklist",
         "synthèse actionnable",
+        "récap avant conclusion",
         "critères de contrôle"
       ],
       "weak_signals": [
@@ -238,6 +284,8 @@
       "selection_rules": [
         "Utiliser avec 2 à 4 points courts.",
         "Préférer recap à facilitator quand l'ordre n'est pas essentiel.",
+        "Utiliser recap pour le rappel qui ouvre un nouveau cours avant le chapter_opener.",
+        "Utiliser recap avant les conclusions et Q/R pour synthétiser ce qui vient d'être vu dans le cours.",
         "Formuler chaque point comme un repère mémorisable."
       ],
       "rejection_rules": [
@@ -278,7 +326,7 @@
       ],
       "selection_rules": [
         "Utiliser quand le passage permet de voir la notion dans une scène métier.",
-        "Limiter à 1 à 3 cas ou angles.",
+        "Adapter le nombre de cartes au texte source : 2 cartes pour une comparaison, 3 cartes pour trois canaux ou trois situations, davantage seulement si le passage donne réellement davantage de cas.",
         "Préférer casestudy à analogy pour les exemples client/conseiller/usager."
       ],
       "rejection_rules": [
@@ -287,11 +335,12 @@
       ],
       "requires": {
         "items_min": 1,
-        "items_max": 3
+        "items_max": 6
       },
       "schema": {
         "title": "3-6 mots",
-        "cases": "1-3 cas avec title et desc"
+        "eyebrow": "contexte court optionnel",
+        "cases": "1-6 cas avec tag, title, desc et example optionnel"
       },
       "good_examples": [
         "Un client dit simplement : je n'ai pas reçu ma facture. Selon la manière de questionner, on découvre soit un problème d'adresse, soit un problème de paiement."

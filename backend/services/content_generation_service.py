@@ -425,6 +425,12 @@ def _runtime_intra_day_carryover_enabled() -> bool:
     return value in {"1", "true", "yes", "on"}
 
 
+def _structured_allow_residual_too_short() -> bool:
+    """Compat flag only: final text budgets are strict by default."""
+    value = str(os.getenv("FORMATION_STRUCTURED_ALLOW_RESIDUAL_TOO_SHORT", "0")).strip().lower()
+    return value not in {"0", "false", "no", "off"}
+
+
 def _course_conclusion_start_margin_sec():
     return _env_float(
         "FORMATION_TTS_CONCLUSION_START_MARGIN_SEC",
@@ -741,6 +747,9 @@ def _merge_unique_strings(*values) -> list[str]:
 _BEAT_TYPE_TO_TEMPLATE = {
     "welcome": "welcome",
     "day_welcome": "welcome",
+    "chapter_opener": "chapter_opener",
+    "chapter_intro": "chapter_opener",
+    "theme_opening": "chapter_opener",
     "program_year": "program_year",
     "day_year": "program_year",
     "annual_program": "program_year",
@@ -781,6 +790,7 @@ _BEAT_TYPE_TO_TEMPLATE = {
 }
 _SUPPORTED_SLIDE_TEMPLATES = {
     "welcome",
+    "chapter_opener",
     "program_year",
     "day_year",
     "day_program_7_steps",
@@ -1023,11 +1033,10 @@ def _opening_structure_teaching_beats(
     day_number: int | None,
     job: dict,
     sub_parts: list,
+    raw_parts: list | None = None,
+    course_title: str | None = None,
     is_first_day: bool,
 ) -> list[dict]:
-    if course_number != 1:
-        return []
-
     formation_name = (
         job.get("program_title")
         or job.get("tp_name")
@@ -1041,6 +1050,70 @@ def _opening_structure_teaching_beats(
         for item in (sub_parts or [])[:7]
     ]
     program_items = [item for item in program_items if item]
+    clean_course_title = _strip_internal_schedule_from_label(
+        str(course_title or (sub_parts[course_number - 1] if 0 <= course_number - 1 < len(sub_parts) else ""))
+    ).strip() or f"Cours {course_number}"
+    first_axes = [
+        _strip_internal_schedule_from_label(str((part or {}).get("title") or (part or {}).get("label") or "")).strip()
+        for part in (raw_parts or [])[:4]
+    ]
+    if not first_axes:
+        first_axes = [
+            _strip_internal_schedule_from_label(str(item or "")).strip()
+            for item in (sub_parts or [])[:3]
+        ]
+    first_axes = [item for item in first_axes if item and item != clean_course_title]
+    chapter_beat = {
+        "beat_id": f"c{course_number}opening-chapter-opener",
+        "type": "chapter_opener",
+        "role": "annoncer le nouveau chapitre et ses axes",
+        "spoken_requirement": (
+            "Annoncer le thème qui commence, son objectif et un plan oral en 2 à 4 axes "
+            "avant tout exemple ou développement."
+        ),
+        "slide_anchor": {
+            "enabled": True,
+            "anchor_id": f"c{course_number}-opening-chapter-opener-slide",
+            "template_type": "chapter_opener",
+            "visual_goal": "ouvrir le chapitre avec son titre et ses axes principaux",
+            "items_expected": len(first_axes) or None,
+            "fields_hint": {
+                "chapter_label": f"Chapitre {course_number}",
+                "title": clean_course_title,
+                "axes": [{"title": axis} for axis in first_axes[:4]],
+            },
+        },
+    }
+
+    if course_number != 1:
+        return [
+            {
+                "beat_id": f"c{course_number}opening-recap",
+                "type": "recap",
+                "role": "récapituler brièvement le cours précédent",
+                "spoken_requirement": (
+                    "Faire un rappel bref et naturel de la partie précédente, sans relancer "
+                    "une nouvelle introduction générale."
+                ),
+                "slide_anchor": {
+                    "enabled": True,
+                    "anchor_id": f"c{course_number}-opening-recap-slide",
+                    "template_type": "recap",
+                    "visual_goal": "remettre en mémoire les points utiles avant le nouveau thème",
+                    "items_expected": 3,
+                    "fields_hint": {
+                        "title": "Ce qu'on reprend.",
+                        "points": [
+                            "Le point clé précédent",
+                            "Le lien avec la suite",
+                            "Le repère à garder en tête",
+                        ],
+                    },
+                },
+            },
+            chapter_beat,
+        ]
+
     welcome_requirement = (
         f"Accueillir les apprenants en disant clairement qu'ils entrent dans la {day_label.lower()} "
         f"de la formation {formation_name}, avec une formule orale simple et chaleureuse."
@@ -1051,7 +1124,7 @@ def _opening_structure_teaching_beats(
             f"cette première journée avec une formule orale simple et chaleureuse."
         )
 
-    return [
+    beats = [
         {
             "beat_id": "c1opening-welcome",
             "type": "welcome",
@@ -1071,6 +1144,33 @@ def _opening_structure_teaching_beats(
                 },
             },
         },
+    ]
+    if is_first_day:
+        beats.append(
+            {
+                "beat_id": "c1opening-program-year",
+                "type": "program_year",
+                "role": "présenter la vision annuelle de la formation",
+                "spoken_requirement": (
+                    "Présenter synthétiquement les deux grandes phases de la formation annuelle "
+                    "sans parler d'horaires, de durées, de créneaux ou de planning."
+                ),
+                "slide_anchor": {
+                    "enabled": True,
+                    "anchor_id": "day-opening-program-year-slide",
+                    "template_type": "program_year",
+                    "visual_goal": "donner une vision annuelle des deux grands blocs de compétences",
+                    "items_expected": 2,
+                    "fields_hint": {
+                        "title": "Programme de l'année.",
+                        "subtitle": "Deux grands ensembles de compétences qui se complètent pour tenir toutes les facettes du poste.",
+                        "day_label": "Parcours annuel",
+                        "formation_name": formation_name,
+                    },
+                },
+            }
+        )
+    beats.extend([
         {
             "beat_id": "c1opening-day-program",
             "type": "day_program",
@@ -1095,7 +1195,9 @@ def _opening_structure_teaching_beats(
                 },
             },
         },
-    ]
+        chapter_beat,
+    ])
+    return beats
 
 
 def _merge_opening_teaching_beats(forced: list[dict], existing: list[dict]) -> list[dict]:
@@ -1108,15 +1210,15 @@ def _merge_opening_teaching_beats(forced: list[dict], existing: list[dict]) -> l
             beat.get("type"),
             anchor.get("template_type") or anchor.get("template_family") or beat.get("template_type"),
         )
-        if template_type in {"welcome", "program_year", "day_program", "day_program_7_steps"}:
+        if template_type in {"welcome", "program_year", "day_program", "day_program_7_steps", "recap", "chapter_opener"}:
             return f"template:{template_type}"
         beat_id = str(beat.get("beat_id") or "").strip()
         anchor_id = str(anchor.get("anchor_id") or "").strip()
         return anchor_id or beat_id or f"beat:{len(merged)}"
 
-    # Prefer the model's opening beats when they already cover the required
-    # structure. Forced beats are a fallback, not extra slides.
-    for beat in [*(existing or []), *(forced or [])]:
+    # Opening structure is a deck contract: forced beats define the expected
+    # visual order, model beats can add detail only after that structure.
+    for beat in [*(forced or []), *(existing or [])]:
         if not isinstance(beat, dict):
             continue
         key = structural_key(beat)
@@ -1124,7 +1226,69 @@ def _merge_opening_teaching_beats(forced: list[dict], existing: list[dict]) -> l
             continue
         seen.add(key)
         merged.append(beat)
-    return merged[:5]
+    return merged[:6]
+
+
+def _course_conclusion_recap_beat(
+    *,
+    course_number: int,
+    course_title: str | None,
+    parts: list[dict],
+) -> dict:
+    clean_course_title = _strip_internal_schedule_from_label(str(course_title or "")).strip() or f"Cours {course_number}"
+    points = [
+        _strip_internal_schedule_from_label(str((part or {}).get("title") or "")).strip()
+        for part in (parts or [])[:4]
+    ]
+    points = [point for point in points if point]
+    if not points:
+        points = [
+            "Le repère clé du cours",
+            "Le réflexe à garder",
+            "Le lien avec la pratique",
+        ]
+    return {
+        "beat_id": f"c{course_number}conclusion-recap",
+        "type": "recap",
+        "role": "récapituler ce qui a été vu dans le cours avant la conclusion et le Q/R",
+        "spoken_requirement": (
+            "Faire un récapitulatif bref de ce qui vient d'être vu dans le cours, puis seulement "
+            "ensuite conclure et annoncer le temps de questions-réponses."
+        ),
+        "slide_anchor": {
+            "enabled": True,
+            "anchor_id": f"c{course_number}-conclusion-recap-slide",
+            "template_type": "recap",
+            "visual_goal": "synthétiser les points vus dans le cours avant la conclusion et le Q/R",
+            "items_expected": min(4, max(2, len(points))),
+            "fields_hint": {
+                "title": "Ce qu'on retient.",
+                "subtitle": clean_course_title,
+                "points": points[:4],
+            },
+        },
+    }
+
+
+def _merge_conclusion_teaching_beats(forced: list[dict], existing: list[dict]) -> list[dict]:
+    merged = []
+    seen = set()
+    for beat in [*(forced or []), *(existing or [])]:
+        if not isinstance(beat, dict):
+            continue
+        anchor = beat.get("slide_anchor") if isinstance(beat.get("slide_anchor"), dict) else {}
+        template_type = _slide_template_for_beat(
+            beat.get("type"),
+            anchor.get("template_type") or anchor.get("template_family") or beat.get("template_type"),
+        )
+        key = f"template:{template_type}" if template_type == "recap" else str(
+            anchor.get("anchor_id") or beat.get("beat_id") or f"beat:{len(merged)}"
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(beat)
+    return merged[:4]
 
 
 def _next_playlist_item_after_index(playlist_spec, idx: int):
@@ -1562,6 +1726,8 @@ def _normalize_structured_course_plans(raw_plan: dict, *, job: dict, playlist_it
                 day_number=day_number,
                 job=job,
                 sub_parts=sub_parts,
+                raw_parts=raw_parts,
+                course_title=title,
                 is_first_day=bool(day_number == 1),
             ),
             opening.get("teaching_beats") if isinstance(opening.get("teaching_beats"), list) else [],
@@ -1607,7 +1773,10 @@ def _normalize_structured_course_plans(raw_plan: dict, *, job: dict, playlist_it
         if course_number == 7:
             course_conclusion["must_include"] = _merge_unique_strings(
                 course_conclusion.get("must_include"),
-                ["récapitulatif de la partie", "utilité concrète des points vus"],
+                [
+                    "récapitulatif de ce qui a été vu dans le cours avant la conclusion",
+                    "utilité concrète des points vus",
+                ],
             )
             course_conclusion["must_avoid"] = _merge_unique_strings(
                 course_conclusion.get("must_avoid"),
@@ -1616,12 +1785,26 @@ def _normalize_structured_course_plans(raw_plan: dict, *, job: dict, playlist_it
         else:
             course_conclusion["must_include"] = _merge_unique_strings(
                 course_conclusion.get("must_include"),
-                ["récapitulatif de la partie", "utilité concrète", "annonce Q/R dans le tchat"],
+                [
+                    "récapitulatif de ce qui a été vu dans le cours avant la conclusion",
+                    "utilité concrète",
+                    "annonce Q/R dans le tchat",
+                ],
             )
             course_conclusion["must_avoid"] = _merge_unique_strings(
                 course_conclusion.get("must_avoid"),
                 ["nouveau développement après annonce Q/R", "transition vers le cours suivant"],
             )
+        course_conclusion["teaching_beats"] = _merge_conclusion_teaching_beats(
+            [
+                _course_conclusion_recap_beat(
+                    course_number=course_number,
+                    course_title=title,
+                    parts=parts,
+                )
+            ],
+            course_conclusion.get("teaching_beats") if isinstance(course_conclusion.get("teaching_beats"), list) else [],
+        )
 
         day_conclusion = None
         if course_number == 7:
@@ -1806,7 +1989,7 @@ MODE DE CETTE PASSE : PLAN GLOBAL COMPLET
               "spoken_requirement": "ce que le texte oral devra couvrir naturellement",
               "slide_anchor": {
                 "enabled": true,
-                "template_type": "welcome|program_year|day_program_7_steps|reflection|casestudy|facilitator|stats|story|recap|analogy|warning|tip|opinion|transition|chart",
+                "template_type": "welcome|program_year|day_program_7_steps|chapter_opener|reflection|casestudy|facilitator|stats|story|recap|analogy|warning|tip|opinion|transition|chart",
                 "visual_goal": "ce que la slide doit aider à retenir",
                 "items_expected": null,
                 "fields_hint": {}
@@ -1851,7 +2034,8 @@ Contraintes générales :
   formulation naturelle. "Imaginons...", "Imaginez qu'un client...",
   "Prenons un exemple fictif..." ou "Supposons que..." suffit.
 {teaching_beat_rules}
-- Dans `opening` du cours interne 1, prévois explicitement les moments structurels d'accueil et d'annonce du programme du jour : ils correspondent aux templates `welcome` et `day_program_7_steps`.
+- Dans `opening` du cours interne 1 de la première journée, prévois explicitement les moments structurels dans cet ordre : accueil (`welcome`), vision annuelle (`program_year`), feuille de route de journée (`day_program_7_steps`), puis ouverture du premier chapitre (`chapter_opener`).
+- Dans `opening` d'un cours interne suivant, prévois un rappel bref du cours précédent (`recap`), puis l'ouverture du nouveau chapitre (`chapter_opener`). N'utilise pas `facilitator` pour ces deux fonctions.
 - Un slide_anchor n'est activé que si le moment mérite vraiment une visualisation. N'active pas une slide pour une simple transition orale.
 - Le texte final ne doit jamais dire "slide", "PowerPoint", "template", "anchor" ou "teaching beat". Ces anchors sont internes.
 - Choisis les templates uniquement dans le catalogue fourni. Ne force pas une roue, une checklist ou des étapes si le contenu ne s'y prête pas.
@@ -2023,7 +2207,7 @@ FORMAT EXACT :
           "spoken_requirement": "ce que l'oral devra couvrir concrètement",
           "slide_anchor": {{
             "enabled": true,
-            "template_type": "reflection|casestudy|facilitator|stats|story|recap|analogy|warning|tip|opinion|transition|chart",
+            "template_type": "chapter_opener|reflection|casestudy|facilitator|stats|story|recap|analogy|warning|tip|opinion|transition|chart",
             "visual_goal": "souvenir visuel spécifique à construire",
             "items_expected": null,
             "must_cover": "contenu précis couvert par la slide",
@@ -6424,7 +6608,8 @@ def _structured_section_scope_guard(section: dict) -> str:
         )
         return (
             "- Tu écris seulement la conclusion de cette partie interne.\n"
-            "- Récapitule et ferme proprement avant le temps de questions-réponses.\n"
+            "- Commence toujours par un récapitulatif bref de ce qui a été vu dans le cours.\n"
+            "- Ensuite seulement, ferme proprement le cours avant le temps de questions-réponses.\n"
             "- Ne lance pas un nouveau thème et ne refais pas d'introduction."
             f"{qa_instruction}"
         )
@@ -9394,7 +9579,7 @@ def _run_structured_content_generation(
                 }
         final_status = _structured_course_budget_status(course_plan, calibrated_text)
         if not final_status.get("ok") and str(os.getenv("FORMATION_STRUCTURED_CALIBRATION_STRICT", "1")).strip().lower() not in {"0", "false", "no", "off"}:
-            if final_status.get("status") == "too_short" and str(os.getenv("FORMATION_STRUCTURED_ALLOW_RESIDUAL_TOO_SHORT", "1")).strip().lower() not in {"0", "false", "no", "off"}:
+            if final_status.get("status") == "too_short" and _structured_allow_residual_too_short():
                 calibration["accepted_residual_shortfall"] = True
                 calibration["accepted_residual_shortfall_words"] = max(
                     0,
@@ -9410,6 +9595,22 @@ def _run_structured_content_generation(
                     final_status.get("target_words"),
                 )
             else:
+                deficit_repair = calibration.get("deficit_repair") or {}
+                attempts = deficit_repair.get("attempts") if isinstance(deficit_repair, dict) else []
+                last_attempt = attempts[-1] if attempts else {}
+                last_reason = ""
+                sections = last_attempt.get("sections") if isinstance(last_attempt, dict) else []
+                if sections:
+                    last_section = sections[-1] or {}
+                    last_reason = (
+                        last_section.get("reason")
+                        or last_section.get("error")
+                        or last_attempt.get("error")
+                        or ""
+                    )
+                elif isinstance(last_attempt, dict):
+                    last_reason = last_attempt.get("error") or ""
+                reason = f" reason={str(last_reason)[:180]}" if last_reason else ""
                 raise ValueError(
                     "Calibrage budget texte insuffisant "
                     f"cours={course_plan.get('course_number')} "
@@ -9417,6 +9618,7 @@ def _run_structured_content_generation(
                     f"words={final_status.get('words')} "
                     f"target={final_status.get('target_words')} "
                     f"min={final_status.get('min_words')}"
+                    f"{reason}"
                 )
         calibrated_words = count_tts_spoken_words(calibrated_text)
         course_number = int(course_plan.get("course_number") or body_result.get("course_number") or 0)

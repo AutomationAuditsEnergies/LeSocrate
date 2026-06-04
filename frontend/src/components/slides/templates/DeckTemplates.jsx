@@ -305,15 +305,66 @@ export const DeckDayProgram7Steps = ({
   );
 };
 
-export const DeckStatement = ({ title = 'Une idée à retenir', text, badge, brandName }) => (
-  <DeckSlide type="BIG_STATEMENT" page="02" className="deck-big" badge={badge} brandName={brandName}>
-    <div>
-      <span className="deck-eyebrow">Postulat de départ</span>
-      <h1><AccentTitle title={title} fallback="Une idée à retenir" /></h1>
-      {text && <p>{text}</p>}
+const renderReflectionTitle = (title = 'Une idée à retenir') => {
+  const clean = String(title || 'Une idée à retenir').trim();
+  if (clean.includes('\n')) {
+    const lines = clean.split(/\n+/).filter(Boolean);
+    const last = lines.pop();
+    return <>{lines.map((line, index) => <React.Fragment key={index}>{line}<br /></React.Fragment>)}<span>{last}</span></>;
+  }
+  const parts = clean.split(/,\s*/);
+  if (parts.length >= 2) {
+    return <>{parts[0]},<br /><span>{parts.slice(1).join(', ')}</span></>;
+  }
+  const words = clean.split(/\s+/);
+  if (words.length > 3) {
+    const pivot = Math.ceil(words.length / 2);
+    return <>{words.slice(0, pivot).join(' ')}<br /><span>{words.slice(pivot).join(' ')}</span></>;
+  }
+  return <span>{clean}</span>;
+};
+
+const renderReflectionText = (text = '') => {
+  const clean = String(text || '').trim();
+  if (!clean) return null;
+  const sentences = clean.split(/(?<=[.!?])\s+/).filter(Boolean);
+  if (sentences.length >= 2) {
+    const last = sentences.pop();
+    return <>{sentences.join(' ')}<br /><b>{last}</b></>;
+  }
+  return clean;
+};
+
+export const DeckStatement = ({
+  title = 'Une idée à retenir',
+  text,
+  eyebrow = 'Principe clé',
+  badge,
+  brandName = 'Sales hacking',
+}) => {
+  const { brandHead, brandTail } = getDeckBrandParts(brandName);
+  const [shellRef, scale] = useSlideStageScale();
+
+  return (
+    <div className="deck-reflection-shell" ref={shellRef}>
+      <section className="deck-reflection-stage" style={{ transform: `scale(${scale})` }}>
+        <div className="deck-chrome">
+          <div className="deck-brand">
+            <span className="deck-brand-mark">{brandHead}</span>
+            <span className="deck-brand-tag">{brandTail}</span>
+          </div>
+          <div className="deck-reflection-rec"><span />EN DIRECT · {badge || 'TP-CRCD'}</div>
+          <div className="deck-reflection-pages"><b>05</b> / 19</div>
+          <div className="deck-reflection-section">TYPE · REFLECTION</div>
+        </div>
+
+        <span className="deck-reflection-eyebrow">— {eyebrow}</span>
+        <h2 className="deck-reflection-title">{renderReflectionTitle(title)}</h2>
+        {text && <p className="deck-reflection-body">{renderReflectionText(text)}</p>}
+      </section>
     </div>
-  </DeckSlide>
-);
+  );
+};
 
 export const DeckDefinition = ({ term, title, eyebrow = 'Définition', definition, text, isItems = [], badge, brandName }) => {
   const word = term || title || 'Définition';
@@ -365,16 +416,69 @@ export const DeckRecap = ({ title = "Ce qu'on retient.", points = [], badge, bra
   );
 };
 
-export const DeckCaseStudy = ({ title = 'Cas terrain', cases = [], badge, brandName }) => {
+export const DeckCaseStudy = ({
+  title = 'Cas terrain',
+  eyebrow = 'Analyse comparative',
+  cases = [],
+  items,
+  badge,
+  brandName = 'Sales hacking',
+}) => {
   const sourceCases = Array.isArray(cases) ? cases : [];
-  const safeCases = sourceCases.length ? sourceCases.slice(0, 3) : [{ title, desc: 'Un cas concret pour ancrer la notion dans une situation professionnelle.' }];
+  const sourceItems = sourceCases.length ? sourceCases : (Array.isArray(items) ? items : []);
+  const safeCases = (sourceItems.length ? sourceItems : [
+    {
+      tag: '01 · Situation',
+      title,
+      desc: 'Un cas concret pour ancrer la notion dans une situation professionnelle.',
+      example: '',
+    },
+  ]).slice(0, 6);
+  const colClass = safeCases.length <= 2 ? 'cols-2' : (safeCases.length === 3 ? 'cols-3' : 'cols-many');
+  const accents = ['accent-coral', 'accent-gold', 'accent-green', 'accent-blue'];
+  const { brandHead, brandTail } = getDeckBrandParts(brandName);
+  const [shellRef, scale] = useSlideStageScale();
+
   return (
-    <DeckSlide type="CASE_STUDY" page="06" className="deck-case" badge={badge} brandName={brandName}>
-      <header><h1>{title}</h1><p>Cas terrain · Application concrète</p></header>
-      <div className="deck-case-stats">
-        {safeCases.map((item, i) => <article key={i}><strong>{String(i + 1).padStart(2, '0')}</strong><span>{item.title}</span><p>{item.desc}</p></article>)}
-      </div>
-    </DeckSlide>
+    <div className="deck-casestudy-shell" ref={shellRef}>
+      <section className="deck-casestudy-stage" style={{ transform: `scale(${scale})` }}>
+        <div className="deck-chrome">
+          <div className="deck-brand">
+            <span className="deck-brand-mark">{brandHead}</span>
+            <span className="deck-brand-tag">{brandTail}</span>
+          </div>
+          <div className="deck-casestudy-rec"><span />EN DIRECT · {badge || 'TP-CRCD'}</div>
+          <div className="deck-casestudy-pages"><b>06</b> / 19</div>
+          <div className="deck-casestudy-section">TYPE · CASE_STUDY</div>
+        </div>
+
+        <div className="deck-casestudy-head">
+          <span className="deck-eyebrow">— {eyebrow}</span>
+          <h1><AccentTitle title={title} fallback="Cas terrain." /></h1>
+        </div>
+
+        <div className={`deck-casestudy-cards ${colClass}`}>
+          {safeCases.map((item, i) => {
+            const caseTitle = typeof item === 'string' ? item : item.title;
+            const caseDesc = typeof item === 'string' ? '' : (item.desc || item.description || item.text || '');
+            const caseTag = typeof item === 'string' ? '' : (item.tag || item.label || `${String(i + 1).padStart(2, '0')} · Cas`);
+            const caseExample = typeof item === 'string' ? '' : (item.example || item.quote || '');
+            return (
+              <article className={`deck-casestudy-card ${accents[i % accents.length]}`} key={i}>
+                <div className="deck-casestudy-stripe" />
+                <div className="deck-casestudy-body">
+                  <span className="deck-casestudy-tag">{caseTag}</span>
+                  <h3>{caseTitle}</h3>
+                  <div className="deck-casestudy-sep" />
+                  {caseDesc && <p>{caseDesc}</p>}
+                  {caseExample && <em>{caseExample}</em>}
+                </div>
+              </article>
+            );
+          })}
+        </div>
+      </section>
+    </div>
   );
 };
 
