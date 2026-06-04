@@ -9,6 +9,14 @@ def words(count):
 
 
 class StructuredBudgetCalibrationTest(unittest.TestCase):
+    def test_residual_shortfall_is_strict_by_default(self):
+        with patch.dict("os.environ", {}, clear=True):
+            self.assertFalse(cgs._structured_allow_residual_too_short())
+
+    def test_residual_shortfall_compat_flag_can_be_enabled(self):
+        with patch.dict("os.environ", {"FORMATION_STRUCTURED_ALLOW_RESIDUAL_TOO_SHORT": "1"}):
+            self.assertTrue(cgs._structured_allow_residual_too_short())
+
     def test_section_budget_calibration_enriches_short_section_to_local_target(self):
         course_plan = {
             "course_number": 1,

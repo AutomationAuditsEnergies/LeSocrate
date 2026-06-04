@@ -1166,11 +1166,12 @@ function PipelineVisualMap({ job, currentStep, autoPilotState, contentFolders, d
   const expectedFolders = diagnostic?.folder_resolution?.expected_count || job.nb_days || folders.length || 0
   const completedFolders = folders.filter(f => f.content_status === 'completed').length
   const allContentCompleted = folders.length > 0 && folders.every(f => f.content_status === 'completed')
-  const allReviewed = folders.length > 0 && folders.every(f => {
+  const allReviewProcessed = folders.length > 0 && folders.every(f => {
     const completed = f.segments_completed || 0
     const processed = (f.segments_reviewed || 0) + (f.segments_review_errors || 0)
     return completed > 0 && processed >= completed
   })
+  const allReviewed = allReviewProcessed && folders.every(f => (f.segments_review_errors || 0) === 0)
   const allSlidesGenerated = folders.length > 0 && folders.every(f => (f.slide_count || 0) > 0)
   const textReady = TEXT_AVAILABLE_STATUSES.has(job.status)
   const planAdherenceDone = hasCompletedPipelineEvent(events, e => e.step === 'plan_adherence_review') ||

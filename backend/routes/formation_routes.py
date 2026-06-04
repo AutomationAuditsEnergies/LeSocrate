@@ -4795,7 +4795,18 @@ def _execute_ap_step(job_id: int, step: str, job: dict) -> None:
                     _write_api_review_report(job_id, fid, result, api_model)
                     reports_written += 1
                     if result.get("segments_failed", 0) > 0:
-                        failed.append(f"{fid}({result['segments_failed']} segments échoués)")
+                        error_samples = []
+                        for detail in result.get("details") or []:
+                            error = str((detail or {}).get("error") or "").strip()
+                            if not error:
+                                continue
+                            error = " ".join(error.split())[:180]
+                            if error not in error_samples:
+                                error_samples.append(error)
+                            if len(error_samples) >= 2:
+                                break
+                        suffix = f" : {' ; '.join(error_samples)}" if error_samples else ""
+                        failed.append(f"{fid}({result['segments_failed']} segments échoués{suffix})")
                 except Exception as e:
                     logger.warning(f"⚠️ Review folder {fid} : {e}")
                     failed.append(str(fid))
