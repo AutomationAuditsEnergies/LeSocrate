@@ -38,8 +38,8 @@ GAP_FILL_RATIO = 0.92
 # wpm Fish Audio calibré pour la voix/vitesse de production.
 WPM_REFERENCE = 165.7
 # Cap absolu du closing : ~4 min audio max. Au-delà, le résidu reste silence
-# (un gap > 5 min signale un volume_safety insuffisant en amont, pas un closing à
-# rallonge pédagogiquement absurde).
+# (un gap > 5 min signale un calibrage budget texte insuffisant en amont, pas
+# un closing à rallonge pédagogiquement absurde).
 MAX_CLOSING_WORDS = 700
 _FORBIDDEN_DEICTIC_RE = re.compile(r"\b(hier|demain)\b", re.IGNORECASE)
 

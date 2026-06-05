@@ -8086,6 +8086,549 @@ def _join_structured_section_records(sections: list[dict]) -> str:
     return "\n\n".join((section.get("text") or "").strip() for section in sections if (section.get("text") or "").strip()).strip()
 
 
+def _insert_before_final_paragraph(text: str, addition: str) -> str:
+    """Insert a top-up before the local closing paragraph when one exists."""
+    text = (text or "").strip()
+    addition = (addition or "").strip()
+    if not addition:
+        return text
+    paragraphs = [p.strip() for p in re.split(r"\n\s*\n+", text) if p.strip()]
+    if len(paragraphs) <= 1:
+        return f"{text}\n\n{addition}".strip()
+    return "\n\n".join([*paragraphs[:-1], addition, paragraphs[-1]]).strip()
+
+
+def _build_structured_course_topup_prompt(
+    *,
+    job: dict,
+    course_plan: dict,
+    current_text: str,
+    module_content: str,
+    desired_words: int,
+    max_words: int,
+) -> str:
+    return f"""Tu ajoutes un complément pédagogique dans un cours audio professionnel.
+
+Mission : produire UNIQUEMENT un ajout pédagogique autonome compatible avec le cours.
+Ne réécris pas le cours complet.
+
+Ajout attendu : environ {desired_words} mots parlés utiles.
+Maximum absolu pour ton ajout : {max_words} mots parlés.
+
+Plan verrouillé du cours :
+{json.dumps(course_plan, ensure_ascii=False, indent=2)}
+
+Contenu source exploitable :
+{_compact_words(module_content or job.get('program_text') or '', 4500)}
+
+Texte actuel du cours :
+{_compact_words(current_text, 5000)}
+
+Contraintes :
+- L'ajout doit apporter de la vraie valeur : nuance métier, méthode, erreur fréquente, mini-cas fictif, clarification ou contre-exemple.
+- Ne mentionne jamais budget mots, fichier, durée, horaire, créneau, planning ou découpage technique.
+- N'utilise jamais le mot "bloc" devant les élèves.
+- Ne refais pas l'accueil, le plan de journée ou la conclusion.
+- Ne crée pas de nouveau thème hors du plan.
+- L'ajout doit pouvoir être placé dans une transition de fin de cours, sans refaire la conclusion.
+- Oral fluide, TTS-ready, sans markdown, sans titre écrit.
+
+Réponds uniquement avec l'ajout."""
+
+
+def _build_structured_topup_rewrite_prompt(
+    *,
+    addition: str,
+    max_words: int,
+    context_label: str,
+) -> str:
+    return f"""Reformule un ajout pédagogique oral pour qu'il rentre dans une marge stricte.
+
+Contexte d'insertion : {context_label}
+Maximum absolu : {max_words} mots parlés.
+
+Texte à reformuler :
+{addition}
+
+Contraintes :
+- Ne tronque pas. Réécris proprement avec des phrases complètes.
+- Garde la valeur pédagogique principale : méthode, nuance métier, exemple, clarification ou erreur fréquente.
+- Supprime les détours, les répétitions et les formules d'introduction inutiles.
+- Ne mentionne jamais budget mots, fichier, durée, horaire, créneau, planning ou découpage technique.
+- N'utilise jamais le mot "bloc" devant les élèves.
+- Oral fluide, TTS-ready, sans markdown, sans titre écrit.
+
+Réponds uniquement avec l'ajout reformulé."""
+
+
+def _fit_structured_topup_addition_to_room(
+    *,
+    addition: str,
+    max_words: int,
+    context_label: str,
+    model=None,
+) -> tuple[str, dict]:
+    """Ask the LLM to rewrite oversized top-ups instead of truncating them."""
+    max_words = int(max_words or 0)
+    addition = _sanitize_learner_facing_text(addition or "")
+    raw_words = count_tts_spoken_words(addition)
+    result = {
+        "raw_words": raw_words,
+        "max_words": max_words,
+        "rephrased": False,
+        "attempts": [],
+    }
+    if max_words <= 0 or raw_words <= 0:
+        result["status"] = "empty"
+        return "", result
+    if raw_words <= max_words:
+        result["status"] = "ok"
+        return addition, result
+
+    max_rewrites = _env_int("FORMATION_STRUCTURED_TOPUP_REWRITE_MAX_ATTEMPTS", 3, min_value=1)
+    max_rewrites = min(6, max_rewrites)
+    current = addition
+    for attempt_no in range(1, max_rewrites + 1):
+        try:
+            raw = _anthropic_post(
+                messages=[{
+                    "role": "user",
+                    "content": _build_structured_topup_rewrite_prompt(
+                        addition=current,
+                        max_words=max_words,
+                        context_label=context_label,
+                    ),
+                }],
+                max_tokens=_structured_generation_max_tokens(max_words),
+                model=model,
+            )
+            candidate = _sanitize_learner_facing_text(_clean_llm_text(raw))
+            candidate_words = count_tts_spoken_words(candidate)
+            result["attempts"].append({
+                "attempt": attempt_no,
+                "words": candidate_words,
+                "ok": 0 < candidate_words <= max_words,
+            })
+            if 0 < candidate_words <= max_words:
+                result["status"] = "ok"
+                result["rephrased"] = True
+                result["final_words"] = candidate_words
+                return candidate, result
+            if candidate_words > 0:
+                current = candidate
+        except Exception as exc:
+            result["attempts"].append({
+                "attempt": attempt_no,
+                "error": str(exc)[:300],
+            })
+            break
+
+    result["status"] = "too_long"
+    result["final_words"] = count_tts_spoken_words(current)
+    return "", result
+
+
+def _refresh_structured_section_results_from_records(
+    section_results: list[dict],
+    sections: list[dict],
+) -> None:
+    sections_by_key = {_section_key(section): section for section in sections}
+    for section_result in section_results:
+        section = sections_by_key.get(
+            (section_result.get("kind"), int(section_result.get("part_number") or 0))
+        )
+        if not section:
+            continue
+        text = section.get("text") or ""
+        after_words = count_tts_spoken_words(text)
+        status = _structured_section_budget_status(section, text)
+        before_words = int(section_result.get("before_words") or 0)
+        section_result["after_words"] = after_words
+        section_result["delta_words"] = after_words - before_words
+        section_result["status"] = status.get("status")
+        section_result["min_words"] = status.get("min_words")
+        section_result["max_words"] = status.get("max_words")
+        section_result["changed"] = bool(section_result.get("changed") or section_result["delta_words"])
+        if section.get("deficit_repair_before_words") is not None:
+            section_result["deficit_repaired"] = True
+        if section.get("topup_before_words") is not None:
+            section_result["section_topup_repaired"] = True
+            section_result["section_topup_before_words"] = section.get("topup_before_words")
+            section_result["section_topup_addition_words"] = section.get("topup_addition_words")
+
+
+def _build_structured_section_topup_prompt(
+    *,
+    job: dict,
+    course_plan: dict,
+    section: dict,
+    current_section_text: str,
+    module_content: str,
+    desired_words: int,
+    max_words: int,
+) -> str:
+    return f"""Tu ajoutes un complément pédagogique dans UNE section précise d'un cours audio professionnel.
+
+Mission : produire UNIQUEMENT un ajout à intégrer dans cette section.
+Ne réécris pas la section complète. Ne réécris pas le cours complet.
+
+Section à enrichir : {_section_label(section)}
+Ajout attendu : environ {desired_words} mots parlés utiles.
+Maximum absolu pour ton ajout : {max_words} mots parlés.
+
+Plan verrouillé du cours :
+{json.dumps(course_plan, ensure_ascii=False, indent=2)}
+
+Section verrouillée :
+{json.dumps(section, ensure_ascii=False, indent=2)}
+
+Frontière stricte de la section :
+{_structured_section_scope_guard(section)}
+
+Moments pédagogiques de cette section :
+{_section_teaching_beats_prompt(section)}
+
+Contenu source exploitable :
+{_compact_words(module_content or job.get('program_text') or '', 4500)}
+
+Texte actuel de la section :
+{current_section_text}
+
+Contraintes :
+- Ajoute de la vraie valeur dans CETTE section : nuance métier, méthode, erreur fréquente, mini-cas fictif, clarification, contre-exemple ou lien terrain.
+- Ne crée pas un nouveau thème hors du plan.
+- Ne refais pas l'accueil, le plan de journée ou la conclusion.
+- Ne mentionne jamais budget mots, fichier, durée, horaire, créneau, planning ou découpage technique.
+- N'utilise jamais le mot "bloc" devant les élèves.
+- L'ajout doit s'insérer naturellement dans la progression locale de la section.
+- Oral fluide, TTS-ready, sans markdown, sans titre écrit.
+
+Réponds uniquement avec l'ajout."""
+
+
+def _repair_structured_course_sections_to_budget(
+    *,
+    job: dict,
+    course_plan: dict,
+    sections: list[dict],
+    module_content: str,
+    model=None,
+) -> tuple[str, list[dict], dict]:
+    """Top up a course by enriching underfilled development sections."""
+    current_sections = [dict(section) for section in sections]
+    attempts = []
+    max_attempts = _env_int("FORMATION_STRUCTURED_SECTION_TOPUP_MAX_ATTEMPTS", 12, min_value=1)
+    max_attempts = min(30, max_attempts)
+    stalled_by_key = {}
+
+    for attempt_no in range(1, max_attempts + 1):
+        course_text = _join_structured_section_records(current_sections)
+        status = _structured_course_budget_status(course_plan, course_text)
+        if status.get("ok"):
+            return course_text, current_sections, {
+                "mode": "section_budget_topup",
+                "changed": course_text.strip() != _join_structured_section_records(sections).strip(),
+                "status": status.get("status"),
+                "words": status.get("words"),
+                "min_words": status.get("min_words"),
+                "target_words": status.get("target_words"),
+                "attempts": attempts,
+            }
+        if status.get("status") != "too_short":
+            break
+
+        missing = int(status.get("min_words") or 0) - int(status.get("words") or 0)
+        if missing <= 0:
+            break
+
+        candidates = []
+        for idx, record in enumerate(current_sections):
+            kind = record.get("kind")
+            if kind not in {"part", "opening"}:
+                continue
+            current_words = count_tts_spoken_words(record.get("text") or "")
+            max_words = int(record.get("target_words") or record.get("max_words") or 0)
+            if max_words <= 0:
+                continue
+            room = max_words - current_words
+            if room < 25:
+                continue
+            key = _section_key(record)
+            if stalled_by_key.get(key, 0) >= 2:
+                continue
+            priority = 0 if kind == "part" else 1
+            candidates.append({
+                "idx": idx,
+                "key": key,
+                "record": record,
+                "current_words": current_words,
+                "max_words": max_words,
+                "room": room,
+                "priority": priority,
+                "fill_ratio": current_words / max_words if max_words else 1.0,
+            })
+
+        if not candidates:
+            attempts.append({
+                "attempt": attempt_no,
+                "status": status,
+                "missing_words": missing,
+                "error": "no_section_with_remaining_room",
+            })
+            break
+
+        candidates.sort(key=lambda item: (item["priority"], item["fill_ratio"], -item["room"]))
+        candidate = candidates[0]
+        record = candidate["record"]
+        section_plan = _section_plan_by_key(course_plan).get(_section_key(record), {})
+        section = {**section_plan, **record}
+        before_text = record.get("text") or ""
+        desired_words = min(candidate["room"], max(35, min(missing + 30, int(missing * 1.2))))
+        try:
+            raw = _anthropic_post(
+                messages=[{
+                    "role": "user",
+                    "content": _build_structured_section_topup_prompt(
+                        job=job,
+                        course_plan=course_plan,
+                        section=section,
+                        current_section_text=before_text,
+                        module_content=module_content,
+                        desired_words=desired_words,
+                        max_words=candidate["room"],
+                    ),
+                }],
+                max_tokens=_structured_generation_max_tokens(desired_words),
+                model=model,
+            )
+            addition = _sanitize_learner_facing_text(_clean_llm_text(raw))
+            fitted_addition, fit_result = _fit_structured_topup_addition_to_room(
+                addition=addition,
+                max_words=candidate["room"],
+                context_label=record.get("label") or _section_label(section),
+                model=model,
+            )
+            addition_words = count_tts_spoken_words(fitted_addition)
+            if addition_words <= 0:
+                stalled_by_key[candidate["key"]] = stalled_by_key.get(candidate["key"], 0) + 1
+                attempts.append({
+                    "attempt": attempt_no,
+                    "status_before": status,
+                    "section": record.get("label") or _section_label(section),
+                    "desired_words": desired_words,
+                    "raw_addition_words": fit_result.get("raw_words"),
+                    "fit": fit_result,
+                    "error": "addition_did_not_fit_room",
+                })
+                continue
+
+            after_text = _insert_before_final_paragraph(before_text, fitted_addition)
+            after_words = count_tts_spoken_words(after_text)
+            if after_words <= candidate["current_words"]:
+                stalled_by_key[candidate["key"]] = stalled_by_key.get(candidate["key"], 0) + 1
+                attempts.append({
+                    "attempt": attempt_no,
+                    "status_before": status,
+                    "section": record.get("label") or _section_label(section),
+                    "before_words": candidate["current_words"],
+                    "after_words": after_words,
+                    "error": "section_not_expanded",
+                })
+                continue
+
+            updated = {
+                **record,
+                "text": after_text,
+                "word_count": after_words,
+                "topup_before_words": candidate["current_words"],
+                "topup_addition_words": addition_words,
+            }
+            current_sections[candidate["idx"]] = updated
+            next_status = _structured_course_budget_status(
+                course_plan,
+                _join_structured_section_records(current_sections),
+            )
+            attempts.append({
+                "attempt": attempt_no,
+                "status_before": status,
+                "status_after": next_status,
+                "section": record.get("label") or _section_label(section),
+                "desired_words": desired_words,
+                "raw_addition_words": fit_result.get("raw_words"),
+                "addition_words": addition_words,
+                "before_words": candidate["current_words"],
+                "after_words": after_words,
+                "rephrased_to_fit": bool(fit_result.get("rephrased")),
+                "fit": fit_result,
+            })
+        except Exception as exc:
+            stalled_by_key[candidate["key"]] = stalled_by_key.get(candidate["key"], 0) + 1
+            attempts.append({
+                "attempt": attempt_no,
+                "status_before": status,
+                "section": record.get("label") or _section_label(section),
+                "desired_words": desired_words,
+                "error": str(exc)[:300],
+            })
+            logger.warning(
+                "PIPELINE_SECTION_TOPUP_FAILED course=%s section=%s attempt=%s error=%s",
+                course_plan.get("course_number"),
+                record.get("label") or _section_label(section),
+                attempt_no,
+                str(exc)[:300],
+            )
+
+    final_text = _join_structured_section_records(current_sections)
+    final_status = _structured_course_budget_status(course_plan, final_text)
+    return final_text, current_sections, {
+        "mode": "section_budget_topup",
+        "changed": final_text.strip() != _join_structured_section_records(sections).strip(),
+        "status": final_status.get("status"),
+        "words": final_status.get("words"),
+        "min_words": final_status.get("min_words"),
+        "target_words": final_status.get("target_words"),
+        "attempts": attempts,
+    }
+
+
+def _repair_structured_course_text_to_budget(
+    *,
+    job: dict,
+    course_plan: dict,
+    text: str,
+    module_content: str,
+    model=None,
+) -> tuple[str, dict]:
+    """Repair a course-level budget by adding bounded LLM top-ups.
+
+    The LLM writes additions, but the backend owns the word count: oversized
+    outputs are rewritten by the LLM to fit the remaining room, then rechecked.
+    """
+    current_text = _sanitize_learner_facing_text(text)
+    attempts = []
+    max_attempts = _env_int("FORMATION_STRUCTURED_COURSE_TOPUP_MAX_ATTEMPTS", 8, min_value=1)
+    max_attempts = min(20, max_attempts)
+
+    for attempt_no in range(1, max_attempts + 1):
+        status = _structured_course_budget_status(course_plan, current_text)
+        if status.get("ok"):
+            return current_text, {
+                "mode": "course_budget_topup",
+                "changed": current_text.strip() != (text or "").strip(),
+                "status": status.get("status"),
+                "words": status.get("words"),
+                "min_words": status.get("min_words"),
+                "target_words": status.get("target_words"),
+                "attempts": attempts,
+            }
+
+        if status.get("status") == "too_long":
+            repaired, calibration = _calibrate_structured_course_text(course_plan, current_text, model=model)
+            repaired_status = _structured_course_budget_status(course_plan, repaired)
+            attempts.append({
+                "attempt": attempt_no,
+                "direction": "shorten",
+                "status_before": status,
+                "status_after": repaired_status,
+                "calibration": calibration,
+            })
+            if repaired.strip() == current_text.strip():
+                break
+            current_text = repaired
+            continue
+
+        missing = int(status.get("min_words") or 0) - int(status.get("words") or 0)
+        room = int(status.get("max_words") or 0) - int(status.get("words") or 0)
+        if missing <= 0:
+            break
+        if room <= 0:
+            attempts.append({
+                "attempt": attempt_no,
+                "direction": "expand",
+                "status_before": status,
+                "error": "no_remaining_room",
+            })
+            break
+
+        desired_words = min(room, max(50, min(missing + 35, int(missing * 1.25))))
+        try:
+            raw = _anthropic_post(
+                messages=[{
+                    "role": "user",
+                    "content": _build_structured_course_topup_prompt(
+                        job=job,
+                        course_plan=course_plan,
+                        current_text=current_text,
+                        module_content=module_content,
+                        desired_words=desired_words,
+                        max_words=room,
+                    ),
+                }],
+                max_tokens=_structured_generation_max_tokens(desired_words),
+                model=model,
+            )
+            addition = _sanitize_learner_facing_text(_clean_llm_text(raw))
+            fitted_addition, fit_result = _fit_structured_topup_addition_to_room(
+                addition=addition,
+                max_words=room,
+                context_label=f"cours {course_plan.get('course_number') or '?'}",
+                model=model,
+            )
+            addition_words = count_tts_spoken_words(fitted_addition)
+            if addition_words <= 0:
+                attempts.append({
+                    "attempt": attempt_no,
+                    "direction": "expand",
+                    "status_before": status,
+                    "desired_words": desired_words,
+                    "raw_addition_words": fit_result.get("raw_words"),
+                    "fit": fit_result,
+                    "error": "addition_did_not_fit_room",
+                })
+                break
+            candidate_text = _insert_before_final_paragraph(current_text, fitted_addition)
+            candidate_status = _structured_course_budget_status(course_plan, candidate_text)
+            attempts.append({
+                "attempt": attempt_no,
+                "direction": "expand",
+                "status_before": status,
+                "desired_words": desired_words,
+                "room": room,
+                "raw_addition_words": fit_result.get("raw_words"),
+                "addition_words": addition_words,
+                "status_after": candidate_status,
+                "rephrased_to_fit": bool(fit_result.get("rephrased")),
+                "fit": fit_result,
+            })
+            current_text = candidate_text
+        except Exception as exc:
+            attempts.append({
+                "attempt": attempt_no,
+                "direction": "expand",
+                "status_before": status,
+                "desired_words": desired_words,
+                "error": str(exc)[:300],
+            })
+            logger.warning(
+                "PIPELINE_COURSE_TOPUP_FAILED course=%s attempt=%s error=%s",
+                course_plan.get("course_number"),
+                attempt_no,
+                str(exc)[:300],
+            )
+            break
+
+    final_status = _structured_course_budget_status(course_plan, current_text)
+    return current_text, {
+        "mode": "course_budget_topup",
+        "changed": current_text.strip() != (text or "").strip(),
+        "status": final_status.get("status"),
+        "words": final_status.get("words"),
+        "min_words": final_status.get("min_words"),
+        "target_words": final_status.get("target_words"),
+        "attempts": attempts,
+    }
+
+
 def _build_structured_course_deficit_repair_prompt(
     *,
     job: dict,
@@ -8389,6 +8932,7 @@ def _calibrate_structured_course_sections(
     course_text = _join_structured_section_records(calibrated_sections)
     course_status = _structured_course_budget_status(course_plan, course_text)
     deficit_repair = None
+    section_topup_repair = None
     if course_status.get("status") == "too_short":
         repaired_text, repaired_sections, deficit_repair = _repair_structured_course_word_deficit(
             job=job,
@@ -8403,23 +8947,23 @@ def _calibrate_structured_course_sections(
             calibrated_sections = repaired_sections
             course_text = repaired_text
             course_status = repaired_status
-            repaired_by_key = {_section_key(section): section for section in calibrated_sections}
-            for section_result in section_results:
-                repaired_section = repaired_by_key.get(
-                    (section_result.get("kind"), int(section_result.get("part_number") or 0))
-                )
-                if not repaired_section:
-                    continue
-                after_words = count_tts_spoken_words(repaired_section.get("text") or "")
-                status = _structured_section_budget_status(repaired_section, repaired_section.get("text") or "")
-                section_result["after_words"] = after_words
-                section_result["delta_words"] = after_words - int(section_result.get("before_words") or 0)
-                section_result["status"] = status.get("status")
-                section_result["min_words"] = status.get("min_words")
-                section_result["max_words"] = status.get("max_words")
-                section_result["changed"] = bool(section_result["delta_words"])
-                if repaired_section.get("deficit_repair_before_words") is not None:
-                    section_result["deficit_repaired"] = True
+            _refresh_structured_section_results_from_records(section_results, calibrated_sections)
+
+    if course_status.get("status") == "too_short":
+        topped_text, topped_sections, section_topup_repair = _repair_structured_course_sections_to_budget(
+            job=job,
+            course_plan=course_plan,
+            sections=calibrated_sections,
+            module_content=module_content,
+            model=model,
+        )
+        topped_status = _structured_course_budget_status(course_plan, topped_text)
+        if topped_text.strip() != course_text.strip():
+            changed = True
+            calibrated_sections = topped_sections
+            course_text = topped_text
+            course_status = topped_status
+            _refresh_structured_section_results_from_records(section_results, calibrated_sections)
 
     return course_text, {
         **course_status,
@@ -8428,6 +8972,7 @@ def _calibrate_structured_course_sections(
         "sections": section_results,
         "calibrated_sections": calibrated_sections,
         "deficit_repair": deficit_repair,
+        "section_topup_repair": section_topup_repair,
     }
 
 
@@ -9578,6 +10123,38 @@ def _run_structured_content_generation(
                     "source_sections_drifted_from_course_text": source_drift,
                 }
         final_status = _structured_course_budget_status(course_plan, calibrated_text)
+        if not final_status.get("ok"):
+            section_records = calibration.get("calibrated_sections") or []
+            sections_text = _join_structured_section_records(section_records)
+            if (
+                final_status.get("status") == "too_short"
+                and section_records
+                and sections_text.strip() == (calibrated_text or "").strip()
+            ):
+                repaired_text, repaired_sections, final_section_topup_repair = _repair_structured_course_sections_to_budget(
+                    job=job,
+                    course_plan=course_plan,
+                    sections=section_records,
+                    module_content=module_content,
+                    model=model,
+                )
+                calibration["final_section_topup_repair"] = final_section_topup_repair
+                if repaired_text.strip() != calibrated_text.strip():
+                    calibrated_text = repaired_text
+                    calibration["calibrated_sections"] = repaired_sections
+                    final_status = _structured_course_budget_status(course_plan, calibrated_text)
+            if not final_status.get("ok"):
+                repaired_text, final_budget_repair = _repair_structured_course_text_to_budget(
+                    job=job,
+                    course_plan=course_plan,
+                    text=calibrated_text,
+                    module_content=module_content,
+                    model=model,
+                )
+                calibration["final_budget_repair"] = final_budget_repair
+                if repaired_text.strip() != calibrated_text.strip():
+                    calibrated_text = repaired_text
+                    final_status = _structured_course_budget_status(course_plan, calibrated_text)
         if not final_status.get("ok") and str(os.getenv("FORMATION_STRUCTURED_CALIBRATION_STRICT", "1")).strip().lower() not in {"0", "false", "no", "off"}:
             if final_status.get("status") == "too_short" and _structured_allow_residual_too_short():
                 calibration["accepted_residual_shortfall"] = True
@@ -9595,7 +10172,13 @@ def _run_structured_content_generation(
                     final_status.get("target_words"),
                 )
             else:
-                deficit_repair = calibration.get("deficit_repair") or {}
+                deficit_repair = (
+                    calibration.get("final_section_topup_repair")
+                    or calibration.get("section_topup_repair")
+                    or calibration.get("final_budget_repair")
+                    or calibration.get("deficit_repair")
+                    or {}
+                )
                 attempts = deficit_repair.get("attempts") if isinstance(deficit_repair, dict) else []
                 last_attempt = attempts[-1] if attempts else {}
                 last_reason = ""
@@ -9633,6 +10216,7 @@ def _run_structured_content_generation(
             "sections": calibration.get("calibrated_sections") or draft.get("sections") or [],
             "plan_adherence": body_result.get("plan_adherence"),
             "draft": draft,
+            "module_content": module_content,
         }
 
     calibrated_results = _run_structured_parallel(
@@ -9700,15 +10284,108 @@ def _run_structured_content_generation(
     def _micro_review_calibrated_course(result: dict) -> dict:
         course_plan = result["course_plan"]
         calibrated_text = result.get("calibrated_text") or result.get("course_text") or ""
-        final_text = _run_ethical_micro_review_for_section(
-            job=job,
-            course_plan=course_plan,
-            section=_ethical_micro_section_for_calibrated_course(course_plan),
-            section_text=calibrated_text,
-            model=model,
-        )
-        micro_changed = (final_text or "").strip() != (calibrated_text or "").strip()
         sections = result.get("sections") or []
+
+        def _review_section_records(section_records: list[dict]) -> tuple[str, list[dict]]:
+            reviewed_sections = []
+            for section in section_records:
+                before_text = section.get("text") or ""
+                reviewed_text = _run_ethical_micro_review_for_section(
+                    job=job,
+                    course_plan=course_plan,
+                    section=section,
+                    section_text=before_text,
+                    model=model,
+                )
+                reviewed = {
+                    **section,
+                    "text": reviewed_text,
+                    "word_count": count_tts_spoken_words(reviewed_text),
+                }
+                if reviewed_text.strip() != before_text.strip():
+                    reviewed["micro_review_before_words"] = count_tts_spoken_words(before_text)
+                reviewed_sections.append(reviewed)
+            return _join_structured_section_records(reviewed_sections), reviewed_sections
+
+        sections_text = _join_structured_section_records(sections)
+        if sections and sections_text.strip() == calibrated_text.strip():
+            final_text, sections = _review_section_records(sections)
+        else:
+            final_text = _run_ethical_micro_review_for_section(
+                job=job,
+                course_plan=course_plan,
+                section=_ethical_micro_section_for_calibrated_course(course_plan),
+                section_text=calibrated_text,
+                model=model,
+            )
+        post_micro_budget_status = _structured_course_budget_status(course_plan, final_text)
+        post_micro_budget_repair = None
+
+        if (
+            not post_micro_budget_status.get("ok")
+            and post_micro_budget_status.get("status") == "too_short"
+            and sections
+        ):
+            section_repairs = []
+            repaired_sections = [dict(section) for section in sections]
+            for repair_round in range(1, 3):
+                before_sections_text = _join_structured_section_records(repaired_sections)
+                repaired_text, repaired_sections, section_repair = _repair_structured_course_sections_to_budget(
+                    job=job,
+                    course_plan=course_plan,
+                    sections=repaired_sections,
+                    module_content=result.get("module_content") or "",
+                    model=model,
+                )
+                section_repairs.append({
+                    **section_repair,
+                    "repair_round": repair_round,
+                    "reviewed_after_topup": True,
+                })
+                if repaired_text.strip() == before_sections_text.strip():
+                    break
+                final_text, repaired_sections = _review_section_records(repaired_sections)
+                post_micro_budget_status = _structured_course_budget_status(course_plan, final_text)
+                sections = repaired_sections
+                if post_micro_budget_status.get("ok") or post_micro_budget_status.get("status") != "too_short":
+                    break
+            if section_repairs:
+                post_micro_budget_repair = {
+                    "mode": "post_micro_section_topup",
+                    "status": post_micro_budget_status.get("status"),
+                    "words": post_micro_budget_status.get("words"),
+                    "min_words": post_micro_budget_status.get("min_words"),
+                    "target_words": post_micro_budget_status.get("target_words"),
+                    "attempts": section_repairs,
+                }
+
+        if not post_micro_budget_status.get("ok"):
+            final_text, course_budget_repair = _repair_structured_course_text_to_budget(
+                job=job,
+                course_plan=course_plan,
+                text=final_text,
+                module_content=result.get("module_content") or "",
+                model=model,
+            )
+            if post_micro_budget_repair:
+                post_micro_budget_repair["course_budget_fallback"] = course_budget_repair
+            else:
+                post_micro_budget_repair = course_budget_repair
+            post_micro_budget_status = _structured_course_budget_status(course_plan, final_text)
+        if (
+            not post_micro_budget_status.get("ok")
+            and str(os.getenv("FORMATION_STRUCTURED_CALIBRATION_STRICT", "1")).strip().lower()
+            not in {"0", "false", "no", "off"}
+        ):
+            raise ValueError(
+                "Budget texte invalide après micro-review "
+                f"cours={course_plan.get('course_number')} "
+                f"status={post_micro_budget_status.get('status')} "
+                f"words={post_micro_budget_status.get('words')} "
+                f"target={post_micro_budget_status.get('target_words')} "
+                f"min={post_micro_budget_status.get('min_words')}"
+            )
+        micro_changed = (final_text or "").strip() != (calibrated_text or "").strip()
         if micro_changed:
             sections = [
                 {
@@ -9727,7 +10404,8 @@ def _run_structured_content_generation(
             "words": count_tts_spoken_words(final_text),
             "micro_changed": micro_changed,
             "sections": sections,
-            "post_micro_budget_status": _structured_course_budget_status(course_plan, final_text),
+            "post_micro_budget_status": post_micro_budget_status,
+            "post_micro_budget_repair": post_micro_budget_repair,
         }
 
     final_course_results = _run_structured_parallel(

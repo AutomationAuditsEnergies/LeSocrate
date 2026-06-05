@@ -170,8 +170,8 @@ def persist_review_report(
 def get_latest_review_report(job_id: int, folder_id: int, kind: str = "compliance") -> dict | None:
     """Retourne le dernier rapport persisté pour une journée.
 
-    `kind` : "compliance" (défaut) → source IN ('api', 'review_api', ...)
-             "humanization"        → source LIKE '%humanization%'
+    `kind` : "compliance" (défaut) → toute conformité non-humanization
+             "humanization"        → source LIKE '%humanization%' (legacy)
     """
     ensure_observability_tables()
     conn = get_db_connection()

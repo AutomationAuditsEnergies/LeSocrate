@@ -16,7 +16,10 @@ Contraintes :
   thème, objectif/axes.
 - Cours interne 7 : conclusion de la dernière partie, conclusion globale de journée, amorce prochaine
   séance ou clôture finale, puis mention douce du tchat.
-- Les exemples non sourcés doivent rester explicitement fictifs.
+- Les exemples non sourcés doivent rester fictifs ou hypothétiques de façon
+  claire et naturelle : "Imaginons...", "Imaginez qu'un client...", "Prenons un
+  exemple fictif..." ou "Supposons que..." suffisent. Ne prévois pas de phrase
+  méta lourde si l'hypothèse est déjà claire.
 - Ne pas employer le mot "bloc" côté apprenant.
 - Les objets JSON "course" sont internes. Côté apprenant, chaque entrée doit
   être formulée comme un grand thème, une partie, un chapitre ou une séquence de
@@ -38,6 +41,18 @@ Contraintes :
 - Chaque `teaching_beat` peut contenir un `slide_anchor`. Active l'anchor
   seulement si le moment mérite vraiment une slide. Ne force jamais une forme
   visuelle si le contenu n'en a pas besoin.
+- Quand tu crées plusieurs `slide_anchor` dans une même partie, chacun doit
+  correspondre à un mouvement pédagogique distinct. Définis mentalement ce que
+  chaque anchor couvre et ce qu'il ne doit pas couvrir pour éviter que deux
+  slides voisines se partagent le même passage oral.
+- Dans chaque `slide_anchor`, renseigne des indices assez précis pour guider la
+  suite : `visual_goal`, `fields_hint`, et si utile `must_cover` et
+  `must_not_cover`. Ces champs sont internes et ne doivent jamais être prononcés
+  dans le texte final.
+- Pour `analogy`, l'anchor doit couvrir une situation hors métier qui sert de
+  parallèle. Un exemple fictif client/conseiller/usager doit être planifié comme
+  cas métier, écart de perception, règle, conseil ou réflexion, pas comme
+  analogie.
 - Le catalogue de templates fait autorité : choisis un template compatible avec
   l'intention pédagogique et le nombre réel d'items. Si le contenu n'a pas cinq
   éléments, ne demande pas un visuel à cinq éléments.

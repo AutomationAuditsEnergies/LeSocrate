@@ -105,7 +105,7 @@ class PipelineOrderTest(unittest.TestCase):
         finally:
             os.unlink(db_path)
 
-    def test_post_review_docs_runs_after_both_reviews(self):
+    def test_post_review_docs_runs_after_local_compliance(self):
         db_path = _make_review_db(humanized=True, reviewed=True)
         try:
             self.assertEqual(self._run_next_step(db_path, _job()), "post_review_docs")

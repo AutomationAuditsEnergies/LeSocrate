@@ -67,7 +67,7 @@ export default function HRDashboard() {
   const [newFormHours, setNewFormHours] = useState('')
   // Auto-pilot : si activé, une fois le job pipeline initié on appelle l'endpoint
   // /run-auto qui chaîne toutes les étapes (REAC → KB → global → daily → content
-  // → humanisation → review → Word 2). L'audio se lance ensuite à la demande.
+  // → conformité locale → Word 2). L'audio se lance ensuite à la demande.
   // Sinon, comportement historique : redirection vers
   // /formation-pipeline pour validation manuelle étape par étape.
   const [autoPilot, setAutoPilot] = useState(false)
@@ -77,7 +77,7 @@ export default function HRDashboard() {
   // - 'api_deepseek' : appels directs à l'API DeepSeek (consomme DEEPSEEK_API_KEY)
   // - 'claude_code'  : subprocess `claude` local (forfait Pro/Max via OAuth, gratuit côté API)
   // - 'test'         : skip KB/global/daily/content, injecte des DOCX/TXT pré-rédigés.
-  //                    La pipeline ne tourne que finalize + humanisation + review + Word 2.
+  //                    La pipeline ne tourne que finalize + conformité locale + Word 2.
   //                    Permet de valider les étapes en aval en ~5 min au lieu de 30-60.
   const [autoPilotMode, setAutoPilotMode] = useState('api')  // 'api' | 'api_deepseek' | 'claude_code' | 'test'
   const [testDocs, setTestDocs] = useState([])  // File[] uploadés pour le mode test
@@ -1801,7 +1801,7 @@ function CreatePlatformView({
                       {autoPilotMode === 'claude_code' && 'Le backend doit avoir LOCAL_DEV=true et le binaire `claude` dans son PATH.'}
                       {autoPilotMode === 'api' && 'Mode standard, aucune dépendance locale requise.'}
                       {autoPilotMode === 'api_deepseek' && 'Le backend doit avoir DEEPSEEK_API_KEY dans son .env. Endpoint compatible Anthropic, route automatique sur api.deepseek.com.'}
-                      {autoPilotMode === 'test' && 'Skip KB/global/daily/content + volume safety (tu fournis 1 DOCX/TXT par journée). Humanisation + conformité tournent ensuite, puis Word 2.'}
+                      {autoPilotMode === 'test' && 'Skip KB/global/daily/content (tu fournis 1 DOCX/TXT par journée). Conformité locale par morceau puis Word 2 tournent ensuite.'}
                     </div>
                   </div>
 

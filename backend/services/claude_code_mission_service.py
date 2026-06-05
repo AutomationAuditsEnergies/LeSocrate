@@ -140,7 +140,7 @@ def _load_kb_entries(job_id: int) -> list:
 
 
 def _load_rules_text() -> str:
-    """Règles #1-#28 pour les étapes `content` et `review`."""
+    """Règles historiques pour l'étape `content`."""
     path = os.path.join(
         os.path.dirname(__file__), "..", "prompts", "prompts-generaux-contenu-formation.md"
     )
@@ -400,8 +400,7 @@ Fondation / Pratique / Maîtrise), génère environ {target_words} mots de texte
 Les sous-parties sont les 7 cours internes de la journée ; utilise leurs
 métadonnées techniques pour calibrer le volume, sans les verbaliser côté apprenant.
 
-**Applique strictement les règles #1 à #28** contenues dans `rules.md` (saturation
-sandwich, pas de mensonge, pas d'énumérations mécaniques, registre oral, etc.).
+**Applique strictement les règles de génération** contenues dans `rules.md`.
 
 Sortie attendue dans `output.md` : un **JSON** de la forme :
 
@@ -479,7 +478,7 @@ def _build_review_mission(target, job, model):
 **TP** : {job['tp_name']} · **Modèle demandé** : {model}
 
 Tu lis `input.md` qui contient les segments à auditer (JSON array). Pour chacun,
-vérifie la conformité aux règles #1-#27 de `rules.md`.
+vérifie la conformité aux règles actives de `rules.md`.
 
 Tu **ne réécris pas** les textes. Tu proposes des **patches minimaux** au format :
 
@@ -492,8 +491,8 @@ Tu **ne réécris pas** les textes. Tu proposes des **patches minimaux** au form
         {{
           "original": "phrase EXACTE à remplacer (copie verbatim, 3-40 mots)",
           "replacement": "phrase corrigée",
-          "rule_violated": "#27",
-          "reason": "registre trop écrit"
+          "rule_violated": "#22",
+          "reason": "discours direct entre guillemets"
         }}
       ]
     }}
@@ -501,7 +500,7 @@ Tu **ne réécris pas** les textes. Tu proposes des **patches minimaux** au form
 }}
 ```
 
-- Max 10 patches par segment (éthiques #1-#17 prioritaires, puis stylistiques #21-#27).
+- Max 10 patches par segment. Priorité : #18 et #22, puis #17, puis #14/#15.
 - `original` doit être trouvable verbatim dans le texte du segment.
 - Si un segment est conforme, renvoie `"patches": []` pour ce segment.
 
@@ -896,7 +895,7 @@ def _import_humanization_review(job_id, output, generated_via):
     """Import manuel de la passe humanisation (#101-#114).
 
     Même format que `_import_review`, mais les patches appliqués invalident la
-    conformité stricte pour forcer la passe #1-#27 ensuite.
+    conformité stricte pour forcer la passe de review ensuite.
     """
     try:
         parsed = json.loads(_extract_json(output))
@@ -1666,8 +1665,7 @@ def _list_review_chunks(job: dict) -> list:
     sous-ensemble de règles.
 
     Avantage vs single-agent : pas de favoritisme. Un agent unique tend à
-    saturer son budget de patches sur les règles qu'il voit le plus
-    (#22 guillemets, #26 énumérations) et oublie #1-#17. Avec N agents
+    saturer son budget de patches sur la règle qu'il voit le plus. Avec N agents
     spécialisés, chaque sous-ensemble de règles a son propre budget complet.
 
     Idempotence : skippe les journées dont tous les segments sont reviewed=1
@@ -1693,41 +1691,22 @@ _PASSE_DESCRIPTIONS = {
 # au lieu d'un agent unique qui se concentre sur ce qu'il voit le plus.
 _REVIEW_RULE_GROUPS = [
     {
-        "id": "ethique_culturelle",
-        "label": "Éthique culturelle",
-        "rules": [1, 2, 3, 9, 14],
-        "description": "Spirituel/religieux, alcool/musique/banques, fêtes émotionnelles, "
-                       "humour, respect des tiers",
-    },
-    {
-        "id": "ethique_commerciale",
-        "label": "Éthique commerciale",
-        "rules": [4, 5, 6, 7, 8],
-        "description": "Manipulation/tromperie en vente, persuasion agressive/closing manipulatoire, "
-                       "flirt/séduction, chance/destin, célébrités/divertissement",
-    },
-    {
-        "id": "legal_integrite",
-        "label": "Légal et intégrité",
-        "rules": [10, 11, 12, 13, 15, 16],
-        "description": "Cohérence interne, discrimination, RGPD/données personnelles, "
-                       "promesses irréalistes, personnes en détresse, "
-                       "conseils médicaux/juridiques précis",
+        "id": "ethique_minimale",
+        "label": "Éthique minimale",
+        "rules": [14, 15],
+        "description": "Respect des tiers et protection des publics vulnérables",
     },
     {
         "id": "anti_hallucination",
         "label": "Anti-hallucination",
-        "rules": [17, 18, 19, 20],
-        "description": "Annonce explicite des exemples fictifs, chiffres/études non sourcés, "
-                       "expressions de prudence, posture pédagogique",
+        "rules": [17, 18],
+        "description": "Anti-hallucination générale et patterns interdits",
     },
     {
         "id": "style_oral_tts",
         "label": "Style oral TTS",
-        "rules": [21, 22, 23, 24, 25, 26, 27],
-        "description": "Fusion syntaxique hypothétiques, guillemets de discours direct, "
-                       "posture dialogale, punchlines isolées, contraintes cours à distance, "
-                       "énumérations mécaniques, registre oral",
+        "rules": [22],
+        "description": "Zéro guillemet de discours direct rapporté",
     },
 ]
 
@@ -1803,7 +1782,7 @@ def _continue_content_until_volume(
 
 Tu as écrit **{words} mots** sur une cible de **{target_words} mots** (minimum {min_words}, maximum prudent {max_words}). Tu dois continuer le cours là où tu t'es arrêté, avec :
 - Le même ton oral et la même voix narrative
-- Les mêmes règles TTS (cf. `rules.md` — règles #1 à #28)
+- Les mêmes règles de génération (cf. `rules.md`)
 - **Sans RÉPÉTER ce qui a déjà été dit**
 
 **Volume cible pour cette continuation : environ {max(350, target_words - words)} mots supplémentaires, sans dépasser {max_words} mots au total si possible.**
@@ -2008,7 +1987,7 @@ def _build_review_chunk(chunk_dir: str, job: dict, chunk: dict, model: str) -> N
                 "pédagogique comptent comme des non-conformités."
             )
             out_of_scope = (
-                "Ignore les règles de conformité stricte #1-#27 : elles seront "
+                "Ignore les règles de conformité stricte : elles seront "
                 "traitées par la passe suivante."
             )
         else:
@@ -2036,7 +2015,7 @@ Lis le détail complet de chacune de tes règles dans `rules.md` (cherche
         cap_per_segment = 10
     else:
         scope_block = (
-            "\nTu vérifies la conformité aux **règles #1 à #28** "
+            "\nTu vérifies la conformité aux **règles actives** "
             "détaillées dans `rules.md` (lis le fichier intégralement).\n"
         )
         cap_per_segment = 10
@@ -3411,7 +3390,7 @@ supplémentaires**.
 
 Le contenu additionnel DOIT :
 - Reprendre le ton oral et la voix narrative du texte existant
-- Respecter scrupuleusement les règles **#1 à #28** décrites dans `rules.md`
+- Respecter scrupuleusement les règles de génération décrites dans `rules.md`
   (lis le fichier intégralement avant d'écrire)
 - Enchaîner avec une transition naturelle ("Allons plus loin maintenant…",
   "Je voudrais te donner d'autres exemples…", "On va creuser un autre angle…")
@@ -3486,7 +3465,7 @@ supplémentaires**.
 
 Le contenu additionnel DOIT :
 - Reprendre le ton oral et la voix narrative du texte existant
-- Respecter scrupuleusement les règles **#1 à #28** décrites plus bas
+- Respecter scrupuleusement les règles de génération décrites plus bas
 - Enchaîner avec une transition naturelle ("Allons plus loin maintenant…",
   "Je voudrais te donner d'autres exemples…", "On va creuser un autre angle…")
 - Rester dans le scope thématique de la sous-partie "{sub_part_name}" et de la
@@ -3845,7 +3824,7 @@ def run_volume_safety(job_id: int, folder_id: int, model: str = "sonnet") -> dic
     Pour chaque folder dont total_words parlé < budget minimal :
       1. Identifier les N segments les plus courts (par word_count ASC).
       2. Pour chaque segment : lancer 1 subprocess `claude` qui produit un
-         texte additionnel (≥1500 mots) respectant les règles #1-#27.
+         texte additionnel (≥1500 mots) respectant les règles de génération.
       3. Append au text_content existant (pas de réécriture). Marque
          dirty=1 et reviewed=0 pour que le segment repasse en révision et
          re-génère son audio TTS.

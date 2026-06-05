@@ -17,7 +17,11 @@ progression, repères pédagogiques, chaleur, mais sans interaction réelle.
 - Le texte doit être oral, fluide, professionnel, prêt TTS.
 - Ne pas inventer de fait, chiffre, source, anecdote, vécu personnel, nom propre
   ou témoignage.
-- Les exemples non sourcés doivent être annoncés comme fictifs ou hypothétiques.
+- Les exemples non sourcés doivent être annoncés comme fictifs ou hypothétiques
+  dès le premier jet, avec une formulation naturelle. "Imaginons...",
+  "Imaginez qu'un client...", "Prenons un exemple fictif..." ou "Supposons que..."
+  suffisent. Ne jamais ajouter une phrase méta lourde si l'hypothèse est déjà
+  claire.
 - Pas de visuel : pas de "je vois", "regardez", "vous avez devant vous".
 - Pas d'interaction retour réelle : pas de "vous m'entendez ?", "levez la main",
   "répondez-moi".
@@ -73,6 +77,9 @@ progression, repères pédagogiques, chaleur, mais sans interaction réelle.
 - Questions rhétoriques autorisées si elles ne demandent pas de réponse réelle.
 - Reformulations sobres : "En clair", "Autrement dit", "Ce qu'il faut retenir".
 - Éviter les tunnels de métaphores, de storytelling ou de remplissage.
+- Ne fabrique pas de punchlines artificielles. Une phrase peut rester nuancée :
+  "peut paraître", "peut donner l'impression", "risque de sembler" ou "donne une
+  impression de" sont acceptables quand la nuance est utile.
 - Ne compte pas sur une passe d'humanisation après coup : le texte généré doit
   déjà avoir ce naturel oral dès la première version.
 

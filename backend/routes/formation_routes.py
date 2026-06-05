@@ -497,19 +497,16 @@ def init_test_pipeline():
 
         # 4. Si auto_pilot demandé, lancer l'auto-pilot en mode Claude Code.
         # Important : même si KB/global/daily/content sont skippés (segments déjà
-        # en DB), les étapes en aval CONSOMMENT de l'IA et donc du crédit :
-        #   - Volume safety : enrichit les journées sous budget audio (Claude)
-        #   - Review conformité : audit règles #1-#27 par 4 agents multi-rules (Claude)
+        # en DB), la conformité locale en aval CONSOMME de l'IA et donc du crédit :
+        #   - Review conformité : audit règles hors micro-éthique, par morceau
         # Sans use_claude_code=True, ces appels passent par l'API LLM configurée
         # (DeepSeek ou Anthropic). Avec True, ils utilisent le forfait Pro/Max
         # via subprocess `claude`.
         # L'audio est désormais découplé : l'auto-pilot prépare le texte/Word 2,
         # puis la synthèse se lance séparément par journée/semaine.
-        # Modèle SONNET (pas Haiku) : la review et le volume_safety demandent du
-        # jugement linguistique fin (fusion de phrases avec "que", transformation
-        # discours direct→indirect avec variation lexicale, etc.). Haiku produit
-        # des patches mécaniques et parfois cassés ("quimaginez" au lieu de
-        # "que vous imaginez"). Le coût est sur le forfait CC, donc gratuit côté API.
+        # Modèle SONNET (pas Haiku) : la conformité locale demande du jugement
+        # linguistique fin. Haiku produit des patches mécaniques et parfois cassés.
+        # Le coût est sur le forfait CC, donc gratuit côté API.
         if auto_pilot:
             import eventlet
             update_job(job_id,
@@ -1943,7 +1940,7 @@ def get_humanization_report(job_id, folder_id):
     return jsonify({"report": report}), 200
 
 
-# ─── Étape 6.5 — Sécurité volume (audit + enrichissement à la demande) ───────
+# ─── Legacy — audit volume lisible, enrichissement append-only désactivé ─────
 
 @formation_bp.route("/api/formation/<int:job_id>/volume-audit", methods=["GET"])
 def volume_audit(job_id):

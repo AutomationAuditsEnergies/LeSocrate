@@ -18,6 +18,23 @@ Contraintes :
   l'ordre et de façon naturelle. Ces beats structurent le fond, mais ils ne
   doivent jamais être nommés comme des beats, slides, anchors, templates,
   PowerPoint ou teaching beats.
+- Quand un `teaching_beat` contient un `slide_anchor`, traite ce beat comme un
+  contrat de segment oral distinct : la portion de texte correspondante doit
+  porter précisément l'intention du beat et de son anchor, avant de passer au
+  beat suivant.
+- Une section peut additionner plusieurs beats, mais elle ne doit pas les
+  mélanger. Le passage oral du premier beat ne doit pas absorber la définition,
+  l'exemple, la règle ou la transition prévus pour le beat suivant.
+- Pour chaque beat avec slide_anchor, respecte mentalement trois frontières :
+  ce que ce segment doit couvrir, ce qu'il doit seulement préparer, et ce qu'il
+  doit laisser au segment suivant. Ces frontières restent invisibles pour
+  l'apprenant.
+- Si un beat est une analogie, garde l'analogie dans son segment : scène hors
+  métier, mécanisme rendu mémorable, puis pont court vers le métier. Ne lui
+  rattache pas l'explication conceptuelle complète ni l'exemple métier suivant.
+- Si le beat suivant définit un concept, explique ce concept dans un nouveau
+  mouvement oral reconnaissable, sans reprendre longuement l'histoire ou
+  l'image du beat précédent.
 - Si c'est une conclusion : récapituler et fermer, sans ouvrir un nouveau sujet.
 - Après Q/R ou mention du tchat : aucun nouveau développement.
 - Pas de markdown ni titre écrit.
@@ -39,3 +56,6 @@ Contraintes :
   thème." Ce modèle donne la direction, il ne doit pas être recopié mot pour mot
   à chaque fois. Pour une partie de développement, ne commence pas par ce type
   de cadrage : entre directement dans l'axe prévu.
+- Ne fabrique pas de punchline artificielle et ne durcis pas une formulation
+  prudente simplement pour produire plus d'impact. Une nuance comme "peut
+  paraître" ou "peut donner l'impression" est correcte si elle sert le sens.

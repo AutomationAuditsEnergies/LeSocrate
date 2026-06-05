@@ -85,6 +85,255 @@ class StructuredBudgetCalibrationTest(unittest.TestCase):
         self.assertEqual(calibration["status"], "too_short")
         self.assertFalse(calibration["changed"])
 
+    def test_course_budget_topup_adds_missing_words_until_range(self):
+        course_plan = {
+            "course_number": 2,
+            "course_title": "Traiter une demande client",
+            "target_words": 150,
+        }
+        current_text = f"{words(80)}\n\nConclusion {words(5)}"
+
+        with patch.object(cgs, "_anthropic_post", return_value=words(60)):
+            repaired_text, repair = cgs._repair_structured_course_text_to_budget(
+                job={"program_title": "TP", "folder_name": "Jour 1"},
+                course_plan=course_plan,
+                text=current_text,
+                module_content="source",
+            )
+
+        self.assertEqual(repair["status"], "ok")
+        self.assertGreaterEqual(cgs.count_tts_spoken_words(repaired_text), repair["min_words"])
+        self.assertIn("Conclusion", repaired_text.split("\n\n")[-1])
+
+    def test_course_budget_topup_rephrases_too_long_addition(self):
+        course_plan = {
+            "course_number": 2,
+            "course_title": "Traiter une demande client",
+            "target_words": 150,
+        }
+        current_text = f"{words(80)}\n\nConclusion {words(5)}"
+
+        with patch.object(cgs, "_anthropic_post", side_effect=[words(500), words(60)]):
+            repaired_text, repair = cgs._repair_structured_course_text_to_budget(
+                job={"program_title": "TP", "folder_name": "Jour 1"},
+                course_plan=course_plan,
+                text=current_text,
+                module_content="source",
+            )
+
+        self.assertEqual(repair["status"], "ok")
+        self.assertLessEqual(cgs.count_tts_spoken_words(repaired_text), 150)
+        self.assertEqual(repair["attempts"][0]["raw_addition_words"], 500)
+        self.assertTrue(repair["attempts"][0]["rephrased_to_fit"])
+        self.assertEqual(repair["attempts"][0]["addition_words"], 60)
+
+    def test_section_budget_topup_adds_value_inside_underfilled_part(self):
+        course_plan = {
+            "course_number": 2,
+            "course_title": "Traiter une demande client",
+            "target_words": 240,
+            "opening": {"title": "Intro", "target_words": 40},
+            "parts": [
+                {
+                    "part_number": 1,
+                    "title": "Qualifier la demande",
+                    "target_words": 160,
+                    "teaching_beats": [],
+                },
+            ],
+            "course_conclusion": {"title": "Conclusion", "target_words": 40},
+        }
+        part_text = f"{words(80)}\n\ncloturelocale {words(19)}"
+        sections = [
+            {
+                "kind": "opening",
+                "label": "introduction",
+                "title": "Intro",
+                "target_words": 40,
+                "word_count": 40,
+                "text": words(40),
+            },
+            {
+                "kind": "part",
+                "label": "partie 1",
+                "part_number": 1,
+                "title": "Qualifier la demande",
+                "target_words": 160,
+                "word_count": 100,
+                "text": part_text,
+            },
+            {
+                "kind": "course_conclusion",
+                "label": "conclusion du cours",
+                "title": "Conclusion",
+                "target_words": 40,
+                "word_count": 40,
+                "text": words(40),
+            },
+        ]
+
+        with patch.object(cgs, "_anthropic_post", side_effect=[words(80), words(60)]):
+            repaired_text, repaired_sections, repair = cgs._repair_structured_course_sections_to_budget(
+                job={"program_title": "TP", "folder_name": "Jour 1"},
+                course_plan=course_plan,
+                sections=sections,
+                module_content="source",
+            )
+
+        self.assertEqual(repair["status"], "ok")
+        self.assertLessEqual(cgs.count_tts_spoken_words(repaired_text), 240)
+        self.assertEqual(repair["attempts"][0]["raw_addition_words"], 80)
+        self.assertTrue(repair["attempts"][0]["rephrased_to_fit"])
+        self.assertEqual(repair["attempts"][0]["addition_words"], 60)
+        repaired_part = next(section for section in repaired_sections if section["kind"] == "part")
+        self.assertEqual(repaired_part["word_count"], 160)
+        self.assertTrue(repaired_part["text"].split("\n\n")[-1].startswith("cloturelocale"))
+
+    def test_course_calibration_uses_section_topup_when_course_still_short(self):
+        course_plan = {
+            "course_number": 2,
+            "course_title": "Traiter une demande client",
+            "target_words": 240,
+            "opening": {"title": "Intro", "target_words": 40},
+            "parts": [
+                {
+                    "part_number": 1,
+                    "title": "Qualifier la demande",
+                    "target_words": 160,
+                    "teaching_beats": [],
+                },
+            ],
+            "course_conclusion": {"title": "Conclusion", "target_words": 40},
+        }
+        draft = {
+            "course_text": f"{words(40)}\n\n{words(100)}\n\n{words(40)}",
+            "sections": [
+                {
+                    "kind": "opening",
+                    "label": "introduction",
+                    "title": "Intro",
+                    "target_words": 40,
+                    "word_count": 40,
+                    "text": words(40),
+                },
+                {
+                    "kind": "part",
+                    "label": "partie 1",
+                    "part_number": 1,
+                    "title": "Qualifier la demande",
+                    "target_words": 160,
+                    "word_count": 100,
+                    "text": words(100),
+                },
+                {
+                    "kind": "course_conclusion",
+                    "label": "conclusion du cours",
+                    "title": "Conclusion",
+                    "target_words": 40,
+                    "word_count": 40,
+                    "text": words(40),
+                },
+            ],
+        }
+
+        def keep_section_text(**kwargs):
+            section = kwargs["section"]
+            return kwargs["text"], {
+                "status": "ok",
+                "changed": False,
+                "min_words": 0,
+                "max_words": section.get("target_words"),
+            }
+
+        with (
+            patch.dict("os.environ", {"FORMATION_STRUCTURED_COURSE_DEFICIT_REPAIR_MAX_ATTEMPTS": "0"}),
+            patch.object(cgs, "_calibrate_structured_section_text", side_effect=keep_section_text),
+            patch.object(cgs, "_anthropic_post", return_value=words(60)),
+        ):
+            calibrated_text, calibration = cgs._calibrate_structured_course_sections(
+                job={"program_title": "TP", "folder_name": "Jour 1"},
+                course_plan=course_plan,
+                draft=draft,
+                module_content="source",
+            )
+
+        self.assertEqual(calibration["status"], "ok")
+        self.assertEqual(calibration["section_topup_repair"]["status"], "ok")
+        self.assertGreaterEqual(cgs.count_tts_spoken_words(calibrated_text), calibration["min_words"])
+        repaired_part = next(
+            section for section in calibration["calibrated_sections"]
+            if section["kind"] == "part"
+        )
+        self.assertEqual(repaired_part["word_count"], 160)
+
+    def test_course_deficit_repair_expands_part_when_course_stays_short(self):
+        course_plan = {
+            "course_number": 2,
+            "course_title": "Traiter une demande client",
+            "target_words": 350,
+            "opening": {"title": "Intro", "target_words": 50},
+            "parts": [
+                {
+                    "part_number": 1,
+                    "title": "Qualifier la demande",
+                    "target_words": 250,
+                    "teaching_beats": [],
+                },
+            ],
+            "course_conclusion": {"title": "Conclusion", "target_words": 50},
+        }
+        draft = {
+            "course_text": f"{words(50)}\n\n{words(150)}\n\n{words(50)}",
+            "sections": [
+                {
+                    "kind": "opening",
+                    "label": "introduction",
+                    "title": "Intro",
+                    "target_words": 50,
+                    "word_count": 50,
+                    "text": words(50),
+                },
+                {
+                    "kind": "part",
+                    "label": "partie 1",
+                    "part_number": 1,
+                    "title": "Qualifier la demande",
+                    "target_words": 250,
+                    "word_count": 150,
+                    "text": words(150),
+                },
+                {
+                    "kind": "course_conclusion",
+                    "label": "conclusion du cours",
+                    "title": "Conclusion",
+                    "target_words": 50,
+                    "word_count": 50,
+                    "text": words(50),
+                },
+            ],
+        }
+
+        with patch.object(cgs, "_anthropic_post", side_effect=[words(150), words(245)]):
+            calibrated_text, calibration = cgs._calibrate_structured_course_sections(
+                job={"program_title": "TP", "folder_name": "Jour 1"},
+                course_plan=course_plan,
+                draft=draft,
+                module_content="source",
+            )
+
+        self.assertEqual(calibration["status"], "ok")
+        self.assertGreaterEqual(
+            cgs.count_tts_spoken_words(calibrated_text),
+            calibration["min_words"],
+        )
+        self.assertEqual(calibration["deficit_repair"]["status"], "ok")
+        self.assertTrue(calibration["deficit_repair"]["changed"])
+        repaired_part = next(
+            section for section in calibration["calibrated_sections"]
+            if section["kind"] == "part"
+        )
+        self.assertEqual(repaired_part["word_count"], 245)
+
 
 if __name__ == "__main__":
     unittest.main()
