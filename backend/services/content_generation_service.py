@@ -87,8 +87,8 @@ _DEFAULT_TTS_WPM_BY_BLOC = {
     7: 208.3,  # 38:47 -> ~48:45
 }
 _COURSE_CONCLUSION_START_MARGIN_SECONDS = 0
-# Marge utilisée pour calculer moins de mots que la durée théorique.
-# Elle ne coupe pas l'audio final : elle réduit seulement la parole générée.
+# Marge utilisée pour estimer le budget mots. L'audio final n'est ni coupé ni
+# rejeté si la durée réelle dépasse ensuite le créneau.
 _COURSE_FINAL_SILENCE_SECONDS = 120
 _DEFAULT_TTS_SPEED = 0.90
 _DEFAULT_TTS_LOCAL_MAX_SPEEDUP = 1.0
@@ -418,8 +418,7 @@ def _runtime_intra_day_carryover_enabled() -> bool:
     """Autorise le report technique d'un reste audio vers le cours suivant.
 
     Désactivé par défaut : chaque cours doit rester autonome. Si un bloc est
-    trop long, on réduit/régénère le texte plutôt que de terminer ce bloc au
-    début du cours suivant.
+    trop long, l'audio complet est conservé pour recalibrer ensuite les budgets.
     """
     value = (os.getenv("FORMATION_RUNTIME_INTRA_DAY_CARRYOVER") or "").strip().lower()
     return value in {"1", "true", "yes", "on"}
@@ -649,8 +648,9 @@ hors Q&A et hors pauses.
 Cadence calibrée : {day['words_per_minute']:.0f} mots/minute.
 Budget journée cours uniquement : cible {day['target_words']} mots parlés,
 tolérance {day['min_words']} à {day['max_words']} mots.
-Le budget ne coupe pas l'audio final : il réduit seulement le nombre de mots
-demandés. Il retire déjà la marge initiale et une marge parole finale de
+Le budget est un repère de calibrage : il ne coupe pas l'audio final et ne
+bloque plus l'upload TTS si la durée réelle dépasse. Il retire déjà la marge
+initiale et une marge parole finale de
 {final_margin_sec} secondes ({final_margin_min:.1f} min), soit environ
 {final_margin_words} mots en moins par rapport à une parole continue jusqu'à la
 fin du cours interne.
@@ -822,7 +822,7 @@ def _load_slide_template_catalog() -> dict:
         return {"version": "missing", "templates": []}
     try:
         data = json.loads(raw)
-    except Exception as exc:
+    except ValueError as exc:
         logger.warning("⚠️ Catalogue templates slides invalide: %s", exc)
         return {"version": "invalid", "templates": []}
     if not isinstance(data.get("templates"), list):
@@ -3106,42 +3106,6 @@ def _assert_audio_duration_within_slot(filename: str, duration_sec: float, targe
         )
 
 
-def _assert_audio_duration_fills_slot(filename: str, duration_sec: float, target_sec: int) -> None:
-    """Runtime-fit course files must include real browser-readable padding."""
-    if not target_sec or duration_sec is None:
-        return
-    if float(duration_sec) < float(target_sec) - _TOLERANCE_OVERFLOW_SEC:
-        raise ValueError(
-            f"{filename} est trop court après padding "
-            f"({float(duration_sec):.1f}s < {int(target_sec)}s). "
-            "Audio non uploadé pour éviter une fin de créneau trop précoce."
-        )
-
-
-def _assert_course_voice_duration_within_deadline(
-    filename: str,
-    voice_duration_sec: float,
-    target_sec: int,
-    *,
-    has_start_silence: bool,
-) -> None:
-    """Vérifie que la parole reste sous la marge finale configurée."""
-    if not target_sec or voice_duration_sec is None:
-        return
-    final_silence_sec = _course_final_silence_sec()
-    limit_sec = (
-        _course_voice_window_sec(target_sec)
-        if has_start_silence
-        else _course_speech_deadline_sec(target_sec)
-    )
-    if float(voice_duration_sec) > float(limit_sec) + _TOLERANCE_OVERFLOW_SEC:
-        raise ValueError(
-            f"{filename} dépasse la limite de parole T-{final_silence_sec:.0f}s "
-            f"({float(voice_duration_sec):.1f}s > {float(limit_sec):.1f}s). "
-            "Audio non uploadé : il faut moins de mots pour garder la marge finale."
-        )
-
-
 def _runtime_conclusions_from_attempts(attempts: list) -> list:
     return [
         {
@@ -3752,20 +3716,6 @@ def _synthesize_course_audio_synced_to_slides(
     final_silence_sec = _course_final_silence_sec()
     speech_deadline_sec = _course_speech_deadline_sec(target_sec)
     api_speed = _course_tts_speed()
-    word_count = bloc.get("word_count") or len((bloc.get("text") or "").split())
-    word_budget = _estimated_words_budget_for_course(
-        target_sec,
-        api_speed,
-        bloc.get("bloc_number"),
-    )
-
-    # Garde-fou Fish Audio : préserve le comportement existant.
-    if not mock and not basic_tts and word_budget > 0 and word_count > word_budget:
-        raise ValueError(
-            f"Bloc {bloc['bloc_number']} trop long avant TTS sync "
-            f"({word_count} mots > budget prudent {word_budget} mots à speed={api_speed})."
-        )
-
     from services.basic_tts_service import concat_mp3_bytes
     if basic_tts:
         from services.basic_tts_service import convert_to_speech_basic
@@ -3774,8 +3724,9 @@ def _synthesize_course_audio_synced_to_slides(
     if not base_chunks:
         raise ValueError(f"Bloc {bloc['bloc_number']} vide pour sync slides")
 
-    # Runtime fit n'est supporté qu'en basic_tts (Edge TTS). Sinon ignoré.
-    use_runtime_fit = bool(runtime_fit and basic_tts)
+    # Le TTS doit lire le texte complet. Le runtime-fit coupait/reportait des
+    # chunks pour tenir dans le créneau ; on le désactive pour observer la durée réelle.
+    use_runtime_fit = False
 
     # Le bloc audio est déjà généré/calibré avec sa conclusion. Runtime fit ne
     # réserve donc plus de marge pour fabriquer une conclusion après coup.
@@ -4043,25 +3994,6 @@ def _synthesize_course_audio_synced_to_slides(
             )
             break
 
-        if (
-            not mock
-            and not use_runtime_fit
-            and cursor_sec + duration_sec > speech_deadline_sec + _TOLERANCE_OVERFLOW_SEC
-        ):
-            attempts.append({
-                "kind": f"{mode}_rejected_speech_deadline",
-                "chunk": chunk_idx + 1,
-                "duration": duration_sec,
-                "words": len(text.split()),
-                "limit_sec": speech_deadline_sec,
-                "final_silence_sec": final_silence_sec,
-            })
-            raise ValueError(
-                f"Bloc {bloc['bloc_number']} sync trop long : la parole finirait à "
-                f"{cursor_sec + duration_sec:.1f}s, après la limite T-{final_silence_sec:.0f}s "
-                f"({speech_deadline_sec:.1f}s). Audio non uploadé."
-            )
-
         start_sec = cursor_sec
         end_sec = start_sec + duration_sec
         audio_parts.append(audio_bytes)
@@ -4126,12 +4058,6 @@ def _synthesize_course_audio_synced_to_slides(
     else:
         voice_stop_duration = cursor_sec
         final_duration = voice_stop_duration
-        if voice_stop_duration > speech_deadline_sec + _TOLERANCE_OVERFLOW_SEC and not mock:
-            raise ValueError(
-                f"Bloc {bloc['bloc_number']} sync trop long "
-                f"({voice_stop_duration:.1f}s > limite parole {speech_deadline_sec:.1f}s, "
-                f"marge parole {final_silence_sec:.0f}s)."
-            )
         output_duration = voice_stop_duration
         if output_duration < target_sec:
             silence_bytes, silence_duration = _silent_mp3_approx_no_ffmpeg(target_sec - output_duration)
@@ -4144,20 +4070,8 @@ def _synthesize_course_audio_synced_to_slides(
                     "duration": silence_duration,
                     "target_sec": target_sec,
                 })
-        elif output_duration > target_sec and not mock:
-            raise ValueError(
-                f"Bloc {bloc['bloc_number']} sync trop long "
-                f"({output_duration:.1f}s > cible {target_sec}s)."
-            )
 
         output_bytes = concat_mp3_bytes(audio_parts)
-
-    if not mock and final_duration > speech_deadline_sec + _TOLERANCE_OVERFLOW_SEC:
-        raise ValueError(
-            f"Bloc {bloc['bloc_number']} trop long : la parole finirait à "
-            f"{final_duration:.1f}s, après la limite T-{final_silence_sec:.0f}s "
-            f"({speech_deadline_sec:.1f}s)."
-        )
 
     fit_method = (
         "slide_sync_mock"
@@ -4405,100 +4319,6 @@ Réponds uniquement avec le texte remanié, sans commentaire."""
     if len(reduced.split()) > budget:
         raise ValueError(
             f"Réduction dernier bloc encore trop longue ({len(reduced.split())} mots > budget {budget})"
-        )
-    return reduced
-
-
-def _reduce_course_bloc_for_runtime_overflow(
-    bloc: dict,
-    runtime_unconsumed_chunks: list,
-    *,
-    model=None,
-) -> str:
-    """Réduit automatiquement un bloc trop long au lieu de reporter sa fin au bloc suivant."""
-    text = (bloc.get("text") or "").strip()
-    if not text:
-        return text
-
-    current_words = count_tts_spoken_words(text)
-    overflow_text = "\n\n".join(
-        (chunk.get("text") or "").strip()
-        for chunk in (runtime_unconsumed_chunks or [])
-        if (chunk.get("text") or "").strip()
-    )
-    overflow_words = max(1, count_tts_spoken_words(overflow_text))
-    budget = int(bloc.get("main_word_budget") or bloc.get("word_budget") or current_words)
-
-    # On retire le surplus observé + une marge pour éviter une deuxième dérive.
-    target_words = min(
-        max(700, int(budget * 0.96)),
-        max(700, current_words - overflow_words - 140),
-    )
-    target_words = max(450, min(target_words, current_words - 80))
-    min_words = max(350, int(target_words * 0.90))
-    bloc_number = int(bloc.get("bloc_number") or 0)
-
-    prompt = f"""Tu es un réviseur pédagogique spécialisé dans les scripts audio TTS.
-
-PROBLÈME :
-La partie interne {bloc_number}/7 est trop longue pour sa contrainte TTS. La fin ne doit JAMAIS
-être reportée à la partie suivante. Tu dois réduire le texte de la partie actuelle pour
-qu'il tienne dans son propre fichier.
-
-OBJECTIF MOTS :
-- Texte actuel : {current_words} mots parlés environ.
-- Surplus observé en fin de partie : {overflow_words} mots environ.
-- Cible de sortie : entre {min_words} et {target_words} mots.
-
-PARTIE QUI A DÉBORDÉ AU RUNTIME :
----
-{_compact_words(overflow_text, 900) or "(non disponible)"}
----
-
-TEXTE COMPLET DE LA PARTIE À RÉDUIRE :
----
-{text}
----
-
-MISSION :
-Réécris le TEXTE COMPLET DE LA PARTIE À RÉDUIRE en version plus courte.
-Réduis prioritairement la fin, les reformulations, les exemples redondants et
-les développements qui ouvrent un nouveau sujet trop tard.
-
-CONTRAINTES ABSOLUES :
-- Ne reporte rien à la partie suivante.
-- Ne supprime pas l'architecture de la partie : reprise, thème, objectif, plan,
-  transitions, conclusion.
-- Ne crée pas de double introduction.
-- Ne termine pas la partie précédente au début de cette partie.
-- Ne change pas le fond pédagogique.
-- N'ajoute aucune nouvelle idée.
-- Si le cours se termine par une Q/R, garde une annonce Q/R sobre à la fin.
-- Après l'annonce Q/R, aucun nouveau développement.
-- Garde un style oral naturel, professionnel, prêt pour Fish Audio.
-- Ne mentionne jamais côté apprenant les mots "bloc", "créneau", "horaire",
-  "planning", une heure précise, une durée de fichier ou un budget mots.
-- Pas de markdown, pas de commentaire, pas de métadonnées.
-
-Réponds uniquement avec le texte réduit complet."""
-
-    reduced = _llm_post(
-        messages=[{"role": "user", "content": prompt}],
-        max_tokens=min(14000, int(target_words * 2.1) + 900),
-        model=model or default_model(),
-    )
-    reduced = (reduced or "").replace("```", "").strip()
-    if not reduced:
-        logger.warning("⚠️ Réduction runtime bloc %s vide, texte original conservé", bloc_number)
-        return text
-
-    reduced_words = count_tts_spoken_words(reduced)
-    if reduced_words > target_words:
-        logger.warning(
-            "⚠️ Réduction runtime bloc %s encore longue : %s mots > cible %s",
-            bloc_number,
-            reduced_words,
-            target_words,
         )
     return reduced
 
@@ -5633,35 +5453,19 @@ def _synthesize_course_audio_to_fit(
     convert_to_speech_with_timestamps=None,
 ):
     """
-    Génère un bloc cours sans troncature brutale.
-    Par défaut, on n'accélère pas la voix : si le texte est manifestement trop
-    long, on échoue avant l'appel Fish Audio pour éviter de payer un TTS inutilisable.
-    Un speedup local reste possible seulement si FORMATION_TTS_LOCAL_MAX_SPEEDUP > 1.
+    Génère un bloc cours tel quel.
+    La durée réelle peut dépasser le créneau prévu : on conserve l'audio complet
+    pour permettre de recalibrer ensuite les budgets mots à partir du résultat.
     """
     target_sec = int(bloc["target_sec"])
-    final_silence_sec = _course_final_silence_sec()
     max_voice_sec = _course_voice_window_sec(target_sec)
     if max_voice_sec <= 0:
         raise ValueError(
             f"Bloc {bloc['bloc_number']} impossible à synthétiser : cible {target_sec}s "
-            f"trop courte pour garder {final_silence_sec:.0f}s de marge parole."
+            "invalide."
         )
     api_speed = _course_tts_speed()
     attempts = []
-    word_count = bloc.get("word_count") or len(bloc["text"].split())
-    word_budget = _estimated_words_budget_for_course(
-        target_sec,
-        api_speed,
-        bloc.get("bloc_number"),
-    )
-
-    if word_budget > 0 and word_count > word_budget:
-        raise ValueError(
-            f"Bloc {bloc['bloc_number']} trop long avant TTS "
-            f"({word_count} mots > budget prudent {word_budget} mots à speed={api_speed}). "
-            "Aucun appel Fish Audio lancé. Il faut générer moins de mots en amont "
-            "ou réduire ce bloc avant synthèse."
-        )
 
     actual_reading = None
     if convert_to_speech_with_timestamps and _fish_timestamp_alignment_enabled():
@@ -5686,74 +5490,7 @@ def _synthesize_course_audio_to_fit(
         "actual_reading": actual_reading,
     })
 
-    if raw_duration <= max_voice_sec:
-        final_bytes, _final_duration = _pad_course_mp3_to_duration_no_ffprobe(
-            audio_bytes,
-            raw_duration,
-            target_sec,
-        )
-        return final_bytes, raw_duration, f"api_speed={api_speed}", attempts
-
-    required_speedup = raw_duration / max_voice_sec
-    max_speedup = _course_local_max_speedup()
-    if max_speedup <= 1.0:
-        raise ValueError(
-            f"Bloc {bloc['bloc_number']} trop long pour {target_sec}s "
-            f"(voix {raw_duration:.1f}s > max {max_voice_sec:.1f}s à speed={api_speed}, "
-            f"marge parole {final_silence_sec:.0f}s). "
-            "Speedup local désactivé par défaut pour préserver la voix. "
-            "Audio non uploadé pour éviter une coupure en pleine phrase."
-        )
-
-    if required_speedup > max_speedup:
-        raise ValueError(
-            f"Bloc {bloc['bloc_number']} trop long pour {target_sec}s "
-            f"(voix {raw_duration:.1f}s > max {max_voice_sec:.1f}s, "
-            f"speedup requis x{required_speedup:.3f} > limite x{max_speedup:.3f}, "
-            f"marge parole {final_silence_sec:.0f}s). "
-            "Audio non uploadé pour éviter une coupure en pleine phrase."
-        )
-
-    import io
-    from pydub import AudioSegment, effects
-
-    source_audio = AudioSegment.from_mp3(io.BytesIO(audio_bytes))
-    # Petite marge parce que pydub.effects.speedup est approximatif.
-    factors = [min(max_speedup, required_speedup * 1.005)]
-    if factors[0] < max_speedup:
-        factors.append(min(max_speedup, required_speedup * 1.02))
-
-    for factor in factors:
-        sped_audio = effects.speedup(
-            source_audio,
-            playback_speed=factor,
-            chunk_size=150,
-            crossfade=25,
-        )
-        out = io.BytesIO()
-        sped_audio.export(out, format="mp3", bitrate="128k")
-        sped_bytes = out.getvalue()
-        sped_duration = measure_duration_ms(sped_bytes) / 1000
-        attempts.append({"kind": "local_speedup", "factor": factor, "duration": sped_duration})
-
-        if sped_duration <= max_voice_sec:
-            final_bytes = pad_audio_to_duration(
-                sped_bytes,
-                target_sec,
-                truncate_overflow=False,
-            )
-            return final_bytes, sped_duration, f"api_speed={api_speed}, local_x{factor:.3f}", attempts
-
-    attempts_str = ", ".join(
-        f"{a['kind']}={a.get('speed', a.get('factor'))}: {a['duration']:.1f}s"
-        for a in attempts
-    )
-    raise ValueError(
-        f"Bloc {bloc['bloc_number']} trop long pour {target_sec}s "
-        f"(max voix {max_voice_sec:.1f}s, marge parole {final_silence_sec:.0f}s). "
-        f"Tentatives locales: {attempts_str}. "
-        "Audio non uploadé pour éviter une coupure en pleine phrase."
-    )
+    return audio_bytes, raw_duration, f"api_speed={api_speed}", attempts
 
 
 def _synthesize_fish_course_audio_observe(
@@ -11029,7 +10766,7 @@ def _build_timed_edge_break_audio(
 
 
 def _course_opening_transitions_enabled() -> bool:
-    value = (os.getenv("COURSE_OPENING_TRANSITIONS", "true") or "").strip().lower()
+    value = (os.getenv("COURSE_OPENING_TRANSITIONS", "false") or "").strip().lower()
     return value not in {"0", "false", "no", "off"}
 
 
@@ -11627,7 +11364,18 @@ def generate_audio_from_script(
     formation_job_id = job.get("formation_job_id")
     saved_script_plan = _load_saved_course_script_plan(platform_id, folder_id) or {}
     target_filename = os.path.basename((target_filename or "").split("?", 1)[0]) or None
-    assert_course_day_word_budget(folder_id, context="audio_generation")
+    try:
+        audio_budget_audit = assert_course_day_word_budget(folder_id, context="audio_generation")
+    except Exception as exc:
+        audio_budget_audit = None
+        logger.warning(
+            "PIPELINE_AUDIO_WORD_BUDGET_OVERFLOW_NON_BLOCKING "
+            "formation_job_id=%s content_job_id=%s folder_id=%s error=%s",
+            formation_job_id,
+            job_id,
+            folder_id,
+            str(exc)[:220],
+        )
     started_at = time.time()
     logger.info(
         "PIPELINE_AUDIO_START formation_job_id=%s content_job_id=%s folder_id=%s platform_id=%s force_all=%s mock=%s basic_tts=%s "
@@ -11800,7 +11548,7 @@ def generate_audio_from_script(
     # Actif pour Edge TTS, avec ou sans sync slides : Edge est plus lent que le
     # budget Fish Audio et doit être calé par durée réelle avant upload.
     intra_day_carryover_chunks = []
-    runtime_fit_enabled = bool(basic_tts and not mock)
+    runtime_fit_enabled = False
     fast_tts_pipeline = bool(fast_tts_pipeline and runtime_fit_enabled)
     if fast_tts_pipeline:
         logger.info(
@@ -12383,126 +12131,30 @@ def generate_audio_from_script(
                 f"[SYNC SLIDES] Bloc {bloc['bloc_number']}/7 — {mode_label} ({len(audio_bloc['text'].split())} mots)...",
             )
             logger.info(f"   🖼️ Bloc {bloc['bloc_number']} ({filename}) — TTS synchronisé slides")
-            # Runtime fit : ne reporte pas le surplus au cours suivant par défaut.
-            # Si un bloc ne tient pas, il doit être réduit/régénéré.
-            runtime_reduction_attempts = []
-            synthesis_ok = False
-            for reduction_attempt in range(5):
-                prepended_for_call = (
-                    intra_day_carryover_chunks if intra_day_carryover_active else None
-                )
-                try:
-                    (
-                        final_bytes,
-                        voice_duration,
-                        fit_method,
-                        attempts,
-                        bloc_timings,
-                        runtime_unconsumed_chunks,
-                        runtime_consumed_chunks,
-                    ) = _synthesize_course_audio_synced_to_slides(
-                        audio_bloc,
-                        slide_deck.get("slides", []) if slide_deck else [],
-                        filename,
-                        mock=mock,
-                        basic_tts=basic_tts,
-                        progress_callback=lambda msg: _progress(step, len(playlist_items), msg),
-                        prepended_chunks=prepended_for_call,
-                        runtime_fit=runtime_fit_enabled,
-                        fast_tts_pipeline=fast_tts_pipeline,
-                        llm_model=llm_model,
-                        next_playlist_item=_next_playlist_item_after(playlist_items, item_idx),
-                    )
-                    synthesis_ok = True
-                except ValueError as e:
-                    message = str(e)
-                    if "trop long" not in message and "aucun audio généré" not in message:
-                        raise
-                    current_text = audio_bloc.get("text") or ""
-                    pseudo_overflow = [{"text": _tail_words(current_text, 1200)}]
-                    _progress(
-                        step,
-                        len(playlist_items),
-                        f"Bloc {bloc['bloc_number']}/7 — réduction IA après dépassement TTS ({reduction_attempt + 1}/5)...",
-                    )
-                    reduced_text = _reduce_course_bloc_for_runtime_overflow(
-                        audio_bloc,
-                        pseudo_overflow,
-                        model=llm_model,
-                    )
-                    audio_bloc = dict(audio_bloc)
-                    audio_bloc["text"] = reduced_text
-                    audio_bloc["word_count"] = count_tts_spoken_words(reduced_text)
-                    bloc["text"] = reduced_text
-                    bloc["word_count"] = audio_bloc["word_count"]
-                    runtime_reduction_attempts.append({
-                        "kind": "ai_runtime_exception_reduction",
-                        "attempt": reduction_attempt + 1,
-                        "error": message[:180],
-                        "words_after": audio_bloc["word_count"],
-                    })
-                    continue
-                overflow_words = (
-                    sum(len((c.get("text") or "").split()) for c in (runtime_unconsumed_chunks or []))
-                    if runtime_fit_enabled and not intra_day_carryover_active
-                    else 0
-                )
-                if not overflow_words:
-                    break
-                _progress(
-                    step,
-                    len(playlist_items),
-                    f"Bloc {bloc['bloc_number']}/7 — réduction IA du surplus ({overflow_words} mots)...",
-                )
-                reduced_text = _reduce_course_bloc_for_runtime_overflow(
-                    audio_bloc,
-                    runtime_unconsumed_chunks,
-                    model=llm_model,
-                )
-                audio_bloc = dict(audio_bloc)
-                audio_bloc["text"] = reduced_text
-                audio_bloc["word_count"] = count_tts_spoken_words(reduced_text)
-                bloc["text"] = reduced_text
-                bloc["word_count"] = audio_bloc["word_count"]
-                runtime_reduction_attempts.append({
-                    "kind": "ai_runtime_overflow_reduction",
-                    "attempt": reduction_attempt + 1,
-                    "overflow_words": overflow_words,
-                    "words_after": audio_bloc["word_count"],
-                })
-            if not synthesis_ok:
-                emergency_words = max(450, int((audio_bloc.get("word_budget") or 1200) * 0.70))
-                audio_bloc = dict(audio_bloc)
-                audio_bloc["text"] = _limit_text_words_natural(audio_bloc.get("text") or "", emergency_words)
-                audio_bloc["word_count"] = count_tts_spoken_words(audio_bloc["text"])
-                bloc["text"] = audio_bloc["text"]
-                bloc["word_count"] = audio_bloc["word_count"]
-                (
-                    final_bytes,
-                    voice_duration,
-                    fit_method,
-                    attempts,
-                    bloc_timings,
-                    runtime_unconsumed_chunks,
-                    runtime_consumed_chunks,
-                ) = _synthesize_course_audio_synced_to_slides(
-                    audio_bloc,
-                    slide_deck.get("slides", []) if slide_deck else [],
-                    filename,
-                    mock=mock,
-                    basic_tts=basic_tts,
-                    progress_callback=lambda msg: _progress(step, len(playlist_items), msg),
-                    prepended_chunks=None,
-                    runtime_fit=runtime_fit_enabled,
-                    fast_tts_pipeline=fast_tts_pipeline,
-                    llm_model=llm_model,
-                    next_playlist_item=_next_playlist_item_after(playlist_items, item_idx),
-                )
-                runtime_reduction_attempts.append({
-                    "kind": "emergency_natural_limit_after_ai_reductions",
-                    "words_after": audio_bloc["word_count"],
-                })
-            attempts = runtime_reduction_attempts + list(attempts or [])
+            prepended_for_call = (
+                intra_day_carryover_chunks if intra_day_carryover_active else None
+            )
+            (
+                final_bytes,
+                voice_duration,
+                fit_method,
+                attempts,
+                bloc_timings,
+                runtime_unconsumed_chunks,
+                runtime_consumed_chunks,
+            ) = _synthesize_course_audio_synced_to_slides(
+                audio_bloc,
+                slide_deck.get("slides", []) if slide_deck else [],
+                filename,
+                mock=mock,
+                basic_tts=basic_tts,
+                progress_callback=lambda msg: _progress(step, len(playlist_items), msg),
+                prepended_chunks=prepended_for_call,
+                runtime_fit=runtime_fit_enabled,
+                fast_tts_pipeline=fast_tts_pipeline,
+                llm_model=llm_model,
+                next_playlist_item=_next_playlist_item_after(playlist_items, item_idx),
+            )
             runtime_conclusions = _runtime_conclusions_from_attempts(attempts)
             runtime_ai_decisions = _runtime_ai_decisions_from_attempts(attempts)
             # Le tampon est consommé par cet appel ; le runtime peut en
@@ -12526,9 +12178,9 @@ def generate_audio_from_script(
                     )
                     if overflow_words:
                         logger.warning(
-                            "PIPELINE_AUDIO_BLOC_RUNTIME_OVERFLOW_AFTER_AI_REDUCE "
+                            "PIPELINE_AUDIO_BLOC_RUNTIME_OVERFLOW_NO_AI_REDUCE "
                             "formation_job_id=%s content_job_id=%s folder_id=%s "
-                            "bloc=%s words=%s action=overflow_remaining_after_5_ai_reductions_no_carryover",
+                            "bloc=%s words=%s action=overflow_remaining_without_ai_reduction",
                             formation_job_id, job_id, folder_id, bloc["bloc_number"],
                             overflow_words,
                         )
@@ -12562,131 +12214,37 @@ def generate_audio_from_script(
             _progress(
                 step,
                 len(playlist_items),
-                f"[BASIC] Bloc {bloc['bloc_number']}/7 — edge-tts runtime fit "
+                f"[BASIC] Bloc {bloc['bloc_number']}/7 — edge-tts "
                 f"({len(audio_bloc['text'].split())} mots)...",
             )
             logger.info(
                 f"   🔊 [BASIC edge-tts] Bloc {bloc['bloc_number']} ({filename}) — "
-                "génération calée sur durée réelle…"
+                "génération complète sans ajustement de durée…"
             )
-            runtime_reduction_attempts = []
-            synthesis_ok = False
-            for reduction_attempt in range(5):
-                prepended_for_call = (
-                    intra_day_carryover_chunks if intra_day_carryover_active else None
-                )
-                try:
-                    (
-                        final_bytes,
-                        voice_duration,
-                        fit_method,
-                        attempts,
-                        _bloc_timings,
-                        runtime_unconsumed_chunks,
-                        runtime_consumed_chunks,
-                    ) = _synthesize_course_audio_synced_to_slides(
-                        audio_bloc,
-                        [],
-                        filename,
-                        mock=False,
-                        basic_tts=True,
-                        progress_callback=lambda msg: _progress(step, len(playlist_items), msg),
-                        prepended_chunks=prepended_for_call,
-                        runtime_fit=runtime_fit_enabled,
-                        fast_tts_pipeline=fast_tts_pipeline,
-                        llm_model=llm_model,
-                        next_playlist_item=_next_playlist_item_after(playlist_items, item_idx),
-                    )
-                    synthesis_ok = True
-                except ValueError as e:
-                    message = str(e)
-                    if "trop long" not in message and "aucun audio généré" not in message:
-                        raise
-                    current_text = audio_bloc.get("text") or ""
-                    pseudo_overflow = [{"text": _tail_words(current_text, 1200)}]
-                    _progress(
-                        step,
-                        len(playlist_items),
-                        f"Bloc {bloc['bloc_number']}/7 — réduction IA après dépassement TTS ({reduction_attempt + 1}/5)...",
-                    )
-                    reduced_text = _reduce_course_bloc_for_runtime_overflow(
-                        audio_bloc,
-                        pseudo_overflow,
-                        model=llm_model,
-                    )
-                    audio_bloc = dict(audio_bloc)
-                    audio_bloc["text"] = reduced_text
-                    audio_bloc["word_count"] = count_tts_spoken_words(reduced_text)
-                    bloc["text"] = reduced_text
-                    bloc["word_count"] = audio_bloc["word_count"]
-                    runtime_reduction_attempts.append({
-                        "kind": "ai_runtime_exception_reduction",
-                        "attempt": reduction_attempt + 1,
-                        "error": message[:180],
-                        "words_after": audio_bloc["word_count"],
-                    })
-                    continue
-                overflow_words = (
-                    sum(len((c.get("text") or "").split()) for c in (runtime_unconsumed_chunks or []))
-                    if runtime_fit_enabled and not intra_day_carryover_active
-                    else 0
-                )
-                if not overflow_words:
-                    break
-                _progress(
-                    step,
-                    len(playlist_items),
-                    f"Bloc {bloc['bloc_number']}/7 — réduction IA du surplus ({overflow_words} mots)...",
-                )
-                reduced_text = _reduce_course_bloc_for_runtime_overflow(
-                    audio_bloc,
-                    runtime_unconsumed_chunks,
-                    model=llm_model,
-                )
-                audio_bloc = dict(audio_bloc)
-                audio_bloc["text"] = reduced_text
-                audio_bloc["word_count"] = count_tts_spoken_words(reduced_text)
-                bloc["text"] = reduced_text
-                bloc["word_count"] = audio_bloc["word_count"]
-                runtime_reduction_attempts.append({
-                    "kind": "ai_runtime_overflow_reduction",
-                    "attempt": reduction_attempt + 1,
-                    "overflow_words": overflow_words,
-                    "words_after": audio_bloc["word_count"],
-                })
-            if not synthesis_ok:
-                emergency_words = max(450, int((audio_bloc.get("word_budget") or 1200) * 0.70))
-                audio_bloc = dict(audio_bloc)
-                audio_bloc["text"] = _limit_text_words_natural(audio_bloc.get("text") or "", emergency_words)
-                audio_bloc["word_count"] = count_tts_spoken_words(audio_bloc["text"])
-                bloc["text"] = audio_bloc["text"]
-                bloc["word_count"] = audio_bloc["word_count"]
-                (
-                    final_bytes,
-                    voice_duration,
-                    fit_method,
-                    attempts,
-                    _bloc_timings,
-                    runtime_unconsumed_chunks,
-                    runtime_consumed_chunks,
-                ) = _synthesize_course_audio_synced_to_slides(
-                    audio_bloc,
-                    [],
-                    filename,
-                    mock=False,
-                    basic_tts=True,
-                    progress_callback=lambda msg: _progress(step, len(playlist_items), msg),
-                    prepended_chunks=None,
-                    runtime_fit=runtime_fit_enabled,
-                    fast_tts_pipeline=fast_tts_pipeline,
-                    llm_model=llm_model,
-                    next_playlist_item=_next_playlist_item_after(playlist_items, item_idx),
-                )
-                runtime_reduction_attempts.append({
-                    "kind": "emergency_natural_limit_after_ai_reductions",
-                    "words_after": audio_bloc["word_count"],
-                })
-            attempts = runtime_reduction_attempts + list(attempts or [])
+            prepended_for_call = (
+                intra_day_carryover_chunks if intra_day_carryover_active else None
+            )
+            (
+                final_bytes,
+                voice_duration,
+                fit_method,
+                attempts,
+                _bloc_timings,
+                runtime_unconsumed_chunks,
+                runtime_consumed_chunks,
+            ) = _synthesize_course_audio_synced_to_slides(
+                audio_bloc,
+                [],
+                filename,
+                mock=False,
+                basic_tts=True,
+                progress_callback=lambda msg: _progress(step, len(playlist_items), msg),
+                prepended_chunks=prepended_for_call,
+                runtime_fit=runtime_fit_enabled,
+                fast_tts_pipeline=fast_tts_pipeline,
+                llm_model=llm_model,
+                next_playlist_item=_next_playlist_item_after(playlist_items, item_idx),
+            )
             runtime_conclusions = _runtime_conclusions_from_attempts(attempts)
             runtime_ai_decisions = _runtime_ai_decisions_from_attempts(attempts)
             if runtime_fit_enabled:
@@ -12708,9 +12266,9 @@ def generate_audio_from_script(
                     )
                     if overflow_words:
                         logger.warning(
-                            "PIPELINE_AUDIO_BLOC_RUNTIME_OVERFLOW_AFTER_AI_REDUCE "
+                            "PIPELINE_AUDIO_BLOC_RUNTIME_OVERFLOW_NO_AI_REDUCE "
                             "formation_job_id=%s content_job_id=%s folder_id=%s "
-                            "bloc=%s words=%s action=overflow_remaining_after_5_ai_reductions_no_carryover",
+                            "bloc=%s words=%s action=overflow_remaining_without_ai_reduction",
                             formation_job_id, job_id, folder_id, bloc["bloc_number"],
                             overflow_words,
                         )
@@ -12736,84 +12294,13 @@ def generate_audio_from_script(
         else:
             _progress(step, len(playlist_items), f"Bloc {bloc['bloc_number']}/7 — génération TTS ({len(audio_bloc['text'].split())} mots)...")
             logger.info(f"   🎙️ Bloc {bloc['bloc_number']} ({filename}) — TTS en cours...")
-            tts_errors = []
-            for reduction_attempt in range(5):
-                try:
-                    final_bytes, voice_duration, fit_method, attempts = _synthesize_course_audio_to_fit(
-                        audio_bloc,
-                        convert_to_speech,
-                        _measure_duration_ms_safe,
-                        _pad_audio_to_duration,
-                        convert_to_speech_with_timestamps=convert_to_speech_with_timestamps,
-                    )
-                    if tts_errors:
-                        attempts = [
-                            {
-                                "kind": "ai_tts_overflow_reduction",
-                                "attempts": len(tts_errors),
-                                "words_after": count_tts_spoken_words(audio_bloc.get("text") or ""),
-                            }
-                        ] + list(attempts or [])
-                    break
-                except ValueError as e:
-                    message = str(e)
-                    if "trop long" not in message and "budget prudent" not in message:
-                        raise
-                    tts_errors.append(message)
-                    current_text = audio_bloc.get("text") or ""
-                    current_words = count_tts_spoken_words(current_text)
-                    budget_words = int(
-                        audio_bloc.get("main_word_budget")
-                        or audio_bloc.get("word_budget")
-                        or current_words
-                    )
-                    overflow_estimate = max(120, current_words - budget_words + 180)
-                    pseudo_overflow = [{"text": _tail_words(current_text, min(1400, overflow_estimate))}]
-                    _progress(
-                        step,
-                        len(playlist_items),
-                        f"Bloc {bloc['bloc_number']}/7 — réduction IA avant Fish Audio ({len(tts_errors)}/5)...",
-                    )
-                    reduced_text = _reduce_course_bloc_for_runtime_overflow(
-                        audio_bloc,
-                        pseudo_overflow,
-                        model=llm_model,
-                    )
-                    audio_bloc = dict(audio_bloc)
-                    audio_bloc["text"] = reduced_text
-                    audio_bloc["word_count"] = count_tts_spoken_words(reduced_text)
-                    bloc["text"] = reduced_text
-                    bloc["word_count"] = audio_bloc["word_count"]
-            else:
-                logger.warning(
-                    "PIPELINE_AUDIO_BLOC_TTS_OVERFLOW_AFTER_AI_REDUCE "
-                    "formation_job_id=%s content_job_id=%s folder_id=%s bloc=%s "
-                    "errors=%s action=basic_runtime_fallback",
-                    formation_job_id, job_id, folder_id, bloc["bloc_number"],
-                    len(tts_errors),
-                )
-                (
-                    final_bytes,
-                    voice_duration,
-                    fit_method,
-                    attempts,
-                    _bloc_timings,
-                    runtime_unconsumed_chunks,
-                    runtime_consumed_chunks,
-                ) = _synthesize_course_audio_synced_to_slides(
-                    audio_bloc,
-                    [],
-                    filename,
-                    mock=False,
-                    basic_tts=True,
-                    progress_callback=lambda msg: _progress(step, len(playlist_items), msg),
-                    prepended_chunks=None,
-                    runtime_fit=True,
-                    fast_tts_pipeline=fast_tts_pipeline,
-                    llm_model=llm_model,
-                    next_playlist_item=_next_playlist_item_after(playlist_items, item_idx),
-                )
-                fit_method = f"{fit_method}, basic_runtime_fallback_after_ai_reduce"
+            final_bytes, voice_duration, fit_method, attempts = _synthesize_course_audio_to_fit(
+                audio_bloc,
+                convert_to_speech,
+                _measure_duration_ms_safe,
+                _pad_audio_to_duration,
+                convert_to_speech_with_timestamps=convert_to_speech_with_timestamps,
+            )
         if len(attempts) > 1:
             logger.info(f"   🔁 Bloc {bloc['bloc_number']} ajusté localement ({fit_method})")
         logger.info(f"   TTS voix : {voice_duration:.1f}s ({fit_method}, cible : {target_sec}s)")
@@ -12837,17 +12324,8 @@ def generate_audio_from_script(
                 float(actual_reading.get("words_per_hour") or 0.0),
             )
 
-        if not mock:
-            _assert_course_voice_duration_within_deadline(
-                filename,
-                voice_duration,
-                target_sec,
-                has_start_silence=not basic_tts,
-            )
-
         if basic_tts and runtime_fit_enabled:
             final_duration = _mp3_duration_seconds_no_ffprobe(final_bytes)
-            _assert_audio_duration_fills_slot(filename, final_duration, target_sec)
         elif sync_slides:
             try:
                 final_duration = _mp3_duration_seconds_no_ffprobe(final_bytes)
@@ -12867,7 +12345,20 @@ def generate_audio_from_script(
                 final_duration = _mp3_duration_seconds_no_ffprobe(final_bytes)
             except Exception:
                 final_duration = target_sec
-        _assert_audio_duration_within_slot(filename, final_duration, target_sec)
+        if not mock and target_sec and float(final_duration) > float(target_sec) + _UPLOAD_DURATION_TOLERANCE_SEC:
+            logger.warning(
+                "PIPELINE_AUDIO_COURSE_DURATION_OVERFLOW_NON_BLOCKING "
+                "formation_job_id=%s content_job_id=%s folder_id=%s filename=%s "
+                "bloc=%s duration=%.1f target=%s overflow=%.1f",
+                formation_job_id,
+                job_id,
+                folder_id,
+                filename,
+                bloc["bloc_number"],
+                float(final_duration),
+                target_sec,
+                float(final_duration) - float(target_sec),
+            )
         blob_path = f"{azure_prefix}{filename}"
         upload_blob(CONTAINER_AUDIOS, blob_path, final_bytes)
         logger.info(f"   ✅ {filename} : {final_duration:.1f}s uploadé")
