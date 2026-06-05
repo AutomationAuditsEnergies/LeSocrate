@@ -1408,6 +1408,192 @@
 .deck-exercise-right strong { display: block; font: 700 16px/1.2 Archivo, sans-serif; margin-bottom: 4px; }
 .deck-exercise-right p { margin: 0; color: var(--dim); font-size: 12px; line-height: 1.35; }
 
+.crl { color: var(--coral); }
+
+.deck-story-dynamic {
+  display: grid;
+  align-items: center;
+  padding: 0 96px;
+  box-sizing: border-box;
+}
+.deck-story-dynamic > div {
+  max-width: 900px;
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+}
+.deck-story-dynamic h1,
+.deck-analogy-dynamic h1,
+.deck-opinion-dynamic h1,
+.deck-framework-dynamic h1 {
+  margin: 12px 0 0;
+  font: 900 clamp(42px, 6vw, 76px)/.9 Archivo Black, Archivo, sans-serif;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+.deck-story-dynamic p {
+  margin: 0;
+  color: rgba(255,255,255,.72);
+  font: 400 24px/1.45 Archivo, sans-serif;
+}
+.deck-story-dynamic strong {
+  display: inline-block;
+  max-width: 780px;
+  color: #fff;
+  border-left: 4px solid var(--coral);
+  padding-left: 24px;
+  font: 800 24px/1.35 Archivo, sans-serif;
+}
+
+.deck-analogy-dynamic {
+  display: grid;
+  grid-template-columns: .9fr 1.1fr;
+  gap: 48px;
+  align-items: center;
+  padding: 70px 88px 0;
+  box-sizing: border-box;
+}
+.deck-analogy-dynamic header {
+  min-width: 0;
+}
+.deck-analogy-dynamic > div {
+  display: grid;
+  gap: 18px;
+}
+.deck-analogy-dynamic article {
+  border: 1px solid rgba(255,255,255,.14);
+  background: rgba(255,255,255,.05);
+  border-radius: 8px;
+  padding: 28px 30px;
+}
+.deck-analogy-dynamic article span {
+  display: block;
+  margin-bottom: 12px;
+  color: var(--coral);
+  font: 500 9px/1 JetBrains Mono, monospace;
+  letter-spacing: .24em;
+  text-transform: uppercase;
+}
+.deck-analogy-dynamic article strong {
+  display: block;
+  color: #fff;
+  font: 900 34px/.98 Archivo Black, Archivo, sans-serif;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+.deck-analogy-dynamic > p {
+  grid-column: 2;
+  margin: -24px 0 0;
+  color: rgba(255,255,255,.68);
+  font: 400 18px/1.45 Archivo, sans-serif;
+}
+
+.deck-opinion-dynamic {
+  display: grid;
+  grid-template-columns: 150px 1fr;
+  gap: 28px;
+  align-items: center;
+  padding: 0 96px;
+  box-sizing: border-box;
+}
+.deck-opinion-dynamic > span,
+.deck-quote-dynamic span {
+  color: var(--coral);
+  font: 900 180px/.65 Georgia, serif;
+}
+.deck-opinion-dynamic em {
+  display: block;
+  color: var(--dim);
+  font: 500 9px/1 JetBrains Mono, monospace;
+  letter-spacing: .28em;
+  text-transform: uppercase;
+  font-style: normal;
+  margin-bottom: 18px;
+}
+.deck-opinion-dynamic p {
+  max-width: 860px;
+  color: rgba(255,255,255,.74);
+  font: 400 22px/1.45 Archivo, sans-serif;
+}
+
+.deck-quote-dynamic {
+  display: grid;
+  place-items: center;
+  padding: 0 120px;
+  box-sizing: border-box;
+  text-align: center;
+}
+.deck-quote-dynamic > div {
+  max-width: 960px;
+}
+.deck-quote-dynamic blockquote {
+  margin: -20px 0 0;
+  color: #fff;
+  font: 900 clamp(44px, 6.8vw, 82px)/1 Archivo Black, Archivo, sans-serif;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.deck-framework-dynamic {
+  display: grid;
+  grid-template-columns: .78fr 1.22fr;
+  gap: 42px;
+  align-items: center;
+  padding: 70px 88px 0;
+  box-sizing: border-box;
+}
+.deck-framework-dynamic-grid {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+.deck-framework-dynamic-grid article {
+  min-height: 150px;
+  border: 1px solid rgba(255,255,255,.14);
+  background: rgba(255,255,255,.045);
+  border-radius: 8px;
+  padding: 22px;
+}
+.deck-framework-dynamic-grid article span {
+  display: block;
+  color: var(--coral);
+  font: 900 22px/1 Archivo Black, Archivo, sans-serif;
+  margin-bottom: 12px;
+}
+.deck-framework-dynamic-grid article strong {
+  display: block;
+  color: #fff;
+  font: 900 22px/.98 Archivo Black, Archivo, sans-serif;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+.deck-framework-dynamic-grid article p {
+  margin: 10px 0 0;
+  color: rgba(255,255,255,.62);
+  font-size: 13px;
+  line-height: 1.38;
+}
+.deck-framework-dynamic-center {
+  position: absolute;
+  inset: 50%;
+  width: 210px;
+  min-height: 86px;
+  transform: translate(-50%, -50%);
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  box-sizing: border-box;
+  border-radius: 8px;
+  background: var(--coral);
+  color: #fff;
+  text-align: center;
+  font: 900 18px/1.05 Archivo Black, Archivo, sans-serif;
+  letter-spacing: 0;
+  text-transform: uppercase;
+  box-shadow: 0 18px 44px rgba(0,0,0,.38);
+}
+
 @media (max-width: 760px) {
   .deck-section, .deck-pages { display: none; }
   .deck-brand { left: 24px; top: 20px; }

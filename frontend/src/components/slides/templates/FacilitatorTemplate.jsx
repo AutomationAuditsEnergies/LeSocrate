@@ -1,6 +1,6 @@
 import React from 'react';
-import { SalesHackingSourceSlide } from './SalesHackingSourceSlides';
+import { DeckProcess } from './DeckTemplates';
 
 export default function FacilitatorTemplate(props) {
-  return <SalesHackingSourceSlide sourceId="flow" />;
+  return <DeckProcess {...props} />;
 }

@@ -1,6 +1,6 @@
 import React from 'react';
-import { SalesHackingSourceSlide } from './SalesHackingSourceSlides';
+import { DeckFramework } from './DeckTemplates';
 
-export default function FrameworkTemplate() {
-  return <SalesHackingSourceSlide sourceId="framework" />;
+export default function FrameworkTemplate(props) {
+  return <DeckFramework {...props} />;
 }

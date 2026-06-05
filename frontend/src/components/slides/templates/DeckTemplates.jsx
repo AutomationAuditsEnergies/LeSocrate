@@ -52,9 +52,89 @@ const useSlideStageScale = () => {
   return [ref, scale];
 };
 
-export const DeckWelcome = () => <SalesHackingSourceSlide sourceId="welcome" />;
+const renderAccentLastWord = (value = '', fallback = '') => {
+  const words = splitTitle(value, fallback).filter(Boolean);
+  if (words.length < 2) return value || fallback;
+  const last = words.pop();
+  return <>{words.join(' ')} <span className="crl">{last}</span></>;
+};
 
-export const DeckChapterOpener = () => <SalesHackingSourceSlide sourceId="chapter_opener" />;
+const deckChrome = (brandName = 'Sales hacking') => {
+  const { brandHead, brandTail } = getDeckBrandParts(brandName);
+  return (
+    <div className="deck-chrome">
+      <div className="deck-brand">
+        <span className="deck-brand-mark">{brandHead}</span>
+        <span className="deck-brand-tag">{brandTail}</span>
+      </div>
+    </div>
+  );
+};
+
+export const DeckWelcome = ({
+  title = 'Bienvenue',
+  formation_name = 'Titre professionnel CRCD',
+  day_label = 'Journée 1',
+  meta_note = 'Relation client à distance',
+  brandName = 'Sales hacking',
+}) => {
+  const [shellRef, scale] = useSlideStageScale();
+
+  return (
+    <div className="deck-welcome-shell" ref={shellRef}>
+      <section className="deck-welcome-stage" style={{ transform: `scale(${scale})` }}>
+        {deckChrome(brandName)}
+        <div className="deck-welcome-meta-row">
+          <span className="deck-welcome-day">{day_label}</span>
+          <i className="deck-welcome-meta-bar" />
+          <span className="deck-welcome-meta-note">{meta_note}</span>
+        </div>
+        <h1>{title}</h1>
+        <div className="deck-welcome-title">{renderAccentLastWord(formation_name, 'Titre professionnel CRCD')}</div>
+      </section>
+    </div>
+  );
+};
+
+export const DeckChapterOpener = ({
+  chapter_label = 'Chapitre',
+  title = 'Point clé',
+  axes = [],
+  items = [],
+  brandName = 'Sales hacking',
+}) => {
+  const [shellRef, scale] = useSlideStageScale();
+  const sourceAxes = Array.isArray(axes) && axes.length ? axes : items;
+  const safeAxes = (Array.isArray(sourceAxes) && sourceAxes.length ? sourceAxes : [
+    { title, desc: 'Le repère principal à retenir dans cette séquence.' },
+  ]).slice(0, 3);
+
+  return (
+    <div className="deck-chapter-shell" ref={shellRef}>
+      <section className="deck-chapter-stage" style={{ transform: `scale(${scale})` }}>
+        {deckChrome(brandName)}
+        <div className="deck-chapter-left">
+          <h1><span className="deck-chapter-label">{chapter_label}</span> <span className="deck-chapter-name">{title}</span></h1>
+        </div>
+        <div className="deck-chapter-axes">
+          {safeAxes.map((axis, index) => {
+            const axisTitle = typeof axis === 'string' ? axis : (axis.title || axis.label || `Axe ${index + 1}`);
+            const axisDesc = typeof axis === 'string' ? '' : (axis.desc || axis.text || axis.description || '');
+            return (
+              <div className="deck-chapter-axis" key={index}>
+                <span className="deck-chapter-num">{String(index + 1).padStart(2, '0')}</span>
+                <div className="deck-chapter-content">
+                  <span className="deck-chapter-axis-title">{axisTitle}</span>
+                  {axisDesc && <span className="deck-chapter-axis-desc">{axisDesc}</span>}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </section>
+    </div>
+  );
+};
 
 export const DeckAgenda = ({ title = 'Au programme.', items = [], day_label, formation_name, badge, brandName }) => {
   const sourceItems = Array.isArray(items) ? items : [];
@@ -78,9 +158,103 @@ export const DeckAgenda = ({ title = 'Au programme.', items = [], day_label, for
   );
 };
 
-export const DeckProgramYear = () => <SalesHackingSourceSlide sourceId="program_year" />;
+export const DeckProgramYear = ({
+  title = "Programme de l'année.",
+  subtitle = 'Deux grands ensembles de compétences qui se complètent.',
+  day_label = 'Parcours annuel',
+  phases = [],
+  items = [],
+  brandName = 'Sales hacking',
+  badge,
+}) => {
+  const [shellRef, scale] = useSlideStageScale();
+  const sourcePhases = Array.isArray(phases) && phases.length ? phases : items;
+  const safePhases = (Array.isArray(sourcePhases) && sourcePhases.length ? sourcePhases : [
+    { title: 'Premier ensemble', desc: 'Installer les repères essentiels du parcours.' },
+    { title: 'Deuxième ensemble', desc: 'Mettre les compétences en action.' },
+  ]).slice(0, 4);
+  const { brandHead, brandTail } = getDeckBrandParts(brandName);
 
-export const DeckDayProgram7Steps = () => <SalesHackingSourceSlide sourceId="day_program" />;
+  return (
+    <div className="deck-year-shell" ref={shellRef}>
+      <section className="deck-year-stage" style={{ transform: `scale(${scale})` }}>
+        <div className="deck-chrome">
+          <div className="deck-brand">
+            <span className="deck-brand-mark">{brandHead}</span>
+            <span className="deck-brand-tag">{brandTail}</span>
+          </div>
+          <div className="deck-year-rec"><span />EN DIRECT · {badge || 'TP-CRCD'}</div>
+          <div className="deck-year-pages"><b>02</b> / 19</div>
+          <div className="deck-year-section">TYPE · PROGRAMME</div>
+        </div>
+        <div className="deck-year-left">
+          <span>- {day_label}</span>
+          <h1>{renderAccentLastWord(title, "Programme de l'année.")}</h1>
+          {subtitle && <p>{subtitle}</p>}
+        </div>
+        <div className="deck-year-phases">
+          {safePhases.map((phase, index) => {
+            const phaseTitle = typeof phase === 'string' ? phase : phase.title;
+            const phaseDesc = typeof phase === 'string' ? '' : (phase.desc || phase.text || phase.description || '');
+            return (
+              <article key={index}>
+                <span className="deck-year-index">{String(index + 1).padStart(2, '0')}</span>
+                <div>
+                  <strong>{phaseTitle}</strong>
+                  {phaseDesc && <p>{phaseDesc}</p>}
+                </div>
+              </article>
+            );
+          })}
+        </div>
+      </section>
+    </div>
+  );
+};
+
+export const DeckDayProgram7Steps = ({
+  title = 'Programme de la journée.',
+  subtitle = 'Une journée dédiée aux fondamentaux.',
+  day_label = 'Feuille de route',
+  active_item = 1,
+  items = [],
+  brandName = 'Sales hacking',
+}) => {
+  const [shellRef, scale] = useSlideStageScale();
+  const safeItems = (Array.isArray(items) && items.length ? items : [
+    'Accueil et objectifs',
+    'Notions clés',
+    'Méthode',
+    'Exemples',
+    'Mise en pratique',
+    'Synthèse',
+    'Questions',
+  ]).slice(0, 9);
+  const activeIndex = Math.max(0, Number(active_item || 1) - 1);
+
+  return (
+    <div className="deck-program7-shell" ref={shellRef}>
+      <section className="deck-program7-stage" style={{ transform: `scale(${scale})` }}>
+        {deckChrome(brandName)}
+        <div className="deck-program7-left">
+          <span className="deck-eyebrow">- {day_label}</span>
+          <h1>{renderAccentLastWord(title, 'Programme de la journée.')}</h1>
+          {subtitle && <p>{subtitle}</p>}
+        </div>
+        <div className="deck-program7-list">
+          <ol>
+            {safeItems.map((item, index) => (
+              <li className={index === activeIndex ? 'start' : ''} key={index}>
+                <span className="n">{String(index + 1).padStart(2, '0')}</span>
+                <span className="t">{typeof item === 'string' ? item : item.title || item.label}</span>
+              </li>
+            ))}
+          </ol>
+        </div>
+      </section>
+    </div>
+  );
+};
 
 const renderReflectionTitle = (title = 'Une idée à retenir') => {
   const clean = String(title || 'Une idée à retenir').trim();
@@ -174,6 +348,73 @@ export const DeckProcess = ({ title = 'Les étapes clés', steps = [], badge, br
             <strong>{step.title}</strong>
             <p>{step.desc}</p>
           </div>
+        ))}
+      </div>
+    </DeckSlide>
+  );
+};
+
+export const DeckStory = ({ title = 'Cas terrain', narrative, moral, text, badge, brandName }) => (
+  <DeckSlide type="STORY" page="18" className="deck-story-dynamic" badge={badge} brandName={brandName}>
+    <div>
+      <span className="deck-eyebrow">Situation</span>
+      <h1><AccentTitle title={title} fallback="Cas terrain" /></h1>
+      <p>{narrative || text || 'Un exemple concret pour ancrer le point clé.'}</p>
+      {moral && <strong>{moral}</strong>}
+    </div>
+  </DeckSlide>
+);
+
+export const DeckAnalogy = ({ title = 'Analogie', concept = 'Concept', comparison = 'Image mentale', text, badge, brandName }) => (
+  <DeckSlide type="ANALOGY" page="19" className="deck-analogy-dynamic" badge={badge} brandName={brandName}>
+    <header><span className="deck-eyebrow">Analogie</span><h1><AccentTitle title={title} fallback="Analogie" /></h1></header>
+    <div>
+      <article><span>Concept</span><strong>{concept}</strong></article>
+      <article><span>Comparable à</span><strong>{comparison}</strong></article>
+    </div>
+    {text && <p>{text}</p>}
+  </DeckSlide>
+);
+
+export const DeckOpinion = ({ title = 'Point de vue', text, badge, brandName }) => (
+  <DeckSlide type="OPINION" page="21" className="deck-opinion-dynamic" badge={badge} brandName={brandName}>
+    <span>"</span>
+    <div>
+      <em>Point de vue</em>
+      <h1><AccentTitle title={title} fallback="Point de vue" /></h1>
+      {text && <p>{text}</p>}
+    </div>
+  </DeckSlide>
+);
+
+export const DeckQuote = ({ quote, title, text, badge, brandName }) => (
+  <DeckSlide type="QUOTE" page="14" className="deck-quote-dynamic" badge={badge} brandName={brandName}>
+    <div>
+      <span>"</span>
+      <blockquote>{quote || text || title || 'Citation à retenir.'}</blockquote>
+    </div>
+  </DeckSlide>
+);
+
+export const DeckFramework = ({ title = 'Cadre de lecture', center = {}, segments = [], items = [], badge, brandName }) => {
+  const sourceSegments = Array.isArray(segments) && segments.length ? segments : items;
+  const safeSegments = (Array.isArray(sourceSegments) && sourceSegments.length ? sourceSegments : [
+    { title: 'Repère 1', desc: 'Premier point de lecture.' },
+    { title: 'Repère 2', desc: 'Deuxième point de lecture.' },
+    { title: 'Repère 3', desc: 'Troisième point de lecture.' },
+    { title: 'Repère 4', desc: 'Quatrième point de lecture.' },
+  ]).slice(0, 4);
+  return (
+    <DeckSlide type="FRAMEWORK" page="20" className="deck-framework-dynamic" badge={badge} brandName={brandName}>
+      <header><span className="deck-eyebrow">Modèle</span><h1><AccentTitle title={title} fallback="Cadre de lecture" /></h1></header>
+      <div className="deck-framework-dynamic-grid">
+        <div className="deck-framework-dynamic-center">{center.title || center.label || 'Point central'}</div>
+        {safeSegments.map((segment, index) => (
+          <article key={index}>
+            <span>{String(index + 1).padStart(2, '0')}</span>
+            <strong>{typeof segment === 'string' ? segment : segment.title}</strong>
+            {typeof segment !== 'string' && (segment.desc || segment.text) && <p>{segment.desc || segment.text}</p>}
+          </article>
         ))}
       </div>
     </DeckSlide>

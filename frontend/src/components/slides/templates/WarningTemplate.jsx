@@ -1,6 +1,6 @@
 import React from 'react';
-import { SalesHackingSourceSlide } from './SalesHackingSourceSlides';
+import { DeckWarning } from './DeckTemplates';
 
 export default function WarningTemplate(props) {
-  return <SalesHackingSourceSlide sourceId="warning" />;
+  return <DeckWarning {...props} />;
 }

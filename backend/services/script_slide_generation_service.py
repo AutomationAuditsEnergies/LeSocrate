@@ -2525,14 +2525,57 @@ def _cap_planned_slides(slides: list[dict], max_slides: int) -> tuple[list[dict]
         return slides, 0
 
     indexed = list(enumerate(slides))
-    selected = sorted(
-        indexed,
-        key=lambda item: (item[1].get("importance", 3), -item[0]),
-        reverse=True,
-    )[:max_slides]
+    anchored = [
+        item for item in indexed
+        if item[1].get("slide_anchor_id") or item[1].get("anchor_id")
+    ]
+
+    if len(anchored) <= max_slides:
+        selected = list(anchored)
+        selected_indices = {idx for idx, _ in selected}
+        unanchored = [
+            item for item in indexed
+            if item[0] not in selected_indices
+        ]
+        selected.extend(
+            sorted(
+                unanchored,
+                key=lambda item: (item[1].get("importance", 3), -item[0]),
+                reverse=True,
+            )[: max_slides - len(selected)]
+        )
+    else:
+        selected = sorted(
+            anchored,
+            key=lambda item: (item[1].get("importance", 3), -item[0]),
+            reverse=True,
+        )[:max_slides]
+
     selected_indices = {idx for idx, _ in selected}
     capped = [slide for idx, slide in indexed if idx in selected_indices]
     return capped, len(slides) - len(capped)
+
+
+def _raise_max_slides_for_anchors(
+    max_slides: int,
+    anchors: list[dict],
+    *,
+    folder_id: int | None = None,
+    content_job_id: int | None = None,
+    source: str = "plan",
+) -> int:
+    anchor_count = len(anchors or [])
+    if anchor_count <= max_slides:
+        return max_slides
+    logger.info(
+        "PIPELINE_SLIDES_MAX_RAISED_FOR_ANCHORS folder=%s content_job=%s source=%s requested_max_slides=%s anchors=%s",
+        folder_id,
+        content_job_id,
+        source,
+        max_slides,
+        anchor_count,
+    )
+    return anchor_count
 
 
 def _run_slide_generation_from_source(
@@ -2550,7 +2593,8 @@ def _run_slide_generation_from_source(
     started_at = time.time()
     folder_id = source.get("folder_id")
 
-    max_slides = _safe_int(max_slides, DEFAULT_MAX_SLIDES, 5, 140)
+    requested_max_slides = _safe_int(max_slides, DEFAULT_MAX_SLIDES, 5, 140)
+    max_slides = requested_max_slides
     pace_config = _pace_profile(pace)
     batch_size = _safe_int(batch_size, DEFAULT_BATCH_SIZE, 1, 10)
     model = model or default_model()
@@ -2559,6 +2603,13 @@ def _run_slide_generation_from_source(
     if content_plan is None and not source.get("preview_only") and not source.get("beat_aligned"):
         content_plan = _load_content_plan(source)
     slide_anchors = _extract_slide_anchors_from_plan(content_plan)
+    max_slides = _raise_max_slides_for_anchors(
+        max_slides,
+        slide_anchors,
+        folder_id=folder_id,
+        content_job_id=source.get("content_job_id"),
+        source="content_plan",
+    )
     source_alignment_mode = "draft_beat_aligned" if source.get("beat_aligned") else "text_windows"
 
     if source.get("beat_aligned"):
@@ -2597,6 +2648,13 @@ def _run_slide_generation_from_source(
             for block in source_blocks
             for anchor in (block.get("slide_anchors") or [])
         ]
+        max_slides = _raise_max_slides_for_anchors(
+            max_slides,
+            slide_anchors,
+            folder_id=folder_id,
+            content_job_id=source.get("content_job_id"),
+            source="beat_aligned_source",
+        )
     elif source_alignment_mode != "section_slide_alignment":
         _assign_slide_anchors_to_source_blocks(source_blocks, slide_anchors)
 
@@ -2757,6 +2815,7 @@ def _run_slide_generation_from_source(
             "slide_anchors_attached": sum(len(block.get("slide_anchors") or []) for block in source_blocks),
             "pace": pace_config["label"],
             "context_words": effective_words_per_slide,
+            "max_slides_requested": requested_max_slides,
             "max_slides": max_slides,
             "slides_generated": len(final_slides),
             "context_slides_inserted": context_slides_inserted,

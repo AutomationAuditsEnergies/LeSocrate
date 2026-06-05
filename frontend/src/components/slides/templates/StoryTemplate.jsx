@@ -1,6 +1,6 @@
 import React from 'react';
-import { SalesHackingSourceSlide } from './SalesHackingSourceSlides';
+import { DeckStory } from './DeckTemplates';
 
-export default function StoryTemplate() {
-  return <SalesHackingSourceSlide sourceId="story" />;
+export default function StoryTemplate(props) {
+  return <DeckStory {...props} />;
 }

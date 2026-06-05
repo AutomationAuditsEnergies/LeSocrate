@@ -1,6 +1,6 @@
 import React from 'react';
-import { SalesHackingSourceSlide } from './SalesHackingSourceSlides';
+import { DeckOpinion } from './DeckTemplates';
 
 export default function OpinionTemplate(props) {
-  return <SalesHackingSourceSlide sourceId="opinion" />;
+  return <DeckOpinion {...props} />;
 }

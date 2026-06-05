@@ -20,6 +20,7 @@ import ChecklistTemplate from '../components/slides/templates/ChecklistTemplate'
 import QuotableTemplate from '../components/slides/templates/QuotableTemplate'
 import PracticeExerciseTemplate from '../components/slides/templates/PracticeExerciseTemplate'
 import BeforeAfterTemplate from '../components/slides/templates/BeforeAfterTemplate'
+import FrameworkTemplate from '../components/slides/templates/FrameworkTemplate'
 import { DeckChapterOpener, DeckDayProgram7Steps, DeckProgramYear, DeckWelcome } from '../components/slides/templates/DeckTemplates'
 
 const Icon = ({ name, className = '', style = {} }) => (
@@ -2500,6 +2501,8 @@ function renderPipelineSlidePreview(slide = {}) {
       return <TransitionTemplate {...props} />
     case 'playful':
       return <PlayfulTemplate {...props} />
+    case 'framework':
+      return <FrameworkTemplate {...props} />
     default:
       return (
         <div style={{ width: '100%', height: '100%', background: '#f8fafc', color: '#0f172a', padding: '48px', fontFamily: 'Inter, system-ui, sans-serif' }}>

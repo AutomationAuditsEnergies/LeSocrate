@@ -1,6 +1,6 @@
 import React from 'react';
-import { SalesHackingSourceSlide } from './SalesHackingSourceSlides';
+import { DeckAnalogy } from './DeckTemplates';
 
-export default function AnalogyTemplate() {
-  return <SalesHackingSourceSlide sourceId="analogy" />;
+export default function AnalogyTemplate(props) {
+  return <DeckAnalogy {...props} />;
 }
