@@ -747,6 +747,7 @@ def _merge_unique_strings(*values) -> list[str]:
 _BEAT_TYPE_TO_TEMPLATE = {
     "welcome": "welcome",
     "day_welcome": "welcome",
+    "opening": "welcome",
     "chapter_opener": "chapter_opener",
     "chapter_intro": "chapter_opener",
     "theme_opening": "chapter_opener",
@@ -758,54 +759,56 @@ _BEAT_TYPE_TO_TEMPLATE = {
     "day_program_7_steps": "day_program_7_steps",
     "program_7_steps": "day_program_7_steps",
     "roadmap_7_steps": "day_program_7_steps",
-    "agenda": "program_year",
-    "definition": "reflection",
+    "agenda": "steps",
+    "definition": "definition",
     "concept": "reflection",
     "key_message": "reflection",
-    "process": "facilitator",
-    "method": "facilitator",
-    "framework": "facilitator",
-    "steps": "facilitator",
+    "process": "steps",
+    "method": "steps",
+    "framework": "steps",
+    "steps": "steps",
+    "facilitator": "steps",
     "checklist": "recap",
     "recap": "recap",
     "takeaways": "recap",
     "example": "casestudy",
     "case": "casestudy",
-    "comparison": "casestudy",
+    "story": "casestudy",
+    "scenario": "casestudy",
+    "comparison": "comparison",
+    "beforeafter": "comparison",
     "warning": "warning",
     "mistake": "warning",
     "risk": "warning",
     "tip": "tip",
     "advice": "tip",
     "good_practice": "tip",
-    "story": "story",
-    "scenario": "story",
-    "analogy": "analogy",
-    "metaphor": "analogy",
-    "data": "stats",
-    "numbers": "stats",
-    "chart": "chart",
-    "transition": "transition",
-    "opinion": "opinion",
+    "analogy": "reflection",
+    "metaphor": "reflection",
+    "data": "recap",
+    "numbers": "recap",
+    "stats": "recap",
+    "chart": "comparison",
+    "transition": "reflection",
+    "opinion": "reflection",
+    "quote": "quotable",
+    "quotable": "quotable",
+    "journal": "quotable",
 }
 _SUPPORTED_SLIDE_TEMPLATES = {
     "welcome",
     "chapter_opener",
     "program_year",
-    "day_year",
     "day_program_7_steps",
     "reflection",
+    "definition",
+    "comparison",
     "casestudy",
-    "facilitator",
-    "stats",
-    "story",
+    "steps",
     "recap",
-    "analogy",
     "warning",
     "tip",
-    "opinion",
-    "transition",
-    "chart",
+    "quotable",
 }
 _ETHICAL_MICRO_RULE_IDS = [14, 15]
 _ETHICAL_MICRO_RULESET_VERSION = "2026-05-31-ethical-micro-v3-minimal"
@@ -1984,12 +1987,12 @@ MODE DE CETTE PASSE : PLAN GLOBAL COMPLET
           "teaching_beats": [
             {
               "beat_id": "c1p1b1",
-              "type": "concept|definition|process|method|example|comparison|warning|tip|story|analogy|data|recap|opinion",
+              "type": "concept|definition|process|method|example|comparison|warning|tip|story|analogy|data|recap|opinion|quote",
               "role": "fonction pédagogique du moment",
               "spoken_requirement": "ce que le texte oral devra couvrir naturellement",
               "slide_anchor": {
                 "enabled": true,
-                "template_type": "welcome|program_year|day_program_7_steps|chapter_opener|reflection|casestudy|facilitator|stats|story|recap|analogy|warning|tip|opinion|transition|chart",
+                "template_type": "welcome|program_year|day_program_7_steps|chapter_opener|reflection|definition|comparison|casestudy|steps|recap|warning|tip|quotable",
                 "visual_goal": "ce que la slide doit aider à retenir",
                 "items_expected": null,
                 "fields_hint": {}
@@ -2035,7 +2038,7 @@ Contraintes générales :
   "Prenons un exemple fictif..." ou "Supposons que..." suffit.
 {teaching_beat_rules}
 - Dans `opening` du cours interne 1 de la première journée, prévois explicitement les moments structurels dans cet ordre : accueil (`welcome`), vision annuelle (`program_year`), feuille de route de journée (`day_program_7_steps`), puis ouverture du premier chapitre (`chapter_opener`).
-- Dans `opening` d'un cours interne suivant, prévois un rappel bref du cours précédent (`recap`), puis l'ouverture du nouveau chapitre (`chapter_opener`). N'utilise pas `facilitator` pour ces deux fonctions.
+- Dans `opening` d'un cours interne suivant, prévois un rappel bref du cours précédent (`recap`), puis l'ouverture du nouveau chapitre (`chapter_opener`). N'utilise pas `steps` pour ces deux fonctions.
 - Un slide_anchor n'est activé que si le moment mérite vraiment une visualisation. N'active pas une slide pour une simple transition orale.
 - Le texte final ne doit jamais dire "slide", "PowerPoint", "template", "anchor" ou "teaching beat". Ces anchors sont internes.
 - Choisis les templates uniquement dans le catalogue fourni. Ne force pas une roue, une checklist ou des étapes si le contenu ne s'y prête pas.
@@ -2202,12 +2205,12 @@ FORMAT EXACT :
       "teaching_beats": [
         {{
           "beat_id": "c{course_number}p1b1",
-          "type": "concept|definition|process|method|example|comparison|warning|tip|story|analogy|data|recap|opinion",
+          "type": "concept|definition|process|method|example|comparison|warning|tip|story|analogy|data|recap|opinion|quote",
           "role": "fonction pédagogique spécifique du moment",
           "spoken_requirement": "ce que l'oral devra couvrir concrètement",
           "slide_anchor": {{
             "enabled": true,
-            "template_type": "chapter_opener|reflection|casestudy|facilitator|stats|story|recap|analogy|warning|tip|opinion|transition|chart",
+            "template_type": "chapter_opener|reflection|definition|comparison|casestudy|steps|recap|warning|tip|quotable",
             "visual_goal": "souvenir visuel spécifique à construire",
             "items_expected": null,
             "must_cover": "contenu précis couvert par la slide",

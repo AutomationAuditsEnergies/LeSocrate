@@ -78,26 +78,22 @@ SUPPORTED_TEMPLATES = {
     "context",
     "welcome",
     "chapter_opener",
-    "chapter_intro",
     "program_year",
-    "day_year",
     "day_program_7_steps",
     "reflection",
+    "definition",
+    "comparison",
     "casestudy",
-    "facilitator",
-    "stats",
-    "story",
+    "steps",
     "recap",
-    "analogy",
     "warning",
     "tip",
-    "opinion",
-    "transition",
-    "chart",
+    "quotable",
 }
 TEMPLATE_ALIASES = {
     "welcome": "welcome",
     "day_welcome": "welcome",
+    "opening": "welcome",
     "chapter_opener": "chapter_opener",
     "chapter_intro": "chapter_opener",
     "theme_opening": "chapter_opener",
@@ -109,34 +105,40 @@ TEMPLATE_ALIASES = {
     "day_program_7_steps": "day_program_7_steps",
     "program_7_steps": "day_program_7_steps",
     "roadmap_7_steps": "day_program_7_steps",
-    "agenda": "program_year",
-    "definition": "reflection",
+    "agenda": "steps",
+    "definition": "definition",
     "concept": "reflection",
     "key_message": "reflection",
-    "process": "facilitator",
-    "method": "facilitator",
-    "framework": "facilitator",
-    "steps": "facilitator",
+    "process": "steps",
+    "method": "steps",
+    "framework": "steps",
+    "steps": "steps",
+    "facilitator": "steps",
     "checklist": "recap",
     "takeaways": "recap",
     "example": "casestudy",
     "case": "casestudy",
-    "comparison": "casestudy",
+    "story": "casestudy",
+    "scenario": "casestudy",
+    "comparison": "comparison",
+    "beforeafter": "comparison",
     "warning": "warning",
     "mistake": "warning",
     "risk": "warning",
     "tip": "tip",
     "advice": "tip",
     "good_practice": "tip",
-    "story": "story",
-    "scenario": "story",
-    "analogy": "analogy",
-    "metaphor": "analogy",
-    "data": "stats",
-    "numbers": "stats",
-    "chart": "chart",
-    "transition": "transition",
-    "opinion": "opinion",
+    "analogy": "reflection",
+    "metaphor": "reflection",
+    "data": "recap",
+    "numbers": "recap",
+    "stats": "recap",
+    "chart": "comparison",
+    "transition": "reflection",
+    "opinion": "reflection",
+    "quote": "quotable",
+    "quotable": "quotable",
+    "journal": "quotable",
 }
 
 EVENT_TYPES = {
@@ -149,18 +151,15 @@ EVENT_TYPES = {
     "day_program",
     "day_program_7_steps",
     "recap",
-    "story",
     "definition",
     "concept",
     "example",
     "process",
     "comparison",
     "data",
-    "analogy",
     "warning",
     "tip",
-    "opinion",
-    "transition",
+    "quote",
 }
 
 _FISHAUDIO_TAG_RE = re.compile(r"\[[^\[\]\n]{1,50}\]")
@@ -1966,7 +1965,7 @@ RÈGLES:
 - Pour chaque anchor utilisé, choisis `source_quote` dans la portion exacte du texte qui réalise cette intention.
 - Ne rattache jamais une slide au passage d'un anchor voisin parce qu'il contient des mots proches, une image répétée ou le même thème général.
 - Si deux anchors voisins sont présents, vérifie leur ordre narratif : la première slide doit pointer vers le premier mouvement oral, la deuxième vers le mouvement oral suivant.
-- `analogy` s'utilise seulement quand le passage raconte une situation hors métier pour expliquer une notion. Un passage qui commence par "Imaginez que..." peut être une analogie si la scène imaginée n'est pas le métier lui-même. Un exemple client/conseiller/usager, même fictif, relève plutôt de `casestudy`, `reflection`, `warning` ou d'un autre template compatible.
+- Les récits, analogies, opinions ou transitions simples ne sont plus des templates autonomes. Si le passage raconte une situation métier, utilise `casestudy`; s'il porte une idée ou une image mentale, utilise `reflection`.
 - Si aucun anchor n'est disponible pour une fenêtre, sélectionne les thèmes, points et idées pédagogiques qui méritent vraiment un visuel.
 - Tu peux produire 0, 1 ou plusieurs slides par fenêtre selon la densité réelle des idées.
 - Maximum {max_batch_slides} slides pour tout ce batch.
@@ -1998,20 +1997,17 @@ CATALOGUE TEMPLATES:
 TEMPLATES AUTORISÉS ET SCHÉMAS:
 - reflection: data={{"title":"3-6 mots","text":"1-2 phrases"}}
 - chapter_opener: data={{"chapter_label":"Chapitre X","title":"titre du thème","axes":[{{"title":"axe court","desc":"optionnel"}}]}}
+- definition: data={{"term":"mot ou notion","eyebrow":"contexte court","definition":"1 phrase","isItems":["critère","critère"]}}
+- comparison: data={{"title":"3-6 mots","cols":[{{"label":"colonne","items":["point court"]}},{{"label":"colonne","items":["point court"]}}]}}
 - casestudy: data={{"title":"3-6 mots","eyebrow":"contexte","cases":[{{"tag":"01 · Canal","title":"court","desc":"1 phrase","example":"optionnel"}}]}} avec autant de cases que le texte justifie
-- facilitator: data={{"title":"3-6 mots","steps":[{{"title":"court","desc":"1 phrase","icon":"target|gear|flash|flag","color":"orange|purple|lime|blue"}}]}} avec 2-4 steps
-- stats: data={{"title":"3-6 mots","description":"1 phrase","stats":[{{"number":"chiffre"}}],"columns":["phrase courte","phrase courte"]}}
-- story: data={{"title":"3-6 mots","narrative":"1-2 phrases","moral":"1 phrase"}}
+- steps: data={{"title":"3-6 mots","steps":[{{"title":"court","desc":"1 phrase"}}]}} avec 2-4 steps
 - recap: data={{"title":"3-6 mots","points":["point court","point court","point court"]}}
-- analogy: data={{"title":"5-10 mots","analogy_label":"situation concrète, 2-5 mots","concept_label":"notion métier, 2-5 mots","text":"1 phrase courte","takeaway":"1 phrase clé","image_prompt":"prompt PNG sans texte ni humains","image_alt":"description accessible"}}
 - warning: data={{"title":"3-6 mots","text":"1-2 phrases"}}
 - tip: data={{"title":"3-6 mots","text":"1-2 phrases"}}
-- opinion: data={{"title":"3-6 mots","text":"1-2 phrases"}}
-- transition: data={{"title":"3-6 mots","from_topic":"2-4 mots","to_topic":"2-4 mots"}}
-- chart: data={{"title":"3-6 mots","description":"1 phrase","chartData":null}}
+- quotable: data={{"quote":"phrase courte à isoler"}}
 
 Choisis `event_type` parmi:
-chapter_opener, recap, story, definition, concept, example, process, comparison, data, analogy, warning, tip, opinion, transition.
+chapter_opener, recap, definition, concept, example, process, comparison, data, warning, tip, quote.
 
 FORMAT EXACT:
 {{
@@ -2226,72 +2222,70 @@ def _normalize_slide_data(template: str, data: dict, fallback_title: str, fallba
             "cases": cases or [{"title": "Point clé", "desc": text, "tag": "", "example": ""}],
         }
 
-    if template == "facilitator":
+    if template == "definition":
+        tags = [_as_text(item, "")[:40] for item in _limit_list(data.get("isItems") or data.get("items"), 4)]
+        return {
+            "term": _as_text(data.get("term") or data.get("title"), title)[:70],
+            "eyebrow": _as_text(data.get("eyebrow"), "Définition")[:50],
+            "definition": _as_text(data.get("definition") or data.get("text"), text)[:260],
+            "isItems": [tag for tag in tags if tag],
+        }
+
+    if template == "comparison":
+        source_cols = data.get("cols") if isinstance(data.get("cols"), list) else []
+        cols = []
+        for index, item in enumerate(_limit_list(source_cols, 3)):
+            if isinstance(item, dict):
+                values = [_as_text(value, "")[:120] for value in _limit_list(item.get("items"), 5)]
+                cols.append({
+                    "label": _as_text(item.get("label") or item.get("title"), f"Option {index + 1}")[:60],
+                    "items": [value for value in values if value],
+                })
+        if not cols:
+            rows = _limit_list(data.get("rows"), 4)
+            before_items = []
+            after_items = []
+            for row in rows:
+                if isinstance(row, dict):
+                    before_items.append(_as_text(row.get("before") or row.get("a"), "")[:120])
+                    after_items.append(_as_text(row.get("after") or row.get("b"), "")[:120])
+            if before_items or after_items:
+                cols = [
+                    {"label": "Avant", "items": [item for item in before_items if item]},
+                    {"label": "Après", "items": [item for item in after_items if item]},
+                ]
+        return {
+            "title": title,
+            "cols": cols or [
+                {"label": "Point de départ", "items": [text]},
+                {"label": "Repère attendu", "items": ["Bonne pratique à appliquer"]},
+            ],
+        }
+
+    if template == "steps":
         steps = []
-        for idx, item in enumerate(_limit_list(data.get("steps"), 4)):
+        for idx, item in enumerate(_limit_list(data.get("steps") or data.get("items") or data.get("points"), 4)):
             if isinstance(item, dict):
                 steps.append(
                     {
                         "title": _as_text(item.get("title"), f"Étape {idx + 1}")[:50],
                         "desc": _as_text(item.get("desc") or item.get("detail"), fallback_text)[:160],
-                        "icon": item.get("icon") if item.get("icon") in ("target", "gear", "flash", "flag") else "target",
-                        "color": item.get("color") if item.get("color") in ("orange", "purple", "lime", "blue") else "orange",
                     }
                 )
-        return {"title": title, "steps": steps or [{"title": "Étape clé", "desc": text, "icon": "target", "color": "orange"}]}
-
-    if template == "stats":
-        stats = []
-        for item in _limit_list(data.get("stats"), 3):
-            if isinstance(item, dict):
-                stats.append({"number": _as_text(item.get("number") or item.get("value"), "1")[:16]})
-        columns = [_as_text(item, fallback_text)[:180] for item in _limit_list(data.get("columns"), 3)]
-        return {"title": title, "description": text, "stats": stats or [{"number": "1"}], "columns": columns or [text]}
-
-    if template == "story":
-        return {
-            "title": title,
-            "narrative": _as_text(data.get("narrative"), text)[:360],
-            "moral": _as_text(data.get("moral"), "À retenir pour la pratique.")[:180],
-        }
+            else:
+                label = _as_text(item, "")
+                if label:
+                    steps.append({"title": label[:50], "desc": ""})
+        return {"title": title, "steps": steps or [{"title": "Étape clé", "desc": text}]}
 
     if template == "recap":
-        points = [_as_text(item, "")[:140] for item in _limit_list(data.get("points"), 4)]
+        source_points = data.get("points") or data.get("columns") or data.get("items") or []
+        points = [_as_text(item, "")[:140] for item in _limit_list(source_points, 4)]
         points = [point for point in points if point]
         return {"title": title, "points": points or [text]}
 
-    if template == "analogy":
-        analogy_label = _as_text(data.get("analogy_label") or data.get("comparison"), "Situation concrète")[:80]
-        concept_label = _as_text(data.get("concept_label") or data.get("concept"), "Notion métier")[:80]
-        return {
-            "title": title,
-            "analogy_label": analogy_label,
-            "concept_label": concept_label,
-            "concept": concept_label,
-            "comparison": analogy_label,
-            "text": text,
-            "takeaway": _as_text(data.get("takeaway"), "Moins il y a de repères, plus le cerveau interprète.")[:180],
-            "image_url": _as_text(data.get("image_url"), "")[:500],
-            "image_prompt": _as_text(
-                data.get("image_prompt"),
-                (
-                    f"Illustration PNG 16:9, no text, no humans, no faces, no silhouettes, "
-                    f"no characters. Professional sober visual analogy: {analogy_label}. "
-                    f"Clean editorial style, institutional training, readable composition."
-                ),
-            )[:600],
-            "image_alt": _as_text(data.get("image_alt"), f"Illustration de l'analogie : {analogy_label}")[:180],
-        }
-
-    if template == "transition":
-        return {
-            "title": title,
-            "from_topic": _as_text(data.get("from_topic"), "")[:45],
-            "to_topic": _as_text(data.get("to_topic"), "")[:45],
-        }
-
-    if template == "chart":
-        return {"title": title, "description": text, "chartData": data.get("chartData") or data.get("chart_data") or None}
+    if template == "quotable":
+        return {"quote": _as_text(data.get("quote") or data.get("text") or data.get("title"), text)[:260]}
 
     return {"title": title, "text": text}
 

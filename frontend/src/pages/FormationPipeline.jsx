@@ -1,27 +1,6 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { apiUrl } from '../api'
-import ReflectionTemplate from '../components/slides/templates/ReflectionTemplate'
-import CaseStudyTemplate from '../components/slides/templates/CaseStudyTemplate'
-import FacilitatorTemplate from '../components/slides/templates/FacilitatorTemplate'
-import ChartTemplate from '../components/slides/templates/ChartTemplate'
-import StatsTemplate from '../components/slides/templates/StatsTemplate'
-import StoryTemplate from '../components/slides/templates/StoryTemplate'
-import RecapTemplate from '../components/slides/templates/RecapTemplate'
-import AnalogyTemplate from '../components/slides/templates/AnalogyTemplate'
-import WarningTemplate from '../components/slides/templates/WarningTemplate'
-import TipTemplate from '../components/slides/templates/TipTemplate'
-import OpinionTemplate from '../components/slides/templates/OpinionTemplate'
-import TransitionTemplate from '../components/slides/templates/TransitionTemplate'
-import PlayfulTemplate from '../components/slides/templates/PlayfulTemplate'
-import DefinitionTemplate from '../components/slides/templates/DefinitionTemplate'
-import ComparisonTemplate from '../components/slides/templates/ComparisonTemplate'
-import StepsTemplate from '../components/slides/templates/StepsTemplate'
-import ChecklistTemplate from '../components/slides/templates/ChecklistTemplate'
-import QuotableTemplate from '../components/slides/templates/QuotableTemplate'
-import PracticeExerciseTemplate from '../components/slides/templates/PracticeExerciseTemplate'
-import BeforeAfterTemplate from '../components/slides/templates/BeforeAfterTemplate'
-import FrameworkTemplate from '../components/slides/templates/FrameworkTemplate'
-import { DeckChapterOpener, DeckDayProgram7Steps, DeckProgramYear, DeckWelcome } from '../components/slides/templates/DeckTemplates'
+import { renderSlideTemplate } from '../components/slides/slideTemplateRegistry'
 
 const Icon = ({ name, className = '', style = {} }) => (
   <span className={`material-icons ${className}`} style={{ fontSize: 'inherit', ...style }}>{name}</span>
@@ -2431,88 +2410,11 @@ function SlidePreviewFrame({ slide }) {
             left: 0,
           }}
         >
-          {renderPipelineSlidePreview(slide)}
+          {renderSlideTemplate(slide)}
         </div>
       </div>
     </div>
   )
-}
-
-function renderPipelineSlidePreview(slide = {}) {
-  const commonProps = {
-    badge: 'TP-CRCD',
-    brandName: 'SALES HACKING',
-  }
-  const props = { ...(slide.data || {}), ...commonProps }
-  const isSevenStepDayProgram = Array.isArray(slide.data?.items) && slide.data.items.length === 7
-
-  switch (slide.template_type) {
-    case 'welcome':
-      return <DeckWelcome {...props} />
-    case 'program_year':
-    case 'day_year':
-      return <DeckProgramYear {...props} />
-    case 'day_program':
-      return isSevenStepDayProgram ? <DeckDayProgram7Steps {...props} /> : <DeckProgramYear {...props} />
-    case 'day_program_7_steps':
-      return <DeckDayProgram7Steps {...props} />
-    case 'chapter_opener':
-    case 'chapter_intro':
-      return <DeckChapterOpener {...props} />
-    case 'context':
-      return <ContextSlidePreview {...props} />
-    case 'definition':
-      return <DefinitionTemplate {...props} />
-    case 'comparison':
-      return <ComparisonTemplate {...props} />
-    case 'beforeafter':
-      return <BeforeAfterTemplate {...props} />
-    case 'steps':
-      return <StepsTemplate {...props} />
-    case 'checklist':
-      return <ChecklistTemplate {...props} />
-    case 'quotable':
-      return <QuotableTemplate {...props} />
-    case 'exercise':
-      return <PracticeExerciseTemplate {...props} />
-    case 'reflection':
-      return <ReflectionTemplate {...props} />
-    case 'casestudy':
-      return <CaseStudyTemplate {...props} />
-    case 'facilitator':
-      return <FacilitatorTemplate {...props} />
-    case 'chart':
-      return <ChartTemplate {...props} />
-    case 'stats':
-      return <StatsTemplate {...props} />
-    case 'story':
-      return <StoryTemplate {...props} />
-    case 'recap':
-      return <RecapTemplate {...props} />
-    case 'analogy':
-      return <AnalogyTemplate {...props} />
-    case 'warning':
-      return <WarningTemplate {...props} />
-    case 'tip':
-      return <TipTemplate {...props} />
-    case 'opinion':
-      return <OpinionTemplate {...props} />
-    case 'transition':
-      return <TransitionTemplate {...props} />
-    case 'playful':
-      return <PlayfulTemplate {...props} />
-    case 'framework':
-      return <FrameworkTemplate {...props} />
-    default:
-      return (
-        <div style={{ width: '100%', height: '100%', background: '#f8fafc', color: '#0f172a', padding: '48px', fontFamily: 'Inter, system-ui, sans-serif' }}>
-          <div style={{ fontSize: '42px', fontWeight: 800, marginBottom: '18px' }}>
-            Template non reconnu
-          </div>
-          <div style={{ fontSize: '24px' }}>{slide.template_type || 'inconnu'}</div>
-        </div>
-      )
-  }
 }
 
 function BeatFirstIterationPanel({
@@ -2635,108 +2537,6 @@ function BeatFirstIterationPanel({
           {error}
         </div>
       )}
-    </div>
-  )
-}
-
-function WelcomeSlidePreview({ title = 'Bienvenue', subtitle, formation_name, day_label, badge = 'TP-CRCD', brandName = 'SALES HACKING' }) {
-  return (
-    <div style={{
-      width: '100%',
-      height: '100%',
-      background: '#f8fafc',
-      color: '#0f172a',
-      fontFamily: 'Inter, system-ui, sans-serif',
-      display: 'flex',
-      flexDirection: 'column',
-      padding: '36px 44px',
-      boxSizing: 'border-box',
-    }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', color: '#64748b', fontSize: '16px', fontWeight: 800 }}>
-        <span>{badge}</span>
-        <span>{brandName}</span>
-      </div>
-      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
-        <div style={{ color: '#dc2626', fontSize: '18px', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '18px' }}>
-          {day_label || subtitle || 'Journée de formation'}
-        </div>
-        <div style={{ fontSize: '58px', lineHeight: 1, fontWeight: 950 }}>
-          {title}
-        </div>
-        <div style={{ marginTop: '24px', height: '3px', width: '88px', background: '#dc2626', borderRadius: '999px' }} />
-        <div style={{ marginTop: '24px', fontSize: '30px', lineHeight: 1.18, fontWeight: 850, color: '#334155', maxWidth: '820px' }}>
-          {formation_name || subtitle || 'Formation'}
-        </div>
-      </div>
-    </div>
-  )
-}
-
-function DayProgramSlidePreview({ title = 'Programme de la journée', items = [], day_label, formation_name, badge = 'TP-CRCD', brandName = 'SALES HACKING' }) {
-  const safeItems = Array.isArray(items) && items.length ? items.slice(0, 7) : ['Accueil et objectifs', 'Thèmes clés', 'Synthèse et questions']
-  return (
-    <div style={{
-      width: '100%',
-      height: '100%',
-      background: '#f8fafc',
-      color: '#0f172a',
-      fontFamily: 'Inter, system-ui, sans-serif',
-      display: 'flex',
-      flexDirection: 'column',
-      padding: '34px 44px',
-      boxSizing: 'border-box',
-    }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', color: '#64748b', fontSize: '16px', fontWeight: 800 }}>
-        <span>{badge}</span>
-        <span>{brandName}</span>
-      </div>
-      <div style={{ marginTop: '26px', color: '#dc2626', fontSize: '16px', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
-        {day_label || formation_name || 'Séquence du jour'}
-      </div>
-      <div style={{ marginTop: '10px', fontSize: '42px', lineHeight: 1.05, fontWeight: 950 }}>
-        {title}
-      </div>
-      <div style={{ marginTop: '24px', display: 'grid', gap: '8px', maxWidth: '820px' }}>
-        {safeItems.map((item, index) => (
-          <div key={index} style={{ display: 'grid', gridTemplateColumns: '36px 1fr', gap: '12px', alignItems: 'center', padding: '10px 12px', background: '#eef2f7', borderLeft: '4px solid #dc2626', borderRadius: '8px' }}>
-            <div style={{ color: '#dc2626', fontWeight: 950, fontSize: '16px' }}>{String(index + 1).padStart(2, '0')}</div>
-            <div style={{ fontSize: '18px', fontWeight: 800, color: '#334155', lineHeight: 1.2 }}>{item}</div>
-          </div>
-        ))}
-      </div>
-    </div>
-  )
-}
-
-function ContextSlidePreview({ formation_name, chapter, label, badge = 'TP-CRCD', brandName = 'SALES HACKING' }) {
-  return (
-    <div style={{
-      width: '100%',
-      height: '100%',
-      background: '#f8fafc',
-      color: '#0f172a',
-      fontFamily: 'Inter, system-ui, sans-serif',
-      display: 'flex',
-      flexDirection: 'column',
-      padding: '36px 44px',
-      boxSizing: 'border-box',
-    }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', color: '#64748b', fontSize: '16px', fontWeight: 800 }}>
-        <span>{badge}</span>
-        <span>{brandName}</span>
-      </div>
-      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
-        <div style={{ color: '#dc2626', fontSize: '18px', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '18px' }}>
-          {label || 'Séquence en cours'}
-        </div>
-        <div style={{ fontSize: '42px', lineHeight: 1.08, fontWeight: 900, maxWidth: '820px' }}>
-          {formation_name || 'Formation'}
-        </div>
-        <div style={{ marginTop: '24px', height: '3px', width: '88px', background: '#dc2626', borderRadius: '999px' }} />
-        <div style={{ marginTop: '24px', fontSize: '28px', lineHeight: 1.25, fontWeight: 800, color: '#334155', maxWidth: '780px' }}>
-          {chapter || 'Chapitre en cours'}
-        </div>
-      </div>
     </div>
   )
 }
