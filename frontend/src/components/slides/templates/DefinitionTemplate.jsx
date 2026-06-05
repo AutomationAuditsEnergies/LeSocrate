@@ -1,6 +1,6 @@
 import React from 'react';
-import { DeckDefinition } from './DeckTemplates';
+import { SalesHackingSourceSlide } from './SalesHackingSourceSlides';
 
 export default function DefinitionTemplate(props) {
-  return <DeckDefinition {...props} />;
+  return <SalesHackingSourceSlide sourceId="definition" />;
 }

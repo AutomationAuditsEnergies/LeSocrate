@@ -1,6 +1,6 @@
 import React from 'react';
-import { DeckStatement } from './DeckTemplates';
+import { SalesHackingSourceSlide } from './SalesHackingSourceSlides';
 
 export default function QuotableTemplate({ quote, title, ...props }) {
-  return <DeckStatement title={title || quote} {...props} />;
+  return <SalesHackingSourceSlide sourceId="journal" />;
 }

@@ -1,6 +1,6 @@
 import React from 'react';
-import { DeckComparison } from './DeckTemplates';
+import { SalesHackingSourceSlide } from './SalesHackingSourceSlides';
 
 export default function ComparisonTemplate(props) {
-  return <DeckComparison {...props} />;
+  return <SalesHackingSourceSlide sourceId="diagnostic" />;
 }

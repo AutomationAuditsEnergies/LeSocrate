@@ -1,6 +1,6 @@
 import React from 'react';
-import { DeckCaseStudy } from './DeckTemplates';
+import { SalesHackingSourceSlide } from './SalesHackingSourceSlides';
 
 export default function CaseStudyTemplate(props) {
-  return <DeckCaseStudy {...props} />;
+  return <SalesHackingSourceSlide sourceId="casestudy" />;
 }

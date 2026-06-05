@@ -1,6 +1,6 @@
 import React from 'react';
-import { DeckRecap } from './DeckTemplates';
+import { SalesHackingSourceSlide } from './SalesHackingSourceSlides';
 
 export default function RecapTemplate(props) {
-  return <DeckRecap {...props} />;
+  return <SalesHackingSourceSlide sourceId="recap" />;
 }

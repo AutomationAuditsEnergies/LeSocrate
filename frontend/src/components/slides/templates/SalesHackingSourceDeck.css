@@ -1,0 +1,4688 @@
+/* Scoped Claude Design source deck styles. Generated from /tmp/anthropic-design-slides/slides/project/deck.html. */
+@import url('https://fonts.googleapis.com/css2?family=Archivo+Black&family=Archivo:wght@400;500;600;700;800;900&family=Manrope:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&family=Caveat:wght@600;700&display=swap');
+
+.sales-source-deck-shell {
+  --bg-0: #050a26;
+      --bg-1: #0c1a5e;
+      --bg-2: #1a37d6;
+      --ink: #ffffff;
+      --ink-dim: rgba(255,255,255,0.55);
+      --ink-mute: rgba(255,255,255,0.35);
+      --ink-line: rgba(255,255,255,0.14);
+      --coral: #ff5d6c;
+      --coral-deep: #ff3d51;
+      --pale: #f6f2eb;
+      --green: #58e2a4;
+
+      --f-display: 'Archivo Black', 'Archivo', sans-serif;
+      --f-head: 'Archivo', sans-serif;
+      --f-body: 'Manrope', sans-serif;
+      --f-mono: 'JetBrains Mono', ui-monospace, monospace;
+      --f-script: 'Caveat', cursive;
+  width: 100%;
+  max-width: 1200px;
+  aspect-ratio: 16 / 9;
+  position: relative;
+  overflow: hidden;
+  flex: 0 1 1200px;
+  background: #0a1351;
+  box-shadow: 0 25px 50px -12px rgba(0,0,0,.35);
+}
+
+.sales-source-deck-shell section.slide {
+  position: absolute !important;
+  inset: 0 auto auto 0 !important;
+  transform-origin: top left !important;
+}
+
+@keyframes sales-source-breathe {
+  0%, 100% {
+    transform: translate(-50%, -50%) scale(1);
+  }
+  50% {
+    transform: translate(-50%, -50%) scale(1.08);
+  }
+}
+
+@keyframes sales-source-pulse {
+  0%, 100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.4;
+    transform: scale(0.72);
+  }
+}
+
+.sales-source-deck-shell /* === SLIDE BASE === */
+  section.slide {
+  position: relative;
+      width: 1920px; height: 1080px;
+      background:
+        radial-gradient(ellipse 1400px 900px at 70% -10%, #2a4af5 0%, transparent 60%),
+        radial-gradient(ellipse 1100px 800px at 10% 100%, #0a1556 0%, transparent 55%),
+        linear-gradient(180deg, #0a1351 0%, #0e1d8a 50%, #0a1351 100%);
+      overflow: hidden;
+      color: var(--ink);
+      font-family: var(--f-body);
+      isolation: isolate;
+}
+
+.sales-source-deck-shell /* subtle grid texture on every slide */
+  section.slide::before {
+  content: ""; position: absolute; inset: 0; pointer-events: none;
+      background-image:
+        linear-gradient(rgba(255,255,255,0.045) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,0.045) 1px, transparent 1px);
+      background-size: 64px 64px;
+      mask-image: radial-gradient(ellipse at center, rgba(0,0,0,0.9) 0%, rgba(0,0,0,0.2) 80%);
+      z-index: 0;
+}
+
+.sales-source-deck-shell /* grain */
+  section.slide::after {
+  content: ""; position: absolute; inset: 0; pointer-events: none; z-index: 1;
+      background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='240' height='240'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' seed='5'/><feColorMatrix values='0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  0 0 0 0.16 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
+      opacity: 0.22; mix-blend-mode: overlay;
+}
+
+.sales-source-deck-shell .slide > * {
+  position: relative; z-index: 2;
+}
+
+.sales-source-deck-shell /* ========== CHROME ========== */
+  .chrome {
+  position: absolute; inset: 0; pointer-events: none; z-index: 5;
+}
+
+.sales-source-deck-shell .chrome .brand {
+  position: absolute; top: 56px; left: 80px;
+      display: flex; align-items: flex-end; gap: 10px;
+}
+
+.sales-source-deck-shell .chrome .brand .mark {
+  font-family: var(--f-script); font-size: 26px; letter-spacing: 0;
+      color: #fff; line-height: 1;
+      transform: translateY(-2px) rotate(-6deg);
+      font-weight: 700;
+}
+
+.sales-source-deck-shell .chrome .brand .tag {
+  font-family: var(--f-script); font-size: 32px; color: var(--coral);
+      transform: translateY(-2px) rotate(-6deg); line-height: 1;
+}
+
+.sales-source-deck-shell .chrome .rec {
+  position: absolute; top: 56px; right: 80px;
+      display: inline-flex; align-items: center; gap: 10px;
+      font-family: var(--f-mono); font-size: 13px; color: var(--ink-dim);
+      letter-spacing: 0.18em;
+}
+
+.sales-source-deck-shell .chrome .rec .dot {
+  width: 9px; height: 9px; border-radius: 50%; background: var(--coral); box-shadow: 0 0 0 4px rgba(255,93,108,0.18);
+}
+
+.sales-source-deck-shell .chrome .pages {
+  position: absolute; bottom: 36px; left: 50%; transform: translateX(-50%);
+      font-family: var(--f-mono); font-size: 13px; letter-spacing: 0.22em; color: var(--ink-mute);
+}
+
+.sales-source-deck-shell .chrome .pages b {
+  color: var(--ink); font-weight: 500;
+}
+
+.sales-source-deck-shell .chrome .section-label {
+  position: absolute; bottom: 36px; right: 80px;
+      font-family: var(--f-mono); font-size: 12px; letter-spacing: 0.28em; color: var(--ink-mute);
+}
+
+.sales-source-deck-shell /* ========== UTILITIES ========== */
+  .eyebrow {
+  font-family: var(--f-mono); font-size: 14px; letter-spacing: 0.32em;
+      color: var(--coral); text-transform: uppercase; font-weight: 500;
+}
+
+.sales-source-deck-shell .eyebrow.dim {
+  color: var(--ink-mute);
+}
+
+.sales-source-deck-shell .underline-coral {
+  background-image: linear-gradient(var(--coral), var(--coral));
+      background-repeat: no-repeat;
+      background-position: 0 100%;
+      background-size: 100% 8px;
+      padding-bottom: 2px;
+}
+
+.sales-source-deck-shell .display {
+  font-family: var(--f-display); font-weight: 900; line-height: 0.92;
+      letter-spacing: -0.02em; text-transform: uppercase;
+}
+
+.sales-source-deck-shell .display-outline {
+  -webkit-text-stroke: 2px rgba(255,255,255,0.45);
+      color: transparent;
+}
+
+.sales-source-deck-shell .pill {
+  display: inline-flex; align-items: center; gap: 8px;
+      background: var(--pale); color: #111a4a;
+      border-radius: 999px; padding: 10px 18px;
+      font-family: var(--f-head); font-weight: 700; font-size: 14px;
+      letter-spacing: 0.16em; text-transform: uppercase;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.25);
+}
+
+.sales-source-deck-shell .arrow-btn {
+  width: 78px; height: 78px; border-radius: 50%;
+      background: var(--coral); color: #fff;
+      display: inline-flex; align-items: center; justify-content: center;
+      box-shadow: 0 10px 30px rgba(255,93,108,0.5), inset 0 -3px 0 rgba(0,0,0,0.2);
+      border: 3px solid #0d1b6e;
+}
+
+.sales-source-deck-shell /* ============================================================ */
+  /* 01 — INTRO FORMATION                                          */
+  /* ============================================================ */
+  .s-intro {
+  display: grid; grid-template-columns: 1fr; align-items: center; padding: 0 140px;
+}
+
+.sales-source-deck-shell .s-intro .wrap {
+  max-width: 1500px; margin: 0 auto; padding-top: 40px;
+}
+
+.sales-source-deck-shell .s-intro .meta-row {
+  display: flex; align-items: center; gap: 28px; margin-bottom: 40px;
+}
+
+.sales-source-deck-shell .s-intro .module-num {
+  font-family: var(--f-mono); color: var(--coral);
+      font-size: 15px; letter-spacing: 0.32em;
+}
+
+.sales-source-deck-shell .s-intro .module-bar {
+  flex: 1; height: 1px; background: rgba(255,255,255,0.2);
+}
+
+.sales-source-deck-shell .s-intro .module-dur {
+  font-family: var(--f-mono); color: var(--ink-dim);
+      font-size: 14px; letter-spacing: 0.2em;
+}
+
+.sales-source-deck-shell .s-intro h1 {
+  font-family: var(--f-display); font-weight: 900;
+      font-size: 168px; line-height: 0.86;
+      letter-spacing: -0.025em; text-transform: uppercase;
+      margin: 0 0 28px;
+}
+
+.sales-source-deck-shell .s-intro h1 .crl {
+  color: var(--coral); display: block;
+}
+
+.sales-source-deck-shell .s-intro .sub {
+  font-family: var(--f-head); font-weight: 400; font-size: 32px;
+      color: rgba(255,255,255,0.78); max-width: 1100px; line-height: 1.35;
+}
+
+.sales-source-deck-shell .s-intro .sub b {
+  font-weight: 700; color: var(--ink);
+}
+
+.sales-source-deck-shell .s-intro .chips {
+  margin-top: 56px; display: flex; gap: 14px; flex-wrap: wrap;
+}
+
+.sales-source-deck-shell .s-intro .chip {
+  border: 1px solid rgba(255,255,255,0.25);
+      border-radius: 999px; padding: 12px 22px;
+      font-family: var(--f-mono); font-size: 14px; letter-spacing: 0.18em;
+      color: var(--ink-dim); text-transform: uppercase;
+}
+
+.sales-source-deck-shell .s-intro .chip.active {
+  background: var(--coral); color: #fff; border-color: var(--coral);
+}
+
+.sales-source-deck-shell /* ============================================================ */
+  /* TIPS (multi-conseils)                                         */
+  /* ============================================================ */
+  .s-tips {
+  display: flex; flex-direction: column; justify-content: center;
+      padding: 110px 140px 100px;
+      gap: 60px;
+}
+
+.sales-source-deck-shell .s-tips .tp-head {
+  display: flex; align-items: center; gap: 28px;
+}
+
+.sales-source-deck-shell .s-tips .tp-bulb {
+  width: 72px; height: 72px; border-radius: 50%;
+      background: var(--coral);
+      display: flex; align-items: center; justify-content: center;
+      box-shadow: 0 0 0 12px rgba(255,93,108,0.12), 0 12px 32px rgba(255,93,108,0.35);
+      flex-shrink: 0;
+}
+
+.sales-source-deck-shell .s-tips .tp-bulb svg {
+  width: 34px; height: 34px;
+}
+
+.sales-source-deck-shell .s-tips .tp-head-text {
+  display: flex; flex-direction: column; gap: 6px;
+}
+
+.sales-source-deck-shell .s-tips .tp-head-text .eyebrow {
+  display: block;
+}
+
+.sales-source-deck-shell .s-tips .tp-head-text h1 {
+  font-family: var(--f-display); font-weight: 900;
+      font-size: 76px; line-height: 0.88;
+      letter-spacing: -0.025em; text-transform: uppercase; margin: 0;
+}
+
+.sales-source-deck-shell .s-tips .tp-head-text h1 .crl {
+  color: var(--coral);
+}
+
+.sales-source-deck-shell .s-tips .tp-cards {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 32px;
+}
+
+.sales-source-deck-shell .s-tips .tp-card {
+  background: rgba(255,255,255,0.04);
+      border: 1px solid rgba(255,255,255,0.13);
+      border-radius: 16px; padding: 44px 48px;
+      display: flex; flex-direction: column; gap: 20px;
+      position: relative; overflow: hidden;
+}
+
+.sales-source-deck-shell /* Coral glow in the top-left corner */
+  .s-tips .tp-card::before {
+  content: ""; position: absolute;
+      top: -60px; left: -60px;
+      width: 180px; height: 180px; border-radius: 50%;
+      background: radial-gradient(circle, rgba(255,93,108,0.15) 0%, transparent 70%);
+      pointer-events: none;
+}
+
+.sales-source-deck-shell .s-tips .tp-card .tp-num {
+  font-family: var(--f-mono); font-size: 14px; letter-spacing: 0.3em;
+      text-transform: uppercase; color: var(--coral);
+      display: flex; align-items: center; gap: 12px;
+}
+
+.sales-source-deck-shell .s-tips .tp-card .tp-num::after {
+  content: ""; flex: 1; height: 1px; background: rgba(255,93,108,0.28);
+}
+
+.sales-source-deck-shell .s-tips .tp-card .tp-quote {
+  font-family: var(--f-display); font-weight: 900;
+      font-size: 44px; line-height: 0.96;
+      letter-spacing: -0.015em; color: #fff;
+      text-transform: uppercase; margin: 0;
+}
+
+.sales-source-deck-shell .s-tips .tp-card .tp-quote .crl {
+  color: var(--coral);
+}
+
+.sales-source-deck-shell .s-tips .tp-card .tp-sub {
+  font-family: var(--f-body); font-size: 24px; line-height: 1.45;
+      color: rgba(255,255,255,0.62); margin: 0;
+      border-top: 1px solid rgba(255,255,255,0.10);
+      padding-top: 20px;
+}
+
+.sales-source-deck-shell .s-tips .tp-card .tp-sub b {
+  color: #fff; font-weight: 700;
+}
+
+.sales-source-deck-shell /* ============================================================ */
+  /* RULE / RÉFLEXE                                                */
+  /* ============================================================ */
+  .s-rule {
+  display: grid; grid-template-columns: 1fr 1.05fr;
+      padding: 0; align-items: stretch;
+}
+
+.sales-source-deck-shell .s-rule .rl-left {
+  padding: 120px 80px 100px 140px;
+      display: flex; flex-direction: column; justify-content: center;
+      min-width: 0;
+}
+
+.sales-source-deck-shell .s-rule .rl-left .eyebrow {
+  display: block; margin-bottom: 44px;
+}
+
+.sales-source-deck-shell .s-rule .rl-left h1 {
+  font-family: var(--f-display); font-weight: 900;
+      font-size: 168px; line-height: 0.82;
+      letter-spacing: -0.03em; text-transform: uppercase;
+      margin: 0; color: #fff;
+}
+
+.sales-source-deck-shell .s-rule .rl-left h1 .crl {
+  color: var(--coral); display: block;
+}
+
+.sales-source-deck-shell .s-rule .rl-right {
+  background: rgba(255,255,255,0.04);
+      border-left: 1px solid rgba(255,255,255,0.16);
+      display: flex; flex-direction: column; justify-content: center;
+      padding: 100px 100px 100px 80px;
+      gap: 32px; min-width: 0;
+}
+
+.sales-source-deck-shell .s-rule .rl-right .rl-label {
+  font-family: var(--f-mono); font-size: 14px; letter-spacing: 0.32em;
+      text-transform: uppercase; color: var(--coral);
+      margin-bottom: 8px; display: block;
+}
+
+.sales-source-deck-shell .s-rule .rl-card {
+  border: 1px solid rgba(255,255,255,0.13);
+      background: rgba(255,255,255,0.04);
+      border-radius: 12px;
+      padding: 32px 36px;
+      display: flex; flex-direction: column; gap: 12px;
+      position: relative; overflow: hidden;
+}
+
+.sales-source-deck-shell .s-rule .rl-card::before {
+  content: ""; position: absolute;
+      left: 0; top: 0; bottom: 0; width: 4px;
+      background: var(--coral);
+      border-radius: 12px 0 0 12px;
+}
+
+.sales-source-deck-shell .s-rule .rl-card.alt::before {
+  background: rgba(255,255,255,0.25);
+}
+
+.sales-source-deck-shell .s-rule .rl-card.accent::before {
+  background: var(--green);
+}
+
+.sales-source-deck-shell .s-rule .rl-card .ct {
+  font-family: var(--f-display); font-size: 30px; line-height: 0.95;
+      letter-spacing: -0.01em; text-transform: uppercase; color: #fff;
+}
+
+.sales-source-deck-shell .s-rule .rl-card .cd {
+  font-family: var(--f-body); font-size: 22px; line-height: 1.45;
+      color: rgba(255,255,255,0.65);
+}
+
+.sales-source-deck-shell .s-rule .rl-card .cd b {
+  color: #fff; font-weight: 700;
+}
+
+.sales-source-deck-shell .s-rule .rl-card .ce {
+  font-family: var(--f-mono); font-size: 16px; letter-spacing: 0.06em;
+      color: var(--green); margin-top: 6px; font-style: italic;
+}
+
+.sales-source-deck-shell /* ============================================================ */
+  /* CHAPITRE OPENER                                               */
+  /* ============================================================ */
+  .s-chapitre {
+  display: flex; flex-direction: column; justify-content: center;
+      padding: 100px 140px;
+      gap: 72px;
+}
+
+.sales-source-deck-shell .s-chapitre .left {
+  display: flex; flex-direction: column;
+}
+
+.sales-source-deck-shell .s-chapitre .left h1 {
+  font-family: var(--f-display); font-weight: 900;
+      font-size: 76px; line-height: 0.9;
+      letter-spacing: -0.02em;
+      margin: 0; white-space: nowrap;
+}
+
+.sales-source-deck-shell .s-chapitre .left h1 .ch-label {
+  text-decoration: underline;
+      text-decoration-color: var(--coral);
+      text-underline-offset: 10px;
+      text-decoration-thickness: 4px;
+}
+
+.sales-source-deck-shell .s-chapitre .left h1 .ch-name {
+  color: #fff;
+}
+
+.sales-source-deck-shell .s-chapitre .axes {
+  display: flex; flex-direction: column; gap: 40px;
+}
+
+.sales-source-deck-shell .s-chapitre .axe {
+  display: grid; grid-template-columns: 100px 1fr; gap: 36px; align-items: start;
+      border-top: 1px solid rgba(255,255,255,0.12); padding-top: 36px;
+}
+
+.sales-source-deck-shell .s-chapitre .axe .num {
+  font-family: var(--f-display); font-size: 72px; line-height: 0.85;
+      letter-spacing: -0.02em; color: var(--coral);
+}
+
+.sales-source-deck-shell .s-chapitre .axe .content {
+  display: flex; flex-direction: column; gap: 12px; padding-top: 8px;
+}
+
+.sales-source-deck-shell .s-chapitre .axe .t {
+  font-family: var(--f-display); font-size: 34px; line-height: 0.95;
+      letter-spacing: -0.015em; text-transform: uppercase; color: #fff;
+}
+
+.sales-source-deck-shell .s-chapitre .axe .d {
+  font-family: var(--f-body); font-size: 22px; line-height: 1.4;
+      color: rgba(255,255,255,0.58);
+}
+
+.sales-source-deck-shell /* ============================================================ */
+  /* REFLECTION template                                           */
+  /* ============================================================ */
+  .s-reflection {
+  display: flex; flex-direction: column; justify-content: center; align-items: flex-start;
+      padding: 160px 200px 0;
+}
+
+.sales-source-deck-shell .s-reflection .ref-eyebrow {
+  font-family: var(--f-mono); font-size: 14px; letter-spacing: 0.32em;
+      text-transform: uppercase; color: var(--coral);
+      margin-bottom: 52px;
+}
+
+.sales-source-deck-shell .s-reflection .ref-title {
+  font-family: var(--f-display); font-weight: 900;
+      font-size: 112px; line-height: 0.88;
+      letter-spacing: -0.03em; text-transform: uppercase;
+      color: #fff; margin: 0 0 52px;
+      max-width: 1400px;
+}
+
+.sales-source-deck-shell .s-reflection .ref-title .crl {
+  color: var(--coral);
+}
+
+.sales-source-deck-shell .s-reflection .ref-body {
+  font-family: var(--f-head); font-weight: 400;
+      font-size: 34px; line-height: 1.45;
+      color: rgba(255,255,255,0.68);
+      max-width: 1100px;
+      border-left: 4px solid var(--coral);
+      padding-left: 36px;
+}
+
+.sales-source-deck-shell .s-reflection .ref-body b {
+  color: #fff; font-weight: 700;
+}
+
+.sales-source-deck-shell .s-reflection .ref-foot {
+  padding: 0 140px 60px;
+      display: flex; align-items: center; gap: 16px;
+      position: relative; z-index: 1;
+}
+
+.sales-source-deck-shell .s-reflection .ref-foot .dot {
+  width: 6px; height: 6px; border-radius: 50%; background: var(--coral);
+}
+
+.sales-source-deck-shell .s-reflection .ref-foot .tag {
+  font-family: var(--f-mono); font-size: 13px; letter-spacing: 0.24em;
+      text-transform: uppercase; color: rgba(255,255,255,0.28);
+}
+
+.sales-source-deck-shell /* ============================================================ */
+  /* 00 — WELCOME (ouverture)                                      */
+  /* ============================================================ */
+  .s-welcome {
+  display: flex; flex-direction: column; justify-content: center;
+      padding: 0 140px;
+}
+
+.sales-source-deck-shell .s-welcome .meta-row {
+  display: flex; align-items: center; gap: 28px;
+      margin-bottom: 58px; max-width: 1180px;
+}
+
+.sales-source-deck-shell .s-welcome .day {
+  font-family: var(--f-mono); color: var(--coral);
+      font-size: 15px; letter-spacing: 0.34em; text-transform: uppercase;
+      white-space: nowrap;
+}
+
+.sales-source-deck-shell .s-welcome .meta-bar {
+  width: 200px; height: 1px; background: rgba(255,255,255,0.25);
+}
+
+.sales-source-deck-shell .s-welcome .meta-note {
+  font-family: var(--f-mono); color: var(--ink-dim);
+      font-size: 14px; letter-spacing: 0.22em; text-transform: uppercase;
+}
+
+.sales-source-deck-shell .s-welcome h1 {
+  font-family: var(--f-display); font-weight: 900;
+      font-size: 188px; line-height: 0.82;
+      letter-spacing: -0.03em; text-transform: uppercase;
+      margin: 0;
+}
+
+.sales-source-deck-shell .s-welcome .titre {
+  margin-top: 50px;
+      font-family: var(--f-head); font-weight: 800;
+      font-size: 58px; line-height: 0.98;
+      letter-spacing: -0.01em; text-transform: uppercase; color: #fff;
+}
+
+.sales-source-deck-shell .s-welcome .titre .crl {
+  color: var(--coral);
+}
+
+.sales-source-deck-shell /* ============================================================ */
+  /* 02 — BIG STATEMENT                                            */
+  /* ============================================================ */
+  .s-big {
+  display: grid; place-items: center; padding: 0 200px; width: 1920px; height: 1080px; box-sizing: border-box;
+}
+
+.sales-source-deck-shell .s-big .wrap {
+  text-align: center; max-width: 1500px;
+}
+
+.sales-source-deck-shell .s-big .eyebrow {
+  margin-bottom: 44px; display: block;
+}
+
+.sales-source-deck-shell .s-big h1 {
+  font-family: var(--f-display); font-size: 124px;
+      line-height: 0.95; letter-spacing: -0.025em;
+      text-transform: uppercase; margin: 0;
+}
+
+.sales-source-deck-shell .s-big h1 .strike {
+  color: rgba(255,255,255,0.32);
+      text-decoration: line-through;
+      text-decoration-color: var(--coral);
+      text-decoration-thickness: 8px;
+}
+
+.sales-source-deck-shell .s-big h1 .accent {
+  color: var(--coral); display: block;
+}
+
+.sales-source-deck-shell .s-big .attrib {
+  margin-top: 48px;
+      font-family: var(--f-script); font-size: 38px; color: rgba(255,255,255,0.7);
+      transform: rotate(-2deg); display: inline-block;
+}
+
+.sales-source-deck-shell /* ============================================================ */
+  /* 03 — DEFINITION                                               */
+  /* ============================================================ */
+  .s-def {
+  display: grid; grid-template-columns: 1.05fr 1fr;
+      padding: 0 0 0 140px;
+      align-items: stretch;          /* columns fill full slide height */
+      min-height: 1080px;
+}
+
+.sales-source-deck-shell .s-def .left {
+  padding: 0 60px 0 0;
+      display: flex; flex-direction: column; justify-content: center;
+}
+
+.sales-source-deck-shell .s-def .left .eyebrow {
+  margin-bottom: 80px; font-size: 22px; letter-spacing: 0.28em;
+}
+
+.sales-source-deck-shell .s-def .word {
+  font-family: var(--f-display); font-size: 140px; line-height: 0.95;
+      letter-spacing: -0.03em; text-transform: uppercase;
+      margin: 0;
+      white-space: nowrap;
+}
+
+.sales-source-deck-shell .s-def .pron {
+  font-family: var(--f-mono); color: var(--ink-dim);
+      font-size: 22px; letter-spacing: 0.04em;
+}
+
+.sales-source-deck-shell .s-def .pron em {
+  color: var(--coral); font-style: normal;
+}
+
+.sales-source-deck-shell .s-def .right {
+  background: rgba(255,255,255,0.04);
+      border-left: 1px solid rgba(255,255,255,0.18);
+      display: flex; flex-direction: column; justify-content: center;
+      padding: 0 120px 0 80px;
+}
+
+.sales-source-deck-shell .s-def .right .label {
+  font-family: var(--f-mono); font-size: 22px; letter-spacing: 0.28em;
+      color: var(--coral); margin-bottom: 28px;
+}
+
+.sales-source-deck-shell .s-def .right .body {
+  font-family: var(--f-head); font-size: 40px; font-weight: 400;
+      line-height: 1.3; color: var(--ink);
+      margin: 0 0 36px;
+}
+
+.sales-source-deck-shell .s-def .right .body b {
+  font-weight: 800; color: var(--coral);
+}
+
+.sales-source-deck-shell .s-def .right .tag-row {
+  display: flex; gap: 12px; flex-wrap: wrap;
+}
+
+.sales-source-deck-shell .s-def .right .tag-row span {
+  border: 1px solid rgba(255,255,255,0.22);
+      padding: 8px 16px; border-radius: 6px;
+      font-family: var(--f-mono); font-size: 13px; letter-spacing: 0.16em;
+      color: var(--ink-dim); text-transform: uppercase;
+}
+
+.sales-source-deck-shell /* ============================================================ */
+  /* 04 — DIAGNOSTIC (split)                                       */
+  /* ============================================================ */
+  .s-diag {
+  display: grid; grid-template-columns: 1fr 1fr; padding: 0;
+      align-items: center;
+      position: relative;          /* anchor for .divider */
+}
+
+.sales-source-deck-shell .s-diag .col {
+  padding: 0 120px; height: 100%;
+      display: flex; flex-direction: column; justify-content: center;
+      min-width: 0;          /* prevent display content from blowing past the 1fr track */
+}
+
+.sales-source-deck-shell .s-diag .col.l {
+  background: linear-gradient(135deg, #060b2c 0%, #0c1660 100%);
+}
+
+.sales-source-deck-shell .s-diag .col.r {
+  background: linear-gradient(135deg, #1632e8 0%, #2042ff 100%);
+}
+
+.sales-source-deck-shell .s-diag .col .eyebrow {
+  margin-bottom: 28px; font-size: 13px;
+}
+
+.sales-source-deck-shell .s-diag .col.l .eyebrow {
+  color: var(--ink-dim);
+}
+
+.sales-source-deck-shell .s-diag .col.r .eyebrow {
+  color: rgba(255,255,255,0.85);
+}
+
+.sales-source-deck-shell .s-diag .col h2 {
+  font-family: var(--f-display); font-size: 108px; line-height: 0.88;
+      letter-spacing: -0.02em; text-transform: uppercase;
+      margin: 0 0 50px;
+}
+
+.sales-source-deck-shell .s-diag .col.l h2 {
+  color: rgba(255,255,255,0.55);
+}
+
+.sales-source-deck-shell .s-diag .col.l h2 .b {
+  display: block; color: rgba(255,255,255,0.85);
+}
+
+.sales-source-deck-shell .s-diag .col.r h2 {
+  color: #fff;
+}
+
+.sales-source-deck-shell .s-diag .col.r h2 .accent {
+  display: block; color: var(--coral); position: relative;
+}
+
+.sales-source-deck-shell .s-diag .col.r h2 .accent::after {
+  content: ""; position: absolute; left: 0; right: 12%; bottom: -8px;
+      height: 6px; background: var(--coral); border-radius: 3px;
+}
+
+.sales-source-deck-shell .s-diag ul {
+  list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 22px;
+}
+
+.sales-source-deck-shell .s-diag ul li {
+  display: flex; align-items: center; gap: 18px;
+      font-family: var(--f-head); font-size: 28px;
+}
+
+.sales-source-deck-shell .s-diag .col.l ul li {
+  color: rgba(255,255,255,0.7); font-weight: 400;
+}
+
+.sales-source-deck-shell .s-diag .col.l ul li .ic {
+  width: 28px; height: 28px; border-radius: 50%; border: 2px solid rgba(255,255,255,0.4); display:inline-flex; align-items:center; justify-content:center; color: rgba(255,255,255,0.4); font-size: 22px; line-height: 1;
+}
+
+.sales-source-deck-shell .s-diag .col.r ul li {
+  color: #fff; font-weight: 600;
+}
+
+.sales-source-deck-shell .s-diag .col.r ul li .ic {
+  color: var(--green); font-size: 32px; font-weight: 700;
+}
+
+.sales-source-deck-shell .s-diag .divider {
+  position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+      z-index: 6; display: flex; flex-direction: column; align-items: center; gap: 18px;
+}
+
+.sales-source-deck-shell /* thin white vertical seam at the column boundary, .sales-source-deck-shell behind pill + arrow */
+  .s-diag .divider .seam {
+  position: absolute; left: 50%;
+      top: -2000px; bottom: -2000px;   /* extend well past the divider's bounds */
+      width: 1px; transform: translateX(-50%);
+      background: rgba(255,255,255,0.32);
+      z-index: -1;
+      pointer-events: none;
+}
+
+.sales-source-deck-shell .s-diag .divider .pill {
+  background: #fff; color: #0e1d8a;
+}
+
+.sales-source-deck-shell .s-diag .divider .arrow-btn {
+  font-size: 28px;
+}
+
+.sales-source-deck-shell /* ============================================================ */
+  /* 05 — MISTAKE                                                   */
+  /* ============================================================ */
+  .s-mistake {
+  padding: 0 140px; display: flex; flex-direction: column; justify-content: center;
+}
+
+.sales-source-deck-shell .s-mistake .top {
+  display: flex; align-items: baseline; gap: 32px; margin-bottom: 40px;
+}
+
+.sales-source-deck-shell .s-mistake .num {
+  font-family: var(--f-display); font-size: 220px; line-height: 0.85;
+      color: var(--coral); letter-spacing: -0.04em;
+      text-shadow: 6px 6px 0 rgba(0,0,0,0.25);
+}
+
+.sales-source-deck-shell .s-mistake .top-r .eyebrow {
+  display:block; margin-bottom: 18px;
+}
+
+.sales-source-deck-shell .s-mistake .top-r .stamp {
+  display: inline-flex; align-items: center; gap: 10px;
+      font-family: var(--f-mono); font-size: 13px; letter-spacing: 0.26em;
+      color: #fff; background: var(--coral);
+      padding: 8px 16px; border-radius: 4px;
+      transform: rotate(-2deg);
+      box-shadow: 0 6px 18px rgba(255,93,108,0.45);
+}
+
+.sales-source-deck-shell .s-mistake h1 {
+  font-family: var(--f-display); font-size: 124px; line-height: 0.92;
+      letter-spacing: -0.02em; text-transform: uppercase; margin: 0 0 36px;
+      max-width: 1500px;
+}
+
+.sales-source-deck-shell .s-mistake h1 .crl {
+  color: var(--coral);
+}
+
+.sales-source-deck-shell .s-mistake .why {
+  display: grid; grid-template-columns: auto 1fr; gap: 32px; align-items: start;
+      border-top: 1px solid rgba(255,255,255,0.18);
+      padding-top: 36px; max-width: 1400px;
+}
+
+.sales-source-deck-shell .s-mistake .why .lbl {
+  font-family: var(--f-mono); font-size: 14px; letter-spacing: 0.3em;
+      color: var(--ink-mute); padding-top: 8px;
+}
+
+.sales-source-deck-shell .s-mistake .why p {
+  font-family: var(--f-head); font-size: 30px; line-height: 1.4; margin: 0;
+      color: rgba(255,255,255,0.88);
+}
+
+.sales-source-deck-shell .s-mistake .why p b {
+  color: #fff; font-weight: 800;
+}
+
+.sales-source-deck-shell /* ============================================================ */
+  /* 06 — CASE STUDY (stats + quote)                                */
+  /* ============================================================ */
+  .s-case {
+  padding: 140px 140px 0; display: flex; flex-direction: column;
+}
+
+.sales-source-deck-shell .s-case .header {
+  display: flex; justify-content: space-between; align-items: baseline;
+      margin-bottom: 60px;
+}
+
+.sales-source-deck-shell .s-case .header .name {
+  font-family: var(--f-display); font-size: 48px; line-height: 1; letter-spacing: -0.01em;
+}
+
+.sales-source-deck-shell .s-case .header .name small {
+  display: block; font-family: var(--f-mono); font-size: 14px;
+      letter-spacing: 0.22em; color: var(--ink-dim); font-weight: 400;
+      margin-top: 8px; text-transform: uppercase;
+}
+
+.sales-source-deck-shell .s-case .header .industry {
+  font-family: var(--f-mono); font-size: 14px; letter-spacing: 0.26em;
+      color: var(--ink-mute); text-align: right; text-transform: uppercase;
+}
+
+.sales-source-deck-shell .s-case .stats {
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 60px;
+      margin: 20px 0 80px;
+}
+
+.sales-source-deck-shell .s-case .stat {
+  text-align: left;
+}
+
+.sales-source-deck-shell .s-case .stat .v {
+  font-family: var(--f-display); font-size: 168px; line-height: 0.85;
+      letter-spacing: -0.04em; color: #fff;
+      display: flex; align-items: baseline; gap: 12px;
+}
+
+.sales-source-deck-shell .s-case .stat .v .u {
+  font-size: 56px; color: rgba(255,255,255,0.55);
+}
+
+.sales-source-deck-shell .s-case .stat .v .plus {
+  color: var(--coral); font-size: 110px;
+}
+
+.sales-source-deck-shell .s-case .stat .bar {
+  height: 1px; background: var(--coral); width: 70%; margin: 16px 0 12px;
+}
+
+.sales-source-deck-shell .s-case .stat .l {
+  font-family: var(--f-mono); font-size: 14px; letter-spacing: 0.24em;
+      color: rgba(255,255,255,0.6); text-transform: uppercase;
+}
+
+.sales-source-deck-shell .s-case .quote {
+  background: rgba(255,255,255,0.04);
+      border-left: 4px solid var(--coral);
+      padding: 32px 44px;
+      max-width: 1300px; margin-left: 200px;
+      position: relative;
+}
+
+.sales-source-deck-shell .s-case .quote::before {
+  content: "“"; position: absolute; top: -50px; left: 24px;
+      font-family: 'Georgia', serif; font-size: 180px; color: var(--coral);
+      line-height: 1; opacity: 0.85;
+}
+
+.sales-source-deck-shell .s-case .quote p {
+  font-family: var(--f-head); font-style: italic; font-size: 30px;
+      line-height: 1.35; margin: 0; color: #fff; font-weight: 400;
+}
+
+.sales-source-deck-shell .s-case .quote cite {
+  display: block; margin-top: 14px;
+      font-family: var(--f-mono); font-size: 13px; letter-spacing: 0.2em;
+      color: var(--ink-dim); font-style: normal; text-transform: uppercase;
+}
+
+.sales-source-deck-shell /* ============================================================ */
+  /* 07 — PROCESS                                                   */
+  /* ============================================================ */
+  .s-process {
+  padding: 0 140px 0;
+      display: flex; flex-direction: column; justify-content: center;
+      min-height: 1080px;
+      padding-top: 180px;   /* shift the whole block toward the bottom-center */
+      padding-bottom: 140px;
+}
+
+.sales-source-deck-shell .s-process .head {
+  margin-bottom: 110px; max-width: 1500px;
+}
+
+.sales-source-deck-shell .s-process .head .eyebrow {
+  margin-bottom: 22px; display: block;
+}
+
+.sales-source-deck-shell .s-process .head h1 {
+  font-family: var(--f-display); font-size: 96px; line-height: 0.9;
+      letter-spacing: -0.02em; text-transform: uppercase; margin: 0;
+}
+
+.sales-source-deck-shell .s-process .head h1 .crl {
+  color: var(--coral);
+}
+
+.sales-source-deck-shell .s-process .steps {
+  display: grid; grid-template-columns: repeat(4, 1fr); gap: 24px;
+      position: relative;
+}
+
+.sales-source-deck-shell /* dotted connector — endpoints sit INSIDE the first & last circles
+     (circles are 100px wide, .sales-source-deck-shell anchored top-left of each column → center at 50px) */
+  .s-process .steps::before {
+  content: ""; position: absolute;
+      left: 50px;
+      right: calc(25% - 68px); /* stops at the center of the 4th circle */
+      top: 49px; height: 2px;
+      background-image: linear-gradient(90deg, var(--coral) 50%, transparent 50%);
+      background-size: 14px 2px;
+      z-index: 0;
+}
+
+.sales-source-deck-shell .s-process .step {
+  position: relative; z-index: 1;
+}
+
+.sales-source-deck-shell .s-process .step .dot {
+  width: 100px; height: 100px; border-radius: 50%;
+      background: #0a1351;
+      border: 3px solid var(--coral);
+      display: flex; align-items: center; justify-content: center;
+      font-family: var(--f-display); font-size: 44px; color: #fff;
+      margin-bottom: 28px;
+      /* no halo — let the dotted line pass cleanly into the circle */
+}
+
+.sales-source-deck-shell .s-process .step .t {
+  font-family: var(--f-display); font-size: 38px; line-height: 0.95;
+      text-transform: uppercase; letter-spacing: -0.01em;
+      margin-bottom: 16px;
+}
+
+.sales-source-deck-shell .s-process .step .d {
+  font-family: var(--f-body); font-size: 20px; line-height: 1.4;
+      color: rgba(255,255,255,0.7); max-width: 360px;
+}
+
+.sales-source-deck-shell .s-process .step.active .dot {
+  background: var(--coral);
+}
+
+.sales-source-deck-shell /* ============================================================ */
+  /* 08 — CHECKLIST                                                 */
+  /* ============================================================ */
+  .s-check {
+  padding: 130px 140px 130px; display: grid; grid-template-columns: 1fr 1fr; gap: 90px; align-items: stretch;
+}
+
+.sales-source-deck-shell .s-check .left .eyebrow {
+  display: block; margin-bottom: 24px;
+}
+
+.sales-source-deck-shell .s-check .left h1 {
+  font-family: var(--f-display); font-size: 116px; line-height: 0.88;
+      letter-spacing: -0.02em; text-transform: uppercase; margin: 0 0 36px;
+}
+
+.sales-source-deck-shell .s-check .left h1 .crl {
+  color: var(--coral);
+}
+
+.sales-source-deck-shell .s-check .left p {
+  font-family: var(--f-head); font-size: 26px; line-height: 1.45;
+      color: rgba(255,255,255,0.7); max-width: 540px;
+}
+
+.sales-source-deck-shell .s-check .left .seal {
+  margin-top: 50px;
+      width: 180px; height: 180px; border-radius: 50%;
+      border: 2px dashed rgba(255,255,255,0.3);
+      display: flex; align-items: center; justify-content: center; flex-direction: column;
+      transform: rotate(-8deg);
+}
+
+.sales-source-deck-shell .s-check .left .seal .n {
+  font-family: var(--f-display); font-size: 64px; color: var(--coral); line-height: 1;
+}
+
+.sales-source-deck-shell .s-check .left .seal .l {
+  font-family: var(--f-mono); font-size: 11px; letter-spacing: 0.26em;
+      color: var(--ink-dim); margin-top: 4px; text-transform: uppercase;
+}
+
+.sales-source-deck-shell .s-check .left {
+  display: flex; flex-direction: column; justify-content: center;
+}
+
+.sales-source-deck-shell .s-check .right {
+  display: flex; flex-direction: column;
+}
+
+.sales-source-deck-shell .s-check ul.list {
+  list-style: none; padding: 0; margin: 0; flex: 1; display: flex; flex-direction: column; justify-content: space-between; gap: 0;
+}
+
+.sales-source-deck-shell .s-check ul.list li {
+  display: grid; grid-template-columns: 56px 1fr; gap: 22px; align-items: center;
+      padding: 36px 26px; flex: 1;
+      background: rgba(255,255,255,0.04);
+      border-left: 3px solid var(--coral);
+      border-radius: 0 12px 12px 0;
+}
+
+.sales-source-deck-shell .s-check ul.list li .box {
+  width: 40px; height: 40px; border-radius: 8px;
+      border: 2px solid rgba(255,255,255,0.4);
+      display: flex; align-items: center; justify-content: center;
+}
+
+.sales-source-deck-shell .s-check ul.list li.done .box {
+  background: var(--coral); border-color: var(--coral);
+}
+
+.sales-source-deck-shell .s-check ul.list li.done .box::after {
+  content: ""; width: 20px; height: 10px;
+      border-left: 3px solid #fff; border-bottom: 3px solid #fff;
+      transform: rotate(-45deg) translate(2px, -2px);
+}
+
+.sales-source-deck-shell .s-check ul.list li .t {
+  font-family: var(--f-head); font-weight: 600; font-size: 26px; color: #fff;
+}
+
+.sales-source-deck-shell .s-check ul.list li .t b {
+  color: var(--coral); font-weight: 800;
+}
+
+.sales-source-deck-shell .s-check ul.list li.done .t {
+  color: rgba(255,255,255,0.5); text-decoration: line-through; text-decoration-color: var(--coral);
+}
+
+.sales-source-deck-shell .s-check ul.list li .t small {
+  display: block; font-family: var(--f-mono); font-weight: 400; font-size: 12px;
+      letter-spacing: 0.22em; color: var(--ink-mute); margin-top: 4px; text-transform: uppercase;
+}
+
+.sales-source-deck-shell /* ============================================================ */
+  /* PROGRAMME ANNUEL — roadmap                                    */
+  /* ============================================================ */
+  .s-prog-year {
+  display: flex; flex-direction: column;
+      padding: 0; overflow: hidden;
+}
+
+.sales-source-deck-shell .s-prog-year .py-head {
+  padding: 100px 140px 36px;
+      display: flex; flex-direction: column; gap: 12px;
+      border-bottom: 1px solid rgba(255,255,255,0.10);
+}
+
+.sales-source-deck-shell .s-prog-year .py-head h1 {
+  font-family: var(--f-display); font-weight: 900;
+      font-size: 72px; line-height: 0.88; letter-spacing: -0.025em;
+      text-transform: uppercase; margin: 0;
+}
+
+.sales-source-deck-shell .s-prog-year .py-head h1 .crl {
+  color: var(--coral);
+}
+
+.sales-source-deck-shell .s-prog-year .py-head .sub {
+  font-family: var(--f-body); font-size: 24px; line-height: 1.4;
+      color: rgba(255,255,255,0.52); max-width: 1100px;
+}
+
+.sales-source-deck-shell /* SVG road fills the rest */
+  .s-prog-year .py-svg-road {
+  flex: 1; display: block; width: 100%;
+}
+
+.sales-source-deck-shell /* ============================================================ */
+  /* STORY BLACKBOARD — école / craie                             */
+  /* ============================================================ */
+  .s-board {
+  width: 1920px; height: 1080px; box-sizing: border-box;
+      display: flex; flex-direction: column; align-items: center;
+      padding: 72px 140px 64px;
+}
+
+.sales-source-deck-shell .s-board .meta {
+  display: flex; align-items: center; gap: 22px; width: 1300px;
+      font-family: var(--f-mono); font-size: 16px; letter-spacing: 0.32em;
+      color: rgba(255,255,255,0.5); text-transform: uppercase;
+      margin-bottom: 26px;
+}
+
+.sales-source-deck-shell .s-board .meta .num {
+  color: var(--coral);
+}
+
+.sales-source-deck-shell .s-board .meta .bar {
+  flex: 1; height: 1px; background: rgba(255,255,255,0.18);
+}
+
+.sales-source-deck-shell .s-board .meta .chapter {
+  color: #fff;
+}
+
+.sales-source-deck-shell /* Wooden frame */
+  .s-board .chalkboard {
+  width: 1300px; height: 600px; flex-shrink: 0;
+      border-radius: 12px;
+      padding: 24px;
+      background:
+        repeating-linear-gradient(91deg, rgba(0,0,0,0.10) 0 3px, transparent 3px 12px),
+        linear-gradient(160deg, #7a5430 0%, #5e3e22 42%, #3f2814 100%);
+      box-shadow:
+        0 48px 100px rgba(0,0,0,0.6),
+        inset 0 2px 3px rgba(255,210,150,0.35),
+        inset 0 -3px 6px rgba(0,0,0,0.5);
+      position: relative;
+}
+
+.sales-source-deck-shell /* Slate surface */
+  .s-board .board-inner {
+  width: 100%; height: 100%;
+      border-radius: 5px;
+      background:
+        radial-gradient(ellipse 70% 80% at 50% 38%, #244034 0%, #18302700 60%),
+        radial-gradient(ellipse at 50% 50%, #1c322a 0%, #142620 72%, #0d1b16 100%);
+      box-shadow: inset 0 0 60px rgba(0,0,0,0.55), inset 0 0 0 2px rgba(0,0,0,0.3);
+      position: relative; overflow: hidden;
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+}
+
+.sales-source-deck-shell /* chalk dust smudges */
+  .s-board .board-inner::before {
+  content: ''; position: absolute; inset: 0; pointer-events: none;
+      background:
+        radial-gradient(ellipse 40% 18% at 24% 78%, rgba(255,255,255,0.05), transparent 70%),
+        radial-gradient(ellipse 30% 14% at 80% 22%, rgba(255,255,255,0.045), transparent 70%);
+}
+
+.sales-source-deck-shell .s-board .ch-title {
+  font-family: var(--f-script); font-size: 46px; line-height: 1;
+      color: #e9d98a; margin: 0 0 6px;
+      transform: rotate(-1deg);
+      text-shadow: 0 0 1px rgba(233,217,138,0.5);
+      position: relative;
+}
+
+.sales-source-deck-shell .s-board .ch-title::after {
+  content: ''; position: absolute; left: 4%; right: 4%; bottom: -8px;
+      height: 3px; border-radius: 3px;
+      background: rgba(233,217,138,0.55);
+      filter: blur(0.4px);
+      transform: rotate(0.4deg);
+}
+
+.sales-source-deck-shell .s-board .ch-lines {
+  width: 82%; margin: 0 auto; text-align: center;
+}
+
+.sales-source-deck-shell .s-board .ch-para {
+  font-family: var(--f-script);
+      font-size: 86px; line-height: 1.22;
+      color: #f3f0e2;
+      text-shadow: 0 0 1.4px rgba(255,255,255,0.35);
+      margin: 0; transform: rotate(-0.5deg);
+}
+
+.sales-source-deck-shell .s-board .ch-para em {
+  color: #e9d98a; font-style: italic;
+}
+
+.sales-source-deck-shell .s-board .ch-para .pink {
+  color: #ff9aa6; position: relative; white-space: nowrap;
+      text-shadow: 0 0 2px rgba(255,154,166,0.5);
+}
+
+.sales-source-deck-shell .s-board .ch-para .pink::after {
+  content: ''; position: absolute; left: 0; right: 0; bottom: -2px;
+      height: 5px; border-radius: 4px; background: rgba(255,154,166,0.6);
+      filter: blur(0.4px); transform: rotate(0.4deg);
+}
+
+.sales-source-deck-shell /* chalk tray */
+  .s-board .tray {
+  position: absolute; left: 24px; right: 24px; bottom: -16px; height: 22px;
+      border-radius: 0 0 8px 8px;
+      background: linear-gradient(180deg, #5e3e22 0%, #3f2814 100%);
+      box-shadow: 0 12px 22px rgba(0,0,0,0.5), inset 0 2px 2px rgba(255,210,150,0.25);
+      display: flex; align-items: center; gap: 14px; padding-left: 80px;
+}
+
+.sales-source-deck-shell .s-board .tray .chalk {
+  width: 56px; height: 9px; border-radius: 4px; display: block;
+}
+
+.sales-source-deck-shell .s-board .tray .chalk.w {
+  background: #efece0;
+}
+
+.sales-source-deck-shell .s-board .tray .chalk.y {
+  background: #e9d98a; width: 40px;
+}
+
+.sales-source-deck-shell .s-board .tray .chalk.p {
+  background: #ff9aa6; width: 34px;
+}
+
+.sales-source-deck-shell .s-board .tray .eraser {
+  width: 64px; height: 22px; border-radius: 3px; margin-left: auto; margin-right: 60px;
+      background: linear-gradient(180deg, #b8472f 0%, #8a3320 100%);
+      box-shadow: inset 0 6px 0 rgba(255,255,255,0.12), 0 3px 6px rgba(0,0,0,0.4);
+}
+
+.sales-source-deck-shell /* Morale below board */
+  .s-board .board-morale {
+  width: 1300px; margin-top: 56px;
+      display: grid; grid-template-columns: auto 1fr; gap: 28px; align-items: center;
+      border-top: 2px solid var(--coral); padding-top: 26px;
+}
+
+.sales-source-deck-shell .s-board .board-morale .lbl {
+  font-family: var(--f-mono); font-size: 18px; letter-spacing: 0.32em;
+      color: var(--coral); text-transform: uppercase; align-self: start; padding-top: 8px;
+}
+
+.sales-source-deck-shell .s-board .board-morale .text {
+  font-family: var(--f-head); font-size: 38px; line-height: 1.25; color: #fff;
+}
+
+.sales-source-deck-shell .s-board .board-morale .text b {
+  color: var(--coral);
+}
+
+.sales-source-deck-shell /* ============================================================ */
+  /* JOURNAL — parchment + inkwell quotable                        */
+  /* ============================================================ */
+  .s-journal {
+  position: relative;
+      width: 1920px; height: 1080px; box-sizing: border-box;
+}
+
+.sales-source-deck-shell .s-journal .jnl-scene {
+  position: absolute;
+      left: 50%; top: 50%;
+      transform: translate(-50%, -50%);
+      width: 1440px; height: 660px; flex-shrink: 0;
+}
+
+.sales-source-deck-shell /* Page shadow */
+  .s-journal .jnl-page {
+  position: absolute; left: 0; top: 30px;
+      width: 1220px; height: 600px;
+      background: linear-gradient(155deg, #f9f3e0 0%, #ede2bc 55%, #e3d5aa 100%);
+      border-radius: 3px;
+      box-shadow:
+        0 32px 90px rgba(0,0,24,0.72),
+        0 8px 24px rgba(0,0,20,0.45),
+        inset 0 0 60px rgba(170,140,60,0.10);
+      transform: rotate(-1.4deg);
+      overflow: hidden;
+}
+
+.sales-source-deck-shell /* Ruled lines */
+  .s-journal .jnl-lines {
+  position: absolute; inset: 0;
+      background-image: repeating-linear-gradient(
+        180deg,
+        transparent 0, transparent 66px,
+        rgba(140,120,70,0.16) 66px, rgba(140,120,70,0.16) 68px
+      );
+}
+
+.sales-source-deck-shell /* Red margin line */
+  .s-journal .jnl-margin {
+  position: absolute; left: 112px; top: 0; bottom: 0;
+      width: 2px; background: rgba(210,60,60,0.32);
+}
+
+.sales-source-deck-shell /* Content zone */
+  .s-journal .jnl-content {
+  position: absolute; left: 140px; right: 48px; top: 40px; bottom: 32px;
+      display: flex; flex-direction: column; justify-content: center; gap: 28px;
+}
+
+.sales-source-deck-shell .s-journal .jnl-q1 {
+  font-family: 'Caveat', cursive; font-size: 68px; line-height: 1.18;
+      color: #0a133a; margin: 0; letter-spacing: -0.01em;
+}
+
+.sales-source-deck-shell .s-journal .jnl-q2 {
+  font-family: 'Caveat', cursive; font-size: 68px; line-height: 1.18;
+      color: #bb2a0d; margin: 0; letter-spacing: -0.01em;
+}
+
+.sales-source-deck-shell .s-journal .jnl-source {
+  font-family: 'Caveat', cursive; font-size: 36px;
+      color: rgba(10,19,58,0.38); margin: 0; margin-top: 28px;
+      border-top: 1px dashed rgba(140,120,70,0.3); padding-top: 18px;
+}
+
+.sales-source-deck-shell /* Inkwell */
+  .s-journal .jnl-inkwell {
+  position: absolute; right: 0; bottom: -10px;
+      filter: drop-shadow(0 20px 40px rgba(0,0,20,0.7));
+}
+
+.sales-source-deck-shell .s-journal .jnl-inkwell svg {
+  width: 240px; height: 320px;
+}
+
+.sales-source-deck-shell /* ============================================================ */
+  /* RECAP v2 — target layout                                      */
+  /* ============================================================ */
+  .s-recap2 {
+  width: 1920px; height: 1080px; box-sizing: border-box;
+      display: flex; flex-direction: column; padding: 100px 120px 80px;
+      position: relative;
+}
+
+.sales-source-deck-shell .s-recap2 .chrome {
+  margin-bottom: 0;
+}
+
+.sales-source-deck-shell .s-recap2 .rc2-layout {
+  display: grid; grid-template-columns: 1fr 560px; gap: 40px;
+      flex: 1; min-height: 0;
+}
+
+.sales-source-deck-shell /* LEFT */
+  .s-recap2 .rc2-left {
+  display: flex; flex-direction: column; gap: 48px;
+      justify-content: center;
+}
+
+.sales-source-deck-shell .s-recap2 .rc2-head h1 {
+  font-family: var(--f-display); font-weight: 900;
+      font-size: 96px; line-height: 0.88; letter-spacing: -0.03em;
+      text-transform: uppercase; margin: 0 0 0;
+}
+
+.sales-source-deck-shell .s-recap2 .rc2-head h1 .o {
+  -webkit-text-stroke: 2px rgba(255,255,255,0.5);
+      color: transparent;
+}
+
+.sales-source-deck-shell .s-recap2 .rc2-cards {
+  display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 26px;
+      align-items: center;
+}
+
+.sales-source-deck-shell .s-recap2 .rc2-card {
+  background: #fff;
+      border-radius: 16px;
+      border-top: 5px solid var(--card-color, var(--coral));
+      padding: 38px 30px 30px 30px;
+      display: flex; flex-direction: column;
+      position: relative;
+      box-shadow: 0 18px 40px rgba(0,0,20,0.4);
+      overflow: hidden;
+}
+
+.sales-source-deck-shell /* Number badge top-left, .sales-source-deck-shell inside card */
+  .s-recap2 .rc2-card .rc2-num-badge {
+  width: 58px; height: 58px; border-radius: 12px;
+      background: var(--card-color, var(--coral));
+      display: flex; align-items: center; justify-content: center;
+      color: #fff; font-family: var(--f-display); font-weight: 900;
+      font-size: 28px; letter-spacing: -0.01em; line-height: 1;
+      box-shadow: 0 6px 18px rgba(0,0,20,0.2);
+      flex-shrink: 0;
+}
+
+.sales-source-deck-shell .s-recap2 .rc2-card h3 {
+  font-family: var(--f-display); font-size: 29px; line-height: 1.02;
+      letter-spacing: -0.01em; text-transform: uppercase;
+      color: #0a133a; margin: 22px 0 0;
+}
+
+.sales-source-deck-shell .s-recap2 .rc2-card .rc2-line {
+  width: 44px; height: 3px;
+      background: var(--card-color, var(--coral));
+      border-radius: 2px; flex-shrink: 0; margin: 14px 0;
+}
+
+.sales-source-deck-shell .s-recap2 .rc2-card p {
+  font-family: var(--f-body); font-size: 21px; line-height: 1.5;
+      color: #3a4060; margin: 0;
+}
+
+.sales-source-deck-shell /* RIGHT */
+  .s-recap2 .rc2-right {
+  position: relative; display: flex; align-items: center; justify-content: center;
+}
+
+.sales-source-deck-shell .s-recap2 .rc2-target {
+  width: 600px; height: 600px; flex-shrink: 0;
+      filter: drop-shadow(0 30px 60px rgba(0,0,20,0.6));
+      position: relative; z-index: 2;
+}
+
+.sales-source-deck-shell /* Deco circles */
+  .s-recap2 .rc2-deco {
+  position: absolute; border-radius: 50%;
+}
+
+.sales-source-deck-shell .s-recap2 .rc2-d1 {
+  width: 90px; height: 90px;
+      background: var(--coral); opacity: 0.85;
+      top: 30px; right: 60px;
+}
+
+.sales-source-deck-shell .s-recap2 .rc2-d2 {
+  width: 60px; height: 60px;
+      border: 3px solid rgba(255,255,255,0.35);
+      top: 80px; left: 60px;
+}
+
+.sales-source-deck-shell .s-recap2 .rc2-d3 {
+  width: 44px; height: 44px;
+      background: rgba(255,255,255,0.15);
+      bottom: 80px; right: 40px;
+}
+
+.sales-source-deck-shell .s-recap2 .rc2-d4 {
+  width: 120px; height: 120px;
+      border: 3px solid rgba(255,255,255,0.12);
+      bottom: 30px; left: 30px;
+}
+
+.sales-source-deck-shell /* Plus signs */
+  .s-recap2 .rc2-plus {
+  position: absolute;
+}
+
+.sales-source-deck-shell .s-recap2 .p1 {
+  top: 100px; right: 120px;
+}
+
+.sales-source-deck-shell .s-recap2 .p2 {
+  top: 200px; left: 30px;
+}
+
+.sales-source-deck-shell .s-recap2 .p3 {
+  bottom: 120px; right: 100px;
+}
+
+.sales-source-deck-shell /* ============================================================ */
+  /* ANALOGY — concept vs comparaison                              */
+  /* ============================================================ */
+  /* ANALOGY — concept vs comparaison (diagonal split)             */
+  .s-analogy {
+  position: relative;
+      width: 1920px; height: 1080px;
+      overflow: hidden;
+      box-sizing: border-box;
+      background: #0a0618;
+}
+
+.sales-source-deck-shell /* Left half — content in 960px, .sales-source-deck-shell bg extends diagonally via ::before */
+  .s-analogy .an-left {
+  position: absolute; left: 0; top: 0;
+      width: 960px; height: 1080px;
+      display: flex; flex-direction: column; justify-content: center;
+      padding: 120px 100px 120px 120px;
+      box-sizing: border-box; z-index: 2;
+}
+
+.sales-source-deck-shell .s-analogy .an-left::before {
+  content: '';
+      position: absolute; left: 0; top: 0;
+      width: 960px; height: 100%;
+      background: #0b1560;
+      z-index: -1;
+}
+
+.sales-source-deck-shell /* Right half */
+  .s-analogy .an-right {
+  position: absolute; left: 960px; top: 0;
+      width: 960px; height: 1080px;
+      background: #0a0618;
+      display: flex; flex-direction: column; justify-content: center;
+      padding: 120px 120px 120px 100px;
+      box-sizing: border-box; z-index: 2;
+}
+
+.sales-source-deck-shell /* Vertical separator bar */
+  .s-analogy .an-diag {
+  position: absolute; left: 960px; top: 0;
+      width: 14px; height: 100%;
+      background: var(--coral);
+      transform: translateX(-50%);
+      box-shadow: 0 0 60px rgba(255,107,71,0.5), 0 0 20px rgba(255,107,71,0.3);
+      z-index: 10;
+}
+
+.sales-source-deck-shell /* Tag */
+  .s-analogy .an-tag {
+  font-family: var(--f-mono); font-size: 15px; letter-spacing: 0.32em;
+      text-transform: uppercase; color: rgba(255,255,255,0.35); display: block;
+      margin-bottom: 20px;
+}
+
+.sales-source-deck-shell .s-analogy .an-right .an-tag {
+  color: var(--coral);
+}
+
+.sales-source-deck-shell /* Name */
+  .s-analogy .an-name {
+  font-family: var(--f-display); font-weight: 900;
+      font-size: 110px; line-height: 0.85; letter-spacing: -0.03em;
+      text-transform: uppercase; color: #fff; margin: 0 0 44px;
+}
+
+.sales-source-deck-shell .s-analogy .an-right .an-name {
+  color: var(--coral);
+}
+
+.sales-source-deck-shell /* Body text */
+  .s-analogy .an-text {
+  font-family: var(--f-body); font-size: 28px; line-height: 1.6;
+      color: rgba(255,255,255,0.6); margin: 0;
+      border-left: 4px solid rgba(255,255,255,0.12); padding-left: 24px;
+}
+
+.sales-source-deck-shell .s-analogy .an-right .an-text {
+  border-left-color: var(--coral);
+}
+
+.sales-source-deck-shell /* ============================================================ */
+  /* HOMEWORK / CHECKLIST — layout colonne                         */
+  /* ============================================================ */
+  .s-hw {
+  display: flex; flex-direction: column; justify-content: center;
+      padding: 100px 140px; gap: 56px;
+}
+
+.sales-source-deck-shell .s-hw .hw-head {
+  display: flex; align-items: center; gap: 52px;
+}
+
+.sales-source-deck-shell .s-hw .hw-head h1 {
+  font-family: var(--f-display); font-weight: 900;
+      font-size: 96px; line-height: 0.88;
+      letter-spacing: -0.025em; text-transform: uppercase; margin: 0;
+}
+
+.sales-source-deck-shell .s-hw .hw-head h1 .crl {
+  color: var(--coral);
+}
+
+.sales-source-deck-shell .s-hw .hw-head .seal {
+  width: 160px; height: 160px; border-radius: 50%; flex-shrink: 0;
+      border: 2px dashed rgba(255,255,255,0.3);
+      display: flex; align-items: center; justify-content: center;
+      flex-direction: column; transform: rotate(-8deg);
+}
+
+.sales-source-deck-shell .s-hw .hw-head .seal .n {
+  font-family: var(--f-display); font-size: 56px; color: var(--coral); line-height: 1;
+}
+
+.sales-source-deck-shell .s-hw .hw-head .seal .l {
+  font-family: var(--f-mono); font-size: 11px; letter-spacing: 0.26em;
+      color: var(--ink-dim); margin-top: 4px; text-transform: uppercase;
+}
+
+.sales-source-deck-shell .s-hw .hw-items {
+  display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 28px;
+      grid-auto-rows: 360px;
+}
+
+.sales-source-deck-shell .s-hw .hw-item {
+  display: flex; flex-direction: column; justify-content: space-between; gap: 24px;
+      background: rgba(255,255,255,0.04);
+      border: 1px solid rgba(255,255,255,0.10);
+      border-left: 4px solid var(--coral);
+      border-radius: 0 14px 14px 0;
+      padding: 44px 44px;
+}
+
+.sales-source-deck-shell .s-hw .hw-item .n {
+  font-family: var(--f-display); font-size: 40px; letter-spacing: -0.01em;
+      color: var(--coral); line-height: 1;
+}
+
+.sales-source-deck-shell .s-hw .hw-item p {
+  font-family: var(--f-head); font-size: 30px; line-height: 1.4;
+      color: rgba(255,255,255,0.85); margin: 0;
+}
+
+.sales-source-deck-shell .s-hw .hw-item p b {
+  color: #fff; font-weight: 800;
+}
+
+.sales-source-deck-shell /* ============================================================ */
+  /* WARNING NOTE — post-it + texte en dessous                     */
+  /* ============================================================ */
+  .s-warning-note {
+  display: flex; align-items: center; justify-content: center;
+      padding: 100px 200px 80px;
+}
+
+.sales-source-deck-shell .s-warning-note .wn-inner {
+  display: flex; align-items: center; gap: 120px;
+      width: 100%; max-width: 1600px;
+}
+
+.sales-source-deck-shell .s-warning-note .wn-sticky {
+  flex-shrink: 0;
+      filter: drop-shadow(0 32px 60px rgba(0,0,20,0.6));
+}
+
+.sales-source-deck-shell .s-warning-note .wn-text {
+  display: flex; flex-direction: column; gap: 40px;
+}
+
+.sales-source-deck-shell .s-warning-note .wn-text .eyebrow {
+  display: block;
+}
+
+.sales-source-deck-shell .s-warning-note h1 {
+  font-family: var(--f-display); font-weight: 900;
+      font-size: 112px; line-height: 0.88;
+      letter-spacing: -0.025em; text-transform: uppercase; margin: 0;
+}
+
+.sales-source-deck-shell .s-warning-note h1 .crl {
+  color: var(--coral);
+}
+
+.sales-source-deck-shell .s-warning-note .wn-body {
+  border-top: 1px solid rgba(255,255,255,0.15);
+      padding-top: 36px;
+      display: grid; grid-template-columns: auto 1fr; gap: 28px; align-items: start;
+}
+
+.sales-source-deck-shell .s-warning-note .lbl {
+  font-family: var(--f-mono); font-size: 14px; letter-spacing: 0.3em;
+      color: rgba(255,255,255,0.35); padding-top: 6px; text-transform: uppercase;
+}
+
+.sales-source-deck-shell .s-warning-note .wn-body p {
+  font-family: var(--f-head); font-size: 30px; line-height: 1.45;
+      color: rgba(255,255,255,0.82); margin: 0;
+}
+
+.sales-source-deck-shell .s-warning-note .wn-body p b {
+  color: #fff; font-weight: 800;
+}
+
+.sales-source-deck-shell /* ============================================================ */
+  /* WARNING / MISTAKE — avec triangle SVG                         */
+  /* ============================================================ */
+  .s-warning {
+  display: grid; grid-template-columns: 420px 1fr;
+      align-items: center; padding: 0;
+      overflow: hidden;
+}
+
+.sales-source-deck-shell /* Left: triangle zone */
+  .s-warning .warn-left {
+  height: 100%; display: flex; align-items: center; justify-content: center;
+      position: relative;
+      border-right: 1px solid rgba(255,255,255,0.10);
+      background: rgba(255,93,108,0.04);
+}
+
+.sales-source-deck-shell /* Large ghost triangle in background */
+  .s-warning .warn-left::before {
+  content: ""; position: absolute;
+      inset: 0;
+      background: radial-gradient(ellipse 360px 400px at 50% 50%, rgba(255,93,108,0.08) 0%, transparent 70%);
+}
+
+.sales-source-deck-shell /* Right: text */
+  .s-warning .warn-right {
+  padding: 120px 140px 100px 100px;
+      display: flex; flex-direction: column; justify-content: center; gap: 44px;
+}
+
+.sales-source-deck-shell .s-warning .warn-top {
+  display: flex; flex-direction: column; gap: 22px;
+}
+
+.sales-source-deck-shell .s-warning .warn-stamp {
+  display: inline-flex; align-items: center; gap: 10px;
+      font-family: var(--f-mono); font-size: 13px; letter-spacing: 0.26em;
+      color: #fff; background: var(--coral);
+      padding: 9px 18px; border-radius: 4px; align-self: flex-start;
+      transform: rotate(-1.5deg);
+      box-shadow: 0 6px 18px rgba(255,93,108,0.40);
+}
+
+.sales-source-deck-shell .s-warning h1 {
+  font-family: var(--f-display); font-weight: 900;
+      font-size: 108px; line-height: 0.88;
+      letter-spacing: -0.025em; text-transform: uppercase;
+      margin: 0; max-width: 1200px;
+}
+
+.sales-source-deck-shell .s-warning h1 .crl {
+  color: var(--coral);
+}
+
+.sales-source-deck-shell .s-warning .warn-body {
+  border-top: 1px solid rgba(255,255,255,0.15);
+      padding-top: 40px;
+      display: grid; grid-template-columns: auto 1fr; gap: 32px; align-items: start;
+}
+
+.sales-source-deck-shell .s-warning .warn-body .lbl {
+  font-family: var(--f-mono); font-size: 14px; letter-spacing: 0.3em;
+      color: rgba(255,255,255,0.35); padding-top: 6px; text-transform: uppercase;
+}
+
+.sales-source-deck-shell .s-warning .warn-body p {
+  font-family: var(--f-head); font-size: 30px; line-height: 1.45;
+      color: rgba(255,255,255,0.82); margin: 0;
+}
+
+.sales-source-deck-shell .s-warning .warn-body p b {
+  color: #fff; font-weight: 800;
+}
+
+.sales-source-deck-shell /* ============================================================ */
+  /* CASE STUDY — cartes comparatives                              */
+  /* ============================================================ */
+  .s-casestudy {
+  display: flex; flex-direction: column; justify-content: center;
+      padding: 100px 140px 80px;
+      gap: 64px;
+}
+
+.sales-source-deck-shell .s-casestudy .cs-head {
+  display: flex; flex-direction: column; gap: 18px; max-width: 1640px;
+}
+
+.sales-source-deck-shell .s-casestudy .cs-head .eyebrow {
+  display: block;
+}
+
+.sales-source-deck-shell .s-casestudy .cs-head h1 {
+  font-family: var(--f-display); font-weight: 900;
+      font-size: 76px; line-height: 0.9; letter-spacing: -0.02em;
+      text-transform: uppercase; margin: 0;
+}
+
+.sales-source-deck-shell .s-casestudy .cs-head h1 .crl {
+  color: var(--coral);
+}
+
+.sales-source-deck-shell /* Card grid — use .cols-2 or .cols-3 */
+  .s-casestudy .cs-cards {
+  display: grid; gap: 28px;
+}
+
+.sales-source-deck-shell .s-casestudy .cs-cards.cols-2 {
+  grid-template-columns: 1fr 1fr;
+}
+
+.sales-source-deck-shell .s-casestudy .cs-cards.cols-3 {
+  grid-template-columns: 1fr 1fr 1fr;
+}
+
+.sales-source-deck-shell .s-casestudy .cs-card {
+  background: rgba(255,255,255,0.05);
+      border: 1px solid rgba(255,255,255,0.12);
+      border-radius: 16px; overflow: hidden;
+      display: flex; flex-direction: column;
+}
+
+.sales-source-deck-shell /* Top accent strip — override per card with .accent-coral / .accent-gold / .accent-green / .accent-blue */
+  .s-casestudy .cs-card .cs-stripe {
+  height: 5px; background: rgba(255,255,255,0.2); flex-shrink: 0;
+}
+
+.sales-source-deck-shell .s-casestudy .cs-card.accent-coral .cs-stripe {
+  background: var(--coral);
+}
+
+.sales-source-deck-shell .s-casestudy .cs-card.accent-gold   .cs-stripe {
+  background: #f5c45a;
+}
+
+.sales-source-deck-shell .s-casestudy .cs-card.accent-green  .cs-stripe {
+  background: var(--green);
+}
+
+.sales-source-deck-shell .s-casestudy .cs-card.accent-blue   .cs-stripe {
+  background: #4a7fff;
+}
+
+.sales-source-deck-shell .s-casestudy .cs-card .cs-body {
+  padding: 36px 40px 40px;
+      display: flex; flex-direction: column; gap: 16px; flex: 1;
+}
+
+.sales-source-deck-shell .s-casestudy .cs-card .cs-tag {
+  font-family: var(--f-mono); font-size: 13px; letter-spacing: 0.28em;
+      text-transform: uppercase; color: var(--ink-dim); display: block;
+}
+
+.sales-source-deck-shell .s-casestudy .cs-card.accent-coral .cs-tag {
+  color: var(--coral);
+}
+
+.sales-source-deck-shell .s-casestudy .cs-card.accent-gold   .cs-tag {
+  color: #f5c45a;
+}
+
+.sales-source-deck-shell .s-casestudy .cs-card.accent-green  .cs-tag {
+  color: var(--green);
+}
+
+.sales-source-deck-shell .s-casestudy .cs-card.accent-blue   .cs-tag {
+  color: #4a7fff;
+}
+
+.sales-source-deck-shell .s-casestudy .cs-card .cs-title {
+  font-family: var(--f-display); font-size: 40px; line-height: 0.92;
+      letter-spacing: -0.015em; text-transform: uppercase; color: #fff;
+      margin: 0;
+}
+
+.sales-source-deck-shell .s-casestudy .cs-card .cs-sep {
+  height: 1px; background: rgba(255,255,255,0.10); margin: 4px 0;
+}
+
+.sales-source-deck-shell .s-casestudy .cs-card .cs-text {
+  font-family: var(--f-body); font-size: 22px; line-height: 1.45;
+      color: rgba(255,255,255,0.65); margin: 0;
+}
+
+.sales-source-deck-shell .s-casestudy .cs-card .cs-text b {
+  color: #fff; font-weight: 700;
+}
+
+.sales-source-deck-shell .s-casestudy .cs-card .cs-example {
+  margin-top: auto; padding-top: 16px;
+      font-family: var(--f-mono); font-size: 16px; line-height: 1.5;
+      color: rgba(255,255,255,0.40); border-top: 1px solid rgba(255,255,255,0.08);
+      font-style: italic;
+}
+
+.sales-source-deck-shell /* ── PAPER variant : cartes physiques ───────────────────── */
+  .s-casestudy .cs-cards.paper {
+  gap: 48px; align-items: center;
+}
+
+.sales-source-deck-shell .s-casestudy .cs-cards.paper .cs-card {
+  background: var(--pale);
+      border: none; border-radius: 4px;
+      box-shadow: 0 24px 64px rgba(0,0,20,0.65), 0 4px 12px rgba(0,0,20,0.4);
+}
+
+.sales-source-deck-shell /* Subtle rotation per card */
+  .s-casestudy .cs-cards.paper .cs-card:nth-child(1) {
+  transform: rotate(-2deg);
+}
+
+.sales-source-deck-shell .s-casestudy .cs-cards.paper .cs-card:nth-child(2) {
+  transform: rotate(0.6deg); margin-top: -16px;
+}
+
+.sales-source-deck-shell .s-casestudy .cs-cards.paper .cs-card:nth-child(3) {
+  transform: rotate(2deg);
+}
+
+.sales-source-deck-shell /* Thicker accent stripe */
+  .s-casestudy .cs-cards.paper .cs-card .cs-stripe {
+  height: 10px;
+}
+
+.sales-source-deck-shell .s-casestudy .cs-cards.paper .cs-card .cs-body {
+  gap: 14px; padding: 28px 36px 36px;
+}
+
+.sales-source-deck-shell /* Dark text on pale background */
+  .s-casestudy .cs-cards.paper .cs-card .cs-tag {
+  color: rgba(10,19,70,0.5);
+}
+
+.sales-source-deck-shell .s-casestudy .cs-cards.paper .cs-card.accent-coral .cs-tag {
+  color: var(--coral-deep);
+}
+
+.sales-source-deck-shell .s-casestudy .cs-cards.paper .cs-card.accent-gold   .cs-tag {
+  color: #b07d10;
+}
+
+.sales-source-deck-shell .s-casestudy .cs-cards.paper .cs-card.accent-green  .cs-tag {
+  color: #1a8a5a;
+}
+
+.sales-source-deck-shell .s-casestudy .cs-cards.paper .cs-card .cs-title {
+  color: #0a1346; font-size: 36px;
+}
+
+.sales-source-deck-shell .s-casestudy .cs-cards.paper .cs-card .cs-sep {
+  background: rgba(10,19,70,0.12);
+}
+
+.sales-source-deck-shell .s-casestudy .cs-cards.paper .cs-card .cs-text {
+  color: rgba(10,19,70,0.75);
+}
+
+.sales-source-deck-shell .s-casestudy .cs-cards.paper .cs-card .cs-text b {
+  color: #0a1346;
+}
+
+.sales-source-deck-shell /* Handwritten example in Caveat */
+  .s-casestudy .cs-cards.paper .cs-card .cs-example {
+  font-family: var(--f-script); font-size: 26px; line-height: 1.3;
+      font-style: normal; letter-spacing: 0.01em;
+      border-top: 1px dashed rgba(10,19,70,0.18);
+      padding-top: 14px;
+}
+
+.sales-source-deck-shell .s-casestudy .cs-cards.paper .cs-card.accent-coral .cs-example {
+  color: var(--coral);
+}
+
+.sales-source-deck-shell .s-casestudy .cs-cards.paper .cs-card.accent-gold   .cs-example {
+  color: #b07d10;
+}
+
+.sales-source-deck-shell .s-casestudy .cs-cards.paper .cs-card.accent-green  .cs-example {
+  color: #1a8a5a;
+}
+
+.sales-source-deck-shell /* ============================================================ */
+  /* 09 — RECAP                                                     */
+  /* ============================================================ */
+  .s-recap {
+  padding: 130px 140px 0;
+}
+
+.sales-source-deck-shell .s-recap .head {
+  display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 70px;
+}
+
+.sales-source-deck-shell .s-recap .head h1 {
+  font-family: var(--f-display); font-size: 140px; line-height: 0.88;
+      letter-spacing: -0.025em; text-transform: uppercase; margin: 0;
+}
+
+.sales-source-deck-shell .s-recap .head h1 .o {
+  -webkit-text-stroke: 3px rgba(255,255,255,0.55);
+      color: transparent;
+}
+
+.sales-source-deck-shell .s-recap .head .meta {
+  font-family: var(--f-mono); font-size: 14px; letter-spacing: 0.26em; color: var(--ink-mute);
+      text-align: right; text-transform: uppercase;
+}
+
+.sales-source-deck-shell .s-recap .head .meta b {
+  color: var(--coral); display: block; font-weight: 500; font-size: 16px;
+}
+
+.sales-source-deck-shell .s-recap .grid {
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 28px;
+}
+
+.sales-source-deck-shell .s-recap .card {
+  border: 1px solid rgba(255,255,255,0.18);
+      background: rgba(255,255,255,0.03);
+      border-radius: 4px;
+      padding: 38px 36px 36px;
+      position: relative;
+      min-height: 380px;
+      display: flex; flex-direction: column;
+}
+
+.sales-source-deck-shell .s-recap .card .n {
+  font-family: var(--f-display); font-size: 24px;
+      color: var(--coral); letter-spacing: 0.04em;
+      margin-bottom: 28px;
+}
+
+.sales-source-deck-shell .s-recap .card .t {
+  font-family: var(--f-display); font-size: 44px; line-height: 0.95;
+      text-transform: uppercase; letter-spacing: -0.01em;
+      margin-bottom: 18px;
+}
+
+.sales-source-deck-shell .s-recap .card .d {
+  font-family: var(--f-body); font-size: 19px; line-height: 1.45;
+      color: rgba(255,255,255,0.72);
+}
+
+.sales-source-deck-shell .s-recap .card .ft {
+  margin-top: auto;
+      font-family: var(--f-mono); font-size: 12px; letter-spacing: 0.22em;
+      color: var(--ink-mute); padding-top: 24px;
+      border-top: 1px solid rgba(255,255,255,0.12); text-transform: uppercase;
+}
+
+.sales-source-deck-shell /* ============================================================ */
+  /* 10 — TRANSITION                                                */
+  /* ============================================================ */
+  .s-trans {
+  display: grid; place-items: center; padding: 0 200px; width: 1920px; height: 1080px; box-sizing: border-box;
+}
+
+.sales-source-deck-shell .s-trans .wrap {
+  text-align: center;
+}
+
+.sales-source-deck-shell .s-trans .top-bar {
+  display: inline-flex; align-items: center; gap: 18px;
+      font-family: var(--f-mono); font-size: 14px; letter-spacing: 0.3em;
+      color: rgba(255,255,255,0.55); margin-bottom: 48px; text-transform: uppercase;
+}
+
+.sales-source-deck-shell .s-trans .top-bar .line {
+  width: 90px; height: 1px; background: rgba(255,255,255,0.4);
+}
+
+.sales-source-deck-shell .s-trans .next-num {
+  font-family: var(--f-display); font-size: 280px; line-height: 0.85;
+      letter-spacing: -0.04em; color: transparent;
+      -webkit-text-stroke: 3px rgba(255,255,255,0.5);
+      margin-bottom: -40px;
+}
+
+.sales-source-deck-shell .s-trans h1 {
+  font-family: var(--f-display); font-size: 144px; line-height: 0.9;
+      letter-spacing: -0.025em; text-transform: uppercase; margin: 0;
+}
+
+.sales-source-deck-shell .s-trans h1 .crl {
+  color: var(--coral);
+}
+
+.sales-source-deck-shell .s-trans .cta {
+  margin-top: 56px;
+      display: inline-flex; align-items: center; gap: 22px;
+}
+
+.sales-source-deck-shell .s-trans .cta .pill {
+  background: #fff; color: #0e1d8a;
+}
+
+.sales-source-deck-shell /* ============================================================ */
+  /* 11 — PAUSE                                                     */
+  /* ============================================================ */
+  .s-pause {
+  display: grid; place-items: center; padding: 0; width: 1920px; height: 1080px; box-sizing: border-box; background: linear-gradient(180deg, #050a26 0%, #0a1351 100%);
+}
+
+.sales-source-deck-shell .s-pause::before {
+  opacity: 0.5;
+}
+
+.sales-source-deck-shell .s-pause .wrap {
+  text-align: center; position: relative;
+}
+
+.sales-source-deck-shell .s-pause .ring {
+  width: 540px; height: 540px; border-radius: 50%;
+      border: 1px solid rgba(255,255,255,0.18);
+      position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+      animation: sales-source-breathe 6s ease-in-out infinite;
+}
+
+.sales-source-deck-shell .s-pause .ring.r2 {
+  width: 700px; height: 700px; opacity: 0.5; animation-delay: 0.5s;
+}
+
+.sales-source-deck-shell .s-pause .ring.r3 {
+  width: 860px; height: 860px; opacity: 0.25; animation-delay: 1s;
+}
+
+.sales-source-deck-shell .s-pause .eyebrow {
+  margin-bottom: 28px; display: block;
+}
+
+.sales-source-deck-shell .s-pause h1 {
+  font-family: var(--f-display); font-size: 240px; line-height: 0.88;
+      letter-spacing: -0.03em; text-transform: uppercase; margin: 0 0 22px;
+}
+
+.sales-source-deck-shell .s-pause h1 .o {
+  -webkit-text-stroke: 3px var(--coral);
+      color: transparent;
+}
+
+.sales-source-deck-shell .s-pause .timer {
+  margin-top: 38px;
+      display: inline-flex; align-items: center; gap: 16px;
+      font-family: var(--f-mono); font-size: 22px; letter-spacing: 0.24em;
+      color: var(--coral); padding: 14px 28px;
+      border: 1px solid rgba(255,93,108,0.45); border-radius: 999px;
+      background: rgba(255,93,108,0.08);
+}
+
+.sales-source-deck-shell .s-pause .timer .dot {
+  width: 10px; height: 10px; border-radius: 50%; background: var(--coral); animation: sales-source-pulse 1.4s infinite;
+}
+
+.sales-source-deck-shell .s-pause .sub {
+  margin-top: 40px;
+      font-family: var(--f-script); font-size: 56px; color: rgba(255,255,255,0.7);
+}
+
+.sales-source-deck-shell /* ============================================================ */
+  /* 12 — Q&A                                                       */
+  /* ============================================================ */
+  .s-qa {
+  padding: 130px 140px 0; display: grid; grid-template-columns: 1.05fr 1fr; gap: 80px; align-items: center;
+}
+
+.sales-source-deck-shell .s-qa .left .eyebrow {
+  display: block; margin-bottom: 28px;
+}
+
+.sales-source-deck-shell .s-qa .left .qmark {
+  font-family: var(--f-display); font-size: 460px; line-height: 0.8;
+      color: var(--coral); letter-spacing: -0.06em;
+      text-shadow: 12px 12px 0 rgba(0,0,0,0.3);
+      margin-bottom: 12px;
+}
+
+.sales-source-deck-shell .s-qa .left h1 {
+  font-family: var(--f-display); font-size: 96px; line-height: 0.9;
+      letter-spacing: -0.02em; text-transform: uppercase; margin: 0;
+}
+
+.sales-source-deck-shell .s-qa .right {
+  display: flex; flex-direction: column; gap: 18px;
+}
+
+.sales-source-deck-shell .s-qa .right .qcard {
+  background: rgba(255,255,255,0.05);
+      border: 1px solid rgba(255,255,255,0.15);
+      border-radius: 4px;
+      padding: 26px 30px;
+      display: grid; grid-template-columns: 60px 1fr auto; gap: 22px; align-items: center;
+}
+
+.sales-source-deck-shell .s-qa .right .qcard .av {
+  width: 52px; height: 52px; border-radius: 50%;
+      background: linear-gradient(135deg, var(--coral), var(--coral-deep));
+      color: #fff; display: flex; align-items: center; justify-content: center;
+      font-family: var(--f-display); font-size: 22px;
+}
+
+.sales-source-deck-shell .s-qa .right .qcard .av.b2 {
+  background: linear-gradient(135deg, #2a4af5, #1a37d6);
+}
+
+.sales-source-deck-shell .s-qa .right .qcard .av.b3 {
+  background: linear-gradient(135deg, #58e2a4, #2db579);
+}
+
+.sales-source-deck-shell .s-qa .right .qcard .txt {
+  font-family: var(--f-head); font-size: 22px; line-height: 1.35; color: #fff; font-weight: 500;
+}
+
+.sales-source-deck-shell .s-qa .right .qcard .txt small {
+  display: block; font-family: var(--f-mono); font-size: 11px; letter-spacing: 0.2em;
+      color: var(--ink-mute); margin-top: 6px; text-transform: uppercase; font-weight: 400;
+}
+
+.sales-source-deck-shell .s-qa .right .qcard .time {
+  font-family: var(--f-mono); font-size: 12px; letter-spacing: 0.18em;
+      color: var(--ink-mute); text-transform: uppercase;
+}
+
+.sales-source-deck-shell .s-qa .right .input {
+  margin-top: 12px;
+      display: flex; align-items: center; gap: 14px;
+      background: #fff; border-radius: 999px; padding: 16px 24px;
+}
+
+.sales-source-deck-shell .s-qa .right .input .ph {
+  flex: 1; font-family: var(--f-head); font-size: 20px; color: #5a5a7a;
+}
+
+.sales-source-deck-shell .s-qa .right .input .btn {
+  background: var(--coral); color: #fff;
+      font-family: var(--f-head); font-weight: 700; font-size: 14px;
+      letter-spacing: 0.16em; text-transform: uppercase;
+      padding: 10px 22px; border-radius: 999px;
+}
+
+.sales-source-deck-shell /* ============================================================ */
+  /* THREE PILLARS                                                 */
+  /* ============================================================ */
+  .s-trio {
+  padding: 110px 140px 0; display: flex; flex-direction: column;
+}
+
+.sales-source-deck-shell .s-trio .head {
+  margin-bottom: 60px; max-width: 1500px;
+      display: flex; align-items: baseline; justify-content: space-between;
+}
+
+.sales-source-deck-shell .s-trio .head .l .eyebrow {
+  margin-bottom: 18px; display: block;
+}
+
+.sales-source-deck-shell .s-trio .head .l h1 {
+  font-family: var(--f-display); font-size: 80px; line-height: 0.95;
+      letter-spacing: -0.02em; text-transform: uppercase; margin: 0;
+}
+
+.sales-source-deck-shell .s-trio .head .l h1 .crl {
+  color: var(--coral);
+}
+
+.sales-source-deck-shell .s-trio .head .r {
+  font-family: var(--f-mono); font-size: 13px; letter-spacing: 0.28em;
+      color: var(--ink-mute); text-align: right; text-transform: uppercase;
+      align-self: flex-end;
+}
+
+.sales-source-deck-shell .s-trio .head .r b {
+  color: var(--coral); font-weight: 500;
+}
+
+.sales-source-deck-shell .s-trio .pillars {
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 36px;
+      max-width: 1640px;
+}
+
+.sales-source-deck-shell .s-trio .pillar {
+  display: flex; flex-direction: column; position: relative;
+}
+
+.sales-source-deck-shell .s-trio .pillar .num {
+  position: absolute; top: -14px; left: -10px;
+      width: 56px; height: 56px; border-radius: 50%;
+      background: var(--coral); color: #fff;
+      display: flex; align-items: center; justify-content: center;
+      font-family: var(--f-display); font-size: 22px;
+      border: 4px solid #0a1351; z-index: 3;
+}
+
+.sales-source-deck-shell .s-trio .pillar .ph {
+  width: 100%; height: 320px;
+      border-radius: 6px; overflow: hidden;
+      border: 1px solid rgba(255,255,255,0.18);
+      background: rgba(255,255,255,0.04);
+      margin-bottom: 26px; position: relative;
+}
+
+.sales-source-deck-shell .s-trio .pillar .ph image-slot {
+  width: 100%; height: 100%;
+      --is-bg: rgba(255,255,255,0.03);
+      --is-border: transparent;
+      --is-label-color: rgba(255,255,255,0.45);
+}
+
+.sales-source-deck-shell .s-trio .pillar .ph .corner {
+  position: absolute; top: 14px; right: 14px;
+      font-family: var(--f-mono); font-size: 11px; letter-spacing: 0.22em;
+      color: rgba(255,255,255,0.45); text-transform: uppercase;
+      background: rgba(0,0,0,0.4); padding: 5px 10px; border-radius: 3px;
+      z-index: 2; pointer-events: none;
+}
+
+.sales-source-deck-shell .s-trio .pillar .lbl {
+  font-family: var(--f-mono); font-size: 12px; letter-spacing: 0.28em;
+      color: var(--coral); margin-bottom: 12px; text-transform: uppercase;
+}
+
+.sales-source-deck-shell .s-trio .pillar .t {
+  font-family: var(--f-display); font-size: 44px; line-height: 0.95;
+      text-transform: uppercase; letter-spacing: -0.015em;
+      margin: 0 0 16px; color: #fff;
+}
+
+.sales-source-deck-shell .s-trio .pillar .d {
+  font-family: var(--f-body); font-size: 20px; line-height: 1.45;
+      color: rgba(255,255,255,0.75);
+}
+
+.sales-source-deck-shell .s-trio .footer {
+  margin-top: auto; padding: 30px 0 0;
+      display: flex; align-items: center; gap: 18px;
+      font-family: var(--f-mono); font-size: 13px; letter-spacing: 0.26em;
+      color: var(--ink-mute); text-transform: uppercase;
+}
+
+.sales-source-deck-shell .s-trio .footer .line {
+  flex: 1; height: 1px; background: rgba(255,255,255,0.16);
+}
+
+.sales-source-deck-shell .s-trio .footer b {
+  color: #fff; font-weight: 500;
+}
+
+.sales-source-deck-shell /* ============================================================ */
+  /* PINNED CARD POSTURE                                            */
+  /* ============================================================ */
+  .s-clip {
+  display: grid; place-items: center; padding: 0 140px; position: relative; width: 1920px; height: 1080px; box-sizing: border-box;
+}
+
+.sales-source-deck-shell .s-clip .board {
+  position: relative;
+      width: 1280px;
+      background: var(--pale);
+      border-radius: 6px;
+      padding: 130px 110px 110px;
+      box-shadow:
+        0 40px 80px rgba(0,0,0,0.55),
+        0 0 0 1px rgba(0,0,0,0.2),
+        inset 0 -3px 0 rgba(0,0,0,0.06);
+      text-align: center;
+      transform: rotate(-1.2deg);
+}
+
+.sales-source-deck-shell /* Subtle paper grain on the card */
+  .s-clip .board::before {
+  content: ""; position: absolute; inset: 0; border-radius: 6px;
+      background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='240' height='240'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' seed='3'/><feColorMatrix values='0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 0.06 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
+      pointer-events: none; mix-blend-mode: multiply;
+}
+
+.sales-source-deck-shell /* Pushpin */
+  .s-clip .pin {
+  position: absolute; top: -22px; left: 50%;
+      transform: translateX(-50%);
+      width: 54px; height: 54px;
+      z-index: 4;
+      filter: drop-shadow(0 8px 14px rgba(0,0,0,0.45));
+}
+
+.sales-source-deck-shell .s-clip .pin .head {
+  position: absolute; inset: 0;
+      background: radial-gradient(circle at 35% 30%, #ff8a96 0%, var(--coral) 45%, var(--coral-deep) 100%);
+      border-radius: 50%;
+      box-shadow: inset 0 -6px 10px rgba(0,0,0,0.25);
+}
+
+.sales-source-deck-shell .s-clip .pin .glint {
+  position: absolute; top: 10px; left: 12px;
+      width: 14px; height: 10px; border-radius: 50%;
+      background: rgba(255,255,255,0.7);
+      transform: rotate(-30deg);
+}
+
+.sales-source-deck-shell .s-clip h1 {
+  font-family: var(--f-display); font-size: 92px; line-height: 0.95;
+      letter-spacing: -0.02em; color: #1a1f3a;
+      text-transform: none; margin: 0 0 36px;
+      position: relative; z-index: 2;
+}
+
+.sales-source-deck-shell .s-clip h1 .crl {
+  color: var(--coral);
+}
+
+.sales-source-deck-shell .s-clip .sub {
+  font-family: var(--f-head); font-weight: 500; font-size: 30px;
+      line-height: 1.4; color: rgba(26,31,58,0.7);
+      max-width: 920px; margin: 0 auto;
+      position: relative; z-index: 2;
+}
+
+.sales-source-deck-shell /* ============================================================ */
+  /* TROIS SITUATIONS                                              */
+  /* ============================================================ */
+  .s-situ {
+  padding: 0 140px; display: flex; flex-direction: column; justify-content: center; align-items: center;
+}
+
+.sales-source-deck-shell .s-situ .heading {
+  text-align: center; margin-bottom: 100px; max-width: 1400px;
+}
+
+.sales-source-deck-shell .s-situ .heading .eyebrow {
+  display: block; margin-bottom: 22px;
+}
+
+.sales-source-deck-shell .s-situ .heading h1 {
+  font-family: var(--f-display); font-size: 104px; line-height: 0.95;
+      letter-spacing: -0.02em; text-transform: uppercase; margin: 0;
+      color: #fff;
+}
+
+.sales-source-deck-shell .s-situ .heading h1 .crl {
+  color: var(--coral);
+}
+
+.sales-source-deck-shell .s-situ .cards {
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 36px;
+      width: 100%; max-width: 1640px;
+}
+
+.sales-source-deck-shell .s-situ .card {
+  position: relative;
+      border-radius: 12px;
+      padding: 56px 44px 100px;
+      min-height: 320px;
+      display: flex; flex-direction: column;
+      box-shadow: 0 20px 50px rgba(0,0,0,0.45), 0 0 0 1px rgba(0,0,0,0.25);
+}
+
+.sales-source-deck-shell /* Subtle paper grain inside each card */
+  .s-situ .card::before {
+  content: ""; position: absolute; inset: 0; border-radius: 12px;
+      background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='240' height='240'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' seed='4'/><feColorMatrix values='0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 0.06 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
+      pointer-events: none; mix-blend-mode: multiply;
+}
+
+.sales-source-deck-shell .s-situ .card.a {
+  background: var(--coral); transform: rotate(-1.3deg);
+}
+
+.sales-source-deck-shell .s-situ .card.b {
+  background: var(--pale); transform: rotate(0.6deg); margin-top: 40px;
+}
+
+.sales-source-deck-shell .s-situ .card.c {
+  background: #fff; transform: rotate(-0.6deg); margin-top: -20px;
+}
+
+.sales-source-deck-shell .s-situ .card .stamp {
+  font-family: var(--f-mono); font-size: 13px; letter-spacing: 0.28em;
+      text-transform: uppercase; margin-bottom: 22px; position: relative; z-index: 2;
+}
+
+.sales-source-deck-shell .s-situ .card.a .stamp {
+  color: rgba(255,255,255,0.8);
+}
+
+.sales-source-deck-shell .s-situ .card.b .stamp {
+  color: rgba(26,31,58,0.5);
+}
+
+.sales-source-deck-shell .s-situ .card.c .stamp {
+  color: rgba(26,31,58,0.5);
+}
+
+.sales-source-deck-shell .s-situ .card .t {
+  font-family: var(--f-display); font-size: 56px; line-height: 0.95;
+      letter-spacing: -0.015em; text-transform: uppercase;
+      margin: 0 0 24px; position: relative; z-index: 2;
+}
+
+.sales-source-deck-shell .s-situ .card.a .t {
+  color: #fff;
+}
+
+.sales-source-deck-shell .s-situ .card.b .t {
+  color: #1a1f3a;
+}
+
+.sales-source-deck-shell .s-situ .card.c .t {
+  color: #1a1f3a;
+}
+
+.sales-source-deck-shell .s-situ .card .d {
+  font-family: var(--f-head); font-weight: 500; font-size: 24px;
+      line-height: 1.35; position: relative; z-index: 2;
+}
+
+.sales-source-deck-shell .s-situ .card.a .d {
+  color: rgba(255,255,255,0.92);
+}
+
+.sales-source-deck-shell .s-situ .card.b .d {
+  color: rgba(26,31,58,0.7);
+}
+
+.sales-source-deck-shell .s-situ .card.c .d {
+  color: rgba(26,31,58,0.7);
+}
+
+.sales-source-deck-shell .s-situ .card .badge {
+  position: absolute; left: 50%; bottom: -36px;
+      transform: translateX(-50%);
+      width: 78px; height: 78px; border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-family: var(--f-display); font-size: 32px;
+      border: 4px solid #0a1351;
+      box-shadow: 0 12px 24px rgba(0,0,0,0.45);
+      z-index: 3;
+}
+
+.sales-source-deck-shell .s-situ .card.a .badge {
+  background: var(--pale); color: var(--coral-deep);
+}
+
+.sales-source-deck-shell .s-situ .card.b .badge {
+  background: var(--coral); color: #fff;
+}
+
+.sales-source-deck-shell .s-situ .card.c .badge {
+  background: #0a1351; color: #fff;
+}
+
+.sales-source-deck-shell /* ============================================================ */
+  /* DATA · CHART                                                  */
+  /* ============================================================ */
+  .s-chart {
+  padding: 130px 140px 100px; display: grid; grid-template-columns: 0.85fr 1.15fr; gap: 80px; align-items: stretch;
+}
+
+.sales-source-deck-shell .s-chart .l {
+  display: flex; flex-direction: column; justify-content: center;
+}
+
+.sales-source-deck-shell .s-chart .l .eyebrow {
+  display: block; margin-bottom: 36px;
+}
+
+.sales-source-deck-shell .s-chart .l h1 {
+  font-family: var(--f-display); font-size: 104px; line-height: 0.95;
+      letter-spacing: -0.02em; text-transform: uppercase; margin: 0 0 40px;
+}
+
+.sales-source-deck-shell .s-chart .l h1 .crl {
+  color: var(--coral);
+}
+
+.sales-source-deck-shell .s-chart .l p.sub {
+  font-family: var(--f-head); font-weight: 400; font-size: 28px;
+      line-height: 1.4; color: rgba(255,255,255,0.75);
+      max-width: 620px; margin: 0 0 48px;
+}
+
+.sales-source-deck-shell .s-chart .l .legend {
+  display: flex; flex-direction: column; gap: 18px;
+}
+
+.sales-source-deck-shell .s-chart .l .legend .row {
+  display: grid; grid-template-columns: 24px 1fr auto; gap: 18px; align-items: center;
+      padding: 16px 0; border-top: 1px solid rgba(255,255,255,0.14);
+}
+
+.sales-source-deck-shell .s-chart .l .legend .row:first-child {
+  border-top: 1px solid rgba(255,255,255,0.22);
+}
+
+.sales-source-deck-shell .s-chart .l .legend .row:last-child {
+  border-bottom: 1px solid rgba(255,255,255,0.14);
+}
+
+.sales-source-deck-shell .s-chart .l .legend .sw {
+  width: 22px; height: 22px; border-radius: 4px;
+}
+
+.sales-source-deck-shell .s-chart .l .legend .sw.c1 {
+  background: var(--coral);
+}
+
+.sales-source-deck-shell .s-chart .l .legend .sw.c2 {
+  background: var(--gold, #f5c45a);
+}
+
+.sales-source-deck-shell .s-chart .l .legend .sw.c3 {
+  background: var(--green);
+}
+
+.sales-source-deck-shell .s-chart .l .legend .lab {
+  font-family: var(--f-head); font-weight: 600; font-size: 22px; color: #fff;
+}
+
+.sales-source-deck-shell .s-chart .l .legend .num {
+  font-family: var(--f-mono); font-size: 16px; letter-spacing: 0.16em;
+      color: rgba(255,255,255,0.55);
+}
+
+.sales-source-deck-shell .s-chart .card {
+  background: #f7f3eb;
+      border-radius: 18px;
+      padding: 48px 50px 38px;
+      box-shadow: 0 30px 70px rgba(0,0,0,0.5), 0 0 0 1px rgba(0,0,0,0.2);
+      transform: rotate(-0.6deg);
+      position: relative;
+      align-self: stretch;
+      display: flex; flex-direction: column;
+}
+
+.sales-source-deck-shell .s-chart .card .meta {
+  display: flex; justify-content: space-between; align-items: baseline;
+      margin-bottom: 32px;
+}
+
+.sales-source-deck-shell .s-chart .card .meta .ttl {
+  font-family: var(--f-head); font-weight: 800; font-size: 22px;
+      color: #1a1f3a; text-transform: uppercase; letter-spacing: 0.06em;
+}
+
+.sales-source-deck-shell .s-chart .card .meta .scale {
+  font-family: var(--f-mono); font-size: 14px; letter-spacing: 0.2em;
+      color: rgba(26,31,58,0.5); text-transform: uppercase;
+}
+
+.sales-source-deck-shell .s-chart .card .chart-wrap {
+  position: relative;
+      width: 100%; flex: 1; min-height: 560px;
+}
+
+.sales-source-deck-shell .s-chart .card svg.chart {
+  width: 100%; height: 100%; display: block; overflow: visible;
+}
+
+.sales-source-deck-shell .s-chart .card svg.chart .grid-line {
+  stroke: rgba(26,31,58,0.1); stroke-width: 1;
+}
+
+.sales-source-deck-shell .s-chart .card svg.chart .y-label {
+  font-family: var(--f-mono); font-size: 13px; fill: rgba(26,31,58,0.55);
+}
+
+.sales-source-deck-shell .s-chart .card svg.chart .x-label {
+  font-family: var(--f-mono); font-size: 13px; font-weight: 600; fill: #1a1f3a; letter-spacing: 0.1em;
+}
+
+.sales-source-deck-shell .s-chart .card svg.chart .peak-label {
+  font-family: var(--f-head); font-weight: 700; font-size: 13px; fill: #1a1f3a;
+}
+
+.sales-source-deck-shell /* ============================================================ */
+  /* TRAITER UNE DEMANDE (4 STEPS WITH ICONS)                      */
+  /* ============================================================ */
+  .s-flow {
+  padding: 0 140px; display: flex; flex-direction: column; justify-content: center;
+}
+
+.sales-source-deck-shell .s-flow .head {
+  margin-bottom: 100px; max-width: 1500px;
+}
+
+.sales-source-deck-shell .s-flow .head .eyebrow {
+  display: block; margin-bottom: 22px;
+}
+
+.sales-source-deck-shell .s-flow .head h1 {
+  font-family: var(--f-display); font-size: 108px; line-height: 0.95;
+      letter-spacing: -0.02em; text-transform: uppercase; margin: 0;
+}
+
+.sales-source-deck-shell .s-flow .head h1 .crl {
+  color: var(--coral);
+}
+
+.sales-source-deck-shell .s-flow .row {
+  display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      max-width: 1640px;
+}
+
+.sales-source-deck-shell .s-flow .step {
+  width: 168px;
+      display: flex; flex-direction: column; align-items: flex-start;
+      overflow: visible;
+}
+
+.sales-source-deck-shell /* tile with paper-stack offset shadow */
+  .s-flow .tile {
+  position: relative;
+      width: 168px; height: 168px;
+      border-radius: 28px;
+      display: flex; align-items: center; justify-content: center;
+      color: #1a1f3a;
+      margin-bottom: 36px;
+      box-shadow: 0 14px 30px rgba(0,0,0,0.4);
+}
+
+.sales-source-deck-shell .s-flow .tile::before {
+  content: ""; position: absolute; inset: 0;
+      border-radius: 28px;
+      background: rgba(0,0,0,0.32);
+      transform: translate(8px, 10px);
+      z-index: -1;
+}
+
+.sales-source-deck-shell .s-flow .tile.c1 {
+  background: var(--coral);
+}
+
+.sales-source-deck-shell .s-flow .tile.c2 {
+  background: var(--pale);
+}
+
+.sales-source-deck-shell .s-flow .tile.c3 {
+  background: var(--gold, #f5c45a);
+}
+
+.sales-source-deck-shell .s-flow .tile.c4 {
+  background: var(--green);
+}
+
+.sales-source-deck-shell .s-flow .tile svg {
+  width: 78px; height: 78px;
+}
+
+.sales-source-deck-shell .s-flow .step .t {
+  font-family: var(--f-display); font-size: 44px; line-height: 0.95;
+      letter-spacing: -0.015em; color: #fff;
+      text-transform: none;
+      margin: 0 0 16px;
+      width: 260px;
+}
+
+.sales-source-deck-shell .s-flow .step .d {
+  font-family: var(--f-head); font-weight: 500; font-size: 22px;
+      line-height: 1.4; color: rgba(255,255,255,0.72);
+      width: 260px;
+}
+
+.sales-source-deck-shell .s-flow .arrow {
+  color: var(--coral);
+      padding-top: 66px; /* tile is 168px tall: center at 84px → 84 − svg_h/2 (18) = 66 */
+}
+
+.sales-source-deck-shell .s-flow .arrow svg {
+  width: 60px; height: 36px; display: block;
+}
+
+.sales-source-deck-shell /* ============================================================ */
+  /* STORY (typographic)                                           */
+  /* ============================================================ */
+  .s-story {
+  width: 1920px; height: 1080px; box-sizing: border-box;
+      padding: 80px 140px; display: grid; grid-template-rows: auto 1fr auto;
+      align-items: stretch; position: relative;
+}
+
+.sales-source-deck-shell .s-story .meta {
+  display: flex; align-items: center; gap: 22px;
+      font-family: var(--f-mono); font-size: 16px; letter-spacing: 0.32em;
+      color: rgba(255,255,255,0.5); text-transform: uppercase;
+}
+
+.sales-source-deck-shell .s-story .meta .num {
+  color: var(--coral);
+}
+
+.sales-source-deck-shell .s-story .meta .bar {
+  flex: 1; height: 1px; background: rgba(255,255,255,0.18);
+}
+
+.sales-source-deck-shell .s-story .meta .chapter {
+  color: #fff;
+}
+
+.sales-source-deck-shell .s-story .stage {
+  position: relative;
+      width: 100%;
+      align-self: center;
+}
+
+.sales-source-deck-shell .s-story .line {
+  font-family: var(--f-display);
+      line-height: 0.9;
+      letter-spacing: -0.025em;
+      text-transform: lowercase;
+      color: #fff;
+      margin: 0;
+      text-wrap: balance;
+}
+
+.sales-source-deck-shell /* Each line gets unique treatment */
+  .s-story .l1 {
+  font-size: 96px;
+      text-align: left;
+      margin-left: 60px;
+      color: rgba(255,255,255,0.92);
+      font-family: var(--f-display); font-weight: 900;
+      line-height: 0.9; letter-spacing: -0.025em;
+      text-transform: lowercase;
+}
+
+.sales-source-deck-shell .s-story .l2 {
+  font-size: 64px;
+      text-align: left;
+      margin: -6px 0 0 280px;
+      color: rgba(255,255,255,0.5);
+      font-style: italic;
+      font-family: 'Georgia', serif;
+      font-weight: 400;
+      letter-spacing: 0;
+      text-transform: none;
+      line-height: 1;
+}
+
+.sales-source-deck-shell .s-story .l3 {
+  font-size: 88px;
+      text-align: right;
+      margin: 40px 80px 0 0;
+      color: #fff;
+      font-family: var(--f-display); font-weight: 900;
+      line-height: 0.9; letter-spacing: -0.025em;
+      text-transform: lowercase;
+}
+
+.sales-source-deck-shell .s-story .l3 em {
+  font-style: italic; font-family: 'Georgia', serif; font-weight: 400;
+      letter-spacing: 0; text-transform: none; color: rgba(255,255,255,0.55);
+}
+
+.sales-source-deck-shell .s-story .l4 {
+  font-family: var(--f-mono);
+      font-size: 22px;
+      letter-spacing: 0.3em;
+      text-align: center;
+      text-transform: uppercase;
+      color: rgba(255,255,255,0.45);
+      margin: 36px 0 28px;
+      font-weight: 400;
+}
+
+.sales-source-deck-shell .s-story .l5 {
+  font-size: 168px;
+      text-align: center;
+      color: var(--coral);
+      line-height: 0.85;
+      text-shadow: 8px 8px 0 rgba(0,0,0,0.25);
+      font-family: var(--f-display); font-weight: 900;
+      letter-spacing: -0.025em;
+      text-transform: lowercase;
+      margin: 0;
+}
+
+.sales-source-deck-shell /* Footer "morale" — bigger, .sales-source-deck-shell presence equal to the story */
+  .s-story .morale {
+  display: grid; grid-template-columns: auto 1fr; gap: 30px;
+      align-items: center;
+      border-top: 2px solid var(--coral);
+      padding-top: 30px;
+      margin-top: 24px;
+}
+
+.sales-source-deck-shell .s-story .morale .lbl {
+  font-family: var(--f-mono); font-size: 18px; letter-spacing: 0.32em;
+      color: var(--coral); text-transform: uppercase;
+      align-self: start; padding-top: 10px;
+}
+
+.sales-source-deck-shell .s-story .morale .text {
+  font-family: var(--f-display); font-weight: 900; font-size: 56px;
+      color: #fff; line-height: 1.05; letter-spacing: -0.01em;
+      text-transform: none;
+}
+
+.sales-source-deck-shell .s-story .morale .text b {
+  color: var(--coral);
+      font-weight: 900;
+}
+
+.sales-source-deck-shell /* ============================================================ */
+  .s-story {
+  padding: 0 140px; display: flex; flex-direction: column; justify-content: center; align-items: stretch;
+}
+
+.sales-source-deck-shell .s-story .eyebrow {
+  display: block; margin-bottom: 36px; padding-left: 8px;
+}
+
+.sales-source-deck-shell /* Slanted ribbon — full bleed feel, .sales-source-deck-shell tapered */
+  .s-story .ribbon {
+  position: relative;
+      width: 1640px;
+      margin: 0 0 70px;
+      background: var(--coral);
+      color: #fff;
+      padding: 32px 60px;
+      transform: rotate(-1.2deg);
+      box-shadow: 0 18px 40px rgba(0,0,0,0.45);
+      clip-path: polygon(0 14%, 100% 0, 100% 86%, 0 100%);
+}
+
+.sales-source-deck-shell .s-story .ribbon::after {
+  /* paper-grain inside */
+      content: ""; position: absolute; inset: 0;
+      background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='240' height='240'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' seed='7'/><feColorMatrix values='0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 0.07 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
+      pointer-events: none; mix-blend-mode: multiply;
+      clip-path: polygon(0 14%, 100% 0, 100% 86%, 0 100%);
+}
+
+.sales-source-deck-shell .s-story .ribbon h1 {
+  font-family: var(--f-display); font-size: 60px; line-height: 1;
+      letter-spacing: -0.005em; text-transform: uppercase;
+      margin: 0; position: relative; z-index: 2;
+      padding-right: 240px;
+}
+
+.sales-source-deck-shell .s-story .ribbon .num {
+  position: absolute; top: 50%; right: 60px;
+      transform: translateY(-50%);
+      font-family: var(--f-mono); font-size: 16px; letter-spacing: 0.3em;
+      color: rgba(255,255,255,0.95);
+      padding: 8px 14px;
+      border: 1px solid rgba(255,255,255,0.4);
+      border-radius: 4px;
+      z-index: 2;
+}
+
+.sales-source-deck-shell .s-story .quote-wrap {
+  position: relative;
+      max-width: 1500px;
+      padding: 0 100px;
+      margin: 0 60px 60px;
+      align-self: center;
+}
+
+.sales-source-deck-shell .s-story .quote-wrap .q-open, .sales-source-deck-shell .s-story .quote-wrap .q-close {
+  position: absolute;
+      font-family: 'Georgia', serif;
+      font-size: 200px; line-height: 0.8;
+      color: var(--coral);
+      opacity: 0.85;
+      pointer-events: none;
+      user-select: none;
+}
+
+.sales-source-deck-shell .s-story .quote-wrap .q-open {
+  top: -28px; left: 0;
+}
+
+.sales-source-deck-shell .s-story .quote-wrap .q-close {
+  bottom: -80px; right: 0; transform: scaleX(-1);
+}
+
+.sales-source-deck-shell .s-story .quote-wrap p {
+  font-family: var(--f-head); font-weight: 500; font-size: 44px;
+      line-height: 1.32; color: #fff; margin: 0;
+      text-wrap: balance;
+}
+
+.sales-source-deck-shell .s-story .takeaway {
+  align-self: center;
+      margin-top: 12px;
+      background: var(--gold, #f5c45a);
+      color: #1a1f3a;
+      padding: 22px 48px;
+      border-radius: 999px;
+      font-family: var(--f-head); font-weight: 700; font-size: 26px;
+      letter-spacing: 0.01em;
+      box-shadow: 0 14px 30px rgba(0,0,0,0.4), 0 0 0 1px rgba(0,0,0,0.15);
+      transform: rotate(-0.8deg);
+      position: relative;
+}
+
+.sales-source-deck-shell .s-story .takeaway::before {
+  content: "→";
+      margin-right: 16px;
+      font-family: var(--f-display);
+      color: var(--coral-deep);
+}
+
+.sales-source-deck-shell /* ============================================================ */
+  /* SHARED UTILITIES FOR NEW TEMPLATES                            */
+  /* ============================================================ */
+  .tpl {
+  padding: 130px 140px 100px; display: flex; flex-direction: column;
+}
+
+.sales-source-deck-shell .tpl .head {
+  margin-bottom: 56px; max-width: 1600px;
+}
+
+.sales-source-deck-shell .tpl .head .eyebrow {
+  display: block; margin-bottom: 20px;
+}
+
+.sales-source-deck-shell .tpl .head h1 {
+  font-family: var(--f-display); font-size: 88px; line-height: 0.95;
+      letter-spacing: -0.02em; text-transform: uppercase; margin: 0;
+}
+
+.sales-source-deck-shell .tpl .head h1 .crl {
+  color: var(--coral);
+}
+
+.sales-source-deck-shell .tpl .head .sub {
+  font-family: var(--f-head); font-weight: 400; font-size: 26px;
+      color: rgba(255,255,255,0.7); margin: 18px 0 0; max-width: 1100px; line-height: 1.4;
+}
+
+.sales-source-deck-shell /* ============================================================ */
+  /* PROGRAMME DE LA JOURNÉE                                       */
+  /* ============================================================ */
+  .s-program {
+  display: grid; grid-template-columns: 0.82fr 1.18fr;
+      gap: 120px; padding: 0 140px; align-items: center;
+}
+
+.sales-source-deck-shell .s-program .pg-left {
+  display: flex; flex-direction: column; min-width: 0;
+}
+
+.sales-source-deck-shell .s-program .day-tag {
+  display: inline-flex; align-items: center; gap: 12px; align-self: flex-start;
+      font-family: var(--f-mono); font-size: 14px; letter-spacing: 0.24em;
+      text-transform: uppercase; color: #fff;
+      background: var(--coral); padding: 11px 22px; border-radius: 999px;
+      margin-bottom: 44px; box-shadow: 0 10px 30px rgba(255,93,108,0.35);
+}
+
+.sales-source-deck-shell .s-program .day-tag .dot {
+  width: 8px; height: 8px; border-radius: 50%; background: #fff;
+}
+
+.sales-source-deck-shell .s-program .pg-left .eyebrow {
+  display: block; margin-bottom: 24px;
+}
+
+.sales-source-deck-shell .s-program .pg-left h1 {
+  font-family: var(--f-display); font-size: 104px; line-height: 0.9;
+      letter-spacing: -0.025em; text-transform: uppercase; margin: 0;
+}
+
+.sales-source-deck-shell .s-program .pg-left h1 .crl {
+  color: var(--coral);
+}
+
+.sales-source-deck-shell .s-program .pg-left .sub {
+  font-family: var(--f-head); font-weight: 400; font-size: 27px;
+      line-height: 1.45; color: rgba(255,255,255,0.72);
+      margin: 38px 0 0; max-width: 600px;
+}
+
+.sales-source-deck-shell .s-program .pg-left .sub b {
+  color: #fff; font-weight: 700;
+}
+
+.sales-source-deck-shell .s-program .pg-list {
+  padding-left: 90px;
+}
+
+.sales-source-deck-shell .s-program .pg-list ol {
+  list-style: none; margin: 0; padding: 0; position: relative;
+}
+
+.sales-source-deck-shell .s-program .pg-list ol::before {
+  content: ""; position: absolute; left: 37px; top: 48px; bottom: 48px;
+      width: 2px; background: linear-gradient(180deg, var(--coral), rgba(255,255,255,0.14));
+}
+
+.sales-source-deck-shell .s-program .pg-list li {
+  display: grid; grid-template-columns: 74px 1fr; align-items: center;
+      gap: 34px; padding: 12px 0; position: relative;
+}
+
+.sales-source-deck-shell .s-program .pg-list li .n {
+  width: 74px; height: 74px; border-radius: 50%;
+      background: #0a1351; border: 2px solid rgba(255,255,255,0.22);
+      display: inline-flex; align-items: center; justify-content: center;
+      font-family: var(--f-mono); font-size: 23px; color: var(--ink-dim);
+      position: relative; z-index: 1;
+}
+
+.sales-source-deck-shell .s-program .pg-list li .t {
+  font-family: var(--f-head); font-weight: 600; font-size: 35px;
+      color: rgba(255,255,255,0.9); letter-spacing: -0.01em; line-height: 1.05;
+}
+
+.sales-source-deck-shell .s-program .pg-list li.start .n {
+  background: var(--coral); border-color: var(--coral); color: #fff;
+      box-shadow: 0 0 0 6px rgba(255,93,108,0.16);
+}
+
+.sales-source-deck-shell .s-program .pg-list li.start .t {
+  color: #fff; font-weight: 700;
+}
+
+.sales-source-deck-shell /* ============================================================ */
+  /* REFLECTION                                                    */
+  /* ============================================================ */
+  .s-reflect {
+  display: grid; place-items: center; padding: 0 200px; width: 1920px; height: 1080px; box-sizing: border-box;
+}
+
+.sales-source-deck-shell .s-reflect .memo {
+  background: var(--pale); color: #1a1f3a;
+      border-radius: 6px; padding: 80px 90px;
+      max-width: 1280px; width: 100%;
+      box-shadow: 0 30px 70px rgba(0,0,0,0.5);
+      transform: rotate(-0.8deg);
+      position: relative;
+}
+
+.sales-source-deck-shell .s-reflect .memo .tab {
+  position: absolute; top: -28px; left: 80px;
+      background: var(--coral); color: #fff;
+      padding: 10px 22px; border-radius: 4px;
+      font-family: var(--f-mono); font-size: 14px; letter-spacing: 0.28em;
+      transform: rotate(-2deg);
+}
+
+.sales-source-deck-shell .s-reflect .memo h2 {
+  font-family: var(--f-display); font-size: 64px; line-height: 1;
+      letter-spacing: -0.02em; margin: 0 0 30px; color: #1a1f3a;
+      text-transform: none;
+}
+
+.sales-source-deck-shell .s-reflect .memo p {
+  font-family: 'Georgia', serif; font-style: italic; font-size: 38px;
+      line-height: 1.4; color: rgba(26,31,58,0.78); margin: 0;
+}
+
+.sales-source-deck-shell .s-reflect .memo .signature {
+  margin-top: 36px;
+      font-family: var(--f-script); font-size: 38px; color: var(--coral);
+      transform: rotate(-2deg); display: inline-block;
+}
+
+.sales-source-deck-shell /* ============================================================ */
+  /* ANALOGY                                                       */
+  /* ============================================================ */
+  .s-analogy .boxes {
+  display: grid; grid-template-columns: 1fr 80px 1fr; gap: 40px; align-items: center; max-width: 1640px;
+}
+
+.sales-source-deck-shell .s-analogy .box {
+  padding: 50px 44px; border-radius: 10px;
+      min-height: 240px; display: flex; flex-direction: column; justify-content: center;
+      text-align: center; position: relative;
+      box-shadow: 0 20px 40px rgba(0,0,0,0.35);
+}
+
+.sales-source-deck-shell .s-analogy .box.a {
+  background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.2);
+}
+
+.sales-source-deck-shell .s-analogy .box.b {
+  background: var(--coral);
+}
+
+.sales-source-deck-shell .s-analogy .box .lbl {
+  font-family: var(--f-mono); font-size: 13px; letter-spacing: 0.28em;
+      text-transform: uppercase; margin-bottom: 16px;
+}
+
+.sales-source-deck-shell .s-analogy .box.a .lbl {
+  color: var(--ink-mute);
+}
+
+.sales-source-deck-shell .s-analogy .box.b .lbl {
+  color: rgba(255,255,255,0.85);
+}
+
+.sales-source-deck-shell .s-analogy .box .name {
+  font-family: var(--f-display); font-size: 56px; line-height: 0.95;
+      letter-spacing: -0.015em; text-transform: uppercase;
+}
+
+.sales-source-deck-shell .s-analogy .box.a .name {
+  color: #fff;
+}
+
+.sales-source-deck-shell .s-analogy .box.b .name {
+  color: #fff;
+}
+
+.sales-source-deck-shell .s-analogy .equal {
+  font-family: var(--f-display); font-size: 88px; color: var(--coral);
+      text-align: center; line-height: 1;
+}
+
+.sales-source-deck-shell .s-analogy .explain {
+  margin-top: 60px; max-width: 1400px; align-self: center; text-align: center;
+      font-family: var(--f-head); font-size: 28px; line-height: 1.4; color: rgba(255,255,255,0.85);
+}
+
+.sales-source-deck-shell .s-analogy .explain b {
+  color: var(--coral); font-weight: 800;
+}
+
+.sales-source-deck-shell /* ============================================================ */
+  /* TIP                                                           */
+  /* ============================================================ */
+  .s-tip {
+  position: relative; width: 1920px; height: 1080px; box-sizing: border-box;
+}
+
+.sales-source-deck-shell .s-tip .card {
+  position: absolute;
+      inset: 0; margin: auto;
+      width: 1280px; height: fit-content;
+      transform: rotate(-0.6deg);
+      background: var(--gold, #f5c45a);
+      color: #1a1f3a;
+      padding: 70px 80px;
+      border-radius: 12px;
+      box-shadow: 0 30px 70px rgba(0,0,0,0.5);
+      display: flex; flex-direction: column;
+}
+
+.sales-source-deck-shell .s-tip .card .badge {
+  display: inline-flex; align-items: center; gap: 10px;
+      background: #1a1f3a; color: var(--gold, #f5c45a);
+      padding: 10px 20px; border-radius: 6px;
+      font-family: var(--f-mono); font-size: 14px; letter-spacing: 0.28em;
+      margin-bottom: 36px; align-self: flex-start;
+}
+
+.sales-source-deck-shell .s-tip .card .badge::before {
+  content: "★"; color: var(--coral);
+}
+
+.sales-source-deck-shell .s-tip .card h2 {
+  font-family: var(--f-display); font-size: 84px; line-height: 1;
+      letter-spacing: -0.02em; margin: 0 0 30px; color: #1a1f3a;
+      text-transform: none;
+}
+
+.sales-source-deck-shell .s-tip .card p {
+  font-family: var(--f-head); font-size: 32px; font-weight: 500;
+      line-height: 1.4; color: rgba(26,31,58,0.78); margin: 0;
+}
+
+.sales-source-deck-shell /* ============================================================ */
+  /* OPINION                                                       */
+  /* ============================================================ */
+  .s-opinion {
+  padding: 140px 140px 0; display: grid; grid-template-columns: 1fr 1fr; gap: 80px; align-items: center; position: relative; overflow: hidden; width: 1920px; height: 1080px; box-sizing: border-box;
+}
+
+.sales-source-deck-shell .s-opinion .quote-bg {
+  position: absolute; top: 40px; right: -20px;
+      font-family: 'Georgia', serif; font-size: 880px; line-height: 0.6;
+      color: var(--coral); opacity: 0.18; pointer-events: none; z-index: 1;
+      overflow: hidden; max-width: 600px;
+}
+
+.sales-source-deck-shell .s-opinion .l {
+  position: relative; z-index: 2;
+}
+
+.sales-source-deck-shell .s-opinion .l .badge {
+  display: inline-block; background: var(--coral); color: #fff;
+      padding: 10px 20px; border-radius: 999px;
+      font-family: var(--f-mono); font-size: 13px; letter-spacing: 0.26em;
+      text-transform: uppercase; margin-bottom: 32px;
+}
+
+.sales-source-deck-shell .s-opinion .l h1 {
+  font-family: var(--f-display); font-size: 88px; line-height: 0.95;
+      letter-spacing: -0.02em; text-transform: uppercase; margin: 0 0 32px;
+}
+
+.sales-source-deck-shell .s-opinion .l h1 .crl {
+  color: var(--coral);
+}
+
+.sales-source-deck-shell .s-opinion .l .signature {
+  font-family: var(--f-script); font-size: 56px; color: var(--coral);
+      transform: rotate(-3deg); display: inline-block; margin-top: 10px;
+}
+
+.sales-source-deck-shell .s-opinion .r {
+  background: var(--pale); color: #1a1f3a;
+      border-radius: 12px; padding: 50px 58px;
+      box-shadow: 0 30px 70px rgba(0,0,0,0.5);
+      transform: rotate(1deg);
+      position: relative; z-index: 2;
+}
+
+.sales-source-deck-shell .s-opinion .r p {
+  font-family: 'Georgia', serif; font-style: italic;
+      font-size: 30px; line-height: 1.45; margin: 0; color: rgba(26,31,58,0.85);
+}
+
+.sales-source-deck-shell /* ============================================================ */
+  /* FRAMEWORK (radial)                                            */
+  /* ============================================================ */
+  .s-fw {
+  padding: 80px 140px 0;
+}
+
+.sales-source-deck-shell .s-fw .head {
+  margin-bottom: 24px; text-align: center;
+}
+
+.sales-source-deck-shell .s-fw .head h1 {
+  font-size: 72px;
+}
+
+.sales-source-deck-shell .s-fw .wheel {
+  position: relative; margin: 0 auto; width: 1000px; height: 760px;
+}
+
+.sales-source-deck-shell .s-fw .wheel svg.dial {
+  position: absolute; inset: 80px 240px; width: 520px; height: 520px;
+}
+
+.sales-source-deck-shell .s-fw .wheel .center {
+  position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+      width: 200px; height: 200px; border-radius: 50%;
+      background: var(--coral); color: #fff;
+      display: flex; align-items: center; justify-content: center; text-align: center;
+      font-family: var(--f-display); font-size: 26px; line-height: 0.95;
+      text-transform: uppercase; padding: 16px;
+      box-shadow: 0 20px 40px rgba(0,0,0,0.5);
+      border: 4px solid #0a1351;
+}
+
+.sales-source-deck-shell .s-fw .sat {
+  position: absolute; width: 220px; padding: 18px 22px;
+      background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.2);
+      border-radius: 8px;
+}
+
+.sales-source-deck-shell .s-fw .sat .t {
+  font-family: var(--f-display); font-size: 22px; color: var(--coral);
+      text-transform: uppercase; letter-spacing: -0.005em; margin-bottom: 6px;
+}
+
+.sales-source-deck-shell .s-fw .sat .d {
+  font-family: var(--f-body); font-size: 16px; line-height: 1.4;
+      color: rgba(255,255,255,0.75);
+}
+
+.sales-source-deck-shell .s-fw .sat.s1 {
+  top: 30px; left: 50%; transform: translateX(-50%);
+}
+
+.sales-source-deck-shell .s-fw .sat.s2 {
+  top: 50%; right: 0; transform: translateY(-50%);
+}
+
+.sales-source-deck-shell .s-fw .sat.s3 {
+  bottom: 30px; left: 50%; transform: translateX(-50%);
+}
+
+.sales-source-deck-shell .s-fw .sat.s4 {
+  top: 50%; left: 0; transform: translateY(-50%);
+}
+
+.sales-source-deck-shell /* 6-segment positions */
+  .s-fw.six .sat.s1 {
+  top: 30px; left: 50%; transform: translateX(-50%);
+}
+
+.sales-source-deck-shell .s-fw.six .sat.s2 {
+  top: 130px; right: 20px; transform: none;
+}
+
+.sales-source-deck-shell .s-fw.six .sat.s3 {
+  bottom: 130px; right: 20px; transform: none;
+}
+
+.sales-source-deck-shell .s-fw.six .sat.s4 {
+  bottom: 30px; left: 50%; transform: translateX(-50%);
+}
+
+.sales-source-deck-shell .s-fw.six .sat.s5 {
+  bottom: 130px; left: 20px; transform: none;
+}
+
+.sales-source-deck-shell .s-fw.six .sat.s6 {
+  top: 130px; left: 20px; transform: none;
+}
+
+.sales-source-deck-shell /* ============================================================ */
+  /* COMPARISON (binaire + ternaire)                               */
+  /* ============================================================ */
+  .s-cmp .cols {
+  display: grid; gap: 0; max-width: 1640px; position: relative;
+}
+
+.sales-source-deck-shell .s-cmp.bin .cols {
+  grid-template-columns: 1fr 1fr;
+}
+
+.sales-source-deck-shell .s-cmp.ter .cols {
+  grid-template-columns: 1fr 1fr 1fr;
+}
+
+.sales-source-deck-shell .s-cmp .col {
+  padding: 40px 42px; border: 1px solid rgba(255,255,255,0.18);
+}
+
+.sales-source-deck-shell .s-cmp .col.bad {
+  background: rgba(255,255,255,0.03);
+}
+
+.sales-source-deck-shell .s-cmp .col.good {
+  background: rgba(88,226,164,0.08); border-color: rgba(88,226,164,0.45);
+}
+
+.sales-source-deck-shell .s-cmp .col.center {
+  background: rgba(255,93,108,0.1); border-color: var(--coral);
+}
+
+.sales-source-deck-shell .s-cmp .col .lbl {
+  font-family: var(--f-mono); font-size: 13px; letter-spacing: 0.28em;
+      color: var(--ink-mute); text-transform: uppercase; margin-bottom: 14px;
+}
+
+.sales-source-deck-shell .s-cmp .col.good .lbl {
+  color: var(--green);
+}
+
+.sales-source-deck-shell .s-cmp .col.center .lbl {
+  color: var(--coral);
+}
+
+.sales-source-deck-shell .s-cmp .col .name {
+  font-family: var(--f-display); font-size: 52px; line-height: 0.95;
+      text-transform: uppercase; letter-spacing: -0.015em; margin-bottom: 28px;
+}
+
+.sales-source-deck-shell .s-cmp .col.good .name {
+  color: var(--green);
+}
+
+.sales-source-deck-shell .s-cmp .col.center .name {
+  color: var(--coral);
+}
+
+.sales-source-deck-shell .s-cmp .col ul {
+  list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 12px;
+}
+
+.sales-source-deck-shell .s-cmp .col ul li {
+  font-family: var(--f-head); font-size: 21px; line-height: 1.35;
+      color: rgba(255,255,255,0.85); padding: 10px 0;
+      border-top: 1px solid rgba(255,255,255,0.1);
+      padding-left: 26px; position: relative;
+}
+
+.sales-source-deck-shell .s-cmp .col ul li::before {
+  content: "—"; position: absolute; left: 0; color: var(--coral);
+}
+
+.sales-source-deck-shell .s-cmp .col.good ul li::before {
+  content: "✓"; color: var(--green);
+}
+
+.sales-source-deck-shell .s-cmp .vs {
+  position: absolute; top: 50%; transform: translate(-50%, -50%);
+      width: 80px; height: 80px; border-radius: 50%;
+      background: #0d1b6e; border: 3px solid #fff; color: #fff;
+      display: flex; align-items: center; justify-content: center;
+      font-family: var(--f-display); font-size: 26px; z-index: 3;
+}
+
+.sales-source-deck-shell .s-cmp.bin .vs {
+  left: 50%;
+}
+
+.sales-source-deck-shell .s-cmp.ter .vs.v1 {
+  left: 33.33%;
+}
+
+.sales-source-deck-shell .s-cmp.ter .vs.v2 {
+  left: 66.66%;
+}
+
+.sales-source-deck-shell /* ============================================================ */
+  /* STEPS (2 steps mini)                                          */
+  /* ============================================================ */
+  .s-steps2 .steps {
+  display: grid; grid-template-columns: 1fr 80px 1fr; gap: 0 40px; align-items: center; max-width: 1640px;
+}
+
+.sales-source-deck-shell .s-steps2 .step {
+  padding: 50px 56px; border-radius: 10px;
+      background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.18);
+}
+
+.sales-source-deck-shell .s-steps2 .step .n {
+  width: 76px; height: 76px; border-radius: 50%;
+      background: var(--coral); color: #fff;
+      display: flex; align-items: center; justify-content: center;
+      font-family: var(--f-display); font-size: 32px; margin-bottom: 28px;
+}
+
+.sales-source-deck-shell .s-steps2 .step .t {
+  font-family: var(--f-display); font-size: 48px; line-height: 0.95;
+      letter-spacing: -0.015em; text-transform: uppercase; margin: 0 0 18px; color: #fff;
+}
+
+.sales-source-deck-shell .s-steps2 .step .d {
+  font-family: var(--f-body); font-size: 22px; line-height: 1.45;
+      color: rgba(255,255,255,0.75);
+}
+
+.sales-source-deck-shell .s-steps2 .arrow {
+  color: var(--coral);
+      font-family: var(--f-display); font-size: 80px; text-align: center;
+}
+
+.sales-source-deck-shell /* ============================================================ */
+  /* PROFILES                                                      */
+  /* ============================================================ */
+  .s-prof .cards {
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 30px; max-width: 1640px;
+}
+
+.sales-source-deck-shell .s-prof .card {
+  background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.18);
+      border-radius: 8px; padding: 36px 34px; display: flex; flex-direction: column; gap: 22px;
+}
+
+.sales-source-deck-shell .s-prof .card .head-c {
+  display: flex; align-items: center; gap: 14px;
+      padding-bottom: 22px; border-bottom: 2px solid var(--coral);
+}
+
+.sales-source-deck-shell .s-prof .card .head-c .emo {
+  width: 54px; height: 54px; border-radius: 50%;
+      background: var(--coral); display: flex; align-items: center; justify-content: center;
+      font-size: 26px;
+}
+
+.sales-source-deck-shell .s-prof .card .head-c .name {
+  font-family: var(--f-display); font-size: 30px; line-height: 1;
+      color: #fff; letter-spacing: -0.01em; text-transform: uppercase;
+}
+
+.sales-source-deck-shell .s-prof .card .signals {
+  font-family: var(--f-mono); font-size: 12px; letter-spacing: 0.26em;
+      color: var(--ink-mute); margin-bottom: 8px; text-transform: uppercase;
+}
+
+.sales-source-deck-shell .s-prof .card ul {
+  list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 10px;
+}
+
+.sales-source-deck-shell .s-prof .card ul li {
+  font-family: var(--f-body); font-size: 18px; line-height: 1.4;
+      color: rgba(255,255,255,0.78);
+      padding-left: 16px; position: relative;
+}
+
+.sales-source-deck-shell .s-prof .card ul li::before {
+  content: ""; position: absolute; left: 0; top: 11px;
+      width: 6px; height: 6px; border-radius: 50%; background: var(--coral);
+}
+
+.sales-source-deck-shell .s-prof .card .posture {
+  background: rgba(255,93,108,0.12);
+      border-left: 3px solid var(--coral);
+      padding: 16px 18px; border-radius: 0 6px 6px 0;
+}
+
+.sales-source-deck-shell .s-prof .card .posture .lbl {
+  font-family: var(--f-mono); font-size: 11px; letter-spacing: 0.26em;
+      color: var(--coral); margin-bottom: 6px; text-transform: uppercase;
+}
+
+.sales-source-deck-shell .s-prof .card .posture .txt {
+  font-family: var(--f-head); font-weight: 600; font-size: 19px; line-height: 1.35; color: #fff;
+}
+
+.sales-source-deck-shell .s-prof .card .phrase {
+  font-family: 'Georgia', serif; font-style: italic;
+      font-size: 19px; line-height: 1.4; color: rgba(255,255,255,0.7);
+      padding-top: 18px; border-top: 1px dashed rgba(255,255,255,0.18);
+}
+
+.sales-source-deck-shell /* ============================================================ */
+  /* QUOTABLE                                                      */
+  /* ============================================================ */
+  .s-quote {
+  display: grid; place-items: center; padding: 0 140px; position: relative; width: 1920px; height: 1080px; box-sizing: border-box;
+}
+
+.sales-source-deck-shell .s-quote .marks {
+  position: absolute; top: 150px; left: 90px;
+      font-family: 'Georgia', serif; font-size: 300px; line-height: 0.5;
+      color: var(--coral); opacity: 0.4;
+}
+
+.sales-source-deck-shell .s-quote .marks.r {
+  left: auto; right: 100px; top: auto; bottom: 180px; transform: scale(-1, -1);
+}
+
+.sales-source-deck-shell .s-quote .wrap {
+  max-width: 1500px; text-align: center; position: relative; z-index: 2;
+}
+
+.sales-source-deck-shell .s-quote .accent {
+  width: 100px; height: 4px; background: var(--coral); margin: 0 auto 40px;
+}
+
+.sales-source-deck-shell .s-quote h1 {
+  font-family: var(--f-display); font-size: 100px; line-height: 1.05;
+      letter-spacing: -0.02em; margin: 0; text-transform: none;
+}
+
+.sales-source-deck-shell .s-quote h1 .crl {
+  color: var(--coral);
+}
+
+.sales-source-deck-shell .s-quote cite {
+  display: block; margin-top: 50px;
+      font-family: var(--f-mono); font-size: 16px; letter-spacing: 0.3em;
+      color: var(--ink-mute); font-style: normal; text-transform: uppercase;
+}
+
+.sales-source-deck-shell .s-quote.v2 .marks {
+  color: var(--gold, #f5c45a);
+}
+
+.sales-source-deck-shell .s-quote.v2 .accent {
+  background: var(--gold, #f5c45a);
+}
+
+.sales-source-deck-shell .s-quote.v2 h1 .crl {
+  color: var(--gold, #f5c45a);
+}
+
+.sales-source-deck-shell /* ============================================================ */
+  /* SCRIPT (dialogue)                                             */
+  /* ============================================================ */
+  .s-script .context {
+  background: rgba(255,255,255,0.05); border-left: 3px solid var(--coral);
+      padding: 16px 22px; max-width: 1500px;
+      font-family: 'Georgia', serif; font-style: italic; font-size: 24px;
+      color: rgba(255,255,255,0.8); margin-bottom: 30px;
+}
+
+.sales-source-deck-shell .s-script .dial {
+  display: flex; flex-direction: column; gap: 20px; max-width: 1600px;
+}
+
+.sales-source-deck-shell .s-script .bubble {
+  display: grid; grid-template-columns: 60px 1fr 200px; gap: 18px; align-items: start;
+}
+
+.sales-source-deck-shell .s-script .bubble.r {
+  grid-template-columns: 200px 1fr 60px;
+}
+
+.sales-source-deck-shell .s-script .bubble .av {
+  width: 54px; height: 54px; border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-family: var(--f-display); font-size: 18px; color: #fff;
+}
+
+.sales-source-deck-shell .s-script .bubble.l .av {
+  background: #2a4af5;
+}
+
+.sales-source-deck-shell .s-script .bubble.r .av {
+  background: var(--coral); grid-column: 3;
+}
+
+.sales-source-deck-shell .s-script .bubble .msg {
+  background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.18);
+      padding: 20px 26px; border-radius: 14px 14px 14px 4px;
+      font-family: var(--f-head); font-size: 22px; line-height: 1.4; color: #fff;
+}
+
+.sales-source-deck-shell .s-script .bubble.r .msg {
+  background: var(--coral); color: #fff; border-radius: 14px 14px 4px 14px; border-color: var(--coral-deep);
+}
+
+.sales-source-deck-shell .s-script .bubble.r .msg {
+  grid-column: 2;
+}
+
+.sales-source-deck-shell .s-script .bubble .ann {
+  font-family: var(--f-mono); font-size: 12px; letter-spacing: 0.22em;
+      color: var(--gold, #f5c45a); padding: 8px 14px;
+      background: rgba(245,196,90,0.1); border: 1px dashed rgba(245,196,90,0.5);
+      border-radius: 4px; text-transform: uppercase; align-self: center;
+}
+
+.sales-source-deck-shell .s-script .bubble.r .ann {
+  grid-column: 1; text-align: left;
+}
+
+.sales-source-deck-shell .s-script .bubble .blank {
+  background: transparent;
+}
+
+.sales-source-deck-shell /* ============================================================ */
+  /* MATRIX                                                        */
+  /* ============================================================ */
+  .s-matrix table {
+  width: 100%; max-width: 1640px;
+      border-collapse: collapse;
+}
+
+.sales-source-deck-shell .s-matrix th {
+  text-align: left; font-family: var(--f-mono); font-size: 13px;
+      letter-spacing: 0.28em; color: var(--coral); text-transform: uppercase;
+      padding: 18px 22px; border-bottom: 2px solid var(--coral);
+}
+
+.sales-source-deck-shell .s-matrix th.r {
+  width: 35%;
+}
+
+.sales-source-deck-shell .s-matrix td {
+  padding: 26px 22px; border-bottom: 1px solid rgba(255,255,255,0.14);
+      vertical-align: top;
+}
+
+.sales-source-deck-shell .s-matrix td.cause {
+  font-family: var(--f-display); font-size: 30px; color: #fff;
+      text-transform: uppercase; letter-spacing: -0.01em;
+}
+
+.sales-source-deck-shell .s-matrix td.cause .icon {
+  display: inline-flex; width: 36px; height: 36px; border-radius: 6px;
+      background: var(--coral); color: #fff; align-items: center; justify-content: center;
+      font-family: var(--f-mono); margin-right: 14px; vertical-align: middle; font-size: 18px;
+}
+
+.sales-source-deck-shell .s-matrix td.sol {
+  display: flex; flex-wrap: wrap; gap: 8px;
+}
+
+.sales-source-deck-shell .s-matrix td.sol span {
+  background: rgba(255,255,255,0.07); border: 1px solid rgba(255,255,255,0.2);
+      padding: 8px 14px; border-radius: 999px;
+      font-family: var(--f-head); font-weight: 600; font-size: 17px; color: #fff;
+}
+
+.sales-source-deck-shell /* ============================================================ */
+  /* GRADIENT (spectre)                                            */
+  /* ============================================================ */
+  .s-grad .bar {
+  height: 24px; border-radius: 999px; margin: 30px 0 70px;
+      background: linear-gradient(90deg, var(--green) 0%, var(--gold, #f5c45a) 50%, var(--coral) 100%);
+      position: relative; max-width: 1640px;
+}
+
+.sales-source-deck-shell .s-grad .bar .marker {
+  position: absolute; top: -16px;
+      width: 56px; height: 56px; border-radius: 50%;
+      border: 4px solid #0a1351;
+      transform: translateX(-50%);
+      font-family: var(--f-display); font-size: 22px;
+      display: flex; align-items: center; justify-content: center; color: #fff;
+      box-shadow: 0 6px 14px rgba(0,0,0,0.4);
+}
+
+.sales-source-deck-shell .s-grad .zones {
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 30px; max-width: 1640px;
+}
+
+.sales-source-deck-shell .s-grad .zone {
+  padding: 30px 30px; border-radius: 8px;
+      background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.18);
+}
+
+.sales-source-deck-shell .s-grad .zone .h {
+  display: flex; align-items: center; gap: 12px; margin-bottom: 18px;
+}
+
+.sales-source-deck-shell .s-grad .zone .h .dot {
+  width: 14px; height: 14px; border-radius: 50%;
+}
+
+.sales-source-deck-shell .s-grad .zone.z1 .h .dot {
+  background: var(--green);
+}
+
+.sales-source-deck-shell .s-grad .zone.z2 .h .dot {
+  background: var(--gold, #f5c45a);
+}
+
+.sales-source-deck-shell .s-grad .zone.z3 .h .dot {
+  background: var(--coral);
+}
+
+.sales-source-deck-shell .s-grad .zone .h .lbl {
+  font-family: var(--f-display); font-size: 24px; color: #fff; text-transform: uppercase;
+      letter-spacing: -0.01em;
+}
+
+.sales-source-deck-shell .s-grad .zone .d {
+  font-family: var(--f-body); font-size: 18px; line-height: 1.4;
+      color: rgba(255,255,255,0.75); margin-bottom: 16px;
+}
+
+.sales-source-deck-shell .s-grad .zone .ex {
+  font-family: var(--f-mono); font-size: 11px; letter-spacing: 0.22em;
+      color: var(--ink-mute); margin-bottom: 6px; text-transform: uppercase;
+}
+
+.sales-source-deck-shell .s-grad .zone ul {
+  list-style: none; padding: 0; margin: 0 0 18px;
+}
+
+.sales-source-deck-shell .s-grad .zone ul li {
+  font-family: var(--f-body); font-size: 16px; color: rgba(255,255,255,0.7);
+      padding-left: 14px; position: relative; padding-top: 4px;
+}
+
+.sales-source-deck-shell .s-grad .zone ul li::before {
+  content: "·"; position: absolute; left: 0; color: var(--coral); font-weight: 700;
+}
+
+.sales-source-deck-shell .s-grad .zone .tactic {
+  background: rgba(255,93,108,0.1); border-left: 3px solid var(--coral);
+      padding: 12px 14px; border-radius: 0 6px 6px 0;
+      font-family: var(--f-head); font-weight: 600; font-size: 16px; color: #fff;
+}
+
+.sales-source-deck-shell /* ============================================================ */
+  /* SIGNALS (2x2)                                                 */
+  /* ============================================================ */
+  .s-sig .grid {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 28px; max-width: 1640px;
+}
+
+.sales-source-deck-shell .s-sig .card {
+  background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.18);
+      border-radius: 8px; padding: 36px 36px; position: relative;
+}
+
+.sales-source-deck-shell .s-sig .card .num {
+  position: absolute; top: 24px; right: 28px;
+      font-family: var(--f-mono); font-size: 13px; letter-spacing: 0.28em;
+      color: var(--ink-mute); text-transform: uppercase;
+}
+
+.sales-source-deck-shell .s-sig .card .ico {
+  width: 64px; height: 64px; border-radius: 12px;
+      background: var(--coral); color: #fff;
+      display: flex; align-items: center; justify-content: center;
+      font-family: var(--f-display); font-size: 24px; margin-bottom: 22px;
+}
+
+.sales-source-deck-shell .s-sig .card .lbl {
+  font-family: var(--f-display); font-size: 30px; line-height: 1; color: #fff;
+      text-transform: uppercase; letter-spacing: -0.01em; margin-bottom: 14px;
+}
+
+.sales-source-deck-shell .s-sig .card .d {
+  font-family: var(--f-body); font-size: 19px; line-height: 1.45;
+      color: rgba(255,255,255,0.72); margin-bottom: 22px;
+}
+
+.sales-source-deck-shell .s-sig .card .strength {
+  display: flex; align-items: center; gap: 6px;
+      font-family: var(--f-mono); font-size: 11px; letter-spacing: 0.24em;
+      color: var(--ink-mute); text-transform: uppercase;
+}
+
+.sales-source-deck-shell .s-sig .card .strength .bar {
+  width: 28px; height: 6px; background: rgba(255,255,255,0.18); border-radius: 3px;
+}
+
+.sales-source-deck-shell .s-sig .card .strength .bar.on {
+  background: var(--coral);
+}
+
+.sales-source-deck-shell /* ============================================================ */
+  /* TIMELINE                                                      */
+  /* ============================================================ */
+  .s-time .line {
+  position: relative; max-width: 1640px;
+      padding: 60px 40px 30px;
+}
+
+.sales-source-deck-shell .s-time .line::before {
+  content: ""; position: absolute; left: 40px; right: 40px; top: 70px;
+      height: 3px; background: linear-gradient(90deg, var(--coral), rgba(255,255,255,0.18));
+}
+
+.sales-source-deck-shell .s-time .row {
+  display: grid; grid-template-columns: repeat(4, 1fr); gap: 24px;
+}
+
+.sales-source-deck-shell .s-time .step {
+  position: relative; padding-top: 50px;
+}
+
+.sales-source-deck-shell .s-time .step::before {
+  content: ""; position: absolute; left: 0; top: 12px;
+      width: 22px; height: 22px; border-radius: 50%;
+      background: var(--coral); border: 4px solid #0a1351;
+}
+
+.sales-source-deck-shell .s-time .step.alt::before {
+  background: var(--gold, #f5c45a);
+}
+
+.sales-source-deck-shell .s-time .step .when {
+  font-family: var(--f-mono); font-size: 13px; letter-spacing: 0.28em;
+      color: var(--coral); text-transform: uppercase; margin-bottom: 8px;
+}
+
+.sales-source-deck-shell .s-time .step .t {
+  font-family: var(--f-display); font-size: 28px; color: #fff;
+      line-height: 1; text-transform: uppercase; letter-spacing: -0.01em; margin-bottom: 14px;
+}
+
+.sales-source-deck-shell .s-time .step ul {
+  list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 8px;
+}
+
+.sales-source-deck-shell .s-time .step ul li {
+  font-family: var(--f-body); font-size: 17px; line-height: 1.4;
+      color: rgba(255,255,255,0.75); padding-left: 16px; position: relative;
+}
+
+.sales-source-deck-shell .s-time .step ul li::before {
+  content: "→"; position: absolute; left: 0; color: var(--coral); font-weight: 700;
+}
+
+.sales-source-deck-shell /* ============================================================ */
+  /* CHANNEL (matrix)                                              */
+  /* ============================================================ */
+  .s-chan table {
+  width: 100%; max-width: 1640px; border-collapse: collapse;
+}
+
+.sales-source-deck-shell .s-chan th, .sales-source-deck-shell .s-chan td {
+  padding: 18px 22px; border-bottom: 1px solid rgba(255,255,255,0.14); text-align: left; vertical-align: top;
+}
+
+.sales-source-deck-shell .s-chan thead th {
+  font-family: var(--f-mono); font-size: 12px; letter-spacing: 0.28em;
+      color: var(--ink-mute); text-transform: uppercase; border-bottom: 2px solid var(--coral);
+}
+
+.sales-source-deck-shell .s-chan thead th.ch {
+  color: var(--coral);
+}
+
+.sales-source-deck-shell .s-chan tbody th {
+  font-family: var(--f-display); font-size: 20px; color: #fff;
+      text-transform: uppercase; letter-spacing: -0.005em; width: 18%;
+}
+
+.sales-source-deck-shell .s-chan td {
+  font-family: var(--f-body); font-size: 18px; line-height: 1.4;
+      color: rgba(255,255,255,0.82);
+}
+
+.sales-source-deck-shell .s-chan .chip-row {
+  display: flex; gap: 10px; align-items: center;
+}
+
+.sales-source-deck-shell .s-chan .chip-row .ico {
+  width: 36px; height: 36px; border-radius: 6px;
+      background: var(--coral); color: #fff;
+      display: flex; align-items: center; justify-content: center; font-size: 16px;
+}
+
+.sales-source-deck-shell .s-chan .chip-row .ico.b2 {
+  background: #2a4af5;
+}
+
+.sales-source-deck-shell .s-chan .chip-row .ico.b3 {
+  background: var(--gold, #f5c45a); color: #1a1f3a;
+}
+
+.sales-source-deck-shell .s-chan .chip-row .ico.b4 {
+  background: var(--green); color: #1a1f3a;
+}
+
+.sales-source-deck-shell /* ============================================================ */
+  /* BEFORE / AFTER                                                */
+  /* ============================================================ */
+  .s-ba .vs {
+  display: grid; grid-template-columns: 1fr 80px 1fr; gap: 0 30px; align-items: stretch; max-width: 1640px;
+}
+
+.sales-source-deck-shell .s-ba .col {
+  padding: 36px 38px; border-radius: 8px;
+}
+
+.sales-source-deck-shell .s-ba .col.b {
+  background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.2);
+}
+
+.sales-source-deck-shell .s-ba .col.a {
+  background: rgba(88,226,164,0.08); border: 1px solid rgba(88,226,164,0.45);
+}
+
+.sales-source-deck-shell .s-ba .col .lbl {
+  font-family: var(--f-mono); font-size: 13px; letter-spacing: 0.28em;
+      color: var(--ink-mute); margin-bottom: 6px; text-transform: uppercase;
+}
+
+.sales-source-deck-shell .s-ba .col.a .lbl {
+  color: var(--green);
+}
+
+.sales-source-deck-shell .s-ba .col .name {
+  font-family: var(--f-display); font-size: 48px; line-height: 1;
+      text-transform: uppercase; letter-spacing: -0.015em; margin-bottom: 28px;
+}
+
+.sales-source-deck-shell .s-ba .col.b .name {
+  color: rgba(255,255,255,0.5);
+}
+
+.sales-source-deck-shell .s-ba .col.a .name {
+  color: var(--green);
+}
+
+.sales-source-deck-shell .s-ba .col.b .content {
+  font-family: 'Georgia', serif; font-style: italic; font-size: 22px;
+      line-height: 1.5; color: rgba(255,255,255,0.75);
+}
+
+.sales-source-deck-shell .s-ba .col.a ul {
+  list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 14px;
+}
+
+.sales-source-deck-shell .s-ba .col.a ul li {
+  display: grid; grid-template-columns: 32px 1fr; gap: 14px; align-items: center;
+      font-family: var(--f-head); font-weight: 600; font-size: 19px; color: #fff;
+}
+
+.sales-source-deck-shell .s-ba .col.a ul li::before {
+  content: "✓"; color: var(--green); font-family: var(--f-display); font-size: 24px;
+}
+
+.sales-source-deck-shell .s-ba .arrow {
+  align-self: center; color: var(--coral); font-family: var(--f-display);
+      font-size: 80px; text-align: center;
+}
+
+.sales-source-deck-shell /* ============================================================ */
+  /* ESCALATION LADDER                                             */
+  /* ============================================================ */
+  .s-esc {
+  display: grid; grid-template-columns: 280px 1fr; gap: 50px; max-width: 1640px;
+}
+
+.sales-source-deck-shell .s-esc .ladder {
+  display: flex; flex-direction: column; gap: 10px; align-items: flex-start;
+}
+
+.sales-source-deck-shell .s-esc .ladder .rung {
+  height: 60px; border-radius: 4px;
+      background: var(--coral); position: relative;
+      display: flex; align-items: center; justify-content: center;
+      font-family: var(--f-display); font-size: 22px; color: #fff;
+}
+
+.sales-source-deck-shell .s-esc .ladder .rung.r1 {
+  width: 60%; opacity: 0.55;
+}
+
+.sales-source-deck-shell .s-esc .ladder .rung.r2 {
+  width: 75%; opacity: 0.7;
+}
+
+.sales-source-deck-shell .s-esc .ladder .rung.r3 {
+  width: 90%; opacity: 0.85;
+}
+
+.sales-source-deck-shell .s-esc .ladder .rung.r4 {
+  width: 100%; opacity: 1;
+}
+
+.sales-source-deck-shell .s-esc .levels {
+  display: flex; flex-direction: column; gap: 14px;
+}
+
+.sales-source-deck-shell .s-esc .level {
+  background: rgba(255,255,255,0.04); border-left: 4px solid var(--coral);
+      border-radius: 0 8px 8px 0; padding: 20px 26px;
+      display: grid; grid-template-columns: 60px 1fr; gap: 18px;
+}
+
+.sales-source-deck-shell .s-esc .level .num {
+  font-family: var(--f-display); font-size: 40px; color: var(--coral); line-height: 1;
+}
+
+.sales-source-deck-shell .s-esc .level .body .lbl {
+  font-family: var(--f-display); font-size: 24px; color: #fff;
+      text-transform: uppercase; letter-spacing: -0.005em; margin-bottom: 6px;
+}
+
+.sales-source-deck-shell .s-esc .level .body .row {
+  display: grid; grid-template-columns: 110px 1fr; gap: 12px;
+      font-family: var(--f-body); font-size: 16px; padding-top: 6px;
+}
+
+.sales-source-deck-shell .s-esc .level .body .row .at {
+  font-family: var(--f-mono); font-size: 11px; letter-spacing: 0.24em;
+      color: var(--ink-mute); text-transform: uppercase; padding-top: 2px;
+}
+
+.sales-source-deck-shell .s-esc .level .body .row .val {
+  color: rgba(255,255,255,0.85); line-height: 1.4;
+}
+
+.sales-source-deck-shell /* ============================================================ */
+  /* TOOLKIT                                                       */
+  /* ============================================================ */
+  .s-kit .tools {
+  display: flex; flex-direction: column; gap: 18px; max-width: 1500px;
+}
+
+.sales-source-deck-shell .s-kit .tool {
+  display: grid; grid-template-columns: 80px 1fr 320px; gap: 28px; align-items: center;
+      background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.18);
+      border-radius: 8px; padding: 24px 28px;
+}
+
+.sales-source-deck-shell .s-kit .tool .ico {
+  width: 64px; height: 64px; border-radius: 12px;
+      background: var(--coral); color: #fff;
+      display: flex; align-items: center; justify-content: center;
+      font-family: var(--f-display); font-size: 26px;
+}
+
+.sales-source-deck-shell .s-kit .tool .name {
+  font-family: var(--f-display); font-size: 28px; color: #fff;
+      text-transform: uppercase; letter-spacing: -0.01em; margin-bottom: 6px;
+}
+
+.sales-source-deck-shell .s-kit .tool .d {
+  font-family: var(--f-body); font-size: 18px; line-height: 1.4;
+      color: rgba(255,255,255,0.7);
+}
+
+.sales-source-deck-shell .s-kit .tool .when {
+  background: rgba(255,93,108,0.1); border-left: 3px solid var(--coral);
+      padding: 10px 14px; border-radius: 0 6px 6px 0;
+      font-family: var(--f-head); font-weight: 600; font-size: 16px; line-height: 1.35; color: #fff;
+}
+
+.sales-source-deck-shell .s-kit .tool .when .lbl {
+  font-family: var(--f-mono); font-size: 10px; letter-spacing: 0.26em;
+      color: var(--coral); margin-bottom: 4px; text-transform: uppercase; font-weight: 500;
+}
+
+.sales-source-deck-shell /* ============================================================ */
+  /* DECISION TREE                                                 */
+  /* ============================================================ */
+  .s-dt svg {
+  width: 100%; max-width: 1640px; height: auto; max-height: 720px; display: block;
+}
+
+.sales-source-deck-shell /* ============================================================ */
+  /* TEMPERATURE                                                   */
+  /* ============================================================ */
+  .s-temp .therm {
+  height: 36px; border-radius: 999px; max-width: 1640px; margin-bottom: 60px;
+      background: linear-gradient(90deg, #6ec5ff 0%, var(--gold, #f5c45a) 50%, var(--coral) 100%);
+      position: relative;
+}
+
+.sales-source-deck-shell .s-temp .therm .lbl {
+  position: absolute; top: -28px; font-family: var(--f-mono); font-size: 12px;
+      letter-spacing: 0.28em; color: var(--ink-dim); text-transform: uppercase;
+}
+
+.sales-source-deck-shell .s-temp .therm .lbl.l {
+  left: 0;
+}
+
+.sales-source-deck-shell .s-temp .therm .lbl.r {
+  right: 0;
+}
+
+.sales-source-deck-shell .s-temp .zones {
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 30px; max-width: 1640px;
+}
+
+.sales-source-deck-shell .s-temp .zone {
+  padding: 32px 32px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.18); background: rgba(255,255,255,0.04);
+}
+
+.sales-source-deck-shell .s-temp .zone .h {
+  display: flex; align-items: center; gap: 14px; margin-bottom: 22px;
+}
+
+.sales-source-deck-shell .s-temp .zone .dot {
+  width: 24px; height: 24px; border-radius: 50%;
+}
+
+.sales-source-deck-shell .s-temp .zone.z1 .dot {
+  background: #6ec5ff;
+}
+
+.sales-source-deck-shell .s-temp .zone.z2 .dot {
+  background: var(--gold, #f5c45a);
+}
+
+.sales-source-deck-shell .s-temp .zone.z3 .dot {
+  background: var(--coral);
+}
+
+.sales-source-deck-shell .s-temp .zone .name {
+  font-family: var(--f-display); font-size: 36px; color: #fff;
+      text-transform: uppercase; letter-spacing: -0.01em;
+}
+
+.sales-source-deck-shell .s-temp .zone ul {
+  list-style: none; padding: 0; margin: 0 0 22px; display: flex; flex-direction: column; gap: 8px;
+}
+
+.sales-source-deck-shell .s-temp .zone ul li {
+  font-family: var(--f-body); font-size: 18px; line-height: 1.4;
+      color: rgba(255,255,255,0.78); padding-left: 16px; position: relative;
+}
+
+.sales-source-deck-shell .s-temp .zone ul li::before {
+  content: ""; position: absolute; left: 0; top: 11px;
+      width: 6px; height: 6px; border-radius: 50%; background: var(--coral);
+}
+
+.sales-source-deck-shell .s-temp .zone .action {
+  background: rgba(255,93,108,0.1); border-left: 3px solid var(--coral);
+      padding: 14px 16px; border-radius: 0 6px 6px 0;
+      font-family: var(--f-head); font-weight: 600; font-size: 18px; color: #fff;
+}
+
+.sales-source-deck-shell /* ============================================================ */
+  /* KPI                                                           */
+  /* ============================================================ */
+  .s-kpi .cards {
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 28px; max-width: 1640px;
+}
+
+.sales-source-deck-shell .s-kpi .card {
+  background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.18);
+      border-radius: 8px; padding: 36px 34px; display: flex; flex-direction: column;
+}
+
+.sales-source-deck-shell .s-kpi .card .acro {
+  font-family: var(--f-display); font-size: 88px; line-height: 0.9;
+      color: var(--coral); letter-spacing: -0.03em; margin-bottom: 10px;
+}
+
+.sales-source-deck-shell .s-kpi .card .full {
+  font-family: var(--f-mono); font-size: 13px; letter-spacing: 0.24em;
+      color: var(--ink-mute); margin-bottom: 24px; text-transform: uppercase;
+      padding-bottom: 18px; border-bottom: 1px solid rgba(255,255,255,0.16);
+}
+
+.sales-source-deck-shell .s-kpi .card .def {
+  font-family: var(--f-body); font-size: 19px; line-height: 1.45;
+      color: rgba(255,255,255,0.85); margin-bottom: 22px;
+}
+
+.sales-source-deck-shell .s-kpi .card .row {
+  display: grid; grid-template-columns: 130px 1fr; gap: 14px; padding: 14px 0; border-top: 1px solid rgba(255,255,255,0.1);
+}
+
+.sales-source-deck-shell .s-kpi .card .row .at {
+  font-family: var(--f-mono); font-size: 11px; letter-spacing: 0.24em;
+      color: var(--ink-mute); text-transform: uppercase; padding-top: 4px;
+}
+
+.sales-source-deck-shell .s-kpi .card .row .val {
+  font-family: var(--f-head); font-weight: 600; font-size: 19px; color: #fff; line-height: 1.3;
+}
+
+.sales-source-deck-shell .s-kpi .card .row .val .acc {
+  color: var(--green);
+}
+
+.sales-source-deck-shell /* ============================================================ */
+  /* SELF-DIAG                                                     */
+  /* ============================================================ */
+  .s-diag .intro {
+  font-family: var(--f-head); font-size: 22px; line-height: 1.45;
+      color: rgba(255,255,255,0.78); max-width: 1300px; margin-bottom: 40px;
+}
+
+.sales-source-deck-shell .s-diag .traits {
+  display: flex; flex-direction: column; gap: 26px; max-width: 1640px;
+}
+
+.sales-source-deck-shell .s-diag .trait .lbl {
+  font-family: var(--f-display); font-size: 26px; color: #fff;
+      text-transform: uppercase; letter-spacing: -0.005em; margin-bottom: 12px;
+}
+
+.sales-source-deck-shell .s-diag .trait .row {
+  display: grid; grid-template-columns: 260px 1fr 260px; gap: 20px; align-items: center;
+}
+
+.sales-source-deck-shell .s-diag .trait .pole {
+  font-family: var(--f-mono); font-size: 13px; letter-spacing: 0.22em;
+      color: var(--ink-mute); text-transform: uppercase;
+}
+
+.sales-source-deck-shell .s-diag .trait .pole.r {
+  text-align: right;
+}
+
+.sales-source-deck-shell .s-diag .trait .track {
+  height: 12px; border-radius: 999px; position: relative;
+      background: linear-gradient(90deg, rgba(255,93,108,0.4) 0%, rgba(88,226,164,0.5) 50%, rgba(255,93,108,0.4) 100%);
+}
+
+.sales-source-deck-shell .s-diag .trait .center {
+  position: absolute; left: 35%; right: 35%; top: 0; bottom: 0;
+      background: rgba(88,226,164,0.2); border-left: 2px dashed var(--green); border-right: 2px dashed var(--green);
+}
+
+.sales-source-deck-shell .s-diag .trait .cursor {
+  position: absolute; top: -10px;
+      width: 32px; height: 32px; border-radius: 50%;
+      background: #fff; border: 4px solid var(--coral);
+      transform: translateX(-50%);
+      box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+}
+
+.sales-source-deck-shell /* ============================================================ */
+  /* PARADOX                                                       */
+  /* ============================================================ */
+  .s-para .badge {
+  display: inline-block; background: var(--coral); color: #fff;
+      padding: 10px 22px; border-radius: 999px;
+      font-family: var(--f-mono); font-size: 14px; letter-spacing: 0.3em;
+      margin-bottom: 36px;
+}
+
+.sales-source-deck-shell .s-para .vs {
+  display: grid; grid-template-columns: 1fr 80px 1fr; gap: 0 30px; align-items: stretch; max-width: 1640px; margin-bottom: 40px;
+}
+
+.sales-source-deck-shell .s-para .pole {
+  background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.18);
+      border-radius: 8px; padding: 36px 38px;
+}
+
+.sales-source-deck-shell .s-para .pole .ctx {
+  font-family: var(--f-mono); font-size: 12px; letter-spacing: 0.26em;
+      color: var(--coral); margin-bottom: 14px; text-transform: uppercase;
+}
+
+.sales-source-deck-shell .s-para .pole .stmt {
+  font-family: var(--f-display); font-size: 40px; line-height: 1;
+      color: #fff; text-transform: uppercase; letter-spacing: -0.015em; margin-bottom: 18px;
+}
+
+.sales-source-deck-shell .s-para .pole .sub {
+  font-family: var(--f-body); font-size: 18px; line-height: 1.45;
+      color: rgba(255,255,255,0.75);
+}
+
+.sales-source-deck-shell .s-para .neq {
+  font-family: var(--f-display); font-size: 90px; color: var(--coral);
+      text-align: center; align-self: center;
+}
+
+.sales-source-deck-shell .s-para .resolution {
+  background: var(--coral); color: #fff;
+      padding: 28px 36px; border-radius: 8px; max-width: 1500px;
+      display: grid; grid-template-columns: auto 1fr; gap: 22px; align-items: center;
+}
+
+.sales-source-deck-shell .s-para .resolution .at {
+  font-family: var(--f-display); font-size: 26px; text-transform: uppercase;
+}
+
+.sales-source-deck-shell .s-para .resolution .txt {
+  font-family: var(--f-head); font-weight: 600; font-size: 24px; line-height: 1.35;
+}
+
+.sales-source-deck-shell /* ============================================================ */
+  /* LEARNING PATH                                                 */
+  /* ============================================================ */
+  .s-path .track {
+  height: 4px; background: rgba(255,255,255,0.18); position: relative;
+      margin: 30px 0 80px; max-width: 1640px;
+}
+
+.sales-source-deck-shell .s-path .track .fill {
+  position: absolute; left: 0; top: 0; bottom: 0; width: 40%; background: var(--coral);
+}
+
+.sales-source-deck-shell .s-path .track .dot {
+  position: absolute; top: 50%; transform: translate(-50%, -50%);
+      width: 26px; height: 26px; border-radius: 50%;
+      background: rgba(255,255,255,0.18); border: 4px solid #0a1351;
+}
+
+.sales-source-deck-shell .s-path .track .dot.done {
+  background: var(--coral);
+}
+
+.sales-source-deck-shell .s-path .track .dot.now {
+  background: #fff; border-color: var(--coral);
+}
+
+.sales-source-deck-shell .s-path .stages {
+  display: grid; grid-template-columns: repeat(4, 1fr); gap: 22px; max-width: 1640px;
+}
+
+.sales-source-deck-shell .s-path .stage {
+  background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.18);
+      border-radius: 8px; padding: 28px 28px;
+}
+
+.sales-source-deck-shell .s-path .stage.now {
+  background: rgba(255,93,108,0.1); border-color: var(--coral);
+}
+
+.sales-source-deck-shell .s-path .stage .when {
+  font-family: var(--f-mono); font-size: 12px; letter-spacing: 0.28em;
+      color: var(--coral); text-transform: uppercase; margin-bottom: 10px;
+}
+
+.sales-source-deck-shell .s-path .stage .t {
+  font-family: var(--f-display); font-size: 28px; line-height: 1;
+      text-transform: uppercase; letter-spacing: -0.005em; color: #fff; margin-bottom: 14px;
+}
+
+.sales-source-deck-shell .s-path .stage .focus {
+  font-family: var(--f-body); font-size: 17px; line-height: 1.4;
+      color: rgba(255,255,255,0.7); margin-bottom: 18px;
+}
+
+.sales-source-deck-shell .s-path .stage .mile {
+  font-family: var(--f-mono); font-size: 11px; letter-spacing: 0.24em;
+      color: var(--ink-mute); text-transform: uppercase;
+      padding-top: 14px; border-top: 1px solid rgba(255,255,255,0.14);
+}
+
+.sales-source-deck-shell /* ============================================================ */
+  /* PRACTICE EXERCISE                                             */
+  /* ============================================================ */
+  .s-ex .top {
+  display: flex; gap: 14px; align-items: center; margin-bottom: 20px;
+}
+
+.sales-source-deck-shell .s-ex .top .badge {
+  background: var(--coral); color: #fff; padding: 8px 18px;
+      border-radius: 999px; font-family: var(--f-mono); font-size: 13px; letter-spacing: 0.28em;
+}
+
+.sales-source-deck-shell .s-ex .top .dur {
+  font-family: var(--f-mono); font-size: 13px; letter-spacing: 0.24em;
+      color: var(--ink-dim); text-transform: uppercase;
+}
+
+.sales-source-deck-shell .s-ex .obj {
+  background: rgba(255,255,255,0.05); border-left: 4px solid var(--coral);
+      padding: 22px 28px; max-width: 1600px; margin-bottom: 40px;
+      font-family: var(--f-head); font-size: 22px; line-height: 1.4; color: #fff;
+}
+
+.sales-source-deck-shell .s-ex .obj .lbl {
+  font-family: var(--f-mono); font-size: 12px; letter-spacing: 0.28em;
+      color: var(--coral); margin-bottom: 6px; text-transform: uppercase;
+}
+
+.sales-source-deck-shell .s-ex .steps {
+  display: grid; grid-template-columns: repeat(4, 1fr); gap: 20px; max-width: 1640px; margin-bottom: 30px;
+}
+
+.sales-source-deck-shell .s-ex .step {
+  background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.18); border-radius: 8px; padding: 24px 24px;
+}
+
+.sales-source-deck-shell .s-ex .step .n {
+  width: 48px; height: 48px; border-radius: 50%; background: var(--coral); color: #fff;
+      display: flex; align-items: center; justify-content: center;
+      font-family: var(--f-display); font-size: 22px; margin-bottom: 18px;
+}
+
+.sales-source-deck-shell .s-ex .step .t {
+  font-family: var(--f-display); font-size: 22px; line-height: 1;
+      text-transform: uppercase; letter-spacing: -0.005em; color: #fff; margin-bottom: 10px;
+}
+
+.sales-source-deck-shell .s-ex .step .d {
+  font-family: var(--f-body); font-size: 17px; line-height: 1.4;
+      color: rgba(255,255,255,0.75);
+}
+
+.sales-source-deck-shell .s-ex .output {
+  background: var(--gold, #f5c45a); color: #1a1f3a;
+      padding: 22px 30px; border-radius: 8px; max-width: 1600px;
+      display: flex; gap: 22px; align-items: center;
+}
+
+.sales-source-deck-shell .s-ex .output .lbl {
+  font-family: var(--f-mono); font-size: 12px; letter-spacing: 0.28em;
+}
+
+.sales-source-deck-shell .s-ex .output .txt {
+  font-family: var(--f-head); font-weight: 700; font-size: 22px; line-height: 1.3;
+}
+
+.sales-source-deck-shell /* ============================================================ */
+  /* SELF MANAGEMENT                                               */
+  /* ============================================================ */
+  .s-sm .grid {
+  display: grid; grid-template-columns: 1fr 80px 1fr; gap: 0 30px; max-width: 1640px; align-items: stretch;
+}
+
+.sales-source-deck-shell .s-sm .col {
+  padding: 36px 38px; border-radius: 8px;
+}
+
+.sales-source-deck-shell .s-sm .col.l {
+  background: rgba(255,93,108,0.08); border: 1px solid rgba(255,93,108,0.4);
+}
+
+.sales-source-deck-shell .s-sm .col.r {
+  background: rgba(88,226,164,0.08); border: 1px solid rgba(88,226,164,0.4);
+}
+
+.sales-source-deck-shell .s-sm .col .lbl {
+  font-family: var(--f-mono); font-size: 13px; letter-spacing: 0.28em;
+      margin-bottom: 16px; text-transform: uppercase;
+}
+
+.sales-source-deck-shell .s-sm .col.l .lbl {
+  color: var(--coral);
+}
+
+.sales-source-deck-shell .s-sm .col.r .lbl {
+  color: var(--green);
+}
+
+.sales-source-deck-shell .s-sm .col .name {
+  font-family: var(--f-display); font-size: 44px; line-height: 0.95;
+      text-transform: uppercase; letter-spacing: -0.015em; margin-bottom: 28px;
+}
+
+.sales-source-deck-shell .s-sm .col.l .name {
+  color: var(--coral);
+}
+
+.sales-source-deck-shell .s-sm .col.r .name {
+  color: var(--green);
+}
+
+.sales-source-deck-shell .s-sm .col ul {
+  list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 12px;
+}
+
+.sales-source-deck-shell .s-sm .col.l ul li {
+  display: grid; grid-template-columns: 38px 1fr; gap: 14px; align-items: center;
+      font-family: var(--f-head); font-weight: 500; font-size: 21px; color: #fff;
+}
+
+.sales-source-deck-shell .s-sm .col.l ul li .ico {
+  font-size: 26px;
+}
+
+.sales-source-deck-shell .s-sm .col.r .tech {
+  background: rgba(255,255,255,0.05); border-left: 3px solid var(--green);
+      padding: 14px 20px; border-radius: 0 6px 6px 0;
+}
+
+.sales-source-deck-shell .s-sm .col.r .tech .name-t {
+  font-family: var(--f-display); font-size: 22px; color: var(--green);
+      text-transform: uppercase; letter-spacing: -0.005em; margin-bottom: 6px;
+}
+
+.sales-source-deck-shell .s-sm .col.r .tech .d {
+  font-family: var(--f-body); font-size: 17px; line-height: 1.4; color: rgba(255,255,255,0.8);
+}
+
+.sales-source-deck-shell .s-sm .arrow {
+  align-self: center; color: var(--coral); font-family: var(--f-display); font-size: 80px; text-align: center;
+}
+
+.sales-source-deck-shell /* ============================================================ */
+  /* SIGNAL RADAR                                                  */
+  /* ============================================================ */
+  .s-radar .cards {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 30px; max-width: 1640px;
+}
+
+.sales-source-deck-shell .s-radar .card {
+  background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.18);
+      border-radius: 8px; padding: 36px 40px;
+}
+
+.sales-source-deck-shell .s-radar .card .h {
+  display: flex; align-items: center; gap: 18px; padding-bottom: 22px;
+      border-bottom: 2px solid var(--coral); margin-bottom: 24px;
+}
+
+.sales-source-deck-shell .s-radar .card .h .emo {
+  width: 60px; height: 60px; border-radius: 50%; background: var(--coral);
+      display: flex; align-items: center; justify-content: center; font-size: 28px;
+}
+
+.sales-source-deck-shell .s-radar .card .h .name {
+  font-family: var(--f-display); font-size: 36px; color: #fff;
+      text-transform: uppercase; letter-spacing: -0.01em;
+}
+
+.sales-source-deck-shell .s-radar .card .lbl {
+  font-family: var(--f-mono); font-size: 12px; letter-spacing: 0.28em;
+      color: var(--coral); margin-bottom: 12px; text-transform: uppercase;
+}
+
+.sales-source-deck-shell .s-radar .card ul {
+  list-style: none; padding: 0; margin: 0 0 26px; display: flex; flex-direction: column; gap: 10px;
+}
+
+.sales-source-deck-shell .s-radar .card ul li {
+  font-family: var(--f-body); font-size: 19px; line-height: 1.4;
+      color: rgba(255,255,255,0.85); padding-left: 18px; position: relative;
+}
+
+.sales-source-deck-shell .s-radar .card ul li::before {
+  content: ""; position: absolute; left: 0; top: 12px;
+      width: 8px; height: 8px; border-radius: 50%; background: var(--coral);
+}
+
+.sales-source-deck-shell .s-radar .card .posture {
+  background: rgba(255,93,108,0.1); border-left: 3px solid var(--coral);
+      padding: 14px 18px; border-radius: 0 6px 6px 0; margin-bottom: 20px;
+      font-family: var(--f-head); font-weight: 600; font-size: 19px; color: #fff;
+}
+
+.sales-source-deck-shell .s-radar .card .phrase {
+  font-family: 'Georgia', serif; font-style: italic;
+      font-size: 21px; line-height: 1.4; color: rgba(255,255,255,0.78);
+      padding-top: 18px; border-top: 1px dashed rgba(255,255,255,0.18);
+}
