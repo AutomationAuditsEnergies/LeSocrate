@@ -436,6 +436,125 @@ def get_latest_script_slide_deck(folder_id: int, content_job_id: int | None = No
     return _decode_deck_row(row)
 
 
+def _audio_basename(value: str | None) -> str:
+    clean = str(value or "").split("?", 1)[0].split("#", 1)[0]
+    return os.path.basename(clean).lower()
+
+
+def _deck_references_audio(deck: dict | None, audio_filename: str) -> bool:
+    if not deck or not audio_filename:
+        return False
+
+    def matches(value: str | None) -> bool:
+        return _audio_basename(value) == audio_filename
+
+    audio_sync = deck.get("audio_sync") or {}
+    for timing in audio_sync.get("timings") or []:
+        if matches(timing.get("audio_filename") or timing.get("filename")):
+            return True
+
+    for slide in deck.get("slides") or []:
+        if matches(slide.get("audio_filename")):
+            return True
+        for segment in slide.get("audio_segments") or []:
+            if matches(segment.get("audio_filename") or segment.get("filename")):
+                return True
+
+    return False
+
+
+def _unique_ints(values: Iterable[int | None]) -> list[int]:
+    seen = set()
+    result = []
+    for value in values:
+        if value is None:
+            continue
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError):
+            continue
+        if parsed in seen:
+            continue
+        seen.add(parsed)
+        result.append(parsed)
+    return result
+
+
+def get_latest_script_slide_deck_for_audio(
+    audio_filename: str,
+    platform_id: int | None = None,
+) -> dict | None:
+    """Find the latest generated deck that contains timings for an audio file."""
+    _ensure_slide_deck_tables()
+    target_audio = _audio_basename(audio_filename)
+    if not target_audio:
+        return None
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    platform_ids = _unique_ints([platform_id])
+    job_ids: list[int] = []
+
+    if platform_id:
+        cursor.execute(
+            """
+            SELECT pc.source_formation_id,
+                   pc.source_module_id,
+                   fm.source_pipeline_job_id,
+                   fm.source_platform_id
+            FROM platform_config pc
+            LEFT JOIN formation_modules fm ON fm.id = pc.source_module_id
+            WHERE pc.id = ?
+            """,
+            (platform_id,),
+        )
+        row = cursor.fetchone()
+        if row:
+            (
+                source_formation_id,
+                _source_module_id,
+                module_pipeline_job_id,
+                module_source_platform_id,
+            ) = row
+            platform_ids = _unique_ints([*platform_ids, module_source_platform_id])
+            job_ids = _unique_ints([source_formation_id, module_pipeline_job_id])
+
+    where_parts = []
+    params: list[int] = []
+    if platform_ids:
+        placeholders = ", ".join("?" for _ in platform_ids)
+        where_parts.append(f"platform_id IN ({placeholders})")
+        params.extend(platform_ids)
+    if job_ids:
+        placeholders = ", ".join("?" for _ in job_ids)
+        where_parts.append(f"(formation_job_id IN ({placeholders}) OR content_job_id IN ({placeholders}))")
+        params.extend(job_ids)
+        params.extend(job_ids)
+
+    where_sql = f"WHERE {' OR '.join(where_parts)}" if where_parts else ""
+    cursor.execute(
+        f"""
+        SELECT id, folder_id, content_job_id, formation_job_id, platform_id, pace,
+               max_slides, model, slides_json, timeline_json, stats_json,
+               pipeline_debug_json, audio_sync_json, created_at, updated_at
+        FROM script_slide_decks
+        {where_sql}
+        ORDER BY id DESC
+        LIMIT 200
+        """,
+        tuple(params),
+    )
+    rows = cursor.fetchall()
+    conn.close()
+
+    for row in rows:
+        deck = _decode_deck_row(row)
+        if _deck_references_audio(deck, target_audio):
+            return deck
+
+    return None
+
+
 def update_script_slide_deck_audio_sync(deck_id: int, audio_sync: dict) -> dict | None:
     _ensure_slide_deck_tables()
     conn = get_db_connection()

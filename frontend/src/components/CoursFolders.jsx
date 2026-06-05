@@ -1667,7 +1667,7 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
       <div
         className="w-full overflow-hidden rounded-xl"
         style={{
-          maxWidth: '960px',
+          maxWidth: audioEditorFile ? '1120px' : '960px',
           maxHeight: '92vh',
           backgroundColor: colors.cardBg,
           border: `1px solid ${colors.border}`,

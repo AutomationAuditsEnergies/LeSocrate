@@ -2,6 +2,7 @@
 from flask import Blueprint, session, jsonify, request, Response
 import requests as http_requests
 from services.audio_service import get_current_audio_info
+from services.script_slide_generation_service import get_latest_script_slide_deck_for_audio
 from services.time_service import get_heure_debut_cours, get_current_simulated_time
 from utils.logger import get_logger
 
@@ -15,6 +16,12 @@ def _get_platform_id():
     pid = request.args.get("platform_id", type=int)
     if pid:
         return pid
+    header_pid = request.headers.get("X-Platform-Id")
+    if header_pid:
+        try:
+            return int(header_pid)
+        except (TypeError, ValueError):
+            pass
     return session.get("platform_id", 1)
 
 
@@ -98,6 +105,43 @@ def video_status():
 
     except Exception as e:
         logger.error(f"❌ Erreur API video/status: {e}")
+        return jsonify({"success": False, "error": "Erreur serveur"}), 500
+
+
+@video_bp.route("/api/video/slides")
+def video_slides():
+    """Retourne le deck synchronisé avec l'audio actuellement projetable côté cours."""
+    try:
+        if "nom" not in session:
+            logger.warning("⚠️ Accès /api/video/slides sans session")
+            return jsonify({"authenticated": False, "error": "Non authentifié"}), 401
+
+        platform_id = _get_platform_id()
+        audio_filename = request.args.get("audio_filename")
+        if not audio_filename:
+            audio_info, _offset, _temps_restant = get_current_audio_info(platform_id)
+            audio_filename = audio_info.get("filename") if audio_info else None
+
+        if not audio_filename:
+            return jsonify({"status": "no_data", "message": "Aucun audio en cours"}), 200
+
+        deck = get_latest_script_slide_deck_for_audio(audio_filename, platform_id=platform_id)
+        if not deck:
+            return jsonify({"status": "no_data", "message": "Aucun deck synchronisé pour cet audio"}), 200
+
+        return jsonify(
+            {
+                "authenticated": True,
+                "status": "success",
+                "deck_id": deck.get("deck_id"),
+                "folder_id": deck.get("folder_id"),
+                "audio_sync": deck.get("audio_sync") or {},
+                "slides": deck.get("slides") or [],
+            }
+        )
+
+    except Exception as e:
+        logger.error(f"❌ Erreur API video/slides: {e}")
         return jsonify({"success": False, "error": "Erreur serveur"}), 500
 
 

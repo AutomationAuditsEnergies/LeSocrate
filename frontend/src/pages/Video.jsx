@@ -1,8 +1,13 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import ChatPanel from '../components/ChatPanel.jsx'
-import LeftSidebar from '../components/LeftSidebar.jsx'
-import { apiUrl, apiFetch, getPlatformName, setPlatformId } from '../api'
+import { apiFetch, getPlatformName, setPlatformId } from '../api'
+import { SlidePreviewFrame } from '../components/slides/PipelineSlidePreview.jsx'
+import {
+  audioBasename,
+  buildAudioSlideTimings,
+  findActiveAudioSlideTiming,
+} from '../components/slides/audioSlideSync'
 
 const BREAK_AUDIO_TYPES = new Set(['qa', 'pause', 'pause_midi'])
 
@@ -52,6 +57,9 @@ export default function Video() {
   const [error, setError] = useState(null)
   const [showPlayPrompt, setShowPlayPrompt] = useState(false)
   const [breakRemaining, setBreakRemaining] = useState(null)
+  const [slideDeck, setSlideDeck] = useState({ slides: [], audioSync: {} })
+  const [slideView, setSlideView] = useState('professor')
+  const [playbackTime, setPlaybackTime] = useState(0)
   const audioRef = useRef(null)
 
   // Synchroniser la propriété muted directement sur l'élément DOM
@@ -153,8 +161,11 @@ export default function Video() {
           id: data.audio_id,
           type: data.audio_type,
         })
+        setPlaybackTime((Number(data.offset) || 0) * 1000)
         if (isBreakAudioType(data.audio_type)) {
           setBreakRemaining(data.remaining ?? Math.max(0, (data.audio_duration || 0) - (data.offset || 0)))
+        } else {
+          setBreakRemaining(null)
         }
         setLoading(false)
       }
@@ -167,8 +178,60 @@ export default function Video() {
 
   // Charger les informations audio depuis l'API
   useEffect(() => {
-    fetchAudioStatus()
+    const timer = window.setTimeout(() => {
+      fetchAudioStatus()
+    }, 0)
+    return () => window.clearTimeout(timer)
   }, [fetchAudioStatus])
+
+  const currentAudioName = audioInfo?.status === 'playing' ? audioBasename(audioInfo.filename) : ''
+  const isCurrentBreakAudio = audioInfo?.status === 'playing' && isBreakAudioType(audioInfo.type)
+
+  useEffect(() => {
+    let cancelled = false
+    const resetTimer = window.setTimeout(() => {
+      if (cancelled) return
+      setSlideView('professor')
+      setSlideDeck({ slides: [], audioSync: {} })
+    }, 0)
+
+    if (audioInfo?.status !== 'playing' || isCurrentBreakAudio || !currentAudioName) {
+      return () => {
+        cancelled = true
+        window.clearTimeout(resetTimer)
+      }
+    }
+
+    apiFetch(`/api/video/slides?audio_filename=${encodeURIComponent(currentAudioName)}`)
+      .then(async (response) => {
+        const data = await response.json().catch(() => ({}))
+        if (!response.ok || (data.status !== 'success' && data.status !== 'no_data')) {
+          throw new Error(data.message || data.error || 'Slides indisponibles')
+        }
+        if (cancelled) return
+        if (data.status === 'success') {
+          setSlideDeck({
+            slides: Array.isArray(data.slides) ? data.slides : [],
+            audioSync: data.audio_sync || {},
+          })
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          console.error('Erreur chargement slides synchronisées:', err)
+        }
+      })
+
+    return () => {
+      cancelled = true
+      window.clearTimeout(resetTimer)
+    }
+  }, [audioInfo?.status, currentAudioName, isCurrentBreakAudio])
+
+  const slideTimings = buildAudioSlideTimings(slideDeck.slides, slideDeck.audioSync, currentAudioName)
+  const activeSlideTiming = findActiveAudioSlideTiming(slideTimings, playbackTime)
+  const hasProjectedSlides = slideTimings.length > 0 && Boolean(activeSlideTiming)
+  const showProjectedSlides = slideView === 'slides' && hasProjectedSlides && !isCurrentBreakAudio
 
   // Positionner l'audio à l'offset correct quand il est chargé
   useEffect(() => {
@@ -178,6 +241,7 @@ export default function Video() {
       const isBreakAudio = isBreakAudioType(audioInfo.type)
       let hasAttemptedPlay = false
       let countdownTimer = null
+      let breakInitTimer = null
 
       const updateBreakRemaining = () => {
         if (!isBreakAudio) return
@@ -186,14 +250,25 @@ export default function Video() {
         setBreakRemaining(Math.max(0, Math.ceil(duration - audio.currentTime)))
       }
 
+      const syncPlaybackTime = () => {
+        setPlaybackTime((Number(audio.currentTime) || 0) * 1000)
+      }
+
       const handleLoadedMetadata = () => {
         if (targetOffset > 0) {
           audio.currentTime = targetOffset
         }
+        syncPlaybackTime()
         updateBreakRemaining()
       }
 
       const handleSeeked = () => {
+        syncPlaybackTime()
+        updateBreakRemaining()
+      }
+
+      const handleTimeUpdate = () => {
+        syncPlaybackTime()
         updateBreakRemaining()
       }
 
@@ -228,24 +303,33 @@ export default function Video() {
 
       audio.addEventListener('loadedmetadata', handleLoadedMetadata)
       audio.addEventListener('seeked', handleSeeked)
+      audio.addEventListener('timeupdate', handleTimeUpdate)
+      audio.addEventListener('playing', syncPlaybackTime)
       audio.addEventListener('canplay', handleCanPlay)
       audio.addEventListener('error', handleError)
       audio.addEventListener('ended', handleEnded)
 
       audio.load()
       if (isBreakAudio) {
-        setBreakRemaining(audioInfo.remaining ?? Math.max(0, (audioInfo.duration || 0) - targetOffset))
+        breakInitTimer = window.setTimeout(() => {
+          setBreakRemaining(audioInfo.remaining ?? Math.max(0, (audioInfo.duration || 0) - targetOffset))
+        }, 0)
         countdownTimer = window.setInterval(updateBreakRemaining, 500)
       }
 
       return () => {
         audio.removeEventListener('loadedmetadata', handleLoadedMetadata)
         audio.removeEventListener('seeked', handleSeeked)
+        audio.removeEventListener('timeupdate', handleTimeUpdate)
+        audio.removeEventListener('playing', syncPlaybackTime)
         audio.removeEventListener('canplay', handleCanPlay)
         audio.removeEventListener('error', handleError)
         audio.removeEventListener('ended', handleEnded)
         if (endedTimer) {
           window.clearTimeout(endedTimer)
+        }
+        if (breakInitTimer) {
+          window.clearTimeout(breakInitTimer)
         }
         if (countdownTimer) {
           window.clearInterval(countdownTimer)
@@ -351,6 +435,16 @@ export default function Video() {
                   </div>
                 </div>
               </div>
+            ) : showProjectedSlides ? (
+              <div className="absolute inset-0 flex items-center justify-center bg-[#020617]">
+                <SlidePreviewFrame
+                  slide={activeSlideTiming.slide}
+                  maxWidth={896}
+                  padding={0}
+                  className="h-full w-full"
+                  style={{ width: '100%', height: '100%', background: '#020617' }}
+                />
+              </div>
             ) : (
               <div className="flex flex-col items-center justify-center">
                 <div className="w-40 h-40 rounded-full bg-white flex items-center justify-center">
@@ -363,8 +457,21 @@ export default function Video() {
             )}
 
             <div className="absolute bottom-6 left-6 bg-black/60 text-white text-xs px-3 py-1.5 rounded-lg backdrop-blur-sm">
-              {isBreakScreen ? breakCopy.eyebrow : 'Professeur'}
+              {isBreakScreen ? breakCopy.eyebrow : showProjectedSlides ? `Slide ${activeSlideTiming.slideIndex + 1}` : 'Professeur'}
             </div>
+
+            {audioInfo?.status === 'playing' && !isBreakScreen && hasProjectedSlides && (
+              <button
+                type="button"
+                onClick={(event) => {
+                  event.stopPropagation()
+                  setSlideView(showProjectedSlides ? 'professor' : 'slides')
+                }}
+                className="absolute right-5 top-5 rounded-xl bg-white/95 px-4 py-2 text-sm font-semibold text-gray-900 shadow-lg transition hover:bg-white focus:outline-none focus:ring-2 focus:ring-purple-500 focus:ring-offset-2 focus:ring-offset-gray-900"
+              >
+                {showProjectedSlides ? 'Professeur' : 'Visualiser les slides'}
+              </button>
+            )}
 
             {showPlayPrompt && (
               <button

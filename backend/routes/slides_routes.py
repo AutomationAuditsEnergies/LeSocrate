@@ -345,7 +345,16 @@ def get_slides():
                 "stats": deck["stats"],
                 "timeline": deck["timeline"],
                 "pipeline_debug": deck["pipeline_debug"],
+                "audio_sync": deck.get("audio_sync") or {},
+                "deck_id": deck.get("deck_id"),
             })
+        return jsonify({
+            "status": "no_data",
+            "message": "Aucun deck slide généré pour ce cours.",
+            "slides": [],
+            "slides_count": 0,
+            "audio_sync": {},
+        })
 
     if _generation_error:
         return jsonify({

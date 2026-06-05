@@ -1,7 +1,9 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import WaveSurfer from 'wavesurfer.js'
 import RegionsPlugin from 'wavesurfer.js/dist/plugins/regions.js'
-import { apiUrl, getPlatformId } from '../api'
+import { apiFetch, apiUrl, getPlatformId } from '../api'
+import { buildAudioSlideTimings } from './slides/audioSlideSync'
+import { SlidePreviewFrame } from './slides/PipelineSlidePreview'
 
 const Icon = ({ name, style, className = '' }) => (
   <span className={`material-icons ${className}`} style={style}>{name}</span>
@@ -21,6 +23,96 @@ function formatTime(ms) {
 //   darkMode      — bool
 //   colors        — objet colors du parent
 //   onClose       — callback fermeture
+function AudioSlideSyncPreview({ colors, darkMode, loading, error, slides, timings, activeTiming }) {
+  const previewBg = darkMode ? '#0f172a' : '#f8fafc'
+  const headerBg = darkMode ? '#111827' : '#ffffff'
+  const title = activeTiming?.slide?.data?.title
+    || activeTiming?.slide?.data?.formation_name
+    || activeTiming?.slide?.data?.chapter
+    || activeTiming?.slide?.template_type
+    || 'Slide'
+
+  let body = null
+  if (loading) {
+    body = (
+      <div className="flex aspect-video w-full items-center justify-center rounded-md" style={{ backgroundColor: darkMode ? '#020617' : '#eef2f7', color: colors.textMuted }}>
+        <div className="flex items-center gap-2 text-sm">
+          <Icon name="hourglass_empty" style={{ fontSize: '18px' }} />
+          Chargement des slides...
+        </div>
+      </div>
+    )
+  } else if (error) {
+    body = (
+      <div className="flex aspect-video w-full items-center justify-center rounded-md px-6 text-center" style={{ backgroundColor: darkMode ? '#1f1720' : '#fff1f2', color: '#dc2626' }}>
+        <div className="max-w-[52ch] text-sm font-medium">{error}</div>
+      </div>
+    )
+  } else if (!slides.length) {
+    body = (
+      <div className="flex aspect-video w-full items-center justify-center rounded-md px-6 text-center" style={{ backgroundColor: darkMode ? '#020617' : '#eef2f7', color: colors.textSecondary }}>
+        <div className="max-w-[56ch] text-sm font-medium">Aucun deck slide disponible pour ce cours.</div>
+      </div>
+    )
+  } else if (!timings.length) {
+    body = (
+      <div className="flex aspect-video w-full items-center justify-center rounded-md px-6 text-center" style={{ backgroundColor: darkMode ? '#020617' : '#eef2f7', color: colors.textSecondary }}>
+        <div className="max-w-[62ch] text-sm font-medium">Aucune synchro trouvée pour cet audio. Relance la génération audio synchronisée.</div>
+      </div>
+    )
+  } else {
+    body = (
+      <SlidePreviewFrame
+        slide={activeTiming?.slide}
+        maxWidth={740}
+        padding={0}
+        style={{ width: '100%' }}
+      />
+    )
+  }
+
+  return (
+    <div
+      className="overflow-hidden rounded-xl"
+      style={{ backgroundColor: previewBg, border: `1px solid ${colors.border}` }}
+    >
+      <div
+        className="flex items-center justify-between gap-3 border-b px-4 py-3"
+        style={{ backgroundColor: headerBg, borderColor: colors.border }}
+      >
+        <div className="flex min-w-0 items-center gap-2">
+          <Icon name="slideshow" style={{ fontSize: '18px', color: colors.textMuted, flexShrink: 0 }} />
+          <div className="min-w-0">
+            <p className="truncate text-sm font-semibold" style={{ color: colors.text }}>
+              PowerPoint synchronisé
+            </p>
+            {activeTiming && (
+              <p className="truncate text-xs" style={{ color: colors.textMuted }}>
+                {title}
+              </p>
+            )}
+          </div>
+        </div>
+        <div className="flex flex-shrink-0 items-center gap-2 text-xs font-semibold" style={{ color: colors.textSecondary }}>
+          {activeTiming ? (
+            <>
+              <span>Slide {activeTiming.slideIndex + 1}/{slides.length}</span>
+              <span style={{ color: colors.textMuted }}>
+                {formatTime(activeTiming.start * 1000)} → {formatTime(activeTiming.end * 1000)}
+              </span>
+            </>
+          ) : (
+            <span>{timings.length ? `${timings.length} repères` : 'Non synchronisé'}</span>
+          )}
+        </div>
+      </div>
+      <div className="p-3">
+        {body}
+      </div>
+    </div>
+  )
+}
+
 export default function AudioEditor({ folderId, filename, darkMode, colors, onClose }) {
   const waveRef = useRef(null)       // div DOM pour WaveSurfer
   const wsRef = useRef(null)         // instance WaveSurfer
@@ -38,7 +130,7 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
   const [replaceText, setReplaceText] = useState('')
   const [previewId, setPreviewId] = useState(null)
   const [previewB64, setPreviewB64] = useState(null)   // base64 du TTS preview
-  const [previewAudio, setPreviewAudio] = useState(null)
+  const [, setPreviewAudio] = useState(null)
   const [stitchedPlaying, setStitchedPlaying] = useState(false)
   const [loadingStitch, setLoadingStitch] = useState(false)
   const [loading, setLoading] = useState(true)
@@ -46,6 +138,10 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState(null)
   const [status, setStatus] = useState(null)
+  const [slides, setSlides] = useState([])
+  const [audioSync, setAudioSync] = useState({})
+  const [slidesLoading, setSlidesLoading] = useState(false)
+  const [slidesError, setSlidesError] = useState(null)
 
   const audioUrlRef = useRef(null)   // URL audio courante (mise à jour après cut/replace)
 
@@ -70,6 +166,59 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
     audioUrlRef.current = url
     return url
   }, [clearAudioUrl, folderId, filename])
+
+  useEffect(() => {
+    let cancelled = false
+    if (!folderId) {
+      setSlides([])
+      setAudioSync({})
+      return undefined
+    }
+
+    setSlidesLoading(true)
+    setSlidesError(null)
+    setSlides([])
+    setAudioSync({})
+
+    apiFetch(`/api/slides/data?folder_id=${encodeURIComponent(folderId)}`)
+      .then(async (resp) => {
+        const data = await resp.json().catch(() => ({}))
+        if (data.status === 'no_data') {
+          if (cancelled) return
+          setSlides([])
+          setAudioSync({})
+          return
+        }
+        if (!resp.ok || data.status !== 'success') {
+          throw new Error(data.message || data.error || 'Deck slides indisponible')
+        }
+        if (cancelled) return
+        setSlides(Array.isArray(data.slides) ? data.slides : [])
+        setAudioSync(data.audio_sync || data.pipeline_debug?.audio_sync || {})
+      })
+      .catch((e) => {
+        if (cancelled) return
+        setSlidesError(e.message || 'Impossible de charger les slides')
+      })
+      .finally(() => {
+        if (!cancelled) setSlidesLoading(false)
+      })
+
+    return () => { cancelled = true }
+  }, [folderId, filename])
+
+  const slideTimings = useMemo(
+    () => buildAudioSlideTimings(slides, audioSync, filename),
+    [slides, audioSync, filename]
+  )
+
+  const activeSlideTiming = useMemo(() => {
+    if (!slideTimings.length) return null
+    const seconds = currentTime / 1000
+    return slideTimings.find(item => seconds >= item.start && seconds < item.end)
+      || [...slideTimings].reverse().find(item => seconds >= item.start)
+      || slideTimings[0]
+  }, [currentTime, slideTimings])
 
   // ── Init WaveSurfer ──
   useEffect(() => {
@@ -110,9 +259,6 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
     const ZOOM_STEP = 1.15
     let currentZoom = 0
     const handleWheel = (e) => {
-      if (!wsRef.current || !duration) {
-        // fallback si duration pas encore dispo : utiliser getDuration
-      }
       e.preventDefault()
       const dur = wsRef.current?.getDuration() || 0
       if (!dur) return
@@ -128,7 +274,7 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
       }
       try {
         wsRef.current.zoom(currentZoom)
-      } catch (err) {
+      } catch {
         // zoom peut échouer si pas prêt
       }
     }
@@ -146,11 +292,20 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
         setError('Impossible de charger l\'audio : ' + e.message)
       })
 
+    const syncCurrentTime = (time) => {
+      const seconds = Number.isFinite(time) ? time : (ws.getCurrentTime?.() || 0)
+      setCurrentTime(seconds * 1000)
+    }
+
     ws.on('ready', () => {
       setDuration(ws.getDuration() * 1000)
+      syncCurrentTime()
       setLoading(false)
     })
-    ws.on('timeupdate', (t) => setCurrentTime(t * 1000))
+    ws.on('timeupdate', syncCurrentTime)
+    ws.on('audioprocess', syncCurrentTime)
+    ws.on('seeking', syncCurrentTime)
+    ws.on('interaction', syncCurrentTime)
     ws.on('play', () => setPlaying(true))
     ws.on('pause', () => setPlaying(false))
     ws.on('finish', () => setPlaying(false))
@@ -190,7 +345,7 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
         ? 'rgba(239, 68, 68, 0.25)'
         : darkMode ? 'rgba(203, 213, 225, 0.25)' : 'rgba(51, 65, 85, 0.18)',
     })
-  }, [mode])
+  }, [mode, darkMode])
 
   const togglePlay = async () => {
     const ws = wsRef.current
@@ -214,7 +369,7 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
 
     try {
       await ws.play()
-    } catch (_) {
+    } catch {
       // Autoplay policy du navigateur — ignoré silencieusement
     }
   }
@@ -226,7 +381,7 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
       ws.seekTo(0)
       setCurrentTime(0)
       await ws.play()
-    } catch (_) {
+    } catch {
       setCurrentTime(0)
     }
   }
@@ -243,9 +398,19 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
 
   // ── Écoute splicée côté client (Web Audio API) ──
   const stopStitchedPlayback = () => {
-    stitchedSourcesRef.current.forEach(src => { try { src.stop() } catch (e) {} })
+    stitchedSourcesRef.current.forEach(src => {
+      try {
+        src.stop()
+      } catch {
+        // Source déjà arrêtée.
+      }
+    })
     stitchedSourcesRef.current = []
-    try { audioCtxRef.current?.close() } catch (e) {}
+    try {
+      audioCtxRef.current?.close()
+    } catch {
+      // Contexte déjà fermé.
+    }
     audioCtxRef.current = null
     setStitchedPlaying(false)
   }
@@ -275,7 +440,6 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
       const previewBytes = Uint8Array.from(atob(previewB64), c => c.charCodeAt(0))
       const previewBuffer = await audioCtx.decodeAudioData(previewBytes.buffer)
 
-      const sr = origBuffer.sampleRate
       const startSec = region.start / 1000
       const endSec = region.end / 1000
 
@@ -347,14 +511,16 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
             const freshUrl = buildAudioStreamUrl()
             setLoading(true)
             wsRef.current?.load(freshUrl)
-          } catch (e) { /* ignore */ }
+          } catch {
+            // Le message d'état restera visible si le reload échoue.
+          }
           setStatus(null)
         }, 1500)
       } else {
         setError(data.error || 'Erreur lors du cut')
       }
     } catch (e) {
-      setError('Erreur réseau')
+      setError(`Erreur réseau : ${e.message || 'requête échouée'}`)
     } finally {
       setSaving(false)
     }
@@ -395,7 +561,7 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
         setError(data.error || 'Erreur lors de la génération TTS')
       }
     } catch (e) {
-      setError('Erreur réseau')
+      setError(`Erreur réseau : ${e.message || 'requête échouée'}`)
     } finally {
       setGenerating(false)
     }
@@ -430,14 +596,16 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
             const freshUrl = buildAudioStreamUrl()
             setLoading(true)
             wsRef.current?.load(freshUrl)
-          } catch (e) { /* ignore */ }
+          } catch {
+            // Le message d'état restera visible si le reload échoue.
+          }
           setStatus(null)
         }, 1500)
       } else {
         setError(data.error || 'Erreur lors du remplacement')
       }
     } catch (e) {
-      setError('Erreur réseau')
+      setError(`Erreur réseau : ${e.message || 'requête échouée'}`)
     } finally {
       setSaving(false)
     }
@@ -475,6 +643,16 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
 
         {/* Corps */}
         <div className="max-h-[calc(92vh-112px)] flex-1 overflow-y-auto p-5 space-y-4">
+
+          <AudioSlideSyncPreview
+            colors={colors}
+            darkMode={darkMode}
+            loading={slidesLoading}
+            error={slidesError}
+            slides={slides}
+            timings={slideTimings}
+            activeTiming={activeSlideTiming}
+          />
 
           {/* Waveform */}
           <div
