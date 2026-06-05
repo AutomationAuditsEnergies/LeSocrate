@@ -71,6 +71,30 @@ const deckChrome = (brandName = 'Sales hacking') => {
   );
 };
 
+const sourceChrome = (brandName = 'Sales hacking') => {
+  const { brandHead, brandTail } = getDeckBrandParts(brandName);
+  return (
+    <div className="chrome">
+      <div className="brand">
+        <span className="mark">{brandHead}</span>
+        <span className="tag">{brandTail}</span>
+      </div>
+    </div>
+  );
+};
+
+const SourceSlide = ({ className, children }) => {
+  const [shellRef, scale] = useSlideStageScale();
+
+  return (
+    <div className="sales-source-deck-shell" ref={shellRef}>
+      <section className={`slide ${className}`} style={{ transform: `scale(${scale})` }}>
+        {children}
+      </section>
+    </div>
+  );
+};
+
 export const DeckWelcome = ({
   title = 'Bienvenue',
   formation_name = 'Titre professionnel CRCD',
@@ -286,6 +310,42 @@ const renderReflectionText = (text = '') => {
   return clean;
 };
 
+const normalizeTextList = (items, limit = 4) => (
+  Array.isArray(items)
+    ? items
+      .map((item) => {
+        if (typeof item === 'string') return item;
+        return item?.title || item?.label || item?.text || item?.desc || item?.description || '';
+      })
+      .filter(Boolean)
+      .slice(0, limit)
+    : []
+);
+
+const splitDisplayTitle = (value = '', fallback = 'Point clé') => {
+  const words = splitTitle(value, fallback).filter(Boolean);
+  if (!words.length) return { first: fallback, rest: '' };
+  if (words.length === 1) return { first: words[0], rest: '' };
+  const first = words.slice(0, Math.ceil(words.length / 2)).join(' ');
+  const rest = words.slice(Math.ceil(words.length / 2)).join(' ');
+  return { first, rest };
+};
+
+const pointParts = (point, index) => {
+  if (typeof point === 'string') {
+    const clean = point.trim();
+    const [head, ...tail] = clean.split(/\s*[:.]\s+/);
+    return {
+      title: head || `Point ${index + 1}`,
+      desc: tail.join('. ') || clean,
+    };
+  }
+  return {
+    title: point?.title || point?.label || `Point ${index + 1}`,
+    desc: point?.desc || point?.description || point?.text || point?.detail || '',
+  };
+};
+
 export const DeckStatement = ({
   title = 'Une idée à retenir',
   text,
@@ -321,17 +381,20 @@ export const DeckDefinition = ({ term, title, eyebrow = 'Définition', definitio
   const word = term || title || 'Définition';
   const tags = Array.isArray(isItems) ? isItems : [];
   return (
-    <DeckSlide type="DEFINITION" page="03" className="deck-def" badge={badge} brandName={brandName}>
-      <div className="deck-def-left">
-        <span className="deck-eyebrow">{eyebrow}</span>
-        <h2>{word}</h2>
+    <SourceSlide className="s-def">
+      {sourceChrome(brandName)}
+      <div className="left">
+        <span className="eyebrow">— {eyebrow}</span>
+        <h2 className="word">{word}</h2>
       </div>
-      <div className="deck-def-right">
-        <span>DÉFINITION DE TRAVAIL</span>
-        <p>{definition || text || 'Une idée centrale formulée de manière simple, mémorisable et directement utilisable.'}</p>
-        <div>{(tags.length ? tags : ['RÉPÉTABLE', 'MESURABLE', 'ACTIONNABLE']).slice(0, 4).map((item, i) => <em key={i}>{item}</em>)}</div>
+      <div className="right">
+        <div className="label">DÉFINITION DE TRAVAIL</div>
+        <p className="body">{definition || text || 'Une idée centrale formulée de manière simple, mémorisable et directement utilisable.'}</p>
+        <div className="tag-row">
+          {(tags.length ? tags : ['RÉPÉTABLE', 'MESURABLE', 'ACTIONNABLE']).slice(0, 4).map((item, i) => <span key={i}>{item}</span>)}
+        </div>
       </div>
-    </DeckSlide>
+    </SourceSlide>
   );
 };
 
@@ -339,18 +402,22 @@ export const DeckProcess = ({ title = 'Les étapes clés', steps = [], badge, br
   const sourceSteps = Array.isArray(steps) ? steps : [];
   const safeSteps = (sourceSteps.length ? sourceSteps : [{ title: 'Observer', desc: 'Comprendre la situation réelle.' }, { title: 'Découper', desc: 'Identifier les étapes utiles.' }, { title: 'Agir', desc: 'Appliquer la méthode.' }, { title: 'Mesurer', desc: 'Vérifier le résultat.' }]).slice(0, 4);
   return (
-    <DeckSlide type="PROCESS" page="07" className="deck-process" badge={badge} brandName={brandName}>
-      <header><span className="deck-eyebrow">Méthode</span><h1><AccentTitle title={title} fallback="Les étapes clés" /></h1></header>
-      <div className="deck-process-steps">
+    <SourceSlide className="s-process">
+      {sourceChrome(brandName)}
+      <div className="head">
+        <span className="eyebrow">— Méthode</span>
+        <h1>{renderAccentLastWord(title, 'Les étapes clés')}</h1>
+      </div>
+      <div className="steps">
         {safeSteps.map((step, i) => (
-          <div className={i === 0 ? 'active' : ''} key={i}>
-            <span>{String(i + 1).padStart(2, '0')}</span>
-            <strong>{step.title}</strong>
-            <p>{step.desc}</p>
+          <div className={`step ${i === 0 ? 'active' : ''}`} key={i}>
+            <div className="dot">{String(i + 1).padStart(2, '0')}</div>
+            <h3 className="t">{step.title}</h3>
+            {step.desc && <p className="d">{step.desc}</p>}
           </div>
         ))}
       </div>
-    </DeckSlide>
+    </SourceSlide>
   );
 };
 
@@ -388,12 +455,29 @@ export const DeckOpinion = ({ title = 'Point de vue', text, badge, brandName }) 
 );
 
 export const DeckQuote = ({ quote, title, text, badge, brandName }) => (
-  <DeckSlide type="QUOTE" page="14" className="deck-quote-dynamic" badge={badge} brandName={brandName}>
-    <div>
-      <span>"</span>
-      <blockquote>{quote || text || title || 'Citation à retenir.'}</blockquote>
+  <SourceSlide className="s-journal">
+    {sourceChrome(brandName)}
+    <div className="jnl-scene">
+      <div className="jnl-page">
+        <div className="jnl-lines" />
+        <div className="jnl-margin" />
+        <div className="jnl-content">
+          {(() => {
+            const value = quote || text || title || 'Citation à retenir.';
+            const sentences = String(value).split(/(?<=[.!?])\s+/).filter(Boolean);
+            const first = sentences.length > 1 ? sentences.slice(0, -1).join(' ') : value;
+            const second = sentences.length > 1 ? sentences[sentences.length - 1] : '';
+            return (
+              <>
+                <p className="jnl-q1">{first}</p>
+                {second && <p className="jnl-q2">{second}</p>}
+              </>
+            );
+          })()}
+        </div>
+      </div>
     </div>
-  </DeckSlide>
+  </SourceSlide>
 );
 
 export const DeckFramework = ({ title = 'Cadre de lecture', center = {}, segments = [], items = [], badge, brandName }) => {
@@ -425,12 +509,63 @@ export const DeckRecap = ({ title = "Ce qu'on retient.", points = [], badge, bra
   const sourcePoints = Array.isArray(points) ? points : [];
   const safePoints = sourcePoints.length ? sourcePoints.slice(0, 3) : ['Une première idée clé.', 'Une deuxième idée clé.', 'Une action à appliquer.'];
   return (
-    <DeckSlide type="RECAP" page="09" className="deck-recap" badge={badge} brandName={brandName}>
-      <header><h1>{title}<br /><span>{safePoints.length} idées clés.</span></h1><p>FIN DE SÉQUENCE</p></header>
-      <div className="deck-recap-grid">
-        {safePoints.map((point, i) => <article key={i}><span>{String(i + 1).padStart(2, '0')} / IDÉE</span><strong>{String(point).split('.')[0]}</strong><p>{point}</p></article>)}
+    <SourceSlide className="s-recap2">
+      {sourceChrome(brandName)}
+      <div className="rc2-layout">
+        <div className="rc2-left">
+          <div className="rc2-head">
+            <h1>{renderAccentLastWord(title, "Ce qu'on retient.")}</h1>
+          </div>
+          <div className="rc2-cards">
+            {safePoints.map((point, i) => {
+              const { title: pointTitle, desc } = pointParts(point, i);
+              return (
+                <div className="rc2-card" style={{ '--card-color': ['#ff6b47', '#f5a623', '#1e40af'][i % 3] }} key={i}>
+                  <div className="rc2-num-badge">{String(i + 1).padStart(2, '0')}</div>
+                  <h3>{pointTitle}</h3>
+                  <div className="rc2-line" />
+                  <p>{desc || pointTitle}</p>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+        <div className="rc2-right">
+          <div className="rc2-deco rc2-d1" />
+          <div className="rc2-deco rc2-d2" />
+          <div className="rc2-deco rc2-d3" />
+          <div className="rc2-deco rc2-d4" />
+          <svg className="rc2-plus p1" width="36" height="36" viewBox="0 0 36 36">
+            <line x1="18" y1="0" x2="18" y2="36" stroke="#ff6b47" strokeWidth="5" strokeLinecap="round" />
+            <line x1="0" y1="18" x2="36" y2="18" stroke="#ff6b47" strokeWidth="5" strokeLinecap="round" />
+          </svg>
+          <svg className="rc2-plus p2" width="28" height="28" viewBox="0 0 28 28">
+            <line x1="14" y1="0" x2="14" y2="28" stroke="rgba(255,255,255,0.35)" strokeWidth="4" strokeLinecap="round" />
+            <line x1="0" y1="14" x2="28" y2="14" stroke="rgba(255,255,255,0.35)" strokeWidth="4" strokeLinecap="round" />
+          </svg>
+          <svg className="rc2-plus p3" width="28" height="28" viewBox="0 0 28 28">
+            <line x1="14" y1="0" x2="14" y2="28" stroke="var(--coral)" strokeWidth="4" strokeLinecap="round" />
+            <line x1="0" y1="14" x2="28" y2="14" stroke="var(--coral)" strokeWidth="4" strokeLinecap="round" />
+          </svg>
+          <svg className="rc2-target" viewBox="0 0 500 500" xmlns="http://www.w3.org/2000/svg">
+            <ellipse cx="258" cy="476" rx="180" ry="22" fill="rgba(0,0,20,0.45)" />
+            <circle cx="250" cy="250" r="230" fill="#0a1060" />
+            <circle cx="250" cy="250" r="190" fill="#0d1880" />
+            <circle cx="250" cy="250" r="150" fill="#1a2a9a" />
+            <circle cx="250" cy="250" r="110" fill="#f4967a" />
+            <circle cx="250" cy="250" r="72" fill="#ff6b47" />
+            <circle cx="250" cy="250" r="38" fill="#cc3b1e" />
+            <ellipse cx="238" cy="237" rx="14" ry="9" fill="rgba(255,255,255,0.22)" transform="rotate(-20 238 237)" />
+            <path d="M 90,180 A 190,190 0 0,1 250,60" stroke="rgba(255,255,255,0.10)" strokeWidth="28" fill="none" strokeLinecap="round" />
+            <line x1="30" y1="470" x2="245" y2="255" stroke="#0a1060" strokeWidth="18" strokeLinecap="round" />
+            <polygon points="245,255 230,278 268,260" fill="#0a1060" />
+            <path d="M30,470 L10,445 L38,455 Z" fill="#0a1060" />
+            <path d="M50,450 L28,428 L56,437 Z" fill="#1a2a9a" />
+            <line x1="32" y1="468" x2="243" y2="258" stroke="rgba(255,255,255,0.12)" strokeWidth="6" strokeLinecap="round" />
+          </svg>
+        </div>
       </div>
-    </DeckSlide>
+    </SourceSlide>
   );
 };
 
@@ -559,10 +694,14 @@ export const DeckWarning = ({
 };
 
 export const DeckTip = ({ title = 'Conseil pratique', text, badge, brandName }) => (
-  <DeckSlide type="TIP" page="19" className="deck-tip" badge={badge} brandName={brandName}>
-    <div className="deck-tip-left"><div className="deck-tip-badge">💡</div><span className="deck-eyebrow">Conseil pro</span><h1><AccentTitle title={title} fallback="Conseil pratique" /></h1><p>{text}</p></div>
-    <div className="deck-tip-right"><span>Comment l'appliquer</span><article><strong>Règle simple</strong><p>{text || 'Transformez le conseil en action observable dès la prochaine situation.'}</p></article><article><strong>Point de vigilance</strong><p>Gardez une formulation courte, concrète et directement testable.</p></article></div>
-  </DeckSlide>
+  <SourceSlide className="s-tip">
+    {sourceChrome(brandName)}
+    <div className="card">
+      <span className="badge">CONSEIL</span>
+      <h2>{title}</h2>
+      <p>{text || 'Transformez le conseil en action observable dès la prochaine situation.'}</p>
+    </div>
+  </SourceSlide>
 );
 
 export const DeckTransition = ({ title = 'On passe à la pratique.', from_topic, to_topic, badge, brandName }) => (
@@ -578,14 +717,40 @@ export const DeckQA = () => <SalesHackingSourceSlide sourceId="qa" />;
 export const DeckComparison = ({ title = 'Avant vs après.', cols = [], rows = [], badge, brandName }) => {
   const sourceCols = Array.isArray(cols) ? cols : [];
   const sourceRows = Array.isArray(rows) ? rows : [];
-  const left = sourceCols[0]?.label || 'Avant';
-  const right = sourceCols[1]?.label || 'Après';
-  const safeRows = sourceRows.length ? sourceRows : (sourceCols[0]?.items || []).slice(0, 4).map((item, i) => ({ label: `Critère ${i + 1}`, before: item, after: sourceCols[1]?.items?.[i] || 'Bonne pratique' }));
+  const left = sourceCols[0] || { label: 'Avant', items: [] };
+  const right = sourceCols[1] || { label: 'Après', items: [] };
+  const leftTitle = splitDisplayTitle(left.label || title, 'Avant');
+  const rightTitle = splitDisplayTitle(right.label || 'Après', 'Après');
+  const leftItems = normalizeTextList(left.items, 4);
+  const rightItems = normalizeTextList(right.items, 4);
+  const safeRows = sourceRows.length ? sourceRows : leftItems.map((item, i) => ({ before: item, after: rightItems[i] || 'Bonne pratique' }));
   return (
-    <DeckSlide type="COMPARISON" page="18" className="deck-comparison" badge={badge} brandName={brandName}>
-      <header><span className="deck-eyebrow">Deux approches</span><h1><AccentTitle title={title} fallback="Avant vs après." /></h1></header>
-      <table><thead><tr><th /><th>{left}</th><th>{right}</th></tr></thead><tbody>{safeRows.map((row, i) => <tr key={i}><td>{row.label || row.criterion}<small>{row.hint}</small></td><td>{row.before || row.a}</td><td>{row.after || row.b}</td></tr>)}</tbody></table>
-    </DeckSlide>
+    <SourceSlide className="s-diag">
+      {sourceChrome(brandName)}
+      <div className="col l">
+        <span className="eyebrow">— {left.label || 'Avant'}</span>
+        <h2>{leftTitle.first}<br /><span className="b">{leftTitle.rest || 'actuel.'}</span></h2>
+        <ul>
+          {(safeRows.length ? safeRows : [{ before: 'Situation actuelle' }]).slice(0, 4).map((row, i) => (
+            <li key={i}><span className="ic">−</span>{row.before || row.a || row.label || row.criterion}</li>
+          ))}
+        </ul>
+      </div>
+      <div className="col r">
+        <span className="eyebrow">— {right.label || 'Après'}</span>
+        <h2>{rightTitle.first}<br /><span className="accent">{rightTitle.rest || 'cible.'}</span></h2>
+        <ul>
+          {(safeRows.length ? safeRows : [{ after: 'Bonne pratique' }]).slice(0, 4).map((row, i) => (
+            <li key={i}><span className="ic">✓</span>{row.after || row.b || rightItems[i] || 'Bonne pratique'}</li>
+          ))}
+        </ul>
+      </div>
+      <div className="divider">
+        <span className="seam" />
+        <span className="pill">Comparaison</span>
+        <span className="arrow-btn">→</span>
+      </div>
+    </SourceSlide>
   );
 };
 
