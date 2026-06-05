@@ -514,11 +514,49 @@ export const DeckStats = ({ title = 'En chiffres.', description, stats = [], col
   );
 };
 
-export const DeckWarning = ({ title = 'À éviter', text, badge, brandName }) => (
-  <DeckSlide type="WARNING" page="17" className="deck-warning" danger badge={badge} brandName={brandName}>
-    <div><div className="deck-warning-icon">!</div><span>ALERTE CRITIQUE</span><h1><AccentTitle title={title} fallback="À éviter" /></h1><p>{text}</p></div>
-  </DeckSlide>
-);
+export const DeckWarning = ({
+  title = 'Automatiser le chaos.',
+  text = "Brancher une IA sur un process bancal multiplie le désordre à la vitesse de la machine. Documentez d'abord, automatisez ensuite.",
+  eyebrow = 'Erreur fréquente',
+  label = 'Pourquoi',
+  brandName = 'Sales hacking',
+}) => {
+  const [shellRef, scale] = useSlideStageScale();
+
+  return (
+    <div className="deck-warning-note-shell" ref={shellRef}>
+      <section className="deck-warning-note-stage" style={{ transform: `scale(${scale})` }}>
+        {deckChrome(brandName)}
+        <div className="deck-warning-note-inner">
+          <div className="deck-warning-note-sticky" aria-hidden="true">
+            <svg viewBox="0 0 500 420" width="500" height="420" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <rect x="20" y="24" width="458" height="382" rx="4" fill="rgba(0,0,30,0.45)" transform="rotate(2,249,215)" />
+              <rect x="14" y="12" width="458" height="382" rx="4" fill="#f5e87c" transform="rotate(-1.5,243,203)" />
+              <line x1="50" y1="148" x2="448" y2="144" stroke="rgba(0,0,80,0.08)" strokeWidth="1.5" />
+              <line x1="50" y1="188" x2="448" y2="184" stroke="rgba(0,0,80,0.06)" strokeWidth="1" />
+              <line x1="50" y1="226" x2="448" y2="222" stroke="rgba(0,0,80,0.06)" strokeWidth="1" />
+              <ellipse cx="253" cy="36" rx="14" ry="6" fill="rgba(0,0,30,0.3)" transform="translate(3,6)" />
+              <circle cx="251" cy="30" r="20" fill="#cc1a2a" />
+              <circle cx="251" cy="30" r="13" fill="#ff5d6c" />
+              <circle cx="247" cy="26" r="5" fill="rgba(255,255,255,0.45)" />
+              <line x1="251" y1="48" x2="251" y2="66" stroke="#7a0e1a" strokeWidth="5" strokeLinecap="round" />
+              <text x="247" y="118" textAnchor="middle" fontFamily="Caveat, cursive" fontSize="88" fill="#cc1a2a" textLength="380" lengthAdjust="spacing" transform="rotate(-1.5,247,118)">Attention !</text>
+            </svg>
+          </div>
+
+          <div className="deck-warning-note-text">
+            <span className="deck-eyebrow">- {eyebrow}</span>
+            <h1>{renderAccentLastWord(title, 'Automatiser le chaos.')}</h1>
+            <div className="deck-warning-note-body">
+              <span className="deck-warning-note-label">{label}</span>
+              <p>{text}</p>
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
+  );
+};
 
 export const DeckTip = ({ title = 'Conseil pratique', text, badge, brandName }) => (
   <DeckSlide type="TIP" page="19" className="deck-tip" badge={badge} brandName={brandName}>
