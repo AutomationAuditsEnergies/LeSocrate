@@ -3200,6 +3200,8 @@ def create_hr_blueprint(socketio):
             force_all = req_body.get("force_all", False)
             sync_slides = bool(req_body.get("sync_slides", False))
             auto_generate_slides = bool(req_body.get("auto_generate_slides", False))
+            slide_max_slides = int(req_body.get("max_slides") or req_body.get("slide_max_slides") or 60)
+            slide_pace = str(req_body.get("pace") or req_body.get("slide_pace") or "normal")
             requested_voice_type_raw = str(req_body.get("voice_type") or req_body.get("tts_mode") or "").strip().lower()
             voice_aliases = {
                 "gtts": "gtts",
@@ -3251,6 +3253,10 @@ def create_hr_blueprint(socketio):
 
             use_basic_tts = voice_type == "gtts"
             voice_label = "gTTS" if voice_type == "gtts" else "Fish Audio" if voice_type == "fish_audio" else "Mock"
+            if "sync_slides" not in req_body:
+                sync_slides = bool(has_script and not playlist_mock and force_all and voice_type in {"gtts", "fish_audio"})
+            if "auto_generate_slides" not in req_body:
+                auto_generate_slides = bool(sync_slides)
 
             # Initialiser le job après validation pour éviter les jobs bloqués en cas de 400.
             _playlist_jobs[folder_id] = {
@@ -3260,6 +3266,7 @@ def create_hr_blueprint(socketio):
                 "message": f"Démarrage audio {voice_label}...",
                 "result": None,
                 "voice_type": voice_type,
+                "sync_slides": sync_slides,
             }
 
             def _run_playlist_pipeline(platform_id, folder_id):
@@ -3280,6 +3287,8 @@ def create_hr_blueprint(socketio):
                             basic_tts=use_basic_tts,
                             sync_slides=sync_slides,
                             auto_generate_slides=auto_generate_slides,
+                            slide_max_slides=slide_max_slides,
+                            slide_pace=slide_pace,
                         )
                         result = {
                             "status": "completed",
@@ -3380,6 +3389,11 @@ def create_hr_blueprint(socketio):
                 }), 400
 
             voice_label = "gTTS" if voice_type == "gtts" else "Fish Audio"
+            is_course_audio = filename.startswith("cours_") and filename.endswith(".mp3")
+            sync_slides = bool(req_body.get("sync_slides", is_course_audio)) and is_course_audio
+            auto_generate_slides = bool(req_body.get("auto_generate_slides", sync_slides))
+            slide_max_slides = int(req_body.get("max_slides") or req_body.get("slide_max_slides") or 60)
+            slide_pace = str(req_body.get("pace") or req_body.get("slide_pace") or "normal")
             _playlist_jobs[folder_id] = {
                 "status": "running",
                 "step": 0,
@@ -3388,9 +3402,19 @@ def create_hr_blueprint(socketio):
                 "result": None,
                 "voice_type": voice_type,
                 "filename": filename,
+                "sync_slides": sync_slides,
             }
 
-            def _run_playlist_item(folder_id, filename, voice_type, voice_label):
+            def _run_playlist_item(
+                folder_id,
+                filename,
+                voice_type,
+                voice_label,
+                sync_slides,
+                auto_generate_slides,
+                slide_max_slides,
+                slide_pace,
+            ):
                 try:
                     def on_progress(step, total, message):
                         _playlist_jobs[folder_id].update({
@@ -3406,6 +3430,10 @@ def create_hr_blueprint(socketio):
                         force_all=True,
                         basic_tts=(voice_type == "gtts"),
                         target_filename=filename,
+                        sync_slides=sync_slides,
+                        auto_generate_slides=auto_generate_slides,
+                        slide_max_slides=slide_max_slides,
+                        slide_pace=slide_pace,
                     )
                     result = {
                         "status": "completed",
@@ -3414,6 +3442,7 @@ def create_hr_blueprint(socketio):
                         "source": "script",
                         "voice_type": voice_type,
                         "filename": filename,
+                        "sync_slides": sync_slides,
                     }
                     _playlist_jobs[folder_id].update({
                         "status": "completed",
@@ -3428,7 +3457,17 @@ def create_hr_blueprint(socketio):
                     })
 
             import eventlet
-            eventlet.spawn(_run_playlist_item, folder_id, filename, voice_type, voice_label)
+            eventlet.spawn(
+                _run_playlist_item,
+                folder_id,
+                filename,
+                voice_type,
+                voice_label,
+                sync_slides,
+                auto_generate_slides,
+                slide_max_slides,
+                slide_pace,
+            )
 
             return jsonify({"success": True, "message": "Génération fichier démarrée"}), 202
 

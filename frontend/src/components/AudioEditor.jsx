@@ -289,6 +289,7 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
         // Chrome propage souvent en "TypeError: Failed to fetch" — bruit qui
         // collait un faux message d'erreur sur la 2e tentative réussie.
         if (e?.name === 'AbortError') return
+        setLoading(false)
         setError('Impossible de charger l\'audio : ' + e.message)
       })
 
@@ -309,6 +310,13 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
     ws.on('play', () => setPlaying(true))
     ws.on('pause', () => setPlaying(false))
     ws.on('finish', () => setPlaying(false))
+    ws.on('error', (e) => {
+      if (cancelled) return
+      if (e?.name === 'AbortError') return
+      const message = typeof e === 'string' ? e : (e?.message || 'stream audio indisponible')
+      setLoading(false)
+      setError(`Impossible de charger l'audio : ${message}`)
+    })
 
     // Permettre la création de régions par drag
     regions.enableDragSelection({ color: darkMode ? 'rgba(203, 213, 225, 0.25)' : 'rgba(51, 65, 85, 0.18)' })

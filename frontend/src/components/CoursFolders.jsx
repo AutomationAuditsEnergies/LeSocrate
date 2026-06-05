@@ -51,6 +51,11 @@ const PLAYLIST_VOICE_OPTIONS = [
   { value: 'fish_audio', label: 'Fish Audio', icon: 'graphic_eq', hint: 'voix premium payante' },
 ]
 
+const isCourseAudioFilename = (filename = '') => (
+  AUDIO_PLAYLIST_ITEMS.some(item => item.filename === filename && item.type === 'cours')
+  || /^cours_.*\.mp3$/i.test(filename)
+)
+
 // ─── Component ───────────────────────────────────────────────────────────────
 export default function CoursFoldersModal({ platformId, platformName, onClose }) {
   const [view, setView] = useState('folders') // 'folders' | 'documents'
@@ -1234,6 +1239,7 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
   const handleGeneratePlaylist = async ({ mock = false, scriptMock = false, forceAll = false, voiceType = playlistVoiceType } = {}) => {
     if (!selectedFolder) return
     const effectiveVoiceType = mock || scriptMock ? 'mock' : voiceType
+    const syncSlides = effectiveVoiceType !== 'mock'
     if (effectiveVoiceType === 'fish_audio') {
       const confirmed = window.confirm("Fish Audio consomme des crédits API. Lancer la génération audio de ce dossier avec Fish Audio ?")
       if (!confirmed) return
@@ -1247,6 +1253,10 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
           script_mock: scriptMock,
           force_all: forceAll,
           voice_type: effectiveVoiceType,
+          sync_slides: syncSlides,
+          auto_generate_slides: syncSlides,
+          max_slides: 60,
+          pace: 'normal',
         }),
         credentials: 'include',
       })
@@ -1265,6 +1275,7 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
 
   const handleGeneratePlaylistItem = async (filename, voiceType) => {
     if (!selectedFolder || !filename) return
+    const syncSlides = voiceType !== 'mock' && isCourseAudioFilename(filename)
     if (voiceType === 'fish_audio') {
       const confirmed = window.confirm(`Fish Audio consomme des crédits API. Générer ${filename} avec Fish Audio ?`)
       if (!confirmed) return
@@ -1273,7 +1284,14 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
       const resp = await fetch(apiUrl(`/api/hr/cours-folders/${selectedFolder.id}/generate-playlist-item`), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ filename, voice_type: voiceType }),
+        body: JSON.stringify({
+          filename,
+          voice_type: voiceType,
+          sync_slides: syncSlides,
+          auto_generate_slides: syncSlides,
+          max_slides: 60,
+          pace: 'normal',
+        }),
         credentials: 'include',
       })
       const data = await resp.json()
