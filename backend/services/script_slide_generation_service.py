@@ -1403,36 +1403,61 @@ def _align_section_to_slide_anchors(section: dict, units: list[dict], anchors: l
             "reason": "units_insufficient",
         }
 
-    prompt = _section_alignment_prompt(section, units, ordered_anchors)
-    try:
-        response = post_message(
-            [{"role": "user", "content": prompt}],
-            max_tokens=2200,
-            model=model,
-            timeout=180,
-        )
-        parsed = _parse_json_object(response)
-        assignments = _validate_section_assignments(parsed, ordered_anchors, units)
-        if assignments:
-            return assignments, {"status": "llm", "assignments": len(assignments)}
-        logger.warning(
-            "PIPELINE_SLIDES_SECTION_ALIGNMENT_INVALID course=%s section=%s anchors=%s units=%s",
-            section.get("course_number"),
-            section.get("section_label"),
-            len(ordered_anchors),
-            len(units),
-        )
-    except Exception as exc:
-        logger.exception(
-            "PIPELINE_SLIDES_SECTION_ALIGNMENT_ERROR course=%s section=%s error=%s",
-            section.get("course_number"),
-            section.get("section_label"),
-            exc,
-        )
+    base_prompt = _section_alignment_prompt(section, units, ordered_anchors)
+    last_reason = "invalid_or_failed_alignment"
+    for attempt in range(2):
+        prompt = base_prompt
+        if attempt:
+            prompt = f"""{base_prompt}
+
+CORRECTION OBLIGATOIRE:
+La réponse précédente était invalide ({last_reason}).
+Cette fois, tu dois fournir exactement {len(ordered_anchors)} assignations:
+- tous les anchor_id prévus, une seule fois chacun;
+- aucune unité oubliée;
+- des plages contiguës qui couvrent de 0 à {len(units) - 1};
+- JSON valide uniquement.
+Choisis les frontières les plus cohérentes avec le texte, sans inventer de contenu.
+"""
+        try:
+            response = post_message(
+                [{"role": "user", "content": prompt}],
+                max_tokens=2200,
+                model=model,
+                timeout=180,
+                temperature=0 if attempt else None,
+            )
+            parsed = _parse_json_object(response)
+            assignments = _validate_section_assignments(parsed, ordered_anchors, units)
+            if assignments:
+                return assignments, {
+                    "status": "llm_retry" if attempt else "llm",
+                    "assignments": len(assignments),
+                    "attempts": attempt + 1,
+                }
+            last_reason = "invalid_assignments"
+            logger.warning(
+                "PIPELINE_SLIDES_SECTION_ALIGNMENT_INVALID course=%s section=%s anchors=%s units=%s attempt=%s",
+                section.get("course_number"),
+                section.get("section_label"),
+                len(ordered_anchors),
+                len(units),
+                attempt + 1,
+            )
+        except Exception as exc:
+            last_reason = f"{exc.__class__.__name__}: {str(exc)[:180]}"
+            logger.exception(
+                "PIPELINE_SLIDES_SECTION_ALIGNMENT_ERROR course=%s section=%s attempt=%s error=%s",
+                section.get("course_number"),
+                section.get("section_label"),
+                attempt + 1,
+                exc,
+            )
 
     return _fallback_section_assignments(ordered_anchors, units, "fallback_invalid_alignment"), {
         "status": "fallback",
-        "reason": "invalid_or_failed_alignment",
+        "reason": last_reason,
+        "attempts": 2,
     }
 
 
@@ -1933,8 +1958,10 @@ def _prompt_for_blocks(blocks: list[dict], source_title: str, pace_profile: dict
     curation_rules = """
 COUCHE DE CURATION IA:
 - Tu n'es pas en train de résumer mécaniquement le texte. Tu sélectionnes les moments qui gagnent vraiment à devenir visuels.
-- Le texte final est la source de vérité. Les `slide_anchors` du plan sont des indices pédagogiques forts, pas des obligations.
-- Si un anchor prévu ne correspond pas clairement au texte réel, ignore-le.
+- Le texte final est la source de vérité.
+- Quand `source_alignment` vaut `section_slide_alignment`, les `slide_anchors` sont des obligations: exactement 1 slide par fenêtre alignée.
+- Hors `section_slide_alignment`, les `slide_anchors` restent des indices pédagogiques forts.
+- Si un anchor hors section alignée ne correspond pas clairement au texte réel, ignore-le.
 - Si le texte réel contient un meilleur moment visuel non prévu par un anchor, tu peux le sélectionner.
 - Pendant cette génération, tu dois utiliser uniquement un `template_type` présent dans le catalogue autorisé.
 - Si tu estimes qu'un nouveau template serait meilleur, indique-le dans `ideal_template_gap`, mais garde `template_type` sur le meilleur template existant.
@@ -1957,9 +1984,9 @@ Source: {source_title}
 
 RÈGLES:
 - Tu reçois des fenêtres de contexte. Elles servent à te donner le texte, pas à imposer le nombre de slides.
-- Si une fenêtre contient `slide_anchors`, ils t'indiquent l'intention initiale du plan. Utilise-les si le texte source couvre réellement leur intention.
-- Si un anchor n'est pas couvert par le texte source, ignore-le au lieu d'inventer.
+- Si une fenêtre contient `slide_anchors`, ils t'indiquent l'intention initiale du plan.
 - Si `source_alignment` vaut `section_slide_alignment`, la fenêtre est déjà la plage chronologique exacte attribuée à l'unique slide prévue: produis exactement 1 slide pour cette fenêtre, utilise son unique anchor, et ne crée pas de deuxième slide.
+- Si un anchor hors `section_slide_alignment` n'est pas couvert par le texte source, ignore-le au lieu d'inventer.
 - Quand tu utilises un anchor, recopie exactement `slide_anchor_id` et `beat_id` dans la slide générée.
 - Un anchor correspond à une intention pédagogique précise, pas à toute la fenêtre.
 - Pour chaque anchor utilisé, choisis `source_quote` dans la portion exacte du texte qui réalise cette intention.
@@ -2321,6 +2348,156 @@ def _fallback_slide(block: dict, reason: str = "fallback") -> dict:
     }
 
 
+def _recap_points_from_text(text: str, max_points: int = 4) -> list[str]:
+    points = []
+    for paragraph in _split_paragraphs(text):
+        clean = re.sub(r"\s+", " ", paragraph).strip()
+        if not clean:
+            continue
+        words = clean.split()
+        lowered = clean.lower()
+        if len(words) <= 4 and lowered.rstrip(".!?,;:") in {"bien", "très bien", "tres bien"}:
+            continue
+        points.append(_shorten(clean, 140))
+        if len(points) >= max_points:
+            break
+
+    if points:
+        return points
+
+    for sentence in _SENTENCE_SPLIT_RE.split(re.sub(r"\s+", " ", text or "").strip()):
+        clean = sentence.strip()
+        if len(clean.split()) >= 5:
+            points.append(_shorten(clean, 140))
+        if len(points) >= max_points:
+            break
+    return points
+
+
+def _coverage_repair_slide(block: dict, reason: str) -> dict:
+    refs = block.get("source_refs") or []
+    first_ref = refs[0] if refs and isinstance(refs[0], dict) else {}
+    section_label = _as_text(first_ref.get("section_label") or block.get("sub_part_name"), "")
+    is_conclusion = "conclusion" in section_label.lower()
+    title = "Ce qu'on retient" if is_conclusion else _fallback_title(block)
+    text = _shorten(block.get("text", ""), 280)
+    points = _recap_points_from_text(block.get("text", ""))
+    template = "recap" if is_conclusion or points else "reflection"
+    data = {"title": title, "points": points or [text]} if template == "recap" else {"title": title, "text": text}
+    return {
+        "source_block_id": block["source_block_id"],
+        "template_type": template,
+        "event_type": "recap" if template == "recap" else "concept",
+        "event_summary": title,
+        "importance": 2,
+        "data": data,
+        "slide_anchor_id": None,
+        "beat_id": "",
+        "anchor_role": "",
+        "source_quote": _shorten(block.get("text", ""), 700),
+        "curation_reason": reason,
+        "fallback_reason": reason,
+        "coverage_repair": True,
+        "ideal_template_gap": _normalize_template_gap(None, template),
+    }
+
+
+def _strict_anchor_blocks(blocks: Iterable[dict]) -> list[dict]:
+    return [
+        block
+        for block in blocks
+        if block.get("source_alignment") == "section_slide_alignment"
+        and block.get("slide_anchors")
+    ]
+
+
+def _fallback_slide_for_anchor(block: dict, anchor: dict, reason: str) -> dict:
+    block_for_anchor = {**block, "slide_anchors": [anchor]}
+    return _fallback_slide(block_for_anchor, reason)
+
+
+def _ensure_strict_anchor_slides(slides: list[dict], blocks: Iterable[dict], reason: str) -> tuple[list[dict], int]:
+    present = set()
+    for slide in slides:
+        try:
+            source_block_id = int(slide.get("source_block_id"))
+        except (TypeError, ValueError):
+            continue
+        anchor_id = str(slide.get("slide_anchor_id") or slide.get("anchor_id") or "").strip()
+        if anchor_id:
+            present.add((source_block_id, anchor_id))
+
+    ensured = list(slides)
+    inserted = 0
+    for block in _strict_anchor_blocks(blocks):
+        try:
+            source_block_id = int(block.get("source_block_id"))
+        except (TypeError, ValueError):
+            continue
+        for anchor in block.get("slide_anchors") or []:
+            if not isinstance(anchor, dict):
+                continue
+            anchor_id = str(anchor.get("anchor_id") or "").strip()
+            if not anchor_id or (source_block_id, anchor_id) in present:
+                continue
+            ensured.append(_fallback_slide_for_anchor(block, anchor, reason))
+            present.add((source_block_id, anchor_id))
+            inserted += 1
+    return ensured, inserted
+
+
+def _ensure_unanchored_coverage_slides(slides: list[dict], blocks: Iterable[dict], reason: str) -> tuple[list[dict], int]:
+    covered_block_ids = set()
+    for slide in slides:
+        try:
+            covered_block_ids.add(int(slide.get("source_block_id")))
+        except (TypeError, ValueError):
+            continue
+
+    ensured = list(slides)
+    inserted = 0
+    for block in blocks:
+        if block.get("source_alignment") != "section_unanchored":
+            continue
+        if not str(block.get("text") or "").strip():
+            continue
+        try:
+            source_block_id = int(block.get("source_block_id"))
+        except (TypeError, ValueError):
+            continue
+        if source_block_id in covered_block_ids:
+            continue
+        ensured.append(_coverage_repair_slide(block, reason))
+        covered_block_ids.add(source_block_id)
+        inserted += 1
+    return ensured, inserted
+
+
+def _sort_slides_by_source_order(slides: list[dict], source_blocks: Iterable[dict]) -> list[dict]:
+    block_order = {}
+    for idx, block in enumerate(source_blocks):
+        try:
+            source_block_id = int(block.get("source_block_id"))
+        except (TypeError, ValueError):
+            continue
+        word_start = block.get("word_start")
+        block_order[source_block_id] = (
+            int(word_start if word_start is not None else 10**12),
+            idx,
+        )
+
+    def sort_key(item: tuple[int, dict]) -> tuple[int, int, int]:
+        idx, slide = item
+        try:
+            source_block_id = int(slide.get("source_block_id"))
+        except (TypeError, ValueError):
+            return 10**12, 10**12, idx
+        start, block_idx = block_order.get(source_block_id, (10**12, 10**12))
+        return start, block_idx, idx
+
+    return [slide for _, slide in sorted(enumerate(slides), key=sort_key)]
+
+
 def _normalize_slide(raw: dict, block: dict) -> dict:
     if not isinstance(raw, dict):
         return _fallback_slide(block, "invalid_slide")
@@ -2332,6 +2509,12 @@ def _normalize_slide(raw: dict, block: dict) -> dict:
     }
     slide_anchor_id = str(raw.get("slide_anchor_id") or raw.get("anchor_id") or "").strip()
     anchor = anchor_by_id.get(slide_anchor_id)
+    if slide_anchor_id and not anchor and anchor_by_id:
+        if len(anchor_by_id) == 1:
+            anchor = next(iter(anchor_by_id.values()))
+            slide_anchor_id = str(anchor.get("anchor_id") or "")
+        else:
+            slide_anchor_id = ""
     if not anchor and not slide_anchor_id and len(anchor_by_id) == 1:
         anchor = next(iter(anchor_by_id.values()))
         slide_anchor_id = str(anchor.get("anchor_id") or "")
@@ -2370,70 +2553,98 @@ def _normalize_slide(raw: dict, block: dict) -> dict:
 
 
 def _generate_batch(blocks: list[dict], source_title: str, model: str, pace_profile: dict, max_batch_slides: int) -> tuple[list[dict], dict]:
-    prompt = _prompt_for_blocks(blocks, source_title, pace_profile, max_batch_slides)
-    response = post_message(
-        [{"role": "user", "content": prompt}],
-        max_tokens=5000,
-        model=model,
-        timeout=240,
-    )
-    parsed = _parse_json_object(response)
-    raw_slides = parsed.get("slides", [])
-    if not isinstance(raw_slides, list):
-        raise ValueError("Réponse LLM sans tableau slides")
-    template_backlog = _normalize_template_backlog(parsed.get("template_backlog") if isinstance(parsed.get("template_backlog"), list) else [])
+    base_prompt = _prompt_for_blocks(blocks, source_title, pace_profile, max_batch_slides)
+    last_error = None
 
-    block_by_id = {block["source_block_id"]: block for block in blocks}
-    per_block_counts = {}
-    slides = []
+    for attempt in range(2):
+        prompt = base_prompt
+        if attempt:
+            prompt = f"""{base_prompt}
 
-    for raw in raw_slides:
-        if not isinstance(raw, dict):
-            continue
+CORRECTION STRICTE:
+La génération précédente du batch a échoué ({last_error}).
+Cette fois, pour toute fenêtre dont `source_alignment` vaut `section_slide_alignment`, tu n'as pas le choix:
+- produis exactement 1 slide pour cette fenêtre;
+- recopie son unique `slide_anchor_id`;
+- utilise son `source_block_id`;
+- n'invente pas de contenu, choisis le template existant le plus simple si besoin.
+Les autres fenêtres restent facultatives.
+Réponds uniquement avec le JSON demandé.
+"""
         try:
-            source_block_id = int(raw.get("source_block_id"))
-        except (TypeError, ValueError):
-            continue
-        block = block_by_id.get(source_block_id)
-        if not block:
-            continue
-        if block.get("source_alignment") == "section_slide_alignment":
-            per_block_limit = 1
-        else:
-            per_block_limit = max(
-                pace_profile["max_slides_per_block"],
-                len(block.get("slide_anchors") or []),
+            response = post_message(
+                [{"role": "user", "content": prompt}],
+                max_tokens=5000,
+                model=model,
+                timeout=240,
+                temperature=0 if attempt else None,
             )
-        if per_block_counts.get(source_block_id, 0) >= per_block_limit:
-            continue
-        slides.append(_normalize_slide(raw, block))
-        per_block_counts[source_block_id] = per_block_counts.get(source_block_id, 0) + 1
-        if len(slides) >= max_batch_slides:
-            break
+            parsed = _parse_json_object(response)
+            raw_slides = parsed.get("slides", [])
+            if not isinstance(raw_slides, list):
+                raise ValueError("Réponse LLM sans tableau slides")
+        except Exception as exc:
+            last_error = f"{exc.__class__.__name__}: {str(exc)[:180]}"
+            if attempt == 0 and _strict_anchor_blocks(blocks):
+                logger.warning(
+                    "PIPELINE_SLIDES_BATCH_RETRY_STRICT blocks=%s-%s error=%s",
+                    blocks[0].get("source_block_id") if blocks else None,
+                    blocks[-1].get("source_block_id") if blocks else None,
+                    exc,
+                )
+                continue
+            raise
 
-    strict_blocks = [
-        block
-        for block in blocks
-        if block.get("source_alignment") == "section_slide_alignment"
-        and block.get("slide_anchors")
-        and per_block_counts.get(block["source_block_id"], 0) == 0
-    ]
-    for block in strict_blocks:
-        if len(slides) >= max_batch_slides:
-            break
-        slides.append(_fallback_slide(block, "missing_strict_section_slide"))
-        per_block_counts[block["source_block_id"]] = 1
+        template_backlog = _normalize_template_backlog(parsed.get("template_backlog") if isinstance(parsed.get("template_backlog"), list) else [])
 
-    for slide in slides:
-        gap = slide.get("ideal_template_gap") or {}
-        if gap.get("needed") and gap.get("suggested_template_name") and gap.get("reason"):
-            template_backlog.extend(_normalize_template_backlog([gap], max_items=1))
+        block_by_id = {block["source_block_id"]: block for block in blocks}
+        per_block_counts = {}
+        slides = []
 
-    return slides, {
-        "template_backlog": _normalize_template_backlog(template_backlog),
-        "raw_backlog_count": len(parsed.get("template_backlog") or []) if isinstance(parsed.get("template_backlog"), list) else 0,
-        "curation_enabled": _slide_curation_enabled(),
-    }
+        for raw in raw_slides:
+            if not isinstance(raw, dict):
+                continue
+            try:
+                source_block_id = int(raw.get("source_block_id"))
+            except (TypeError, ValueError):
+                continue
+            block = block_by_id.get(source_block_id)
+            if not block:
+                continue
+            if block.get("source_alignment") == "section_slide_alignment":
+                per_block_limit = 1
+            else:
+                per_block_limit = max(
+                    pace_profile["max_slides_per_block"],
+                    len(block.get("slide_anchors") or []),
+                )
+            if per_block_counts.get(source_block_id, 0) >= per_block_limit:
+                continue
+            slides.append(_normalize_slide(raw, block))
+            per_block_counts[source_block_id] = per_block_counts.get(source_block_id, 0) + 1
+            if len(slides) >= max_batch_slides:
+                break
+
+        slides, strict_fallback_slides = _ensure_strict_anchor_slides(
+            slides,
+            blocks,
+            "missing_strict_section_slide",
+        )
+
+        for slide in slides:
+            gap = slide.get("ideal_template_gap") or {}
+            if gap.get("needed") and gap.get("suggested_template_name") and gap.get("reason"):
+                template_backlog.extend(_normalize_template_backlog([gap], max_items=1))
+
+        return slides, {
+            "template_backlog": _normalize_template_backlog(template_backlog),
+            "raw_backlog_count": len(parsed.get("template_backlog") or []) if isinstance(parsed.get("template_backlog"), list) else 0,
+            "curation_enabled": _slide_curation_enabled(),
+            "attempts": attempt + 1,
+            "strict_fallback_slides": strict_fallback_slides,
+        }
+
+    raise RuntimeError(last_error or "batch_generation_failed")
 
 
 def _build_final_slide(slide: dict, block: dict, slide_number: int) -> dict:
@@ -2464,7 +2675,7 @@ def _build_final_slide(slide: dict, block: dict, slide_number: int) -> dict:
         source_ref["highlight_word_start"] = quote_start
         source_ref["highlight_word_end"] = quote_end
         source_ref["source_quote"] = quote
-        if source_alignment != "section_slide_alignment":
+        if source_alignment not in {"section_slide_alignment", "section_unanchored"}:
             source_ref["word_start"] = quote_start
             source_ref["word_end"] = quote_end
             source_ref["word_count"] = max(1, quote_end - quote_start)
@@ -2822,8 +3033,17 @@ def _run_slide_generation_from_source(
             status = "llm"
         except Exception as exc:
             logger.exception("PIPELINE_SLIDES_BATCH_ERROR folder=%s batch=%s-%s error=%s", folder_id, start, start + len(batch) - 1, exc)
-            batch_slides = []
-            curation_debug = {"template_backlog": [], "curation_enabled": _slide_curation_enabled()}
+            batch_slides, strict_fallback_slides = _ensure_strict_anchor_slides(
+                [],
+                batch,
+                "batch_error_strict_anchor_fallback",
+            )
+            curation_debug = {
+                "template_backlog": [],
+                "curation_enabled": _slide_curation_enabled(),
+                "strict_fallback_slides": strict_fallback_slides,
+                "fallback_reason": f"{exc.__class__.__name__}: {str(exc)[:180]}",
+            }
             status = "fallback"
         template_backlog.extend(curation_debug.get("template_backlog") or [])
         logger.info(
@@ -2853,7 +3073,51 @@ def _run_slide_generation_from_source(
     if not planned and source_blocks and not slide_anchors:
         planned = [_fallback_slide(source_blocks[0], "empty_curation_deck")]
 
+    strict_anchor_fallback_slides = sum(
+        int((batch.get("curation") or {}).get("strict_fallback_slides") or 0)
+        for batch in batches_debug
+    )
+    planned, global_strict_fallback_slides = _ensure_strict_anchor_slides(
+        planned,
+        source_blocks,
+        "global_missing_strict_anchor_fallback",
+    )
+    strict_anchor_fallback_slides += global_strict_fallback_slides
+    if global_strict_fallback_slides:
+        logger.warning(
+            "PIPELINE_SLIDES_STRICT_ANCHOR_GLOBAL_FALLBACK folder=%s content_job=%s inserted=%s",
+            folder_id,
+            source.get("content_job_id"),
+            global_strict_fallback_slides,
+        )
+
     planned, dropped_by_cap = _cap_planned_slides(planned, max_slides)
+    planned, post_cap_strict_fallback_slides = _ensure_strict_anchor_slides(
+        planned,
+        source_blocks,
+        "post_cap_missing_strict_anchor_fallback",
+    )
+    strict_anchor_fallback_slides += post_cap_strict_fallback_slides
+    if post_cap_strict_fallback_slides:
+        logger.warning(
+            "PIPELINE_SLIDES_STRICT_ANCHOR_POST_CAP_FALLBACK folder=%s content_job=%s inserted=%s",
+            folder_id,
+            source.get("content_job_id"),
+            post_cap_strict_fallback_slides,
+        )
+    planned, coverage_repair_slides = _ensure_unanchored_coverage_slides(
+        planned,
+        source_blocks,
+        "unanchored_section_coverage_repair",
+    )
+    if coverage_repair_slides:
+        logger.warning(
+            "PIPELINE_SLIDES_UNANCHORED_COVERAGE_REPAIR folder=%s content_job=%s inserted=%s",
+            folder_id,
+            source.get("content_job_id"),
+            coverage_repair_slides,
+        )
+    planned = _sort_slides_by_source_order(planned, source_blocks)
     template_backlog = _normalize_template_backlog(template_backlog)
 
     block_by_id = {block["source_block_id"]: block for block in source_blocks}
@@ -2934,6 +3198,8 @@ def _run_slide_generation_from_source(
             "context_slides_inserted": context_slides_inserted,
             "slides_dropped_by_cap": dropped_by_cap,
             "slides_dropped_unanchored": dropped_unanchored,
+            "strict_anchor_fallback_slides": strict_anchor_fallback_slides,
+            "coverage_repair_slides_inserted": coverage_repair_slides,
             "slide_curation_enabled": _slide_curation_enabled(),
             "section_slide_alignment_enabled": _section_slide_alignment_enabled(),
             "section_slide_alignment": section_alignment_debug,

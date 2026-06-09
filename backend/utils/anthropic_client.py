@@ -286,7 +286,7 @@ def _call_via_claude_cli(messages: list, model: str, timeout: int = 600) -> str:
         raise AnthropicAPIError(500, "cli_not_found", "Binaire `claude` introuvable dans le PATH")
 
 
-def post_message(messages, max_tokens=8000, model=None, timeout=600) -> str:
+def post_message(messages, max_tokens=8000, model=None, timeout=600, temperature=None) -> str:
     """
     Appelle POST /v1/messages et retourne le texte du premier bloc de la réponse.
 
@@ -318,6 +318,8 @@ def post_message(messages, max_tokens=8000, model=None, timeout=600) -> str:
         "max_tokens": max_tokens,
         "messages": messages,
     }
+    if temperature is not None:
+        payload["temperature"] = temperature
     if config["provider"] == "DeepSeek":
         user_id = _deepseek_user_id()
         if user_id:
