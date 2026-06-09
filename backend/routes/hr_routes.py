@@ -1752,7 +1752,7 @@ def create_hr_blueprint(socketio):
         Schedule par défaut :
           - P1 : vendredi à 9h00
           - P2 : lundi à 9h00
-          - P3 : mercredi à 9h00
+          - P3 : lundi à 9h00
 
         Corps JSON optionnel pour surcharger :
           { "schedule": [{"platform_id": 1, "weekday": 4, "hour": 9}] }
@@ -1766,7 +1766,7 @@ def create_hr_blueprint(socketio):
         DEFAULT_SCHEDULE = [
             {"platform_id": 1, "weekday": 4, "hour": 9},  # vendredi
             {"platform_id": 2, "weekday": 0, "hour": 9},  # lundi
-            {"platform_id": 3, "weekday": 2, "hour": 9},  # mercredi
+            {"platform_id": 3, "weekday": 0, "hour": 9},  # lundi
             {"platform_id": 4, "weekday": 3, "hour": 9},  # jeudi
         ]
 

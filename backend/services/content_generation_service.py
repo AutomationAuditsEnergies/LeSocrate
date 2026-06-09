@@ -765,35 +765,64 @@ _BEAT_TYPE_TO_TEMPLATE = {
     "key_message": "reflection",
     "process": "steps",
     "method": "steps",
-    "framework": "steps",
+    "framework": "framework",
     "steps": "steps",
-    "facilitator": "steps",
+    "flow": "flow",
+    "facilitator": "flow",
+    "mots_a_bannir": "situations",
+    "expressions_interdites": "situations",
+    "blacklist_3": "situations",
+    "trois_piliers": "situations",
+    "piliers": "situations",
+    "triade": "situations",
+    "triptyque": "situations",
+    "trepied": "situations",
+    "trépied": "situations",
     "checklist": "recap",
     "recap": "recap",
     "takeaways": "recap",
     "example": "casestudy",
     "case": "casestudy",
-    "story": "casestudy",
+    "story": "story",
     "scenario": "casestudy",
+    "situations": "situations",
+    "situation": "situations",
     "comparison": "comparison",
     "beforeafter": "comparison",
+    "synchrone_asynchrone": "comparison",
+    "synchronous_asynchronous": "comparison",
+    "canaux_synchrones": "comparison",
+    "canaux_asynchrones": "comparison",
+    "deux_familles": "comparison",
     "warning": "warning",
     "mistake": "warning",
     "risk": "warning",
+    "blacklist": "warning",
+    "forbidden": "warning",
+    "interdit": "warning",
+    "bannir": "warning",
+    "anti_pattern": "warning",
+    "trap": "warning",
+    "piege": "warning",
     "tip": "tip",
     "advice": "tip",
     "good_practice": "tip",
-    "analogy": "reflection",
-    "metaphor": "reflection",
+    "analogy": "analogy",
+    "metaphor": "analogy",
     "data": "recap",
     "numbers": "recap",
     "stats": "recap",
     "chart": "comparison",
     "transition": "reflection",
-    "opinion": "reflection",
+    "opinion": "opinion",
     "quote": "quotable",
     "quotable": "quotable",
     "journal": "quotable",
+    "pause": "pause",
+    "break": "pause",
+    "qa": "qa",
+    "questions": "qa",
+    "q&a": "qa",
 }
 _SUPPORTED_SLIDE_TEMPLATES = {
     "welcome",
@@ -804,11 +833,40 @@ _SUPPORTED_SLIDE_TEMPLATES = {
     "definition",
     "comparison",
     "casestudy",
+    "situations",
     "steps",
+    "flow",
+    "story",
+    "analogy",
+    "framework",
+    "opinion",
     "recap",
     "warning",
     "tip",
     "quotable",
+    "pause",
+    "qa",
+}
+_PEDAGOGICAL_SHAPE_TO_TEMPLATES = {
+    "ouverture": ("welcome", "chapter_opener", "program_year", "day_program_7_steps"),
+    "definition_notion": ("definition",),
+    "idee_forte": ("reflection", "opinion"),
+    "maxime_a_ancrer": ("quotable",),
+    "recit_avec_morale": ("story",),
+    "image_mentale": ("analogy",),
+    "conseil_actionnable": ("tip",),
+    "mise_en_garde": ("warning",),
+    "opposition_deux_modes": ("comparison",),
+    "triade_structurante": ("situations",),
+    "progression_ordonnee": ("steps", "flow"),
+    "cas_comparables": ("casestudy",),
+    "synthese_apres_developpement": ("recap",),
+    "modele_a_leviers": ("framework",),
+}
+_DEFAULT_SHAPE_BY_TEMPLATE = {
+    template: shape
+    for shape, templates in _PEDAGOGICAL_SHAPE_TO_TEMPLATES.items()
+    for template in templates
 }
 _ETHICAL_MICRO_RULE_IDS = [14, 15]
 _ETHICAL_MICRO_RULESET_VERSION = "2026-05-31-ethical-micro-v3-minimal"
@@ -841,7 +899,7 @@ def _slide_template_catalog_prompt() -> str:
             continue
         templates.append({
             "template_id": template_id,
-            "families": item.get("families") or [],
+            "use_cases": item.get("use_cases") or item.get("families") or [],
             "use_when": item.get("use_when") or "",
             "avoid_when": item.get("avoid_when") or "",
             "requires": item.get("requires") or {},
@@ -866,6 +924,25 @@ def _slide_template_for_beat(beat_type: str | None, requested: str | None = None
         return alias
     beat_key = str(beat_type or "").strip().lower()
     return _BEAT_TYPE_TO_TEMPLATE.get(beat_key, "reflection")
+
+
+def _pedagogical_shape_mapping_prompt() -> str:
+    rows = []
+    for shape, templates in _PEDAGOGICAL_SHAPE_TO_TEMPLATES.items():
+        template_list = ", ".join(templates)
+        if shape == "progression_ordonnee":
+            template_list += " (si exactement 4 gestes métier enchaînés: flow)"
+        rows.append(f"- {shape}: {template_list}")
+    return "\n".join(rows)
+
+
+def _pedagogical_shape_for_template(value: str | None, template_type: str | None) -> str:
+    shape = str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+    template = _slide_template_for_beat(None, template_type)
+    if shape in _PEDAGOGICAL_SHAPE_TO_TEMPLATES:
+        if template in _PEDAGOGICAL_SHAPE_TO_TEMPLATES[shape]:
+            return shape
+    return _DEFAULT_SHAPE_BY_TEMPLATE.get(template, "")
 
 
 _GENERIC_BEAT_PATTERNS = (
@@ -934,6 +1011,7 @@ def _fallback_teaching_beats_for_part(raw_part: dict) -> list[dict]:
             "slide_anchor": {
                 "enabled": True,
                 "template_type": "reflection",
+                "pedagogical_shape": "idee_forte",
                 "visual_goal": f"faire retenir le repère pratique propre à {title}",
                 "must_cover": first_focus,
                 "must_not_cover": "une formulation générique sans contenu métier précis",
@@ -949,6 +1027,7 @@ def _fallback_teaching_beats_for_part(raw_part: dict) -> list[dict]:
             "slide_anchor": {
                 "enabled": True,
                 "template_type": "tip",
+                "pedagogical_shape": "conseil_actionnable",
                 "visual_goal": f"ancrer l'action concrète à mener dans {title}",
                 "must_cover": method_focus,
                 "must_not_cover": "un simple rappel abstrait de l'idée principale",
@@ -1013,6 +1092,7 @@ def _normalize_teaching_beats(raw_part: dict, *, course_number: int, part_number
             "enabled": enabled,
             "anchor_id": str(anchor.get("anchor_id") or f"{beat_id}-slide").strip(),
             "template_type": template_type,
+            "pedagogical_shape": _pedagogical_shape_for_template(anchor.get("pedagogical_shape"), template_type),
             "visual_goal": str(anchor.get("visual_goal") or default_visual_goal).strip(),
             "items_expected": anchor.get("items_expected"),
             "must_cover": str(anchor.get("must_cover") or "").strip(),
@@ -1078,6 +1158,7 @@ def _opening_structure_teaching_beats(
             "enabled": True,
             "anchor_id": f"c{course_number}-opening-chapter-opener-slide",
             "template_type": "chapter_opener",
+            "pedagogical_shape": "ouverture",
             "visual_goal": "ouvrir le chapitre avec son titre et ses axes principaux",
             "items_expected": len(first_axes) or None,
             "fields_hint": {
@@ -1102,6 +1183,7 @@ def _opening_structure_teaching_beats(
                     "enabled": True,
                     "anchor_id": f"c{course_number}-opening-recap-slide",
                     "template_type": "recap",
+                    "pedagogical_shape": "synthese_apres_developpement",
                     "visual_goal": "remettre en mémoire les points utiles avant le nouveau thème",
                     "items_expected": 3,
                     "fields_hint": {
@@ -1137,6 +1219,7 @@ def _opening_structure_teaching_beats(
                 "enabled": True,
                 "anchor_id": "day-opening-welcome-slide",
                 "template_type": "welcome",
+                "pedagogical_shape": "ouverture",
                 "visual_goal": "installer immédiatement le cadre de la journée et le nom de la formation",
                 "items_expected": None,
                 "fields_hint": {
@@ -1162,6 +1245,7 @@ def _opening_structure_teaching_beats(
                     "enabled": True,
                     "anchor_id": "day-opening-program-year-slide",
                     "template_type": "program_year",
+                    "pedagogical_shape": "ouverture",
                     "visual_goal": "donner une vision annuelle des deux grands blocs de compétences",
                     "items_expected": 2,
                     "fields_hint": {
@@ -1186,6 +1270,7 @@ def _opening_structure_teaching_beats(
                 "enabled": True,
                 "anchor_id": "day-opening-program-slide",
                 "template_type": "day_program_7_steps",
+                "pedagogical_shape": "ouverture",
                 "visual_goal": "donner une carte claire des thèmes de la journée avant le premier contenu",
                 "items_expected": len(program_items) or None,
                 "fields_hint": {
@@ -1262,6 +1347,7 @@ def _course_conclusion_recap_beat(
             "enabled": True,
             "anchor_id": f"c{course_number}-conclusion-recap-slide",
             "template_type": "recap",
+            "pedagogical_shape": "synthese_apres_developpement",
             "visual_goal": "synthétiser les points vus dans le cours avant la conclusion et le Q/R",
             "items_expected": min(4, max(2, len(points))),
             "fields_hint": {
@@ -1961,13 +2047,16 @@ MODE DE CETTE PASSE : PLAN GLOBAL COMPLET
 - Tu dois produire le plan complet, incluant les `teaching_beats` et les
   `slide_anchor` de chaque partie.
 """
-        teaching_beat_rules = """
+        teaching_beat_rules = f"""
 - Pour chaque partie de développement, crée des `teaching_beats` : 2 à 4 moments pédagogiques structurants qui guideront le texte.
 - Chaque teaching beat doit avoir : beat_id, type, role, spoken_requirement, slide_anchor.
 - Interdiction de beats paresseux ou génériques : n'écris jamais `role` ou `visual_goal` du type "poser l'idée centrale", "faire retenir l'idée centrale", "présenter l'idée principale" ou "visualiser le point pédagogique".
 - Chaque beat doit nommer le contenu métier précis à traiter : notion, geste, piège, méthode, exemple, comparaison ou décision observable. On doit comprendre ce que l'apprenant retient sans lire le titre de la partie.
 - Dans `spoken_requirement`, indique ce qui doit être dit concrètement à l'oral, pas seulement "présenter clairement".
+- Dans `slide_anchor.pedagogical_shape`, nomme la fonction pédagogique du passage avant le template.
 - Dans `slide_anchor.visual_goal`, formule le souvenir visuel spécifique à construire, pas une intention générale.
+Taxonomie `pedagogical_shape`:
+{_pedagogical_shape_mapping_prompt()}
 """
         response_schema = """{
   "courses": [
@@ -1992,7 +2081,8 @@ MODE DE CETTE PASSE : PLAN GLOBAL COMPLET
               "spoken_requirement": "ce que le texte oral devra couvrir naturellement",
               "slide_anchor": {
                 "enabled": true,
-                "template_type": "welcome|program_year|day_program_7_steps|chapter_opener|reflection|definition|comparison|casestudy|steps|recap|warning|tip|quotable",
+                "template_type": "welcome|program_year|day_program_7_steps|chapter_opener|reflection|definition|comparison|casestudy|situations|steps|flow|story|analogy|framework|opinion|recap|warning|tip|quotable|pause|qa",
+                "pedagogical_shape": "ouverture|definition_notion|idee_forte|maxime_a_ancrer|recit_avec_morale|image_mentale|conseil_actionnable|mise_en_garde|opposition_deux_modes|triade_structurante|progression_ordonnee|cas_comparables|synthese_apres_developpement|modele_a_leviers",
                 "visual_goal": "ce que la slide doit aider à retenir",
                 "items_expected": null,
                 "fields_hint": {}
@@ -2042,6 +2132,14 @@ Contraintes générales :
 - Un slide_anchor n'est activé que si le moment mérite vraiment une visualisation. N'active pas une slide pour une simple transition orale.
 - Le texte final ne doit jamais dire "slide", "PowerPoint", "template", "anchor" ou "teaching beat". Ces anchors sont internes.
 - Choisis les templates uniquement dans le catalogue fourni. Ne force pas une roue, une checklist ou des étapes si le contenu ne s'y prête pas.
+- Si le passage introduit une maxime, une phrase clé, une formule exacte ou un repère à mémoriser, le bon anchor est `quotable`, pas `recap` ni `reflection`.
+- Si cette phrase clé est ensuite illustrée par une scène ou une expérience concrète, `story` peut être utilisé comme déclinaison narrative.
+- Une structure nouvelle en trois piliers, trois repères, trois profils, trois postures, trois situations ou trois expressions est `situations`, pas `recap`.
+- Un seul cas fictif qui sert à faire passer un conseil, une astuce ou un réflexe métier est `tip`, pas `casestudy`.
+- `casestudy` est réservé à 2 ou 3 cas métier comparables en cartes.
+- Une distinction en deux familles ou deux modes, comme synchrone/asynchrone, téléphone/courriel, immédiat/différé, rapidité/exhaustivité, est `comparison`.
+- Une liste de mots/formules à bannir, expressions interdites, pièges de langage ou erreurs à éviter n'est pas un `recap`: utilise `situations` s'il y a exactement 3 éléments, sinon `warning`.
+- `recap` est réservé à une vraie synthèse après un développement déjà traité: "ce qu'on retient", "en résumé", "nous avons vu".
 
 Position dans la formation :
 - Journée courante : {day_number or "inconnue"}
@@ -2155,6 +2253,7 @@ Objectif de cette passe :
 - Créer les `teaching_beats` précis de chaque partie de développement du cours cible.
 - Choisir les moments qui méritent une slide.
 - Associer un template existant pertinent à chaque `slide_anchor`.
+- Associer aussi une `pedagogical_shape` à chaque `slide_anchor`, avant le choix du template.
 - Produire des objectifs visuels et exigences orales spécifiques au contenu métier.
 
 Règles de qualité obligatoires :
@@ -2163,6 +2262,7 @@ Règles de qualité obligatoires :
 - Interdiction absolue des formulations paresseuses : "idée centrale", "idée principale", "point pédagogique", "présenter clairement", "faire retenir l'idée centrale".
 - `role` doit dire à quoi sert le moment dans la progression.
 - `spoken_requirement` doit décrire ce que l'oral devra concrètement couvrir.
+- `slide_anchor.pedagogical_shape` doit nommer la fonction pédagogique du passage, pas son thème.
 - `slide_anchor.visual_goal` doit indiquer le souvenir visuel spécifique à construire.
 - `slide_anchor.must_cover` doit nommer le contenu exact couvert par cette slide.
 - `slide_anchor.must_not_cover` doit indiquer ce que cette slide ne doit pas absorber, pour éviter les doublons.
@@ -2193,6 +2293,19 @@ Intitulé journée :
 Catalogue interne des templates de slides :
 {slide_template_catalog}
 
+Règles de choix à respecter :
+Taxonomie `pedagogical_shape`:
+{_pedagogical_shape_mapping_prompt()}
+
+- Maxime, phrase clé, formule exacte ou repère à mémoriser = `quotable`.
+- Scène ou expérience qui illustre une maxime = `story`.
+- Trois piliers, trois repères, trois profils, trois postures, trois situations ou trois expressions = `situations`.
+- Cas unique qui amène un conseil, une astuce ou un réflexe métier = `tip`.
+- 2 ou 3 cas métier comparables = `casestudy`.
+- Deux familles ou deux modes à opposer = `comparison`.
+- Une liste de mots/formules à bannir, expressions interdites, pièges de langage ou erreurs à éviter n'est pas un `recap`: utilise `situations` s'il y a exactement 3 éléments, sinon `warning`.
+- `recap` est réservé à une vraie synthèse après un développement déjà traité: "ce qu'on retient", "en résumé", "nous avons vu".
+
 Réponds UNIQUEMENT en JSON valide.
 Ne renvoie que les parties et leurs teaching_beats, pas le plan complet.
 
@@ -2210,7 +2323,8 @@ FORMAT EXACT :
           "spoken_requirement": "ce que l'oral devra couvrir concrètement",
           "slide_anchor": {{
             "enabled": true,
-            "template_type": "chapter_opener|reflection|definition|comparison|casestudy|steps|recap|warning|tip|quotable",
+            "template_type": "chapter_opener|reflection|definition|comparison|casestudy|situations|steps|flow|story|analogy|framework|opinion|recap|warning|tip|quotable|pause|qa",
+            "pedagogical_shape": "ouverture|definition_notion|idee_forte|maxime_a_ancrer|recit_avec_morale|image_mentale|conseil_actionnable|mise_en_garde|opposition_deux_modes|triade_structurante|progression_ordonnee|cas_comparables|synthese_apres_developpement|modele_a_leviers",
             "visual_goal": "souvenir visuel spécifique à construire",
             "items_expected": null,
             "must_cover": "contenu précis couvert par la slide",
@@ -6413,6 +6527,10 @@ def _section_teaching_beats_prompt(section: dict) -> str:
             "slide_anchor": {
                 "enabled": bool(anchor.get("enabled")),
                 "template_type": anchor.get("template_type"),
+                "pedagogical_shape": _pedagogical_shape_for_template(
+                    anchor.get("pedagogical_shape"),
+                    anchor.get("template_type"),
+                ),
                 "visual_goal": anchor.get("visual_goal"),
                 "items_expected": anchor.get("items_expected"),
                 "must_cover": anchor.get("must_cover"),
@@ -6505,6 +6623,10 @@ Moment pédagogique à écrire maintenant :
     "slide_anchor": {
         "enabled": bool(anchor.get("enabled")),
         "template_type": anchor.get("template_type"),
+        "pedagogical_shape": _pedagogical_shape_for_template(
+            anchor.get("pedagogical_shape"),
+            anchor.get("template_type"),
+        ),
         "visual_goal": anchor.get("visual_goal"),
         "items_expected": anchor.get("items_expected"),
         "must_cover": anchor.get("must_cover"),

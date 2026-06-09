@@ -14,6 +14,7 @@ import math
 import os
 import re
 import time
+import unicodedata
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Iterable
 
@@ -75,7 +76,6 @@ PACE_PROFILES = {
 }
 
 SUPPORTED_TEMPLATES = {
-    "context",
     "welcome",
     "chapter_opener",
     "program_year",
@@ -84,13 +84,45 @@ SUPPORTED_TEMPLATES = {
     "definition",
     "comparison",
     "casestudy",
+    "situations",
     "steps",
+    "flow",
+    "story",
+    "analogy",
+    "framework",
+    "opinion",
     "recap",
     "warning",
     "tip",
     "quotable",
+    "pause",
+    "qa",
 }
+
+PEDAGOGICAL_SHAPE_TO_TEMPLATES = {
+    "ouverture": ("welcome", "chapter_opener", "program_year", "day_program_7_steps"),
+    "definition_notion": ("definition",),
+    "idee_forte": ("reflection", "opinion"),
+    "maxime_a_ancrer": ("quotable",),
+    "recit_avec_morale": ("story",),
+    "image_mentale": ("analogy",),
+    "conseil_actionnable": ("tip",),
+    "mise_en_garde": ("warning",),
+    "opposition_deux_modes": ("comparison",),
+    "triade_structurante": ("situations",),
+    "progression_ordonnee": ("steps", "flow"),
+    "cas_comparables": ("casestudy",),
+    "synthese_apres_developpement": ("recap",),
+    "modele_a_leviers": ("framework",),
+}
+DEFAULT_SHAPE_BY_TEMPLATE = {
+    template: shape
+    for shape, templates in PEDAGOGICAL_SHAPE_TO_TEMPLATES.items()
+    for template in templates
+}
+
 TEMPLATE_ALIASES = {
+    "context": "reflection",
     "welcome": "welcome",
     "day_welcome": "welcome",
     "opening": "welcome",
@@ -111,34 +143,64 @@ TEMPLATE_ALIASES = {
     "key_message": "reflection",
     "process": "steps",
     "method": "steps",
-    "framework": "steps",
+    "framework": "framework",
     "steps": "steps",
-    "facilitator": "steps",
+    "flow": "flow",
+    "request_flow": "flow",
+    "facilitator": "flow",
+    "mots_a_bannir": "situations",
+    "expressions_interdites": "situations",
+    "blacklist_3": "situations",
+    "trois_piliers": "situations",
+    "piliers": "situations",
+    "triade": "situations",
+    "triptyque": "situations",
+    "trepied": "situations",
+    "trépied": "situations",
     "checklist": "recap",
+    "recap": "recap",
     "takeaways": "recap",
     "example": "casestudy",
     "case": "casestudy",
-    "story": "casestudy",
+    "story": "story",
     "scenario": "casestudy",
+    "situations": "situations",
+    "situation": "situations",
+    "three_situations": "situations",
     "comparison": "comparison",
     "beforeafter": "comparison",
+    "synchrone_asynchrone": "comparison",
+    "synchronous_asynchronous": "comparison",
+    "canaux_synchrones": "comparison",
+    "canaux_asynchrones": "comparison",
+    "deux_familles": "comparison",
     "warning": "warning",
     "mistake": "warning",
     "risk": "warning",
+    "blacklist": "warning",
+    "forbidden": "warning",
+    "interdit": "warning",
+    "bannir": "warning",
+    "anti_pattern": "warning",
+    "trap": "warning",
+    "piege": "warning",
     "tip": "tip",
     "advice": "tip",
     "good_practice": "tip",
-    "analogy": "reflection",
-    "metaphor": "reflection",
+    "analogy": "analogy",
+    "metaphor": "analogy",
     "data": "recap",
     "numbers": "recap",
     "stats": "recap",
     "chart": "comparison",
     "transition": "reflection",
-    "opinion": "reflection",
+    "opinion": "opinion",
     "quote": "quotable",
     "quotable": "quotable",
     "journal": "quotable",
+    "pause": "pause",
+    "qa": "qa",
+    "q&a": "qa",
 }
 
 EVENT_TYPES = {
@@ -150,13 +212,21 @@ EVENT_TYPES = {
     "day_year",
     "day_program",
     "day_program_7_steps",
+    "pause",
+    "qa",
     "recap",
     "definition",
     "concept",
     "example",
+    "story",
+    "analogy",
+    "opinion",
+    "transition",
+    "framework",
     "process",
     "comparison",
     "data",
+    "exercise",
     "warning",
     "tip",
     "quote",
@@ -242,21 +312,26 @@ def _template_catalog_for_prompt() -> str:
         template_id = _canonical_template(item.get("template_id"))
         if template_id != item.get("template_id"):
             continue
-        templates.append({
+        entry = {
             "template_id": template_id,
-            "families": item.get("families") or [],
+            "use_cases": item.get("use_cases") or item.get("families") or [],
             "visual_role": item.get("visual_role") or "",
             "use_when": item.get("use_when") or "",
             "avoid_when": item.get("avoid_when") or "",
-            "strong_signals": item.get("strong_signals") or [],
-            "weak_signals": item.get("weak_signals") or [],
-            "selection_rules": item.get("selection_rules") or [],
-            "rejection_rules": item.get("rejection_rules") or [],
             "requires": item.get("requires") or {},
-            "schema": item.get("schema") or {},
-            "good_examples": item.get("good_examples") or [],
-            "bad_examples": item.get("bad_examples") or [],
-        })
+        }
+        for optional_key in (
+            "strong_signals",
+            "rejection_rules",
+            "confusable_with",
+            "good_examples",
+            "bad_examples",
+            "schema",
+        ):
+            optional_value = item.get(optional_key)
+            if optional_value:
+                entry[optional_key] = optional_value
+        templates.append(entry)
     return json.dumps(
         {
             "version": catalog.get("version"),
@@ -268,14 +343,23 @@ def _template_catalog_for_prompt() -> str:
     )
 
 
+def _pedagogical_shape_mapping_for_prompt() -> str:
+    rows = []
+    for shape, templates in PEDAGOGICAL_SHAPE_TO_TEMPLATES.items():
+        template_list = ", ".join(templates)
+        if shape == "progression_ordonnee":
+            template_list += " (si exactement 4 gestes métier enchaînés: flow)"
+        rows.append(f"- {shape}: {template_list}")
+    return "\n".join(rows)
+
+
 def _slide_curation_enabled() -> bool:
     value = str(os.getenv("FORMATION_SLIDE_CURATION_ENABLED", "1")).strip().lower()
     return value not in {"0", "false", "no", "off"}
 
 
 def _context_gap_slides_enabled() -> bool:
-    value = str(os.getenv("FORMATION_SLIDE_CONTEXT_GAPS_ENABLED", "0")).strip().lower()
-    return value not in {"0", "false", "no", "off"}
+    return False
 
 
 def _section_slide_alignment_enabled() -> bool:
@@ -1008,6 +1092,7 @@ def _extract_slide_anchors_from_plan(plan: dict | None) -> list[dict]:
                 "role": role,
                 "spoken_requirement": spoken,
                 "template_type": template_type,
+                "pedagogical_shape": _normalize_pedagogical_shape(slide_anchor.get("pedagogical_shape"), template_type),
                 "visual_goal": visual_goal,
                 "items_expected": slide_anchor.get("items_expected"),
                 "must_cover": must_cover,
@@ -1048,6 +1133,7 @@ def _extract_slide_anchors_from_plan(plan: dict | None) -> list[dict]:
                     "role": role,
                     "spoken_requirement": spoken,
                     "template_type": template_type,
+                    "pedagogical_shape": _normalize_pedagogical_shape(slide_anchor.get("pedagogical_shape"), template_type),
                     "visual_goal": visual_goal,
                     "items_expected": slide_anchor.get("items_expected"),
                     "must_cover": must_cover,
@@ -1085,6 +1171,7 @@ def _extract_slide_anchors_from_plan(plan: dict | None) -> list[dict]:
                 "role": role,
                 "spoken_requirement": spoken,
                 "template_type": template_type,
+                "pedagogical_shape": _normalize_pedagogical_shape(slide_anchor.get("pedagogical_shape"), template_type),
                 "visual_goal": visual_goal,
                 "items_expected": slide_anchor.get("items_expected"),
                 "must_cover": must_cover,
@@ -1262,6 +1349,7 @@ def _alignment_anchor_payload(anchor: dict) -> dict:
         "anchor_id": anchor.get("anchor_id"),
         "beat_id": anchor.get("beat_id"),
         "template_type": anchor.get("template_type"),
+        "pedagogical_shape": anchor.get("pedagogical_shape"),
         "beat_type": anchor.get("beat_type"),
         "role": anchor.get("role"),
         "visual_goal": anchor.get("visual_goal"),
@@ -1846,6 +1934,7 @@ def _build_beat_source_blocks(segments: list[dict]) -> tuple[list[dict], int]:
         anchor = segment.get("slide_anchor") if isinstance(segment.get("slide_anchor"), dict) else {}
         slide_anchors = []
         if anchor.get("enabled"):
+            template_type = _canonical_template(segment.get("template_type") or anchor.get("template_type"))
             slide_anchors.append({
                 "anchor_id": str(segment.get("slide_anchor_id") or anchor.get("anchor_id") or "").strip(),
                 "beat_id": str(segment.get("beat_id") or "").strip(),
@@ -1857,7 +1946,8 @@ def _build_beat_source_blocks(segments: list[dict]) -> tuple[list[dict], int]:
                 "beat_type": str(segment.get("beat_type") or "concept"),
                 "role": segment.get("beat_role") or "",
                 "spoken_requirement": segment.get("spoken_requirement") or "",
-                "template_type": _canonical_template(segment.get("template_type") or anchor.get("template_type")),
+                "template_type": template_type,
+                "pedagogical_shape": _normalize_pedagogical_shape(anchor.get("pedagogical_shape"), template_type),
                 "visual_goal": anchor.get("visual_goal") or "",
                 "items_expected": anchor.get("items_expected"),
                 "must_cover": anchor.get("must_cover") or "",
@@ -1940,7 +2030,8 @@ def _prompt_for_blocks(blocks: list[dict], source_title: str, pace_profile: dict
                     "part_title": anchor.get("part_title"),
                     "beat_type": anchor.get("beat_type"),
                     "spoken_requirement": anchor.get("spoken_requirement"),
-                    "template_type": anchor.get("template_type"),
+                    "planned_template_type": anchor.get("template_type"),
+                    "planned_pedagogical_shape": anchor.get("pedagogical_shape"),
                     "visual_goal": anchor.get("visual_goal"),
                     "items_expected": anchor.get("items_expected"),
                     "must_cover": anchor.get("must_cover"),
@@ -1959,7 +2050,9 @@ def _prompt_for_blocks(blocks: list[dict], source_title: str, pace_profile: dict
 COUCHE DE CURATION IA:
 - Tu n'es pas en train de résumer mécaniquement le texte. Tu sélectionnes les moments qui gagnent vraiment à devenir visuels.
 - Le texte final est la source de vérité.
-- Quand `source_alignment` vaut `section_slide_alignment`, les `slide_anchors` sont des obligations: exactement 1 slide par fenêtre alignée.
+- Quand `source_alignment` vaut `section_slide_alignment`, les `slide_anchors` imposent l'existence et l'emplacement de la slide: exactement 1 slide par fenêtre alignée.
+- Le `planned_template_type` d'un anchor est seulement le choix initial du plan. Tu dois le remplacer si le texte réel correspond mieux à un autre template du catalogue.
+- Le `planned_pedagogical_shape` d'un anchor explique pourquoi le beat existe: utilise-le comme indice fort, mais change-le si le texte réel le contredit et explique-le dans `template_decision_reason`.
 - Hors `section_slide_alignment`, les `slide_anchors` restent des indices pédagogiques forts.
 - Si un anchor hors section alignée ne correspond pas clairement au texte réel, ignore-le.
 - Si le texte réel contient un meilleur moment visuel non prévu par un anchor, tu peux le sélectionner.
@@ -1985,14 +2078,26 @@ Source: {source_title}
 RÈGLES:
 - Tu reçois des fenêtres de contexte. Elles servent à te donner le texte, pas à imposer le nombre de slides.
 - Si une fenêtre contient `slide_anchors`, ils t'indiquent l'intention initiale du plan.
-- Si `source_alignment` vaut `section_slide_alignment`, la fenêtre est déjà la plage chronologique exacte attribuée à l'unique slide prévue: produis exactement 1 slide pour cette fenêtre, utilise son unique anchor, et ne crée pas de deuxième slide.
+- Si `source_alignment` vaut `section_slide_alignment`, la fenêtre est déjà la plage chronologique exacte attribuée à l'unique slide prévue: produis exactement 1 slide pour cette fenêtre, recopie son unique anchor, et ne crée pas de deuxième slide.
+- Dans une fenêtre `section_slide_alignment`, conserve donc le même nombre de slides et le même rattachement texte, mais choisis librement le meilleur `template_type` parmi le catalogue selon le texte réel. Le `planned_template_type` est un indice faible, jamais une obligation.
 - Si un anchor hors `section_slide_alignment` n'est pas couvert par le texte source, ignore-le au lieu d'inventer.
-- Quand tu utilises un anchor, recopie exactement `slide_anchor_id` et `beat_id` dans la slide générée.
+- Quand tu utilises un anchor, recopie exactement `slide_anchor_id` et `beat_id` dans la slide générée, mais ne recopie pas automatiquement son template prévu.
+- Si l'anchor fournit `planned_pedagogical_shape`, pars de cette forme pédagogique avant de choisir `template_type`; si tu changes de forme, dis pourquoi dans `template_decision_reason`.
 - Un anchor correspond à une intention pédagogique précise, pas à toute la fenêtre.
 - Pour chaque anchor utilisé, choisis `source_quote` dans la portion exacte du texte qui réalise cette intention.
 - Ne rattache jamais une slide au passage d'un anchor voisin parce qu'il contient des mots proches, une image répétée ou le même thème général.
 - Si deux anchors voisins sont présents, vérifie leur ordre narratif : la première slide doit pointer vers le premier mouvement oral, la deuxième vers le mouvement oral suivant.
-- Les récits, analogies, opinions ou transitions simples ne sont plus des templates autonomes. Si le passage raconte une situation métier, utilise `casestudy`; s'il porte une idée ou une image mentale, utilise `reflection`.
+- Le deck source exact est la seule référence visuelle autorisée: utilise uniquement les templates du catalogue.
+- Les nouvelles formes du deck source exact ont leur propre attribution: `story` pour un mini-récit avec morale, `analogy` pour une image mentale, `framework` pour un modèle à leviers, `opinion` pour une prise de position, `situations` pour trois profils ou situations, `flow` pour quatre gestes métier enchaînés.
+- Si le texte introduit une maxime, une phrase clé, une formule exacte ou un repère à mémoriser avec des signaux comme "la voici", "phrase à retenir", "maxime", "repère", "souvenez-vous", utilise `quotable` et copie la phrase exacte dans `quote`.
+- `story` peut être la déclinaison narrative d'une maxime: utilise-le seulement si le passage raconte ensuite une scène, une expérience client ou une conséquence concrète qui illustre cette phrase.
+- Une structure nouvelle en trois piliers, trois repères, trois profils, trois postures, trois situations ou trois expressions n'est pas un `recap`: utilise `situations`. Les signaux forts sont "trois piliers", "les trois", "les voici", "trépied", "triptyque".
+- Ne mets pas `casestudy` par défaut dès qu'il y a un exemple. Utilise `casestudy` seulement pour 2 à 3 cas comparables ou situations métier concrètes en cartes.
+- Si le passage raconte un seul cas fictif ou une seule situation pour amener un conseil, une astuce, un réflexe métier ou une phrase de conduite à tenir, utilise `tip`. Si ce cas unique sert surtout de récit avec morale, utilise `story`.
+- Pour deux versions opposées, préfère `comparison`. Pour une progression en étapes, préfère `steps` ou `flow`.
+- Si le passage pose une distinction en deux familles ou deux modes, comme synchrone/asynchrone, téléphone/courriel, immédiat/différé, rapidité/exhaustivité, utilise `comparison`.
+- Une liste de mots/formules à bannir, expressions interdites, pièges de langage ou erreurs à éviter n'est pas un `recap`: utilise `situations` s'il y a exactement 3 éléments, sinon `warning`.
+- `recap` est réservé à une vraie synthèse après un développement déjà traité: "ce qu'on retient", "en résumé", "nous avons vu".
 - Si aucun anchor n'est disponible pour une fenêtre, sélectionne les thèmes, points et idées pédagogiques qui méritent vraiment un visuel.
 - Tu peux produire 0, 1 ou plusieurs slides par fenêtre selon la densité réelle des idées.
 - Maximum {max_batch_slides} slides pour tout ce batch.
@@ -2009,12 +2114,18 @@ RÈGLES:
 
 {curation_rules}
 
+TAXONOMIE `pedagogical_shape`:
+Classe d'abord la fonction pédagogique du passage: qu'est-ce que ce passage fait faire au cerveau de l'apprenant ? Ne classe pas selon le thème.
+{_pedagogical_shape_mapping_for_prompt()}
+
 PROCESSUS OBLIGATOIRE:
 1. Lis toutes les fenêtres du batch et repère seulement les moments qui méritent vraiment un visuel.
 2. Vérifie chaque moment contre les `slide_anchors` éventuels: anchor couvert, anchor ignoré, ou moment non prévu mais meilleur.
-3. Pour chaque moment retenu, choisis le template existant depuis le catalogue en appliquant `use_when`, `avoid_when`, `strong_signals`, `weak_signals`, `selection_rules` et `rejection_rules`.
-4. Produis uniquement les slides retenues. Ne remplis pas le quota si le texte ne le justifie pas.
-5. Si le meilleur rendu demanderait un template absent, renseigne `ideal_template_gap`, mais utilise quand même le meilleur template existant.
+3. Pour chaque moment retenu, renseigne d'abord `pedagogical_shape` avec une valeur de la taxonomie, puis `shape_evidence` avec une citation très courte qui prouve cette forme.
+4. À partir de cette forme, choisis le template existant depuis le catalogue en appliquant `use_when`, `avoid_when`, `strong_signals`, `rejection_rules`, `requires` et les éventuels exemples positifs/négatifs. En cas d'hésitation, compare explicitement les templates listés dans `confusable_with`. Le template prévu par l'anchor ne sert qu'à comprendre l'intention initiale.
+5. Renseigne `template_decision_reason` en une phrase et `rejected_templates` pour les templates plausibles mais écartés.
+6. Produis uniquement les slides retenues. Ne remplis pas le quota si le texte ne le justifie pas.
+7. Si le meilleur rendu demanderait un template absent, renseigne `ideal_template_gap`, mais utilise quand même le meilleur template existant.
 
 {density_rules}
 
@@ -2022,19 +2133,30 @@ CATALOGUE TEMPLATES:
 {_template_catalog_for_prompt()}
 
 TEMPLATES AUTORISÉS ET SCHÉMAS:
+- welcome: data={{"title":"Bienvenue","formation_name":"nom formation","day_label":"Journée X","meta_note":"note courte"}}
+- program_year: data={{"title":"3-6 mots","subtitle":"phrase courte","day_label":"Parcours annuel","phases":[{{"title":"phase","desc":"1 phrase"}}]}} avec exactement 2 phases
+- day_program_7_steps: data={{"title":"3-6 mots","subtitle":"phrase courte","day_label":"Feuille de route","active_item":1,"items":["thème 1","thème 2"]}} avec exactement 7 items
 - reflection: data={{"title":"3-6 mots","text":"1-2 phrases"}}
 - chapter_opener: data={{"chapter_label":"Chapitre X","title":"titre du thème","axes":[{{"title":"axe court","desc":"optionnel"}}]}}
 - definition: data={{"term":"mot ou notion","eyebrow":"contexte court","definition":"1 phrase","isItems":["critère","critère"]}}
 - comparison: data={{"title":"3-6 mots","cols":[{{"label":"colonne","items":["point court"]}},{{"label":"colonne","items":["point court"]}}]}}
-- casestudy: data={{"title":"3-6 mots","eyebrow":"contexte","cases":[{{"tag":"01 · Canal","title":"court","desc":"1 phrase","example":"optionnel"}}]}} avec autant de cases que le texte justifie
+- casestudy: data={{"title":"3-6 mots","eyebrow":"contexte","cases":[{{"tag":"01 · Canal","title":"court","desc":"1 phrase","example":"optionnel"}}]}} avec 2 à 3 cases comparables
+- situations: data={{"title":"3-6 mots","eyebrow":"contexte","items":[{{"title":"pilier, profil, posture ou situation","desc":"rôle ou règle courte"}}]}} avec exactement 3 items
 - steps: data={{"title":"3-6 mots","steps":[{{"title":"court","desc":"1 phrase"}}]}} avec 2-4 steps
+- flow: data={{"title":"3-6 mots","eyebrow":"contexte","steps":[{{"title":"geste court","desc":"1 phrase"}}]}} avec exactement 4 gestes métier
+- story: data={{"title":"3-6 mots","narrative":"1-2 phrases de situation","moral":"phrase de conclusion qui relie la scène au principe"}}
+- analogy: data={{"title":"3-6 mots","concept":"notion source","comparison":"image mentale","text":"1 phrase d'explication"}}
+- framework: data={{"title":"3-8 mots","center":{{"title":"coeur du modèle"}},"segments":[{{"title":"court","desc":"1 phrase"}}]}} avec 4-6 segments
+- opinion: data={{"title":"3-8 mots","text":"1-2 phrases de point de vue argumenté"}}
 - recap: data={{"title":"3-6 mots","points":["point court","point court","point court"]}}
 - warning: data={{"title":"3-6 mots","text":"1-2 phrases"}}
 - tip: data={{"title":"3-6 mots","text":"1-2 phrases"}}
-- quotable: data={{"quote":"phrase courte à isoler"}}
+- quotable: data={{"quote":"phrase exacte courte à ancrer, copiée telle quelle depuis le texte source"}}
+- pause: data={{}}
+- qa: data={{}}
 
 Choisis `event_type` parmi:
-chapter_opener, recap, definition, concept, example, process, comparison, data, warning, tip, quote.
+welcome, chapter_opener, recap, definition, reflection, casestudy, story, analogy, opinion, framework, steps, comparison, warning, tip, quotable.
 
 FORMAT EXACT:
 {{
@@ -2043,8 +2165,14 @@ FORMAT EXACT:
       "source_block_id": 0,
       "slide_anchor_id": "anchor optionnel si utilisé",
       "beat_id": "beat optionnel si utilisé",
+      "pedagogical_shape": "idee_forte",
+      "shape_evidence": "Citation très courte qui prouve la forme pédagogique",
+      "template_decision_reason": "Pourquoi ce template correspond mieux au passage",
+      "rejected_templates": [
+        {{"template": "recap", "why": "Le passage introduit une structure nouvelle, ce n'est pas une synthèse."}}
+      ],
       "template_type": "reflection",
-      "event_type": "concept",
+      "event_type": "reflection",
       "event_summary": "Phrase courte décrivant l'idée source",
       "source_quote": "Citation exacte du passage source qui correspond à cette slide",
       "curation_reason": "Pourquoi ce moment mérite une slide",
@@ -2082,6 +2210,39 @@ def _as_text(value, fallback: str = "") -> str:
     return text or fallback
 
 
+def _normalize_pedagogical_shape(value, template: str = "") -> str:
+    shape = str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+    template = _canonical_template(template, fallback="")
+    if shape in PEDAGOGICAL_SHAPE_TO_TEMPLATES:
+        if not template or template in PEDAGOGICAL_SHAPE_TO_TEMPLATES[shape]:
+            return shape
+    return DEFAULT_SHAPE_BY_TEMPLATE.get(template, "")
+
+
+def _normalize_rejected_templates(value, max_items: int = 4) -> list[dict]:
+    if not isinstance(value, list):
+        return []
+    rejected = []
+    seen = set()
+    for item in value:
+        if isinstance(item, dict):
+            template = _canonical_template(
+                item.get("template") or item.get("template_type") or item.get("name"),
+                fallback="",
+            )
+            why = _as_text(item.get("why") or item.get("reason") or item.get("rationale"), "")[:240]
+        else:
+            template = _canonical_template(item, fallback="")
+            why = ""
+        if not template or template in seen:
+            continue
+        rejected.append({"template": template, "why": why})
+        seen.add(template)
+        if len(rejected) >= max_items:
+            break
+    return rejected
+
+
 def _quote_word_offsets(block_text: str, quote: str) -> tuple[int, int] | None:
     quote_norm = re.sub(r"\s+", " ", quote or "").strip()
     block_norm = re.sub(r"\s+", " ", block_text or "").strip()
@@ -2105,6 +2266,214 @@ def _limit_list(value, max_len: int) -> list:
     if not isinstance(value, list):
         return []
     return value[:max_len]
+
+
+_FORBIDDEN_EXPRESSION_SIGNALS = (
+    "a bannir",
+    "bannir",
+    "expression interdite",
+    "expressions interdites",
+    "mot interdit",
+    "mots interdits",
+    "interdit",
+    "interdits",
+    "interdites",
+    "a eviter",
+    "ne dites pas",
+    "ne jamais dire",
+    "pieges de langage",
+    "tue l ecoute",
+    "tue-l ecoute",
+    "interrupteur de dialogue",
+    "interrupteurs de dialogue",
+    "sabotent la desescalade",
+    "calmez vous",
+    "ne vous inquietez pas",
+)
+
+_THREE_PART_STRUCTURE_SIGNALS = (
+    "trois piliers",
+    "3 piliers",
+    "les trois piliers",
+    "trois reperes",
+    "3 reperes",
+    "trois profils",
+    "3 profils",
+    "trois postures",
+    "3 postures",
+    "trois situations",
+    "3 situations",
+    "trois expressions",
+    "3 expressions",
+    "trois elements",
+    "3 elements",
+    "triade",
+    "triptyque",
+    "trepied",
+)
+
+_ADVICE_FROM_SINGLE_CASE_SIGNALS = (
+    "astuce",
+    "conseil",
+    "reflexe",
+    "reflexe metier",
+    "a adopter",
+    "dans ce cas",
+    "faire table rase",
+    "suspendez votre jugement",
+    "oubliez l'etiquette",
+    "micro-pause",
+    "micro pause",
+    "respirez",
+    "dites-vous",
+    "je ne sais rien de ce client",
+    "ecoute neuve",
+    "ecoute propre",
+    "condition sine qua non",
+    "ce qu'il faut retenir",
+)
+
+_TWO_FAMILY_COMPARISON_SIGNALS = (
+    "synchrone",
+    "synchrones",
+    "asynchrone",
+    "asynchrones",
+    "deux grandes familles",
+    "deux familles",
+    "deux modes",
+    "deux canaux",
+    "d'un cote",
+    "de l'autre cote",
+    "en revanche",
+    "a l'inverse",
+    "interaction se fait en temps reel",
+    "interaction se fait en temps differe",
+    "temps reel",
+    "temps differe",
+    "reaction immediate",
+    "reponse complete",
+    "autoportante",
+    "rapidite",
+    "exhaustivite",
+)
+
+
+def _fold_for_matching(text: str) -> str:
+    normalized = unicodedata.normalize("NFKD", text or "")
+    ascii_text = "".join(char for char in normalized if not unicodedata.combining(char))
+    ascii_text = ascii_text.lower().replace("’", "'").replace("‘", "'")
+    return re.sub(r"\s+", " ", ascii_text).strip()
+
+
+def _forbidden_expression_template(raw_data: dict, *text_parts) -> str:
+    raw_payload = _json_dumps(raw_data) if isinstance(raw_data, dict) else ""
+    haystack = _fold_for_matching(" ".join([raw_payload, *[_as_text(part, "") for part in text_parts]]))
+    if not any(signal in haystack for signal in _FORBIDDEN_EXPRESSION_SIGNALS):
+        return ""
+
+    source_items = []
+    if isinstance(raw_data, dict):
+        for key in ("items", "points", "cases", "profiles", "scenes"):
+            source_items = _limit_list(raw_data.get(key), 4)
+            if source_items:
+                break
+    has_three_items = len(source_items) == 3 or bool(
+        re.search(r"\b(3|trois)\s+(mots?|expressions?|formules?)\b", haystack)
+    )
+    return "situations" if has_three_items else "warning"
+
+
+def _three_part_structure_template(raw_data: dict, *text_parts) -> str:
+    raw_payload = _json_dumps(raw_data) if isinstance(raw_data, dict) else ""
+    haystack = _fold_for_matching(" ".join([raw_payload, *[_as_text(part, "") for part in text_parts]]))
+    if not any(signal in haystack for signal in _THREE_PART_STRUCTURE_SIGNALS):
+        return ""
+
+    source_items = []
+    if isinstance(raw_data, dict):
+        for key in ("items", "points", "cases", "profiles", "scenes"):
+            source_items = _limit_list(raw_data.get(key), 4)
+            if source_items:
+                break
+    has_three_items = len(source_items) == 3 or bool(
+        re.search(r"\b(3|trois)\s+(piliers?|reperes?|profils?|postures?|situations?|expressions?|elements?)\b", haystack)
+    )
+    return "situations" if has_three_items else ""
+
+
+def _source_items_from_payload(raw_data: dict) -> list:
+    if not isinstance(raw_data, dict):
+        return []
+    for key in ("cases", "items", "points", "profiles", "scenes"):
+        source_items = _limit_list(raw_data.get(key), 4)
+        if source_items:
+            return source_items
+    return []
+
+
+def _single_case_template(raw_data: dict, *text_parts) -> str:
+    source_items = _source_items_from_payload(raw_data)
+    if len(source_items) >= 2:
+        return ""
+
+    raw_payload = _json_dumps(raw_data) if isinstance(raw_data, dict) else ""
+    haystack = _fold_for_matching(" ".join([raw_payload, *[_as_text(part, "") for part in text_parts]]))
+    if any(signal in haystack for signal in _ADVICE_FROM_SINGLE_CASE_SIGNALS):
+        return "tip"
+    return "story"
+
+
+def _two_family_comparison_template(raw_data: dict, *text_parts) -> str:
+    raw_payload = _json_dumps(raw_data) if isinstance(raw_data, dict) else ""
+    haystack = _fold_for_matching(" ".join([raw_payload, *[_as_text(part, "") for part in text_parts]]))
+    has_sync_pair = "synchrone" in haystack and "asynchrone" in haystack
+    has_two_family_signal = any(signal in haystack for signal in (
+        "deux grandes familles",
+        "deux familles",
+        "deux modes",
+        "deux canaux",
+        "d'un cote",
+        "de l'autre cote",
+    ))
+    has_expectation_contrast = any(signal in haystack for signal in (
+        "reaction immediate",
+        "reponse complete",
+        "temps reel",
+        "temps differe",
+        "rapidite",
+        "exhaustivite",
+        "autoportante",
+    ))
+    if has_sync_pair or (has_two_family_signal and has_expectation_contrast):
+        return "comparison"
+    return ""
+
+
+def _two_family_comparison_data(data: dict, fallback_title: str, fallback_text: str) -> dict:
+    if isinstance(data, dict) and isinstance(data.get("cols"), list) and len(data["cols"]) >= 2:
+        return data
+    haystack = _fold_for_matching(" ".join([
+        _json_dumps(data) if isinstance(data, dict) else "",
+        fallback_title,
+        fallback_text,
+    ]))
+    title = _as_text((data or {}).get("title") if isinstance(data, dict) else "", fallback_title)
+    if "synchrone" in haystack or "asynchrone" in haystack or "temps reel" in haystack or "temps differe" in haystack:
+        return {
+            **(data if isinstance(data, dict) else {}),
+            "title": title,
+            "cols": [
+                {
+                    "label": "Canaux synchrones",
+                    "items": ["Temps réel", "Réactivité immédiate", "Maintenir le lien pendant l'échange"],
+                },
+                {
+                    "label": "Canaux asynchrones",
+                    "items": ["Temps différé", "Réponse complète", "Message autonome"],
+                },
+            ],
+        }
+    return data if isinstance(data, dict) else {"title": title, "text": fallback_text}
 
 
 def _normalize_template_gap(value: dict | None, selected_template: str) -> dict:
@@ -2163,6 +2532,25 @@ def _normalize_slide_data(template: str, data: dict, fallback_title: str, fallba
 
     title = _as_text(data.get("title"), fallback_title)[:90]
     text = _as_text(data.get("text") or data.get("description"), fallback_text)[:420]
+
+    def _items_from(*keys: str, max_len: int = 4) -> list[dict]:
+        source = []
+        for key in keys:
+            candidate = data.get(key)
+            if isinstance(candidate, list):
+                source = candidate
+                break
+        items = []
+        for idx, item in enumerate(_limit_list(source, max_len)):
+            if isinstance(item, dict):
+                item_title = _as_text(item.get("title") or item.get("label") or item.get("name"), f"Point {idx + 1}")[:80]
+                item_desc = _as_text(item.get("desc") or item.get("description") or item.get("text") or item.get("detail"), "")[:180]
+            else:
+                item_title = _as_text(item, "")[:80]
+                item_desc = ""
+            if item_title:
+                items.append({"title": item_title, "desc": item_desc})
+        return items
 
     if template == "welcome":
         return {
@@ -2231,7 +2619,7 @@ def _normalize_slide_data(template: str, data: dict, fallback_title: str, fallba
 
     if template == "casestudy":
         cases = []
-        for item in _limit_list(data.get("cases") or data.get("items") or data.get("points"), 6):
+        for item in _limit_list(data.get("cases") or data.get("items") or data.get("points"), 3):
             if isinstance(item, dict):
                 cases.append({
                     "tag": _as_text(item.get("tag") or item.get("label"), "")[:40],
@@ -2249,6 +2637,14 @@ def _normalize_slide_data(template: str, data: dict, fallback_title: str, fallba
             "cases": cases or [{"title": "Point clé", "desc": text, "tag": "", "example": ""}],
         }
 
+    if template == "situations":
+        items = _items_from("items", "cases", "profiles", "scenes", "points", max_len=3)
+        return {
+            "title": title,
+            "eyebrow": _as_text(data.get("eyebrow"), "Adapter sa posture")[:60],
+            "items": items or [{"title": "Situation clé", "desc": text}],
+        }
+
     if template == "definition":
         tags = [_as_text(item, "")[:40] for item in _limit_list(data.get("isItems") or data.get("items"), 4)]
         return {
@@ -2258,7 +2654,7 @@ def _normalize_slide_data(template: str, data: dict, fallback_title: str, fallba
             "isItems": [tag for tag in tags if tag],
         }
 
-    if template == "comparison":
+    if template in {"comparison", "beforeafter"}:
         source_cols = data.get("cols") if isinstance(data.get("cols"), list) else []
         cols = []
         for index, item in enumerate(_limit_list(source_cols, 3)):
@@ -2289,7 +2685,45 @@ def _normalize_slide_data(template: str, data: dict, fallback_title: str, fallba
             ],
         }
 
-    if template == "steps":
+    if template == "story":
+        return {
+            "title": title,
+            "narrative": _as_text(data.get("narrative") or data.get("text") or data.get("description"), text)[:360],
+            "moral": _as_text(data.get("moral") or data.get("takeaway") or data.get("quote"), "")[:180],
+        }
+
+    if template == "analogy":
+        return {
+            "title": title,
+            "concept": _as_text(data.get("concept") or data.get("term") or data.get("a"), title)[:80],
+            "comparison": _as_text(data.get("comparison") or data.get("image") or data.get("metaphor") or data.get("b"), "Image mentale")[:90],
+            "text": _as_text(data.get("text") or data.get("description") or data.get("explanation"), text)[:260],
+        }
+
+    if template == "opinion":
+        return {
+            "title": _as_text(data.get("title") or data.get("claim"), title)[:100],
+            "text": _as_text(data.get("text") or data.get("description") or data.get("takeaway"), text)[:320],
+        }
+
+    if template == "transition":
+        return {
+            "title": title,
+            "from_topic": _as_text(data.get("from_topic") or data.get("from") or data.get("previous"), "")[:70],
+            "to_topic": _as_text(data.get("to_topic") or data.get("to") or data.get("next"), "")[:90],
+        }
+
+    if template == "framework":
+        segments = _items_from("segments", "items", "points", "steps", max_len=6)
+        return {
+            "title": title,
+            "center": data.get("center") if isinstance(data.get("center"), dict) else {
+                "title": _as_text(data.get("center_title") or data.get("core") or data.get("topic"), "Point central")[:80],
+            },
+            "segments": segments or [{"title": "Repère clé", "desc": text}],
+        }
+
+    if template in {"steps", "facilitator", "flow"}:
         steps = []
         for idx, item in enumerate(_limit_list(data.get("steps") or data.get("items") or data.get("points"), 4)):
             if isinstance(item, dict):
@@ -2303,13 +2737,167 @@ def _normalize_slide_data(template: str, data: dict, fallback_title: str, fallba
                 label = _as_text(item, "")
                 if label:
                     steps.append({"title": label[:50], "desc": ""})
-        return {"title": title, "steps": steps or [{"title": "Étape clé", "desc": text}]}
+        payload = {"title": title, "steps": steps or [{"title": "Étape clé", "desc": text}]}
+        if template == "flow":
+            payload["eyebrow"] = _as_text(data.get("eyebrow"), "Le flux en quatre temps")[:60]
+        return payload
+
+    if template == "exercise":
+        return {
+            "title": title,
+            "duration": _as_text(data.get("duration"), "10 minutes")[:40],
+            "objective": _as_text(data.get("objective") or data.get("text") or data.get("description"), text)[:220],
+            "steps": _items_from("steps", "items", "points", max_len=4) or [{"title": "Consigne", "desc": text}],
+        }
+
+    if template == "checklist":
+        source_points = data.get("points") or data.get("items") or data.get("checklist") or data.get("steps") or []
+        points = []
+        for item in _limit_list(source_points, 5):
+            if isinstance(item, dict):
+                points.append(_as_text(item.get("title") or item.get("label") or item.get("text") or item.get("desc"), "")[:140])
+            else:
+                points.append(_as_text(item, "")[:140])
+        return {"title": title, "points": [point for point in points if point] or [text]}
+
+    if template == "stats":
+        stats = []
+        for idx, item in enumerate(_limit_list(data.get("stats") or data.get("items") or data.get("points"), 4)):
+            if isinstance(item, dict):
+                stats.append({
+                    "number": _as_text(item.get("number") or item.get("value"), str(idx + 1))[:30],
+                    "label": _as_text(item.get("label") or item.get("title") or item.get("text"), "Repère clé")[:100],
+                })
+            else:
+                stats.append({"number": str(idx + 1), "label": _as_text(item, "Repère clé")[:100]})
+        return {
+            "title": title,
+            "description": _as_text(data.get("description") or data.get("source"), "")[:140],
+            "stats": stats or [{"number": "1", "label": text}],
+        }
+
+    if template == "chart":
+        return {
+            "title": title,
+            "description": _as_text(data.get("description") or data.get("text"), text)[:220],
+            "chartData": data.get("chartData") or data.get("chart_data") or data.get("data_points") or [],
+        }
+
+    if template == "matrix":
+        rows = []
+        for item in _limit_list(data.get("rows") or data.get("items") or data.get("points"), 4):
+            if isinstance(item, dict):
+                solutions = item.get("solutions")
+                if not isinstance(solutions, list):
+                    solutions = item.get("responses") or item.get("answers") or []
+                rows.append({
+                    "cause": _as_text(item.get("cause") or item.get("title") or item.get("label"), "Situation")[:80],
+                    "solutions": [_as_text(solution, "")[:90] for solution in _limit_list(solutions, 4) if _as_text(solution, "")],
+                })
+            else:
+                rows.append({"cause": _as_text(item, "Situation")[:80], "solutions": []})
+        return {"title": title, "rows": rows or [{"cause": title, "solutions": [text]}]}
+
+    if template == "script":
+        lines = []
+        for item in _limit_list(data.get("lines") or data.get("dialogue") or data.get("items"), 6):
+            if isinstance(item, dict):
+                speaker = _as_text(item.get("speaker"), "conseiller").lower()
+                if speaker not in {"client", "conseiller"}:
+                    speaker = "conseiller"
+                lines.append({
+                    "speaker": speaker,
+                    "text": _as_text(item.get("text") or item.get("line") or item.get("quote"), "")[:180],
+                    "annotation": _as_text(item.get("annotation") or item.get("note"), "")[:120],
+                })
+            else:
+                lines.append({"speaker": "conseiller", "text": _as_text(item, "")[:180], "annotation": ""})
+        return {
+            "title": title,
+            "context": _as_text(data.get("context") or data.get("situation"), "")[:180],
+            "lines": [line for line in lines if line["text"]] or [{"speaker": "conseiller", "text": text, "annotation": ""}],
+        }
+
+    if template == "profiles":
+        profiles = []
+        for item in _limit_list(data.get("profiles") or data.get("items") or data.get("points"), 3):
+            if isinstance(item, dict):
+                signals = item.get("signals") if isinstance(item.get("signals"), list) else []
+                profiles.append({
+                    "name": _as_text(item.get("name") or item.get("title") or item.get("label"), "Profil")[:50],
+                    "signals": [_as_text(signal, "")[:70] for signal in _limit_list(signals, 4) if _as_text(signal, "")],
+                    "posture": _as_text(item.get("posture") or item.get("desc") or item.get("description"), "")[:180],
+                    "phrase": _as_text(item.get("phrase") or item.get("example") or item.get("quote"), "")[:140],
+                })
+        return {"title": title, "profiles": profiles} if profiles else {"title": title}
+
+    if template == "channel":
+        criteria = [_as_text(item, "")[:50] for item in _limit_list(data.get("criteria"), 5) if _as_text(item, "")]
+        channels = []
+        for item in _limit_list(data.get("channels") or data.get("items"), 4):
+            if isinstance(item, dict):
+                cells = item.get("cells") if isinstance(item.get("cells"), dict) else {}
+                channels.append({
+                    "name": _as_text(item.get("name") or item.get("title") or item.get("label"), "Canal")[:50],
+                    "cells": {str(key): _as_text(value, "")[:120] for key, value in cells.items()},
+                })
+        if criteria and channels:
+            return {"title": title, "criteria": criteria, "channels": channels}
+        return {"title": title}
+
+    if template == "timeline":
+        milestones = []
+        for item in _limit_list(data.get("milestones") or data.get("items") or data.get("steps"), 5):
+            if isinstance(item, dict):
+                actions = item.get("actions") if isinstance(item.get("actions"), list) else []
+                milestones.append({
+                    "when": _as_text(item.get("when") or item.get("period") or item.get("date"), "")[:40],
+                    "title": _as_text(item.get("title") or item.get("label"), "Jalon")[:70],
+                    "actions": [_as_text(action, "")[:100] for action in _limit_list(actions, 3) if _as_text(action, "")],
+                })
+        if milestones:
+            return {"title": title, "subtitle": _as_text(data.get("subtitle") or data.get("description"), "")[:160], "milestones": milestones}
+        return {"title": title, "subtitle": _as_text(data.get("subtitle") or data.get("description"), "")[:160]}
+
+    if template == "decisiontree":
+        branches = data.get("branches") if isinstance(data.get("branches"), list) else []
+        if not branches:
+            return {"title": title, "root": _as_text(data.get("root") or data.get("question"), text)[:180]}
+        return {
+            "title": title,
+            "root": _as_text(data.get("root") or data.get("question"), text)[:180],
+            "branches": branches,
+        }
 
     if template == "recap":
-        source_points = data.get("points") or data.get("columns") or data.get("items") or []
-        points = [_as_text(item, "")[:140] for item in _limit_list(source_points, 4)]
+        source_points = data.get("points") or data.get("columns") or data.get("items") or data.get("checklist") or data.get("steps") or []
+        points = []
+        for item in _limit_list(source_points, 4):
+            if isinstance(item, dict):
+                points.append(_as_text(item.get("title") or item.get("label") or item.get("text") or item.get("desc"), "")[:140])
+            else:
+                points.append(_as_text(item, "")[:140])
         points = [point for point in points if point]
         return {"title": title, "points": points or [text]}
+
+    if template == "tip":
+        first_case = _limit_list(data.get("cases"), 1)
+        first_item = first_case[0] if first_case else None
+        if first_item is None:
+            source_items = _limit_list(data.get("items") or data.get("points"), 1)
+            first_item = source_items[0] if source_items else None
+        if isinstance(first_item, dict):
+            tip_text = _as_text(
+                first_item.get("example")
+                or first_item.get("takeaway")
+                or first_item.get("desc")
+                or first_item.get("description")
+                or first_item.get("text"),
+                text,
+            )
+        else:
+            tip_text = _as_text(first_item, text)
+        return {"title": title, "text": tip_text[:420]}
 
     if template == "quotable":
         return {"quote": _as_text(data.get("quote") or data.get("text") or data.get("title"), text)[:260]}
@@ -2333,6 +2921,10 @@ def _fallback_slide(block: dict, reason: str = "fallback") -> dict:
     template = _canonical_template((anchor or {}).get("template_type"), fallback="reflection")
     return {
         "source_block_id": block["source_block_id"],
+        "pedagogical_shape": _normalize_pedagogical_shape((anchor or {}).get("pedagogical_shape"), template),
+        "shape_evidence": "",
+        "template_decision_reason": "",
+        "rejected_templates": [],
         "template_type": template,
         "event_type": "concept",
         "event_summary": title,
@@ -2386,6 +2978,10 @@ def _coverage_repair_slide(block: dict, reason: str) -> dict:
     data = {"title": title, "points": points or [text]} if template == "recap" else {"title": title, "text": text}
     return {
         "source_block_id": block["source_block_id"],
+        "pedagogical_shape": _normalize_pedagogical_shape("", template),
+        "shape_evidence": "",
+        "template_decision_reason": "",
+        "rejected_templates": [],
         "template_type": template,
         "event_type": "recap" if template == "recap" else "concept",
         "event_summary": title,
@@ -2518,13 +3114,14 @@ def _normalize_slide(raw: dict, block: dict) -> dict:
     if not anchor and not slide_anchor_id and len(anchor_by_id) == 1:
         anchor = next(iter(anchor_by_id.values()))
         slide_anchor_id = str(anchor.get("anchor_id") or "")
-    template = _canonical_template(
+    requested_template = _canonical_template(
         raw.get("template_type")
         or raw.get("selected_existing_template")
         or raw.get("template")
         or (anchor or {}).get("template_type"),
         fallback="reflection",
     )
+    template = requested_template
 
     event_type = raw.get("event_type") or "concept"
     if event_type not in EVENT_TYPES:
@@ -2534,10 +3131,95 @@ def _normalize_slide(raw: dict, block: dict) -> dict:
     fallback_text = _shorten(block.get("text", ""), 260)
     raw_data = raw.get("data") if isinstance(raw.get("data"), dict) else {}
     anchor_fields = (anchor or {}).get("fields_hint") if isinstance((anchor or {}).get("fields_hint"), dict) else {}
-    data = _normalize_slide_data(template, {**anchor_fields, **raw_data}, fallback_title, fallback_text)
+    slide_data_payload = {**anchor_fields, **raw_data}
+    if template == "recap":
+        reroute_event_type = "warning"
+        rerouted_template = _forbidden_expression_template(
+            slide_data_payload,
+            fallback_title,
+            fallback_text,
+            raw.get("event_summary"),
+            raw.get("source_quote"),
+            raw.get("curation_reason"),
+            (anchor or {}).get("role"),
+            (anchor or {}).get("visual_goal"),
+            (anchor or {}).get("must_cover"),
+        )
+        if not rerouted_template:
+            reroute_event_type = "concept"
+            rerouted_template = _three_part_structure_template(
+                slide_data_payload,
+                fallback_title,
+                fallback_text,
+                raw.get("event_summary"),
+                raw.get("source_quote"),
+                raw.get("curation_reason"),
+                (anchor or {}).get("role"),
+                (anchor or {}).get("visual_goal"),
+                (anchor or {}).get("must_cover"),
+            )
+        if rerouted_template:
+            template = rerouted_template
+            if event_type == "recap":
+                event_type = reroute_event_type
+    if template == "casestudy":
+        rerouted_template = _single_case_template(
+            slide_data_payload,
+            fallback_title,
+            fallback_text,
+            raw.get("event_summary"),
+            raw.get("source_quote"),
+            raw.get("curation_reason"),
+            (anchor or {}).get("role"),
+            (anchor or {}).get("visual_goal"),
+            (anchor or {}).get("must_cover"),
+        )
+        if rerouted_template:
+            template = rerouted_template
+            if event_type in {"example", "concept"}:
+                event_type = "tip" if rerouted_template == "tip" else "story"
+    if template != "comparison":
+        rerouted_template = _two_family_comparison_template(
+            slide_data_payload,
+            fallback_title,
+            fallback_text,
+            raw.get("event_summary"),
+            raw.get("source_quote"),
+            raw.get("curation_reason"),
+            (anchor or {}).get("role"),
+            (anchor or {}).get("visual_goal"),
+            (anchor or {}).get("must_cover"),
+        )
+        if rerouted_template:
+            template = rerouted_template
+            if event_type in {"concept", "definition", "recap", "example"}:
+                event_type = "comparison"
+            slide_data_payload = _two_family_comparison_data(slide_data_payload, fallback_title, fallback_text)
+    data = _normalize_slide_data(template, slide_data_payload, fallback_title, fallback_text)
+    rejected_templates = _normalize_rejected_templates(raw.get("rejected_templates"))
+    template_decision_reason = _as_text(raw.get("template_decision_reason"), "")[:360]
+    if requested_template != template:
+        if not any(item.get("template") == requested_template for item in rejected_templates):
+            rejected_templates.insert(0, {
+                "template": requested_template,
+                "why": f"Reclassement backend vers `{template}` après vérification des contraintes du passage.",
+            })
+            rejected_templates = rejected_templates[:4]
+        if not template_decision_reason:
+            template_decision_reason = (
+                f"Reclassement backend: `{requested_template}` ne respecte pas les contraintes du passage; "
+                f"`{template}` correspond mieux."
+            )
 
     return {
         "source_block_id": block["source_block_id"],
+        "pedagogical_shape": _normalize_pedagogical_shape(
+            raw.get("pedagogical_shape") or (anchor or {}).get("pedagogical_shape"),
+            template,
+        ),
+        "shape_evidence": _as_text(raw.get("shape_evidence"), "")[:260],
+        "template_decision_reason": template_decision_reason,
+        "rejected_templates": rejected_templates,
         "template_type": template,
         "event_type": event_type,
         "event_summary": _as_text(raw.get("event_summary"), fallback_title)[:180],
@@ -2567,7 +3249,9 @@ Cette fois, pour toute fenêtre dont `source_alignment` vaut `section_slide_alig
 - produis exactement 1 slide pour cette fenêtre;
 - recopie son unique `slide_anchor_id`;
 - utilise son `source_block_id`;
-- n'invente pas de contenu, choisis le template existant le plus simple si besoin.
+- n'invente pas de contenu;
+- choisis le meilleur `template_type` depuis le catalogue selon le texte réel, même s'il diffère du `planned_template_type`.
+- renseigne aussi `pedagogical_shape`, `shape_evidence`, `template_decision_reason` et `rejected_templates`.
 Les autres fenêtres restent facultatives.
 Réponds uniquement avec le JSON demandé.
 """
@@ -2686,6 +3370,10 @@ def _build_final_slide(slide: dict, block: dict, slide_number: int) -> dict:
         "slide_id": f"script-s{slide_number + 1:03d}-b{block['source_block_id'] + 1:03d}",
         "trigger_time": None,
         "end_time": None,
+        "pedagogical_shape": slide.get("pedagogical_shape") or _normalize_pedagogical_shape("", slide["template_type"]),
+        "shape_evidence": slide.get("shape_evidence") or "",
+        "template_decision_reason": slide.get("template_decision_reason") or "",
+        "rejected_templates": slide.get("rejected_templates") or [],
         "template_type": slide["template_type"],
         "data": slide["data"],
         "event_type": slide["event_type"],
@@ -2768,7 +3456,11 @@ def _build_context_slide(source: dict, source_blocks: list[dict], start: int, en
         "slide_id": f"script-s{slide_number + 1:03d}-context-w{start:05d}",
         "trigger_time": None,
         "end_time": None,
-        "template_type": "context",
+        "pedagogical_shape": "idee_forte",
+        "shape_evidence": "",
+        "template_decision_reason": "",
+        "rejected_templates": [],
+        "template_type": "reflection",
         "data": {
             "formation_name": source.get("program_title") or source.get("folder_name") or "Formation",
             "chapter": chapter,
@@ -3218,6 +3910,10 @@ def _run_slide_generation_from_source(
                     "source_block_id": slide["source_block_id"],
                     "slide_anchor_id": slide.get("slide_anchor_id"),
                     "beat_id": slide.get("beat_id"),
+                    "pedagogical_shape": slide.get("pedagogical_shape") or "",
+                    "shape_evidence": slide.get("shape_evidence") or "",
+                    "template_decision_reason": slide.get("template_decision_reason") or "",
+                    "rejected_templates": slide.get("rejected_templates") or [],
                     "template": slide["template_type"],
                     "event_type": slide["event_type"],
                     "title_hint": slide["data"].get("title", ""),
@@ -3232,6 +3928,10 @@ def _run_slide_generation_from_source(
                     "slide_id": slide.get("slide_id"),
                     "slide_kind": slide.get("slide_kind"),
                     "transition_effect": slide.get("transition_effect"),
+                    "pedagogical_shape": slide.get("pedagogical_shape") or "",
+                    "shape_evidence": slide.get("shape_evidence") or "",
+                    "template_decision_reason": slide.get("template_decision_reason") or "",
+                    "rejected_templates": slide.get("rejected_templates") or [],
                     "template": slide.get("template_type"),
                     "event_type": slide.get("event_type"),
                     "slide_anchor_id": slide.get("slide_anchor_id"),
@@ -3305,6 +4005,7 @@ def preview_slides_from_text(
             "role": visual_goal or "",
             "spoken_requirement": "",
             "template_type": template,
+            "pedagogical_shape": _normalize_pedagogical_shape("", template),
             "visual_goal": visual_goal or "",
             "items_expected": None,
             "must_cover": "",
@@ -3357,6 +4058,7 @@ def preview_slides_from_text(
                                         "enabled": True,
                                         "anchor_id": anchor["anchor_id"],
                                         "template_type": template,
+                                        "pedagogical_shape": anchor["pedagogical_shape"],
                                         "visual_goal": visual_goal or "",
                                         "items_expected": None,
                                         "fields_hint": anchor["fields_hint"],

@@ -16,7 +16,7 @@ def auto_schedule(myTimer: func.TimerRequest) -> None:
     """
     Timer Trigger : s'exécute chaque samedi à 7h UTC (= 8h/9h Paris).
     Appelle /api/internal/auto-schedule sur le backend P1 pour programmer
-    les cours de la semaine suivante (P1=vendredi, P2=lundi, P3=mercredi).
+    les cours de la semaine suivante (P1=vendredi, P2=lundi, P3=lundi).
     """
     if myTimer.past_due:
         logging.warning("Le timer est en retard !")

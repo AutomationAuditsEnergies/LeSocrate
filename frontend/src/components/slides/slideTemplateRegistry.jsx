@@ -3,15 +3,21 @@ import {
   DeckCaseStudy,
   DeckChapterOpener,
   DeckComparison,
+  DeckAnalogy,
   DeckDayProgram7Steps,
   DeckDefinition,
+  DeckFlow,
+  DeckFramework,
+  DeckOpinion,
   DeckPause,
   DeckProcess,
   DeckProgramYear,
   DeckQA,
   DeckQuote,
   DeckRecap,
+  DeckSituations,
   DeckStatement,
+  DeckStory,
   DeckTip,
   DeckWarning,
   DeckWelcome,
@@ -21,6 +27,30 @@ export const COMMON_SLIDE_PROPS = {
   badge: 'TP-CRCD',
   brandName: 'SALES HACKING',
 }
+
+export const OFFICIAL_SOURCE_TEMPLATE_IDS = new Set([
+  'welcome',
+  'program_year',
+  'day_program_7_steps',
+  'chapter_opener',
+  'reflection',
+  'definition',
+  'comparison',
+  'warning',
+  'casestudy',
+  'situations',
+  'steps',
+  'recap',
+  'pause',
+  'qa',
+  'quotable',
+  'tip',
+  'flow',
+  'story',
+  'analogy',
+  'framework',
+  'opinion',
+])
 
 const ALIASES = {
   welcome: 'welcome',
@@ -39,52 +69,71 @@ const ALIASES = {
   reflection: 'reflection',
   concept: 'reflection',
   key_message: 'reflection',
-  opinion: 'reflection',
+  opinion: 'opinion',
   transition: 'reflection',
-  analogy: 'reflection',
-  metaphor: 'reflection',
+  analogy: 'analogy',
+  metaphor: 'analogy',
   paradox: 'reflection',
   definition: 'definition',
   comparison: 'comparison',
   'comparison-ternary': 'comparison',
   beforeafter: 'comparison',
+  synchrone_asynchrone: 'comparison',
+  synchronous_asynchronous: 'comparison',
+  canaux_synchrones: 'comparison',
+  canaux_asynchrones: 'comparison',
+  deux_familles: 'comparison',
   chart: 'comparison',
-  matrix: 'comparison',
+  matrix: 'reflection',
   diagnostic: 'comparison',
+  situations: 'situations',
+  situation: 'situations',
+  three_situations: 'situations',
+  trois_piliers: 'situations',
+  piliers: 'situations',
+  triade: 'situations',
+  triptyque: 'situations',
+  trepied: 'situations',
+  trépied: 'situations',
+  flow: 'flow',
+  request_flow: 'flow',
   warning: 'warning',
   mistake: 'warning',
   risk: 'warning',
   casestudy: 'casestudy',
   case: 'casestudy',
   example: 'casestudy',
-  story: 'casestudy',
+  story: 'story',
   scenario: 'casestudy',
-  profiles: 'casestudy',
-  script: 'casestudy',
+  profiles: 'situations',
+  script: 'story',
   steps: 'steps',
   'steps-mini': 'steps',
-  facilitator: 'steps',
+  facilitator: 'flow',
   process: 'steps',
   method: 'steps',
-  framework: 'steps',
-  channel: 'steps',
+  framework: 'framework',
+  channel: 'casestudy',
+  timeline: 'steps',
   escalation: 'steps',
-  toolkit: 'steps',
-  decisiontree: 'steps',
+  toolkit: 'recap',
+  decisiontree: 'reflection',
+  decision_tree: 'reflection',
   learningpath: 'steps',
-  selfmanagement: 'steps',
+  selfmanagement: 'tip',
   exercise: 'steps',
+  practice_exercise: 'steps',
   recap: 'recap',
   checklist: 'recap',
   takeaways: 'recap',
   stats: 'recap',
   data: 'recap',
   numbers: 'recap',
-  signals: 'recap',
-  signalradar: 'recap',
-  temperature: 'recap',
+  signals: 'warning',
+  signalradar: 'warning',
+  temperature: 'comparison',
   kpi: 'recap',
-  selfdiag: 'recap',
+  selfdiag: 'reflection',
   pause: 'pause',
   qa: 'qa',
   quotable: 'quotable',
@@ -96,7 +145,84 @@ const ALIASES = {
   good_practice: 'tip',
   playful: 'reflection',
   gradient: 'reflection',
-  context: 'context',
+  learning_path: 'steps',
+  self_management: 'tip',
+  signal_radar: 'warning',
+  channel_adaptation: 'casestudy',
+  chronology: 'steps',
+  chronologie: 'steps',
+  escalation_ladder: 'steps',
+  temperature_scale: 'comparison',
+  kpi_explainer: 'recap',
+  self_diag: 'reflection',
+  context: 'reflection',
+}
+
+const countVisualItems = (data = {}) => {
+  for (const key of ['cases', 'items', 'points', 'profiles', 'scenes']) {
+    if (Array.isArray(data[key])) return data[key].length
+  }
+  return 0
+}
+
+const flattenSlideText = (value) => {
+  if (value == null) return ''
+  if (typeof value === 'string' || typeof value === 'number') return String(value)
+  if (Array.isArray(value)) return value.map(flattenSlideText).join(' ')
+  if (typeof value === 'object') return Object.values(value).map(flattenSlideText).join(' ')
+  return ''
+}
+
+const hasAdviceSignal = (data = {}) => {
+  const text = flattenSlideText(data).toLowerCase()
+  return [
+    'astuce',
+    'conseil',
+    'réflexe',
+    'reflexe',
+    'à adopter',
+    'a adopter',
+    'faire table rase',
+    'micro-pause',
+    'micro pause',
+    'respirez',
+    'dites-vous',
+    'je ne sais rien de ce client',
+    'écoute neuve',
+    'ecoute neuve',
+    'ce qu’il faut retenir',
+    "ce qu'il faut retenir",
+  ].some((signal) => text.includes(signal))
+}
+
+const hasTwoFamilyComparisonSignal = (data = {}) => {
+  const text = flattenSlideText(data).toLowerCase()
+  const hasSyncPair = text.includes('synchrone') && text.includes('asynchrone')
+  const hasTwoFamilySignal = [
+    'deux grandes familles',
+    'deux familles',
+    'deux modes',
+    'deux canaux',
+    "d'un côté",
+    'de l’autre côté',
+    "de l'autre côté",
+  ].some((signal) => text.includes(signal))
+  const hasExpectationContrast = [
+    'réaction immédiate',
+    'reaction immediate',
+    'réponse complète',
+    'reponse complete',
+    'temps réel',
+    'temps reel',
+    'temps différé',
+    'temps differe',
+    'rapidité',
+    'rapidite',
+    'exhaustivité',
+    'exhaustivite',
+    'autoportante',
+  ].some((signal) => text.includes(signal))
+  return hasSyncPair || (hasTwoFamilySignal && hasExpectationContrast)
 }
 
 export const normalizeSlideType = (type, data = {}) => {
@@ -107,7 +233,14 @@ export const normalizeSlideType = (type, data = {}) => {
   if (key === 'agenda') {
     return Array.isArray(data.items) && data.items.length === 7 ? 'day_program_7_steps' : 'steps'
   }
-  return ALIASES[key] || 'reflection'
+  const canonical = ALIASES[key] || 'reflection'
+  if (canonical !== 'comparison' && hasTwoFamilyComparisonSignal(data)) {
+    return 'comparison'
+  }
+  if (canonical === 'casestudy' && countVisualItems(data) < 2) {
+    return hasAdviceSignal(data) ? 'tip' : 'story'
+  }
+  return OFFICIAL_SOURCE_TEMPLATE_IDS.has(canonical) ? canonical : 'reflection'
 }
 
 const textFrom = (...values) => values.map((value) => String(value || '').trim()).find(Boolean) || ''
@@ -125,6 +258,17 @@ const normalizeItems = (items, limit = 4) => {
       example: textFrom(item?.example, item?.quote),
     }
   })
+}
+
+const normalizeTextList = (items, limit = 4) => {
+  if (!Array.isArray(items)) return []
+  return items
+    .map((item, index) => {
+      if (typeof item === 'string') return item
+      return textFrom(item?.title, item?.label, item?.text, item?.desc, item?.description, `Point ${index + 1}`)
+    })
+    .filter(Boolean)
+    .slice(0, limit)
 }
 
 const normalizeRegistryData = (canonicalType, originalType, data) => {
@@ -164,9 +308,126 @@ const normalizeRegistryData = (canonicalType, originalType, data) => {
     }
   }
 
+  if (canonicalType === 'comparison' && !Array.isArray(data.cols)) {
+    if (hasTwoFamilyComparisonSignal(data)) {
+      return {
+        ...data,
+        title: textFrom(data.title, 'Deux logiques'),
+        cols: [
+          {
+            label: 'Canaux synchrones',
+            items: ['Temps réel', 'Réactivité immédiate', "Maintenir le lien pendant l'échange"],
+          },
+          {
+            label: 'Canaux asynchrones',
+            items: ['Temps différé', 'Réponse complète', 'Message autonome'],
+          },
+        ],
+      }
+    }
+    const cols = normalizeItems(data.columns || data.items || data.points, 2).map((item, index) => ({
+      label: item.title || `Option ${index + 1}`,
+      items: [item.desc || item.example || item.title].filter(Boolean),
+    }))
+    if (cols.length >= 2) {
+      return { ...data, cols }
+    }
+  }
+
   if (canonicalType === 'steps' && !Array.isArray(data.steps)) {
     const steps = normalizeItems(data.items || data.segments || data.phases || data.points, 4)
     return { ...data, steps: steps.length ? steps : data.steps }
+  }
+
+  if (canonicalType === 'facilitator' && !Array.isArray(data.steps)) {
+    const steps = normalizeItems(data.items || data.segments || data.phases || data.points, 4)
+    return { ...data, steps: steps.length ? steps : data.steps }
+  }
+
+  if (canonicalType === 'flow' && !Array.isArray(data.steps)) {
+    const steps = normalizeItems(data.items || data.segments || data.phases || data.points, 4)
+    return { ...data, steps: steps.length ? steps : data.steps }
+  }
+
+  if (canonicalType === 'framework' && !Array.isArray(data.segments)) {
+    const segments = normalizeItems(data.items || data.points || data.steps, 6)
+    return {
+      ...data,
+      center: data.center || { title: textFrom(data.center_title, data.core, data.topic, 'Point central') },
+      segments: segments.length ? segments : data.segments,
+    }
+  }
+
+  if (canonicalType === 'situations' && !Array.isArray(data.items)) {
+    const items = normalizeItems(data.cases || data.profiles || data.scenes || data.points, 3)
+    return { ...data, items }
+  }
+
+  if (canonicalType === 'story') {
+    return {
+      ...data,
+      title: textFrom(data.title, data.event_summary, 'Cas terrain'),
+      narrative: textFrom(data.narrative, data.text, data.description),
+      moral: textFrom(data.moral, data.takeaway, data.quote),
+    }
+  }
+
+  if (canonicalType === 'analogy') {
+    return {
+      ...data,
+      title: textFrom(data.title, 'Analogie'),
+      concept: textFrom(data.concept, data.term, data.a, 'Concept'),
+      comparison: textFrom(data.comparison, data.image, data.metaphor, data.b, 'Image mentale'),
+      text: textFrom(data.text, data.description, data.explanation),
+    }
+  }
+
+  if (canonicalType === 'opinion') {
+    return {
+      ...data,
+      title: textFrom(data.title, data.claim, 'Point de vue'),
+      text: textFrom(data.text, data.description, data.takeaway),
+    }
+  }
+
+  if (canonicalType === 'tip') {
+    const firstCase = Array.isArray(data.cases) ? data.cases[0] : null
+    const firstItem = Array.isArray(data.items) ? data.items[0] : null
+    return {
+      ...data,
+      title: textFrom(data.title, firstCase?.title, firstItem?.title, 'Conseil pratique'),
+      text: textFrom(
+        data.text,
+        data.description,
+        data.takeaway,
+        firstCase?.example,
+        firstCase?.desc,
+        firstCase?.description,
+        firstItem?.desc,
+        firstItem?.description,
+      ),
+    }
+  }
+
+  if (canonicalType === 'transition') {
+    return {
+      ...data,
+      title: textFrom(data.title, data.to_topic, 'On passe à la pratique'),
+      from_topic: textFrom(data.from_topic, data.from, data.previous),
+      to_topic: textFrom(data.to_topic, data.to, data.next),
+    }
+  }
+
+  if (canonicalType === 'stats' && !Array.isArray(data.stats)) {
+    const stats = normalizeItems(data.items || data.points || data.columns, 4).map((item, index) => ({
+      number: item.title || String(index + 1),
+      label: item.desc || item.title,
+    }))
+    return { ...data, stats }
+  }
+
+  if (canonicalType === 'checklist' && !Array.isArray(data.points)) {
+    return { ...data, points: normalizeTextList(data.items || data.checklist || data.steps, 5) }
   }
 
   if (canonicalType === 'recap' && !Array.isArray(data.points)) {
@@ -183,49 +444,16 @@ const normalizeRegistryData = (canonicalType, originalType, data) => {
     if (Array.isArray(data.items)) {
       points.push(...data.items.map((item) => (typeof item === 'string' ? item : textFrom(item?.title, item?.label, item?.text))))
     }
+    if (Array.isArray(data.checklist)) {
+      points.push(...data.checklist.map((item) => (typeof item === 'string' ? item : textFrom(item?.title, item?.label, item?.text, item?.desc))))
+    }
+    if (Array.isArray(data.steps)) {
+      points.push(...data.steps.map((item) => (typeof item === 'string' ? item : textFrom(item?.title, item?.label, item?.text, item?.desc))))
+    }
     return { ...data, points: points.filter(Boolean).slice(0, 4) }
   }
 
   return data
-}
-
-function ContextSlidePreview({
-  formation_name,
-  chapter,
-  label,
-  badge = COMMON_SLIDE_PROPS.badge,
-  brandName = COMMON_SLIDE_PROPS.brandName,
-}) {
-  return (
-    <div style={{
-      width: '100%',
-      height: '100%',
-      background: '#f8fafc',
-      color: '#0f172a',
-      fontFamily: 'Inter, system-ui, sans-serif',
-      display: 'flex',
-      flexDirection: 'column',
-      padding: '36px 44px',
-      boxSizing: 'border-box',
-    }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', color: '#64748b', fontSize: '16px', fontWeight: 800 }}>
-        <span>{badge}</span>
-        <span>{brandName}</span>
-      </div>
-      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
-        <div style={{ color: '#dc2626', fontSize: '18px', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '18px' }}>
-          {label || 'Séquence en cours'}
-        </div>
-        <div style={{ fontSize: '42px', lineHeight: 1.08, fontWeight: 900, maxWidth: '820px' }}>
-          {formation_name || 'Formation'}
-        </div>
-        <div style={{ marginTop: '24px', height: '3px', width: '88px', background: '#dc2626', borderRadius: '999px' }} />
-        <div style={{ marginTop: '24px', fontSize: '28px', lineHeight: 1.25, fontWeight: 800, color: '#334155', maxWidth: '780px' }}>
-          {chapter || 'Chapitre en cours'}
-        </div>
-      </div>
-    </div>
-  )
 }
 
 export function renderSlideTemplate(slide = {}, extraProps = {}) {
@@ -255,10 +483,22 @@ export function renderSlideTemplate(slide = {}, extraProps = {}) {
       return <DeckWarning {...props} />
     case 'casestudy':
       return <DeckCaseStudy {...props} />
+    case 'story':
+      return <DeckStory {...props} />
     case 'steps':
       return <DeckProcess {...props} />
+    case 'flow':
+      return <DeckFlow {...props} />
+    case 'framework':
+      return <DeckFramework {...props} />
     case 'recap':
       return <DeckRecap {...props} />
+    case 'analogy':
+      return <DeckAnalogy {...props} />
+    case 'opinion':
+      return <DeckOpinion {...props} />
+    case 'situations':
+      return <DeckSituations {...props} />
     case 'pause':
       return <DeckPause {...props} />
     case 'qa':
@@ -267,8 +507,6 @@ export function renderSlideTemplate(slide = {}, extraProps = {}) {
       return <DeckQuote {...props} />
     case 'tip':
       return <DeckTip {...props} />
-    case 'context':
-      return <ContextSlidePreview {...props} />
     case 'reflection':
     default:
       return <DeckStatement {...props} />

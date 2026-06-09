@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { Info } from 'lucide-react';
 import { apiFetch } from '../api';
 import { renderSlideTemplate } from '../components/slides/slideTemplateRegistry';
 
@@ -60,6 +61,48 @@ function getSlideSourceExcerpt(slide = {}, index = 0, slides = []) {
   return words.slice(highlight.start, highlight.end).join(' ');
 }
 
+function getPlanDebugForSlide(pipelineDebug = {}, slide = {}, index = 0) {
+  const slidePlan = Array.isArray(pipelineDebug?.slide_plan) ? pipelineDebug.slide_plan : [];
+  const anchorId = slide.slide_anchor_id || '';
+  const sourceBlockId = slide.source_ref?.source_block_id;
+
+  if (anchorId) {
+    const byAnchor = slidePlan.find(item => item?.slide_anchor_id === anchorId);
+    if (byAnchor) return byAnchor;
+  }
+
+  if (sourceBlockId !== undefined && sourceBlockId !== null) {
+    const bySource = slidePlan.find(item => item?.source_block_id === sourceBlockId && item?.template === slide.template_type);
+    if (bySource) return bySource;
+  }
+
+  return slidePlan[index] || {};
+}
+
+function getAnchorDebugForSlide(slide = {}) {
+  const anchors = slide.source_ref?.slide_anchors;
+  if (!Array.isArray(anchors) || !anchors.length) return {};
+  const anchorId = slide.slide_anchor_id || '';
+  if (anchorId) {
+    return anchors.find(anchor => anchor?.anchor_id === anchorId) || {};
+  }
+  return anchors.length === 1 ? anchors[0] : {};
+}
+
+function normalizeRejectedTemplates(value) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => {
+      if (!item) return null;
+      if (typeof item === 'string') return { template: item, why: '' };
+      return {
+        template: item.template || item.template_type || item.name || '',
+        why: item.why || item.reason || item.rationale || ''
+      };
+    })
+    .filter(item => item?.template);
+}
+
 function renderHighlightedCourseSource(slide = {}, index = 0, slides = []) {
   const sourceText = normalizeSourceText(slide.source_text || '');
   if (!sourceText) return 'Texte source non disponible';
@@ -109,6 +152,7 @@ export default function GeneratedSlides() {
   const [showTimeline, setShowTimeline] = useState(false);
   const [pipelineDebug, setPipelineDebug] = useState(null);
   const [showPipeline, setShowPipeline] = useState(false);
+  const [showSlideDecision, setShowSlideDecision] = useState(false);
   const [sourceView, setSourceView] = useState('course');
 
   useEffect(() => {
@@ -298,6 +342,29 @@ export default function GeneratedSlides() {
   const sourceDebugItems = isScriptMode
     ? (pipelineDebug?.source_blocks || [])
     : (pipelineDebug?.raw_events || []);
+  const currentSlideData = slides[currentSlide] || {};
+  const currentPlanDebug = getPlanDebugForSlide(pipelineDebug, currentSlideData, currentSlide);
+  const currentAnchorDebug = getAnchorDebugForSlide(currentSlideData);
+  const currentRejectedTemplates = normalizeRejectedTemplates(
+    currentSlideData.rejected_templates || currentPlanDebug.rejected_templates
+  );
+  const currentSourceQuote = normalizeSourceText(
+    currentSlideData.source_ref?.source_quote ||
+    currentSlideData.source_quote ||
+    getSlideSourceExcerpt(currentSlideData, currentSlide, slides)
+  );
+  const currentDecisionDebug = {
+    template: currentSlideData.template_type || currentPlanDebug.template || '',
+    eventType: currentSlideData.event_type || currentPlanDebug.event_type || '',
+    pedagogicalShape: currentSlideData.pedagogical_shape || currentPlanDebug.pedagogical_shape || '',
+    plannedTemplate: currentAnchorDebug.template_type || '',
+    plannedShape: currentAnchorDebug.pedagogical_shape || '',
+    shapeEvidence: currentSlideData.shape_evidence || currentPlanDebug.shape_evidence || '',
+    reason: currentSlideData.template_decision_reason || currentPlanDebug.template_decision_reason || '',
+    curationReason: currentSlideData.curation_reason || currentPlanDebug.curation_reason || '',
+    sourceQuote: currentSourceQuote,
+    rejectedTemplates: currentRejectedTemplates
+  };
 
   return (
     <div style={{
@@ -1226,6 +1293,31 @@ export default function GeneratedSlides() {
                 Idéal: {currentTemplateGap.suggested_template_name}
               </span>
             )}
+            <button
+              type="button"
+              onClick={() => setShowSlideDecision(!showSlideDecision)}
+              aria-expanded={showSlideDecision}
+              aria-label={showSlideDecision ? 'Masquer le debug template' : 'Afficher le debug template'}
+              title={showSlideDecision ? 'Masquer le debug template' : 'Afficher le debug template'}
+              style={{
+                marginLeft: 'auto',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '0.4rem',
+                border: `1px solid ${showSlideDecision ? 'rgba(129,212,250,0.55)' : 'rgba(148,163,184,0.35)'}`,
+                backgroundColor: showSlideDecision ? 'rgba(129,212,250,0.14)' : 'rgba(15,23,42,0.42)',
+                color: showSlideDecision ? '#BAE6FD' : '#CBD5E1',
+                borderRadius: '8px',
+                padding: '0.38rem 0.65rem',
+                cursor: 'pointer',
+                fontFamily: 'Poppins, sans-serif',
+                fontSize: '0.78rem',
+                fontWeight: 700
+              }}
+            >
+              <Info size={15} strokeWidth={2.2} />
+              Debug template
+            </button>
           </div>
 
           {/* La slide */}
@@ -1237,6 +1329,200 @@ export default function GeneratedSlides() {
               {renderSlide(slides[currentSlide])}
             </div>
           </div>
+
+          {showSlideDecision && (
+            <div style={{
+              width: '100%',
+              maxWidth: '920px',
+              backgroundColor: '#0F172A',
+              border: '1px solid rgba(148,163,184,0.24)',
+              borderRadius: '12px',
+              padding: '1rem',
+              margin: '0 0 1.5rem',
+              fontFamily: 'Poppins, sans-serif'
+            }}>
+              <div style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                gap: '1rem',
+                flexWrap: 'wrap',
+                alignItems: 'flex-start',
+                marginBottom: '0.85rem'
+              }}>
+                <div>
+                  <div style={{
+                    color: '#E2E8F0',
+                    fontSize: '0.95rem',
+                    fontWeight: 700,
+                    marginBottom: '0.25rem'
+                  }}>
+                    Décision template
+                  </div>
+                  <div style={{
+                    color: '#94A3B8',
+                    fontSize: '0.78rem',
+                    lineHeight: 1.45
+                  }}>
+                    Lecture interne de la slide courante. Invisible côté apprenant.
+                  </div>
+                </div>
+                <div style={{
+                  display: 'flex',
+                  gap: '0.45rem',
+                  flexWrap: 'wrap',
+                  justifyContent: 'flex-end'
+                }}>
+                  <span style={{
+                    backgroundColor: '#8B5CF6',
+                    color: '#fff',
+                    borderRadius: '6px',
+                    padding: '0.24rem 0.5rem',
+                    fontSize: '0.74rem',
+                    fontWeight: 700
+                  }}>
+                    {currentDecisionDebug.template || 'template inconnu'}
+                  </span>
+                  {currentDecisionDebug.pedagogicalShape && (
+                    <span style={{
+                      backgroundColor: 'rgba(129,212,250,0.12)',
+                      color: '#BAE6FD',
+                      border: '1px solid rgba(129,212,250,0.28)',
+                      borderRadius: '6px',
+                      padding: '0.24rem 0.5rem',
+                      fontSize: '0.74rem',
+                      fontWeight: 700
+                    }}>
+                      {currentDecisionDebug.pedagogicalShape}
+                    </span>
+                  )}
+                  {currentDecisionDebug.eventType && (
+                    <span style={{
+                      backgroundColor: 'rgba(148,163,184,0.12)',
+                      color: '#CBD5E1',
+                      borderRadius: '6px',
+                      padding: '0.24rem 0.5rem',
+                      fontSize: '0.74rem',
+                      fontWeight: 700
+                    }}>
+                      {currentDecisionDebug.eventType}
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              <div style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))',
+                gap: '0.75rem',
+                marginBottom: '0.85rem'
+              }}>
+                <div style={{
+                  backgroundColor: '#111827',
+                  borderRadius: '8px',
+                  padding: '0.75rem',
+                  border: '1px solid rgba(148,163,184,0.16)'
+                }}>
+                  <div style={{ color: '#94A3B8', fontSize: '0.72rem', marginBottom: '0.3rem', fontWeight: 700 }}>
+                    Forme prévue
+                  </div>
+                  <div style={{ color: '#E5E7EB', fontSize: '0.82rem', lineHeight: 1.45 }}>
+                    {currentDecisionDebug.plannedShape || 'Non renseignée'}
+                    {currentDecisionDebug.plannedTemplate ? ` · ${currentDecisionDebug.plannedTemplate}` : ''}
+                  </div>
+                </div>
+                <div style={{
+                  backgroundColor: '#111827',
+                  borderRadius: '8px',
+                  padding: '0.75rem',
+                  border: '1px solid rgba(148,163,184,0.16)'
+                }}>
+                  <div style={{ color: '#94A3B8', fontSize: '0.72rem', marginBottom: '0.3rem', fontWeight: 700 }}>
+                    Preuve de forme
+                  </div>
+                  <div style={{ color: '#E5E7EB', fontSize: '0.82rem', lineHeight: 1.45 }}>
+                    {currentDecisionDebug.shapeEvidence || 'Non renseignée'}
+                  </div>
+                </div>
+              </div>
+
+              {(currentDecisionDebug.reason || currentDecisionDebug.curationReason) && (
+                <div style={{
+                  backgroundColor: 'rgba(15,23,42,0.68)',
+                  borderRadius: '8px',
+                  padding: '0.75rem',
+                  border: '1px solid rgba(139,92,246,0.22)',
+                  marginBottom: '0.85rem'
+                }}>
+                  <div style={{ color: '#C4B5FD', fontSize: '0.72rem', marginBottom: '0.35rem', fontWeight: 700 }}>
+                    Raison du choix
+                  </div>
+                  <div style={{ color: '#E5E7EB', fontSize: '0.84rem', lineHeight: 1.55 }}>
+                    {currentDecisionDebug.reason || currentDecisionDebug.curationReason}
+                  </div>
+                </div>
+              )}
+
+              {currentDecisionDebug.rejectedTemplates.length > 0 && (
+                <div style={{ marginBottom: '0.85rem' }}>
+                  <div style={{ color: '#94A3B8', fontSize: '0.72rem', marginBottom: '0.45rem', fontWeight: 700 }}>
+                    Templates écartés
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.45rem' }}>
+                    {currentDecisionDebug.rejectedTemplates.map((item, index) => (
+                      <div key={`${item.template}-${index}`} style={{
+                        display: 'flex',
+                        gap: '0.6rem',
+                        alignItems: 'flex-start',
+                        backgroundColor: '#111827',
+                        border: '1px solid rgba(148,163,184,0.16)',
+                        borderRadius: '8px',
+                        padding: '0.55rem 0.65rem'
+                      }}>
+                        <span style={{
+                          color: '#FCA5A5',
+                          backgroundColor: 'rgba(220,38,38,0.12)',
+                          borderRadius: '6px',
+                          padding: '0.16rem 0.42rem',
+                          fontSize: '0.72rem',
+                          fontWeight: 700,
+                          whiteSpace: 'nowrap'
+                        }}>
+                          {item.template}
+                        </span>
+                        <span style={{
+                          color: '#CBD5E1',
+                          fontSize: '0.8rem',
+                          lineHeight: 1.45
+                        }}>
+                          {item.why || 'Raison non renseignée'}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <div style={{
+                backgroundColor: '#111827',
+                borderRadius: '8px',
+                padding: '0.75rem',
+                border: '1px solid rgba(148,163,184,0.16)'
+              }}>
+                <div style={{ color: '#94A3B8', fontSize: '0.72rem', marginBottom: '0.35rem', fontWeight: 700 }}>
+                  Citation source
+                </div>
+                <div style={{
+                  color: '#CBD5E1',
+                  fontSize: '0.82rem',
+                  lineHeight: 1.55,
+                  maxHeight: '7.5rem',
+                  overflow: 'auto'
+                }}>
+                  {currentDecisionDebug.sourceQuote || 'Citation source non disponible'}
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* Navigation */}
           <div style={{

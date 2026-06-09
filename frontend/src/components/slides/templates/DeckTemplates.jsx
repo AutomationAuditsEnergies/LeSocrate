@@ -4,6 +4,30 @@ import { SalesHackingSourceSlide } from './SalesHackingSourceSlides';
 
 const splitTitle = (title = '', fallback = '') => String(title || fallback).split(/\s+/);
 
+const getChapterTitleFit = (chapterLabel = '', title = '') => {
+  const text = `${chapterLabel || ''} ${title || ''}`.trim();
+  const words = splitTitle(text).filter(Boolean);
+  const wordCount = words.length;
+  const charCount = Array.from(text).length;
+  const longestWord = words.reduce((max, word) => Math.max(max, Array.from(word).length), 0);
+
+  let fontSize = 76;
+  if (wordCount >= 13 || charCount >= 86 || longestWord >= 22) {
+    fontSize = 44;
+  } else if (wordCount >= 11 || charCount >= 72 || longestWord >= 18) {
+    fontSize = 48;
+  } else if (wordCount >= 9 || charCount >= 58) {
+    fontSize = 50;
+  } else if (wordCount >= 7 || charCount >= 46) {
+    fontSize = 62;
+  }
+
+  return {
+    fontSize,
+    shouldWrap: wordCount >= 13 || charCount >= 86 || longestWord >= 22,
+  };
+};
+
 const getDeckBrandParts = (brandName = 'Sales hacking') => {
   const normalizedBrandName = String(brandName || 'Sales hacking').trim();
   const isSalesHackingBrand = normalizedBrandName.toLowerCase() === 'sales hacking';
@@ -57,6 +81,55 @@ const renderAccentLastWord = (value = '', fallback = '') => {
   if (words.length < 2) return value || fallback;
   const last = words.pop();
   return <>{words.join(' ')} <span className="crl">{last}</span></>;
+};
+
+const svgTextLines = (value = '', maxChars = 24, maxLines = 2) => {
+  const words = String(value || '').split(/\s+/).filter(Boolean);
+  const lines = [];
+  let current = '';
+  words.forEach((word) => {
+    const candidate = current ? `${current} ${word}` : word;
+    if (candidate.length > maxChars && current) {
+      lines.push(current);
+      current = word;
+    } else {
+      current = candidate;
+    }
+  });
+  if (current) lines.push(current);
+  if (lines.length <= maxLines) return lines;
+  const lineCount = Math.max(1, maxLines);
+  const targetLength = Math.ceil(words.join(' ').length / lineCount);
+  const balanced = [];
+  current = '';
+  words.forEach((word) => {
+    const candidate = current ? `${current} ${word}` : word;
+    if (candidate.length > targetLength && current && balanced.length < lineCount - 1) {
+      balanced.push(current);
+      current = word;
+    } else {
+      current = candidate;
+    }
+  });
+  if (current) balanced.push(current);
+  return balanced;
+};
+
+const svgTitleBlock = (value = '', fallback = '', maxChars = 28) => {
+  const text = String(value || fallback || '').trim();
+  const lines = svgTextLines(text, maxChars, 3);
+  const length = text.length;
+  const fontSize = length > 68 ? 18 : length > 56 ? 20 : length > 42 ? 22 : 26;
+  return {
+    lines,
+    fontSize,
+    lineGap: Math.round(fontSize * 1.2),
+  };
+};
+
+const shortenSvgText = (value = '', maxChars = 64) => {
+  const clean = String(value || '').trim();
+  return clean.length > maxChars ? `${clean.slice(0, maxChars - 1)}…` : clean;
 };
 
 const deckChrome = (brandName = 'Sales hacking') => {
@@ -129,6 +202,7 @@ export const DeckChapterOpener = ({
 }) => {
   const [shellRef, scale] = useSlideStageScale();
   const sourceAxes = Array.isArray(axes) && axes.length ? axes : items;
+  const titleFit = getChapterTitleFit(chapter_label, title);
   const safeAxes = (Array.isArray(sourceAxes) && sourceAxes.length ? sourceAxes : [
     { title, desc: 'Le repère principal à retenir dans cette séquence.' },
   ]).slice(0, 3);
@@ -138,7 +212,14 @@ export const DeckChapterOpener = ({
       <section className="deck-chapter-stage" style={{ transform: `scale(${scale})` }}>
         {deckChrome(brandName)}
         <div className="deck-chapter-left">
-          <h1><span className="deck-chapter-label">{chapter_label}</span> <span className="deck-chapter-name">{title}</span></h1>
+          <h1
+            className={titleFit.shouldWrap ? 'deck-chapter-title--wrap' : undefined}
+            style={{
+              '--chapter-title-size': `${titleFit.fontSize}px`,
+            }}
+          >
+            <span className="deck-chapter-label">{chapter_label}</span> <span className="deck-chapter-name">{title}</span>
+          </h1>
         </div>
         <div className="deck-chapter-axes">
           {safeAxes.map((axis, index) => {
@@ -183,56 +264,79 @@ export const DeckAgenda = ({ title = 'Au programme.', items = [], day_label, for
 };
 
 export const DeckProgramYear = ({
-  title = "Programme de l'année.",
+  title = 'Parcours annuel.',
   subtitle = 'Deux grands ensembles de compétences qui se complètent.',
-  day_label = 'Parcours annuel',
+  day_label = "Programme de l'année",
   phases = [],
   items = [],
   brandName = 'Sales hacking',
-  badge,
 }) => {
-  const [shellRef, scale] = useSlideStageScale();
   const sourcePhases = Array.isArray(phases) && phases.length ? phases : items;
   const safePhases = (Array.isArray(sourcePhases) && sourcePhases.length ? sourcePhases : [
     { title: 'Premier ensemble', desc: 'Installer les repères essentiels du parcours.' },
     { title: 'Deuxième ensemble', desc: 'Mettre les compétences en action.' },
-  ]).slice(0, 4);
-  const { brandHead, brandTail } = getDeckBrandParts(brandName);
+  ]).slice(0, 2);
+  const phaseOne = safePhases[0] || {};
+  const phaseTwo = safePhases[1] || {};
+  const phaseOneTitle = typeof phaseOne === 'string' ? phaseOne : phaseOne.title;
+  const phaseTwoTitle = typeof phaseTwo === 'string' ? phaseTwo : phaseTwo.title;
+  const phaseOneDesc = typeof phaseOne === 'string' ? '' : (phaseOne.desc || phaseOne.text || phaseOne.description || '');
+  const phaseTwoDesc = typeof phaseTwo === 'string' ? '' : (phaseTwo.desc || phaseTwo.text || phaseTwo.description || '');
+  const phaseOneBlock = svgTitleBlock(phaseOneTitle, 'Assistance et relation client', 28);
+  const phaseTwoBlock = svgTitleBlock(phaseTwoTitle, 'Actions commerciales', 28);
+  const displayedTitle = 'Parcours annuel.';
+  const displayedDayLabel = "Programme de l'année";
+  const topTitleStartY = 104 - ((phaseOneBlock.lines.length - 1) * phaseOneBlock.lineGap) / 2;
+  const bottomTitleStartY = 650 - ((phaseTwoBlock.lines.length - 1) * phaseTwoBlock.lineGap) / 2;
 
   return (
-    <div className="deck-year-shell" ref={shellRef}>
-      <section className="deck-year-stage" style={{ transform: `scale(${scale})` }}>
-        <div className="deck-chrome">
-          <div className="deck-brand">
-            <span className="deck-brand-mark">{brandHead}</span>
-            <span className="deck-brand-tag">{brandTail}</span>
-          </div>
-          <div className="deck-year-rec"><span />EN DIRECT · {badge || 'TP-CRCD'}</div>
-          <div className="deck-year-pages"><b>02</b> / 19</div>
-          <div className="deck-year-section">TYPE · PROGRAMME</div>
-        </div>
-        <div className="deck-year-left">
-          <span>- {day_label}</span>
-          <h1>{renderAccentLastWord(title, "Programme de l'année.")}</h1>
-          {subtitle && <p>{subtitle}</p>}
-        </div>
-        <div className="deck-year-phases">
-          {safePhases.map((phase, index) => {
-            const phaseTitle = typeof phase === 'string' ? phase : phase.title;
-            const phaseDesc = typeof phase === 'string' ? '' : (phase.desc || phase.text || phase.description || '');
-            return (
-              <article key={index}>
-                <span className="deck-year-index">{String(index + 1).padStart(2, '0')}</span>
-                <div>
-                  <strong>{phaseTitle}</strong>
-                  {phaseDesc && <p>{phaseDesc}</p>}
-                </div>
-              </article>
-            );
-          })}
-        </div>
-      </section>
-    </div>
+    <SourceSlide className="s-prog-year">
+      {sourceChrome(brandName)}
+      <div className="py-head">
+        <span className="eyebrow">— {displayedDayLabel || day_label}</span>
+        <h1>{renderAccentLastWord(displayedTitle || title, 'Parcours annuel.')}</h1>
+        {subtitle && <p className="sub">{subtitle}</p>}
+      </div>
+
+      <svg className="py-svg-road" viewBox="0 0 1920 760" preserveAspectRatio="xMidYMid meet" xmlns="http://www.w3.org/2000/svg">
+        <path d="M 0,380 C 160,380 340,220 520,220 C 700,220 860,380 1000,380 C 1140,380 1340,510 1560,510 C 1680,510 1820,380 1920,380" stroke="rgba(0,0,20,0.55)" strokeWidth="120" fill="none" strokeLinecap="round" />
+        <path d="M 0,380 C 160,380 340,220 520,220 C 700,220 860,380 1000,380 C 1140,380 1340,510 1560,510 C 1680,510 1820,380 1920,380" stroke="#162060" strokeWidth="104" fill="none" strokeLinecap="round" />
+        <path d="M 0,380 C 160,380 340,220 520,220 C 700,220 860,380 1000,380 C 1140,380 1340,510 1560,510 C 1680,510 1820,380 1920,380" stroke="rgba(255,255,255,0.12)" strokeWidth="104" fill="none" strokeLinecap="round" />
+        <path d="M 0,380 C 160,380 340,220 520,220 C 700,220 860,380 1000,380 C 1140,380 1340,510 1560,510 C 1680,510 1820,380 1920,380" stroke="rgba(255,255,255,0.65)" strokeWidth="5" fill="none" strokeDasharray="36 22" strokeLinecap="round" />
+
+        <rect x="268" y="16" width="504" height="150" rx="14" fill="rgba(255,255,255,0.07)" stroke="rgba(255,255,255,0.15)" strokeWidth="1.5" />
+        <rect x="268" y="16" width="5" height="150" rx="3" fill="#ff5d6c" />
+        <text x="284" y="44" fontFamily="'JetBrains Mono',monospace" fontSize="15" fill="#ff5d6c" letterSpacing="3">PHASE 01</text>
+        <text textAnchor="middle" fill="white" fontFamily="'Archivo Black',sans-serif">
+          {phaseOneBlock.lines.map((line, index) => (
+            <tspan x="522" y={topTitleStartY + index * phaseOneBlock.lineGap} fontSize={phaseOneBlock.fontSize} key={line}>{line}</tspan>
+          ))}
+        </text>
+        <text x="284" y="151" fontFamily="Manrope,sans-serif" fontSize="19" fill="rgba(255,255,255,0.60)">{shortenSvgText(phaseOneDesc, 70)}</text>
+        <line x1="520" y1="170" x2="520" y2="178" stroke="rgba(255,255,255,0.3)" strokeWidth="2" strokeDasharray="5 4" />
+        <circle cx="520" cy="220" r="64" fill="rgba(255,93,108,0.10)" />
+        <circle cx="520" cy="220" r="50" fill="none" stroke="rgba(255,93,108,0.35)" strokeWidth="2" />
+        <circle cx="520" cy="220" r="40" fill="#ff5d6c" />
+        <circle cx="520" cy="220" r="40" fill="none" stroke="rgba(255,255,255,0.22)" strokeWidth="4" />
+        <text x="520" y="234" textAnchor="middle" fontFamily="'Archivo Black',sans-serif" fontSize="34" fontWeight="900" fill="white" letterSpacing="-0.5">01</text>
+
+        <circle cx="1560" cy="510" r="64" fill="rgba(255,93,108,0.10)" />
+        <circle cx="1560" cy="510" r="50" fill="none" stroke="rgba(255,93,108,0.35)" strokeWidth="2" />
+        <circle cx="1560" cy="510" r="40" fill="#ff5d6c" />
+        <circle cx="1560" cy="510" r="40" fill="none" stroke="rgba(255,255,255,0.22)" strokeWidth="4" />
+        <text x="1560" y="524" textAnchor="middle" fontFamily="'Archivo Black',sans-serif" fontSize="34" fontWeight="900" fill="white" letterSpacing="-0.5">02</text>
+        <line x1="1560" y1="554" x2="1560" y2="562" stroke="rgba(255,255,255,0.3)" strokeWidth="2" strokeDasharray="5 4" />
+        <rect x="1308" y="564" width="504" height="150" rx="14" fill="rgba(255,255,255,0.07)" stroke="rgba(255,255,255,0.15)" strokeWidth="1.5" />
+        <rect x="1308" y="564" width="5" height="150" rx="3" fill="#ff5d6c" />
+        <text x="1324" y="592" fontFamily="'JetBrains Mono',monospace" fontSize="15" fill="#ff5d6c" letterSpacing="3">PHASE 02</text>
+        <text textAnchor="middle" fill="white" fontFamily="'Archivo Black',sans-serif">
+          {phaseTwoBlock.lines.map((line, index) => (
+            <tspan x="1562" y={bottomTitleStartY + index * phaseTwoBlock.lineGap} fontSize={phaseTwoBlock.fontSize} key={line}>{line}</tspan>
+          ))}
+        </text>
+        <text x="1324" y="704" fontFamily="Manrope,sans-serif" fontSize="19" fill="rgba(255,255,255,0.60)">{shortenSvgText(phaseTwoDesc, 70)}</text>
+      </svg>
+    </SourceSlide>
   );
 };
 
@@ -346,6 +450,42 @@ const pointParts = (point, index) => {
   };
 };
 
+const sourceTitleParts = (value = '', fallback = 'Point clé') => {
+  const clean = String(value || fallback).trim();
+  if (clean.includes('\n')) {
+    const lines = clean.split(/\n+/).filter(Boolean);
+    return { first: lines.slice(0, -1).join(' '), accent: lines[lines.length - 1] || clean };
+  }
+  const selon = clean.match(/^(.+?)\s+(selon\s+.+)$/i);
+  if (selon) return { first: selon[1], accent: selon[2] };
+  const comma = clean.match(/^(.+?,)\s+(.+)$/);
+  if (comma) return { first: comma[1], accent: comma[2] };
+  const colon = clean.match(/^(.+?:)\s+(.+)$/);
+  if (colon) return { first: colon[1], accent: colon[2] };
+  const words = clean.split(/\s+/).filter(Boolean);
+  if (words.length <= 3) return { first: clean, accent: '' };
+  const pivot = Math.ceil(words.length / 2);
+  return { first: words.slice(0, pivot).join(' '), accent: words.slice(pivot).join(' ') };
+};
+
+const SourceAccentTitle = ({ title, fallback = 'Point clé' }) => {
+  const { first, accent } = sourceTitleParts(title, fallback);
+  if (!accent) return <>{first}</>;
+  return <>{first}<br /><span className="crl">{accent}</span></>;
+};
+
+const formatSourceQuote = (value = '') => {
+  const clean = String(value || '').trim();
+  if (!clean) return '';
+  if (/^[«"“]/.test(clean)) return clean;
+  return `« ${clean} »`;
+};
+
+const sourceItems = (items, fallback, limit) => {
+  const source = Array.isArray(items) && items.length ? items : fallback;
+  return source.slice(0, limit);
+};
+
 export const DeckStatement = ({
   title = 'Une idée à retenir',
   text,
@@ -377,7 +517,7 @@ export const DeckStatement = ({
   );
 };
 
-export const DeckDefinition = ({ term, title, eyebrow = 'Définition', definition, text, isItems = [], badge, brandName }) => {
+export const DeckDefinition = ({ term, title, eyebrow = 'Définition', definition, text, isItems = [], brandName }) => {
   const word = term || title || 'Définition';
   const tags = Array.isArray(isItems) ? isItems : [];
   return (
@@ -398,7 +538,7 @@ export const DeckDefinition = ({ term, title, eyebrow = 'Définition', definitio
   );
 };
 
-export const DeckProcess = ({ title = 'Les étapes clés', steps = [], badge, brandName }) => {
+export const DeckProcess = ({ title = 'Les étapes clés', steps = [], brandName }) => {
   const sourceSteps = Array.isArray(steps) ? steps : [];
   const safeSteps = (sourceSteps.length ? sourceSteps : [{ title: 'Observer', desc: 'Comprendre la situation réelle.' }, { title: 'Découper', desc: 'Identifier les étapes utiles.' }, { title: 'Agir', desc: 'Appliquer la méthode.' }, { title: 'Mesurer', desc: 'Vérifier le résultat.' }]).slice(0, 4);
   return (
@@ -421,40 +561,70 @@ export const DeckProcess = ({ title = 'Les étapes clés', steps = [], badge, br
   );
 };
 
-export const DeckStory = ({ title = 'Cas terrain', narrative, moral, text, badge, brandName }) => (
-  <DeckSlide type="STORY" page="18" className="deck-story-dynamic" badge={badge} brandName={brandName}>
-    <div>
-      <span className="deck-eyebrow">Situation</span>
-      <h1><AccentTitle title={title} fallback="Cas terrain" /></h1>
-      <p>{narrative || text || 'Un exemple concret pour ancrer le point clé.'}</p>
-      {moral && <strong>{moral}</strong>}
+export const DeckStory = ({ title = 'Cas terrain', narrative, moral, text, brandName }) => (
+  <SourceSlide className="s-board">
+    {sourceChrome(brandName)}
+    <div className="meta">
+      <span className="num">STORY</span>
+      <span className="bar" />
+      <span className="chapter">{title}</span>
     </div>
-  </DeckSlide>
+
+    <div className="chalkboard">
+      <div className="board-inner">
+        <div className="ch-lines">
+          <p className="ch-para">{narrative || text || 'Un exemple concret pour ancrer le point clé.'}</p>
+        </div>
+      </div>
+      <div className="tray">
+        <span className="chalk w" />
+        <span className="chalk y" />
+        <span className="chalk p" />
+        <span className="eraser" />
+      </div>
+    </div>
+
+    {(moral || text) && (
+      <div className="board-morale">
+        <span className="lbl">↳ Morale</span>
+        <span className="text">{moral || text}</span>
+      </div>
+    )}
+  </SourceSlide>
 );
 
-export const DeckAnalogy = ({ title = 'Analogie', concept = 'Concept', comparison = 'Image mentale', text, badge, brandName }) => (
-  <DeckSlide type="ANALOGY" page="19" className="deck-analogy-dynamic" badge={badge} brandName={brandName}>
-    <header><span className="deck-eyebrow">Analogie</span><h1><AccentTitle title={title} fallback="Analogie" /></h1></header>
-    <div>
-      <article><span>Concept</span><strong>{concept}</strong></article>
-      <article><span>Comparable à</span><strong>{comparison}</strong></article>
+export const DeckAnalogy = ({ title = 'Analogie', concept = 'Concept', comparison = 'Image mentale', text, brandName }) => (
+  <SourceSlide className="s-analogy">
+    {sourceChrome(brandName)}
+    <div className="an-diag" />
+    <div className="an-left">
+      <span className="an-tag">— Le concept</span>
+      <h2 className="an-name">{concept || title}</h2>
+      <p className="an-text">{text || 'La notion à comprendre dans la situation professionnelle.'}</p>
     </div>
-    {text && <p>{text}</p>}
-  </DeckSlide>
+    <div className="an-right">
+      <span className="an-tag">— L'analogie</span>
+      <h2 className="an-name">{comparison}</h2>
+      <p className="an-text">{text || 'Une image mentale pour rendre la notion plus facile à retenir.'}</p>
+    </div>
+  </SourceSlide>
 );
 
-export const DeckOpinion = ({ title = 'Point de vue', text, badge, brandName }) => (
-  <DeckSlide type="OPINION" page="21" className="deck-opinion-dynamic" badge={badge} brandName={brandName}>
-    <span>"</span>
-    <div>
-      <em>Point de vue</em>
-      <h1><AccentTitle title={title} fallback="Point de vue" /></h1>
-      {text && <p>{text}</p>}
+export const DeckOpinion = ({ title = 'Point de vue', text, brandName }) => (
+  <SourceSlide className="s-opinion">
+    {sourceChrome(brandName)}
+    <span className="quote-bg">"</span>
+    <div className="l">
+      <span className="badge">POINT DE VUE</span>
+      <h1><SourceAccentTitle title={title} fallback="Point de vue" /></h1>
     </div>
-  </DeckSlide>
+    <div className="r">
+      <p>{text || 'Une prise de position pédagogique pour structurer la suite du raisonnement.'}</p>
+    </div>
+  </SourceSlide>
 );
 
-export const DeckQuote = ({ quote, title, text, badge, brandName }) => (
+export const DeckQuote = ({ quote, title, text, brandName }) => (
   <SourceSlide className="s-journal">
     {sourceChrome(brandName)}
     <div className="jnl-scene">
@@ -480,32 +650,46 @@ export const DeckQuote = ({ quote, title, text, badge, brandName }) => (
   </SourceSlide>
 );
 
-export const DeckFramework = ({ title = 'Cadre de lecture', center = {}, segments = [], items = [], badge, brandName }) => {
+export const DeckFramework = ({ title = 'Cadre de lecture', center = {}, segments = [], items = [], brandName }) => {
   const sourceSegments = Array.isArray(segments) && segments.length ? segments : items;
   const safeSegments = (Array.isArray(sourceSegments) && sourceSegments.length ? sourceSegments : [
     { title: 'Repère 1', desc: 'Premier point de lecture.' },
     { title: 'Repère 2', desc: 'Deuxième point de lecture.' },
     { title: 'Repère 3', desc: 'Troisième point de lecture.' },
     { title: 'Repère 4', desc: 'Quatrième point de lecture.' },
-  ]).slice(0, 4);
+  ]).slice(0, 6);
+  const frameworkClass = safeSegments.length > 4 ? 's-fw tpl six' : 's-fw tpl';
   return (
-    <DeckSlide type="FRAMEWORK" page="20" className="deck-framework-dynamic" badge={badge} brandName={brandName}>
-      <header><span className="deck-eyebrow">Modèle</span><h1><AccentTitle title={title} fallback="Cadre de lecture" /></h1></header>
-      <div className="deck-framework-dynamic-grid">
-        <div className="deck-framework-dynamic-center">{center.title || center.label || 'Point central'}</div>
+    <SourceSlide className={frameworkClass}>
+      {sourceChrome(brandName)}
+      <div className="head">
+        <span className="eyebrow">— Modèle d'analyse</span>
+        <h1><SourceAccentTitle title={title} fallback="Cadre de lecture" /></h1>
+      </div>
+      <div className="wheel">
+        <svg className="dial" viewBox="0 0 260 260" aria-hidden="true">
+          <circle cx="130" cy="130" r="120" fill="none" stroke="rgba(255,255,255,0.2)" strokeWidth="2" />
+          <g fill="none" stroke="rgba(255,255,255,0.18)" strokeWidth="1.5">
+            <line x1="130" y1="10" x2="130" y2="250" />
+            <line x1="10" y1="130" x2="250" y2="130" />
+          </g>
+          <g fill="rgba(255,93,108,0.25)" stroke="var(--coral)" strokeWidth="2">
+            <path d="M 130 130 L 130 20 A 110 110 0 0 1 240 130 Z" />
+          </g>
+        </svg>
+        <div className="center">{center.title || center.label || 'Point central'}</div>
         {safeSegments.map((segment, index) => (
-          <article key={index}>
-            <span>{String(index + 1).padStart(2, '0')}</span>
-            <strong>{typeof segment === 'string' ? segment : segment.title}</strong>
-            {typeof segment !== 'string' && (segment.desc || segment.text) && <p>{segment.desc || segment.text}</p>}
-          </article>
+          <div className={`sat s${index + 1}`} key={index}>
+            <div className="t">{typeof segment === 'string' ? segment : segment.title}</div>
+            {typeof segment !== 'string' && (segment.desc || segment.text) && <div className="d">{segment.desc || segment.text}</div>}
+          </div>
         ))}
       </div>
-    </DeckSlide>
+    </SourceSlide>
   );
 };
 
-export const DeckRecap = ({ title = "Ce qu'on retient.", points = [], badge, brandName }) => {
+export const DeckRecap = ({ title = "Ce qu'on retient.", points = [], brandName }) => {
   const sourcePoints = Array.isArray(points) ? points : [];
   const safePoints = sourcePoints.length ? sourcePoints.slice(0, 3) : ['Une première idée clé.', 'Une deuxième idée clé.', 'Une action à appliquer.'];
   return (
@@ -574,7 +758,6 @@ export const DeckCaseStudy = ({
   eyebrow = 'Analyse comparative',
   cases = [],
   items,
-  badge,
   brandName = 'Sales hacking',
 }) => {
   const sourceCases = Array.isArray(cases) ? cases : [];
@@ -586,52 +769,159 @@ export const DeckCaseStudy = ({
       desc: 'Un cas concret pour ancrer la notion dans une situation professionnelle.',
       example: '',
     },
-  ]).slice(0, 6);
+  ]).slice(0, 3);
   const colClass = safeCases.length <= 2 ? 'cols-2' : (safeCases.length === 3 ? 'cols-3' : 'cols-many');
   const accents = ['accent-coral', 'accent-gold', 'accent-green', 'accent-blue'];
-  const { brandHead, brandTail } = getDeckBrandParts(brandName);
-  const [shellRef, scale] = useSlideStageScale();
 
   return (
-    <div className="deck-casestudy-shell" ref={shellRef}>
-      <section className="deck-casestudy-stage" style={{ transform: `scale(${scale})` }}>
-        <div className="deck-chrome">
-          <div className="deck-brand">
-            <span className="deck-brand-mark">{brandHead}</span>
-            <span className="deck-brand-tag">{brandTail}</span>
-          </div>
-          <div className="deck-casestudy-rec"><span />EN DIRECT · {badge || 'TP-CRCD'}</div>
-          <div className="deck-casestudy-pages"><b>06</b> / 19</div>
-          <div className="deck-casestudy-section">TYPE · CASE_STUDY</div>
-        </div>
+    <SourceSlide className="s-casestudy">
+      {sourceChrome(brandName)}
+      <div className="cs-head">
+        <span className="eyebrow">— {eyebrow}</span>
+        <h1><SourceAccentTitle title={title} fallback="Cas terrain" /></h1>
+      </div>
 
-        <div className="deck-casestudy-head">
-          <span className="deck-eyebrow">— {eyebrow}</span>
-          <h1><AccentTitle title={title} fallback="Cas terrain." /></h1>
-        </div>
+      <div className={`cs-cards ${colClass} paper`}>
+        {safeCases.map((item, i) => {
+          const caseTitle = typeof item === 'string' ? item : item.title;
+          const caseDesc = typeof item === 'string' ? '' : (item.desc || item.description || item.text || '');
+          const caseTag = typeof item === 'string' ? '' : (item.tag || item.label || `${String(i + 1).padStart(2, '0')} · Cas`);
+          const caseExample = typeof item === 'string' ? '' : (item.example || item.quote || '');
+          return (
+            <article className={`cs-card ${accents[i % accents.length]}`} key={i}>
+              <div className="cs-stripe" />
+              <div className="cs-body">
+                <span className="cs-tag">{caseTag}</span>
+                <h3 className="cs-title">{caseTitle}</h3>
+                <div className="cs-sep" />
+                {caseDesc && <p className="cs-text">{caseDesc}</p>}
+                {caseExample && <span className="cs-example">{formatSourceQuote(caseExample)}</span>}
+              </div>
+            </article>
+          );
+        })}
+      </div>
+    </SourceSlide>
+  );
+};
 
-        <div className={`deck-casestudy-cards ${colClass}`}>
-          {safeCases.map((item, i) => {
-            const caseTitle = typeof item === 'string' ? item : item.title;
-            const caseDesc = typeof item === 'string' ? '' : (item.desc || item.description || item.text || '');
-            const caseTag = typeof item === 'string' ? '' : (item.tag || item.label || `${String(i + 1).padStart(2, '0')} · Cas`);
-            const caseExample = typeof item === 'string' ? '' : (item.example || item.quote || '');
-            return (
-              <article className={`deck-casestudy-card ${accents[i % accents.length]}`} key={i}>
-                <div className="deck-casestudy-stripe" />
-                <div className="deck-casestudy-body">
-                  <span className="deck-casestudy-tag">{caseTag}</span>
-                  <h3>{caseTitle}</h3>
-                  <div className="deck-casestudy-sep" />
-                  {caseDesc && <p>{caseDesc}</p>}
-                  {caseExample && <em>{caseExample}</em>}
+const FlowIcon = ({ index }) => {
+  if (index === 0) {
+    return (
+      <svg viewBox="0 0 64 64" fill="none" stroke="#1a1f3a" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        <circle cx="32" cy="32" r="24" />
+        <circle cx="32" cy="32" r="14" />
+        <circle cx="32" cy="32" r="4" fill="#1a1f3a" />
+      </svg>
+    );
+  }
+  if (index === 1) {
+    return (
+      <svg viewBox="0 0 64 64" fill="none" stroke="#1a1f3a" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        <circle cx="32" cy="32" r="9" />
+        <path d="M32 8 v8 M32 48 v8 M8 32 h8 M48 32 h8 M15 15 l6 6 M43 43 l6 6 M15 49 l6 -6 M43 21 l6 -6" />
+      </svg>
+    );
+  }
+  if (index === 2) {
+    return (
+      <svg viewBox="0 0 64 64" fill="#1a1f3a" stroke="#1a1f3a" strokeWidth="3" strokeLinejoin="round" aria-hidden="true">
+        <polygon points="36,6 14,36 30,36 26,58 50,26 34,26" />
+      </svg>
+    );
+  }
+  return (
+    <svg viewBox="0 0 64 64" fill="none" stroke="#1a1f3a" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <line x1="16" y1="8" x2="16" y2="58" />
+      <path d="M16 12 L48 12 L42 22 L48 32 L16 32 Z" fill="#1a1f3a" stroke="none" />
+    </svg>
+  );
+};
+
+export const DeckSituations = ({ title = 'Trois situations client.', eyebrow = 'Adapter sa posture', items = [], cases = [], brandName }) => {
+  const safeItems = sourceItems(
+    Array.isArray(items) && items.length ? items : cases,
+    [
+      { title: 'Client pressé.', desc: "Prioriser l'essentiel et aller droit au résultat." },
+      { title: 'Client hésitant.', desc: 'Clarifier le besoin avant de proposer quoi que ce soit.' },
+      { title: 'Client mécontent.', desc: "Traiter l'émotion avant la procédure." },
+    ],
+    3,
+  );
+  const classes = ['a', 'b', 'c'];
+
+  return (
+    <SourceSlide className="s-situ">
+      {sourceChrome(brandName)}
+      <div className="heading">
+        <span className="eyebrow">— {eyebrow}</span>
+        <h1><SourceAccentTitle title={title} fallback="Trois situations client." /></h1>
+      </div>
+
+      <div className="cards">
+        {safeItems.map((item, index) => {
+          const itemTitle = typeof item === 'string' ? item : item.title;
+          const itemDesc = typeof item === 'string' ? '' : (item.desc || item.description || item.text || '');
+          return (
+            <div className={`card ${classes[index]}`} key={index}>
+              <div className="stamp">SITUATION · {String.fromCharCode(65 + index)}</div>
+              <div className="t">{itemTitle}</div>
+              <div className="d">{itemDesc}</div>
+              <div className="badge">{index + 1}</div>
+            </div>
+          );
+        })}
+      </div>
+    </SourceSlide>
+  );
+};
+
+export const DeckFlow = ({ title = 'Traiter une demande.', eyebrow = 'Le flux en quatre temps', steps = [], items = [], brandName }) => {
+  const safeSteps = sourceItems(
+    Array.isArray(steps) && steps.length ? steps : items,
+    [
+      { title: 'Identifier', desc: 'Comprendre le besoin exprimé.' },
+      { title: 'Qualifier', desc: 'Vérifier les contraintes utiles.' },
+      { title: 'Agir', desc: 'Proposer une réponse concrète.' },
+      { title: 'Clore', desc: 'Confirmer la suite avec précision.' },
+    ],
+    4,
+  );
+
+  return (
+    <SourceSlide className="s-flow">
+      {sourceChrome(brandName)}
+      <div className="head">
+        <span className="eyebrow">— {eyebrow}</span>
+        <h1><SourceAccentTitle title={title} fallback="Traiter une demande." /></h1>
+      </div>
+
+      <div className="row">
+        {safeSteps.map((step, index) => {
+          const stepTitle = typeof step === 'string' ? step : step.title;
+          const stepDesc = typeof step === 'string' ? '' : (step.desc || step.description || step.text || '');
+          return (
+            <React.Fragment key={index}>
+              <div className="step">
+                <div className={`tile c${index + 1}`}>
+                  <FlowIcon index={index} />
                 </div>
-              </article>
-            );
-          })}
-        </div>
-      </section>
-    </div>
+                <div className="t">{stepTitle}</div>
+                <div className="d">{stepDesc}</div>
+              </div>
+              {index < safeSteps.length - 1 && (
+                <div className="arrow">
+                  <svg viewBox="0 0 70 36" fill="none" stroke="currentColor" strokeWidth="5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <line x1="6" y1="18" x2="60" y2="18" />
+                    <polyline points="48,6 62,18 48,30" />
+                  </svg>
+                </div>
+              )}
+            </React.Fragment>
+          );
+        })}
+      </div>
+    </SourceSlide>
   );
 };
 
@@ -693,7 +983,7 @@ export const DeckWarning = ({
   );
 };
 
-export const DeckTip = ({ title = 'Conseil pratique', text, badge, brandName }) => (
+export const DeckTip = ({ title = 'Conseil pratique', text, brandName }) => (
   <SourceSlide className="s-tip">
     {sourceChrome(brandName)}
     <div className="card">
@@ -714,7 +1004,7 @@ export const DeckPause = () => <SalesHackingSourceSlide sourceId="pause" />;
 
 export const DeckQA = () => <SalesHackingSourceSlide sourceId="qa" />;
 
-export const DeckComparison = ({ title = 'Avant vs après.', cols = [], rows = [], badge, brandName }) => {
+export const DeckComparison = ({ title = 'Avant vs après.', cols = [], rows = [], brandName }) => {
   const sourceCols = Array.isArray(cols) ? cols : [];
   const sourceRows = Array.isArray(rows) ? rows : [];
   const left = sourceCols[0] || { label: 'Avant', items: [] };

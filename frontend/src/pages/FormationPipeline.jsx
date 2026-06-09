@@ -1222,7 +1222,7 @@ function PipelineVisualMap({ job, currentStep, autoPilotState, contentFolders, d
     },
     {
       key: 'slide_beats',
-      title: 'Teaching beats et anchors slides',
+      title: 'Moments pédagogiques et ancrages visuels',
       detail: 'Exemples, conseils, pièges, comparaisons et templates associés au plan.',
       icon: 'account_tree',
       artifacts: ['content-plan.json'],
@@ -2835,6 +2835,7 @@ function SlideAnchorAuditCard({ beat, sectionText, sectionTargetWords, slideInde
             Slide {slideIndex + 1} · {anchor.template_type || beat.type || 'template'}
           </div>
           <div style={{ color: '#e2e8f0', fontWeight: 800, fontSize: '12px', marginTop: '3px', lineHeight: 1.35 }}>
+            <span style={{ color: '#93c5fd' }}>Moment pédagogique : </span>
             {beat.role || anchor.visual_goal || 'Moment pédagogique prévu'}
           </div>
         </div>
@@ -2850,6 +2851,7 @@ function SlideAnchorAuditCard({ beat, sectionText, sectionTargetWords, slideInde
 
       {anchor.visual_goal && (
         <div style={{ color: '#94a3b8', fontSize: '11px', lineHeight: 1.45, marginTop: '7px' }}>
+          <span style={{ color: '#38bdf8', fontWeight: 800 }}>Ancrage visuel : </span>
           {anchor.visual_goal}
         </div>
       )}
@@ -4261,10 +4263,12 @@ function PlanSlideBeatCard({ beat, index }) {
         Slide {index + 1} · {anchor.template_type || beat.type || 'template'}
       </div>
       <div style={{ color: '#e2e8f0', fontWeight: 800, fontSize: '12px', marginTop: '4px', lineHeight: 1.35 }}>
+        <span style={{ color: '#93c5fd' }}>Moment pédagogique : </span>
         {beat.role || anchor.visual_goal || 'Moment pédagogique prévu'}
       </div>
       {anchor.visual_goal && (
         <div style={{ color: '#94a3b8', fontSize: '11px', lineHeight: 1.45, marginTop: '6px' }}>
+          <span style={{ color: '#38bdf8', fontWeight: 800 }}>Ancrage visuel : </span>
           {anchor.visual_goal}
         </div>
       )}
@@ -4337,14 +4341,14 @@ function SlideBeatsAuditView({ artifacts }) {
         fontSize: '12px',
         lineHeight: 1.5,
       }}>
-        <strong>Lecture de l'étape 7.</strong> Cette vue isole les moments visuels prévus par le plan : teaching beats, anchors slides, templates, objectifs visuels, exigences orales et champs suggérés.
+        <strong>Lecture de l'étape 7.</strong> Cette vue isole les moments pédagogiques avec ancrage visuel prévus par le plan : templates, objectifs visuels, exigences orales et champs suggérés.
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '10px' }}>
         <AuditStatCard label="Journées" value={days.length} color="#a78bfa" />
         <AuditStatCard label="Thèmes" value={totals.courses} color="#38bdf8" />
         <AuditStatCard label="Sections avec slides" value={totals.sections} color="#34d399" />
-        <AuditStatCard label="Anchors slides" value={totals.beats} color="#f59e0b" />
+        <AuditStatCard label="Ancrages visuels" value={totals.beats} color="#f59e0b" />
       </div>
 
       {topTemplates.length > 0 && (
@@ -4495,6 +4499,7 @@ function SlideBeatAnchorCard({ item, index }) {
               Slide {index + 1} · {anchor.template_type || beat.type || 'template'}
             </div>
             <div style={{ color: '#e2e8f0', fontWeight: 900, fontSize: '13px', lineHeight: 1.35, marginTop: '4px' }}>
+              <span style={{ color: '#93c5fd' }}>Moment pédagogique : </span>
               {beat.role || anchor.visual_goal || 'Moment pédagogique prévu'}
             </div>
           </div>
@@ -4507,7 +4512,7 @@ function SlideBeatAnchorCard({ item, index }) {
       </div>
 
       <div style={{ padding: '11px 12px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
-        <SlideBeatInfoBlock title="Objectif visuel" text={anchor.visual_goal || beat.visual_goal} color="#38bdf8" />
+        <SlideBeatInfoBlock title="Ancrage visuel :" text={anchor.visual_goal || beat.visual_goal} color="#38bdf8" />
         <SlideBeatInfoBlock title="Exigence orale" text={anchor.spoken_requirement || beat.spoken_requirement} color="#34d399" />
         <SlideBeatInfoBlock title="Résumé pédagogique" text={beat.summary || beat.event_summary || beat.description} color="#f59e0b" />
 

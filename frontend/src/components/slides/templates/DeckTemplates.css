@@ -346,11 +346,16 @@
 .deck-chapter-left h1 {
   font-family: var(--f-display);
   font-weight: 900;
-  font-size: 76px;
-  line-height: .9;
-  letter-spacing: -.02em;
+  font-size: var(--chapter-title-size, 76px);
+  line-height: .92;
+  letter-spacing: 0;
   margin: 0;
+  max-width: 100%;
   white-space: nowrap;
+}
+.deck-chapter-left h1.deck-chapter-title--wrap {
+  white-space: normal;
+  text-wrap: balance;
 }
 .deck-chapter-label {
   text-decoration: underline;
