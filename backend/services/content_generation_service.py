@@ -101,6 +101,12 @@ _CARRYOVER_INTRO = (
 )
 _CARRYOVER_COLUMNS_READY = False
 _FISHAUDIO_TAG_RE = re.compile(r"\[[^\[\]\n]{1,50}\]")
+_SLIDE_DISPLAY_ORDER_MARKER = "===ORDRE_AFFICHAGE_SLIDES==="
+_SLIDE_DISPLAY_MAP_MARKER = "===CARTE_AFFICHAGE_SLIDES==="
+_SLIDE_DISPLAY_END_MARKER = "===FIN_CARTE==="
+_SLIDE_DISPLAY_FIELD_RE = re.compile(r'^(?P<key>[A-Z_]+)\s*:\s*(?P<value>.*)$')
+_SLIDE_DISPLAY_MARKER_LINE_RE = re.compile(r"^\s*={3}[^=\n]{1,80}={3}\s*$")
+_SLIDE_DISPLAY_ANCHOR_LINE_RE = re.compile(r"^\s*[^|\n]{1,160}\|\s*ANCRAGE\s*:", re.IGNORECASE)
 _INTERNAL_SCHEDULE_TIME_RANGE_RE = re.compile(
     r"\b(?:[01]?\d|2[0-3])\s*(?:h|:)\s*(?:[0-5]\d)?\s*"
     r"(?:[-–—]|à|a)\s*"
@@ -2604,6 +2610,553 @@ def _section_artifact_metadata(section: dict) -> dict:
         "must_avoid": section.get("must_avoid") if isinstance(section.get("must_avoid"), list) else [],
         "teaching_beats": teaching_beats,
         "slide_anchors": slide_anchors,
+    }
+
+
+def _fold_display_text(text: str | None) -> str:
+    cleaned = _FISHAUDIO_TAG_RE.sub(" ", text or "")
+    cleaned = cleaned.replace("\u00a0", " ")
+    cleaned = cleaned.replace("’", "'").replace("‘", "'").replace("`", "'")
+    cleaned = cleaned.replace("«", '"').replace("»", '"').replace("“", '"').replace("”", '"')
+    cleaned = re.sub(r"\s+", " ", cleaned)
+    return cleaned.strip().lower()
+
+
+def _fold_display_token(text: str | None) -> str:
+    folded = _fold_display_text(text)
+    return re.sub(r"^[^\wÀ-ÖØ-öø-ÿ]+|[^\wÀ-ÖØ-öø-ÿ]+$", "", folded)
+
+
+def _display_text_tokens(text: str) -> list[dict]:
+    tokens = []
+    for match in re.finditer(r"\S+", text or ""):
+        folded = _fold_display_token(match.group(0))
+        if not folded:
+            continue
+        tokens.append({
+            "text": match.group(0),
+            "folded": folded,
+            "start": match.start(),
+            "end": match.end(),
+        })
+    return tokens
+
+
+def _display_anchor_matches(text: str, anchor_text: str) -> list[dict]:
+    tokens = _display_text_tokens(text)
+    anchor_tokens = [token["folded"] for token in _display_text_tokens(anchor_text)]
+    if not tokens or not anchor_tokens:
+        return []
+    folded_tokens = [token["folded"] for token in tokens]
+    matches = []
+    span_len = len(anchor_tokens)
+    for idx in range(0, len(folded_tokens) - span_len + 1):
+        if folded_tokens[idx:idx + span_len] == anchor_tokens:
+            matches.append({
+                "word_start": idx,
+                "word_end": idx + span_len,
+                "char_start": tokens[idx]["start"],
+                "char_end": tokens[idx + span_len - 1]["end"],
+            })
+    return matches
+
+
+def _display_map_expected_beats(section: dict) -> dict[str, dict]:
+    expected = {}
+    for beat in _section_teaching_beats(section):
+        anchor = beat.get("slide_anchor") if isinstance(beat.get("slide_anchor"), dict) else {}
+        beat_id = str(beat.get("beat_id") or "").strip()
+        if beat_id and anchor.get("enabled"):
+            expected[beat_id] = {"beat": beat, "anchor": anchor}
+    return expected
+
+
+def _strip_residual_slide_display_map_leaks(text: str | None) -> str:
+    lines = (text or "").splitlines()
+    kept = []
+    dropping_display_block = False
+    for line in lines:
+        stripped = line.strip()
+        if stripped in {_SLIDE_DISPLAY_ORDER_MARKER, _SLIDE_DISPLAY_MAP_MARKER}:
+            dropping_display_block = True
+            continue
+        if stripped == _SLIDE_DISPLAY_END_MARKER:
+            dropping_display_block = False
+            continue
+        if dropping_display_block:
+            continue
+        if _SLIDE_DISPLAY_ANCHOR_LINE_RE.match(line):
+            continue
+        if _SLIDE_DISPLAY_MARKER_LINE_RE.match(line):
+            continue
+        kept.append(line)
+    return "\n".join(kept).strip()
+
+
+def _strip_slide_display_map_block(raw_text: str | None) -> tuple[str, str, list[str]]:
+    text = raw_text or ""
+    map_start = text.rfind(_SLIDE_DISPLAY_MAP_MARKER)
+    order_start = text.rfind(
+        _SLIDE_DISPLAY_ORDER_MARKER,
+        0,
+        map_start if map_start >= 0 else len(text),
+    )
+    if map_start < 0 and order_start < 0:
+        return _strip_residual_slide_display_map_leaks(text), "", ["missing_block"]
+    block_start = order_start if order_start >= 0 and (map_start < 0 or order_start < map_start) else map_start
+    map_start = text.find(_SLIDE_DISPLAY_MAP_MARKER, block_start)
+    if map_start < 0:
+        clean = _strip_residual_slide_display_map_leaks(text[:block_start])
+        return clean, text[block_start:].strip(), ["missing_map_marker"]
+    end_start = text.find(_SLIDE_DISPLAY_END_MARKER, map_start)
+    if end_start < 0:
+        block = text[block_start:].strip()
+        clean = _strip_residual_slide_display_map_leaks(text[:block_start])
+        return clean, block, []
+    end = end_start + len(_SLIDE_DISPLAY_END_MARKER)
+    block = text[block_start:end].strip()
+    clean = _strip_residual_slide_display_map_leaks(f"{text[:block_start]}\n{text[end:]}")
+    return clean, block, []
+
+
+def _unquote_display_value(value: str) -> str:
+    value = (value or "").strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
+        return value[1:-1].strip()
+    return value.strip()
+
+
+def _parse_slide_display_map_line(line: str) -> tuple[dict | None, str | None]:
+    parts = [part.strip() for part in line.split("|")]
+    if len(parts) < 2:
+        return None, "malformed_line"
+    beat_id = parts[0].strip()
+    if not beat_id:
+        return None, "missing_beat_id"
+    entry = {
+        "beat_id": beat_id,
+        "anchor_text": "",
+        "quote": "",
+        "items": [],
+        "status": "ok",
+    }
+    for field in parts[1:]:
+        if not field:
+            continue
+        match = _SLIDE_DISPLAY_FIELD_RE.match(field)
+        if not match:
+            return None, f"malformed_field:{field[:40]}"
+        key = match.group("key").strip().upper()
+        value = match.group("value").strip()
+        if key == "ANCRAGE":
+            entry["anchor_text"] = _unquote_display_value(value)
+        elif key == "QUOTE":
+            entry["quote"] = _unquote_display_value(value)
+        elif key == "ITEMS":
+            entry["items"] = [
+                item.strip()
+                for item in re.split(r"\s*;\s*", _unquote_display_value(value))
+                if item.strip()
+            ]
+        else:
+            return None, f"unknown_field:{key}"
+    if not entry["anchor_text"]:
+        return None, "missing_anchor_text"
+    return entry, None
+
+
+def _parse_slide_display_map_with_order(raw_text: str | None) -> tuple[str, list[dict], list[str], list[str]]:
+    clean_text, block, errors = _strip_slide_display_map_block(raw_text)
+    if not block:
+        return clean_text, [], errors, []
+    map_start = block.find(_SLIDE_DISPLAY_MAP_MARKER)
+    if map_start < 0:
+        return clean_text, [], errors or ["missing_map_marker"], []
+    order_text = ""
+    if _SLIDE_DISPLAY_ORDER_MARKER in block:
+        order_text = block.split(_SLIDE_DISPLAY_ORDER_MARKER, 1)[1].split(_SLIDE_DISPLAY_MAP_MARKER, 1)[0]
+    order_declared = [
+        item.strip()
+        for item in re.split(r"[,\n]+", order_text)
+        if item.strip() and not item.strip().startswith("===")
+    ]
+    map_text = block[map_start + len(_SLIDE_DISPLAY_MAP_MARKER):]
+    if _SLIDE_DISPLAY_END_MARKER in map_text:
+        map_text = map_text.split(_SLIDE_DISPLAY_END_MARKER, 1)[0]
+    entries = []
+    for line_no, raw_line in enumerate(map_text.splitlines(), start=1):
+        line = raw_line.strip()
+        if not line or line.startswith("==="):
+            continue
+        entry, error = _parse_slide_display_map_line(line)
+        if error:
+            errors.append(f"line_{line_no}:{error}")
+            continue
+        entries.append(entry)
+    if not entries:
+        errors.append("empty_map")
+    return clean_text, entries, errors, order_declared
+
+
+def _parse_slide_display_map(raw_text: str | None) -> tuple[str, list[dict], list[str]]:
+    clean_text, entries, errors, _order_declared = _parse_slide_display_map_with_order(raw_text)
+    return clean_text, entries, errors
+
+
+def _validate_slide_display_map(section: dict, entries: list[dict], clean_text: str) -> tuple[list[dict], list[str]]:
+    expected = _display_map_expected_beats(section)
+    errors = []
+    if not expected:
+        return [], []
+    by_beat: dict[str, list[dict]] = {}
+    for entry in entries or []:
+        by_beat.setdefault(str(entry.get("beat_id") or "").strip(), []).append(entry)
+
+    validated = []
+    for beat_id, matches in by_beat.items():
+        if beat_id not in expected:
+            errors.append(f"unknown_beat:{beat_id}")
+        if len(matches) > 1:
+            errors.append(f"duplicate_beat:{beat_id}")
+
+    for beat_id, expected_info in expected.items():
+        matches = by_beat.get(beat_id) or []
+        if not matches:
+            errors.append(f"missing_beat:{beat_id}")
+            continue
+        entry = {**matches[0]}
+        anchor_matches = _display_anchor_matches(clean_text, entry.get("anchor_text") or "")
+        if len(anchor_matches) != 1:
+            errors.append(
+                f"{'missing_anchor' if not anchor_matches else 'ambiguous_anchor'}:{beat_id}"
+            )
+            entry["status"] = "dropped"
+        else:
+            entry["status"] = entry.get("status") or "ok"
+
+        quote = str(entry.get("quote") or "").strip()
+        if quote:
+            quote_words = len(quote.split())
+            if quote_words > 25 or len(_display_anchor_matches(clean_text, quote)) < 1:
+                logger.info(
+                    "PIPELINE_SLIDE_DISPLAY_MAP_QUOTE_DROPPED beat_id=%s reason=%s",
+                    beat_id,
+                    "too_long" if quote_words > 25 else "not_found",
+                )
+                entry["quote"] = ""
+
+        items_expected = expected_info["anchor"].get("items_expected")
+        if items_expected is not None:
+            try:
+                expected_count = int(items_expected)
+            except (TypeError, ValueError):
+                expected_count = 0
+            if expected_count > 0 and len(entry.get("items") or []) != expected_count:
+                errors.append(f"items_count:{beat_id}:expected_{expected_count}:got_{len(entry.get('items') or [])}")
+                entry["status"] = "dropped"
+        validated.append(entry)
+    return validated, errors
+
+
+def _repair_slide_display_map_block(
+    *,
+    section: dict,
+    clean_text: str,
+    errors: list[str],
+    model=None,
+) -> str | None:
+    expected = _display_map_expected_beats(section)
+    if not expected:
+        return None
+    beats_payload = []
+    for beat_id, item in expected.items():
+        beat = item["beat"]
+        anchor = item["anchor"]
+        beats_payload.append({
+            "beat_id": beat_id,
+            "type": beat.get("type"),
+            "role": beat.get("role"),
+            "spoken_requirement": beat.get("spoken_requirement"),
+            "pedagogical_shape": anchor.get("pedagogical_shape"),
+            "template_type": anchor.get("template_type"),
+            "items_expected": anchor.get("items_expected"),
+        })
+    prompt = f"""Tu répares uniquement la carte technique d'affichage des slides.
+
+Le texte oral ci-dessous est définitif. Ne le réécris pas.
+Tu dois produire uniquement ce bloc, sans commentaire:
+
+{_SLIDE_DISPLAY_ORDER_MARKER}
+beat_id_1, beat_id_2
+{_SLIDE_DISPLAY_MAP_MARKER}
+beat_id_1 | ANCRAGE: "8 à 20 mots copiés exactement depuis le texte"
+{_SLIDE_DISPLAY_END_MARKER}
+
+Règles:
+- une seule entrée par beat_id attendu;
+- ANCRAGE = les premiers mots exacts de la phrase où commence le développement principal du beat;
+- recopie caractère pour caractère depuis le texte oral;
+- si une phrase d'ancrage est ambiguë, utilise 15 à 20 mots;
+- ajoute QUOTE pour un beat maxime_a_ancrer si une phrase exacte est prononcée;
+- ajoute ITEMS séparés par ; si items_expected est renseigné.
+
+Erreurs à corriger:
+{json.dumps(errors or [], ensure_ascii=False)}
+
+Beats attendus:
+{json.dumps(beats_payload, ensure_ascii=False, indent=2)}
+
+Texte oral:
+{clean_text}
+"""
+    try:
+        return _anthropic_post(
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=1400,
+            model=model,
+        )
+    except Exception as exc:
+        logger.warning(
+            "PIPELINE_SLIDE_DISPLAY_MAP_REPAIR_FAILED section=%s error=%s",
+            _section_label(section),
+            str(exc)[:220],
+        )
+        return None
+
+
+def _prepare_slide_display_map_for_section(section: dict, raw_text: str, model=None) -> dict:
+    clean_text, entries, parse_errors, order_declared = _parse_slide_display_map_with_order(raw_text)
+    expected = _display_map_expected_beats(section)
+    if not expected:
+        return {
+            "text": clean_text,
+            "slide_display_map": [],
+            "display_order_declared": order_declared,
+            "display_map_status": "none",
+            "display_map_errors": parse_errors if entries else [],
+        }
+
+    validated, validation_errors = _validate_slide_display_map(section, entries, clean_text)
+    errors = [*parse_errors, *validation_errors]
+    if not errors and validated:
+        return {
+            "text": clean_text,
+            "slide_display_map": validated,
+            "display_order_declared": order_declared,
+            "display_map_status": "ok",
+            "display_map_errors": [],
+        }
+
+    repaired_raw = _repair_slide_display_map_block(
+        section=section,
+        clean_text=clean_text,
+        errors=errors,
+        model=model,
+    )
+    if repaired_raw:
+        _repaired_text, repaired_entries, repaired_parse_errors, repaired_order = _parse_slide_display_map_with_order(
+            f"{clean_text}\n\n{repaired_raw}"
+        )
+        repaired_validated, repaired_validation_errors = _validate_slide_display_map(
+            section,
+            repaired_entries,
+            clean_text,
+        )
+        repaired_errors = [*repaired_parse_errors, *repaired_validation_errors]
+        if not repaired_errors and repaired_validated:
+            return {
+                "text": clean_text,
+                "slide_display_map": [
+                    {**entry, "status": "repaired"} for entry in repaired_validated
+                ],
+                "display_order_declared": repaired_order,
+                "display_map_status": "repaired",
+                "display_map_errors": [],
+            }
+
+    logger.info(
+        "PIPELINE_SLIDE_DISPLAY_MAP_FAILED section=%s errors=%s",
+        _section_label(section),
+        errors[:8],
+    )
+    return {
+        "text": clean_text,
+        "slide_display_map": validated,
+        "display_order_declared": order_declared,
+        "display_map_status": "failed",
+        "display_map_errors": errors[:20],
+    }
+
+
+def _slide_display_generation_fields(section_generation: dict) -> dict:
+    return {
+        "slide_display_map": section_generation.get("slide_display_map") or [],
+        "display_order_declared": section_generation.get("display_order_declared") or [],
+        "display_map_status": section_generation.get("display_map_status") or "none",
+        "display_map_errors": section_generation.get("display_map_errors") or [],
+    }
+
+
+def _revalidate_slide_display_payload(
+    section: dict,
+    display_payload: dict,
+    text: str,
+    reason: str,
+) -> dict:
+    if display_payload.get("display_map_status") not in {"ok", "repaired", "relocated_patch"}:
+        return display_payload
+    validated, errors = _validate_slide_display_map(
+        section,
+        display_payload.get("slide_display_map") or [],
+        text,
+    )
+    if not errors:
+        return {
+            **display_payload,
+            "slide_display_map": validated,
+            "display_map_errors": [],
+        }
+    return {
+        **display_payload,
+        "slide_display_map": validated,
+        "display_map_status": "failed",
+        "display_map_errors": [
+            *display_payload.get("display_map_errors", []),
+            f"lost_after_{reason}",
+            *errors,
+        ][:20],
+    }
+
+
+def _patch_char_range(patch: dict, current_text: str) -> tuple[int, int] | None:
+    try:
+        start = int(patch.get("original_start"))
+        end = int(patch.get("original_end"))
+    except (TypeError, ValueError):
+        start = -1
+        end = -1
+    original = str(patch.get("original") or "")
+    if start >= 0 and end >= start and current_text[start:end] == original:
+        return start, end
+    if not original:
+        return None
+    if current_text.count(original) != 1:
+        return None
+    start = current_text.find(original)
+    return start, start + len(original)
+
+
+def _tracked_display_text_after_patch(
+    *,
+    current_text: str,
+    tracked_text: str,
+    patch_start: int,
+    patch_end: int,
+    replacement: str,
+) -> tuple[str, bool]:
+    matches = _display_anchor_matches(current_text, tracked_text)
+    if len(matches) != 1:
+        return tracked_text, False
+    span_start = int(matches[0]["char_start"])
+    span_end = int(matches[0]["char_end"])
+    if max(span_start, patch_start) >= min(span_end, patch_end):
+        return tracked_text, False
+    prefix = current_text[span_start:min(max(patch_start, span_start), span_end)]
+    suffix = current_text[max(min(patch_end, span_end), span_start):span_end]
+    updated = f"{prefix}{replacement}{suffix}".strip()
+    return (updated or replacement.strip() or tracked_text), True
+
+
+def _thread_slide_display_map_through_patches(
+    section: dict,
+    *,
+    before_text: str,
+    after_text: str,
+    applied_patches: list[dict],
+    pass_name: str,
+) -> dict:
+    entries = section.get("slide_display_map") if isinstance(section.get("slide_display_map"), list) else []
+    status = str(section.get("display_map_status") or "none")
+    if status not in {"ok", "repaired", "relocated_patch"} or not entries:
+        return section
+
+    threaded_entries = [dict(entry) for entry in entries if isinstance(entry, dict)]
+    current_text = before_text or ""
+    touched_any = False
+
+    for patch in applied_patches or []:
+        original = str((patch or {}).get("original") or "")
+        replacement = str((patch or {}).get("replacement") or "")
+        patch_range = _patch_char_range(patch or {}, current_text)
+        if not patch_range:
+            continue
+        patch_start, patch_end = patch_range
+        next_text = f"{current_text[:patch_start]}{replacement}{current_text[patch_end:]}"
+        touched_patch = False
+
+        for entry in threaded_entries:
+            anchor_text = str(entry.get("anchor_text") or "")
+            if anchor_text:
+                updated_anchor, changed = _tracked_display_text_after_patch(
+                    current_text=current_text,
+                    tracked_text=anchor_text,
+                    patch_start=patch_start,
+                    patch_end=patch_end,
+                    replacement=replacement,
+                )
+                if changed:
+                    entry["anchor_text"] = updated_anchor
+                    entry["status"] = "relocated_patch"
+                    touched_patch = True
+
+            quote = str(entry.get("quote") or "")
+            if quote:
+                updated_quote, changed = _tracked_display_text_after_patch(
+                    current_text=current_text,
+                    tracked_text=quote,
+                    patch_start=patch_start,
+                    patch_end=patch_end,
+                    replacement=replacement,
+                )
+                if changed:
+                    entry["quote"] = updated_quote
+                    entry["status"] = "relocated_patch"
+                    touched_patch = True
+
+        if touched_patch:
+            touched_any = True
+        current_text = next_text
+
+    validated, errors = _validate_slide_display_map(section, threaded_entries, after_text or current_text)
+    if errors:
+        degraded_entries = []
+        for entry in validated:
+            entry = {**entry}
+            if entry.get("status") == "dropped":
+                entry["status"] = f"lost_after_{pass_name}"
+            degraded_entries.append(entry)
+        return {
+            **section,
+            "slide_display_map": degraded_entries,
+            "display_map_status": "degraded",
+            "display_map_errors": [
+                *(section.get("display_map_errors") or []),
+                f"lost_after_{pass_name}",
+                *errors,
+            ][:20],
+        }
+
+    if not touched_any:
+        return {
+            **section,
+            "slide_display_map": validated,
+            "display_map_errors": [],
+        }
+    return {
+        **section,
+        "slide_display_map": validated,
+        "display_map_status": "relocated_patch",
+        "display_map_errors": [],
     }
 
 
@@ -6395,6 +6948,14 @@ def _build_structured_section_prompt(
         generated_context = _compact_words(generated_so_far, 900) or "(début de la partie)"
     scope_guard = _structured_section_scope_guard(section)
     teaching_beats_context = _section_teaching_beats_prompt(section)
+    has_slide_display_map = bool(_display_map_expected_beats(section))
+    response_instruction = (
+        "Réponds avec le texte oral de cette section, puis le bloc technique "
+        "ORDRE_AFFICHAGE_SLIDES / CARTE_AFFICHAGE_SLIDES demandé par le contrat de section. "
+        "Le bloc technique doit venir après le texte oral."
+        if has_slide_display_map
+        else "Réponds uniquement avec le texte oral de cette section."
+    )
     return f"""Tu écris UNE SECTION d'une partie audio professionnelle TTS-ready.
 
 SOCLE GÉNÉRAL À RESPECTER :
@@ -6436,7 +6997,7 @@ Contraintes absolues :
 - Ne formule pas l'unité interne comme "ce cours", "premier cours", "cours actuel" ou "le cours qui nous occupe".
 - Préfère "premier grand thème", "cette première partie", "ce chapitre", "cette séquence", "ce point" ou "cet axe" selon le contexte.
 - Ne dis jamais "trois quarts d'heure", "45 minutes" ou une durée équivalente pour situer la séquence.
-- Ne mentionne jamais d'heure précise, de durée de fichier, de budget mots, de nom de fichier ou de découpage technique.
+- Dans le texte oral, ne mentionne jamais d'heure précise, de durée de fichier, de budget mots, de nom de fichier ou de découpage technique. Le bloc technique final demandé pour les slides est la seule exception, et il reste hors oral.
 - Ne dis jamais aux apprenants de ne pas se soucier des horaires : présente seulement la progression pédagogique.
 - Pour une introduction seulement : ton naturel, posé, proche de "Bien. Maintenant que le cadre général est posé, on peut entrer dans le premier grand thème." Ne recopie pas cette phrase systématiquement. Pour une partie de développement, n'utilise pas ce modèle : entre directement dans l'axe demandé.
 - Oral professionnel, clair, chaleureux, sans vocabulaire littéraire excessif.
@@ -6452,11 +7013,11 @@ Contraintes absolues :
 - Si cette section est une introduction, elle doit annoncer le plan avant tout exemple, avec une formulation naturelle du type : "Pour avancer progressivement, on va suivre trois grands axes. D'abord... Ensuite... Et enfin...".
 - Si cette introduction est générée après le contenu principal, écris-la quand même comme le tout début de la partie, jamais comme une suite.
 - Si cette section est une partie, elle doit développer seulement cette partie et apporter une idée nouvelle identifiable. Elle ne doit jamais refaire l'accueil, le cadrage de la journée, l'annonce des thèmes de la journée ou le plan global déjà porté par l'introduction.
-- Si cette section contient des teaching_beats, couvre-les dans l'ordre avec naturel. Ne les nomme jamais comme des beats, slides, anchors, PowerPoint ou templates.
+- Si cette section contient des teaching_beats, couvre-les avec naturel. Tu peux choisir l'ordre narratif qui sert le mieux la prose, mais chaque beat ancré doit avoir un seul moment de développement principal. Ne les nomme jamais comme des beats, slides, anchors, PowerPoint ou templates.
 - Si cette section est une conclusion, elle doit récapituler sans ouvrir un nouveau développement.
 - Après l'annonce Q/R ou la mention du tchat, aucun nouveau développement.
 
-Réponds uniquement avec le texte oral de cette section."""
+{response_instruction}"""
 
 
 def _structured_section_scope_guard(section: dict) -> str:
@@ -6765,6 +7326,10 @@ def _generate_structured_section_beat_first(
         "beat_texts": beat_records,
         "generation_mode": "beat_first",
         "beat_count": len(beat_records),
+        "slide_display_map": [],
+        "display_order_declared": [],
+        "display_map_status": "none",
+        "display_map_errors": [],
     }
 
 
@@ -6818,19 +7383,21 @@ def _generate_structured_section_record(
                 result["beat_alignment_status"] = "aligned"
             return result
 
+    section_payload = _generate_structured_section_payload(
+        job=job,
+        course_plan=course_plan,
+        section=section,
+        previous_course_summary=previous_course_summary,
+        generated_so_far=generated_so_far,
+        module_content=module_content,
+        model=model,
+    )
     return {
-        "text": _generate_structured_section(
-            job=job,
-            course_plan=course_plan,
-            section=section,
-            previous_course_summary=previous_course_summary,
-            generated_so_far=generated_so_far,
-            module_content=module_content,
-            model=model,
-        ),
+        "text": section_payload["text"],
         "beat_texts": [],
         "generation_mode": "section_full",
         "beat_alignment_status": "not_applicable",
+        **_slide_display_generation_fields(section_payload),
     }
 
 
@@ -6905,6 +7472,7 @@ Réponds uniquement avec la section corrigée."""
 
 def _fit_generated_section_to_budget(text: str, target_words: int) -> str:
     text = _sanitize_learner_facing_text(_clean_llm_text(text))
+    text = _strip_residual_slide_display_map_leaks(text)
     target_words = int(target_words or 0)
     if target_words <= 0:
         return text
@@ -6920,7 +7488,7 @@ def _fit_generated_section_to_budget(text: str, target_words: int) -> str:
     return text.strip()
 
 
-def _generate_structured_section(
+def _generate_structured_section_payload(
     *,
     job: dict,
     course_plan: dict,
@@ -6929,7 +7497,7 @@ def _generate_structured_section(
     generated_so_far: str,
     module_content: str,
     model=None,
-) -> str:
+) -> dict:
     target_words = int(section.get("target_words") or 500)
     prompt = _build_structured_section_prompt(
         job=job,
@@ -6944,7 +7512,15 @@ def _generate_structured_section(
         max_tokens=_structured_generation_max_tokens(target_words),
         model=model,
     )
-    section_text = _fit_generated_section_to_budget(raw, target_words)
+    display_payload = _prepare_slide_display_map_for_section(section, raw, model=model)
+    section_text = _fit_generated_section_to_budget(display_payload["text"], target_words)
+    if section_text.strip() != display_payload["text"].strip():
+        display_payload = _revalidate_slide_display_payload(
+            section,
+            display_payload,
+            section_text,
+            "section_sanitize",
+        )
     if _part_section_opening_leak_evidence(section, section_text):
         logger.info(
             "PIPELINE_STRUCTURED_SECTION_SCOPE_REPAIR formation_job_id=%s content_job_id=%s course=%s part=%s",
@@ -6961,7 +7537,38 @@ def _generate_structured_section(
             module_content=module_content,
             model=model,
         )
-    return section_text
+        if section_text.strip() != display_payload["text"].strip():
+            display_payload = _revalidate_slide_display_payload(
+                section,
+                display_payload,
+                section_text,
+                "scope_repair",
+            )
+    return {
+        **display_payload,
+        "text": section_text,
+    }
+
+
+def _generate_structured_section(
+    *,
+    job: dict,
+    course_plan: dict,
+    section: dict,
+    previous_course_summary: str,
+    generated_so_far: str,
+    module_content: str,
+    model=None,
+) -> str:
+    return _generate_structured_section_payload(
+        job=job,
+        course_plan=course_plan,
+        section=section,
+        previous_course_summary=previous_course_summary,
+        generated_so_far=generated_so_far,
+        module_content=module_content,
+        model=model,
+    )["text"]
 
 
 def _ethical_micro_review_enabled() -> bool:
@@ -7663,13 +8270,24 @@ def _run_ethical_micro_review_for_section(
     section: dict,
     section_text: str,
     model=None,
-) -> str:
+    return_details: bool = False,
+) -> str | dict:
+    def _return(text: str, *, applied=None, rejected=None, status: str = ""):
+        if return_details:
+            return {
+                "text": text,
+                "applied": list(applied or []),
+                "rejected": list(rejected or []),
+                "status": status,
+            }
+        return text
+
     if not _ethical_micro_review_enabled() or not (section_text or "").strip():
-        return section_text
+        return _return(section_text, status="skipped")
 
     rules_text = _load_ethical_micro_rules_text()
     if not rules_text.strip():
-        return section_text
+        return _return(section_text, status="skipped")
 
     prompt = _build_ethical_micro_review_prompt(
         course_plan=course_plan,
@@ -7707,7 +8325,7 @@ def _run_ethical_micro_review_for_section(
                 duration_ms=int((time.time() - started) * 1000),
             ),
         )
-        return section_text
+        return _return(section_text, status="error")
 
     patches, parse_error = _parse_patches_response(raw)
     if parse_error:
@@ -7731,7 +8349,7 @@ def _run_ethical_micro_review_for_section(
                 duration_ms=int((time.time() - started) * 1000),
             ),
         )
-        return section_text
+        return _return(section_text, status="parse_error")
 
     max_patches = _ethical_micro_max_patches(section)
     scoped_patches = [
@@ -7833,7 +8451,12 @@ def _run_ethical_micro_review_for_section(
                 duration_ms=int((time.time() - started) * 1000),
             ),
         )
-        return _sanitize_learner_facing_text(candidate)
+        return _return(
+            _sanitize_learner_facing_text(candidate),
+            applied=applied,
+            rejected=rejected,
+            status="patched",
+        )
 
     if not rejected and not proposed_count:
         logger.info(
@@ -7856,7 +8479,7 @@ def _run_ethical_micro_review_for_section(
                 duration_ms=int((time.time() - started) * 1000),
             ),
         )
-        return section_text
+        return _return(section_text, status="clean")
 
     logger.info(
         "PIPELINE_ETHICAL_MICRO_REVIEW_REJECTED formation_job_id=%s content_job_id=%s course=%s section=%s proposed=%s rejected=%s lexical=%s residual=%s duration_ms=%s",
@@ -7886,7 +8509,7 @@ def _run_ethical_micro_review_for_section(
             duration_ms=int((time.time() - started) * 1000),
         ),
     )
-    return section_text
+    return _return(section_text, rejected=rejected, status="rejected")
 
 
 def _summarize_previous_course_for_structured(course_text: str, model=None) -> str:
@@ -9900,6 +10523,7 @@ def _generate_structured_course_body(
             "generation_mode": section_generation.get("generation_mode"),
             "beat_alignment_status": section_generation.get("beat_alignment_status"),
             "beat_texts": section_generation.get("beat_texts") or [],
+            **_slide_display_generation_fields(section_generation),
             **_section_artifact_metadata(section),
         })
     body_text = "\n\n".join(s for s in section_texts if s.strip()).strip()
@@ -9959,6 +10583,7 @@ def _generate_late_opening_for_structured_course(
             "generation_mode": section_generation.get("generation_mode"),
             "beat_alignment_status": section_generation.get("beat_alignment_status"),
             "beat_texts": section_generation.get("beat_texts") or [],
+            **_slide_display_generation_fields(section_generation),
             **_section_artifact_metadata(section),
         },
         "text": opening_text,
@@ -10001,6 +10626,7 @@ def _generate_late_day_conclusion_for_structured_course(
             "generation_mode": section_generation.get("generation_mode"),
             "beat_alignment_status": section_generation.get("beat_alignment_status"),
             "beat_texts": section_generation.get("beat_texts") or [],
+            **_slide_display_generation_fields(section_generation),
             **_section_artifact_metadata(section),
         },
         "text": day_conclusion_text,
@@ -10411,18 +11037,27 @@ def _run_structured_content_generation(
             reviewed_sections = []
             for section in section_records:
                 before_text = section.get("text") or ""
-                reviewed_text = _run_ethical_micro_review_for_section(
+                review_result = _run_ethical_micro_review_for_section(
                     job=job,
                     course_plan=course_plan,
                     section=section,
                     section_text=before_text,
                     model=model,
+                    return_details=True,
                 )
+                reviewed_text = review_result.get("text") or before_text
                 reviewed = {
                     **section,
                     "text": reviewed_text,
                     "word_count": count_tts_spoken_words(reviewed_text),
                 }
+                reviewed = _thread_slide_display_map_through_patches(
+                    reviewed,
+                    before_text=before_text,
+                    after_text=reviewed_text,
+                    applied_patches=review_result.get("applied") or [],
+                    pass_name="micro_review",
+                )
                 if reviewed_text.strip() != before_text.strip():
                     reviewed["micro_review_before_words"] = count_tts_spoken_words(before_text)
                 reviewed_sections.append(reviewed)
@@ -14242,8 +14877,16 @@ def _apply_patches(text: str, patches: list) -> tuple:
         replacement = p["replacement"]
         count = text.count(original)
         if count == 1:
-            text = text.replace(original, replacement, 1)
-            applied.append(p)
+            start = text.find(original)
+            end = start + len(original)
+            text = f"{text[:start]}{replacement}{text[end:]}"
+            applied.append({
+                **p,
+                "original_start": start,
+                "original_end": end,
+                "replacement_start": start,
+                "replacement_end": start + len(replacement),
+            })
         elif count == 0:
             rejected.append({**p, "reject_reason": "original not found"})
         else:

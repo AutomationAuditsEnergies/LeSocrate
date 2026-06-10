@@ -1,5 +1,24 @@
 # Changelog
 
+## 2026-06-10
+
+### feat(slides): carte d'affichage déclarée par le rédacteur
+
+Ajout d'une carte technique `ORDRE_AFFICHAGE_SLIDES` / `CARTE_AFFICHAGE_SLIDES`
+à la génération de section, strippée avant budget/TTS, validée par match
+verbatim et persistée dans les artifacts de sections. Le deck sait désormais
+calculer des fenêtres de slides depuis cette carte en
+`FORMATION_SLIDES_DISPLAY_MAP_MODE=on`, avec mode `shadow` par défaut et
+fallback LLM par section si une carte est absente ou invalide.
+Durcissement avant rollout : la carte est aussi strippée si le modèle omet
+`ORDRE_AFFICHAGE_SLIDES`, un filet anti-fuite retire les marqueurs résiduels
+avant TTS, et la validation utilise le même matching tokenisé que le deck.
+Les patches de conformité appliqués aux sections transportent maintenant les
+repères de slide : si un `ANCRAGE` ou une `QUOTE` est réécrit via
+`original → replacement`, la carte hérite du texte successeur avec le statut
+`relocated_patch`; si le successeur n'est plus vérifiable, la section est
+marquée `degraded` et retombe sur le fallback LLM.
+
 ## 2026-06-02
 
 ### fix(slides): chevauchement du titre sur la slide "Programme journée"

@@ -1300,6 +1300,17 @@ def _course_section_records_from_artifact(source: dict) -> list[dict]:
                     "kind": section.get("kind") or "",
                     "title": section.get("title") or label,
                     "text": text,
+                    "slide_display_map": (
+                        section.get("slide_display_map")
+                        if isinstance(section.get("slide_display_map"), list)
+                        else []
+                    ),
+                    "display_order_declared": (
+                        section.get("display_order_declared")
+                        if isinstance(section.get("display_order_declared"), list)
+                        else []
+                    ),
+                    "display_map_status": section.get("display_map_status") or "none",
                 }
             )
     return records
@@ -1352,6 +1363,198 @@ def _section_alignment_units(section: dict, word_cursor: int, min_units: int = 0
         )
         cursor += len(words)
     return units, cursor
+
+
+def _display_map_mode() -> str:
+    value = str(os.getenv("FORMATION_SLIDES_DISPLAY_MAP_MODE", "shadow")).strip().lower()
+    if value in {"off", "0", "false", "no"}:
+        return "off"
+    if value in {"on", "1", "true", "yes"}:
+        return "on"
+    return "shadow"
+
+
+def _fold_display_text(text: str | None) -> str:
+    cleaned = _strip_tts_tags(text or "")
+    cleaned = cleaned.replace("\u00a0", " ")
+    cleaned = cleaned.replace("’", "'").replace("‘", "'").replace("`", "'")
+    cleaned = cleaned.replace("«", '"').replace("»", '"').replace("“", '"').replace("”", '"')
+    cleaned = re.sub(r"\s+", " ", cleaned)
+    return cleaned.strip().lower()
+
+
+def _fold_display_token(text: str | None) -> str:
+    folded = _fold_display_text(text)
+    return re.sub(r"^[^\wÀ-ÖØ-öø-ÿ]+|[^\wÀ-ÖØ-öø-ÿ]+$", "", folded)
+
+
+def _display_text_tokens(text: str) -> list[dict]:
+    tokens = []
+    for match in re.finditer(r"\S+", text or ""):
+        folded = _fold_display_token(match.group(0))
+        if not folded:
+            continue
+        tokens.append({
+            "text": match.group(0),
+            "folded": folded,
+            "start": match.start(),
+            "end": match.end(),
+        })
+    return tokens
+
+
+def _display_anchor_matches(text: str, anchor_text: str) -> list[dict]:
+    tokens = _display_text_tokens(text)
+    anchor_tokens = [token["folded"] for token in _display_text_tokens(anchor_text)]
+    if not tokens or not anchor_tokens:
+        return []
+    folded_tokens = [token["folded"] for token in tokens]
+    matches = []
+    span_len = len(anchor_tokens)
+    for idx in range(0, len(folded_tokens) - span_len + 1):
+        if folded_tokens[idx:idx + span_len] == anchor_tokens:
+            matches.append({
+                "word_start": idx,
+                "word_end": idx + span_len,
+                "char_start": tokens[idx]["start"],
+                "char_end": tokens[idx + span_len - 1]["end"],
+            })
+    return matches
+
+
+def _display_map_entry_by_beat(section: dict) -> dict[str, dict]:
+    entries = section.get("slide_display_map") if isinstance(section.get("slide_display_map"), list) else []
+    by_beat = {}
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        beat_id = str(entry.get("beat_id") or "").strip()
+        anchor_text = str(entry.get("anchor_text") or "").strip()
+        if beat_id and anchor_text:
+            by_beat[beat_id] = entry
+    return by_beat
+
+
+def _anchor_with_display_map_fields(anchor: dict, entry: dict) -> dict:
+    fields_hint = anchor.get("fields_hint") if isinstance(anchor.get("fields_hint"), dict) else {}
+    merged_fields = {**fields_hint}
+    quote = str(entry.get("quote") or "").strip()
+    items = entry.get("items") if isinstance(entry.get("items"), list) else []
+    if quote:
+        merged_fields["quote"] = quote
+    if items:
+        merged_fields["items"] = [str(item).strip() for item in items if str(item).strip()]
+    return {
+        **anchor,
+        "fields_hint": merged_fields,
+        "display_map_anchor_text": entry.get("anchor_text") or "",
+        "display_map_status": entry.get("status") or "",
+    }
+
+
+def _build_display_map_source_blocks(section: dict, anchors: list[dict], section_word_start: int) -> tuple[list[dict], dict] | None:
+    status = str(section.get("display_map_status") or "").strip().lower()
+    if status not in {"ok", "repaired", "relocated_patch"}:
+        return None
+    text = section.get("text") or ""
+    tokens = _display_text_tokens(text)
+    if not tokens or not anchors:
+        return None
+
+    entries_by_beat = _display_map_entry_by_beat(section)
+    located = []
+    for anchor in anchors:
+        beat_id = str(anchor.get("beat_id") or "").strip()
+        entry = entries_by_beat.get(beat_id)
+        if not entry:
+            return None
+        matches = _display_anchor_matches(text, entry.get("anchor_text") or "")
+        if len(matches) != 1:
+            return None
+        located.append({
+            "anchor": _anchor_with_display_map_fields(anchor, entry),
+            "entry": entry,
+            "match": matches[0],
+        })
+    located.sort(key=lambda item: (item["match"]["word_start"], str(item["anchor"].get("anchor_id") or "")))
+
+    blocks = []
+    for idx, item in enumerate(located):
+        local_word_start = 0 if idx == 0 else int(item["match"]["word_start"])
+        local_word_end = (
+            int(located[idx + 1]["match"]["word_start"])
+            if idx + 1 < len(located)
+            else len(tokens)
+        )
+        if local_word_end <= local_word_start:
+            return None
+        char_start = 0 if idx == 0 else int(item["match"]["char_start"])
+        char_end = (
+            int(located[idx + 1]["match"]["char_start"])
+            if idx + 1 < len(located)
+            else len(text)
+        )
+        block_text = text[char_start:char_end].strip()
+        if not block_text:
+            return None
+        anchor = item["anchor"]
+        assignment = {
+            "anchor_id": anchor.get("anchor_id"),
+            "unit_start": local_word_start,
+            "unit_end": max(local_word_start, local_word_end - 1),
+            "fit_reason": "display_map_anchor",
+        }
+        blocks.append({
+            "source_block_id": -1,
+            "word_start": section_word_start + local_word_start,
+            "word_end": section_word_start + local_word_end,
+            "word_count": local_word_end - local_word_start,
+            "sub_part_index": section.get("sub_part_index"),
+            "sub_part_name": section.get("sub_part_name"),
+            "text": block_text,
+            "source_refs": [
+                {
+                    "sub_part_index": section.get("sub_part_index"),
+                    "sub_part_name": section.get("sub_part_name"),
+                    "passe": 1,
+                    "course_number": section.get("course_number"),
+                    "part_number": section.get("part_number"),
+                    "section_index": section.get("section_index"),
+                    "section_label": section.get("section_label"),
+                    "slide_anchor_id": anchor.get("anchor_id"),
+                    "source_alignment": "section_slide_alignment",
+                    "alignment_status": "display_map",
+                    "alignment_method": "display_map",
+                    "unit_start": assignment["unit_start"],
+                    "unit_end": assignment["unit_end"],
+                }
+            ],
+            "slide_anchors": [anchor],
+            "source_alignment": "section_slide_alignment",
+            "section_alignment": {
+                "course_number": section.get("course_number"),
+                "part_number": section.get("part_number"),
+                "section_index": section.get("section_index"),
+                "section_label": section.get("section_label"),
+                "anchor_id": anchor.get("anchor_id"),
+                "unit_start": assignment["unit_start"],
+                "unit_end": assignment["unit_end"],
+                "fit_reason": assignment["fit_reason"],
+                "status": "display_map",
+                "alignment_method": "display_map",
+            },
+        })
+    return blocks, {
+        "status": "display_map",
+        "alignment_method": "display_map",
+        "assignments": [
+            {
+                "anchor_id": (item["anchor"].get("anchor_id") or ""),
+                "word_start": item["match"]["word_start"],
+            }
+            for item in located
+        ],
+    }
 
 
 def _alignment_anchor_payload(anchor: dict) -> dict:
@@ -1622,13 +1825,14 @@ def _build_section_aligned_source_blocks(source: dict, anchors: list[dict], mode
         return None
 
     logger.info(
-        "PIPELINE_SLIDES_SECTION_ALIGNMENT_START folder=%s content_job=%s sections=%s anchors=%s workers=%s model=%s",
+        "PIPELINE_SLIDES_SECTION_ALIGNMENT_START folder=%s content_job=%s sections=%s anchors=%s workers=%s model=%s display_map_mode=%s",
         source.get("folder_id"),
         source.get("content_job_id"),
         len(sections),
         len(anchors),
         _section_slide_alignment_workers(),
         model,
+        _display_map_mode(),
     )
 
     anchors_by_section: dict[tuple[int, int], list[dict]] = {}
@@ -1636,6 +1840,16 @@ def _build_section_aligned_source_blocks(source: dict, anchors: list[dict], mode
         key = (int(anchor.get("course_number") or 0), int(anchor.get("part_number") or 0))
         anchors_by_section.setdefault(key, []).append(anchor)
 
+    display_map_mode = _display_map_mode()
+    display_map_stats = {
+        "mode": display_map_mode,
+        "sections_available": 0,
+        "sections_used": 0,
+        "fallback_llm": 0,
+        "divergence_p50": None,
+        "divergence_p95": None,
+    }
+    display_map_divergences = []
     word_cursor = 0
     prepared_sections = []
 
@@ -1645,12 +1859,22 @@ def _build_section_aligned_source_blocks(source: dict, anchors: list[dict], mode
         units, word_cursor = _section_alignment_units(section, word_cursor, min_units=len(section_anchors))
         if not units:
             continue
+        display_map_result = None
+        if display_map_mode != "off" and section_anchors:
+            display_map_result = _build_display_map_source_blocks(
+                section,
+                section_anchors,
+                int(units[0].get("word_start") or 0),
+            )
+            if display_map_result:
+                display_map_stats["sections_available"] += 1
         prepared_sections.append(
             {
                 "section_order": section_order,
                 "section": section,
                 "units": units,
                 "anchors": section_anchors,
+                "display_map_result": display_map_result,
             }
         )
 
@@ -1682,7 +1906,12 @@ def _build_section_aligned_source_blocks(source: dict, anchors: list[dict], mode
         )
         return prepared["section_order"], assignments, debug
 
-    anchored_sections = [prepared for prepared in prepared_sections if prepared["anchors"]]
+    anchored_sections = [
+        prepared
+        for prepared in prepared_sections
+        if prepared["anchors"]
+        and not (display_map_mode == "on" and prepared.get("display_map_result"))
+    ]
     alignment_results: dict[int, tuple[list[dict], dict]] = {}
     workers = min(_section_slide_alignment_workers(), max(1, len(anchored_sections)))
     if anchored_sections and workers > 1:
@@ -1745,6 +1974,28 @@ def _build_section_aligned_source_blocks(source: dict, anchors: list[dict], mode
             )
             continue
 
+        if display_map_mode == "on" and prepared.get("display_map_result"):
+            display_blocks, display_debug = prepared["display_map_result"]
+            for display_block in display_blocks:
+                display_block = {**display_block, "source_block_id": len(blocks)}
+                blocks.append(display_block)
+                aligned_anchor_count += 1
+            display_map_stats["sections_used"] += 1
+            alignment_debug.append(
+                {
+                    "course_number": section.get("course_number"),
+                    "part_number": section.get("part_number"),
+                    "section_index": section.get("section_index"),
+                    "section_label": section.get("section_label"),
+                    "anchors": len(section_anchors),
+                    "units": len(units),
+                    "status": "display_map",
+                    "alignment_method": "display_map",
+                    "assignments": display_debug.get("assignments") or [],
+                }
+            )
+            continue
+
         assignments, debug = alignment_results.get(
             prepared["section_order"],
             (
@@ -1752,11 +2003,29 @@ def _build_section_aligned_source_blocks(source: dict, anchors: list[dict], mode
                 {"status": "fallback", "reason": "missing_parallel_result"},
             ),
         )
+        if display_map_mode == "on":
+            display_map_stats["fallback_llm"] += 1
         anchor_by_id = {str(anchor.get("anchor_id") or ""): anchor for anchor in section_anchors}
+        shadow_display_by_anchor = {}
+        if display_map_mode == "shadow" and prepared.get("display_map_result"):
+            display_blocks, _display_debug = prepared["display_map_result"]
+            shadow_display_by_anchor = {
+                str((block.get("slide_anchors") or [{}])[0].get("anchor_id") or ""): int(block.get("word_start") or 0)
+                for block in display_blocks
+                if block.get("slide_anchors")
+            }
         for assignment in assignments:
             anchor = anchor_by_id.get(str(assignment.get("anchor_id") or ""))
             if not anchor:
                 continue
+            if shadow_display_by_anchor:
+                try:
+                    llm_word_start = int(units[int(assignment.get("unit_start") or 0)].get("word_start") or 0)
+                    display_word_start = shadow_display_by_anchor.get(str(anchor.get("anchor_id") or ""))
+                    if display_word_start is not None:
+                        display_map_divergences.append(abs(display_word_start - llm_word_start))
+                except (TypeError, ValueError, IndexError):
+                    pass
             blocks.append(
                 _section_alignment_block(
                     block_id=len(blocks),
@@ -1778,12 +2047,25 @@ def _build_section_aligned_source_blocks(source: dict, anchors: list[dict], mode
                 "units": len(units),
                 "status": debug.get("status"),
                 "reason": debug.get("reason"),
+                "alignment_method": "llm_fallback" if display_map_mode == "on" else "llm",
+                "display_map_shadow": (
+                    "available"
+                    if display_map_mode == "shadow" and prepared.get("display_map_result")
+                    else ""
+                ),
                 "assignments": assignments,
             }
         )
 
     if not blocks or not aligned_anchor_count:
         return None
+
+    if display_map_divergences:
+        sorted_deltas = sorted(display_map_divergences)
+        p50_idx = min(len(sorted_deltas) - 1, int(round((len(sorted_deltas) - 1) * 0.50)))
+        p95_idx = min(len(sorted_deltas) - 1, int(math.ceil((len(sorted_deltas) - 1) * 0.95)))
+        display_map_stats["divergence_p50"] = sorted_deltas[p50_idx]
+        display_map_stats["divergence_p95"] = sorted_deltas[p95_idx]
 
     logger.info(
         "PIPELINE_SLIDES_SECTION_ALIGNMENT_DONE folder=%s content_job=%s blocks=%s aligned_anchors=%s sections=%s",
@@ -1801,6 +2083,7 @@ def _build_section_aligned_source_blocks(source: dict, anchors: list[dict], mode
         "aligned_anchors": aligned_anchor_count,
         "blocks": len(blocks),
         "workers": workers,
+        "display_map": display_map_stats,
         "records": alignment_debug,
     }
 
@@ -3142,6 +3425,8 @@ def _normalize_slide(raw: dict, block: dict) -> dict:
     raw_data = raw.get("data") if isinstance(raw.get("data"), dict) else {}
     anchor_fields = (anchor or {}).get("fields_hint") if isinstance((anchor or {}).get("fields_hint"), dict) else {}
     slide_data_payload = {**anchor_fields, **raw_data}
+    if template == "quotable" and anchor_fields.get("quote"):
+        slide_data_payload["quote"] = anchor_fields["quote"]
     if template == "recap":
         reroute_event_type = "warning"
         rerouted_template = _forbidden_expression_template(

@@ -213,6 +213,87 @@ class ScriptSlideGenerationServiceTest(unittest.TestCase):
             ),
         )
 
+    def test_display_map_blocks_follow_real_text_order(self):
+        section = {
+            "course_number": 1,
+            "part_number": 2,
+            "section_index": 1,
+            "section_label": "Partie 2",
+            "sub_part_index": 0,
+            "sub_part_name": "Cours test · Partie 2",
+            "text": (
+                "Avant de commencer, posons le contexte. "
+                "Premier repère à afficher pour ouvrir le raisonnement. "
+                "Troisième repère à afficher parce que la prose le place ici. "
+                "Deuxième repère à afficher seulement après ce détour."
+            ),
+            "display_map_status": "ok",
+            "slide_display_map": [
+                {"beat_id": "b1", "anchor_text": "Premier repère à afficher", "quote": "", "items": []},
+                {"beat_id": "b2", "anchor_text": "Deuxième repère à afficher", "quote": "phrase courte", "items": []},
+                {"beat_id": "b3", "anchor_text": "Troisième repère à afficher", "quote": "", "items": ["a", "b", "c"]},
+            ],
+        }
+        anchors = [
+            {"anchor_id": "a1", "beat_id": "b1", "template_type": "reflection", "fields_hint": {}},
+            {"anchor_id": "a2", "beat_id": "b2", "template_type": "quotable", "fields_hint": {}},
+            {"anchor_id": "a3", "beat_id": "b3", "template_type": "situations", "fields_hint": {}},
+        ]
+
+        result = slides._build_display_map_source_blocks(section, anchors, section_word_start=0)
+
+        self.assertIsNotNone(result)
+        blocks, debug = result
+        self.assertEqual(debug["alignment_method"], "display_map")
+        self.assertEqual(
+            [(block["slide_anchors"][0]["beat_id"], block["slide_anchors"][0]["anchor_id"]) for block in blocks],
+            [("b1", "a1"), ("b3", "a3"), ("b2", "a2")],
+        )
+        self.assertEqual(blocks[1]["slide_anchors"][0]["fields_hint"]["items"], ["a", "b", "c"])
+        self.assertEqual(blocks[2]["slide_anchors"][0]["fields_hint"]["quote"], "phrase courte")
+        self.assertTrue(blocks[0]["text"].startswith("Avant de commencer"))
+
+    def test_display_map_mode_on_uses_llm_fallback_when_section_failed(self):
+        section = {
+            "course_number": 1,
+            "course_title": "Cours test",
+            "sub_part_index": 0,
+            "sub_part_name": "Cours test · Partie 2",
+            "section_index": 1,
+            "section_label": "Partie 2",
+            "part_number": 2,
+            "kind": "part",
+            "title": "Partie 2",
+            "text": "Premier passage aligné. Deuxième passage aligné.",
+            "display_map_status": "failed",
+            "slide_display_map": [],
+        }
+        anchors = [
+            {"anchor_id": "a1", "beat_id": "b1", "course_number": 1, "part_number": 2, "beat_order": 1},
+            {"anchor_id": "a2", "beat_id": "b2", "course_number": 1, "part_number": 2, "beat_order": 2},
+        ]
+
+        with patch.object(slides, "_display_map_mode", return_value="on"), \
+             patch.object(slides, "_course_section_records_from_artifact", return_value=[section]), \
+             patch.object(
+                 slides,
+                 "_align_section_to_slide_anchors",
+                 return_value=(
+                     [
+                         {"anchor_id": "a1", "unit_start": 0, "unit_end": 0, "fit_reason": "test"},
+                         {"anchor_id": "a2", "unit_start": 1, "unit_end": 1, "fit_reason": "test"},
+                     ],
+                     {"status": "llm", "assignments": 2},
+                 ),
+             ) as align_mock:
+            result = slides._build_section_aligned_source_blocks({}, anchors, "test-model")
+
+        self.assertIsNotNone(result)
+        blocks, _word_cursor, debug = result
+        self.assertEqual(len(blocks), 2)
+        self.assertEqual(debug["display_map"]["fallback_llm"], 1)
+        align_mock.assert_called_once()
+
     def test_slide_curation_prompt_uses_real_catalog_decision_fields(self):
         prompt = slides._prompt_for_blocks(
             [_strict_block(1)],
