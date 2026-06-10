@@ -1,4 +1,5 @@
 import unittest
+import time
 from unittest.mock import patch
 
 from services import script_slide_generation_service as slides
@@ -153,6 +154,65 @@ class ScriptSlideGenerationServiceTest(unittest.TestCase):
         self.assertEqual(anchors[0]["template_type"], "situations")
         self.assertEqual(anchors[0]["pedagogical_shape"], "triade_structurante")
 
+    def test_course_conclusion_section_uses_same_part_number_as_recap_anchor(self):
+        plan = {
+            "courses": [
+                {
+                    "course_number": 1,
+                    "course_title": "Cours test",
+                    "course_conclusion": {
+                        "title": "Conclusion du cours",
+                        "teaching_beats": [
+                            {
+                                "beat_id": "c1conclusion-b1",
+                                "type": "recap",
+                                "role": "Synthétiser ce qui vient d'être vu.",
+                                "spoken_requirement": "Rappeler les points utiles.",
+                                "slide_anchor": {
+                                    "enabled": True,
+                                    "anchor_id": "c1conclusion-b1-slide",
+                                    "template_type": "recap",
+                                    "pedagogical_shape": "synthese_apres_developpement",
+                                    "visual_goal": "Faire retenir la synthèse finale.",
+                                },
+                            }
+                        ],
+                    },
+                }
+            ]
+        }
+        artifact = {
+            "courses": [
+                {
+                    "course_number": 1,
+                    "course_title": "Cours test",
+                    "sections": [
+                        {"kind": "opening", "label": "Introduction", "text": "Bonjour et bienvenue."},
+                        {"kind": "part", "part_number": 1, "label": "Partie 1", "text": "Le développement."},
+                        {"kind": "course_conclusion", "label": "Conclusion du cours", "text": "Ce qu'on retient."},
+                        {"kind": "day_conclusion", "label": "Conclusion de journée", "text": "Bilan de la journée."},
+                    ],
+                }
+            ]
+        }
+
+        anchors = slides._extract_slide_anchors_from_plan(plan)
+        with patch.object(slides, "_load_beat_sections_artifact", return_value=artifact):
+            records = slides._course_section_records_from_artifact({})
+
+        records_by_kind = {record["kind"]: record for record in records}
+
+        self.assertEqual(anchors[0]["part_number"], 900)
+        self.assertEqual(records_by_kind["course_conclusion"]["part_number"], 900)
+        self.assertEqual(records_by_kind["day_conclusion"]["part_number"], 901)
+        self.assertEqual(
+            (anchors[0]["course_number"], anchors[0]["part_number"]),
+            (
+                records_by_kind["course_conclusion"]["course_number"],
+                records_by_kind["course_conclusion"]["part_number"],
+            ),
+        )
+
     def test_slide_curation_prompt_uses_real_catalog_decision_fields(self):
         prompt = slides._prompt_for_blocks(
             [_strict_block(1)],
@@ -270,6 +330,46 @@ class ScriptSlideGenerationServiceTest(unittest.TestCase):
         self.assertEqual(result["stats"]["max_slides"], 84)
         self.assertEqual(result["stats"]["slide_anchors_found"], 84)
         self.assertEqual(result["stats"]["slides_dropped_by_cap"], 0)
+
+    def test_parallel_slide_batches_preserve_source_order(self):
+        source = {
+            "folder_id": 10,
+            "content_job_id": 20,
+            "platform_id": 1,
+            "folder_name": "Jour test",
+            "program_title": "Formation test",
+            "segments": [_anchored_segment(idx) for idx in range(6)],
+            "beat_aligned": True,
+            "beat_aligned_segments": 6,
+            "beat_aligned_anchors": 6,
+        }
+
+        def slow_generate_batch(blocks, source_title, model, pace_profile, max_batch_slides):
+            first_id = blocks[0]["source_block_id"]
+            time.sleep(0.01 * (6 - first_id))
+            return _fake_generate_batch(blocks, source_title, model, pace_profile, max_batch_slides)
+
+        with patch.dict("os.environ", {"FORMATION_SLIDE_BATCH_WORKERS": "3"}), \
+             patch.object(slides, "_generate_batch", side_effect=slow_generate_batch):
+            result = slides._run_slide_generation_from_source(
+                source,
+                job_id=99,
+                max_slides=6,
+                pace="normal",
+                model="test-model",
+                batch_size=1,
+                persist=False,
+            )
+
+        self.assertEqual(result["stats"]["slide_batch_workers"], 3)
+        self.assertEqual(
+            [slide["source_ref"]["source_block_id"] for slide in result["slides"]],
+            list(range(6)),
+        )
+        self.assertEqual(
+            [batch["start_block"] for batch in result["pipeline_debug"]["batches"]],
+            list(range(6)),
+        )
 
     def test_cap_preserves_anchored_slides_before_unanchored(self):
         anchored = [

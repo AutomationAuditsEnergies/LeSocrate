@@ -868,8 +868,15 @@ _DEFAULT_SHAPE_BY_TEMPLATE = {
     for shape, templates in _PEDAGOGICAL_SHAPE_TO_TEMPLATES.items()
     for template in templates
 }
-_ETHICAL_MICRO_RULE_IDS = [14, 15]
-_ETHICAL_MICRO_RULESET_VERSION = "2026-05-31-ethical-micro-v3-minimal"
+_ETHICAL_MICRO_RULE_IDS = list(range(1, 17))
+_ETHICAL_LEXICAL_RULE_IDS = tuple(range(1, 17))
+_ETHICAL_LEXICAL_PREFIX_PATTERNS = {
+    # La famille "musique" est souvent réintroduite sous forme de métaphore
+    # ("musique de la voix") ou de dérivé ("musicale", "musicien").
+    "musique": r"musi(?:qu|c)[\wÀ-ÿ]*",
+    "musical": r"musi(?:qu|c)[\wÀ-ÿ]*",
+}
+_ETHICAL_MICRO_RULESET_VERSION = "2026-06-10-ethical-micro-v4-full"
 _ETHICAL_MICRO_RULES_CACHE = {"mtime": None, "text": ""}
 _ETHICAL_LEXICAL_TERMS_CACHE = {"mtime": None, "data": None}
 
@@ -6962,11 +6969,57 @@ def _ethical_micro_review_enabled() -> bool:
     return value not in {"0", "false", "no", "off"}
 
 
+def _load_ethical_lexical_rules_text_for_micro_review() -> str:
+    path = _prompt_file_path("reviews", "ethical-lexical-terms.json")
+    with open(path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    blocks = []
+    for rule in data.get("rules") or []:
+        if not isinstance(rule, dict):
+            continue
+        try:
+            rule_id = int(rule.get("rule_id") or 0)
+        except Exception:
+            continue
+        if rule_id not in _ETHICAL_MICRO_RULE_IDS:
+            continue
+        terms = [str(term).strip() for term in (rule.get("terms") or []) if str(term).strip()]
+        label = str(rule.get("label") or f"Règle #{rule_id}").strip()
+        body = (
+            f"RÈGLE #{rule_id} — {label}\n"
+            "Le texte entendu par les apprenants ne doit pas employer ces termes, "
+            "même dans une métaphore ou un exemple descriptif. Si l'idée est utile, "
+            "reformuler naturellement avec un équivalent neutre.\n"
+            f"Termes et familles à éviter : {', '.join(terms)}."
+        )
+        blocks.append(body)
+    if not blocks:
+        raise ValueError("aucune règle lexicale micro-éthique trouvée")
+    exceptions = data.get("exceptions") or []
+    exception_lines = []
+    for exc in exceptions:
+        if not isinstance(exc, dict):
+            continue
+        term = str(exc.get("term") or "").strip()
+        allow_when = str(exc.get("allow_when") or "").strip()
+        if term and allow_when:
+            exception_lines.append(f"- {term}: {allow_when}")
+    exception_text = "\n\nExceptions autorisées :\n" + "\n".join(exception_lines) if exception_lines else ""
+    return (
+        f"SOURCE LEXICALE: ethical-lexical-terms.json · version {data.get('version') or 'unknown'} "
+        f"· micro-review {_ETHICAL_MICRO_RULESET_VERSION}\n\n"
+        + "\n\n".join(blocks)
+        + exception_text
+    )
+
+
 def _load_ethical_micro_rules_text() -> str:
     path = _prompt_file_path("reviews", "compliance-rules.json")
     try:
         mtime = os.path.getmtime(path)
-        if _ETHICAL_MICRO_RULES_CACHE["mtime"] == mtime and _ETHICAL_MICRO_RULES_CACHE["text"]:
+        lexical_mtime = os.path.getmtime(_prompt_file_path("reviews", "ethical-lexical-terms.json"))
+        cache_key = (mtime, lexical_mtime)
+        if _ETHICAL_MICRO_RULES_CACHE["mtime"] == cache_key and _ETHICAL_MICRO_RULES_CACHE["text"]:
             return _ETHICAL_MICRO_RULES_CACHE["text"]
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
@@ -6985,29 +7038,37 @@ def _load_ethical_micro_rules_text() -> str:
             f"SOURCE MODULAIRE: compliance-rules.json · version {data.get('version') or 'unknown'} "
             f"· scope ethics_compliance · micro-review {_ETHICAL_MICRO_RULESET_VERSION}\n\n"
             + "\n\n".join(blocks)
+            + "\n\n"
+            + _load_ethical_lexical_rules_text_for_micro_review()
         )
-        _ETHICAL_MICRO_RULES_CACHE["mtime"] = mtime
+        _ETHICAL_MICRO_RULES_CACHE["mtime"] = cache_key
         _ETHICAL_MICRO_RULES_CACHE["text"] = rules_text
         return rules_text
     except Exception as exc:
-        logger.warning("⚠️ Règles micro-éthique JSON indisponibles, fallback règles #14/#15: %s", exc)
+        logger.warning("⚠️ Règles micro-éthique JSON indisponibles, fallback règles #1-#16: %s", exc)
         return _extract_rules_for_group(_load_review_rules(), _ETHICAL_MICRO_RULE_IDS)
 
 
 def _ethical_micro_max_patches(section: dict) -> int:
-    default = 8 if (section or {}).get("kind") == "course_calibrated" else 3
+    default = 16 if (section or {}).get("kind") == "course_calibrated" else 8
     return _env_int("FORMATION_ETHICAL_MICRO_REVIEW_MAX_PATCHES", default, min_value=1)
 
 
 def _build_ethical_micro_review_prompt(*, course_plan: dict, section: dict, section_text: str, rules_text: str) -> str:
     contract = _load_prompt_file("reviews", "ethical-micro-review.md")
     max_patches = _ethical_micro_max_patches(section)
+    rules_list = ", ".join(f"#{rid}" for rid in _ETHICAL_MICRO_RULE_IDS)
     return f"""Tu es reviewer de conformité ÉTHIQUE en micro-passe.
 
 CONTRAT :
 {contract}
 
-Tu vérifies uniquement les règles #14 et #15 du scope ethics_compliance.
+Tu vérifies toutes les règles micro-éthiques {rules_list}.
+Tu traites chaque section comme un moment pédagogique autonome : si une phrase
+peut être entendue par les apprenants, elle doit respecter littéralement ces
+règles. Les interdits lexicaux comptent même quand le mot est utilisé comme
+métaphore ou description neutre.
+
 Ignore tout le reste : style oral, humanisation, plan, budget, structure, slides,
 anchors, templates, horaires, transitions, répétitions ou préférence éditoriale.
 
@@ -7036,8 +7097,9 @@ Contraintes impératives :
 - `original` doit être trouvable tel quel dans le texte, une seule fois.
 - `replacement` corrige uniquement la violation éthique, sans enrichir, sans restructurer, sans changer la pédagogie.
 - N'ajoute pas de nouvelle idée, pas de nouveau chapitre, pas de mention de slide/PowerPoint/template/anchor/teaching beat.
-- Si la section est conforme pour #14 et #15, renvoie exactement {{"patches": []}}.
-- `rule_violated` doit être "#14" ou "#15".
+- Si la section est conforme pour les règles {rules_list}, renvoie exactement {{"patches": []}}.
+- `rule_violated` doit être un numéro parmi {rules_list}.
+- Pour les règles lexicales, remplace par un équivalent neutre et naturel sans citer le mot interdit ni expliquer qu'il est interdit.
 
 RÈGLES ÉTHIQUES À VÉRIFIER :
 {rules_text}
@@ -7051,6 +7113,42 @@ JSON :"""
 def _ethical_lexical_scan_enabled() -> bool:
     value = str(os.getenv("FORMATION_ETHICAL_LEXICAL_SCAN_ENABLED", "1")).strip().lower()
     return value not in {"0", "false", "no", "off"}
+
+
+def _ethical_lexical_strict_enabled() -> bool:
+    value = str(os.getenv("FORMATION_ETHICAL_LEXICAL_STRICT", "0")).strip().lower()
+    return value not in {"0", "false", "no", "off"}
+
+
+def _ethical_lexical_rule_ids() -> set[int]:
+    raw = str(os.getenv("FORMATION_ETHICAL_LEXICAL_RULE_IDS", "") or "").strip().lower()
+    if not raw or raw in {"all", "*"}:
+        return set(_ETHICAL_LEXICAL_RULE_IDS)
+    rule_ids = set()
+    for part in re.split(r"[,;\s]+", raw):
+        if not part:
+            continue
+        try:
+            rule_ids.add(int(part.lstrip("#")))
+        except Exception:
+            logger.warning("⚠️ Rule id lexical invalide ignoré: %s", part)
+    return rule_ids or set(_ETHICAL_LEXICAL_RULE_IDS)
+
+
+def _ethical_lexical_max_findings() -> int:
+    return _env_int("FORMATION_ETHICAL_LEXICAL_MAX_FINDINGS", 48, min_value=1)
+
+
+def _ethical_lexical_max_patches(section: dict, findings_count: int) -> int:
+    default = 24 if (section or {}).get("kind") == "course_calibrated" else 16
+    return min(
+        max(0, int(findings_count or 0)),
+        _env_int("FORMATION_ETHICAL_LEXICAL_MAX_PATCHES", default, min_value=1),
+    )
+
+
+def _ethical_lexical_max_iterations() -> int:
+    return _env_int("FORMATION_ETHICAL_LEXICAL_MAX_ITERATIONS", 2, min_value=1)
 
 
 def _load_ethical_lexical_terms() -> dict:
@@ -7072,10 +7170,20 @@ def _load_ethical_lexical_terms() -> dict:
 
 
 def _ethical_lexical_pattern(term: str):
+    normalized = re.sub(r"\s+", " ", str(term or "").strip().lower())
+    prefix_pattern = _ETHICAL_LEXICAL_PREFIX_PATTERNS.get(normalized)
+    if prefix_pattern:
+        return re.compile(
+            r"(?<![\wÀ-ÿ-])" + prefix_pattern + r"(?![\wÀ-ÿ-])",
+            re.IGNORECASE,
+        )
+
     escaped = re.escape(str(term or "").strip())
     if not escaped:
         return None
     escaped = escaped.replace(r"\ ", r"\s+")
+    if " " not in normalized and not normalized.endswith("s"):
+        escaped += "s?"
     return re.compile(r"(?<![\wÀ-ÿ-])" + escaped + r"(?![\wÀ-ÿ-])", re.IGNORECASE)
 
 
@@ -7135,7 +7243,8 @@ def _scan_ethical_lexical_findings(text: str, *, max_findings: int | None = None
     if not _ethical_lexical_scan_enabled() or not (text or "").strip():
         return []
     data = _load_ethical_lexical_terms()
-    limit = max_findings or _env_int("FORMATION_ETHICAL_LEXICAL_MAX_FINDINGS", 8, min_value=1)
+    limit = int(max_findings) if max_findings is not None else _ethical_lexical_max_findings()
+    allowed_rule_ids = _ethical_lexical_rule_ids()
     findings = []
     seen = set()
     for rule in data.get("rules") or []:
@@ -7145,7 +7254,7 @@ def _scan_ethical_lexical_findings(text: str, *, max_findings: int | None = None
             rule_id = int(rule.get("rule_id") or 0)
         except Exception:
             continue
-        if rule_id not in _ETHICAL_MICRO_RULE_IDS:
+        if rule_id not in allowed_rule_ids:
             continue
         label = str(rule.get("label") or f"Règle #{rule_id}").strip()
         for term in rule.get("terms") or []:
@@ -7181,12 +7290,8 @@ def _build_ethical_lexical_rewrite_prompt(
     section_text: str,
     findings: list[dict],
 ) -> str:
-    finding_rules = sorted({int(f.get("rule_id") or 0) for f in findings if f.get("rule_id")})
-    rules_text = _extract_rules_for_group(_load_review_rules(), finding_rules) if finding_rules else ""
-    max_patches = min(
-        len(findings),
-        _env_int("FORMATION_ETHICAL_LEXICAL_MAX_PATCHES", _ethical_micro_max_patches(section), min_value=1),
-    )
+    max_patches = _ethical_lexical_max_patches(section, len(findings))
+    rules_context = _ethical_lexical_rules_context(findings[:max_patches])
     return f"""Tu es reviewer de conformité ÉTHIQUE en passe lexicale déterministe.
 
 La micro-conformité IA a déjà été passée. Le scan déterministe a ensuite trouvé
@@ -7199,7 +7304,10 @@ Important :
 - Garde le même objectif pédagogique.
 - Ne crée pas de nouvelle partie, slide, ancre, template ou métadonnée.
 - `original` doit être une phrase ou un court passage EXACT, copié du texte.
-- `replacement` doit être entendable par les apprenants et conforme aux règles #14 et #15.
+- `replacement` doit être entendable par les apprenants et conforme aux catégories lexicales signalées.
+- Même un usage métaphorique reste interdit : par exemple "musique de la voix" doit être reformulé.
+- Le remplacement ne doit contenir aucun terme listé dans les détections.
+- `rule_violated` doit reprendre la règle lexicale de la détection traitée, par exemple "#2".
 - Maximum {max_patches} patches.
 
 Contexte pédagogique :
@@ -7210,8 +7318,8 @@ Contexte pédagogique :
 Détections lexicales à traiter :
 {json.dumps(findings[:max_patches], ensure_ascii=False, indent=2)}
 
-Règles concernées :
-{rules_text}
+Catégories lexicales concernées :
+{rules_context}
 
 Format de sortie strict, JSON valide uniquement :
 {{
@@ -7229,6 +7337,29 @@ TEXTE DE LA SECTION :
 {section_text}
 
 JSON :"""
+
+
+def _ethical_lexical_rules_context(findings: list[dict]) -> str:
+    grouped = {}
+    for finding in findings or []:
+        try:
+            rule_id = int(finding.get("rule_id") or 0)
+        except Exception:
+            continue
+        if not rule_id:
+            continue
+        item = grouped.setdefault(
+            rule_id,
+            {
+                "rule": f"#{rule_id}",
+                "label": finding.get("rule_label") or f"Règle #{rule_id}",
+                "detected_terms": [],
+            },
+        )
+        term = str(finding.get("match") or finding.get("term") or "").strip()
+        if term and term not in item["detected_terms"]:
+            item["detected_terms"].append(term)
+    return json.dumps(list(grouped.values()), ensure_ascii=False, indent=2)
 
 
 def _lexical_patch_meta(patch: dict, findings: list[dict]) -> dict:
@@ -7262,6 +7393,38 @@ def _residual_lexical_rejection(finding: dict) -> dict:
     }
 
 
+def _ethical_lexical_finding_key(finding: dict) -> tuple:
+    return (
+        int(finding.get("rule_id") or 0),
+        str(finding.get("match") or finding.get("term") or "").lower(),
+        int(finding.get("start") or 0),
+        int(finding.get("end") or 0),
+    )
+
+
+def _append_unique_ethical_lexical_findings(target: list[dict], findings: list[dict]) -> None:
+    seen = {_ethical_lexical_finding_key(item) for item in target}
+    for finding in findings or []:
+        key = _ethical_lexical_finding_key(finding)
+        if key in seen:
+            continue
+        target.append(finding)
+        seen.add(key)
+
+
+def _ethical_lexical_residual_error(findings: list[dict], *, context: str = "") -> str:
+    samples = []
+    for finding in (findings or [])[:6]:
+        match = finding.get("match") or finding.get("term") or "?"
+        rule = finding.get("rule") or f"#{finding.get('rule_id') or '?'}"
+        samples.append(f"{match} ({rule})")
+    suffix = f" — {context}" if context else ""
+    return (
+        "Termes lexicaux interdits encore présents après reformulation"
+        f"{suffix}: " + ", ".join(samples)
+    )
+
+
 def _run_ethical_lexical_rewrite_for_section(
     *,
     job: dict,
@@ -7270,8 +7433,97 @@ def _run_ethical_lexical_rewrite_for_section(
     section_text: str,
     model=None,
 ) -> dict:
-    findings = _scan_ethical_lexical_findings(section_text)
-    if not findings:
+    candidate = section_text
+    all_findings = []
+    all_applied = []
+    all_rejected = []
+    errors = []
+    residual_findings = []
+
+    max_iterations = _ethical_lexical_max_iterations()
+    for iteration in range(1, max_iterations + 1):
+        findings = _scan_ethical_lexical_findings(candidate)
+        residual_findings = findings
+        if not findings:
+            break
+        _append_unique_ethical_lexical_findings(all_findings, findings)
+
+        prompt = _build_ethical_lexical_rewrite_prompt(
+            course_plan=course_plan,
+            section=section,
+            section_text=candidate,
+            findings=findings,
+        )
+        max_patches = _ethical_lexical_max_patches(section, len(findings))
+        default_max_tokens = min(7000, max(1800, 600 + max_patches * 220))
+        max_tokens = _env_int("FORMATION_ETHICAL_LEXICAL_REWRITE_MAX_TOKENS", default_max_tokens, min_value=500)
+        try:
+            raw = _anthropic_post(
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=max_tokens,
+                model=model,
+            )
+        except Exception as exc:
+            rejected = [_residual_lexical_rejection(f) for f in findings]
+            for item in rejected:
+                item["reject_reason"] = f"lexical_rewrite_error: {str(exc)[:180]}"
+                item["lexical_iteration"] = iteration
+            all_rejected.extend(rejected)
+            errors.append(str(exc))
+            logger.warning(
+                "PIPELINE_ETHICAL_LEXICAL_REWRITE_ERROR formation_job_id=%s content_job_id=%s course=%s section=%s iteration=%s error=%s",
+                job.get("formation_job_id"),
+                job.get("id"),
+                course_plan.get("course_number"),
+                _section_label(section),
+                iteration,
+                str(exc)[:220],
+            )
+            break
+
+        patches, parse_error = _parse_patches_response(raw)
+        if parse_error:
+            rejected = [_residual_lexical_rejection(f) for f in findings]
+            for item in rejected:
+                item["reject_reason"] = f"lexical_parse_error: {parse_error[:180]}"
+                item["lexical_iteration"] = iteration
+            all_rejected.extend(rejected)
+            errors.append(parse_error)
+            break
+
+        scoped_patches = [
+            _lexical_patch_meta(patch, findings)
+            for patch in patches
+            if (_patch_rule_number(patch) in _ethical_lexical_rule_ids())
+        ][:max_patches]
+        for patch in scoped_patches:
+            patch["lexical_iteration"] = iteration
+
+        before_candidate = candidate
+        candidate, applied, rejected = _apply_patches(candidate, scoped_patches)
+        candidate, applied, budget_rejected = _apply_review_budget_guard(
+            before_candidate,
+            candidate,
+            applied,
+            "compliance",
+        )
+        for patch in applied:
+            patch["lexical_iteration"] = iteration
+        for patch in rejected + budget_rejected:
+            patch["lexical_iteration"] = iteration
+        all_applied.extend(applied)
+        all_rejected.extend(rejected + budget_rejected)
+
+        residual_findings = _scan_ethical_lexical_findings(candidate)
+        if not residual_findings:
+            break
+        if not applied or candidate.strip() == before_candidate.strip():
+            break
+
+    else:
+        residual_findings = _scan_ethical_lexical_findings(candidate)
+
+    if not all_findings:
         return {
             "text": section_text,
             "findings": [],
@@ -7281,81 +7533,15 @@ def _run_ethical_lexical_rewrite_for_section(
             "error": "",
         }
 
-    prompt = _build_ethical_lexical_rewrite_prompt(
-        course_plan=course_plan,
-        section=section,
-        section_text=section_text,
-        findings=findings,
-    )
-    max_tokens = _env_int("FORMATION_ETHICAL_LEXICAL_REWRITE_MAX_TOKENS", 1800, min_value=500)
-    try:
-        raw = _anthropic_post(
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=max_tokens,
-            model=model,
-        )
-    except Exception as exc:
-        rejected = [_residual_lexical_rejection(f) for f in findings]
-        for item in rejected:
-            item["reject_reason"] = f"lexical_rewrite_error: {str(exc)[:180]}"
-        logger.warning(
-            "PIPELINE_ETHICAL_LEXICAL_REWRITE_ERROR formation_job_id=%s content_job_id=%s course=%s section=%s error=%s",
-            job.get("formation_job_id"),
-            job.get("id"),
-            course_plan.get("course_number"),
-            _section_label(section),
-            str(exc)[:220],
-        )
-        return {
-            "text": section_text,
-            "findings": findings,
-            "residual_findings": findings,
-            "applied": [],
-            "rejected": rejected,
-            "error": str(exc),
-        }
-
-    patches, parse_error = _parse_patches_response(raw)
-    if parse_error:
-        rejected = [_residual_lexical_rejection(f) for f in findings]
-        for item in rejected:
-            item["reject_reason"] = f"lexical_parse_error: {parse_error[:180]}"
-        return {
-            "text": section_text,
-            "findings": findings,
-            "residual_findings": findings,
-            "applied": [],
-            "rejected": rejected,
-            "error": parse_error,
-        }
-
-    scoped_patches = [
-        _lexical_patch_meta(patch, findings)
-        for patch in patches
-        if (_patch_rule_number(patch) in _ETHICAL_MICRO_RULE_IDS)
-    ]
-    max_patches = min(
-        len(findings),
-        _env_int("FORMATION_ETHICAL_LEXICAL_MAX_PATCHES", _ethical_micro_max_patches(section), min_value=1),
-    )
-    scoped_patches = scoped_patches[:max_patches]
-    candidate, applied, rejected = _apply_patches(section_text, scoped_patches)
-    candidate, applied, budget_rejected = _apply_review_budget_guard(
-        section_text,
-        candidate,
-        applied,
-        "compliance",
-    )
-    rejected = rejected + budget_rejected
-    residual_findings = _scan_ethical_lexical_findings(candidate)
-    rejected = rejected + [_residual_lexical_rejection(f) for f in residual_findings]
+    if residual_findings:
+        all_rejected.extend([_residual_lexical_rejection(f) for f in residual_findings])
     return {
         "text": candidate,
-        "findings": findings,
+        "findings": all_findings,
         "residual_findings": residual_findings,
-        "applied": applied,
-        "rejected": rejected,
-        "error": "",
+        "applied": all_applied,
+        "rejected": all_rejected,
+        "error": "; ".join(errors)[:700],
     }
 
 
@@ -7439,6 +7625,7 @@ def _ethical_micro_review_record(
 
 
 def _ethical_micro_review_summary(records: list[dict]) -> dict:
+    residual_records = [r for r in records if int(r.get("lexical_residual_count") or 0) > 0]
     return {
         "sections_reviewed": len(records),
         "sections_clean": sum(1 for r in records if r.get("status") == "clean"),
@@ -7450,6 +7637,9 @@ def _ethical_micro_review_summary(records: list[dict]) -> dict:
         "patches_rejected": sum(int(r.get("patches_rejected") or 0) for r in records),
         "lexical_findings": sum(int(r.get("lexical_findings_count") or 0) for r in records),
         "lexical_residual_findings": sum(int(r.get("lexical_residual_count") or 0) for r in records),
+        "lexical_residual_sections": len(residual_records),
+        "lexical_residual_non_blocking": not _ethical_lexical_strict_enabled(),
+        "lexical_rewrite_max_iterations": _ethical_lexical_max_iterations(),
     }
 
 
@@ -7576,6 +7766,40 @@ def _run_ethical_micro_review_for_section(
     applied = applied + list(lexical_result.get("applied") or [])
     rejected = rejected + list(lexical_result.get("rejected") or [])
     proposed_count = len(scoped_patches) + len(lexical_findings)
+
+    if lexical_residual_findings and _ethical_lexical_strict_enabled():
+        strict_error = _ethical_lexical_residual_error(
+            lexical_residual_findings,
+            context=f"cours={course_plan.get('course_number')} section={_section_label(section)}",
+        )
+        logger.warning(
+            "PIPELINE_ETHICAL_MICRO_REVIEW_LEXICAL_RESIDUAL formation_job_id=%s content_job_id=%s course=%s section=%s residual=%s error=%s",
+            job.get("formation_job_id"),
+            job.get("id"),
+            course_plan.get("course_number"),
+            _section_label(section),
+            len(lexical_residual_findings),
+            strict_error[:300],
+        )
+        _record_ethical_micro_review(
+            job,
+            _ethical_micro_review_record(
+                job=job,
+                course_plan=course_plan,
+                section=section,
+                status="error",
+                original_text=section_text,
+                final_text=candidate,
+                proposed=proposed_count,
+                applied=applied,
+                rejected=rejected,
+                lexical_findings=lexical_findings,
+                lexical_residual_findings=lexical_residual_findings,
+                error=(lexical_result.get("error") or strict_error),
+                duration_ms=int((time.time() - started) * 1000),
+            ),
+        )
+        raise ValueError(strict_error)
 
     if applied:
         logger.info(
@@ -10257,6 +10481,7 @@ def _run_structured_content_generation(
                 }
 
         if not post_micro_budget_status.get("ok"):
+            before_course_budget_repair = final_text
             final_text, course_budget_repair = _repair_structured_course_text_to_budget(
                 job=job,
                 course_plan=course_plan,
@@ -10268,6 +10493,14 @@ def _run_structured_content_generation(
                 post_micro_budget_repair["course_budget_fallback"] = course_budget_repair
             else:
                 post_micro_budget_repair = course_budget_repair
+            if final_text.strip() != before_course_budget_repair.strip():
+                final_text = _run_ethical_micro_review_for_section(
+                    job=job,
+                    course_plan=course_plan,
+                    section=_ethical_micro_section_for_calibrated_course(course_plan),
+                    section_text=final_text,
+                    model=model,
+                )
             post_micro_budget_status = _structured_course_budget_status(course_plan, final_text)
         if (
             not post_micro_budget_status.get("ok")
@@ -13593,9 +13826,27 @@ def _review_rules_signature(
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
+def _ethical_lexical_signature_text() -> str:
+    try:
+        payload = {
+            "source": "ethical-lexical-terms.json",
+            "rule_ids": sorted(_ethical_lexical_rule_ids()),
+            "strict": _ethical_lexical_strict_enabled(),
+            "terms": _load_ethical_lexical_terms(),
+        }
+        return "\n\nSOURCE LEXICALE DÉTERMINISTE:\n" + _json.dumps(
+            payload,
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+    except Exception as exc:
+        logger.warning("⚠️ Signature lexicale éthique indisponible: %s", exc)
+        return "\n\nSOURCE LEXICALE DÉTERMINISTE: unavailable"
+
+
 def _current_compliance_review_signature() -> str:
     return _review_rules_signature(
-        _load_review_rules(),
+        _load_review_rules() + _ethical_lexical_signature_text(),
         groups=_compliance_review_groups_for_final_pass(),
         version=_REVIEW_RULESET_VERSION,
     )
@@ -14361,6 +14612,60 @@ def _run_content_review_pass(
                     int((time.time() - group_started_at) * 1000),
                 )
 
+        if not segment_error and review_kind == "local_compliance":
+            lexical_started_at = time.time()
+            course_number = _extract_audio_block_number(current_text) or int(sub_idx or 0) + 1
+            lexical_course_plan = {
+                "course_number": course_number,
+                "course_title": sub_part_name or f"Cours {course_number}",
+            }
+            lexical_section = {
+                "kind": "course_calibrated",
+                "title": sub_part_name or f"Segment {sub_idx + 1}",
+                "part_number": int(sub_idx or 0) + 1,
+            }
+            lexical_result = _run_ethical_lexical_rewrite_for_section(
+                job=job,
+                course_plan=lexical_course_plan,
+                section=lexical_section,
+                section_text=current_text,
+                model=model,
+            )
+            lexical_findings = lexical_result.get("findings") or []
+            lexical_residual_findings = lexical_result.get("residual_findings") or []
+            if lexical_result.get("applied"):
+                current_text = lexical_result.get("text") or current_text
+            all_applied.extend(lexical_result.get("applied") or [])
+            all_rejected.extend(lexical_result.get("rejected") or [])
+            all_proposed += len(lexical_findings)
+            if lexical_findings or lexical_residual_findings:
+                logger.info(
+                    "PIPELINE_REVIEW_LEXICAL_DONE formation_job_id=%s content_job_id=%s folder_id=%s segment_id=%s findings=%s applied=%s rejected=%s residual=%s duration_ms=%s",
+                    formation_job_id,
+                    job_id,
+                    folder_id,
+                    seg_id,
+                    len(lexical_findings),
+                    len(lexical_result.get("applied") or []),
+                    len(lexical_result.get("rejected") or []),
+                    len(lexical_residual_findings),
+                    int((time.time() - lexical_started_at) * 1000),
+                )
+            if lexical_residual_findings and _ethical_lexical_strict_enabled():
+                segment_error = _ethical_lexical_residual_error(
+                    lexical_residual_findings,
+                    context=f"segment_id={seg_id}",
+                )
+                logger.warning(
+                    "PIPELINE_REVIEW_LEXICAL_RESIDUAL formation_job_id=%s content_job_id=%s folder_id=%s segment_id=%s residual=%s error=%s",
+                    formation_job_id,
+                    job_id,
+                    folder_id,
+                    seg_id,
+                    len(lexical_residual_findings),
+                    segment_error[:300],
+                )
+
         if not segment_error and all_applied:
             guarded_text, guarded_applied, budget_rejected = _apply_review_budget_guard(
                 original_text,
@@ -14391,6 +14696,22 @@ def _run_content_review_pass(
                 all_rejected.extend(budget_rejected)
 
         current_text = _preserve_audio_block_marker(original_text, current_text)
+        if not segment_error and review_kind == "local_compliance" and _ethical_lexical_strict_enabled():
+            final_lexical_residuals = _scan_ethical_lexical_findings(current_text)
+            if final_lexical_residuals:
+                segment_error = _ethical_lexical_residual_error(
+                    final_lexical_residuals,
+                    context=f"segment_id={seg_id} final_check",
+                )
+                logger.warning(
+                    "PIPELINE_REVIEW_LEXICAL_FINAL_RESIDUAL formation_job_id=%s content_job_id=%s folder_id=%s segment_id=%s residual=%s error=%s",
+                    formation_job_id,
+                    job_id,
+                    folder_id,
+                    seg_id,
+                    len(final_lexical_residuals),
+                    segment_error[:300],
+                )
 
         # Écriture finale en DB (une seule transaction par segment)
         conn = get_db_connection()

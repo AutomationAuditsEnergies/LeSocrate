@@ -3839,17 +3839,85 @@ function addedHighlightStyle() {
 }
 
 function EthicalMicroAuditView({ artifacts }) {
+  const [showResiduals, setShowResiduals] = useState(false)
   const available = (artifacts || []).filter(item => item.ok && item.artifact)
   const missing = (artifacts || []).filter(item => !item.ok)
   const records = available.flatMap(item =>
     (item.artifact.records || []).map(record => ({ ...record, folder: item.folder, generated_at: item.artifact.generated_at })),
   )
+  const residualEntries = records.flatMap(record =>
+    (record.lexical_residual_findings || []).map((finding, findingIndex) => ({
+      finding,
+      findingIndex,
+      record,
+    })),
+  )
+  const residualSections = new Set(
+    residualEntries.map(entry => `${entry.record.folder?.folder_id || 'folder'}-${entry.record.course_number}-${entry.record.section_label}`),
+  ).size
   const issueRecords = records.filter(record =>
     record.status !== 'clean' || (record.patches_detail || []).length > 0 || record.error,
   )
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+      {available.length > 0 && (
+        <div style={{
+          display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+          gap: '12px', flexWrap: 'wrap',
+        }}>
+          <div style={{ color: '#94a3b8', fontSize: '12px', lineHeight: 1.5 }}>
+            {records.length} section(s) auditées · {available.length} artefact(s) chargé(s)
+          </div>
+          <button
+            type="button"
+            onClick={() => setShowResiduals(value => !value)}
+            style={{
+              display: 'inline-flex', alignItems: 'center', gap: '7px',
+              padding: '7px 10px', borderRadius: '8px',
+              border: `1px solid ${residualEntries.length ? 'rgba(251,146,60,0.45)' : 'rgba(52,211,153,0.35)'}`,
+              background: residualEntries.length ? 'rgba(251,146,60,0.12)' : 'rgba(16,185,129,0.10)',
+              color: residualEntries.length ? '#fdba74' : '#6ee7b7',
+              fontSize: '12px', fontWeight: 800, cursor: 'pointer',
+            }}
+          >
+            <Icon name={residualEntries.length ? 'warning' : 'verified'} />
+            Résidus éthiques : {residualEntries.length}
+          </button>
+        </div>
+      )}
+      {showResiduals && residualEntries.length > 0 && (
+        <div style={{
+          border: '1px solid rgba(251,146,60,0.24)', borderRadius: '10px',
+          background: 'rgba(251,146,60,0.07)', overflow: 'hidden',
+        }}>
+          <div style={{
+            padding: '10px 12px', color: '#fed7aa', fontSize: '12px',
+            borderBottom: '1px solid rgba(251,146,60,0.16)', fontWeight: 800,
+          }}>
+            {residualEntries.length} passage(s) non corrigé(s) · {residualSections} section(s)
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', padding: '10px 12px' }}>
+            {residualEntries.map(({ finding, record, findingIndex }, index) => (
+              <div key={`${record.folder?.folder_id}-${record.course_number}-${record.section_label}-${findingIndex}-${index}`} style={{
+                padding: '10px', border: '1px solid rgba(251,146,60,0.14)',
+                borderRadius: '8px', background: 'rgba(15,23,42,0.42)',
+              }}>
+                <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center', marginBottom: '6px' }}>
+                  <span style={{ color: '#fdba74', fontWeight: 900, fontSize: '12px' }}>{finding.rule || `#${finding.rule_id || '?'}`}</span>
+                  <span style={{ color: '#e2e8f0', fontWeight: 800, fontSize: '12px' }}>{finding.match || finding.term || 'terme détecté'}</span>
+                  <span style={{ color: '#94a3b8', fontSize: '12px' }}>
+                    {folderDisplayName(record.folder)} · Cours {record.course_number} · {record.section_label}
+                  </span>
+                </div>
+                <div style={{ color: '#cbd5e1', fontSize: '12px', lineHeight: 1.55 }}>
+                  {finding.excerpt || 'Extrait indisponible'}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
       {missing.length > 0 && available.length === 0 && (
         <AuditEmptyState
           icon="info"

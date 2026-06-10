@@ -371,6 +371,12 @@ def _section_slide_alignment_workers() -> int:
     return _safe_int(os.getenv("FORMATION_SECTION_SLIDE_ALIGNMENT_WORKERS"), 4, 1, 8)
 
 
+def _slide_batch_workers(model: str | None = None) -> int:
+    model_key = str(model or "").strip().lower()
+    default = 3 if model_key.startswith("deepseek") or model_key in {"flash", "pro"} else 1
+    return _safe_int(os.getenv("FORMATION_SLIDE_BATCH_WORKERS"), default, 1, 8)
+
+
 def _ensure_slide_deck_tables() -> None:
     """Persist generated decks so audio sync can run outside the request."""
     global _SLIDE_DECK_TABLES_READY
@@ -1251,6 +1257,10 @@ def _section_part_number(section: dict, section_index: int) -> int:
     kind = str(section.get("kind") or "").strip().lower()
     if kind in {"opening", "intro", "introduction"}:
         return 0
+    if kind == "course_conclusion":
+        return 900
+    if kind == "day_conclusion":
+        return 901
     if section.get("part_number") is not None:
         return _safe_int(section.get("part_number"), section_index, 0, 1000)
     return section_index
@@ -3677,29 +3687,9 @@ def _run_slide_generation_from_source(
     if not source_blocks:
         raise ValueError("Aucun bloc source exploitable")
 
-    logger.info(
-        "PIPELINE_SLIDES_START folder=%s content_job=%s platform=%s words=%s source_segments=%s "
-        "context_windows=%s max_slides=%s pace=%s context_words=%s batch_size=%s model=%s anchors=%s",
-        folder_id,
-        source.get("content_job_id"),
-        source.get("platform_id"),
-        total_words,
-        len(source["segments"]),
-        len(source_blocks),
-        max_slides,
-        pace_config["label"],
-        effective_words_per_slide,
-        batch_size,
-        model,
-        len(slide_anchors),
-    )
-
-    planned = []
-    batches_debug = []
-    template_backlog = []
-    for start in range(0, len(source_blocks), batch_size):
+    batch_jobs = []
+    for batch_index, start in enumerate(range(0, len(source_blocks), batch_size)):
         batch = source_blocks[start : start + batch_size]
-        batch_started_at = time.time()
         max_batch_slides = max(
             1,
             min(
@@ -3710,6 +3700,45 @@ def _run_slide_generation_from_source(
         batch_anchor_count = sum(len(block.get("slide_anchors") or []) for block in batch)
         if batch_anchor_count:
             max_batch_slides = max(max_batch_slides, min(batch_anchor_count, max_slides))
+        batch_jobs.append(
+            {
+                "batch_index": batch_index,
+                "start": start,
+                "batch": batch,
+                "max_batch_slides": max_batch_slides,
+                "anchor_count": batch_anchor_count,
+            }
+        )
+    slide_batch_workers = min(_slide_batch_workers(model), max(1, len(batch_jobs)))
+
+    logger.info(
+        "PIPELINE_SLIDES_START folder=%s content_job=%s platform=%s words=%s source_segments=%s "
+        "context_windows=%s max_slides=%s pace=%s context_words=%s batch_size=%s batch_workers=%s model=%s anchors=%s",
+        folder_id,
+        source.get("content_job_id"),
+        source.get("platform_id"),
+        total_words,
+        len(source["segments"]),
+        len(source_blocks),
+        max_slides,
+        pace_config["label"],
+        effective_words_per_slide,
+        batch_size,
+        slide_batch_workers,
+        model,
+        len(slide_anchors),
+    )
+
+    planned = []
+    batches_debug = []
+    template_backlog = []
+
+    def _run_slide_batch(job: dict) -> dict:
+        batch = job["batch"]
+        start = job["start"]
+        max_batch_slides = job["max_batch_slides"]
+        batch_anchor_count = job["anchor_count"]
+        batch_started_at = time.time()
         logger.info(
             "PIPELINE_SLIDES_BATCH_START folder=%s content_job=%s batch=%s-%s blocks=%s max_batch_slides=%s anchors=%s",
             folder_id,
@@ -3737,7 +3766,6 @@ def _run_slide_generation_from_source(
                 "fallback_reason": f"{exc.__class__.__name__}: {str(exc)[:180]}",
             }
             status = "fallback"
-        template_backlog.extend(curation_debug.get("template_backlog") or [])
         logger.info(
             "PIPELINE_SLIDES_BATCH_DONE folder=%s content_job=%s batch=%s-%s status=%s slides=%s duration_ms=%s",
             folder_id,
@@ -3748,9 +3776,10 @@ def _run_slide_generation_from_source(
             len(batch_slides),
             int((time.time() - batch_started_at) * 1000),
         )
-        planned.extend(batch_slides)
-        batches_debug.append(
-            {
+        return {
+            "batch_index": job["batch_index"],
+            "slides": batch_slides,
+            "debug": {
                 "start_block": batch[0]["source_block_id"],
                 "end_block": batch[-1]["source_block_id"],
                 "blocks": len(batch),
@@ -3758,8 +3787,71 @@ def _run_slide_generation_from_source(
                 "anchors": batch_anchor_count,
                 "status": status,
                 "curation": curation_debug,
-            }
+            },
+        }
+
+    batch_results = [None] * len(batch_jobs)
+    if batch_jobs and slide_batch_workers > 1:
+        logger.info(
+            "PIPELINE_SLIDES_BATCH_PARALLEL_START folder=%s content_job=%s batches=%s workers=%s",
+            folder_id,
+            source.get("content_job_id"),
+            len(batch_jobs),
+            slide_batch_workers,
         )
+        with ThreadPoolExecutor(max_workers=slide_batch_workers) as executor:
+            future_map = {
+                executor.submit(_run_slide_batch, job): job
+                for job in batch_jobs
+            }
+            for future in as_completed(future_map):
+                job = future_map[future]
+                try:
+                    result = future.result()
+                except Exception as exc:
+                    logger.exception(
+                        "PIPELINE_SLIDES_BATCH_FUTURE_ERROR folder=%s content_job=%s batch=%s-%s error=%s",
+                        folder_id,
+                        source.get("content_job_id"),
+                        job["start"],
+                        job["start"] + len(job["batch"]) - 1,
+                        exc,
+                    )
+                    batch_slides, strict_fallback_slides = _ensure_strict_anchor_slides(
+                        [],
+                        job["batch"],
+                        "batch_future_error_strict_anchor_fallback",
+                    )
+                    result = {
+                        "batch_index": job["batch_index"],
+                        "slides": batch_slides,
+                        "debug": {
+                            "start_block": job["batch"][0]["source_block_id"],
+                            "end_block": job["batch"][-1]["source_block_id"],
+                            "blocks": len(job["batch"]),
+                            "max_slides": job["max_batch_slides"],
+                            "anchors": job["anchor_count"],
+                            "status": "fallback",
+                            "curation": {
+                                "template_backlog": [],
+                                "curation_enabled": _slide_curation_enabled(),
+                                "strict_fallback_slides": strict_fallback_slides,
+                                "fallback_reason": f"{exc.__class__.__name__}: {str(exc)[:180]}",
+                            },
+                        },
+                    }
+                batch_results[job["batch_index"]] = result
+    else:
+        for job in batch_jobs:
+            batch_results[job["batch_index"]] = _run_slide_batch(job)
+
+    for result in batch_results:
+        if not result:
+            continue
+        curation_debug = result["debug"].get("curation") or {}
+        template_backlog.extend(curation_debug.get("template_backlog") or [])
+        planned.extend(result["slides"])
+        batches_debug.append(result["debug"])
 
     dropped_unanchored = 0
     if not planned and source_blocks and not slide_anchors:
@@ -3897,6 +3989,7 @@ def _run_slide_generation_from_source(
             "section_slide_alignment": section_alignment_debug,
             "template_backlog_count": len(template_backlog),
             "llm_batches": len(batches_debug),
+            "slide_batch_workers": slide_batch_workers,
             "model": model,
         },
         "pipeline_debug": {
