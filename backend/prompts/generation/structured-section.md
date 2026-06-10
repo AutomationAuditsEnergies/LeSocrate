@@ -35,6 +35,13 @@ Contraintes :
 - Si le beat suivant définit un concept, explique ce concept dans un nouveau
   mouvement oral reconnaissable, sans reprendre longuement l'histoire ou
   l'image du beat précédent.
+- Si un beat porte une maxime, une phrase clé ou une formule à ancrer, énonce
+  la phrase exacte une seule fois, telle quelle, introduite naturellement
+  ("retenez ceci", "la voici", "la phrase à garder en tête"). Ne la dilue pas
+  en plusieurs reformulations.
+- Si un beat oppose deux familles, deux modes ou deux postures, nomme
+  explicitement les deux côtés dans le texte oral, par exemple "d'un côté..."
+  puis "de l'autre...". Ne laisse pas l'opposition implicite.
 - Si c'est une conclusion : récapituler et fermer, sans ouvrir un nouveau sujet.
 - Après Q/R ou mention du tchat : aucun nouveau développement.
 - Pas de markdown ni titre écrit.
