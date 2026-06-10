@@ -912,7 +912,10 @@ def _slide_template_catalog_prompt() -> str:
             continue
         templates.append({
             "template_id": template_id,
+            "pedagogical_shape": item.get("pedagogical_shape") or "",
             "use_cases": item.get("use_cases") or item.get("families") or [],
+            "plan_signals": item.get("plan_signals") or [],
+            "plan_avoid": item.get("plan_avoid") or "",
             "use_when": item.get("use_when") or "",
             "avoid_when": item.get("avoid_when") or "",
             "requires": item.get("requires") or {},

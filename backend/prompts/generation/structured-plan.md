@@ -70,27 +70,12 @@ Contraintes :
   `comparison`, `casestudy`, `situations`, `steps`, `flow`, `story`,
   `analogy`, `framework`, `opinion`, `recap`, `warning`, `tip`, `quotable`,
   `pause`, `qa`.
-  N'utilise `casestudy` que pour des cas comparables ou situations métier en
-  cartes ; un récit avec morale est `story`, trois profils sont `situations`,
-  quatre gestes métier sont `flow`, un modèle à leviers est `framework`.
-- Une maxime, phrase clé, formule exacte ou repère à mémoriser est `quotable`.
-  Si cette phrase est ensuite illustrée par une scène ou une expérience client,
-  cette déclinaison narrative peut devenir `story`.
-- Une structure nouvelle en trois piliers, trois repères, trois profils, trois
-  postures, trois situations ou trois expressions est `situations`, pas
-  `recap`. Les signaux forts sont "trois piliers", "les trois", "les voici",
-  "trépied" ou "triptyque".
-- Un seul cas fictif qui sert à faire passer un conseil, une astuce ou un
-  réflexe métier est `tip`, pas `casestudy`. `casestudy` est réservé à 2 ou 3
-  cas métier comparables en cartes.
-- Une distinction en deux familles ou deux modes, comme synchrone/asynchrone,
-  téléphone/courriel, immédiat/différé ou rapidité/exhaustivité, est
-  `comparison`.
-- Une liste de mots/formules à bannir, expressions interdites, pièges de
-  langage ou erreurs à éviter n'est pas un `recap` : utilise `situations` s'il y
-  a exactement 3 éléments, sinon `warning`.
-- `recap` est réservé à une vraie synthèse après un développement déjà traité :
-  "ce qu'on retient", "en résumé", "nous avons vu".
+- Pour chaque beat slideable : repère dans la matière source les
+  `plan_signals` qui correspondent, fixe d'abord `pedagogical_shape`, puis
+  `template_type` comme conséquence de cette shape. Compte les éléments
+  réellement présents dans la matière avant de fixer `items_expected` ; ne
+  planifie jamais un visuel à N éléments si la matière n'en contient pas N. En
+  cas d'hésitation entre deux templates, applique `plan_avoid`.
 - Ces beats et anchors sont internes. Le texte final ne doit jamais prononcer
   "slide", "PowerPoint", "template", "anchor" ou "teaching beat".
 

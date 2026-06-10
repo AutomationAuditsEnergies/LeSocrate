@@ -2,6 +2,14 @@
 
 ## 2026-06-10
 
+### feat(slides): signaux génériques de plan dans le catalogue
+
+Ajout de `pedagogical_shape`, `plan_signals` et `plan_avoid` au catalogue de
+templates pour guider le plan avec des signaux structurels génériques, sans
+exemples liés à un domaine de formation. Le prompt de plan reçoit ces champs,
+la curation conserve ses `strong_signals`/`rejection_rules`, et un test
+anti-overfitting bloque les termes spécialisés dans les signaux de plan.
+
 ### feat(slides): carte d'affichage déclarée par le rédacteur
 
 Ajout d'une carte technique `ORDRE_AFFICHAGE_SLIDES` / `CARTE_AFFICHAGE_SLIDES`

@@ -1,5 +1,5 @@
 {
-  "version": "slide-template-catalog-v7-source-exact-21-signals",
+  "version": "slide-template-catalog-v8-source-exact-21-plan-signals",
   "principle": "La génération automatique doit rester alignée sur les 21 slides du Deck source exact. Les anciens templates restaurés et corpus TP CRCD restent hors catalogue de production.",
   "curation_policy": {
     "source_of_truth": "Le texte final prime sur le plan. Les anchors du plan orientent le choix, mais le deck source exact limite les formes visuelles.",
@@ -50,7 +50,9 @@
       "avoid_when": "Le passage est un récap, une méthode détaillée, une checklist ou un exemple.",
       "strong_signals": ["nouveau chapitre", "premier grand thème", "dans cet axe", "nous allons aborder", "objectif de cette séquence"],
       "rejection_rules": ["Rejeter si le passage conclut ou synthétise.", "Rejeter si le passage donne déjà une procédure détaillée ou un cas."],
-      "requires": {"items_min": 1, "items_max": 3}
+      "requires": {"items_min": 1, "items_max": 3},
+      "pedagogical_shape": "ouverture",
+      "plan_signals": ["début d'un nouveau grand thème avec son objectif et ses axes"]
     },
     {
       "template_id": "reflection",
@@ -62,7 +64,9 @@
       "strong_signals": ["idée centrale", "principe clé", "ce qu'il faut comprendre", "l'idée importante", "retenez cette logique"],
       "rejection_rules": ["Rejeter si une phrase exacte est explicitement présentée comme maxime ou citation : préférer `quotable`.", "Rejeter si le passage contient plusieurs items ou une méthode."],
       "confusable_with": ["quotable", "opinion", "tip"],
-      "requires": {"title": "3 à 8 mots", "text": "1 à 2 phrases courtes"}
+      "requires": {"title": "3 à 8 mots", "text": "1 à 2 phrases courtes"},
+      "pedagogical_shape": "idee_forte",
+      "plan_signals": ["une idée centrale qui tient en une phrase"]
     },
     {
       "template_id": "definition",
@@ -74,7 +78,10 @@
       "strong_signals": ["définition", "on appelle", "cela signifie", "le terme", "distinction simple"],
       "rejection_rules": ["Rejeter si le passage oppose deux familles opérationnelles : préférer `comparison`.", "Rejeter si le passage donne surtout une bonne pratique : préférer `tip`."],
       "confusable_with": ["comparison", "reflection"],
-      "requires": {"term": "mot ou notion", "definition": "1 phrase", "items_max": 4}
+      "requires": {"term": "mot ou notion", "definition": "1 phrase", "items_max": 4},
+      "pedagogical_shape": "definition_notion",
+      "plan_signals": ["la matière introduit un terme ou une notion à définir avant d'aller plus loin"],
+      "plan_avoid": "Pas pour un conseil ou une idée générale sans terme à poser."
     },
     {
       "template_id": "comparison",
@@ -86,31 +93,39 @@
       "strong_signals": ["d'un côté", "de l'autre", "à l'inverse", "synchrone", "asynchrone", "deux familles", "deux versions", "avant/après"],
       "rejection_rules": ["Rejeter si le passage ne compare pas deux pôles clairement distincts.", "Rejeter si les éléments sont trois ou plus : préférer `situations`, `casestudy` ou `framework` selon le contenu."],
       "confusable_with": ["definition", "casestudy", "warning"],
-      "requires": {"columns_min": 2, "columns_max": 2}
+      "requires": {"columns_min": 2, "columns_max": 2},
+      "pedagogical_shape": "opposition_deux_modes",
+      "plan_signals": ["la matière oppose deux modes, deux familles ou deux approches", "deux colonnes se dessinent naturellement"],
+      "plan_avoid": "Pas si un seul des deux côtés est réellement développé."
     },
     {
       "template_id": "warning",
       "source_slide_ref": "08 Warning",
       "use_cases": ["piège", "erreur fréquente", "risque", "mauvaise pratique"],
-      "visual_role": "Signaler un piège, une erreur fréquente ou un risque métier.",
+      "visual_role": "Signaler un piège, une erreur fréquente ou un risque.",
       "use_when": "Le passage signale une erreur, un risque, une confusion, une expression interdite ou une mauvaise pratique à éviter.",
       "avoid_when": "Le passage donne un conseil positif sans danger clair. S'il liste exactement trois mots ou expressions à bannir, préfère `situations`.",
       "strong_signals": ["attention", "piège", "erreur fréquente", "à éviter", "risque", "mauvaise pratique", "ne dites pas"],
       "rejection_rules": ["Rejeter si le passage formule surtout un conseil positif : préférer `tip`.", "Rejeter si le passage liste exactement trois expressions ou erreurs : préférer `situations`."],
       "confusable_with": ["tip", "situations", "recap"],
-      "requires": {"title": "3 à 8 mots", "text": "1 à 2 phrases"}
+      "requires": {"title": "3 à 8 mots", "text": "1 à 2 phrases"},
+      "pedagogical_shape": "mise_en_garde",
+      "plan_signals": ["la matière signale une erreur fréquente, un piège ou un risque"]
     },
     {
       "template_id": "casestudy",
       "source_slide_ref": "09 Case study",
-      "use_cases": ["2 à 3 cas comparables", "canaux", "variantes métier"],
-      "visual_role": "Comparer plusieurs cas métier concrets dans une même logique.",
-      "use_when": "Le passage met en regard 2 à 3 cas concrets comparables, canaux, variantes ou situations métier contextualisées.",
+      "use_cases": ["2 à 3 situations comparables"],
+      "visual_role": "Comparer plusieurs situations concrètes dans une même logique.",
+      "use_when": "Le passage met en regard 2 à 3 situations concrètes comparables.",
       "avoid_when": "Le passage raconte un seul cas pour amener un conseil, une astuce ou un réflexe métier : préfère `tip`. Le passage raconte un seul cas avec une morale narrative : préfère `story`. Le passage pose une triade conceptuelle comme trois piliers, trois repères, trois profils, trois postures ou trois expressions : préfère `situations`.",
-      "strong_signals": ["2 cas", "3 cas", "selon le canal", "téléphone / email / chat", "variantes métier", "cas comparables", "plusieurs situations concrètes"],
-      "rejection_rules": ["Rejeter si le passage contient un seul cas fictif qui sert un conseil : préférer `tip`.", "Rejeter si le passage contient un seul récit avec morale : préférer `story`.", "Rejeter si les trois éléments sont des piliers conceptuels et non des cas métier : préférer `situations`."],
+      "strong_signals": ["2 cas", "3 cas", "cas comparables", "plusieurs situations concrètes", "situations comparables développées en parallèle"],
+      "rejection_rules": ["Rejeter si le passage contient un seul cas fictif qui sert un conseil : préférer `tip`.", "Rejeter si le passage contient un seul récit avec morale : préférer `story`.", "Rejeter si les trois éléments sont des piliers conceptuels et non des situations comparables : préférer `situations`."],
       "confusable_with": ["tip", "story", "situations", "comparison"],
-      "requires": {"items_min": 2, "items_max": 3}
+      "requires": {"items_min": 2, "items_max": 3},
+      "pedagogical_shape": "cas_comparables",
+      "plan_signals": ["la matière décrit 2 ou 3 situations comparables"],
+      "plan_avoid": "Un seul exemple ou une seule anecdote : tip ou story selon la fonction."
     },
     {
       "template_id": "steps",
@@ -122,7 +137,9 @@
       "strong_signals": ["étape 1", "d'abord", "ensuite", "puis", "enfin", "procédure", "méthode", "séquence"],
       "rejection_rules": ["Rejeter si les points ne sont pas ordonnés.", "Rejeter si le passage contient exactement quatre gestes métier très opérationnels : préférer `flow`."],
       "confusable_with": ["flow", "recap", "framework"],
-      "requires": {"items_min": 2, "items_max": 4}
+      "requires": {"items_min": 2, "items_max": 4},
+      "pedagogical_shape": "progression_ordonnee",
+      "plan_signals": ["la matière décrit une suite ordonnée de 2 à 4 étapes"]
     },
     {
       "template_id": "recap",
@@ -134,7 +151,10 @@
       "strong_signals": ["en résumé", "ce qu'on retient", "nous avons vu", "pour conclure", "à retenir", "voilà pour l'essentiel"],
       "rejection_rules": ["Rejeter si le passage introduit une nouvelle structure en trois éléments : préférer `situations`.", "Rejeter si le passage arrive avant le développement principal.", "Rejeter si les points sont des cas comparables : préférer `casestudy`."],
       "confusable_with": ["situations", "warning", "steps"],
-      "requires": {"items_min": 2, "items_max": 4}
+      "requires": {"items_min": 2, "items_max": 4},
+      "pedagogical_shape": "synthese_apres_developpement",
+      "plan_signals": ["fin d'un chapitre déjà développé, plusieurs points à retenir"],
+      "plan_avoid": "Jamais pour introduire une structure nouvelle, même en trois points."
     },
     {
       "template_id": "pause",
@@ -162,25 +182,29 @@
       "template_id": "quotable",
       "source_slide_ref": "14 Quote",
       "use_cases": ["maxime à ancrer", "phrase clé", "citation courte", "repère mémorisable", "formule à isoler"],
-      "visual_role": "Ancrer dans l'esprit des apprenants une phrase exacte qui doit devenir un repère professionnel.",
+      "visual_role": "Ancrer dans l'esprit des apprenants une phrase exacte qui doit devenir un repère.",
       "use_when": "Le passage introduit explicitement une maxime, une phrase clé, une formule ou un repère à retenir, surtout avec des signaux comme « la voici », « phrase à retenir », « maxime », « repère », « souvenez-vous ».",
-      "avoid_when": "Le passage explique surtout une scène, une expérience client ou un exemple narratif sans phrase exacte à isoler. Dans ce cas, préfère `story`.",
+      "avoid_when": "Le passage explique surtout une scène ou un exemple narratif sans phrase exacte à isoler. Dans ce cas, préfère `story`.",
       "strong_signals": ["la voici", "phrase à retenir", "maxime", "formule", "repère", "souvenez-vous", "à garder en tête"],
       "rejection_rules": ["Rejeter si aucune phrase exacte ne doit être copiée telle quelle.", "Rejeter si le passage raconte surtout une scène : préférer `story`.", "Rejeter si l'idée est reformulée librement par le modèle : préférer `reflection`."],
       "confusable_with": ["reflection", "story", "opinion"],
-      "requires": {"quote": "phrase exacte courte, idéalement 6 à 18 mots, copiée telle quelle depuis le texte source"}
+      "requires": {"quote": "phrase exacte courte, idéalement 6 à 18 mots, copiée telle quelle depuis le texte source"},
+      "pedagogical_shape": "maxime_a_ancrer",
+      "plan_signals": ["la matière contient une formule courte qui mérite d'être retenue mot pour mot"]
     },
     {
       "template_id": "tip",
       "source_slide_ref": "15 Tip",
-      "use_cases": ["conseil pratique", "réflexe métier", "bonne pratique", "un cas qui amène une astuce"],
+      "use_cases": ["conseil pratique", "bonne pratique", "un exemple qui amène une astuce"],
       "visual_role": "Mettre en avant un conseil pratique immédiatement applicable.",
-      "use_when": "Le passage donne une astuce, un réflexe métier ou une bonne pratique concrète, même s'il commence par un seul cas fictif pour faire comprendre le conseil.",
-      "avoid_when": "Le passage compare plusieurs cas métier entre eux : préfère `casestudy`. Le passage est surtout un récit avec morale : préfère `story`. Le passage est théorique ou centré sur un risque à éviter.",
-      "strong_signals": ["conseil", "réflexe", "bonne pratique", "ce qu'il faut faire", "pensez à", "gardez toujours", "dans ce cas"],
+      "use_when": "Le passage donne une astuce ou une bonne pratique concrète, même s'il commence par un seul cas fictif pour faire comprendre le conseil.",
+      "avoid_when": "Le passage compare plusieurs situations entre elles : préfère `casestudy`. Le passage est surtout un récit avec morale : préfère `story`. Le passage est théorique ou centré sur un risque à éviter.",
+      "strong_signals": ["conseil", "bonne pratique", "ce qu'il faut faire", "pensez à", "gardez toujours", "dans ce cas"],
       "rejection_rules": ["Rejeter si le passage compare deux ou trois cas : préférer `casestudy`.", "Rejeter si le passage raconte une scène avec morale : préférer `story`.", "Rejeter si le passage signale surtout un danger : préférer `warning`."],
       "confusable_with": ["casestudy", "story", "warning", "reflection"],
-      "requires": {"title": "3 à 8 mots", "text": "1 à 2 phrases"}
+      "requires": {"title": "3 à 8 mots", "text": "1 à 2 phrases"},
+      "pedagogical_shape": "conseil_actionnable",
+      "plan_signals": ["la matière donne une bonne pratique directement applicable, éventuellement illustrée par un seul exemple"]
     },
     {
       "template_id": "situations",
@@ -192,43 +216,53 @@
       "strong_signals": ["trois piliers", "les trois", "les voici", "trépied", "triptyque", "trois profils", "trois postures", "trois expressions"],
       "rejection_rules": ["Rejeter si les trois éléments sont des cas métier contextualisés : préférer `casestudy`.", "Rejeter si le passage synthétise après développement : préférer `recap`.", "Rejeter si les éléments sont quatre ou plus : préférer `framework` ou `flow` selon la logique."],
       "confusable_with": ["recap", "casestudy", "framework"],
-      "requires": {"items_min": 3, "items_max": 3}
+      "requires": {"items_min": 3, "items_max": 3},
+      "pedagogical_shape": "triade_structurante",
+      "plan_signals": ["la matière nomme exactement trois notions qui forment un ensemble"],
+      "plan_avoid": "Si c'est la synthèse d'un chapitre déjà traité : recap."
     },
     {
       "template_id": "flow",
       "source_slide_ref": "17 Traiter une demande",
-      "use_cases": ["4 gestes métier", "flux opérationnel", "actions successives"],
-      "visual_role": "Afficher quatre gestes métier enchaînés avec une logique opérationnelle.",
+      "use_cases": ["4 actions", "flux opérationnel", "actions successives"],
+      "visual_role": "Afficher quatre actions enchaînées avec une logique opérationnelle.",
       "use_when": "Le passage décrit exactement quatre actions successives qu'un apprenant doit appliquer dans l'ordre.",
-      "avoid_when": "Le passage est un modèle conceptuel, une simple liste de conseils ou une progression sans action métier.",
-      "strong_signals": ["quatre gestes", "4 gestes", "dans l'ordre", "enchaînement", "identifier", "qualifier", "agir", "clore"],
+      "avoid_when": "Le passage est un modèle conceptuel, une simple liste de conseils ou une progression sans action.",
+      "strong_signals": ["quatre actions", "4 actions", "dans l'ordre", "enchaînement"],
       "rejection_rules": ["Rejeter si les quatre éléments sont des dimensions conceptuelles : préférer `framework`.", "Rejeter si le passage contient deux ou trois étapes seulement : préférer `steps`.", "Rejeter si l'ordre n'est pas important."],
       "confusable_with": ["steps", "framework", "recap"],
-      "requires": {"items_min": 4, "items_max": 4}
+      "requires": {"items_min": 4, "items_max": 4},
+      "pedagogical_shape": "progression_ordonnee",
+      "plan_signals": ["la matière décrit exactement 4 actions à enchaîner dans l'ordre"],
+      "plan_avoid": "Moins ou plus de 4 : steps."
     },
     {
       "template_id": "story",
       "source_slide_ref": "18 Story",
-      "use_cases": ["déclinaison narrative d'une maxime", "mini-récit", "situation vécue", "expérience client", "morale pédagogique"],
+      "use_cases": ["déclinaison narrative d'une maxime", "mini-récit", "situation vécue", "morale pédagogique"],
       "visual_role": "Transformer une phrase clé ou un principe en scène concrète pour montrer pourquoi il compte.",
-      "use_when": "Le passage développe une expérience vécue, une scène client, une mise en situation ou une conséquence concrète qui donne du sens à une maxime ou à un principe.",
+      "use_when": "Le passage développe une scène, une mise en situation ou une conséquence concrète qui donne du sens à une maxime ou à un principe.",
       "avoid_when": "Le passage sert d'abord à faire mémoriser une phrase exacte. Dans ce cas, préfère `quotable`; `story` peut venir ensuite si le texte raconte une scène qui illustre cette phrase.",
-      "strong_signals": ["imaginez", "prenons une situation", "dans votre expérience", "un client", "une scène", "cela se traduit concrètement", "morale"],
+      "strong_signals": ["imaginez", "prenons une situation", "une scène", "cela se traduit concrètement", "morale"],
       "rejection_rules": ["Rejeter si le passage sert d'abord à copier une phrase exacte : préférer `quotable`.", "Rejeter si le cas unique débouche surtout sur une consigne pratique courte : préférer `tip`.", "Rejeter si plusieurs cas sont comparés : préférer `casestudy`."],
       "confusable_with": ["quotable", "tip", "casestudy"],
-      "requires": {"narrative": "1 à 2 phrases décrivant la scène ou l'expérience", "moral": "phrase de conclusion qui relie la scène au principe"}
+      "requires": {"narrative": "1 à 2 phrases décrivant la scène ou l'expérience", "moral": "phrase de conclusion qui relie la scène au principe"},
+      "pedagogical_shape": "recit_avec_morale",
+      "plan_signals": ["la matière contient un récit unique dont on tire une leçon"]
     },
     {
       "template_id": "analogy",
       "source_slide_ref": "19 Analogy",
-      "use_cases": ["image mentale", "métaphore utile", "comparaison hors métier"],
+      "use_cases": ["image mentale", "métaphore utile", "comparaison hors domaine"],
       "visual_role": "Expliquer une notion abstraite par une image mentale familière.",
       "use_when": "Le passage compare une notion à une image, un objet ou une situation connue pour aider la compréhension.",
-      "avoid_when": "La comparaison est seulement décorative ou relève d'un exemple métier concret.",
-      "strong_signals": ["c'est comme", "image mentale", "métaphore", "comme un", "comparons cela à", "imaginez hors métier"],
+      "avoid_when": "La comparaison est seulement décorative ou relève d'un exemple concret du domaine enseigné.",
+      "strong_signals": ["c'est comme", "image mentale", "métaphore", "comme un", "comparons cela à", "imaginez hors domaine"],
       "rejection_rules": ["Rejeter si la comparaison est un exemple métier concret : préférer `story`, `tip` ou `casestudy`.", "Rejeter si l'image ne sert pas à comprendre une notion abstraite."],
       "confusable_with": ["story", "comparison", "reflection"],
-      "requires": {"concept": "notion source", "comparison": "image mentale", "text": "1 phrase"}
+      "requires": {"concept": "notion source", "comparison": "image mentale", "text": "1 phrase"},
+      "pedagogical_shape": "image_mentale",
+      "plan_signals": ["la matière explique une notion par une image étrangère au domaine enseigné"]
     },
     {
       "template_id": "framework",
@@ -240,7 +274,10 @@
       "strong_signals": ["modèle", "cadre d'analyse", "leviers", "dimensions", "forces", "autour de", "système"],
       "rejection_rules": ["Rejeter si le passage présente exactement trois éléments : préférer `situations`.", "Rejeter si les éléments sont des étapes ordonnées : préférer `steps` ou `flow`.", "Rejeter si les éléments sont des cas métier comparables : préférer `casestudy`."],
       "confusable_with": ["situations", "steps", "flow", "casestudy"],
-      "requires": {"center": "coeur du modèle", "segments_min": 4, "segments_max": 6}
+      "requires": {"center": "coeur du modèle", "segments_min": 4, "segments_max": 6},
+      "pedagogical_shape": "modele_a_leviers",
+      "plan_signals": ["la matière présente un modèle avec un centre et 4 à 6 composantes"],
+      "plan_avoid": "Exactement 3 composantes : situations."
     },
     {
       "template_id": "opinion",
@@ -252,7 +289,9 @@
       "strong_signals": ["j'insiste", "point de vue", "ce n'est pas", "la vraie question", "il faut comprendre que", "thèse"],
       "rejection_rules": ["Rejeter si le passage contient une phrase exacte à mémoriser : préférer `quotable`.", "Rejeter si le passage donne un conseil directement applicable : préférer `tip`.", "Rejeter si le passage ne développe pas une position argumentée."],
       "confusable_with": ["quotable", "reflection", "tip"],
-      "requires": {"title": "3 à 8 mots", "text": "1 à 2 phrases"}
+      "requires": {"title": "3 à 8 mots", "text": "1 à 2 phrases"},
+      "pedagogical_shape": "idee_forte",
+      "plan_signals": ["une prise de position argumentée qui structure la suite"]
     }
   ]
 }
