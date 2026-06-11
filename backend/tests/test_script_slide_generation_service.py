@@ -115,7 +115,44 @@ class ScriptSlideGenerationServiceTest(unittest.TestCase):
         self.assertIn("choisis librement le meilleur `template_type`", prompt)
         self.assertIn("planned_pedagogical_shape", prompt)
         self.assertIn("ne recopie pas automatiquement son template prévu", prompt)
+        self.assertIn("BUDGETS DE TEXTE DES TEMPLATES SOURCE", prompt)
+        self.assertIn("Ne crée jamais une deuxième slide", prompt)
+        self.assertIn("casestudy: data=", prompt)
+        self.assertIn("avec 2 à 4 cases comparables", prompt)
+        self.assertIn("recap: data=", prompt)
+        self.assertIn("avec 2 à 4 points", prompt)
+        self.assertIn("reprise_recap: data=", prompt)
         self.assertNotIn('"template_type": "reflection", "visual_goal"', prompt)
+
+    def test_normalize_slide_compresses_overlong_data_to_source_layout(self):
+        block = {
+            **_strict_block(1),
+            "text": "Définition longue qui doit être synthétisée pour tenir dans la slide.",
+        }
+        raw = {
+            "source_block_id": 1,
+            "template_type": "definition",
+            "event_type": "definition",
+            "layout_variant": "expressive",
+            "data": {
+                "term": "Sourire vocal professionnel avec posture d'écoute active",
+                "eyebrow": "Vocabulaire professionnel",
+                "definition": (
+                    "Une posture vocale complète qui combine le rythme, la respiration, "
+                    "l'articulation, la tonalité perçue, la clarté du cadre relationnel et "
+                    "la sensation d'ouverture donnée au client même lorsqu'il n'existe aucun "
+                    "contact visuel direct avec le conseiller."
+                ),
+                "isItems": ["volume stable et contrôlé", "registre medium naturel"],
+            },
+            "source_quote": "Définition longue.",
+        }
+
+        slide = slides._normalize_slide(raw, block)
+
+        self.assertEqual(slide["layout_variant"], "source")
+        self.assertEqual(slide["layout_fit"]["status"], "compressed_to_source")
+        self.assertLessEqual(len(slide["data"]["definition"]), slides.SLIDE_LAYOUT_BUDGETS["definition"]["balanced"]["definition"])
 
     def test_extract_slide_anchor_keeps_pedagogical_shape(self):
         plan = {
@@ -783,7 +820,7 @@ class ScriptSlideGenerationServiceTest(unittest.TestCase):
             "word_end": 5000,
             "word_count": 199,
             "sub_part_name": "Canaux",
-            "text": "Comparons trois canaux : téléphone, email et chat. Chacun impose un accueil différent.",
+            "text": "Comparons quatre canaux : téléphone, email, chat et relance. Chacun impose un accueil différent.",
             "slide_anchors": [],
         }
         raw = {
@@ -796,6 +833,7 @@ class ScriptSlideGenerationServiceTest(unittest.TestCase):
                     {"title": "Téléphone", "desc": "La voix porte la relation."},
                     {"title": "Email", "desc": "La clarté structure l'échange."},
                     {"title": "Chat", "desc": "La rapidité rassure."},
+                    {"title": "Relance", "desc": "Le suivi confirme la suite."},
                 ],
             },
             "source_quote": block["text"],
@@ -804,7 +842,7 @@ class ScriptSlideGenerationServiceTest(unittest.TestCase):
         normalized = slides._normalize_slide(raw, block)
 
         self.assertEqual(normalized["template_type"], "casestudy")
-        self.assertEqual(len(normalized["data"]["cases"]), 3)
+        self.assertEqual(len(normalized["data"]["cases"]), 4)
 
     def test_two_channel_families_reroutes_to_comparison(self):
         block = {
@@ -876,6 +914,7 @@ class ScriptSlideGenerationServiceTest(unittest.TestCase):
                 "framework",
                 "opinion",
                 "recap",
+                "reprise_recap",
                 "pause",
                 "qa",
                 "quotable",

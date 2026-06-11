@@ -15,6 +15,7 @@ import {
   DeckQA,
   DeckQuote,
   DeckRecap,
+  DeckRepriseRecap,
   DeckSituations,
   DeckStatement,
   DeckStory,
@@ -41,6 +42,7 @@ export const OFFICIAL_SOURCE_TEMPLATE_IDS = new Set([
   'situations',
   'steps',
   'recap',
+  'reprise_recap',
   'pause',
   'qa',
   'quotable',
@@ -124,6 +126,10 @@ const ALIASES = {
   exercise: 'steps',
   practice_exercise: 'steps',
   recap: 'recap',
+  reprise: 'reprise_recap',
+  reprise_recap: 'reprise_recap',
+  opening_recap: 'reprise_recap',
+  rappel: 'reprise_recap',
   checklist: 'recap',
   takeaways: 'recap',
   stats: 'recap',
@@ -430,7 +436,7 @@ const normalizeRegistryData = (canonicalType, originalType, data) => {
     return { ...data, points: normalizeTextList(data.items || data.checklist || data.steps, 5) }
   }
 
-  if (canonicalType === 'recap' && !Array.isArray(data.points)) {
+  if ((canonicalType === 'recap' || canonicalType === 'reprise_recap') && !Array.isArray(data.points)) {
     const points = []
     if (Array.isArray(data.columns)) {
       points.push(...data.columns.map((item) => textFrom(item)))
@@ -493,6 +499,8 @@ export function renderSlideTemplate(slide = {}, extraProps = {}) {
       return <DeckFramework {...props} />
     case 'recap':
       return <DeckRecap {...props} />
+    case 'reprise_recap':
+      return <DeckRepriseRecap {...props} />
     case 'analogy':
       return <DeckAnalogy {...props} />
     case 'opinion':

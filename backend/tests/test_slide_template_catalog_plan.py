@@ -12,7 +12,7 @@ class SlideTemplateCatalogPlanTest(unittest.TestCase):
         self.assertIn('"plan_signals"', prompt)
         self.assertIn('"pedagogical_shape"', prompt)
         self.assertIn('"plan_avoid"', prompt)
-        self.assertIn("la matière décrit 2 ou 3 situations comparables", prompt)
+        self.assertIn("la matière décrit 2 à 4 situations comparables", prompt)
         self.assertNotIn('"strong_signals"', prompt)
         self.assertNotIn('"rejection_rules"', prompt)
 
@@ -43,6 +43,24 @@ class SlideTemplateCatalogPlanTest(unittest.TestCase):
     def test_plan_catalog_json_is_valid(self):
         parsed = json.loads(content._slide_template_catalog_prompt())
         self.assertTrue(parsed.get("templates"))
+
+    def test_late_course_opening_forces_reprise_recap_anchor(self):
+        beats = content._opening_structure_teaching_beats(
+            course_number=2,
+            day_number=1,
+            job={"folder_name": "Journée test", "program_title": "Formation test"},
+            sub_parts=["Cours 1", "Cours 2"],
+            raw_parts=[{"title": "Axe 1"}, {"title": "Axe 2"}],
+            course_title="Cours 2",
+            is_first_day=True,
+        )
+
+        self.assertGreaterEqual(len(beats), 2)
+        recap = beats[0]
+        self.assertEqual(recap["type"], "reprise_recap")
+        self.assertEqual(recap["slide_anchor"]["template_type"], "reprise_recap")
+        self.assertEqual(recap["slide_anchor"]["pedagogical_shape"], "synthese_de_reprise")
+        self.assertEqual(beats[1]["slide_anchor"]["template_type"], "chapter_opener")
 
 
 if __name__ == "__main__":

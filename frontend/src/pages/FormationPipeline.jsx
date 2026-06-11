@@ -6589,7 +6589,7 @@ export default function FormationPipeline() {
                           credentials: 'include',
                           body: JSON.stringify({
                             tts_mode: autoPilotState.tts_mode || 'gtts',
-                            model: autoPilotState.model || 'sonnet',
+                            model: autoPilotState.model || 'pro',
                           }),
                         },
                       )

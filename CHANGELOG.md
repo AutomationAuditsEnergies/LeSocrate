@@ -2,6 +2,37 @@
 
 ## 2026-06-10
 
+### feat(slides): variantes structurelles 2/4 items pour les templates source
+
+Ajout de variantes de composition pour les templates source qui peuvent porter
+2 à 4 éléments sans créer de nouvelle slide : `casestudy`, `steps/process`,
+`recap` et rendu tolérant pour `situations`. Les variantes restent dans le
+même design source exact, mais adaptent grille, espacement et tailles selon le
+nombre réel d'items. La page Test Slides expose maintenant ces variantes, et
+la curation/normalisation accepte `casestudy` jusqu'à 4 cartes.
+
+### feat(slides): budgets de texte sans split ni variante visuelle
+
+Ajout d'un contrat de longueur pour les templates source exacts. Le prompt de
+curation reçoit des budgets de caractères par template et doit reformuler les
+champs trop longs pour rentrer dans le design existant, sans créer de slide
+supplémentaire et sans variante visuelle. Le backend applique aussi une sécurité
+déterministe qui compresse les champs au budget du template source en dernier
+recours et persiste `layout_fit` pour audit.
+
+### feat(plan): cohérence interne des slide_anchors (spoken_requirement ↔ shape)
+
+Le plan pouvait livrer des anchors auto-contradictoires : la
+`spoken_requirement` demandait parfois une structure orale, tandis que le
+`pedagogical_shape` et le `template_type` annonçaient une autre forme. La
+curation finale (section_slide_alignment), qui suit le texte réel, corrigeait
+alors le template — mais elle corrigeait une contradiction déjà présente dans
+le plan, pas une dérive d'écriture. Ajout dans `structured-plan.md`, le prompt
+de plan global et le prompt d'enrichissement des beats : la structure orale
+dominante demandée par la `spoken_requirement` fait autorité, puis le plan fixe
+un `pedagogical_shape` et un `template_type` compatibles. La curation finale
+garde le dernier mot si le texte dévie malgré un plan cohérent.
+
 ### feat(slides): signaux génériques de plan dans le catalogue
 
 Ajout de `pedagogical_shape`, `plan_signals` et `plan_avoid` au catalogue de

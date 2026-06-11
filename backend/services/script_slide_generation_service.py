@@ -92,11 +92,123 @@ SUPPORTED_TEMPLATES = {
     "framework",
     "opinion",
     "recap",
+    "reprise_recap",
     "warning",
     "tip",
     "quotable",
     "pause",
     "qa",
+}
+
+LAYOUT_VARIANTS = ("source",)
+
+DEFAULT_LAYOUT_BUDGETS = {
+    "expressive": {"title": 42, "text": 110, "item_title": 28, "item_desc": 60},
+    "balanced": {"title": 64, "text": 180, "item_title": 42, "item_desc": 90},
+    "dense": {"title": 84, "text": 260, "item_title": 56, "item_desc": 130},
+}
+
+SLIDE_LAYOUT_BUDGETS = {
+    "welcome": {
+        "expressive": {"title": 32, "subtitle": 70, "formation_name": 70, "day_label": 24},
+        "balanced": {"title": 48, "subtitle": 95, "formation_name": 100, "day_label": 32},
+        "dense": {"title": 60, "subtitle": 120, "formation_name": 120, "day_label": 40},
+    },
+    "program_year": {
+        "expressive": {"title": 30, "subtitle": 95, "phase_title": 32, "phase_desc": 55, "day_label": 28},
+        "balanced": {"title": 45, "subtitle": 135, "phase_title": 46, "phase_desc": 75, "day_label": 36},
+        "dense": {"title": 60, "subtitle": 170, "phase_title": 58, "phase_desc": 90, "day_label": 44},
+    },
+    "day_program_7_steps": {
+        "expressive": {"title": 32, "subtitle": 80, "item_title": 42, "day_label": 28},
+        "balanced": {"title": 48, "subtitle": 120, "item_title": 58, "day_label": 36},
+        "dense": {"title": 64, "subtitle": 150, "item_title": 72, "day_label": 44},
+    },
+    "chapter_opener": {
+        "expressive": {"title": 48, "chapter_label": 28, "axis_title": 44, "axis_desc": 50},
+        "balanced": {"title": 70, "chapter_label": 36, "axis_title": 62, "axis_desc": 80},
+        "dense": {"title": 88, "chapter_label": 40, "axis_title": 76, "axis_desc": 110},
+    },
+    "definition": {
+        "expressive": {"term": 32, "eyebrow": 32, "definition": 110, "tag": 18},
+        "balanced": {"term": 48, "eyebrow": 42, "definition": 170, "tag": 28},
+        "dense": {"term": 62, "eyebrow": 50, "definition": 220, "tag": 36},
+    },
+    "comparison": {
+        "expressive": {"title": 40, "col_label": 28, "col_item": 46},
+        "balanced": {"title": 60, "col_label": 42, "col_item": 70},
+        "dense": {"title": 80, "col_label": 54, "col_item": 95},
+    },
+    "casestudy": {
+        "expressive": {"title": 44, "eyebrow": 36, "case_tag": 20, "case_title": 26, "case_desc": 70, "case_example": 40},
+        "balanced": {"title": 64, "eyebrow": 50, "case_tag": 30, "case_title": 42, "case_desc": 110, "case_example": 70},
+        "dense": {"title": 82, "eyebrow": 60, "case_tag": 40, "case_title": 56, "case_desc": 150, "case_example": 100},
+    },
+    "situations": {
+        "expressive": {"title": 46, "eyebrow": 40, "item_title": 28, "item_desc": 60},
+        "balanced": {"title": 66, "eyebrow": 55, "item_title": 42, "item_desc": 95},
+        "dense": {"title": 86, "eyebrow": 64, "item_title": 54, "item_desc": 130},
+    },
+    "steps": {
+        "expressive": {"title": 46, "step_title": 24, "step_desc": 50},
+        "balanced": {"title": 70, "step_title": 36, "step_desc": 90},
+        "dense": {"title": 90, "step_title": 48, "step_desc": 120},
+    },
+    "flow": {
+        "expressive": {"title": 42, "eyebrow": 36, "step_title": 18, "step_desc": 42},
+        "balanced": {"title": 62, "eyebrow": 48, "step_title": 28, "step_desc": 70},
+        "dense": {"title": 80, "eyebrow": 60, "step_title": 38, "step_desc": 95},
+    },
+    "story": {
+        "expressive": {"title": 44, "narrative": 120, "moral": 70},
+        "balanced": {"title": 65, "narrative": 200, "moral": 110},
+        "dense": {"title": 80, "narrative": 280, "moral": 150},
+    },
+    "analogy": {
+        "expressive": {"title": 40, "concept": 36, "comparison": 36, "text": 90},
+        "balanced": {"title": 60, "concept": 54, "comparison": 54, "text": 150},
+        "dense": {"title": 75, "concept": 70, "comparison": 78, "text": 210},
+    },
+    "framework": {
+        "expressive": {"title": 44, "center_title": 30, "segment_title": 24, "segment_desc": 44},
+        "balanced": {"title": 65, "center_title": 46, "segment_title": 36, "segment_desc": 70},
+        "dense": {"title": 80, "center_title": 64, "segment_title": 48, "segment_desc": 95},
+    },
+    "opinion": {
+        "expressive": {"title": 52, "text": 120},
+        "balanced": {"title": 78, "text": 200},
+        "dense": {"title": 100, "text": 280},
+    },
+    "recap": {
+        "expressive": {"title": 42, "point": 50},
+        "balanced": {"title": 64, "point": 80},
+        "dense": {"title": 84, "point": 110},
+    },
+    "reprise_recap": {
+        "expressive": {"title": 42, "point": 50},
+        "balanced": {"title": 64, "point": 80},
+        "dense": {"title": 84, "point": 110},
+    },
+    "warning": {
+        "expressive": {"title": 44, "text": 120, "eyebrow": 32},
+        "balanced": {"title": 70, "text": 200, "eyebrow": 44},
+        "dense": {"title": 90, "text": 300, "eyebrow": 56},
+    },
+    "tip": {
+        "expressive": {"title": 44, "text": 120},
+        "balanced": {"title": 70, "text": 200},
+        "dense": {"title": 90, "text": 300},
+    },
+    "quotable": {
+        "expressive": {"quote": 80},
+        "balanced": {"quote": 130},
+        "dense": {"quote": 190},
+    },
+    "reflection": {
+        "expressive": {"title": 42, "text": 110},
+        "balanced": {"title": 64, "text": 180},
+        "dense": {"title": 84, "text": 260},
+    },
 }
 
 PEDAGOGICAL_SHAPE_TO_TEMPLATES = {
@@ -112,6 +224,7 @@ PEDAGOGICAL_SHAPE_TO_TEMPLATES = {
     "triade_structurante": ("situations",),
     "progression_ordonnee": ("steps", "flow"),
     "cas_comparables": ("casestudy",),
+    "synthese_de_reprise": ("reprise_recap",),
     "synthese_apres_developpement": ("recap",),
     "modele_a_leviers": ("framework",),
 }
@@ -159,6 +272,10 @@ TEMPLATE_ALIASES = {
     "trépied": "situations",
     "checklist": "recap",
     "recap": "recap",
+    "reprise": "reprise_recap",
+    "reprise_recap": "reprise_recap",
+    "opening_recap": "reprise_recap",
+    "rappel": "reprise_recap",
     "takeaways": "recap",
     "example": "casestudy",
     "case": "casestudy",
@@ -215,6 +332,7 @@ EVENT_TYPES = {
     "pause",
     "qa",
     "recap",
+    "reprise_recap",
     "definition",
     "concept",
     "example",
@@ -348,7 +466,7 @@ def _pedagogical_shape_mapping_for_prompt() -> str:
     for shape, templates in PEDAGOGICAL_SHAPE_TO_TEMPLATES.items():
         template_list = ", ".join(templates)
         if shape == "progression_ordonnee":
-            template_list += " (si exactement 4 gestes métier enchaînés: flow)"
+            template_list += " (si 2 à 4 gestes métier enchaînés: flow)"
         rows.append(f"- {shape}: {template_list}")
     return "\n".join(rows)
 
@@ -2308,6 +2426,261 @@ def _shorten(text: str, max_chars: int = MAX_SOURCE_TEXT_CHARS) -> str:
     return clean[: max_chars - 1].rstrip() + "…"
 
 
+def _shorten_for_layout(value, max_chars: int) -> str:
+    clean = re.sub(r"\s+", " ", str(value or "")).strip()
+    if max_chars <= 0 or len(clean) <= max_chars:
+        return clean
+    truncated = clean[: max_chars - 1].rstrip()
+    if " " in truncated:
+        truncated = truncated.rsplit(" ", 1)[0].rstrip() or truncated
+    return truncated + "…"
+
+
+def _layout_budgets_for(template: str) -> dict:
+    return SLIDE_LAYOUT_BUDGETS.get(template) or DEFAULT_LAYOUT_BUDGETS
+
+
+def _layout_budget_for(template: str, variant: str) -> dict:
+    budgets = _layout_budgets_for(template)
+    return budgets.get("source") or budgets.get("balanced") or budgets.get("dense") or DEFAULT_LAYOUT_BUDGETS["balanced"]
+
+
+def _text_exceeds(value, limit: int) -> bool:
+    return len(re.sub(r"\s+", " ", str(value or "")).strip()) > limit
+
+
+def _layout_overages(template: str, data: dict, budget: dict) -> list[str]:
+    overages: list[str] = []
+
+    def check(key: str, label: str | None = None):
+        if key in data and _text_exceeds(data.get(key), int(budget.get(label or key, 10_000))):
+            overages.append(label or key)
+
+    def check_items(items, title_key: str, desc_key: str, title_label: str, desc_label: str):
+        if not isinstance(items, list):
+            return
+        for item in items:
+            if isinstance(item, dict):
+                if title_key and _text_exceeds(item.get(title_key), int(budget.get(title_label, 10_000))):
+                    overages.append(title_label)
+                if desc_key and _text_exceeds(item.get(desc_key), int(budget.get(desc_label, 10_000))):
+                    overages.append(desc_label)
+            elif title_key and _text_exceeds(item, int(budget.get(title_label, 10_000))):
+                overages.append(title_label)
+
+    if template in {"pause", "qa"}:
+        return []
+    if template == "program_year":
+        check("title")
+        check("subtitle")
+        check("day_label")
+        check_items(data.get("phases"), "title", "desc", "phase_title", "phase_desc")
+        return sorted(set(overages))
+    if template == "day_program_7_steps":
+        check("title")
+        check("subtitle")
+        check("day_label")
+        for item in data.get("items") or []:
+            if _text_exceeds(item, int(budget.get("item_title", 10_000))):
+                overages.append("item_title")
+        return sorted(set(overages))
+    if template == "chapter_opener":
+        check("title")
+        check("chapter_label")
+        check_items(data.get("axes"), "title", "desc", "axis_title", "axis_desc")
+        return sorted(set(overages))
+    if template == "definition":
+        check("term")
+        check("eyebrow")
+        check("definition")
+        for item in data.get("isItems") or []:
+            if _text_exceeds(item, int(budget.get("tag", 10_000))):
+                overages.append("tag")
+        return sorted(set(overages))
+    if template == "comparison":
+        check("title")
+        cols = data.get("cols") if isinstance(data.get("cols"), list) else []
+        for col in cols:
+            if not isinstance(col, dict):
+                continue
+            if _text_exceeds(col.get("label"), int(budget.get("col_label", 10_000))):
+                overages.append("col_label")
+            for item in col.get("items") or []:
+                if _text_exceeds(item, int(budget.get("col_item", 10_000))):
+                    overages.append("col_item")
+        return sorted(set(overages))
+    if template == "casestudy":
+        check("title")
+        check("eyebrow")
+        cases = data.get("cases") if isinstance(data.get("cases"), list) else []
+        for item in cases:
+            if not isinstance(item, dict):
+                continue
+            for key, label in (("tag", "case_tag"), ("title", "case_title"), ("desc", "case_desc"), ("example", "case_example")):
+                if _text_exceeds(item.get(key), int(budget.get(label, 10_000))):
+                    overages.append(label)
+        return sorted(set(overages))
+    if template == "situations":
+        check("title")
+        check("eyebrow")
+        check_items(data.get("items"), "title", "desc", "item_title", "item_desc")
+        return sorted(set(overages))
+    if template in {"steps", "flow"}:
+        check("title")
+        check("eyebrow")
+        check_items(data.get("steps"), "title", "desc", "step_title", "step_desc")
+        return sorted(set(overages))
+    if template == "story":
+        check("title")
+        check("narrative")
+        check("moral")
+        return sorted(set(overages))
+    if template == "analogy":
+        for key in ("title", "concept", "comparison", "text"):
+            check(key)
+        return sorted(set(overages))
+    if template == "framework":
+        check("title")
+        center = data.get("center") if isinstance(data.get("center"), dict) else {}
+        if _text_exceeds(center.get("title"), int(budget.get("center_title", 10_000))):
+            overages.append("center_title")
+        check_items(data.get("segments"), "title", "desc", "segment_title", "segment_desc")
+        return sorted(set(overages))
+    if template in {"recap", "reprise_recap"}:
+        check("title")
+        for point in data.get("points") or []:
+            if _text_exceeds(point, int(budget.get("point", 10_000))):
+                overages.append("point")
+        return sorted(set(overages))
+    if template == "quotable":
+        check("quote")
+        return sorted(set(overages))
+
+    check("title")
+    check("text")
+    check("eyebrow")
+    return sorted(set(overages))
+
+
+def _data_fits_layout(template: str, data: dict, variant: str) -> bool:
+    return not _layout_overages(template, data, _layout_budget_for(template, variant))
+
+
+def _fit_data_to_budget(template: str, data: dict, budget: dict) -> tuple[dict, bool]:
+    fitted = json.loads(json.dumps(data, ensure_ascii=False))
+    changed = False
+
+    def fit_key(obj: dict, key: str, budget_key: str | None = None):
+        nonlocal changed
+        if not isinstance(obj, dict) or key not in obj:
+            return
+        limit = int(budget.get(budget_key or key, 10_000))
+        current = obj.get(key)
+        next_value = _shorten_for_layout(current, limit)
+        if next_value != str(current or "").strip():
+            obj[key] = next_value
+            changed = True
+
+    def fit_items(items, mapping: dict[str, str]):
+        nonlocal changed
+        if not isinstance(items, list):
+            return
+        for index, item in enumerate(items):
+            if isinstance(item, dict):
+                for key, budget_key in mapping.items():
+                    fit_key(item, key, budget_key)
+            elif "value" in mapping:
+                limit = int(budget.get(mapping["value"], 10_000))
+                next_value = _shorten_for_layout(item, limit)
+                if next_value != str(item or "").strip():
+                    items[index] = next_value
+                    changed = True
+
+    if template == "program_year":
+        for key in ("title", "subtitle", "day_label"):
+            fit_key(fitted, key)
+        fit_items(fitted.get("phases"), {"title": "phase_title", "desc": "phase_desc"})
+    elif template == "day_program_7_steps":
+        for key in ("title", "subtitle", "day_label"):
+            fit_key(fitted, key)
+        fit_items(fitted.get("items"), {"value": "item_title"})
+    elif template == "chapter_opener":
+        fit_key(fitted, "title")
+        fit_key(fitted, "chapter_label")
+        fit_items(fitted.get("axes"), {"title": "axis_title", "desc": "axis_desc"})
+    elif template == "definition":
+        for key in ("term", "eyebrow", "definition"):
+            fit_key(fitted, key)
+        fit_items(fitted.get("isItems"), {"value": "tag"})
+    elif template == "comparison":
+        fit_key(fitted, "title")
+        cols = fitted.get("cols") if isinstance(fitted.get("cols"), list) else []
+        for col in cols:
+            fit_key(col, "label", "col_label")
+            fit_items(col.get("items"), {"value": "col_item"})
+    elif template == "casestudy":
+        fit_key(fitted, "title")
+        fit_key(fitted, "eyebrow")
+        fit_items(
+            fitted.get("cases"),
+            {"tag": "case_tag", "title": "case_title", "desc": "case_desc", "example": "case_example"},
+        )
+    elif template == "situations":
+        fit_key(fitted, "title")
+        fit_key(fitted, "eyebrow")
+        fit_items(fitted.get("items"), {"title": "item_title", "desc": "item_desc"})
+    elif template in {"steps", "flow"}:
+        fit_key(fitted, "title")
+        fit_key(fitted, "eyebrow")
+        fit_items(fitted.get("steps"), {"title": "step_title", "desc": "step_desc"})
+    elif template == "story":
+        for key in ("title", "narrative", "moral"):
+            fit_key(fitted, key)
+    elif template == "analogy":
+        for key in ("title", "concept", "comparison", "text"):
+            fit_key(fitted, key)
+    elif template == "framework":
+        fit_key(fitted, "title")
+        if isinstance(fitted.get("center"), dict):
+            fit_key(fitted["center"], "title", "center_title")
+        fit_items(fitted.get("segments"), {"title": "segment_title", "desc": "segment_desc"})
+    elif template in {"recap", "reprise_recap"}:
+        fit_key(fitted, "title")
+        fit_items(fitted.get("points"), {"value": "point"})
+    elif template == "quotable":
+        fit_key(fitted, "quote")
+    else:
+        for key in ("title", "text", "eyebrow"):
+            fit_key(fitted, key)
+
+    return fitted, changed
+
+
+def _resolve_slide_layout(template: str, data: dict, requested_variant: str = "") -> tuple[str, dict, dict]:
+    source_budget = _layout_budget_for(template, "source")
+    if not _layout_overages(template, data, source_budget):
+        return "source", data, {
+            "status": "ok",
+            "requested_variant": "",
+            "over_budget_fields": [],
+        }
+
+    overages = _layout_overages(template, data, source_budget)
+    fitted_data, changed = _fit_data_to_budget(template, data, source_budget)
+    return "source", fitted_data, {
+        "status": "compressed_to_source" if changed else "source_over_budget",
+        "requested_variant": "",
+        "over_budget_fields": overages,
+    }
+
+
+def _layout_budget_prompt() -> str:
+    compact = {}
+    for template in sorted(SUPPORTED_TEMPLATES):
+        compact[template] = _layout_budget_for(template, "source")
+    return json.dumps(compact, ensure_ascii=False, separators=(",", ":"))
+
+
 def _prompt_for_blocks(blocks: list[dict], source_title: str, pace_profile: dict, max_batch_slides: int) -> str:
     payload = [
         {
@@ -2381,11 +2754,11 @@ RÈGLES:
 - Ne rattache jamais une slide au passage d'un anchor voisin parce qu'il contient des mots proches, une image répétée ou le même thème général.
 - Si deux anchors voisins sont présents, vérifie leur ordre narratif : la première slide doit pointer vers le premier mouvement oral, la deuxième vers le mouvement oral suivant.
 - Le deck source exact est la seule référence visuelle autorisée: utilise uniquement les templates du catalogue.
-- Les nouvelles formes du deck source exact ont leur propre attribution: `story` pour un mini-récit avec morale, `analogy` pour une image mentale, `framework` pour un modèle à leviers, `opinion` pour une prise de position, `situations` pour trois profils ou situations, `flow` pour quatre gestes métier enchaînés.
+- Les nouvelles formes du deck source exact ont leur propre attribution: `story` pour un mini-récit avec morale, `analogy` pour une image mentale, `framework` pour un modèle à leviers, `opinion` pour une prise de position, `situations` pour trois profils ou situations, `flow` pour 2 à 4 gestes métier enchaînés.
 - Si le texte introduit une maxime, une phrase clé, une formule exacte ou un repère à mémoriser avec des signaux comme "la voici", "phrase à retenir", "maxime", "repère", "souvenez-vous", utilise `quotable` et copie la phrase exacte dans `quote`.
 - `story` peut être la déclinaison narrative d'une maxime: utilise-le seulement si le passage raconte ensuite une scène, une expérience client ou une conséquence concrète qui illustre cette phrase.
 - Une structure nouvelle en trois piliers, trois repères, trois profils, trois postures, trois situations ou trois expressions n'est pas un `recap`: utilise `situations`. Les signaux forts sont "trois piliers", "les trois", "les voici", "trépied", "triptyque".
-- Ne mets pas `casestudy` par défaut dès qu'il y a un exemple. Utilise `casestudy` seulement pour 2 à 3 cas comparables ou situations métier concrètes en cartes.
+- Ne mets pas `casestudy` par défaut dès qu'il y a un exemple. Utilise `casestudy` seulement pour 2 à 4 cas comparables ou situations métier concrètes en cartes.
 - Si le passage raconte un seul cas fictif ou une seule situation pour amener un conseil, une astuce, un réflexe métier ou une phrase de conduite à tenir, utilise `tip`. Si ce cas unique sert surtout de récit avec morale, utilise `story`.
 - Pour deux versions opposées, préfère `comparison`. Pour une progression en étapes, préfère `steps` ou `flow`.
 - Si le passage pose une distinction en deux familles ou deux modes, comme synchrone/asynchrone, téléphone/courriel, immédiat/différé, rapidité/exhaustivité, utilise `comparison`.
@@ -2396,6 +2769,7 @@ RÈGLES:
 - Maximum {max_batch_slides} slides pour tout ce batch.
 - Maximum {pace_profile["max_slides_per_block"]} slides pour une même fenêtre source, sauf si plusieurs slide_anchors explicites y sont attachés.
 - {pace_profile["instruction"]}
+- Ne crée jamais une deuxième slide parce que son texte est long. Reformule les champs pour rentrer dans le template source exact.
 - Ne rajoute aucun timing. Ne crée pas de slide absente du texte.
 - Le JSON de plan peut orienter le choix, mais le texte final reste le contrôle : une slide doit correspondre à ce qui est vraiment dit.
 - Le deck doit être lisible: titres courts, contenu très synthétique, aucun pavé.
@@ -2422,6 +2796,14 @@ PROCESSUS OBLIGATOIRE:
 
 {density_rules}
 
+BUDGETS DE TEXTE DES TEMPLATES SOURCE:
+- Il n'y a pas de variante visuelle: le deck source exact reste inchangé.
+- Les budgets ci-dessous sont les limites de texte du template actuel.
+- Si le contenu dépasse, reformule `data` pour respecter ces limites.
+- Ne compense jamais par une slide supplémentaire ou par un pavé de texte.
+- Budgets par template, en caractères maximum:
+{_layout_budget_prompt()}
+
 CATALOGUE TEMPLATES:
 {_template_catalog_for_prompt()}
 
@@ -2433,15 +2815,16 @@ TEMPLATES AUTORISÉS ET SCHÉMAS:
 - chapter_opener: data={{"chapter_label":"Chapitre X","title":"titre du thème","axes":[{{"title":"axe court","desc":"optionnel"}}]}}
 - definition: data={{"term":"mot ou notion","eyebrow":"contexte court","definition":"1 phrase","isItems":["critère","critère"]}}
 - comparison: data={{"title":"3-6 mots","cols":[{{"label":"colonne","items":["point court"]}},{{"label":"colonne","items":["point court"]}}]}}
-- casestudy: data={{"title":"3-6 mots","eyebrow":"contexte","cases":[{{"tag":"01 · Canal","title":"court","desc":"1 phrase","example":"optionnel"}}]}} avec 2 à 3 cases comparables
+- casestudy: data={{"title":"3-6 mots","eyebrow":"contexte","cases":[{{"tag":"01 · Canal","title":"court","desc":"1 phrase","example":"optionnel"}}]}} avec 2 à 4 cases comparables
 - situations: data={{"title":"3-6 mots","eyebrow":"contexte","items":[{{"title":"pilier, profil, posture ou situation","desc":"rôle ou règle courte"}}]}} avec exactement 3 items
 - steps: data={{"title":"3-6 mots","steps":[{{"title":"court","desc":"1 phrase"}}]}} avec 2-4 steps
-- flow: data={{"title":"3-6 mots","eyebrow":"contexte","steps":[{{"title":"geste court","desc":"1 phrase"}}]}} avec exactement 4 gestes métier
+- flow: data={{"title":"3-6 mots","eyebrow":"contexte","steps":[{{"title":"geste court","desc":"1 phrase"}}]}} avec 2 à 4 gestes métier
 - story: data={{"title":"3-6 mots","narrative":"1-2 phrases de situation","moral":"phrase de conclusion qui relie la scène au principe"}}
 - analogy: data={{"title":"3-6 mots","concept":"notion source","comparison":"image mentale","text":"1 phrase d'explication"}}
 - framework: data={{"title":"3-8 mots","center":{{"title":"coeur du modèle"}},"segments":[{{"title":"court","desc":"1 phrase"}}]}} avec 4-6 segments
 - opinion: data={{"title":"3-8 mots","text":"1-2 phrases de point de vue argumenté"}}
-- recap: data={{"title":"3-6 mots","points":["point court","point court","point court"]}}
+- recap: data={{"title":"3-6 mots","points":["point court"]}} avec 2 à 4 points
+- reprise_recap: data={{"title":"3-6 mots","points":["point court"]}} avec 2 à 4 points repris du chapitre précédent
 - warning: data={{"title":"3-6 mots","text":"1-2 phrases"}}
 - tip: data={{"title":"3-6 mots","text":"1-2 phrases"}}
 - quotable: data={{"quote":"phrase exacte courte à ancrer, copiée telle quelle depuis le texte source"}}
@@ -2449,7 +2832,7 @@ TEMPLATES AUTORISÉS ET SCHÉMAS:
 - qa: data={{}}
 
 Choisis `event_type` parmi:
-welcome, chapter_opener, recap, definition, reflection, casestudy, story, analogy, opinion, framework, steps, comparison, warning, tip, quotable.
+welcome, chapter_opener, recap, reprise_recap, definition, reflection, casestudy, story, analogy, opinion, framework, steps, comparison, warning, tip, quotable.
 
 FORMAT EXACT:
 {{
@@ -2912,7 +3295,7 @@ def _normalize_slide_data(template: str, data: dict, fallback_title: str, fallba
 
     if template == "casestudy":
         cases = []
-        for item in _limit_list(data.get("cases") or data.get("items") or data.get("points"), 3):
+        for item in _limit_list(data.get("cases") or data.get("items") or data.get("points"), 4):
             if isinstance(item, dict):
                 cases.append({
                     "tag": _as_text(item.get("tag") or item.get("label"), "")[:40],
@@ -2931,7 +3314,7 @@ def _normalize_slide_data(template: str, data: dict, fallback_title: str, fallba
         }
 
     if template == "situations":
-        items = _items_from("items", "cases", "profiles", "scenes", "points", max_len=3)
+        items = _items_from("items", "cases", "profiles", "scenes", "points", max_len=4)
         return {
             "title": title,
             "eyebrow": _as_text(data.get("eyebrow"), "Adapter sa posture")[:60],
@@ -3162,7 +3545,7 @@ def _normalize_slide_data(template: str, data: dict, fallback_title: str, fallba
             "branches": branches,
         }
 
-    if template == "recap":
+    if template in {"recap", "reprise_recap"}:
         source_points = data.get("points") or data.get("columns") or data.get("items") or data.get("checklist") or data.get("steps") or []
         points = []
         for item in _limit_list(source_points, 4):
@@ -3212,6 +3595,8 @@ def _fallback_slide(block: dict, reason: str = "fallback") -> dict:
     title = _fallback_title(block)
     text = _shorten(block.get("text", ""), 280)
     template = _canonical_template((anchor or {}).get("template_type"), fallback="reflection")
+    data = _normalize_slide_data(template, {"title": title, "text": text}, title, text)
+    layout_variant, data, layout_fit = _resolve_slide_layout(template, data, "source")
     return {
         "source_block_id": block["source_block_id"],
         "pedagogical_shape": _normalize_pedagogical_shape((anchor or {}).get("pedagogical_shape"), template),
@@ -3219,10 +3604,16 @@ def _fallback_slide(block: dict, reason: str = "fallback") -> dict:
         "template_decision_reason": "",
         "rejected_templates": [],
         "template_type": template,
+        "layout_variant": layout_variant,
+        "layout_fit": {
+            "status": "fallback_source" if layout_fit.get("status") == "ok" else layout_fit.get("status"),
+            "requested_variant": "",
+            "over_budget_fields": layout_fit.get("over_budget_fields") or [],
+        },
         "event_type": "concept",
         "event_summary": title,
         "importance": 2,
-        "data": {"title": title, "text": text},
+        "data": data,
         "slide_anchor_id": (anchor or {}).get("anchor_id"),
         "beat_id": (anchor or {}).get("beat_id") or "",
         "anchor_role": (anchor or {}).get("role") or "",
@@ -3491,6 +3882,11 @@ def _normalize_slide(raw: dict, block: dict) -> dict:
                 event_type = "comparison"
             slide_data_payload = _two_family_comparison_data(slide_data_payload, fallback_title, fallback_text)
     data = _normalize_slide_data(template, slide_data_payload, fallback_title, fallback_text)
+    layout_variant, data, layout_fit = _resolve_slide_layout(
+        template,
+        data,
+        raw.get("layout_variant") or slide_data_payload.get("layout_variant") or "",
+    )
     rejected_templates = _normalize_rejected_templates(raw.get("rejected_templates"))
     template_decision_reason = _as_text(raw.get("template_decision_reason"), "")[:360]
     if requested_template != template:
@@ -3516,6 +3912,8 @@ def _normalize_slide(raw: dict, block: dict) -> dict:
         "template_decision_reason": template_decision_reason,
         "rejected_templates": rejected_templates,
         "template_type": template,
+        "layout_variant": layout_variant,
+        "layout_fit": layout_fit,
         "event_type": event_type,
         "event_summary": _as_text(raw.get("event_summary"), fallback_title)[:180],
         "curation_reason": _as_text(raw.get("curation_reason"), "")[:360],

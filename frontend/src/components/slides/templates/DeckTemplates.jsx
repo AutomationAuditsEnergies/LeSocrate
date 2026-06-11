@@ -202,7 +202,8 @@ export const DeckChapterOpener = ({
 }) => {
   const [shellRef, scale] = useSlideStageScale();
   const sourceAxes = Array.isArray(axes) && axes.length ? axes : items;
-  const titleFit = getChapterTitleFit(chapter_label, title);
+  const safeChapterLabel = String(chapter_label || 'Chapitre').trim().replace(/\s*:\s*$/, '');
+  const titleFit = getChapterTitleFit(safeChapterLabel, title);
   const safeAxes = (Array.isArray(sourceAxes) && sourceAxes.length ? sourceAxes : [
     { title, desc: 'Le repère principal à retenir dans cette séquence.' },
   ]).slice(0, 3);
@@ -218,7 +219,7 @@ export const DeckChapterOpener = ({
               '--chapter-title-size': `${titleFit.fontSize}px`,
             }}
           >
-            <span className="deck-chapter-label">{chapter_label}</span> <span className="deck-chapter-name">{title}</span>
+            <span className="deck-chapter-label">{safeChapterLabel} :</span> <span className="deck-chapter-name">{title}</span>
           </h1>
         </div>
         <div className="deck-chapter-axes">
@@ -286,8 +287,8 @@ export const DeckProgramYear = ({
   const phaseTwoBlock = svgTitleBlock(phaseTwoTitle, 'Actions commerciales', 28);
   const displayedTitle = 'Parcours annuel.';
   const displayedDayLabel = "Programme de l'année";
-  const topTitleStartY = 104 - ((phaseOneBlock.lines.length - 1) * phaseOneBlock.lineGap) / 2;
-  const bottomTitleStartY = 650 - ((phaseTwoBlock.lines.length - 1) * phaseTwoBlock.lineGap) / 2;
+  const topTitleStartY = 88 - ((phaseOneBlock.lines.length - 1) * phaseOneBlock.lineGap) / 2;
+  const bottomTitleStartY = 676 - ((phaseTwoBlock.lines.length - 1) * phaseTwoBlock.lineGap) / 2;
 
   return (
     <SourceSlide className="s-prog-year">
@@ -299,21 +300,29 @@ export const DeckProgramYear = ({
       </div>
 
       <svg className="py-svg-road" viewBox="0 0 1920 760" preserveAspectRatio="xMidYMid meet" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <linearGradient id="py-paper-card" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0%" stopColor="#f9f3e0" />
+            <stop offset="58%" stopColor="#ede2bc" />
+            <stop offset="100%" stopColor="#e3d5aa" />
+          </linearGradient>
+        </defs>
         <path d="M 0,380 C 160,380 340,220 520,220 C 700,220 860,380 1000,380 C 1140,380 1340,510 1560,510 C 1680,510 1820,380 1920,380" stroke="rgba(0,0,20,0.55)" strokeWidth="120" fill="none" strokeLinecap="round" />
         <path d="M 0,380 C 160,380 340,220 520,220 C 700,220 860,380 1000,380 C 1140,380 1340,510 1560,510 C 1680,510 1820,380 1920,380" stroke="#162060" strokeWidth="104" fill="none" strokeLinecap="round" />
         <path d="M 0,380 C 160,380 340,220 520,220 C 700,220 860,380 1000,380 C 1140,380 1340,510 1560,510 C 1680,510 1820,380 1920,380" stroke="rgba(255,255,255,0.12)" strokeWidth="104" fill="none" strokeLinecap="round" />
         <path d="M 0,380 C 160,380 340,220 520,220 C 700,220 860,380 1000,380 C 1140,380 1340,510 1560,510 C 1680,510 1820,380 1920,380" stroke="rgba(255,255,255,0.65)" strokeWidth="5" fill="none" strokeDasharray="36 22" strokeLinecap="round" />
 
-        <rect x="268" y="16" width="504" height="150" rx="14" fill="rgba(255,255,255,0.07)" stroke="rgba(255,255,255,0.15)" strokeWidth="1.5" />
-        <rect x="268" y="16" width="5" height="150" rx="3" fill="#ff5d6c" />
-        <text x="284" y="44" fontFamily="'JetBrains Mono',monospace" fontSize="15" fill="#ff5d6c" letterSpacing="3">PHASE 01</text>
-        <text textAnchor="middle" fill="white" fontFamily="'Archivo Black',sans-serif">
+        <rect x="278" y="10" width="504" height="150" rx="4" fill="rgba(0,0,20,0.38)" />
+        <rect x="268" y="0" width="504" height="150" rx="4" fill="url(#py-paper-card)" stroke="rgba(10,19,58,0.10)" strokeWidth="1.5" />
+        <line x1="302" y1="0" x2="302" y2="150" stroke="rgba(210,60,60,0.32)" strokeWidth="2" />
+        <text x="318" y="28" fontFamily="'JetBrains Mono',monospace" fontSize="15" fill="#cc3b1e" letterSpacing="3">PHASE 01</text>
+        <text textAnchor="middle" fill="#0a133a" fontFamily="'Archivo Black',sans-serif">
           {phaseOneBlock.lines.map((line, index) => (
             <tspan x="522" y={topTitleStartY + index * phaseOneBlock.lineGap} fontSize={phaseOneBlock.fontSize} key={line}>{line}</tspan>
           ))}
         </text>
-        <text x="284" y="151" fontFamily="Manrope,sans-serif" fontSize="19" fill="rgba(255,255,255,0.60)">{shortenSvgText(phaseOneDesc, 70)}</text>
-        <line x1="520" y1="170" x2="520" y2="178" stroke="rgba(255,255,255,0.3)" strokeWidth="2" strokeDasharray="5 4" />
+        <text x="318" y="135" fontFamily="Manrope,sans-serif" fontSize="19" fill="rgba(10,19,58,0.62)">{shortenSvgText(phaseOneDesc, 64)}</text>
+        <line x1="520" y1="154" x2="520" y2="178" stroke="rgba(255,255,255,0.3)" strokeWidth="2" strokeDasharray="5 4" />
         <circle cx="520" cy="220" r="64" fill="rgba(255,93,108,0.10)" />
         <circle cx="520" cy="220" r="50" fill="none" stroke="rgba(255,93,108,0.35)" strokeWidth="2" />
         <circle cx="520" cy="220" r="40" fill="#ff5d6c" />
@@ -325,16 +334,17 @@ export const DeckProgramYear = ({
         <circle cx="1560" cy="510" r="40" fill="#ff5d6c" />
         <circle cx="1560" cy="510" r="40" fill="none" stroke="rgba(255,255,255,0.22)" strokeWidth="4" />
         <text x="1560" y="524" textAnchor="middle" fontFamily="'Archivo Black',sans-serif" fontSize="34" fontWeight="900" fill="white" letterSpacing="-0.5">02</text>
-        <line x1="1560" y1="554" x2="1560" y2="562" stroke="rgba(255,255,255,0.3)" strokeWidth="2" strokeDasharray="5 4" />
-        <rect x="1308" y="564" width="504" height="150" rx="14" fill="rgba(255,255,255,0.07)" stroke="rgba(255,255,255,0.15)" strokeWidth="1.5" />
-        <rect x="1308" y="564" width="5" height="150" rx="3" fill="#ff5d6c" />
-        <text x="1324" y="592" fontFamily="'JetBrains Mono',monospace" fontSize="15" fill="#ff5d6c" letterSpacing="3">PHASE 02</text>
-        <text textAnchor="middle" fill="white" fontFamily="'Archivo Black',sans-serif">
+        <line x1="1560" y1="554" x2="1560" y2="586" stroke="rgba(255,255,255,0.3)" strokeWidth="2" strokeDasharray="5 4" />
+        <rect x="1318" y="600" width="504" height="150" rx="4" fill="rgba(0,0,20,0.38)" />
+        <rect x="1308" y="590" width="504" height="150" rx="4" fill="url(#py-paper-card)" stroke="rgba(10,19,58,0.10)" strokeWidth="1.5" />
+        <line x1="1342" y1="590" x2="1342" y2="740" stroke="rgba(210,60,60,0.32)" strokeWidth="2" />
+        <text x="1358" y="618" fontFamily="'JetBrains Mono',monospace" fontSize="15" fill="#cc3b1e" letterSpacing="3">PHASE 02</text>
+        <text textAnchor="middle" fill="#0a133a" fontFamily="'Archivo Black',sans-serif">
           {phaseTwoBlock.lines.map((line, index) => (
             <tspan x="1562" y={bottomTitleStartY + index * phaseTwoBlock.lineGap} fontSize={phaseTwoBlock.fontSize} key={line}>{line}</tspan>
           ))}
         </text>
-        <text x="1324" y="704" fontFamily="Manrope,sans-serif" fontSize="19" fill="rgba(255,255,255,0.60)">{shortenSvgText(phaseTwoDesc, 70)}</text>
+        <text x="1358" y="730" fontFamily="Manrope,sans-serif" fontSize="19" fill="rgba(10,19,58,0.62)">{shortenSvgText(phaseTwoDesc, 64)}</text>
       </svg>
     </SourceSlide>
   );
@@ -486,6 +496,11 @@ const sourceItems = (items, fallback, limit) => {
   return source.slice(0, limit);
 };
 
+const countVariantClass = (baseClass, count) => {
+  const safeCount = Math.min(4, Math.max(2, Number(count) || 3));
+  return `${baseClass} ${baseClass}--count-${safeCount}`;
+};
+
 export const DeckStatement = ({
   title = 'Une idée à retenir',
   text,
@@ -542,7 +557,7 @@ export const DeckProcess = ({ title = 'Les étapes clés', steps = [], brandName
   const sourceSteps = Array.isArray(steps) ? steps : [];
   const safeSteps = (sourceSteps.length ? sourceSteps : [{ title: 'Observer', desc: 'Comprendre la situation réelle.' }, { title: 'Découper', desc: 'Identifier les étapes utiles.' }, { title: 'Agir', desc: 'Appliquer la méthode.' }, { title: 'Mesurer', desc: 'Vérifier le résultat.' }]).slice(0, 4);
   return (
-    <SourceSlide className="s-process">
+    <SourceSlide className={countVariantClass('s-process', safeSteps.length)}>
       {sourceChrome(brandName)}
       <div className="head">
         <span className="eyebrow">— Méthode</span>
@@ -565,7 +580,6 @@ export const DeckStory = ({ title = 'Cas terrain', narrative, moral, text, brand
   <SourceSlide className="s-board">
     {sourceChrome(brandName)}
     <div className="meta">
-      <span className="num">STORY</span>
       <span className="bar" />
       <span className="chapter">{title}</span>
     </div>
@@ -613,7 +627,6 @@ export const DeckAnalogy = ({ title = 'Analogie', concept = 'Concept', compariso
 export const DeckOpinion = ({ title = 'Point de vue', text, brandName }) => (
   <SourceSlide className="s-opinion">
     {sourceChrome(brandName)}
-    <span className="quote-bg">"</span>
     <div className="l">
       <span className="badge">POINT DE VUE</span>
       <h1><SourceAccentTitle title={title} fallback="Point de vue" /></h1>
@@ -673,11 +686,8 @@ export const DeckFramework = ({ title = 'Cadre de lecture', center = {}, segment
             <line x1="130" y1="10" x2="130" y2="250" />
             <line x1="10" y1="130" x2="250" y2="130" />
           </g>
-          <g fill="rgba(255,93,108,0.25)" stroke="var(--coral)" strokeWidth="2">
-            <path d="M 130 130 L 130 20 A 110 110 0 0 1 240 130 Z" />
-          </g>
         </svg>
-        <div className="center">{center.title || center.label || 'Point central'}</div>
+        <div className="center" aria-hidden="true" />
         {safeSegments.map((segment, index) => (
           <div className={`sat s${index + 1}`} key={index}>
             <div className="t">{typeof segment === 'string' ? segment : segment.title}</div>
@@ -691,7 +701,7 @@ export const DeckFramework = ({ title = 'Cadre de lecture', center = {}, segment
 
 export const DeckRecap = ({ title = "Ce qu'on retient.", points = [], brandName }) => {
   const sourcePoints = Array.isArray(points) ? points : [];
-  const safePoints = sourcePoints.length ? sourcePoints.slice(0, 3) : ['Une première idée clé.', 'Une deuxième idée clé.', 'Une action à appliquer.'];
+  const safePoints = sourcePoints.length ? sourcePoints.slice(0, 4) : ['Une première idée clé.', 'Une deuxième idée clé.', 'Une action à appliquer.'];
   return (
     <SourceSlide className="s-recap2">
       {sourceChrome(brandName)}
@@ -700,11 +710,11 @@ export const DeckRecap = ({ title = "Ce qu'on retient.", points = [], brandName 
           <div className="rc2-head">
             <h1>{renderAccentLastWord(title, "Ce qu'on retient.")}</h1>
           </div>
-          <div className="rc2-cards">
+          <div className={countVariantClass('rc2-cards', safePoints.length)}>
             {safePoints.map((point, i) => {
               const { title: pointTitle, desc } = pointParts(point, i);
               return (
-                <div className="rc2-card" style={{ '--card-color': ['#ff6b47', '#f5a623', '#1e40af'][i % 3] }} key={i}>
+                <div className="rc2-card" style={{ '--card-color': ['#ff6b47', '#f5a623', '#1e40af', '#58e2a4'][i % 4] }} key={i}>
                   <div className="rc2-num-badge">{String(i + 1).padStart(2, '0')}</div>
                   <h3>{pointTitle}</h3>
                   <div className="rc2-line" />
@@ -753,6 +763,47 @@ export const DeckRecap = ({ title = "Ce qu'on retient.", points = [], brandName 
   );
 };
 
+export const DeckRepriseRecap = ({ title = 'On reprend le fil.', points = [], brandName }) => {
+  const sourcePoints = Array.isArray(points) ? points : [];
+  const safePoints = sourcePoints.length ? sourcePoints.slice(0, 4) : [
+    'Le repère clé précédent.',
+    "Ce qu'il faut garder en tête.",
+    'Le lien avec la suite.',
+  ];
+
+  return (
+    <SourceSlide className="s-reprise-recap">
+      {sourceChrome(brandName)}
+      <div className="rr-layout">
+        <div className="rr-left">
+          <span className="rr-eyebrow">— Reprise</span>
+          <h1>{renderAccentLastWord(title, 'On reprend le fil.')}</h1>
+          <div className={countVariantClass('rr-points', safePoints.length)}>
+            {safePoints.map((point, i) => {
+              const { title: pointTitle, desc } = pointParts(point, i);
+              return (
+                <div className="rr-point" key={i}>
+                  <span className="rr-num">{String(i + 1).padStart(2, '0')}</span>
+                  <div>
+                    <h3>{pointTitle}</h3>
+                    <p>{desc || pointTitle}</p>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+        <div className="rr-right" aria-hidden="true">
+          <div className="rr-card">
+            <span>chapitre précédent</span>
+            <strong>repères utiles</strong>
+          </div>
+        </div>
+      </div>
+    </SourceSlide>
+  );
+};
+
 export const DeckCaseStudy = ({
   title = 'Cas terrain',
   eyebrow = 'Analyse comparative',
@@ -769,8 +820,8 @@ export const DeckCaseStudy = ({
       desc: 'Un cas concret pour ancrer la notion dans une situation professionnelle.',
       example: '',
     },
-  ]).slice(0, 3);
-  const colClass = safeCases.length <= 2 ? 'cols-2' : (safeCases.length === 3 ? 'cols-3' : 'cols-many');
+  ]).slice(0, 4);
+  const colClass = `cols-${Math.min(4, Math.max(2, safeCases.length))}`;
   const accents = ['accent-coral', 'accent-gold', 'accent-green', 'accent-blue'];
 
   return (
@@ -846,12 +897,12 @@ export const DeckSituations = ({ title = 'Trois situations client.', eyebrow = '
       { title: 'Client hésitant.', desc: 'Clarifier le besoin avant de proposer quoi que ce soit.' },
       { title: 'Client mécontent.', desc: "Traiter l'émotion avant la procédure." },
     ],
-    3,
+    4,
   );
-  const classes = ['a', 'b', 'c'];
+  const classes = ['a', 'b', 'c', 'd'];
 
   return (
-    <SourceSlide className="s-situ">
+    <SourceSlide className={countVariantClass('s-situ', safeItems.length)}>
       {sourceChrome(brandName)}
       <div className="heading">
         <span className="eyebrow">— {eyebrow}</span>
@@ -889,7 +940,7 @@ export const DeckFlow = ({ title = 'Traiter une demande.', eyebrow = 'Le flux en
   );
 
   return (
-    <SourceSlide className="s-flow">
+    <SourceSlide className={countVariantClass('s-flow', safeSteps.length)}>
       {sourceChrome(brandName)}
       <div className="head">
         <span className="eyebrow">— {eyebrow}</span>
@@ -965,7 +1016,7 @@ export const DeckWarning = ({
               <circle cx="251" cy="30" r="13" fill="#ff5d6c" />
               <circle cx="247" cy="26" r="5" fill="rgba(255,255,255,0.45)" />
               <line x1="251" y1="48" x2="251" y2="66" stroke="#7a0e1a" strokeWidth="5" strokeLinecap="round" />
-              <text x="247" y="118" textAnchor="middle" fontFamily="Caveat, cursive" fontSize="88" fill="#cc1a2a" textLength="380" lengthAdjust="spacing" transform="rotate(-1.5,247,118)">Attention !</text>
+              <text x="247" y="220" textAnchor="middle" fontFamily="Caveat, cursive" fontSize="88" fill="#cc1a2a" textLength="380" lengthAdjust="spacing" transform="rotate(-1.5,247,220)">Attention !</text>
             </svg>
           </div>
 
@@ -1034,11 +1085,6 @@ export const DeckComparison = ({ title = 'Avant vs après.', cols = [], rows = [
             <li key={i}><span className="ic">✓</span>{row.after || row.b || rightItems[i] || 'Bonne pratique'}</li>
           ))}
         </ul>
-      </div>
-      <div className="divider">
-        <span className="seam" />
-        <span className="pill">Comparaison</span>
-        <span className="arrow-btn">→</span>
       </div>
     </SourceSlide>
   );

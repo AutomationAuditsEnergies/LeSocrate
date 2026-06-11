@@ -786,6 +786,10 @@ _BEAT_TYPE_TO_TEMPLATE = {
     "trépied": "situations",
     "checklist": "recap",
     "recap": "recap",
+    "reprise": "reprise_recap",
+    "reprise_recap": "reprise_recap",
+    "opening_recap": "reprise_recap",
+    "rappel": "reprise_recap",
     "takeaways": "recap",
     "example": "casestudy",
     "case": "casestudy",
@@ -847,6 +851,7 @@ _SUPPORTED_SLIDE_TEMPLATES = {
     "framework",
     "opinion",
     "recap",
+    "reprise_recap",
     "warning",
     "tip",
     "quotable",
@@ -866,6 +871,7 @@ _PEDAGOGICAL_SHAPE_TO_TEMPLATES = {
     "triade_structurante": ("situations",),
     "progression_ordonnee": ("steps", "flow"),
     "cas_comparables": ("casestudy",),
+    "synthese_de_reprise": ("reprise_recap",),
     "synthese_apres_developpement": ("recap",),
     "modele_a_leviers": ("framework",),
 }
@@ -947,7 +953,7 @@ def _pedagogical_shape_mapping_prompt() -> str:
     for shape, templates in _PEDAGOGICAL_SHAPE_TO_TEMPLATES.items():
         template_list = ", ".join(templates)
         if shape == "progression_ordonnee":
-            template_list += " (si exactement 4 gestes métier enchaînés: flow)"
+            template_list += " (si 2 à 4 gestes métier enchaînés: flow)"
         rows.append(f"- {shape}: {template_list}")
     return "\n".join(rows)
 
@@ -1189,25 +1195,26 @@ def _opening_structure_teaching_beats(
         return [
             {
                 "beat_id": f"c{course_number}opening-recap",
-                "type": "recap",
-                "role": "récapituler brièvement le cours précédent",
+                "type": "reprise_recap",
+                "role": "reprendre les repères utiles du chapitre précédent avant le nouveau thème",
                 "spoken_requirement": (
-                    "Faire un rappel bref et naturel de la partie précédente, sans relancer "
-                    "une nouvelle introduction générale."
+                    "Marquer une courte reprise de début de cours : regarder en arrière, rappeler "
+                    "2 à 4 repères utiles du chapitre précédent, puis les relier à la suite. Ne pas "
+                    "refaire l'accueil général, ne pas annoncer encore le nouveau chapitre en détail."
                 ),
                 "slide_anchor": {
                     "enabled": True,
                     "anchor_id": f"c{course_number}-opening-recap-slide",
-                    "template_type": "recap",
-                    "pedagogical_shape": "synthese_apres_developpement",
-                    "visual_goal": "remettre en mémoire les points utiles avant le nouveau thème",
+                    "template_type": "reprise_recap",
+                    "pedagogical_shape": "synthese_de_reprise",
+                    "visual_goal": "remettre en mémoire les repères précédents avant d'ouvrir le nouveau thème",
                     "items_expected": 3,
                     "fields_hint": {
-                        "title": "Ce qu'on reprend.",
+                        "title": "On reprend le fil.",
                         "points": [
-                            "Le point clé précédent",
+                            "Le repère clé précédent",
+                            "Ce qu'il faut garder en tête",
                             "Le lien avec la suite",
-                            "Le repère à garder en tête",
                         ],
                     },
                 },
@@ -2069,6 +2076,7 @@ MODE DE CETTE PASSE : PLAN GLOBAL COMPLET
 - Interdiction de beats paresseux ou génériques : n'écris jamais `role` ou `visual_goal` du type "poser l'idée centrale", "faire retenir l'idée centrale", "présenter l'idée principale" ou "visualiser le point pédagogique".
 - Chaque beat doit nommer le contenu métier précis à traiter : notion, geste, piège, méthode, exemple, comparaison ou décision observable. On doit comprendre ce que l'apprenant retient sans lire le titre de la partie.
 - Dans `spoken_requirement`, indique ce qui doit être dit concrètement à l'oral, pas seulement "présenter clairement".
+- La `spoken_requirement` d'un beat slideable doit réaliser la forme pédagogique déclarée dans son `slide_anchor` : déduis d'abord la structure orale dominante, fixe le `pedagogical_shape`, puis choisis un `template_type` compatible avec cette shape. Ne livre jamais un anchor dont l'exigence orale fabrique déjà une autre forme que celle annoncée.
 - Dans `slide_anchor.pedagogical_shape`, nomme la fonction pédagogique du passage avant le template.
 - Dans `slide_anchor.visual_goal`, formule le souvenir visuel spécifique à construire, pas une intention générale.
 Taxonomie `pedagogical_shape`:
@@ -2092,13 +2100,13 @@ Taxonomie `pedagogical_shape`:
           "teaching_beats": [
             {
               "beat_id": "c1p1b1",
-              "type": "concept|definition|process|method|example|comparison|warning|tip|story|analogy|data|recap|opinion|quote",
+              "type": "concept|definition|process|method|example|comparison|warning|tip|story|analogy|data|recap|reprise_recap|opinion|quote",
               "role": "fonction pédagogique du moment",
               "spoken_requirement": "ce que le texte oral devra couvrir naturellement",
               "slide_anchor": {
                 "enabled": true,
-                "template_type": "welcome|program_year|day_program_7_steps|chapter_opener|reflection|definition|comparison|casestudy|situations|steps|flow|story|analogy|framework|opinion|recap|warning|tip|quotable|pause|qa",
-                "pedagogical_shape": "ouverture|definition_notion|idee_forte|maxime_a_ancrer|recit_avec_morale|image_mentale|conseil_actionnable|mise_en_garde|opposition_deux_modes|triade_structurante|progression_ordonnee|cas_comparables|synthese_apres_developpement|modele_a_leviers",
+                "template_type": "welcome|program_year|day_program_7_steps|chapter_opener|reflection|definition|comparison|casestudy|situations|steps|flow|story|analogy|framework|opinion|recap|reprise_recap|warning|tip|quotable|pause|qa",
+                "pedagogical_shape": "ouverture|definition_notion|idee_forte|maxime_a_ancrer|recit_avec_morale|image_mentale|conseil_actionnable|mise_en_garde|opposition_deux_modes|triade_structurante|progression_ordonnee|cas_comparables|synthese_de_reprise|synthese_apres_developpement|modele_a_leviers",
                 "visual_goal": "ce que la slide doit aider à retenir",
                 "items_expected": null,
                 "fields_hint": {}
@@ -2144,7 +2152,7 @@ Contraintes générales :
   "Prenons un exemple fictif..." ou "Supposons que..." suffit.
 {teaching_beat_rules}
 - Dans `opening` du cours interne 1 de la première journée, prévois explicitement les moments structurels dans cet ordre : accueil (`welcome`), vision annuelle (`program_year`), feuille de route de journée (`day_program_7_steps`), puis ouverture du premier chapitre (`chapter_opener`).
-- Dans `opening` d'un cours interne suivant, prévois un rappel bref du cours précédent (`recap`), puis l'ouverture du nouveau chapitre (`chapter_opener`). N'utilise pas `steps` pour ces deux fonctions.
+- Dans `opening` d'un cours interne suivant, prévois une reprise brève du chapitre précédent (`reprise_recap`), puis l'ouverture du nouveau chapitre (`chapter_opener`). N'utilise pas `steps` pour ces deux fonctions.
 - Un slide_anchor n'est activé que si le moment mérite vraiment une visualisation. N'active pas une slide pour une simple transition orale.
 - Le texte final ne doit jamais dire "slide", "PowerPoint", "template", "anchor" ou "teaching beat". Ces anchors sont internes.
 - Choisis les templates uniquement dans le catalogue fourni. Ne force pas une roue, une checklist ou des étapes si le contenu ne s'y prête pas.
@@ -2152,7 +2160,8 @@ Contraintes générales :
 - Si cette phrase clé est ensuite illustrée par une scène ou une expérience concrète, `story` peut être utilisé comme déclinaison narrative.
 - Une structure nouvelle en trois piliers, trois repères, trois profils, trois postures, trois situations ou trois expressions est `situations`, pas `recap`.
 - Un seul cas fictif qui sert à faire passer un conseil, une astuce ou un réflexe métier est `tip`, pas `casestudy`.
-- `casestudy` est réservé à 2 ou 3 cas métier comparables en cartes.
+- `casestudy` est réservé à 2 à 4 cas métier comparables en cartes.
+- La structure demandée par la `spoken_requirement` fait autorité : règle d'action = `conseil_actionnable`, cas comparables = `cas_comparables`, opposition = `opposition_deux_modes`, triade = `triade_structurante`, suite ordonnée = `progression_ordonnee`. Si cette structure contredit le template envisagé, change la shape et le template au lieu de forcer le choix initial.
 - Une distinction en deux familles ou deux modes, comme synchrone/asynchrone, téléphone/courriel, immédiat/différé, rapidité/exhaustivité, est `comparison`.
 - Une liste de mots/formules à bannir, expressions interdites, pièges de langage ou erreurs à éviter n'est pas un `recap`: utilise `situations` s'il y a exactement 3 éléments, sinon `warning`.
 - `recap` est réservé à une vraie synthèse après un développement déjà traité: "ce qu'on retient", "en résumé", "nous avons vu".
@@ -2278,6 +2287,7 @@ Règles de qualité obligatoires :
 - Interdiction absolue des formulations paresseuses : "idée centrale", "idée principale", "point pédagogique", "présenter clairement", "faire retenir l'idée centrale".
 - `role` doit dire à quoi sert le moment dans la progression.
 - `spoken_requirement` doit décrire ce que l'oral devra concrètement couvrir.
+- La `spoken_requirement` d'un beat slideable doit réaliser la forme pédagogique déclarée dans son `slide_anchor` : déduis d'abord la structure orale dominante, fixe le `pedagogical_shape`, puis choisis un `template_type` compatible avec cette shape. Ne livre jamais un anchor dont l'exigence orale fabrique déjà une autre forme que celle annoncée.
 - `slide_anchor.pedagogical_shape` doit nommer la fonction pédagogique du passage, pas son thème.
 - `slide_anchor.visual_goal` doit indiquer le souvenir visuel spécifique à construire.
 - `slide_anchor.must_cover` doit nommer le contenu exact couvert par cette slide.
@@ -2317,7 +2327,8 @@ Taxonomie `pedagogical_shape`:
 - Scène ou expérience qui illustre une maxime = `story`.
 - Trois piliers, trois repères, trois profils, trois postures, trois situations ou trois expressions = `situations`.
 - Cas unique qui amène un conseil, une astuce ou un réflexe métier = `tip`.
-- 2 ou 3 cas métier comparables = `casestudy`.
+- 2 à 4 cas métier comparables = `casestudy`.
+- La structure demandée par la `spoken_requirement` fait autorité : règle d'action = `conseil_actionnable`, cas comparables = `cas_comparables`, opposition = `opposition_deux_modes`, triade = `triade_structurante`, suite ordonnée = `progression_ordonnee`. Si cette structure contredit le template envisagé, change la shape et le template au lieu de forcer le choix initial.
 - Deux familles ou deux modes à opposer = `comparison`.
 - Une liste de mots/formules à bannir, expressions interdites, pièges de langage ou erreurs à éviter n'est pas un `recap`: utilise `situations` s'il y a exactement 3 éléments, sinon `warning`.
 - `recap` est réservé à une vraie synthèse après un développement déjà traité: "ce qu'on retient", "en résumé", "nous avons vu".
@@ -2334,13 +2345,13 @@ FORMAT EXACT :
       "teaching_beats": [
         {{
           "beat_id": "c{course_number}p1b1",
-          "type": "concept|definition|process|method|example|comparison|warning|tip|story|analogy|data|recap|opinion|quote",
+          "type": "concept|definition|process|method|example|comparison|warning|tip|story|analogy|data|recap|reprise_recap|opinion|quote",
           "role": "fonction pédagogique spécifique du moment",
           "spoken_requirement": "ce que l'oral devra couvrir concrètement",
           "slide_anchor": {{
             "enabled": true,
-            "template_type": "chapter_opener|reflection|definition|comparison|casestudy|situations|steps|flow|story|analogy|framework|opinion|recap|warning|tip|quotable|pause|qa",
-            "pedagogical_shape": "ouverture|definition_notion|idee_forte|maxime_a_ancrer|recit_avec_morale|image_mentale|conseil_actionnable|mise_en_garde|opposition_deux_modes|triade_structurante|progression_ordonnee|cas_comparables|synthese_apres_developpement|modele_a_leviers",
+            "template_type": "chapter_opener|reflection|definition|comparison|casestudy|situations|steps|flow|story|analogy|framework|opinion|recap|reprise_recap|warning|tip|quotable|pause|qa",
+            "pedagogical_shape": "ouverture|definition_notion|idee_forte|maxime_a_ancrer|recit_avec_morale|image_mentale|conseil_actionnable|mise_en_garde|opposition_deux_modes|triade_structurante|progression_ordonnee|cas_comparables|synthese_de_reprise|synthese_apres_developpement|modele_a_leviers",
             "visual_goal": "souvenir visuel spécifique à construire",
             "items_expected": null,
             "must_cover": "contenu précis couvert par la slide",

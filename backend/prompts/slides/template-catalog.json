@@ -1,6 +1,6 @@
 {
-  "version": "slide-template-catalog-v8-source-exact-21-plan-signals",
-  "principle": "La génération automatique doit rester alignée sur les 21 slides du Deck source exact. Les anciens templates restaurés et corpus TP CRCD restent hors catalogue de production.",
+  "version": "slide-template-catalog-v9-source-exact-22-plan-signals",
+  "principle": "La génération automatique doit rester alignée sur les 22 slides du Deck source exact. Les anciens templates restaurés et corpus TP CRCD restent hors catalogue de production.",
   "curation_policy": {
     "source_of_truth": "Le texte final prime sur le plan. Les anchors du plan orientent le choix, mais le deck source exact limite les formes visuelles.",
     "selection_rule": "Créer une slide seulement quand un visuel aide à comprendre, mémoriser, comparer, décider ou appliquer.",
@@ -115,16 +115,16 @@
     {
       "template_id": "casestudy",
       "source_slide_ref": "09 Case study",
-      "use_cases": ["2 à 3 situations comparables"],
+      "use_cases": ["2 à 4 situations comparables"],
       "visual_role": "Comparer plusieurs situations concrètes dans une même logique.",
-      "use_when": "Le passage met en regard 2 à 3 situations concrètes comparables.",
+      "use_when": "Le passage met en regard 2 à 4 situations concrètes comparables.",
       "avoid_when": "Le passage raconte un seul cas pour amener un conseil, une astuce ou un réflexe métier : préfère `tip`. Le passage raconte un seul cas avec une morale narrative : préfère `story`. Le passage pose une triade conceptuelle comme trois piliers, trois repères, trois profils, trois postures ou trois expressions : préfère `situations`.",
-      "strong_signals": ["2 cas", "3 cas", "cas comparables", "plusieurs situations concrètes", "situations comparables développées en parallèle"],
+      "strong_signals": ["2 cas", "3 cas", "4 cas", "cas comparables", "plusieurs situations concrètes", "situations comparables développées en parallèle"],
       "rejection_rules": ["Rejeter si le passage contient un seul cas fictif qui sert un conseil : préférer `tip`.", "Rejeter si le passage contient un seul récit avec morale : préférer `story`.", "Rejeter si les trois éléments sont des piliers conceptuels et non des situations comparables : préférer `situations`."],
       "confusable_with": ["tip", "story", "situations", "comparison"],
-      "requires": {"items_min": 2, "items_max": 3},
+      "requires": {"items_min": 2, "items_max": 4},
       "pedagogical_shape": "cas_comparables",
-      "plan_signals": ["la matière décrit 2 ou 3 situations comparables"],
+      "plan_signals": ["la matière décrit 2 à 4 situations comparables"],
       "plan_avoid": "Un seul exemple ou une seule anecdote : tip ou story selon la fonction."
     },
     {
@@ -135,7 +135,7 @@
       "use_when": "Le passage présente un enchaînement, une procédure ou des étapes d'action.",
       "avoid_when": "Le contenu n'a pas au moins deux étapes distinctes ou n'indique aucun ordre.",
       "strong_signals": ["étape 1", "d'abord", "ensuite", "puis", "enfin", "procédure", "méthode", "séquence"],
-      "rejection_rules": ["Rejeter si les points ne sont pas ordonnés.", "Rejeter si le passage contient exactement quatre gestes métier très opérationnels : préférer `flow`."],
+      "rejection_rules": ["Rejeter si les points ne sont pas ordonnés.", "Rejeter si le passage contient 2 à 4 gestes métier très opérationnels enchaînés : préférer `flow`."],
       "confusable_with": ["flow", "recap", "framework"],
       "requires": {"items_min": 2, "items_max": 4},
       "pedagogical_shape": "progression_ordonnee",
@@ -155,6 +155,21 @@
       "pedagogical_shape": "synthese_apres_developpement",
       "plan_signals": ["fin d'un chapitre déjà développé, plusieurs points à retenir"],
       "plan_avoid": "Jamais pour introduire une structure nouvelle, même en trois points."
+    },
+    {
+      "template_id": "reprise_recap",
+      "source_slide_ref": "11B Reprise recap",
+      "use_cases": ["reprise de début de cours", "rappel chapitre précédent", "pont vers la suite"],
+      "visual_role": "Remettre en mémoire quelques repères déjà vus avant d'ouvrir le nouveau thème.",
+      "use_when": "Le passage arrive au tout début d'un cours après le premier et rappelle brièvement 2 à 4 repères de la séquence précédente avant de faire le lien avec la suite.",
+      "avoid_when": "Le passage conclut ce qui vient d'être traité : utiliser `recap`. Le passage annonce directement un nouveau thème avec objectif et axes : utiliser `chapter_opener`.",
+      "strong_signals": ["on reprend", "la dernière fois", "nous venons de voir", "avant d'avancer", "regarder dans le rétroviseur", "garder en tête"],
+      "rejection_rules": ["Rejeter si le passage arrive en fin de développement : préférer `recap`.", "Rejeter si le passage ouvre le tout premier cours d'une journée : préférer `welcome` ou `chapter_opener`.", "Rejeter si le passage introduit une structure nouvelle plutôt qu'un rappel."],
+      "confusable_with": ["recap", "chapter_opener", "reflection"],
+      "requires": {"items_min": 2, "items_max": 4},
+      "pedagogical_shape": "synthese_de_reprise",
+      "plan_signals": ["début d'un cours après une séquence précédente, rappel bref de 2 à 4 repères déjà traités"],
+      "plan_avoid": "Pas pour conclure un chapitre ni pour annoncer les axes du nouveau thème."
     },
     {
       "template_id": "pause",
@@ -200,7 +215,7 @@
       "use_when": "Le passage donne une astuce ou une bonne pratique concrète, même s'il commence par un seul cas fictif pour faire comprendre le conseil.",
       "avoid_when": "Le passage compare plusieurs situations entre elles : préfère `casestudy`. Le passage est surtout un récit avec morale : préfère `story`. Le passage est théorique ou centré sur un risque à éviter.",
       "strong_signals": ["conseil", "bonne pratique", "ce qu'il faut faire", "pensez à", "gardez toujours", "dans ce cas"],
-      "rejection_rules": ["Rejeter si le passage compare deux ou trois cas : préférer `casestudy`.", "Rejeter si le passage raconte une scène avec morale : préférer `story`.", "Rejeter si le passage signale surtout un danger : préférer `warning`."],
+      "rejection_rules": ["Rejeter si le passage compare deux à quatre cas : préférer `casestudy`.", "Rejeter si le passage raconte une scène avec morale : préférer `story`.", "Rejeter si le passage signale surtout un danger : préférer `warning`."],
       "confusable_with": ["casestudy", "story", "warning", "reflection"],
       "requires": {"title": "3 à 8 mots", "text": "1 à 2 phrases"},
       "pedagogical_shape": "conseil_actionnable",
@@ -224,17 +239,17 @@
     {
       "template_id": "flow",
       "source_slide_ref": "17 Traiter une demande",
-      "use_cases": ["4 actions", "flux opérationnel", "actions successives"],
-      "visual_role": "Afficher quatre actions enchaînées avec une logique opérationnelle.",
-      "use_when": "Le passage décrit exactement quatre actions successives qu'un apprenant doit appliquer dans l'ordre.",
+      "use_cases": ["2 à 4 actions", "flux opérationnel", "actions successives"],
+      "visual_role": "Afficher deux à quatre actions enchaînées avec une logique opérationnelle.",
+      "use_when": "Le passage décrit 2 à 4 actions successives qu'un apprenant doit appliquer dans l'ordre.",
       "avoid_when": "Le passage est un modèle conceptuel, une simple liste de conseils ou une progression sans action.",
       "strong_signals": ["quatre actions", "4 actions", "dans l'ordre", "enchaînement"],
-      "rejection_rules": ["Rejeter si les quatre éléments sont des dimensions conceptuelles : préférer `framework`.", "Rejeter si le passage contient deux ou trois étapes seulement : préférer `steps`.", "Rejeter si l'ordre n'est pas important."],
+      "rejection_rules": ["Rejeter si les éléments sont des dimensions conceptuelles : préférer `framework`.", "Rejeter si le passage contient une méthode abstraite plutôt que des gestes métier enchaînés : préférer `steps`.", "Rejeter si l'ordre n'est pas important."],
       "confusable_with": ["steps", "framework", "recap"],
-      "requires": {"items_min": 4, "items_max": 4},
+      "requires": {"items_min": 2, "items_max": 4},
       "pedagogical_shape": "progression_ordonnee",
-      "plan_signals": ["la matière décrit exactement 4 actions à enchaîner dans l'ordre"],
-      "plan_avoid": "Moins ou plus de 4 : steps."
+      "plan_signals": ["la matière décrit 2 à 4 actions à enchaîner dans l'ordre"],
+      "plan_avoid": "Si c'est une procédure générique ou une méthode abstraite : steps."
     },
     {
       "template_id": "story",

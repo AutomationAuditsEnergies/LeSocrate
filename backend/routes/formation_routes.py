@@ -20,6 +20,7 @@ import math
 import os
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from flask import Blueprint, jsonify, request, session, send_file
 from io import BytesIO
@@ -60,6 +61,28 @@ _PIPELINE_MODEL_ALIASES = {
     "pro": "deepseek-v4-pro",
 }
 _PIPELINE_MODEL_CHOICES = set(_PIPELINE_MODEL_ALIASES)
+
+
+def _slides_folder_workers(default: int = 3) -> int:
+    """Nombre de journées dont les decks slides sont générés en parallèle."""
+    try:
+        workers = int(os.getenv("FORMATION_SLIDES_FOLDER_WORKERS", str(default)))
+    except (TypeError, ValueError):
+        workers = default
+    return max(1, min(8, workers))
+
+
+def _resolve_pipeline_slide_model(api_model: str | None) -> str | None:
+    """Modèle dédié à la curation slides.
+
+    L'itération manuelle "Régénérer curation + slides" utilise DeepSeek Pro par
+    défaut. On aligne l'auto-pilot dessus, tout en laissant un override env pour
+    les environnements sans clé DeepSeek.
+    """
+    override = (os.getenv("FORMATION_SLIDES_MODEL") or "").strip()
+    if override:
+        return _PIPELINE_MODEL_ALIASES.get(override.lower(), override)
+    return "deepseek-v4-pro"
 
 
 def _formation_content_day_workers(default: int = 1) -> int:
@@ -4504,7 +4527,7 @@ def _execute_ap_step(job_id: int, step: str, job: dict) -> None:
     from database.db import get_db_connection
     from services.claude_code_mission_service import execute_mission_locally
 
-    model = _normalize_pipeline_model_choice(job.get("auto_pilot_model"), default="sonnet")
+    model = _normalize_pipeline_model_choice(job.get("auto_pilot_model"), default="pro")
     tts_mode = job.get("auto_pilot_tts_mode") or "gtts"
     use_cc = bool(job.get("auto_pilot_use_cc"))
     platform_id = job["platform_id"]
@@ -4932,11 +4955,27 @@ def _execute_ap_step(job_id: int, step: str, job: dict) -> None:
         generated = 0
         skipped = 0
         failures = []
+        slide_api_model = _resolve_pipeline_slide_model(api_model)
+        slide_workers = min(_slides_folder_workers(), max(1, len(rows)))
+        pending_rows = []
         for fid, cg_job_id in rows:
             existing = get_latest_script_slide_deck(fid, content_job_id=cg_job_id)
             if existing and (existing.get("slides") or []):
                 skipped += 1
                 continue
+            pending_rows.append((fid, cg_job_id))
+
+        logger.info(
+            "🤖 Slides job %s : folders=%s pending=%s skipped=%s workers=%s model=%s",
+            job_id,
+            len(rows),
+            len(pending_rows),
+            skipped,
+            min(slide_workers, max(1, len(pending_rows))) if pending_rows else 0,
+            slide_api_model,
+        )
+
+        def _generate_slide_folder(fid: int, cg_job_id: int) -> dict:
             started = time.time()
             try:
                 log_pipeline_event(
@@ -4945,9 +4984,14 @@ def _execute_ap_step(job_id: int, step: str, job: dict) -> None:
                     step="slides",
                     status="running",
                     folder_id=fid,
-                    model=api_model,
+                    model=slide_api_model,
                     message="Génération slides anchor-first démarrée",
-                    data={"content_job_id": cg_job_id, "max_slides": 60, "pace": "normal"},
+                    data={
+                        "content_job_id": cg_job_id,
+                        "max_slides": 60,
+                        "pace": "normal",
+                        "parallel_folders": min(slide_workers, max(1, len(pending_rows))),
+                    },
                 )
                 result = generate_slides_from_script(
                     folder_id=fid,
@@ -4955,16 +4999,15 @@ def _execute_ap_step(job_id: int, step: str, job: dict) -> None:
                     platform_id=platform_id,
                     max_slides=60,
                     pace="normal",
-                    model=api_model,
+                    model=slide_api_model,
                 )
-                generated += 1
                 log_pipeline_event(
                     job_id,
                     "slides_folder_completed",
                     step="slides",
                     status="completed",
                     folder_id=fid,
-                    model=api_model,
+                    model=slide_api_model,
                     duration_ms=int((time.time() - started) * 1000),
                     message="Génération slides anchor-first terminée",
                     data={
@@ -4973,11 +5016,12 @@ def _execute_ap_step(job_id: int, step: str, job: dict) -> None:
                         "slides_generated": (result.get("stats") or {}).get("slides_generated"),
                         "slide_anchors_found": (result.get("stats") or {}).get("slide_anchors_found"),
                         "generation_mode": (result.get("stats") or {}).get("generation_mode"),
+                        "slide_batch_workers": (result.get("stats") or {}).get("slide_batch_workers"),
                     },
                 )
+                return {"status": "generated", "folder_id": fid}
             except Exception as e:
                 err = str(e)[:500]
-                failures.append(f"{fid}({err})")
                 try:
                     log_pipeline_event(
                         job_id,
@@ -4985,20 +5029,45 @@ def _execute_ap_step(job_id: int, step: str, job: dict) -> None:
                         step="slides",
                         status="error",
                         folder_id=fid,
-                        model=api_model,
+                        model=slide_api_model,
                         duration_ms=int((time.time() - started) * 1000),
                         message="Génération slides anchor-first échouée",
                         error=err,
                     )
                 except Exception:
                     pass
+                return {"status": "failed", "folder_id": fid, "error": err}
+
+        if pending_rows:
+            active_workers = min(slide_workers, len(pending_rows))
+            if active_workers > 1:
+                with ThreadPoolExecutor(max_workers=active_workers) as pool:
+                    future_map = {
+                        pool.submit(_generate_slide_folder, fid, cg_job_id): (fid, cg_job_id)
+                        for fid, cg_job_id in pending_rows
+                    }
+                    for future in as_completed(future_map):
+                        result = future.result()
+                        if result.get("status") == "generated":
+                            generated += 1
+                        else:
+                            failures.append(f"{result.get('folder_id')}({result.get('error')})")
+            else:
+                for fid, cg_job_id in pending_rows:
+                    result = _generate_slide_folder(fid, cg_job_id)
+                    if result.get("status") == "generated":
+                        generated += 1
+                    else:
+                        failures.append(f"{result.get('folder_id')}({result.get('error')})")
         if failures:
             raise RuntimeError("Slides échouées sur folders : " + ", ".join(failures))
         logger.info(
-            "🤖 ✓ Slides générées job %s : generated=%s skipped=%s",
+            "🤖 ✓ Slides générées job %s : generated=%s skipped=%s workers=%s model=%s",
             job_id,
             generated,
             skipped,
+            min(slide_workers, max(1, len(pending_rows))) if pending_rows else 0,
+            slide_api_model,
         )
 
     elif step == "audio":
@@ -5312,7 +5381,7 @@ def run_auto_pilot(job_id):
 
     Body (optionnel) :
       - tts_mode : 'fish_audio' | 'gtts' | 'mock' (défaut 'gtts')
-      - model : 'sonnet' | 'haiku' (défaut 'sonnet')
+      - model : 'sonnet' | 'haiku' | 'flash' | 'pro' (défaut 'pro')
       - use_claude_code : bool (défaut false)
       - generate_audio : bool (défaut false) — legacy, enchaîne aussi l'audio
 
@@ -5329,7 +5398,7 @@ def run_auto_pilot(job_id):
     tts_mode = (payload.get("tts_mode") or "gtts").lower()
     if tts_mode not in ("fish_audio", "gtts", "mock"):
         return jsonify({"error": "tts_mode invalide (fish_audio | gtts | mock)"}), 400
-    model = _normalize_pipeline_model_choice(payload.get("model"), default=job.get("auto_pilot_model") or "sonnet")
+    model = _normalize_pipeline_model_choice(payload.get("model"), default=job.get("auto_pilot_model") or "pro")
     if model not in _PIPELINE_MODEL_CHOICES:
         return jsonify({"error": "model invalide (sonnet | haiku | flash | pro)"}), 400
     use_cc = bool(payload.get("use_claude_code", False))

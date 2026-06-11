@@ -57,7 +57,7 @@ Contraintes :
   `recit_avec_morale`, `image_mentale`, `conseil_actionnable`,
   `mise_en_garde`, `opposition_deux_modes`, `triade_structurante`,
   `progression_ordonnee`, `cas_comparables`,
-  `synthese_apres_developpement`, `modele_a_leviers`.
+  `synthese_de_reprise`, `synthese_apres_developpement`, `modele_a_leviers`.
 - Pour `analogy`, l'anchor doit couvrir une situation hors métier qui sert de
   parallèle. Un exemple fictif client/conseiller/usager doit être planifié comme
   cas métier, écart de perception, règle, conseil ou réflexion, pas comme
@@ -68,14 +68,27 @@ Contraintes :
 - Les templates source exacts disponibles sont : `welcome`, `program_year`,
   `day_program_7_steps`, `chapter_opener`, `reflection`, `definition`,
   `comparison`, `casestudy`, `situations`, `steps`, `flow`, `story`,
-  `analogy`, `framework`, `opinion`, `recap`, `warning`, `tip`, `quotable`,
-  `pause`, `qa`.
+  `analogy`, `framework`, `opinion`, `recap`, `reprise_recap`, `warning`,
+  `tip`, `quotable`, `pause`, `qa`.
 - Pour chaque beat slideable : repère dans la matière source les
   `plan_signals` qui correspondent, fixe d'abord `pedagogical_shape`, puis
   `template_type` comme conséquence de cette shape. Compte les éléments
   réellement présents dans la matière avant de fixer `items_expected` ; ne
   planifie jamais un visuel à N éléments si la matière n'en contient pas N. En
   cas d'hésitation entre deux templates, applique `plan_avoid`.
+- Cohérence interne obligatoire de chaque anchor : la `spoken_requirement` du
+  beat doit réaliser la forme pédagogique déclarée. Déduis la structure orale
+  dominante avant de fixer `pedagogical_shape`, puis choisis un
+  `template_type` compatible avec cette shape. La curation finale corrige
+  seulement si le texte dévie ; ne livre jamais un anchor dont l'exigence orale
+  fabrique déjà une autre forme que celle annoncée.
+- Contrat de forme : une règle d'action à retenir appelle
+  `conseil_actionnable` ; deux à quatre cas comparables appellent
+  `cas_comparables` ; une opposition entre deux modes appelle
+  `opposition_deux_modes` ; trois repères formant un ensemble appellent
+  `triade_structurante` ; une suite ordonnée appelle
+  `progression_ordonnee`. Si la structure orale change, change aussi la shape
+  et le template au lieu de forcer le template prévu.
 - Ces beats et anchors sont internes. Le texte final ne doit jamais prononcer
   "slide", "PowerPoint", "template", "anchor" ou "teaching beat".
 

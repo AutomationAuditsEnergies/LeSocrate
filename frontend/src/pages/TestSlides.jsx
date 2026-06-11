@@ -63,8 +63,8 @@ const TEMPLATE_USAGE = {
   casestudy: {
     templateId: 'casestudy',
     description: 'Comparer plusieurs cas métier concrets dans une même logique.',
-    useCases: ['2 à 3 cas comparables', 'canaux', 'variantes métier'],
-    useWhen: 'Le passage met en regard 2 à 3 cas concrets comparables, canaux, variantes ou situations métier contextualisées.',
+    useCases: ['2 à 4 cas comparables', 'canaux', 'variantes métier'],
+    useWhen: 'Le passage met en regard 2 à 4 cas concrets comparables, canaux, variantes ou situations métier contextualisées.',
     avoidWhen: 'Le passage raconte un seul cas pour amener un conseil, une astuce ou un réflexe métier : préfère tip. Le passage raconte un seul cas avec une morale narrative : préfère story. Le passage pose une triade conceptuelle comme trois piliers, trois repères, trois profils, trois postures ou trois expressions : préfère situations.',
   },
   steps: {
@@ -80,6 +80,13 @@ const TEMPLATE_USAGE = {
     useCases: ['synthèse finale', 'points à retenir', 'après développement'],
     useWhen: 'Le passage donne plusieurs points de synthèse, contrôles ou repères à retenir après avoir traité un chapitre.',
     avoidWhen: "Le contenu introduit une structure nouvelle en trois piliers, trois repères, trois profils, trois postures, trois situations ou trois expressions. Ce n'est pas une synthèse finale : préfère situations.",
+  },
+  reprise_recap: {
+    templateId: 'reprise_recap',
+    description: "Remettre en mémoire quelques repères déjà vus avant d'ouvrir le nouveau thème.",
+    useCases: ['reprise de début de cours', 'rappel chapitre précédent', 'pont vers la suite'],
+    useWhen: "Le passage arrive au début d'un cours après le premier et rappelle brièvement 2 à 4 repères de la séquence précédente avant de faire le lien avec la suite.",
+    avoidWhen: "Le passage conclut ce qui vient d'être traité : utilise recap. Le passage annonce directement un nouveau thème avec objectif et axes : utilise chapter_opener.",
   },
   pause: {
     templateId: 'pause',
@@ -118,9 +125,9 @@ const TEMPLATE_USAGE = {
   },
   flow: {
     templateId: 'flow',
-    description: 'Afficher quatre gestes métier enchaînés avec une logique opérationnelle.',
-    useCases: ['4 gestes métier', 'flux opérationnel', 'actions successives'],
-    useWhen: "Le passage décrit exactement quatre actions successives qu'un apprenant doit appliquer dans l'ordre.",
+    description: 'Afficher deux à quatre gestes métier enchaînés avec une logique opérationnelle.',
+    useCases: ['2 à 4 gestes métier', 'flux opérationnel', 'actions successives'],
+    useWhen: "Le passage décrit 2 à 4 actions successives qu'un apprenant doit appliquer dans l'ordre.",
     avoidWhen: 'Le passage est un modèle conceptuel, une simple liste de conseils ou une progression sans action métier.',
   },
   story: {
@@ -154,9 +161,9 @@ const TEMPLATE_USAGE = {
 };
 
 const SLIDES = SOURCE_SLIDE_INDEX.map((slide) => ({
-  label: `${slide.label.replace('&amp;', '&')} · exact`,
+  label: `${slide.label.replace('&amp;', '&')} · ${slide.isVariant ? 'variante' : 'exact'}`,
   sourceId: slide.id,
-  usage: TEMPLATE_USAGE[slide.id],
+  usage: TEMPLATE_USAGE[slide.templateId || slide.id],
 }));
 
 const USAGE_STORAGE_KEY = 'socrate-test-slides-usage-rules-v5';
@@ -263,13 +270,13 @@ export default function TestSlides() {
             Aperçu deck
           </div>
           <h1 style={{ margin: 0, fontSize: '18px', fontWeight: 700 }}>
-            {SLIDES.length} slides source exact
+            {SLIDES.length} slides source + variantes
           </h1>
         </div>
 
         <div style={{ marginBottom: '16px' }}>
           <div style={{ fontSize: '10px', fontWeight: 700, letterSpacing: '0.12em', textTransform: 'uppercase', color: '#64748B', marginBottom: '6px', paddingLeft: '4px' }}>
-            Deck source exact
+            Deck source exact + variantes
           </div>
           <div style={{ display: 'grid', gap: '4px' }}>
             {SLIDES.map((slide, index) => {
@@ -307,7 +314,7 @@ export default function TestSlides() {
         <div style={{ width: 'min(1200px,100%)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px' }}>
           <div>
             <div style={{ fontSize: '11px', color: '#64748b', marginBottom: '2px' }}>
-              Deck source exact · {currentIndex + 1}/{SLIDES.length}
+              Deck source exact + variantes · {currentIndex + 1}/{SLIDES.length}
             </div>
             <h2 style={{ margin: 0, fontSize: '18px', fontWeight: 700 }}>{item.label}</h2>
           </div>

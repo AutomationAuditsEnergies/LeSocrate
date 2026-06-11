@@ -301,6 +301,7 @@ export default function GeneratedSlides() {
       comparison: '#6366F1',
       data: '#EF4444',
       recap: '#F97316',
+      reprise_recap: '#38BDF8',
       // Types narratifs/rhetoriques
       analogy: '#14B8A6',    // Teal
       warning: '#DC2626',    // Rouge vif
