@@ -43,7 +43,7 @@ jobs:
       contents: read
     env:
       RESOURCE_GROUP: socrate1_group
-      STARTUP_COMMAND: gunicorn --worker-class eventlet -w 1 --bind 0.0.0.0:8000 --timeout 120 run:app
+      STARTUP_COMMAND: python -m gunicorn --worker-class eventlet -w 1 --bind 0.0.0.0:8000 --timeout 120 run:app
 
     steps:
       - name: Download artifact from build job
@@ -74,6 +74,7 @@ jobs:
           az webapp config set \
             --resource-group "${RESOURCE_GROUP}" \
             --name socrate1 \
+            --linux-fx-version "PYTHON|3.11" \
             --startup-file "${STARTUP_COMMAND}"
 
       - name: Deploy to Azure Web App production
