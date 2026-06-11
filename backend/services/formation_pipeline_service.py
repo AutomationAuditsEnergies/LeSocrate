@@ -9,6 +9,8 @@ Flux complet :
   5. Lancement génération TTS pour chaque journée (pipeline existant)
 """
 
+from __future__ import annotations
+
 import io
 import os
 import re

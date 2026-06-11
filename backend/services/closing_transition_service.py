@@ -20,6 +20,8 @@ La fin du cours tient aussi compte de l'élément suivant dans la playlist :
 si une Q&A ou une pause arrive, c'est le cours qui l'annonce sobrement.
 """
 
+from __future__ import annotations
+
 import re
 from utils.anthropic_client import default_model, post_message as _llm_post, AnthropicAPIError
 from utils.logger import get_logger

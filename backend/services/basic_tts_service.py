@@ -20,6 +20,8 @@ Usage : 3ᵉ option dans l'étape 7 de `/formation-pipeline`, à côté de Fish
 Audio (payant) et du mock silence (gratuit mais pas écoutable).
 """
 
+from __future__ import annotations
+
 import asyncio
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import os

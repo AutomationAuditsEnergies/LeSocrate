@@ -16,6 +16,8 @@ POST /api/formation/<job_id>/launch-audio Lance la synthèse TTS Fish Audio sur 
 GET  /api/formation/list                  Liste les jobs de la plateforme
 """
 
+from __future__ import annotations
+
 import math
 import os
 import threading

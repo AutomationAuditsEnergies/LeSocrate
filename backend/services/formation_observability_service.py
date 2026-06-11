@@ -7,6 +7,8 @@ Deux responsabilités :
   dashboard d'analyse.
 """
 
+from __future__ import annotations
+
 import json
 from datetime import datetime
 
