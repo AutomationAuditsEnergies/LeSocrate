@@ -2426,14 +2426,25 @@ def _shorten(text: str, max_chars: int = MAX_SOURCE_TEXT_CHARS) -> str:
     return clean[: max_chars - 1].rstrip() + "…"
 
 
-def _shorten_for_layout(value, max_chars: int) -> str:
-    clean = re.sub(r"\s+", " ", str(value or "")).strip()
-    if max_chars <= 0 or len(clean) <= max_chars:
-        return clean
-    truncated = clean[: max_chars - 1].rstrip()
-    if " " in truncated:
-        truncated = truncated.rsplit(" ", 1)[0].rstrip() or truncated
-    return truncated + "…"
+def _layout_repair_schema_for(template: str) -> str:
+    schemas = {
+        "definition": '{"term":"court","eyebrow":"court","definition":"phrase courte","isItems":["tag court"]}',
+        "comparison": '{"title":"court","cols":[{"label":"court","items":["point court"]}]}',
+        "casestudy": '{"title":"court","eyebrow":"court","cases":[{"tag":"court","title":"court","desc":"phrase courte","example":"optionnel court"}]}',
+        "situations": '{"title":"court","eyebrow":"court","items":[{"title":"court","desc":"phrase courte"}]}',
+        "steps": '{"title":"court","steps":[{"title":"court","desc":"phrase courte"}]}',
+        "flow": '{"title":"court","eyebrow":"court","steps":[{"title":"court","desc":"phrase courte"}]}',
+        "story": '{"title":"court","narrative":"1 phrase courte","moral":"phrase courte"}',
+        "analogy": '{"title":"court","concept":"court","comparison":"court","text":"phrase courte"}',
+        "framework": '{"title":"court","center":{"title":"court"},"segments":[{"title":"court","desc":"phrase courte"}]}',
+        "opinion": '{"title":"court","text":"1 phrase courte"}',
+        "recap": '{"title":"court","points":["point court"]}',
+        "reprise_recap": '{"title":"court","points":["point court"]}',
+        "warning": '{"title":"court","eyebrow":"court","text":"1 phrase courte"}',
+        "tip": '{"title":"court","text":"1 phrase courte"}',
+        "reflection": '{"title":"court","text":"1 phrase courte"}',
+    }
+    return schemas.get(template, '{"title":"court","text":"1 phrase courte","eyebrow":"court"}')
 
 
 def _layout_budgets_for(template: str) -> dict:
@@ -2566,97 +2577,74 @@ def _data_fits_layout(template: str, data: dict, variant: str) -> bool:
     return not _layout_overages(template, data, _layout_budget_for(template, variant))
 
 
-def _fit_data_to_budget(template: str, data: dict, budget: dict) -> tuple[dict, bool]:
-    fitted = json.loads(json.dumps(data, ensure_ascii=False))
-    changed = False
+def _repair_layout_data_with_llm(
+    template: str,
+    data: dict,
+    budget: dict,
+    overages: list[str],
+    model: str | None,
+) -> tuple[dict | None, dict]:
+    if not model or template in {"pause", "qa", "quotable"}:
+        return None, {"status": "layout_repair_unavailable"}
 
-    def fit_key(obj: dict, key: str, budget_key: str | None = None):
-        nonlocal changed
-        if not isinstance(obj, dict) or key not in obj:
-            return
-        limit = int(budget.get(budget_key or key, 10_000))
-        current = obj.get(key)
-        next_value = _shorten_for_layout(current, limit)
-        if next_value != str(current or "").strip():
-            obj[key] = next_value
-            changed = True
+    prompt = f"""Tu corriges les textes d'une slide pour qu'ils rentrent dans son template.
 
-    def fit_items(items, mapping: dict[str, str]):
-        nonlocal changed
-        if not isinstance(items, list):
-            return
-        for index, item in enumerate(items):
-            if isinstance(item, dict):
-                for key, budget_key in mapping.items():
-                    fit_key(item, key, budget_key)
-            elif "value" in mapping:
-                limit = int(budget.get(mapping["value"], 10_000))
-                next_value = _shorten_for_layout(item, limit)
-                if next_value != str(item or "").strip():
-                    items[index] = next_value
-                    changed = True
+Règles strictes:
+- Réponds uniquement avec un JSON objet: {{"data": ...}}
+- Ne change pas le template.
+- Garde exactement la même structure de données et le même nombre d'éléments.
+- Réécris seulement pour raccourcir proprement les champs trop longs.
+- Aucun champ ne doit dépasser son budget en caractères.
+- N'utilise jamais de troncature, jamais de points de suspension, jamais "...", jamais "…".
+- Garde le sens pédagogique.
 
-    if template == "program_year":
-        for key in ("title", "subtitle", "day_label"):
-            fit_key(fitted, key)
-        fit_items(fitted.get("phases"), {"title": "phase_title", "desc": "phase_desc"})
-    elif template == "day_program_7_steps":
-        for key in ("title", "subtitle", "day_label"):
-            fit_key(fitted, key)
-        fit_items(fitted.get("items"), {"value": "item_title"})
-    elif template == "chapter_opener":
-        fit_key(fitted, "title")
-        fit_key(fitted, "chapter_label")
-        fit_items(fitted.get("axes"), {"title": "axis_title", "desc": "axis_desc"})
-    elif template == "definition":
-        for key in ("term", "eyebrow", "definition"):
-            fit_key(fitted, key)
-        fit_items(fitted.get("isItems"), {"value": "tag"})
-    elif template == "comparison":
-        fit_key(fitted, "title")
-        cols = fitted.get("cols") if isinstance(fitted.get("cols"), list) else []
-        for col in cols:
-            fit_key(col, "label", "col_label")
-            fit_items(col.get("items"), {"value": "col_item"})
-    elif template == "casestudy":
-        fit_key(fitted, "title")
-        fit_key(fitted, "eyebrow")
-        fit_items(
-            fitted.get("cases"),
-            {"tag": "case_tag", "title": "case_title", "desc": "case_desc", "example": "case_example"},
+Template: {template}
+Champs trop longs: {json.dumps(overages, ensure_ascii=False)}
+Budgets caractères: {json.dumps(budget, ensure_ascii=False)}
+Schéma attendu: {_layout_repair_schema_for(template)}
+
+Données actuelles:
+{json.dumps(data, ensure_ascii=False, indent=2)}
+"""
+    try:
+        response = post_message(
+            [{"role": "user", "content": prompt}],
+            max_tokens=1800,
+            model=model,
+            timeout=120,
+            temperature=0,
         )
-    elif template == "situations":
-        fit_key(fitted, "title")
-        fit_key(fitted, "eyebrow")
-        fit_items(fitted.get("items"), {"title": "item_title", "desc": "item_desc"})
-    elif template in {"steps", "flow"}:
-        fit_key(fitted, "title")
-        fit_key(fitted, "eyebrow")
-        fit_items(fitted.get("steps"), {"title": "step_title", "desc": "step_desc"})
-    elif template == "story":
-        for key in ("title", "narrative", "moral"):
-            fit_key(fitted, key)
-    elif template == "analogy":
-        for key in ("title", "concept", "comparison", "text"):
-            fit_key(fitted, key)
-    elif template == "framework":
-        fit_key(fitted, "title")
-        if isinstance(fitted.get("center"), dict):
-            fit_key(fitted["center"], "title", "center_title")
-        fit_items(fitted.get("segments"), {"title": "segment_title", "desc": "segment_desc"})
-    elif template in {"recap", "reprise_recap"}:
-        fit_key(fitted, "title")
-        fit_items(fitted.get("points"), {"value": "point"})
-    elif template == "quotable":
-        fit_key(fitted, "quote")
-    else:
-        for key in ("title", "text", "eyebrow"):
-            fit_key(fitted, key)
-
-    return fitted, changed
+        parsed = _parse_json_object(response)
+        repaired = parsed.get("data")
+        if not isinstance(repaired, dict):
+            return None, {"status": "layout_repair_invalid_response"}
+        remaining = _layout_overages(template, repaired, budget)
+        if remaining:
+            return repaired, {
+                "status": "layout_repair_still_over_budget",
+                "remaining_over_budget_fields": remaining,
+            }
+        return repaired, {"status": "repaired_llm", "remaining_over_budget_fields": []}
+    except Exception as exc:
+        logger.warning(
+            "PIPELINE_SLIDES_LAYOUT_REPAIR_FAILED template=%s overages=%s error=%s",
+            template,
+            overages,
+            str(exc)[:240],
+        )
+        return None, {
+            "status": "layout_repair_failed",
+            "error": f"{exc.__class__.__name__}: {str(exc)[:180]}",
+        }
 
 
-def _resolve_slide_layout(template: str, data: dict, requested_variant: str = "") -> tuple[str, dict, dict]:
+def _resolve_slide_layout(
+    template: str,
+    data: dict,
+    requested_variant: str = "",
+    *,
+    model: str | None = None,
+) -> tuple[str, dict, dict]:
     source_budget = _layout_budget_for(template, "source")
     if not _layout_overages(template, data, source_budget):
         return "source", data, {
@@ -2666,11 +2654,19 @@ def _resolve_slide_layout(template: str, data: dict, requested_variant: str = ""
         }
 
     overages = _layout_overages(template, data, source_budget)
-    fitted_data, changed = _fit_data_to_budget(template, data, source_budget)
-    return "source", fitted_data, {
-        "status": "compressed_to_source" if changed else "source_over_budget",
+    repaired_data, repair_debug = _repair_layout_data_with_llm(template, data, source_budget, overages, model)
+    if repaired_data and not _layout_overages(template, repaired_data, source_budget):
+        return "source", repaired_data, {
+            "status": "repaired_llm",
+            "requested_variant": "",
+            "over_budget_fields": overages,
+        }
+
+    return "source", data, {
+        "status": repair_debug.get("status") or "source_over_budget",
         "requested_variant": "",
         "over_budget_fields": overages,
+        **{k: v for k, v in repair_debug.items() if k not in {"status"}},
     }
 
 
@@ -2800,6 +2796,7 @@ BUDGETS DE TEXTE DES TEMPLATES SOURCE:
 - Il n'y a pas de variante visuelle: le deck source exact reste inchangé.
 - Les budgets ci-dessous sont les limites de texte du template actuel.
 - Si le contenu dépasse, reformule `data` pour respecter ces limites.
+- Ne résous jamais un dépassement par une troncature ou des points de suspension: chaque champ doit rester une formulation complète et propre.
 - Ne compense jamais par une slide supplémentaire ou par un pavé de texte.
 - Budgets par template, en caractères maximum:
 {_layout_budget_prompt()}
@@ -3778,7 +3775,7 @@ def _sort_slides_by_source_order(slides: list[dict], source_blocks: Iterable[dic
     return [slide for _, slide in sorted(enumerate(slides), key=sort_key)]
 
 
-def _normalize_slide(raw: dict, block: dict) -> dict:
+def _normalize_slide(raw: dict, block: dict, model: str | None = None) -> dict:
     if not isinstance(raw, dict):
         return _fallback_slide(block, "invalid_slide")
 
@@ -3886,6 +3883,7 @@ def _normalize_slide(raw: dict, block: dict) -> dict:
         template,
         data,
         raw.get("layout_variant") or slide_data_payload.get("layout_variant") or "",
+        model=model,
     )
     rejected_templates = _normalize_rejected_templates(raw.get("rejected_templates"))
     template_decision_reason = _as_text(raw.get("template_decision_reason"), "")[:360]
@@ -3997,7 +3995,7 @@ Réponds uniquement avec le JSON demandé.
                 )
             if per_block_counts.get(source_block_id, 0) >= per_block_limit:
                 continue
-            slides.append(_normalize_slide(raw, block))
+            slides.append(_normalize_slide(raw, block, model=model))
             per_block_counts[source_block_id] = per_block_counts.get(source_block_id, 0) + 1
             if len(slides) >= max_batch_slides:
                 break

@@ -1,5 +1,6 @@
 import unittest
 import time
+import json
 from unittest.mock import patch
 
 from services import script_slide_generation_service as slides
@@ -148,11 +149,23 @@ class ScriptSlideGenerationServiceTest(unittest.TestCase):
             "source_quote": "Définition longue.",
         }
 
-        slide = slides._normalize_slide(raw, block)
+        def fake_post_message(*_args, **_kwargs):
+            return json.dumps({
+                "data": {
+                    "term": "Sourire vocal",
+                    "eyebrow": "Vocabulaire",
+                    "definition": "Voix posée qui rend l'échange clair, calme et accueillant.",
+                    "isItems": ["Volume stable", "Registre naturel"],
+                }
+            })
+
+        with patch.object(slides, "post_message", side_effect=fake_post_message):
+            slide = slides._normalize_slide(raw, block, model="deepseek-v4-pro")
 
         self.assertEqual(slide["layout_variant"], "source")
-        self.assertEqual(slide["layout_fit"]["status"], "compressed_to_source")
+        self.assertEqual(slide["layout_fit"]["status"], "repaired_llm")
         self.assertLessEqual(len(slide["data"]["definition"]), slides.SLIDE_LAYOUT_BUDGETS["definition"]["balanced"]["definition"])
+        self.assertNotIn("…", slide["data"]["definition"])
 
     def test_extract_slide_anchor_keeps_pedagogical_shape(self):
         plan = {
