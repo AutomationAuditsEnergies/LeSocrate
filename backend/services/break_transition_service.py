@@ -10,8 +10,6 @@ annonce déjà une pause, le fichier pause ne refait pas d'intro : il garde
 seulement son outro en fin de créneau.
 """
 
-from __future__ import annotations
-
 import json
 import re
 

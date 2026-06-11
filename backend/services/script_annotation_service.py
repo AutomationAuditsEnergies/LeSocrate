@@ -1,7 +1,5 @@
 """Persist and export human review notes for generated TTS scripts."""
 
-from __future__ import annotations
-
 import logging
 import os
 from datetime import datetime

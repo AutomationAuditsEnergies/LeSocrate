@@ -27,16 +27,13 @@ jobs:
           source antenv/bin/activate
           pip install -r requirements.txt
 
-      - name: Package backend
-        run: |
-          cd backend
-          zip -r ../python-app.zip . -x "antenv/*" "__pycache__/*" "*.pyc"
-
       - name: Upload artifact for deployment jobs
         uses: actions/upload-artifact@v4
         with:
           name: python-app
-          path: python-app.zip
+          path: |
+            ./backend
+            !./backend/antenv/
 
   deploy:
     runs-on: ubuntu-latest
@@ -46,7 +43,7 @@ jobs:
       contents: read
     env:
       RESOURCE_GROUP: socrate1_group
-      STARTUP_COMMAND: python run.py
+      STARTUP_COMMAND: gunicorn --worker-class eventlet -w 1 --bind 0.0.0.0:8000 --timeout 120 run:app
 
     steps:
       - name: Download artifact from build job
@@ -70,7 +67,6 @@ jobs:
             --settings \
               SCM_DO_BUILD_DURING_DEPLOYMENT=true \
               ENABLE_ORYX_BUILD=true \
-              WEBSITES_PORT=8000 \
               FORMATION_TTS_WORDS_PER_MINUTE=165.7 \
               BASIC_TTS_SPEED=1.15 \
               PLATFORM_1_FRONTEND_URL=https://thankful-wave-043aa3b03.4.azurestaticapps.net
@@ -78,11 +74,10 @@ jobs:
           az webapp config set \
             --resource-group "${RESOURCE_GROUP}" \
             --name socrate1 \
-            --linux-fx-version "PYTHON|3.11" \
             --startup-file "${STARTUP_COMMAND}"
 
       - name: Deploy to Azure Web App production
         uses: azure/webapps-deploy@v3
         with:
           app-name: 'socrate1'
-          package: python-app.zip
+          package: .

@@ -6,8 +6,6 @@ règles. Ce markdown alimente la Phase 3b (revérif post-TTS) qui patche les
 chunks non-conformes via la primitive de splice MP3.
 """
 
-from __future__ import annotations
-
 import json
 import logging
 import os
