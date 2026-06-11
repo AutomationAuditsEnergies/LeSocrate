@@ -46,7 +46,7 @@ jobs:
       contents: read
     env:
       RESOURCE_GROUP: socrate1_group
-      STARTUP_COMMAND: python -m gunicorn --worker-class eventlet -w 1 --bind 0.0.0.0:8000 --timeout 120 run:app
+      STARTUP_COMMAND: python run.py
 
     steps:
       - name: Download artifact from build job
@@ -70,6 +70,7 @@ jobs:
             --settings \
               SCM_DO_BUILD_DURING_DEPLOYMENT=true \
               ENABLE_ORYX_BUILD=true \
+              WEBSITES_PORT=5001 \
               FORMATION_TTS_WORDS_PER_MINUTE=165.7 \
               BASIC_TTS_SPEED=1.15 \
               PLATFORM_1_FRONTEND_URL=https://thankful-wave-043aa3b03.4.azurestaticapps.net
