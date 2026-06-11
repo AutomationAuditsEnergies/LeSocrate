@@ -1,4 +1,6 @@
 # db.py - Gestion de la base de données
+import os
+import shutil
 import sqlite3
 from datetime import datetime
 from config import DB_PATH, FRANCE_TZ
@@ -12,9 +14,37 @@ def get_db_connection():
     return sqlite3.connect(DB_PATH)
 
 
-def init_database():
+def _is_malformed_database_error(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return (
+        "database disk image is malformed" in message
+        or "file is not a database" in message
+    )
+
+
+def _quarantine_corrupt_database(db_path: str) -> str:
+    timestamp = datetime.now(FRANCE_TZ).strftime("%Y%m%d-%H%M%S")
+    backup_path = f"{db_path}.corrupt-{timestamp}"
+
+    for path in (db_path, f"{db_path}-wal", f"{db_path}-shm"):
+        if not os.path.exists(path):
+            continue
+        suffix = path[len(db_path):]
+        target = f"{backup_path}{suffix}"
+        try:
+            os.replace(path, target)
+        except OSError:
+            shutil.copy2(path, target)
+            os.remove(path)
+        logger.error("🧯 Base SQLite corrompue mise de côté: %s -> %s", path, target)
+
+    return backup_path
+
+
+def init_database(_recovered_from_corruption: bool = False):
     """Initialise la base de données avec les tables nécessaires"""
     logger.info("🗄️ Initialisation de la base de données...")
+    conn = None
     try:
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
@@ -702,5 +732,17 @@ def init_database():
         logger.info("✅ Base de données initialisée avec succès")
 
     except Exception as e:
+        try:
+            if conn is not None:
+                conn.close()
+        except Exception:
+            pass
         logger.error(f"❌ Erreur lors de l'initialisation de la base: {e}")
+        if _is_malformed_database_error(e) and not _recovered_from_corruption:
+            backup_path = _quarantine_corrupt_database(DB_PATH)
+            logger.error(
+                "🧯 Récupération SQLite: ancienne base sauvegardée sous %s, recréation d'une base saine",
+                backup_path,
+            )
+            return init_database(_recovered_from_corruption=True)
         raise
