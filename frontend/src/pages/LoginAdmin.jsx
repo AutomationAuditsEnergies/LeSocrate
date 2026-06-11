@@ -42,14 +42,17 @@ export default function LoginAdmin() {
         }),
       })
 
-      const data = await response.json()
+      const contentType = response.headers.get('content-type') || ''
+      const data = contentType.includes('application/json')
+        ? await response.json()
+        : {}
 
       if (response.ok && data.success) {
         // Propager ?p= vers /admin pour qu'un refresh en navigation privée
         // (localStorage volatile) puisse restaurer le bon tenant.
         navigate(pParam ? `/admin?p=${pParam}` : '/admin')
       } else {
-        setError(data.error || 'Identifiants incorrects')
+        setError(data.error || `Erreur serveur (${response.status})`)
       }
     } catch (err) {
       console.error('Erreur login admin:', err)
