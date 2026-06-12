@@ -82,6 +82,7 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
   const [wordAnalysis, setWordAnalysis] = useState(null) // résultat analyse mots
   const [analysing, setAnalysing] = useState(false)
   const [generatedAudios, setGeneratedAudios] = useState([]) // MP3 générés du dossier
+  const [deletingAudioFile, setDeletingAudioFile] = useState('')
   const [dragFolderIdx, setDragFolderIdx] = useState(null)
   const [dragOverFolderIdx, setDragOverFolderIdx] = useState(null)
   // ── Génération de contenu ──
@@ -1330,6 +1331,38 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
     }
   }
 
+  const handleDeleteGeneratedAudio = async (filename) => {
+    if (!selectedFolder || !filename || deletingAudioFile) return
+    const confirmed = window.confirm(
+      `Supprimer définitivement ${filename} ?\n\n` +
+      `Le fichier sera supprimé du dossier TTS et de la plateforme publiée.`
+    )
+    if (!confirmed) return
+
+    setDeletingAudioFile(filename)
+    try {
+      const resp = await fetch(
+        apiUrl(`/api/hr/cours-folders/${selectedFolder.id}/audio/${encodeURIComponent(filename)}`),
+        {
+          method: 'DELETE',
+          credentials: 'include',
+        }
+      )
+      const data = await resp.json().catch(() => ({}))
+      if (resp.ok && data.success) {
+        setGeneratedAudios(prev => prev.filter(audio => audio.filename !== filename))
+        if (audioEditorFile === filename) setAudioEditorFile(null)
+      } else {
+        alert(data.error || `Erreur lors de la suppression de ${filename}`)
+      }
+    } catch (e) {
+      console.error('Erreur suppression audio:', e)
+      alert('Erreur réseau pendant la suppression')
+    } finally {
+      setDeletingAudioFile('')
+    }
+  }
+
   // ─── Mock upload (dev only) : copie les MP3 locaux depuis output_jour1 ──
   const handleMockAudioUpload = async () => {
     if (!selectedFolder || mockUploading) return
@@ -1997,14 +2030,26 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
                               </p>
                             </div>
                             {audio && (
-                              <button
-                                onClick={() => setAudioEditorFile(item.filename)}
-                                title="Éditer cet audio (couper / remplacer)"
-                                className="inline-flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg transition-colors"
-                                style={{ backgroundColor: colors.innerBg, border: `1px solid ${colors.border}`, color: colors.textSecondary }}
-                              >
-                                <Icon name="content_cut" style={{ fontSize: '16px' }} />
-                              </button>
+                              <div className="flex flex-shrink-0 items-center gap-1.5">
+                                <button
+                                  onClick={() => setAudioEditorFile(item.filename)}
+                                  title="Éditer cet audio (couper / remplacer)"
+                                  className="inline-flex h-8 w-8 items-center justify-center rounded-lg transition-colors"
+                                  style={{ backgroundColor: colors.innerBg, border: `1px solid ${colors.border}`, color: colors.textSecondary }}
+                                >
+                                  <Icon name="content_cut" style={{ fontSize: '16px' }} />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleDeleteGeneratedAudio(item.filename)}
+                                  disabled={deletingAudioFile === item.filename}
+                                  title="Supprimer cet audio"
+                                  className="inline-flex h-8 w-8 items-center justify-center rounded-lg transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+                                  style={{ backgroundColor: darkMode ? '#3f1d22' : '#fef2f2', border: `1px solid ${darkMode ? '#7f1d1d' : '#fecaca'}`, color: '#dc2626' }}
+                                >
+                                  <Icon name={deletingAudioFile === item.filename ? 'hourglass_empty' : 'delete'} style={{ fontSize: '16px' }} />
+                                </button>
+                              </div>
                             )}
                           </div>
                         )

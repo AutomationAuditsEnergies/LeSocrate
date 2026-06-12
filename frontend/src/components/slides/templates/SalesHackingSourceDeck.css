@@ -671,12 +671,11 @@
       max-width: 100%;
       white-space: normal;
       text-wrap: balance;
-      /* Pas de césure brute en plein mot : l'auto-fit réduit la police, et si
-         un mot reste trop large malgré le plancher, césure typographique. */
+      /* Jamais de césure dans le terme : AutoFitText réduit la police. */
       overflow-wrap: normal;
       word-break: normal;
-      hyphens: auto;
-      -webkit-hyphens: auto;
+      hyphens: none;
+      -webkit-hyphens: none;
 }
 
 .sales-source-deck-shell .s-def .pron {
@@ -1291,7 +1290,10 @@
 }
 
 .sales-source-deck-shell .s-board .ch-lines {
-  width: 82%; margin: 0 auto; text-align: center;
+  width: 82%; max-height: calc(100% - 120px); margin: 0 auto; padding: 34px 0;
+      text-align: center;
+      display: flex; align-items: center; justify-content: center;
+      box-sizing: border-box;
 }
 
 .sales-source-deck-shell .s-board .ch-para {
@@ -1522,7 +1524,11 @@
   font-family: var(--f-display); font-size: var(--recap-card-title-size, 29px); line-height: 1.08;
       letter-spacing: -0.01em; text-transform: uppercase;
       color: #0a133a; margin: 22px 0 0;
-      overflow-wrap: anywhere;
+      max-width: 100%;
+      overflow-wrap: normal;
+      word-break: normal;
+      hyphens: none;
+      -webkit-hyphens: none;
 }
 
 .sales-source-deck-shell .s-recap2 .rc2-card .rc2-line {
@@ -1681,7 +1687,11 @@
   margin: 0 0 10px;
       font-family: var(--f-display); font-size: min(var(--recap-card-title-size, 25px), 25px); line-height: 1.08;
       text-transform: uppercase; color: #fff;
-      overflow-wrap: anywhere;
+      max-width: 100%;
+      overflow-wrap: normal;
+      word-break: normal;
+      hyphens: none;
+      -webkit-hyphens: none;
       text-wrap: balance;
 }
 

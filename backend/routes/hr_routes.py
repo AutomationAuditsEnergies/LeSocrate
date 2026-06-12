@@ -4,7 +4,7 @@ import time
 import requests as http_requests
 from datetime import datetime, timedelta, timezone
 from flask import Blueprint, request, session, jsonify, Response, stream_with_context
-from azure.storage.blob import BlobServiceClient, generate_blob_sas, BlobSasPermissions
+from azure.storage.blob import BlobServiceClient, ContentSettings, generate_blob_sas, BlobSasPermissions
 from azure.core.exceptions import ResourceExistsError
 from config import FRANCE_TZ
 from database.db import get_db_connection
@@ -52,6 +52,54 @@ def _is_local_platform(pid):
     """True si la plateforme tourne sur ce backend (pas de backend_url distant)"""
     info = _get_platform_info(pid)
     return not info.get("backend_url")
+
+
+def _publish_playlist_audio_to_platform(platform_id, folder_id, filenames=None):
+    """Copie les MP3 générés du dossier vers le container audio public de la plateforme.
+
+    La page /video lit les fichiers à la racine du container formationaudio-pX,
+    alors que la génération TTS écrit dans audiostts/platform-X/folder-Y/playlist/.
+    """
+    tts_conn = os.environ.get("AZURE_TTS_STORAGE_CONNECTION_STRING")
+    audio_conn = os.environ.get("AZURE_AUDIO_STORAGE_CONNECTION_STRING") or os.environ.get("AZURE_STORAGE_CONNECTION_STRING")
+    if not tts_conn or not audio_conn:
+        raise ValueError("Connexions Azure audio manquantes")
+
+    wanted = {os.path.basename(str(name).split("?", 1)[0]) for name in (filenames or []) if name}
+    pinfo = _get_platform_info(int(platform_id))
+    dest_container = pinfo["audio_container"]
+    prefix = f"platform-{platform_id}/folder-{folder_id}/playlist/"
+
+    tts_bsc = BlobServiceClient.from_connection_string(tts_conn)
+    audio_bsc = BlobServiceClient.from_connection_string(audio_conn)
+    source_cc = tts_bsc.get_container_client("audiostts")
+    dest_cc = audio_bsc.get_container_client(dest_container)
+
+    copied = []
+    errors = []
+    for blob in source_cc.list_blobs(name_starts_with=prefix):
+        filename = blob.name.split("/")[-1]
+        if not filename.endswith(".mp3"):
+            continue
+        if wanted and filename not in wanted:
+            continue
+        try:
+            audio_bytes = source_cc.get_blob_client(blob.name).download_blob().readall()
+            dest_cc.get_blob_client(filename).upload_blob(
+                audio_bytes,
+                overwrite=True,
+                content_settings=ContentSettings(
+                    content_type="audio/mpeg",
+                    content_disposition=f'inline; filename="{filename}"',
+                ),
+            )
+            copied.append(filename)
+            logger.info(f"📣 Audio publié vers {dest_container}/{filename}")
+        except Exception as e:
+            logger.error(f"❌ Publication audio {filename} échouée: {e}")
+            errors.append({"filename": filename, "error": str(e)})
+
+    return {"published": copied, "publish_errors": errors}
 
 
 def _bool_arg(name, default=False):
@@ -3321,6 +3369,11 @@ def create_hr_blueprint(socketio):
                             mock=playlist_mock,
                         )
                         result["voice_type"] = voice_type
+                    try:
+                        result["publish"] = _publish_playlist_audio_to_platform(platform_id, folder_id)
+                    except Exception as publish_error:
+                        logger.error(f"❌ Publication playlist P{platform_id}/F{folder_id} échouée: {publish_error}")
+                        result["publish"] = {"published": [], "publish_errors": [{"error": str(publish_error)}]}
                     if has_script and not playlist_mock:
                         done_msg = f"✅ Terminé ({voice_label}) : {result['generated']} bloc(s) régénéré(s), {result.get('skipped', 0)} conservé(s)"
                     else:
@@ -3362,6 +3415,7 @@ def create_hr_blueprint(socketio):
 
             if not row:
                 return jsonify({"success": False, "error": "Dossier introuvable"}), 404
+            platform_id = row[0]
 
             if folder_id in _playlist_jobs and _playlist_jobs[folder_id].get("status") == "running":
                 return jsonify({
@@ -3457,6 +3511,11 @@ def create_hr_blueprint(socketio):
                         "filename": filename,
                         "sync_slides": sync_slides,
                     }
+                    try:
+                        result["publish"] = _publish_playlist_audio_to_platform(platform_id, folder_id, [filename])
+                    except Exception as publish_error:
+                        logger.error(f"❌ Publication item {filename} P{platform_id}/F{folder_id} échouée: {publish_error}")
+                        result["publish"] = {"published": [], "publish_errors": [{"filename": filename, "error": str(publish_error)}]}
                     _playlist_jobs[folder_id].update({
                         "status": "completed",
                         "result": result,
@@ -3576,6 +3635,72 @@ def create_hr_blueprint(socketio):
 
         except Exception as e:
             logger.error(f"❌ Erreur get_generated_audios: {e}")
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/audio/<path:filename>", methods=["DELETE"])
+    def delete_generated_audio(folder_id, filename):
+        """Supprime un MP3 généré du dossier et sa copie publiée sur la plateforme."""
+        denied = _require_admin()
+        if denied:
+            return denied
+
+        try:
+            platform_id = _get_platform_id_for_folder(folder_id)
+            safe_filename = os.path.basename(str(filename or "").split("?", 1)[0])
+            if not safe_filename or not safe_filename.lower().endswith(".mp3"):
+                return jsonify({"success": False, "error": "Nom de fichier audio invalide"}), 400
+
+            tts_conn = os.environ.get("AZURE_TTS_STORAGE_CONNECTION_STRING")
+            audio_conn = os.environ.get("AZURE_AUDIO_STORAGE_CONNECTION_STRING") or os.environ.get("AZURE_STORAGE_CONNECTION_STRING")
+            if not tts_conn:
+                return jsonify({"success": False, "error": "AZURE_TTS_STORAGE_CONNECTION_STRING manquant"}), 500
+
+            deleted = []
+            errors = []
+            blob_path = _get_audio_blob_path(platform_id, folder_id, safe_filename)
+
+            try:
+                tts_bsc = BlobServiceClient.from_connection_string(tts_conn)
+                tts_bsc.get_blob_client(container="audiostts", blob=blob_path).delete_blob()
+                deleted.append(f"audiostts/{blob_path}")
+                logger.info(f"🗑️ Audio généré supprimé: audiostts/{blob_path}")
+            except Exception as e:
+                if "BlobNotFound" in str(e) or "The specified blob does not exist" in str(e):
+                    logger.info(f"ℹ️ Audio généré déjà absent: audiostts/{blob_path}")
+                else:
+                    errors.append({"target": f"audiostts/{blob_path}", "error": str(e)})
+
+            if audio_conn:
+                try:
+                    pinfo = _get_platform_info(int(platform_id))
+                    public_container = pinfo["audio_container"]
+                    audio_bsc = BlobServiceClient.from_connection_string(audio_conn)
+                    audio_bsc.get_blob_client(container=public_container, blob=safe_filename).delete_blob()
+                    deleted.append(f"{public_container}/{safe_filename}")
+                    logger.info(f"🗑️ Audio publié supprimé: {public_container}/{safe_filename}")
+                except Exception as e:
+                    if "BlobNotFound" in str(e) or "The specified blob does not exist" in str(e):
+                        logger.info(f"ℹ️ Audio publié déjà absent: {safe_filename}")
+                    else:
+                        errors.append({"target": safe_filename, "error": str(e)})
+
+            if errors:
+                return jsonify({
+                    "success": False,
+                    "error": "Suppression partielle ou échouée",
+                    "deleted": deleted,
+                    "errors": errors,
+                    "filename": safe_filename,
+                }), 500
+
+            return jsonify({
+                "success": True,
+                "filename": safe_filename,
+                "deleted": deleted,
+            }), 200
+
+        except Exception as e:
+            logger.error(f"❌ delete_generated_audio: {e}")
             return jsonify({"success": False, "error": str(e)}), 500
 
     # ─── Éditeur audio ───────────────────────────────────────────────────────

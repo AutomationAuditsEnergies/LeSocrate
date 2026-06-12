@@ -752,7 +752,7 @@ export const DeckDefinition = ({ term, title, eyebrow = 'Définition', definitio
       {sourceChrome(brandName)}
       <div className="left">
         <span className="eyebrow">— {eyebrow}</span>
-        <AutoFitText as="h2" className="word" style={definitionStyle} minScale={0.58}>{word}</AutoFitText>
+        <AutoFitText as="h2" className="word" style={definitionStyle} minScale={0.38}>{word}</AutoFitText>
       </div>
       <div className="right">
         <div className="label">DÉFINITION DE TRAVAIL</div>
@@ -938,7 +938,7 @@ export const DeckRecap = ({ title = "Ce qu'on retient.", points = [], brandName 
               return (
                 <div className="rc2-card" style={{ '--card-color': ['#ff6b47', '#f5a623', '#1e40af', '#58e2a4'][i % 4], ...cardFit }} key={i}>
                   <div className="rc2-num-badge">{String(i + 1).padStart(2, '0')}</div>
-                  <h3>{pointTitle}</h3>
+                  <AutoFitText as="h3" minScale={0.52}>{pointTitle}</AutoFitText>
                   <div className="rc2-line" />
                   {desc && <p>{desc}</p>}
                 </div>
@@ -1008,7 +1008,7 @@ export const DeckRepriseRecap = ({ title = 'On reprend le fil.', points = [], br
                 <div className="rr-point" style={pointFit} key={i}>
                   <span className="rr-num">{String(i + 1).padStart(2, '0')}</span>
                   <div>
-                    <h3>{pointTitle}</h3>
+                    <AutoFitText as="h3" minScale={0.52}>{pointTitle}</AutoFitText>
                     {desc && <p>{desc}</p>}
                   </div>
                 </div>
