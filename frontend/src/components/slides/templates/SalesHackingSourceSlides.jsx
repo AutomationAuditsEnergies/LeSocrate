@@ -459,9 +459,18 @@ const useSourceSlideScale = () => {
   return [ref, scale];
 };
 
-export const SalesHackingSourceSlide = ({ sourceId }) => {
+// `replacements` : remplacements littéraux { "texte source": "texte affiché" }
+// appliqués au HTML statique (ex : durée réelle de la pause).
+export const SalesHackingSourceSlide = ({ sourceId, replacements }) => {
   const source = SOURCE_SLIDE_CATALOG[sourceId] || SOURCE_SLIDES.welcome;
   const [shellRef, scale] = useSourceSlideScale();
+
+  let html = source.html;
+  if (replacements) {
+    for (const [from, to] of Object.entries(replacements)) {
+      html = html.split(from).join(to);
+    }
+  }
 
   return (
     <div className="sales-source-deck-shell" ref={shellRef}>
@@ -469,7 +478,7 @@ export const SalesHackingSourceSlide = ({ sourceId }) => {
         className={source.className}
         data-screen-label={source.label}
         style={{ transform: `scale(${scale})` }}
-        dangerouslySetInnerHTML={{ __html: source.html }}
+        dangerouslySetInnerHTML={{ __html: html }}
       />
     </div>
   );

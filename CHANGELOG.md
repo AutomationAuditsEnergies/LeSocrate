@@ -2,6 +2,33 @@
 
 ## 2026-06-12
 
+### feat(video+hr): slides dédiés pause/Q&A affichés pendant les pauses
+
+Pendant les pauses (10 min, midi) et les Q&A, la page `/video` affichait une
+simple carte de compte à rebours, et la modale d'édition audio du HR Dashboard
+affichait « Aucune synchro trouvée pour cet audio » : les decks générés ne
+contiennent pas de timings pour les audios `pause_*`/`qa_*`.
+
+Les slides statiques dédiés du deck Sales Hacking (`DeckPause`, `DeckQA` via
+`SalesHackingSourceSlide`) sont maintenant affichés :
+
+- **`Video.jsx`** : pendant un audio `pause`/`pause_midi`/`qa`, le slide dédié
+  remplit la zone vidéo (via `SlidePreviewFrame`), avec un bandeau « Reprise
+  dans M:SS » + barre de progression en surimpression bas. `getBreakSlideCopy`
+  (textes de l'ancienne carte) supprimé.
+- **`AudioEditor.jsx`** (modale HR) : détection par préfixe du nom de fichier
+  (`pause_*`/`pause_midi_*` → pause, `qa_*` → qa) ; le slide dédié remplace le
+  message « Aucune synchro trouvée », avec libellé « Slide dédié pause/Q&A »
+  dans l'en-tête. Si des timings existent un jour pour ces audios, ils gardent
+  la priorité.
+- **Durée réelle sur le slide pause** : le « 5 minutes. » en dur du slide
+  statique est remplacé par la durée effective (`breakDurationLabel` dans
+  `audioSlideSync.js` : 600 s → « 10 minutes. », 5400 s → « 1h30. »).
+  Côté `/video` la durée vient de l'API (`audio_duration`), côté modale HR
+  elle est déduite de la plage horaire du nom de fichier
+  (`pause_9h55_10h05.mp3` → 10 min). `SalesHackingSourceSlide` accepte un
+  prop `replacements` pour substituer du texte dans le HTML statique.
+
 ### perf(frontend): code splitting + splash — fini l'écran noir au chargement
 
 Le bundle initial (2,9 Mo : toutes les pages + runtime Spline) bloquait le

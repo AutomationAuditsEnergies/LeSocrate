@@ -1080,7 +1080,12 @@ export const DeckTransition = ({ title = 'On passe à la pratique.', from_topic,
   </DeckSlide>
 );
 
-export const DeckPause = () => <SalesHackingSourceSlide sourceId="pause" />;
+export const DeckPause = ({ duration_label }) => (
+  <SalesHackingSourceSlide
+    sourceId="pause"
+    replacements={duration_label ? { '5 minutes.': `${duration_label}.` } : undefined}
+  />
+);
 
 export const DeckQA = () => <SalesHackingSourceSlide sourceId="qa" />;
 

@@ -13,6 +13,17 @@ function toNumber(value) {
   return Number.isFinite(parsed) ? parsed : null
 }
 
+// Libellé de durée pour le slide pause dédié : 600 → "10 minutes", 5400 → "1h30".
+export function breakDurationLabel(seconds) {
+  const minutes = Math.round(Math.max(0, Number(seconds) || 0) / 60)
+  if (!minutes) return null
+  if (minutes === 1) return '1 minute'
+  if (minutes < 60) return `${minutes} minutes`
+  const h = Math.floor(minutes / 60)
+  const m = minutes % 60
+  return m ? `${h}h${String(m).padStart(2, '0')}` : `${h} heure${h > 1 ? 's' : ''}`
+}
+
 export function buildAudioSlideTimings(slides = [], audioSync = {}, filename = '') {
   const targetName = audioBasename(filename)
   const slideById = new Map()

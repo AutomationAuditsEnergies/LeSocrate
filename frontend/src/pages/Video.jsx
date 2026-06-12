@@ -5,6 +5,7 @@ import { apiFetch, getPlatformId, getPlatformName, setPlatformId } from '../api'
 import { SlidePreviewFrame } from '../components/slides/PipelineSlidePreview.jsx'
 import {
   audioBasename,
+  breakDurationLabel,
   buildAudioSlideTimings,
   findActiveAudioSlideTiming,
 } from '../components/slides/audioSlideSync'
@@ -20,31 +21,6 @@ function formatCountdown(seconds) {
   const minutes = Math.floor(total / 60)
   const secs = total % 60
   return `${minutes}:${String(secs).padStart(2, '0')}`
-}
-
-function getBreakSlideCopy(type) {
-  if (type === 'qa') {
-    return {
-      eyebrow: 'Questions-réponses',
-      title: 'Posez vos questions dans le chat',
-      body: 'Le cours reprend automatiquement à la fin de ce temps.',
-      countdownLabel: 'Reprise dans',
-    }
-  }
-  if (type === 'pause_midi') {
-    return {
-      eyebrow: 'Pause déjeuner',
-      title: 'Prenez le temps de couper',
-      body: 'Le cours reprend automatiquement après la pause.',
-      countdownLabel: 'Reprise dans',
-    }
-  }
-  return {
-    eyebrow: 'Pause',
-    title: 'Soufflez quelques minutes',
-    body: 'Le cours reprend automatiquement après la pause.',
-    countdownLabel: 'Reprise dans',
-  }
 }
 
 function CourseStatusScreen({ tone = 'loading', title, message }) {
@@ -403,7 +379,6 @@ export default function Video() {
   }
 
   const isBreakScreen = audioInfo?.status === 'playing' && isBreakAudioType(audioInfo.type)
-  const breakCopy = getBreakSlideCopy(audioInfo?.type)
   const breakDuration = Math.max(1, Number(audioInfo?.duration || 0))
   const breakSecondsRemaining = Math.max(
     0,
@@ -444,27 +419,28 @@ export default function Video() {
             style={{ transform: 'translateY(-20px)', borderColor: '#E4E4E4' }}
           >
             {isBreakScreen ? (
-              <div className="absolute inset-0 flex flex-col items-center justify-center px-8 text-center" style={{ backgroundColor: '#2B2138' }}>
-                <div className="mb-5 text-sm font-semibold uppercase tracking-[0.2em]" style={{ color: '#D8C7FF' }}>
-                  {breakCopy.eyebrow}
-                </div>
-                <h2 className="max-w-2xl text-4xl font-semibold leading-tight text-white">
-                  {breakCopy.title}
-                </h2>
-                <p className="mt-4 max-w-xl text-base leading-7" style={{ color: '#E7DCF7' }}>
-                  {breakCopy.body}
-                </p>
-
-                <div className="mt-10 w-full max-w-xl">
-                  <div className="flex items-end justify-between gap-4">
-                    <span className="text-sm font-medium" style={{ color: '#D8C7FF' }}>
-                      {breakCopy.countdownLabel}
-                    </span>
-                    <span className="text-6xl font-semibold tabular-nums text-white">
-                      {formatCountdown(breakSecondsRemaining)}
-                    </span>
-                  </div>
-                  <div className="mt-4 h-3 overflow-hidden rounded-full" style={{ backgroundColor: 'rgba(248, 247, 245, 0.18)' }}>
+              <div className="absolute inset-0" style={{ backgroundColor: '#020617' }}>
+                <SlidePreviewFrame
+                  slide={{
+                    template_type: audioInfo.type === 'qa' ? 'qa' : 'pause',
+                    data: { duration_label: breakDurationLabel(audioInfo.duration) },
+                  }}
+                  maxWidth={896}
+                  padding={0}
+                  className="h-full w-full"
+                  style={{ width: '100%', height: '100%', background: '#020617' }}
+                />
+                <div
+                  className="absolute inset-x-0 bottom-0 flex items-center gap-4 px-6 pb-4 pt-10"
+                  style={{ background: 'linear-gradient(to top, rgba(2, 6, 23, 0.85), rgba(2, 6, 23, 0))' }}
+                >
+                  <span className="text-sm font-medium" style={{ color: '#D8C7FF' }}>
+                    Reprise dans
+                  </span>
+                  <span className="text-3xl font-semibold tabular-nums text-white">
+                    {formatCountdown(breakSecondsRemaining)}
+                  </span>
+                  <div className="h-2 flex-1 overflow-hidden rounded-full" style={{ backgroundColor: 'rgba(248, 247, 245, 0.25)' }}>
                     <div
                       className="h-full rounded-full transition-[width] duration-500 ease-out"
                       style={{ width: `${breakProgress}%`, backgroundColor: '#BFA7FF' }}
@@ -493,9 +469,11 @@ export default function Video() {
               </div>
             )}
 
-            <div className="absolute bottom-6 left-6 bg-black/60 text-white text-xs px-3 py-1.5 rounded-lg backdrop-blur-sm">
-              {isBreakScreen ? breakCopy.eyebrow : showProjectedSlides ? `Slide ${activeSlideTiming.slideIndex + 1}` : 'Professeur'}
-            </div>
+            {!isBreakScreen && (
+              <div className="absolute bottom-6 left-6 bg-black/60 text-white text-xs px-3 py-1.5 rounded-lg backdrop-blur-sm">
+                {showProjectedSlides ? `Slide ${activeSlideTiming.slideIndex + 1}` : 'Professeur'}
+              </div>
+            )}
 
             {audioInfo?.status === 'playing' && !isBreakScreen && hasProjectedSlides && (
               <button

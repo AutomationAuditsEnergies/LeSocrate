@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import WaveSurfer from 'wavesurfer.js'
 import RegionsPlugin from 'wavesurfer.js/dist/plugins/regions.js'
 import { apiFetch, apiUrl, getPlatformId } from '../api'
-import { buildAudioSlideTimings } from './slides/audioSlideSync'
+import { breakDurationLabel, buildAudioSlideTimings } from './slides/audioSlideSync'
 import { SlidePreviewFrame } from './slides/PipelineSlidePreview'
 
 const Icon = ({ name, style, className = '' }) => (
@@ -16,6 +16,24 @@ function formatTime(ms) {
   return `${m}:${String(s % 60).padStart(2, '0')}`
 }
 
+// Audios pause/Q&A : pas de synchro deck, on affiche le slide statique dédié
+// (pause_*.mp3 et pause_midi_*.mp3 → pause, qa_*.mp3 → qa).
+function breakSlideTemplateForFilename(filename) {
+  const name = String(filename || '').toLowerCase()
+  if (name.startsWith('qa_')) return 'qa'
+  if (name.startsWith('pause_')) return 'pause'
+  return null
+}
+
+// Durée déduite de la plage horaire du nom (pause_9h55_10h05.mp3 → 600 s).
+function breakDurationLabelForFilename(filename) {
+  const match = String(filename || '').match(/(\d{1,2})h(\d{2})_(\d{1,2})h(\d{2})/)
+  if (!match) return null
+  const start = parseInt(match[1], 10) * 60 + parseInt(match[2], 10)
+  const end = parseInt(match[3], 10) * 60 + parseInt(match[4], 10)
+  return end > start ? breakDurationLabel((end - start) * 60) : null
+}
+
 // ─── AudioEditor ─────────────────────────────────────────────────────────────
 // Props:
 //   folderId      — ID du dossier
@@ -23,7 +41,7 @@ function formatTime(ms) {
 //   darkMode      — bool
 //   colors        — objet colors du parent
 //   onClose       — callback fermeture
-function AudioSlideSyncPreview({ colors, darkMode, loading, error, slides, timings, activeTiming }) {
+function AudioSlideSyncPreview({ colors, darkMode, loading, error, slides, timings, activeTiming, breakTemplate, breakDuration }) {
   const previewBg = darkMode ? '#0f172a' : '#f8fafc'
   const headerBg = darkMode ? '#111827' : '#ffffff'
   const title = activeTiming?.slide?.data?.title
@@ -32,8 +50,19 @@ function AudioSlideSyncPreview({ colors, darkMode, loading, error, slides, timin
     || activeTiming?.slide?.template_type
     || 'Slide'
 
+  const showBreakSlide = Boolean(breakTemplate) && !timings.length
+
   let body = null
-  if (loading) {
+  if (showBreakSlide) {
+    body = (
+      <SlidePreviewFrame
+        slide={{ template_type: breakTemplate, data: { duration_label: breakDuration } }}
+        maxWidth={740}
+        padding={0}
+        style={{ width: '100%' }}
+      />
+    )
+  } else if (loading) {
     body = (
       <div className="flex aspect-video w-full items-center justify-center rounded-md" style={{ backgroundColor: darkMode ? '#020617' : '#eef2f7', color: colors.textMuted }}>
         <div className="flex items-center gap-2 text-sm">
@@ -102,7 +131,11 @@ function AudioSlideSyncPreview({ colors, darkMode, loading, error, slides, timin
               </span>
             </>
           ) : (
-            <span>{timings.length ? `${timings.length} repères` : 'Non synchronisé'}</span>
+            <span>
+              {showBreakSlide
+                ? `Slide dédié ${breakTemplate === 'qa' ? 'Q&A' : 'pause'}`
+                : timings.length ? `${timings.length} repères` : 'Non synchronisé'}
+            </span>
           )}
         </div>
       </div>
@@ -660,6 +693,8 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
             slides={slides}
             timings={slideTimings}
             activeTiming={activeSlideTiming}
+            breakTemplate={breakSlideTemplateForFilename(filename)}
+            breakDuration={breakDurationLabelForFilename(filename)}
           />
 
           {/* Waveform */}
