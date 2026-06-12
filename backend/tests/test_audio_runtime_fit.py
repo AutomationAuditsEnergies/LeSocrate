@@ -992,7 +992,9 @@ class BreakTransitionOwnershipTest(unittest.TestCase):
         self.assertEqual(intro, "")
         self.assertIn("pause déjeuner est terminée", outro)
 
-    def test_first_break_without_previous_audio_keeps_intro(self):
+    def test_first_break_without_previous_audio_has_no_intro(self):
+        # Depuis 2026-06-12, les breaks ne portent jamais d'intro propre,
+        # même sans audio précédent : silence au début, outro seule à la fin.
         playlist_items = [
             ("pause_9h00_9h05.mp3", 300, "pause", 1),
             ("cours_9h05_9h50.mp3", 2700, "cours", 1),
@@ -1001,7 +1003,7 @@ class BreakTransitionOwnershipTest(unittest.TestCase):
         with patch.object(
             bks,
             "_llm_post",
-            return_value='{"intro": "On fait une courte pause.", "outro": "On reprend ensuite."}',
+            return_value='{"intro": "", "outro": "On reprend ensuite."}',
         ):
             intro, outro = bks.build_break_transition_texts(
                 filename="pause_9h00_9h05.mp3",
@@ -1014,7 +1016,7 @@ class BreakTransitionOwnershipTest(unittest.TestCase):
                 model="test-model",
             )
 
-        self.assertIn("courte pause", intro)
+        self.assertEqual(intro, "")
         self.assertIn("reprend", outro)
 
     def test_schedule_neutral_current_audio_does_not_announce_next_break(self):

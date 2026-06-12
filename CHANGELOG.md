@@ -2,6 +2,24 @@
 
 ## 2026-06-12
 
+### feat(tts): plus d'intro dans les fichiers pause/Q&A — outro seule
+
+Les audios `pause_*`/`pause_midi_*`/`qa_*` générés en TTS portaient une intro
+parlée au début du fichier. Décision : plus jamais d'intro propre — le fichier
+commence par du silence et garde seulement son outro de fin de créneau
+(annonce de reprise), durée totale inchangée. L'annonce du break reste portée
+par l'outro de l'audio précédent quand le pipeline le permet.
+
+Implémentation : `break_intro_owned_by_previous()` retourne désormais vrai pour
+tout break (`qa`/`pause`/`pause_midi`), sans condition sur le fichier précédent
+ni sur la neutralité été/hiver. Tous les chemins en aval forcent déjà
+`intro = ""` quand ce flag est vrai : prompt LLM (`generate_break_transition`),
+fallbacks statiques, chemin générique Edge (`_generic_break_texts`), assembleurs
+(`_build_pause_audio`, `_build_timed_edge_break_audio` gèrent l'intro vide).
+Les textes manuels saisis dans la modale HR (`break_overrides`) ne sont pas
+touchés. Test `test_first_break_without_previous_audio_keeps_intro` renommé
+en `..._has_no_intro` pour refléter la nouvelle règle.
+
 ### feat(video+hr): slides dédiés pause/Q&A affichés pendant les pauses
 
 Pendant les pauses (10 min, midi) et les Q&A, la page `/video` affichait une

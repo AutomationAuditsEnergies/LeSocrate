@@ -2,12 +2,11 @@
 Transitions contextuelles pour fichiers Q&A et pauses.
 
 Chaque break produit deux textes :
-- intro : annonce uniquement la fonction du fichier courant (questions ou pause)
+- intro : toujours vide depuis 2026-06-12 — les fichiers Q&A/pause commencent
+  par du silence, l'annonce du break vit dans l'outro de l'audio précédent
 - outro : clôture le fichier courant et raccorde vers le cours suivant
 
-La logique est pilotée par la playlist effective. Quand le fichier précédent
-annonce déjà une pause, le fichier pause ne refait pas d'intro : il garde
-seulement son outro en fin de créneau.
+La logique est pilotée par la playlist effective.
 """
 
 import json
@@ -196,15 +195,12 @@ def break_intro_owned_by_previous(
 ) -> bool:
     """Vrai si le break doit commencer sans intro.
 
-    Les fichiers sensibles été/hiver restent neutres : si le fichier précédent
-    est lui-même sensible, on ne suppose pas qu'il a annoncé ce break.
+    Décision 2026-06-12 : les fichiers Q&A/pause ne portent plus jamais
+    d'intro propre. L'annonce vit dans l'outro de l'audio précédent quand
+    c'est possible ; le fichier break commence par du silence et garde
+    seulement son outro de fin de créneau (durée totale inchangée).
     """
-    if break_type not in {"qa", "pause", "pause_midi"}:
-        return False
-    if previous_item_type(playlist_items, start_idx) not in {"cours", "qa"}:
-        return False
-    prev_filename = _item_filename(playlist_items, start_idx - 1)
-    return not is_schedule_neutral_break(prev_filename)
+    return break_type in {"qa", "pause", "pause_midi"}
 
 
 def should_announce_next_break_in_outro(
