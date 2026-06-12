@@ -436,6 +436,7 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
       const resp = await fetch(apiUrl(`/api/hr/cours-folders/${selectedFolder.id}/content-job/script`), { credentials: 'include' })
       const data = await resp.json()
       if (data.success) {
+        const visibleCourseBlocs = data.course_blocs?.length ? data.course_blocs : (data.planned_course_blocs || [])
         setContentScriptModal(data)
         setScriptAnnotations(data.annotations || [])
         setScriptSelection(null)
@@ -443,7 +444,7 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
         setAnnotationError('')
         setContentScriptView('courses')
         setScriptActiveSubPart(0)
-        setScriptActiveCourse(data.course_blocs?.[0]?.bloc_number || 1)
+        setScriptActiveCourse(visibleCourseBlocs?.[0]?.bloc_number || 1)
         setScriptActiveBreak(null)
         setEditingSegment(null)
         setRulesPanelOpen(false)
@@ -917,6 +918,11 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
         setContentScriptModal(prev => prev ? {
           ...prev,
           course_blocs: (prev.course_blocs || []).map(bloc =>
+            bloc.bloc_number === editingSegment.bloc_number
+              ? { ...bloc, ...data.bloc }
+              : bloc
+          ),
+          planned_course_blocs: (prev.planned_course_blocs || []).map(bloc =>
             bloc.bloc_number === editingSegment.bloc_number
               ? { ...bloc, ...data.bloc }
               : bloc
@@ -2134,7 +2140,7 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
                     Script TTS généré
                   </h3>
 	                  <p className="truncate text-xs" style={{ color: colors.textMuted }}>
-	                    {(contentScriptModal.total_words || 0).toLocaleString('fr-FR')} mots · {(contentScriptModal.course_blocs?.length || 0)} cours audio
+	                    {(contentScriptModal.total_words || 0).toLocaleString('fr-FR')} mots · {((contentScriptModal.course_blocs?.length ? contentScriptModal.course_blocs : contentScriptModal.planned_course_blocs)?.length || 0)} cours audio
 	                  </p>
                 </div>
               </div>
@@ -2672,7 +2678,8 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
               </div>
             </div>
             ) : (() => {
-              const visibleCourseBlocs = contentScriptModal.course_blocs || []
+              const hasGeneratedCourseBlocs = Boolean(contentScriptModal.course_blocs?.length)
+              const visibleCourseBlocs = hasGeneratedCourseBlocs ? contentScriptModal.course_blocs : (contentScriptModal.planned_course_blocs || [])
               return (
             <div className="flex flex-1 min-h-0">
               <div
@@ -2909,10 +2916,10 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
                       </div>
                     )
                   }
-	                  const sourceKey = contentScriptModal.course_blocs_source
+	                  const sourceKey = hasGeneratedCourseBlocs ? contentScriptModal.course_blocs_source : contentScriptModal.planned_course_blocs_source
 	                  const sourceLabel = sourceKey === 'last_audio_generation' ? 'Dernière génération TTS' : 'Prévisualisation'
-	                  const coursePlanNote = contentScriptModal.course_blocs_note
-	                  const coursePlanStale = contentScriptModal.course_blocs_stale
+	                  const coursePlanNote = hasGeneratedCourseBlocs ? contentScriptModal.course_blocs_note : contentScriptModal.planned_course_blocs_note
+	                  const coursePlanStale = hasGeneratedCourseBlocs ? contentScriptModal.course_blocs_stale : contentScriptModal.planned_course_blocs_stale
                   const statusLabel = {
                     generated: 'Généré',
                     preserved: 'Conservé',

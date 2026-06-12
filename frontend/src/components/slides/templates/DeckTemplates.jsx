@@ -55,6 +55,74 @@ const getDefinitionFit = (word = '', definition = '') => {
   };
 };
 
+const getAnalogyFit = (concept = '', comparison = '', text = '') => {
+  const labelText = `${concept || ''} ${comparison || ''}`.trim();
+  const labelWords = splitTitle(labelText).filter(Boolean);
+  const labelChars = Array.from(labelText).length;
+  const longestLabelWord = labelWords.reduce((max, word) => Math.max(max, Array.from(word).length), 0);
+  const bodyChars = Array.from(String(text || '')).length;
+
+  let nameSize = 110;
+  if (labelChars >= 92 || longestLabelWord >= 26) {
+    nameSize = 58;
+  } else if (labelChars >= 72 || labelWords.length >= 10 || longestLabelWord >= 22) {
+    nameSize = 68;
+  } else if (labelChars >= 54 || labelWords.length >= 7 || longestLabelWord >= 18) {
+    nameSize = 82;
+  } else if (labelChars >= 38 || labelWords.length >= 5 || longestLabelWord >= 14) {
+    nameSize = 94;
+  }
+
+  let textSize = 28;
+  if (bodyChars >= 560) {
+    textSize = 18;
+  } else if (bodyChars >= 420) {
+    textSize = 20;
+  } else if (bodyChars >= 300) {
+    textSize = 22;
+  } else if (bodyChars >= 190) {
+    textSize = 24;
+  }
+
+  return {
+    '--analogy-name-size': `${nameSize}px`,
+    '--analogy-text-size': `${textSize}px`,
+  };
+};
+
+const getRecapCardFit = (title = '', desc = '') => {
+  const titleText = String(title || '').trim();
+  const titleWords = splitTitle(titleText).filter(Boolean);
+  const titleChars = Array.from(titleText).length;
+  const longestWord = titleWords.reduce((max, word) => Math.max(max, Array.from(word).length), 0);
+  const descChars = Array.from(String(desc || '')).length;
+
+  let titleSize = 29;
+  if (titleChars >= 78 || titleWords.length >= 9 || longestWord >= 17) {
+    titleSize = 20;
+  } else if (titleChars >= 62 || titleWords.length >= 7 || longestWord >= 14) {
+    titleSize = 22;
+  } else if (titleChars >= 46 || titleWords.length >= 5 || longestWord >= 12) {
+    titleSize = 24;
+  } else if (titleChars >= 34 || titleWords.length >= 4) {
+    titleSize = 26;
+  }
+
+  let descSize = 21;
+  if (descChars >= 150) {
+    descSize = 15;
+  } else if (descChars >= 110) {
+    descSize = 16;
+  } else if (descChars >= 75) {
+    descSize = 18;
+  }
+
+  return {
+    '--recap-card-title-size': `${titleSize}px`,
+    '--recap-card-desc-size': `${descSize}px`,
+  };
+};
+
 const getDeckBrandParts = (brandName = 'Sales hacking') => {
   const normalizedBrandName = String(brandName || 'Sales hacking').trim();
   const isSalesHackingBrand = normalizedBrandName.toLowerCase() === 'sales hacking';
@@ -270,12 +338,12 @@ const sourceChrome = (brandName = 'Sales hacking') => {
   );
 };
 
-const SourceSlide = ({ className, children }) => {
+const SourceSlide = ({ className, children, style }) => {
   const [shellRef, scale] = useSlideStageScale();
 
   return (
     <div className="sales-source-deck-shell" ref={shellRef}>
-      <section className={`slide ${className}`} style={{ transform: `scale(${scale})` }}>
+      <section className={`slide ${className}`} style={{ ...style, transform: `scale(${scale})` }}>
         {children}
       </section>
     </div>
@@ -753,22 +821,29 @@ export const DeckStory = ({ title = 'Cas terrain', narrative, moral, text, brand
   </SourceSlide>
 );
 
-export const DeckAnalogy = ({ title = 'Analogie', concept = 'Concept', comparison = 'Image mentale', text, brandName }) => (
-  <SourceSlide className="s-analogy">
-    {sourceChrome(brandName)}
-    <div className="an-diag" />
-    <div className="an-left">
-      <span className="an-tag">— Le concept</span>
-      <h2 className="an-name">{concept || title}</h2>
-      <p className="an-text">{text || 'La notion à comprendre dans la situation professionnelle.'}</p>
-    </div>
-    <div className="an-right">
-      <span className="an-tag">— L'analogie</span>
-      <h2 className="an-name">{comparison}</h2>
-      <p className="an-text">{text || 'Une image mentale pour rendre la notion plus facile à retenir.'}</p>
-    </div>
-  </SourceSlide>
-);
+export const DeckAnalogy = ({ title = 'Analogie', concept = 'Concept', comparison = 'Image mentale', text, brandName }) => {
+  const conceptLabel = concept || title;
+  const comparisonLabel = comparison || 'Image mentale';
+  const bodyText = text || 'Une image mentale pour rendre la notion plus facile à retenir.';
+  const analogyFit = getAnalogyFit(conceptLabel, comparisonLabel, bodyText);
+
+  return (
+    <SourceSlide className="s-analogy" style={analogyFit}>
+      {sourceChrome(brandName)}
+      <div className="an-diag" />
+      <div className="an-left">
+        <span className="an-tag">— Le concept</span>
+        <AutoFitText as="h2" className="an-name" minScale={0.58}>{conceptLabel}</AutoFitText>
+        <AutoFitText as="p" className="an-text" minScale={0.62}>{bodyText}</AutoFitText>
+      </div>
+      <div className="an-right">
+        <span className="an-tag">— L'analogie</span>
+        <AutoFitText as="h2" className="an-name" minScale={0.58}>{comparisonLabel}</AutoFitText>
+        <AutoFitText as="p" className="an-text" minScale={0.62}>{bodyText}</AutoFitText>
+      </div>
+    </SourceSlide>
+  );
+};
 
 export const DeckOpinion = ({ title = 'Point de vue', text, brandName }) => (
   <SourceSlide className="s-opinion">
@@ -859,8 +934,9 @@ export const DeckRecap = ({ title = "Ce qu'on retient.", points = [], brandName 
           <div className={countVariantClass('rc2-cards', safePoints.length)}>
             {safePoints.map((point, i) => {
               const { title: pointTitle, desc } = pointParts(point, i);
+              const cardFit = getRecapCardFit(pointTitle, desc);
               return (
-                <div className="rc2-card" style={{ '--card-color': ['#ff6b47', '#f5a623', '#1e40af', '#58e2a4'][i % 4] }} key={i}>
+                <div className="rc2-card" style={{ '--card-color': ['#ff6b47', '#f5a623', '#1e40af', '#58e2a4'][i % 4], ...cardFit }} key={i}>
                   <div className="rc2-num-badge">{String(i + 1).padStart(2, '0')}</div>
                   <h3>{pointTitle}</h3>
                   <div className="rc2-line" />
@@ -927,8 +1003,9 @@ export const DeckRepriseRecap = ({ title = 'On reprend le fil.', points = [], br
           <div className={countVariantClass('rr-points', safePoints.length)}>
             {safePoints.map((point, i) => {
               const { title: pointTitle, desc } = pointParts(point, i);
+              const pointFit = getRecapCardFit(pointTitle, desc);
               return (
-                <div className="rr-point" key={i}>
+                <div className="rr-point" style={pointFit} key={i}>
                   <span className="rr-num">{String(i + 1).padStart(2, '0')}</span>
                   <div>
                     <h3>{pointTitle}</h3>

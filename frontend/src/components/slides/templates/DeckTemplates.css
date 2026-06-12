@@ -356,8 +356,12 @@
   text-wrap: balance;
 }
 .deck-chapter-left h1.deck-chapter-title--wrap {
+  line-height: 1.08;
   white-space: normal;
   text-wrap: balance;
+}
+.deck-chapter-left h1.deck-chapter-title--wrap .deck-chapter-label {
+  text-underline-offset: 12px;
 }
 .deck-chapter-label {
   text-decoration: underline;
