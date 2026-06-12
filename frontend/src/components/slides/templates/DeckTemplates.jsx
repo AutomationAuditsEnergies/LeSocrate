@@ -730,9 +730,11 @@ export const DeckStory = ({ title = 'Cas terrain', narrative, moral, text, brand
 
     <div className="chalkboard">
       <div className="board-inner">
-        <div className="ch-lines">
+        {/* AutoFitText sur ch-lines : son parent board-inner a une hauteur
+            fixe (600px), c'est lui qui sert de gabarit de détection. */}
+        <AutoFitText className="ch-lines" minScale={0.45}>
           <p className="ch-para">{narrative || text || 'Un exemple concret pour ancrer le point clé.'}</p>
-        </div>
+        </AutoFitText>
       </div>
       <div className="tray">
         <span className="chalk w" />

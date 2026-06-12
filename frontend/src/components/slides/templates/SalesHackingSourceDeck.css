@@ -1295,7 +1295,7 @@
 
 .sales-source-deck-shell .s-board .ch-para {
   font-family: var(--f-script);
-      font-size: 86px; line-height: 1.22;
+      font-size: calc(86px * var(--text-fit-scale, 1)); line-height: 1.22;
       color: #f3f0e2;
       text-shadow: 0 0 1.4px rgba(255,255,255,0.35);
       margin: 0; transform: rotate(-0.5deg);

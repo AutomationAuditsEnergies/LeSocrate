@@ -53,6 +53,33 @@ const report = await page.evaluate(() => {
           text: text.slice(0, 60),
         })
       }
+
+      // Texte rogné par un ancêtre overflow:hidden (ex : tableau du template
+      // story) — invisible pour les checks scroll/stage car le clipping est
+      // local au conteneur.
+      let ancestor = el.parentElement
+      while (ancestor && ancestor !== stage) {
+        const overflow = getComputedStyle(ancestor).overflow
+        if (overflow === 'hidden' || overflow === 'clip') {
+          const aRect = ancestor.getBoundingClientRect()
+          if (
+            rect.top < aRect.top - 4
+            || rect.bottom > aRect.bottom + 4
+            || rect.left < aRect.left - 4
+            || rect.right > aRect.right + 4
+          ) {
+            issues.push({
+              kind: 'clipped-by-ancestor',
+              tag: el.tagName,
+              cls: el.className?.toString?.().slice(0, 60),
+              ancestorCls: ancestor.className?.toString?.().slice(0, 60),
+              text: text.slice(0, 60),
+            })
+            break
+          }
+        }
+        ancestor = ancestor.parentElement
+      }
     })
 
     stage.querySelectorAll('[data-fit-overflow="true"]').forEach((el) => {

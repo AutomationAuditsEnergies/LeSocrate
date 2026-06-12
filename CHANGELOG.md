@@ -2,6 +2,20 @@
 
 ## 2026-06-12
 
+### fix(slides): story — le texte du tableau noir ne déborde plus
+
+Le template `story` (tableau noir) coupait souvent le récit en haut et en bas :
+tableau à hauteur fixe (600px), texte manuscrit à 86px fixe, contenu centré →
+un récit de 40+ mots dépassait des deux côtés et était rogné par
+l'`overflow: hidden` du cadre. Corrigé avec `AutoFitText` sur `ch-lines`
+(le parent `board-inner` à hauteur fixe sert de gabarit) : la police descend
+progressivement (plancher −55 %) jusqu'à ce que tout le récit tienne.
+
+L'audit `overflow-audit.mjs` détecte désormais aussi le texte rogné par un
+ancêtre `overflow: hidden` (top/bottom/left/right) — ce cas était invisible
+pour les checks scroll/stage. Deux cas story réels (Samir plateau, Léa
+télétravail) ajoutés au banc : 49 cas, 0 anomalie.
+
 ### fix(slides): fin des textes coupés et débordements — audit Playwright
 
 Suite et fin du chantier « le texte ne fait pas sa loi » (troncatures `…`,
