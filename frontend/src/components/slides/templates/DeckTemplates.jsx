@@ -103,6 +103,86 @@ const useSlideStageScale = () => {
   return [ref, scale];
 };
 
+const AutoFitText = ({
+  as = 'div',
+  children,
+  className = '',
+  style,
+  minScale = 0.68,
+  ...props
+}) => {
+  const Tag = as;
+  const ref = useRef(null);
+  const [fitScale, setFitScale] = useState(1);
+
+  useLayoutEffect(() => {
+    const element = ref.current;
+    if (!element) return undefined;
+
+    let rafId = 0;
+    const getOverflowState = () => {
+      const parent = element.parentElement;
+      const ownOverflow = (
+        element.scrollWidth > element.clientWidth + 4
+        || element.scrollHeight > element.clientHeight + 10
+      );
+      if (!parent) return ownOverflow;
+
+      const elementRect = element.getBoundingClientRect();
+      const parentRect = parent.getBoundingClientRect();
+      const parentOverflow = (
+        elementRect.left < parentRect.left - 2
+        || elementRect.right > parentRect.right + 2
+        || elementRect.bottom > parentRect.bottom + 2
+      );
+      return ownOverflow || parentOverflow;
+    };
+
+    const fit = () => {
+      let nextScale = 1;
+      element.style.setProperty('--text-fit-scale', '1');
+
+      for (let i = 0; i < 12; i += 1) {
+        if (!getOverflowState()) break;
+        nextScale = Math.max(minScale, Number((nextScale - 0.04).toFixed(2)));
+        element.style.setProperty('--text-fit-scale', String(nextScale));
+        if (nextScale <= minScale) break;
+      }
+
+      const stillOverflowing = getOverflowState();
+      element.dataset.fitOverflow = stillOverflowing ? 'true' : 'false';
+      setFitScale(nextScale);
+    };
+
+    const scheduleFit = () => {
+      window.cancelAnimationFrame(rafId);
+      rafId = window.requestAnimationFrame(fit);
+    };
+
+    scheduleFit();
+    const resizeObserver = new ResizeObserver(scheduleFit);
+    resizeObserver.observe(element);
+    if (element.parentElement) resizeObserver.observe(element.parentElement);
+    document.fonts?.ready?.then(scheduleFit).catch(() => {});
+
+    return () => {
+      window.cancelAnimationFrame(rafId);
+      resizeObserver.disconnect();
+    };
+  }, [children, minScale]);
+
+  return (
+    <Tag
+      ref={ref}
+      className={`deck-fit-text ${className}`.trim()}
+      style={{ ...style, '--text-fit-scale': fitScale }}
+      {...props}
+    >
+      {children}
+    </Tag>
+  );
+};
+
 const renderAccentLastWord = (value = '', fallback = '') => {
   const words = splitTitle(value, fallback).filter(Boolean);
   if (words.length < 2) return value || fallback;
@@ -154,9 +234,16 @@ const svgTitleBlock = (value = '', fallback = '', maxChars = 28) => {
   };
 };
 
-const shortenSvgText = (value = '', maxChars = 64) => {
-  const clean = String(value || '').trim();
-  return clean.length > maxChars ? `${clean.slice(0, maxChars - 1)}…` : clean;
+const svgBodyBlock = (value = '', maxChars = 44, maxLines = 2) => {
+  const text = String(value || '').trim();
+  const lines = svgTextLines(text, maxChars, maxLines);
+  const length = text.length;
+  const fontSize = length > 105 ? 13 : length > 82 ? 15 : 17;
+  return {
+    lines,
+    fontSize,
+    lineGap: Math.round(fontSize * 1.22),
+  };
 };
 
 const deckChrome = (brandName = 'Sales hacking') => {
@@ -312,6 +399,8 @@ export const DeckProgramYear = ({
   const phaseTwoDesc = typeof phaseTwo === 'string' ? '' : (phaseTwo.desc || phaseTwo.text || phaseTwo.description || '');
   const phaseOneBlock = svgTitleBlock(phaseOneTitle, 'Assistance et relation client', 28);
   const phaseTwoBlock = svgTitleBlock(phaseTwoTitle, 'Actions commerciales', 28);
+  const phaseOneDescBlock = svgBodyBlock(phaseOneDesc, 46, 2);
+  const phaseTwoDescBlock = svgBodyBlock(phaseTwoDesc, 46, 2);
   const displayedTitle = 'Parcours annuel.';
   const displayedDayLabel = "Programme de l'année";
   const topTitleStartY = 88 - ((phaseOneBlock.lines.length - 1) * phaseOneBlock.lineGap) / 2;
@@ -348,7 +437,13 @@ export const DeckProgramYear = ({
             <tspan x="522" y={topTitleStartY + index * phaseOneBlock.lineGap} fontSize={phaseOneBlock.fontSize} key={line}>{line}</tspan>
           ))}
         </text>
-        <text x="318" y="135" fontFamily="Manrope,sans-serif" fontSize="19" fill="rgba(10,19,58,0.62)">{shortenSvgText(phaseOneDesc, 64)}</text>
+        {phaseOneDescBlock.lines.length > 0 && (
+          <text x="318" y={phaseOneDescBlock.lines.length > 1 ? 124 : 136} fontFamily="Manrope,sans-serif" fontSize={phaseOneDescBlock.fontSize} fill="rgba(10,19,58,0.62)">
+            {phaseOneDescBlock.lines.map((line, index) => (
+              <tspan x="318" dy={index === 0 ? 0 : phaseOneDescBlock.lineGap} key={line}>{line}</tspan>
+            ))}
+          </text>
+        )}
         <line x1="520" y1="154" x2="520" y2="178" stroke="rgba(255,255,255,0.3)" strokeWidth="2" strokeDasharray="5 4" />
         <circle cx="520" cy="220" r="64" fill="rgba(255,93,108,0.10)" />
         <circle cx="520" cy="220" r="50" fill="none" stroke="rgba(255,93,108,0.35)" strokeWidth="2" />
@@ -371,7 +466,13 @@ export const DeckProgramYear = ({
             <tspan x="1562" y={bottomTitleStartY + index * phaseTwoBlock.lineGap} fontSize={phaseTwoBlock.fontSize} key={line}>{line}</tspan>
           ))}
         </text>
-        <text x="1358" y="730" fontFamily="Manrope,sans-serif" fontSize="19" fill="rgba(10,19,58,0.62)">{shortenSvgText(phaseTwoDesc, 64)}</text>
+        {phaseTwoDescBlock.lines.length > 0 && (
+          <text x="1358" y={phaseTwoDescBlock.lines.length > 1 ? 718 : 730} fontFamily="Manrope,sans-serif" fontSize={phaseTwoDescBlock.fontSize} fill="rgba(10,19,58,0.62)">
+            {phaseTwoDescBlock.lines.map((line, index) => (
+              <tspan x="1358" dy={index === 0 ? 0 : phaseTwoDescBlock.lineGap} key={line}>{line}</tspan>
+            ))}
+          </text>
+        )}
       </svg>
     </SourceSlide>
   );
@@ -464,12 +565,23 @@ const normalizeTextList = (items, limit = 4) => (
 );
 
 const splitDisplayTitle = (value = '', fallback = 'Point clé') => {
-  const words = splitTitle(value, fallback).filter(Boolean);
+  const clean = String(value || fallback || '').trim();
+  const colon = clean.match(/^(.+?:)\s+(.+)$/);
+  if (colon) return { first: colon[1], rest: colon[2] };
+  const comma = clean.match(/^(.+?,)\s+(.+)$/);
+  if (comma) return { first: comma[1], rest: comma[2] };
+
+  const words = splitTitle(clean, fallback).filter(Boolean);
   if (!words.length) return { first: fallback, rest: '' };
-  if (words.length === 1) return { first: words[0], rest: '' };
+  if (words.length <= 3) return { first: words.join(' '), rest: '' };
   const first = words.slice(0, Math.ceil(words.length / 2)).join(' ');
   const rest = words.slice(Math.ceil(words.length / 2)).join(' ');
   return { first, rest };
+};
+
+const ComparisonTitle = ({ parts, accentClass }) => {
+  if (!parts?.rest) return <>{parts?.first}</>;
+  return <>{parts.first}<br /><span className={accentClass}>{parts.rest}</span></>;
 };
 
 const pointParts = (point, index) => {
@@ -478,12 +590,15 @@ const pointParts = (point, index) => {
     const [head, ...tail] = clean.split(/\s*[:.]\s+/);
     return {
       title: head || `Point ${index + 1}`,
-      desc: tail.join('. ') || clean,
+      desc: tail.join('. '),
     };
   }
+  const title = point?.title || point?.label || `Point ${index + 1}`;
+  const desc = point?.desc || point?.description || point?.text || point?.detail || '';
+  // Ne jamais répéter le titre en guise de description.
   return {
-    title: point?.title || point?.label || `Point ${index + 1}`,
-    desc: point?.desc || point?.description || point?.text || point?.detail || '',
+    title,
+    desc: desc.trim().toLowerCase() === String(title).trim().toLowerCase() ? '' : desc,
   };
 };
 
@@ -569,11 +684,11 @@ export const DeckDefinition = ({ term, title, eyebrow = 'Définition', definitio
       {sourceChrome(brandName)}
       <div className="left">
         <span className="eyebrow">— {eyebrow}</span>
-        <h2 className="word" style={definitionStyle}>{word}</h2>
+        <AutoFitText as="h2" className="word" style={definitionStyle} minScale={0.58}>{word}</AutoFitText>
       </div>
       <div className="right">
         <div className="label">DÉFINITION DE TRAVAIL</div>
-        <p className="body" style={definitionStyle}>{definitionText}</p>
+        <AutoFitText as="p" className="body" style={definitionStyle} minScale={0.72}>{definitionText}</AutoFitText>
         <div className="tag-row">
           {(tags.length ? tags : ['RÉPÉTABLE', 'MESURABLE', 'ACTIONNABLE']).slice(0, 4).map((item, i) => <span key={i}>{item}</span>)}
         </div>
@@ -692,7 +807,7 @@ export const DeckQuote = ({ quote, title, text, brandName }) => (
   </SourceSlide>
 );
 
-export const DeckFramework = ({ title = 'Cadre de lecture', center = {}, segments = [], items = [], brandName }) => {
+export const DeckFramework = ({ title = 'Cadre de lecture', segments = [], items = [], brandName }) => {
   const sourceSegments = Array.isArray(segments) && segments.length ? segments : items;
   const safeSegments = (Array.isArray(sourceSegments) && sourceSegments.length ? sourceSegments : [
     { title: 'Repère 1', desc: 'Premier point de lecture.' },
@@ -747,7 +862,7 @@ export const DeckRecap = ({ title = "Ce qu'on retient.", points = [], brandName 
                   <div className="rc2-num-badge">{String(i + 1).padStart(2, '0')}</div>
                   <h3>{pointTitle}</h3>
                   <div className="rc2-line" />
-                  <p>{desc || pointTitle}</p>
+                  {desc && <p>{desc}</p>}
                 </div>
               );
             })}
@@ -815,7 +930,7 @@ export const DeckRepriseRecap = ({ title = 'On reprend le fil.', points = [], br
                   <span className="rr-num">{String(i + 1).padStart(2, '0')}</span>
                   <div>
                     <h3>{pointTitle}</h3>
-                    <p>{desc || pointTitle}</p>
+                    {desc && <p>{desc}</p>}
                   </div>
                 </div>
               );
@@ -1094,10 +1209,14 @@ export const DeckComparison = ({ title = 'Avant vs après.', cols = [], rows = [
   const sourceRows = Array.isArray(rows) ? rows : [];
   const left = sourceCols[0] || { label: 'Avant', items: [] };
   const right = sourceCols[1] || { label: 'Après', items: [] };
-  const leftTitle = splitDisplayTitle(left.label || title, 'Avant');
-  const rightTitle = splitDisplayTitle(right.label || 'Après', 'Après');
-  const leftFit = getSourceDisplayFit(left.label || title, 'Avant');
-  const rightFit = getSourceDisplayFit(right.label || 'Après', 'Après');
+  // Le label nourrit l'eyebrow ; le grand titre vient de col.title quand la
+  // curation l'a fourni (sinon on retombe sur le label, comportement legacy).
+  const leftHeading = left.title || left.label || title;
+  const rightHeading = right.title || right.label || 'Après';
+  const leftTitle = splitDisplayTitle(leftHeading, 'Avant');
+  const rightTitle = splitDisplayTitle(rightHeading, 'Après');
+  const leftFit = getSourceDisplayFit(leftHeading, 'Avant');
+  const rightFit = getSourceDisplayFit(rightHeading, 'Après');
   const leftItems = normalizeTextList(left.items, 4);
   const rightItems = normalizeTextList(right.items, 4);
   const safeRows = sourceRows.length ? sourceRows : leftItems.map((item, i) => ({ before: item, after: rightItems[i] || 'Bonne pratique' }));
@@ -1106,7 +1225,9 @@ export const DeckComparison = ({ title = 'Avant vs après.', cols = [], rows = [
       {sourceChrome(brandName)}
       <div className="col l">
         <span className="eyebrow">— {left.label || 'Avant'}</span>
-        <h2 style={leftFit}>{leftTitle.first}<br /><span className="b">{leftTitle.rest || 'actuel.'}</span></h2>
+        <AutoFitText as="h2" style={leftFit} minScale={0.62}>
+          <ComparisonTitle parts={leftTitle} accentClass="b" />
+        </AutoFitText>
         <ul>
           {(safeRows.length ? safeRows : [{ before: 'Situation actuelle' }]).slice(0, 4).map((row, i) => (
             <li key={i}><span className="ic">−</span>{row.before || row.a || row.label || row.criterion}</li>
@@ -1115,7 +1236,9 @@ export const DeckComparison = ({ title = 'Avant vs après.', cols = [], rows = [
       </div>
       <div className="col r">
         <span className="eyebrow">— {right.label || 'Après'}</span>
-        <h2 style={rightFit}>{rightTitle.first}<br /><span className="accent">{rightTitle.rest || 'cible.'}</span></h2>
+        <AutoFitText as="h2" style={rightFit} minScale={0.62}>
+          <ComparisonTitle parts={rightTitle} accentClass="accent" />
+        </AutoFitText>
         <ul>
           {(safeRows.length ? safeRows : [{ after: 'Bonne pratique' }]).slice(0, 4).map((row, i) => (
             <li key={i}><span className="ic">✓</span>{row.after || row.b || rightItems[i] || 'Bonne pratique'}</li>

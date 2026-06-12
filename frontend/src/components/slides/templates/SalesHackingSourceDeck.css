@@ -35,6 +35,18 @@
   transform-origin: top left !important;
 }
 
+.sales-source-deck-shell .deck-fit-text {
+  --text-fit-scale: 1;
+}
+
+/* Les dimensions du deck source (1920×1080, paddings inclus) supposent le
+   border-box du preflight Tailwind ; on le garantit localement pour ne pas
+   dépendre du contexte d'intégration. */
+.sales-source-deck-shell section.slide,
+.sales-source-deck-shell section.slide * {
+  box-sizing: border-box;
+}
+
 @keyframes sales-source-breathe {
   0%, 100% {
     transform: translate(-50%, -50%) scale(1);
@@ -635,7 +647,7 @@
   /* 03 — DEFINITION                                               */
   /* ============================================================ */
   .s-def {
-  display: grid; grid-template-columns: 1.05fr 1fr;
+  display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr);
       padding: 0 0 0 140px;
       align-items: stretch;          /* columns fill full slide height */
       min-height: 1080px;
@@ -644,6 +656,7 @@
 .sales-source-deck-shell .s-def .left {
   padding: 0 60px 0 0;
       display: flex; flex-direction: column; justify-content: center;
+      min-width: 0;
 }
 
 .sales-source-deck-shell .s-def .left .eyebrow {
@@ -651,13 +664,18 @@
 }
 
 .sales-source-deck-shell .s-def .word {
-  font-family: var(--f-display); font-size: var(--definition-word-size, 140px); line-height: 0.95;
+  font-family: var(--f-display); font-size: calc(var(--definition-word-size, 140px) * var(--text-fit-scale, 1)); line-height: 0.95;
       letter-spacing: -0.03em; text-transform: uppercase;
       margin: 0;
       max-width: 100%;
       white-space: normal;
       text-wrap: balance;
-      overflow-wrap: anywhere;
+      /* Pas de césure brute en plein mot : l'auto-fit réduit la police, et si
+         un mot reste trop large malgré le plancher, césure typographique. */
+      overflow-wrap: normal;
+      word-break: normal;
+      hyphens: auto;
+      -webkit-hyphens: auto;
 }
 
 .sales-source-deck-shell .s-def .pron {
@@ -683,7 +701,7 @@
 }
 
 .sales-source-deck-shell .s-def .right .body {
-  font-family: var(--f-head); font-size: var(--definition-body-size, 40px); font-weight: 400;
+  font-family: var(--f-head); font-size: calc(var(--definition-body-size, 40px) * var(--text-fit-scale, 1)); font-weight: 400;
       line-height: 1.3; color: var(--ink);
       margin: 0 0 36px;
       max-width: 100%;
@@ -743,11 +761,14 @@
 }
 
 .sales-source-deck-shell .s-diag .col h2 {
-  font-family: var(--f-display); font-size: var(--source-title-size, 108px); line-height: 0.88;
+  font-family: var(--f-display); font-size: calc(var(--source-title-size, 108px) * var(--text-fit-scale, 1)); line-height: 0.88;
       letter-spacing: -0.02em; text-transform: uppercase;
       margin: 0 0 50px;
       max-width: 100%;
-      overflow-wrap: anywhere;
+      /* Jamais de césure en plein mot : un mot trop large doit déborder pour
+         que l'auto-fit réduise la police, pas être coupé sur deux lignes. */
+      overflow-wrap: normal;
+      word-break: normal;
       text-wrap: balance;
 }
 
@@ -2023,11 +2044,11 @@
 }
 
 .sales-source-deck-shell .s-casestudy .cs-cards.cols-2 {
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .sales-source-deck-shell .s-casestudy .cs-cards.cols-3 {
-  grid-template-columns: 1fr 1fr 1fr;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
 .sales-source-deck-shell .s-casestudy .cs-cards.cols-4 {

@@ -2691,6 +2691,8 @@ RÈGLES:
 - Ne rajoute aucun timing. Ne crée pas de slide absente du texte.
 - Le JSON de plan peut orienter le choix, mais le texte final reste le contrôle : une slide doit correspondre à ce qui est vraiment dit.
 - Le deck doit être lisible: titres courts, contenu très synthétique, aucun pavé.
+- Aucun champ ne doit se terminer par "..." ou "…": écris des phrases complètes. Si un contenu dépasse son budget, reformule-le plus court, ne le coupe jamais.
+- `definition` exige que le texte source pose réellement une définition: le champ `definition` reformule fidèlement le sens donné par la source (justifié par `source_quote`), jamais une définition inventée. Si la source ne définit pas la notion, choisis un autre template.
 - Si deux idées sont proches, regroupe-les. Si une fenêtre répète une idée déjà traitée, saute-la.
 - Pour chaque slide, ajoute `source_quote`: une citation exacte, copiée mot pour mot depuis la fenêtre source, qui justifie cette slide.
 - `source_quote` doit être courte mais suffisante pour localiser la slide dans le texte: idéalement 15 à 60 mots.
@@ -2732,7 +2734,7 @@ TEMPLATES AUTORISÉS ET SCHÉMAS:
 - reflection: data={{"title":"3-6 mots","text":"1-2 phrases"}}
 - chapter_opener: data={{"chapter_label":"Chapitre X","title":"titre du thème","axes":[{{"title":"axe court","desc":"optionnel"}}]}}
 - definition: data={{"term":"mot ou notion","eyebrow":"contexte court","definition":"1 phrase","isItems":["critère","critère"]}}
-- comparison: data={{"title":"3-6 mots","cols":[{{"label":"colonne","items":["point court"]}},{{"label":"colonne","items":["point court"]}}]}}
+- comparison: data={{"title":"3-6 mots","cols":[{{"label":"contexte court","title":"titre fort 1-3 mots","items":["point court"]}},{{"label":"contexte court","title":"titre fort 1-3 mots","items":["point court"]}}]}} — `label` est le petit eyebrow, `title` le grand titre de colonne
 - casestudy: data={{"title":"3-6 mots","eyebrow":"contexte","cases":[{{"tag":"01 · Canal","title":"court","desc":"1 phrase","example":"optionnel"}}]}} avec 2 à 4 cases comparables
 - situations: data={{"title":"3-6 mots","eyebrow":"contexte","items":[{{"title":"pilier, profil, posture ou situation","desc":"rôle ou règle courte"}}]}} avec exactement 3 items
 - steps: data={{"title":"3-6 mots","steps":[{{"title":"court","desc":"1 phrase"}}]}} avec 2-4 steps
@@ -2799,9 +2801,27 @@ FENÊTRES DE CONTEXTE:
 """
 
 
+class _SlideText(str):
+    """String wrapper that prevents silent final-copy truncation via [:N].
+
+    Layout budgets are still computed after normalization; over-budget fields are
+    reported in layout metadata instead of being amputated here.
+    """
+
+    def __getitem__(self, key):
+        if (
+            isinstance(key, slice)
+            and key.start is None
+            and key.stop is not None
+            and key.step is None
+        ):
+            return str(self)
+        return super().__getitem__(key)
+
+
 def _as_text(value, fallback: str = "") -> str:
     text = str(value or fallback).strip()
-    return text or fallback
+    return _SlideText(text or fallback)
 
 
 def _normalize_pedagogical_shape(value, template: str = "") -> str:

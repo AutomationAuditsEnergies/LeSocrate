@@ -2,6 +2,42 @@
 
 ## 2026-06-12
 
+### fix(slides): fin des textes coupés et débordements — audit Playwright
+
+Suite et fin du chantier « le texte ne fait pas sa loi » (troncatures `…`,
+débordements, soulignements arbitraires, textes amputés). Audit mené avec un
+banc de rendu réel (`frontend/overflow-test.html` + `overflow-audit.mjs`,
+Playwright) sur 47 slides : 42 slides réels issus des decks en base + 5 cas
+extrêmes synthétiques. Résultat : 30 anomalies → 0 (2 faux positifs
+letter-spacing restants).
+
+Corrections en plus du travail déjà en cours (AutoFitText, suppression du
+`slice + '…'`, wrapper `_SlideText` anti-troncature backend) :
+
+- **`casestudy` : cartes hors cadre** — `cols-2`/`cols-3` utilisaient
+  `1fr` (min-size = min-content en grid) : une carte au contenu large
+  élargissait la grille au-delà du slide. → `repeat(n, minmax(0, 1fr))`.
+- **`definition` : colonne écrasée** — même piège grid sur `.s-def`
+  (`1.05fr 1fr` → `minmax(0, …)` + `min-width: 0` sur `.left`).
+- **`comparison` : mauvais titres** — le grand titre de colonne affichait
+  `col.label` (eyebrow) au lieu de `col.title` ; le schéma du prompt de
+  curation documente maintenant `label` (eyebrow) vs `title` (grand titre).
+- **Mots cassés en plein milieu** (« ÉMOTIONNELL/E ») — `overflow-wrap:
+  anywhere` remplacé par pas-de-césure + auto-fit, avec `hyphens: auto`
+  (césure typographique fr) en dernier recours sur le terme de définition.
+- **`box-sizing` garanti** — les dimensions du deck source supposaient le
+  border-box du preflight Tailwind ; désormais imposé localement dans
+  `SalesHackingSourceDeck.css`.
+- **`recap`/`reprise_recap` : description dupliquée** — quand desc == titre,
+  on n'affiche plus le doublon (`pointParts` ne recopie plus le texte entier
+  en desc).
+- **Prompt curation durci** — interdiction de terminer un champ par `...`/`…`
+  (reformuler, jamais couper) ; `definition` exige une définition réellement
+  posée par la source, justifiée par `source_quote`.
+
+Le banc de test est commité : `node overflow-audit.mjs` (Vite lancé) rejoue
+l'audit complet et screenshote les cas en anomalie dans `/tmp/slide-audit/`.
+
 ### feat(tts): plus d'intro dans les fichiers pause/Q&A — outro seule
 
 Les audios `pause_*`/`pause_midi_*`/`qa_*` générés en TTS portaient une intro
