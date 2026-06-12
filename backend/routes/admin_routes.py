@@ -9,8 +9,9 @@ from azure.storage.blob import BlobServiceClient, generate_blob_sas, BlobSasPerm
 from azure.core.exceptions import ResourceExistsError
 from pydub import AudioSegment
 import state
-from config import FRANCE_TZ
+from config import FRANCE_TZ, DB_PATH
 from database.db import get_db_connection
+from database import db_safety
 from services.time_service import set_heure_debut_cours, get_heure_debut_cours
 from services.export_service import generate_excel_export
 from utils.logger import get_logger
@@ -398,6 +399,74 @@ def create_admin_blueprint(socketio):
         except Exception as e:
             logger.error(f"❌ Erreur logout admin: {e}")
             return jsonify({"success": False, "error": "Erreur serveur"}), 500
+
+    def _require_admin():
+        if not session.get("is_admin"):
+            return jsonify({"success": False, "error": "Accès admin requis"}), 401
+        return None
+
+    @admin_bp.route("/api/admin/db/status", methods=["GET"])
+    def db_status():
+        """Santé de la base : intégrité, backups, mode maintenance, notices."""
+        denied = _require_admin()
+        if denied:
+            return denied
+        ok, detail = db_safety.check_integrity()
+        size = os.path.getsize(DB_PATH) if os.path.exists(DB_PATH) else 0
+        return jsonify({
+            "integrity_ok": ok,
+            "integrity_detail": detail,
+            "db_path": DB_PATH,
+            "db_size_bytes": size,
+            "health": db_safety.db_health,
+            "backups": db_safety.list_backups(),
+        })
+
+    @admin_bp.route("/api/admin/db/backup", methods=["POST"])
+    def db_backup():
+        """Déclenche un backup manuel immédiat."""
+        denied = _require_admin()
+        if denied:
+            return denied
+        try:
+            path = db_safety.create_backup(label="manual")
+            return jsonify({"success": True, "backup": os.path.basename(path) if path else None})
+        except Exception as e:
+            logger.error(f"❌ Backup manuel en échec: {e}")
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    @admin_bp.route("/api/admin/db/restore", methods=["POST"])
+    def db_restore():
+        """Restaure un backup nommé (body JSON: {"backup": "<nom>"}).
+
+        L'intégrité du backup est vérifiée avant remplacement, et la base
+        courante est sauvegardée en 'pre-restore' — opération réversible.
+        """
+        denied = _require_admin()
+        if denied:
+            return denied
+        data = request.get_json(silent=True) or {}
+        backup_name = (data.get("backup") or "").strip()
+        if not backup_name:
+            return jsonify({"success": False, "error": "Paramètre 'backup' requis"}), 400
+        if db_safety.restore_backup(backup_name):
+            from database.db import init_database
+            init_database()  # ré-appliquer les migrations sur la base restaurée
+            db_safety.set_maintenance(False)
+            return jsonify({"success": True, "restored": backup_name})
+        return jsonify({"success": False, "error": "Backup introuvable ou corrompu"}), 400
+
+    @admin_bp.route("/api/admin/db/maintenance", methods=["POST"])
+    def db_maintenance():
+        """Active/désactive le mode maintenance (body JSON: {"enabled": bool})."""
+        denied = _require_admin()
+        if denied:
+            return denied
+        data = request.get_json(silent=True) or {}
+        enabled = bool(data.get("enabled"))
+        reason = (data.get("reason") or "activé manuellement") if enabled else None
+        db_safety.set_maintenance(enabled, reason)
+        return jsonify({"success": True, "maintenance": enabled})
 
     @admin_bp.route("/api/admin/simulate-current-time", methods=["POST"])
     def simulate_current_time():

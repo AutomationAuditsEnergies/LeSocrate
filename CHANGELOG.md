@@ -1,5 +1,39 @@
 # Changelog
 
+## 2026-06-11
+
+### feat(db): système de sécurité SQLite — backups, intégrité, récupération auto
+
+Suite à l'incident "database disk image is malformed" (commit 5d9f00a), mise en
+place d'une défense complète dans `backend/database/db_safety.py` :
+
+- **Au boot** (avant `init_database`) : `PRAGMA integrity_check` ; si la base
+  est saine → backup horodaté dans `<dir DB>/backups/` (`/home/backups/` sur
+  Azure) avec rotation (15 max). Chaque déploiement redémarre l'app, donc
+  chaque déploiement déclenche un backup.
+- **Si corruption détectée** : quarantaine (`.corrupt-<ts>`), puis restauration
+  automatique du dernier backup sain. Sans backup sain, base recréée vide mais
+  **mode maintenance activé** : toute l'API répond 503 (sauf `/api/admin/db/*`
+  et `/api/admin/login`) au lieu de repartir vide silencieusement.
+- **Backup périodique** toutes les 6h (green thread eventlet).
+- **Durcissement connexions** (`get_db_connection`) : `timeout=30` contre les
+  "database is locked" des écritures concurrentes. En local : `journal_mode=WAL`
+  (activé au boot, persistant) + `synchronous=NORMAL`. **Pas de WAL sur Azure** :
+  `/home` est un partage réseau (Azure Files/CIFS) et SQLite documente le WAL
+  comme non fiable sur filesystem réseau — possiblement la cause de la
+  corruption d'origine. Sur Azure on garde rollback journal + `synchronous=FULL`.
+- **Endpoints admin** (session `is_admin` requise) :
+  `GET /api/admin/db/status` (intégrité, backups, notices de récupération),
+  `POST /api/admin/db/backup` (backup manuel),
+  `POST /api/admin/db/restore` (`{"backup": "<nom>"}`, vérifie l'intégrité du
+  backup, sauvegarde l'actuelle en `pre-restore`, ré-applique les migrations),
+  `POST /api/admin/db/maintenance` (`{"enabled": bool}`).
+- Le filet de sécurité existant dans `init_database` tente lui aussi la
+  restauration d'un backup sain avant de recréer une base vide.
+
+Testé : boot sain → backup ; corruption → quarantaine + restauration auto avec
+données intactes ; corruption sans backup → maintenance ON.
+
 ## 2026-06-10
 
 ### feat(slides): variantes structurelles 2/4 items pour les templates source

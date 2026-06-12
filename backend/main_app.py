@@ -11,6 +11,7 @@ from utils.logger import configure_logging, get_logger
 
 # Database
 from database.db import init_database
+from database import db_safety
 
 # Routes
 from routes.auth_routes import create_auth_blueprint
@@ -98,6 +99,18 @@ import state as _state
 from flask import jsonify as _jsonify
 @app.before_request
 def populate_session_from_token():
+    # Mode maintenance DB : tout est bloqué en 503 sauf les endpoints admin
+    # nécessaires au diagnostic et à la restauration.
+    if db_safety.is_maintenance() and not (
+        request.path.startswith("/api/admin/db")
+        or request.path.startswith("/api/admin/login")
+    ):
+        return _jsonify({
+            "error": "maintenance",
+            "message": "Plateforme en maintenance : récupération de la base de données en cours.",
+            "reason": db_safety.db_health.get("maintenance_reason"),
+        }), 503
+
     if "nom" not in session:
         token = request.headers.get("X-Auth-Token")
         if token and token in _state.user_tokens:
@@ -134,9 +147,17 @@ def platform_info():
 register_socketio_handlers(socketio)
 logger.info("✅ Gestionnaires SocketIO enregistrés")
 
+# Sécurité DB avant tout : integrity_check + backup au boot, restauration
+# automatique du dernier backup sain en cas de corruption (cf. db_safety.py)
+db_safety.startup_check()
+
 # Initialisation de la base de données (migrations incluses — doit précéder boot recovery)
 init_database()
 logger.info("✅ Base de données initialisée")
+
+# Backup périodique toutes les 6h (green thread eventlet via socketio)
+socketio.start_background_task(db_safety.periodic_backup_loop, socketio.sleep)
+logger.info("✅ Backup DB périodique programmé (toutes les 6h)")
 
 # Watchdog après init DB : reprend les auto-pilots interrompus ou locks zombies
 start_auto_pilot_watchdog()

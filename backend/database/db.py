@@ -10,8 +10,21 @@ logger = get_logger(__name__)
 
 
 def get_db_connection():
-    """Retourne une connexion à la base de données SQLite"""
-    return sqlite3.connect(DB_PATH)
+    """Retourne une connexion à la base de données SQLite.
+
+    timeout=30 : en cas d'écriture concurrente (pipelines parallèles), la
+    connexion attend jusqu'à 30s que le verrou se libère au lieu de lever
+    immédiatement "database is locked". Le journal_mode WAL (activé au boot
+    par db_safety.startup_check, persistant) permet lecteurs + 1 écrivain
+    simultanés et réduit fortement le risque de corruption.
+    """
+    conn = sqlite3.connect(DB_PATH, timeout=30)
+    # NORMAL n'est sûr qu'avec WAL (jamais activé sur Azure : /home est un
+    # partage réseau, cf. db_safety.enable_wal). En mode rollback journal on
+    # garde le FULL par défaut, plus lent mais sans risque de corruption.
+    if not os.getenv("WEBSITE_SITE_NAME"):
+        conn.execute("PRAGMA synchronous=NORMAL")
+    return conn
 
 
 def _is_malformed_database_error(exc: Exception) -> bool:
@@ -741,8 +754,34 @@ def init_database(_recovered_from_corruption: bool = False):
         if _is_malformed_database_error(e) and not _recovered_from_corruption:
             backup_path = _quarantine_corrupt_database(DB_PATH)
             logger.error(
-                "🧯 Récupération SQLite: ancienne base sauvegardée sous %s, recréation d'une base saine",
+                "🧯 Récupération SQLite: ancienne base sauvegardée sous %s",
                 backup_path,
             )
+            # Tenter de repartir du dernier backup sain plutôt que d'une base
+            # vide ; sinon, base neuve + mode maintenance (cf. db_safety).
+            from database.db_safety import (
+                _restore_latest_healthy_backup,
+                db_health,
+                set_maintenance,
+            )
+            restored = _restore_latest_healthy_backup(DB_PATH)
+            if restored:
+                logger.warning("♻️ Base restaurée depuis le backup %s", restored)
+                db_health["recovery_notice"] = "restored_from_backup"
+                db_health["recovery_detail"] = (
+                    f"Corruption détectée pendant init_database ({e}). "
+                    f"Restaurée depuis {restored}."
+                )
+            else:
+                db_health["recovery_notice"] = "recreated_empty"
+                db_health["recovery_detail"] = (
+                    f"Corruption détectée pendant init_database ({e}). "
+                    "Aucun backup sain : base recréée vide."
+                )
+                set_maintenance(
+                    True,
+                    "Base corrompue recréée vide pendant init_database — "
+                    "restauration manuelle requise.",
+                )
             return init_database(_recovered_from_corruption=True)
         raise
