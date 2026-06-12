@@ -2,6 +2,21 @@
 
 ## 2026-06-12
 
+### perf(frontend): code splitting + splash — fini l'écran noir au chargement
+
+Le bundle initial (2,9 Mo : toutes les pages + runtime Spline) bloquait le
+premier rendu sur fond noir (`body #0b0b0b`) plusieurs secondes, à chaque
+déploiement (hash du bundle invalidé). Trois changements :
+
+- **Code splitting par route** (`React.lazy`) : seule la page de login reste
+  dans le bundle initial → 239 Ko (77 Ko gzip). HRDashboard, FormationPipeline,
+  Video, etc. deviennent des chunks à la demande.
+- **Spline différé** : le runtime 3D (~4 Mo avec physics) se charge après le
+  rendu du formulaire, son fade-in existant masque l'arrivée tardive.
+- **Splash inline dans index.html** (`#root:empty` + spinner violet) : pendant
+  le téléchargement du JS on voit un écran de chargement Le Socrate au lieu du
+  noir. Le fallback Suspense reprend le même visuel.
+
 ### fix(hr): containers audio créés avec accès public blob
 
 Les containers audio créés par « Nouvelle plateforme » étaient privés → le

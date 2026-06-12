@@ -1,7 +1,11 @@
 import { useNavigate, useSearchParams } from 'react-router-dom'
-import { useState, useEffect } from 'react'
-import Spline from '@splinetool/react-spline'
+import { lazy, Suspense, useState, useEffect } from 'react'
 import { apiUrl, setPlatformId, setPlatformName } from '../api'
+
+// Le runtime Spline pèse plusieurs Mo : chargé en différé pour que le
+// formulaire de login s'affiche immédiatement. La scène 3D a déjà un
+// fade-in (opacity 0 → 0.8 sur onLoad), l'arrivée tardive est invisible.
+const Spline = lazy(() => import('@splinetool/react-spline'))
 
 export default function Index() {
   const navigate = useNavigate()
@@ -90,11 +94,13 @@ export default function Index() {
               willChange: 'opacity, transform'
             }}
           >
-            <Spline
-              scene="https://prod.spline.design/Td1yXokrn9dRpNzQ/scene.splinecode"
-              style={{ width: '100%', height: '100%' }}
-              onLoad={() => setTimeout(() => setSplineLoaded(true), 100)}
-            />
+            <Suspense fallback={null}>
+              <Spline
+                scene="https://prod.spline.design/Td1yXokrn9dRpNzQ/scene.splinecode"
+                style={{ width: '100%', height: '100%' }}
+                onLoad={() => setTimeout(() => setSplineLoaded(true), 100)}
+              />
+            </Suspense>
           </div>
         </div>
 
