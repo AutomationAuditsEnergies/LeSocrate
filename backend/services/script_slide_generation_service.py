@@ -2567,93 +2567,10 @@ def _data_fits_layout(template: str, data: dict, variant: str) -> bool:
 
 
 def _fit_data_to_budget(template: str, data: dict, budget: dict) -> tuple[dict, bool]:
-    fitted = json.loads(json.dumps(data, ensure_ascii=False))
-    changed = False
-
-    def fit_key(obj: dict, key: str, budget_key: str | None = None):
-        nonlocal changed
-        if not isinstance(obj, dict) or key not in obj:
-            return
-        limit = int(budget.get(budget_key or key, 10_000))
-        current = obj.get(key)
-        next_value = _shorten_for_layout(current, limit)
-        if next_value != str(current or "").strip():
-            obj[key] = next_value
-            changed = True
-
-    def fit_items(items, mapping: dict[str, str]):
-        nonlocal changed
-        if not isinstance(items, list):
-            return
-        for index, item in enumerate(items):
-            if isinstance(item, dict):
-                for key, budget_key in mapping.items():
-                    fit_key(item, key, budget_key)
-            elif "value" in mapping:
-                limit = int(budget.get(mapping["value"], 10_000))
-                next_value = _shorten_for_layout(item, limit)
-                if next_value != str(item or "").strip():
-                    items[index] = next_value
-                    changed = True
-
-    if template == "program_year":
-        for key in ("title", "subtitle", "day_label"):
-            fit_key(fitted, key)
-        fit_items(fitted.get("phases"), {"title": "phase_title", "desc": "phase_desc"})
-    elif template == "day_program_7_steps":
-        for key in ("title", "subtitle", "day_label"):
-            fit_key(fitted, key)
-        fit_items(fitted.get("items"), {"value": "item_title"})
-    elif template == "chapter_opener":
-        fit_key(fitted, "title")
-        fit_key(fitted, "chapter_label")
-        fit_items(fitted.get("axes"), {"title": "axis_title", "desc": "axis_desc"})
-    elif template == "definition":
-        for key in ("term", "eyebrow", "definition"):
-            fit_key(fitted, key)
-        fit_items(fitted.get("isItems"), {"value": "tag"})
-    elif template == "comparison":
-        fit_key(fitted, "title")
-        cols = fitted.get("cols") if isinstance(fitted.get("cols"), list) else []
-        for col in cols:
-            fit_key(col, "label", "col_label")
-            fit_items(col.get("items"), {"value": "col_item"})
-    elif template == "casestudy":
-        fit_key(fitted, "title")
-        fit_key(fitted, "eyebrow")
-        fit_items(
-            fitted.get("cases"),
-            {"tag": "case_tag", "title": "case_title", "desc": "case_desc", "example": "case_example"},
-        )
-    elif template == "situations":
-        fit_key(fitted, "title")
-        fit_key(fitted, "eyebrow")
-        fit_items(fitted.get("items"), {"title": "item_title", "desc": "item_desc"})
-    elif template in {"steps", "flow"}:
-        fit_key(fitted, "title")
-        fit_key(fitted, "eyebrow")
-        fit_items(fitted.get("steps"), {"title": "step_title", "desc": "step_desc"})
-    elif template == "story":
-        for key in ("title", "narrative", "moral"):
-            fit_key(fitted, key)
-    elif template == "analogy":
-        for key in ("title", "concept", "comparison", "text"):
-            fit_key(fitted, key)
-    elif template == "framework":
-        fit_key(fitted, "title")
-        if isinstance(fitted.get("center"), dict):
-            fit_key(fitted["center"], "title", "center_title")
-        fit_items(fitted.get("segments"), {"title": "segment_title", "desc": "segment_desc"})
-    elif template in {"recap", "reprise_recap"}:
-        fit_key(fitted, "title")
-        fit_items(fitted.get("points"), {"value": "point"})
-    elif template == "quotable":
-        fit_key(fitted, "quote")
-    else:
-        for key in ("title", "text", "eyebrow"):
-            fit_key(fitted, key)
-
-    return fitted, changed
+    # Do not silently truncate final slide copy. The LLM receives strict budgets
+    # and must reformulate content upstream; if it still exceeds a budget, keep
+    # the text intact and expose the over-budget status for review/retry.
+    return json.loads(json.dumps(data, ensure_ascii=False)), False
 
 
 def _resolve_slide_layout(template: str, data: dict, requested_variant: str = "") -> tuple[str, dict, dict]:

@@ -351,7 +351,9 @@
   letter-spacing: 0;
   margin: 0;
   max-width: 100%;
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  text-wrap: balance;
 }
 .deck-chapter-left h1.deck-chapter-title--wrap {
   white-space: normal;
@@ -365,6 +367,7 @@
 }
 .deck-chapter-name {
   color: #fff;
+  overflow-wrap: anywhere;
 }
 .deck-chapter-axes {
   display: flex;
@@ -399,6 +402,8 @@
   letter-spacing: -.015em;
   text-transform: uppercase;
   color: #fff;
+  overflow-wrap: anywhere;
+  text-wrap: balance;
 }
 .deck-chapter-axis-desc {
   font-family: var(--f-body);

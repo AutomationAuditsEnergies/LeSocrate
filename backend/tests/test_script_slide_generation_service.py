@@ -124,7 +124,7 @@ class ScriptSlideGenerationServiceTest(unittest.TestCase):
         self.assertIn("reprise_recap: data=", prompt)
         self.assertNotIn('"template_type": "reflection", "visual_goal"', prompt)
 
-    def test_normalize_slide_compresses_overlong_data_to_source_layout(self):
+    def test_normalize_slide_preserves_overlong_data_for_layout_repair(self):
         block = {
             **_strict_block(1),
             "text": "Définition longue qui doit être synthétisée pour tenir dans la slide.",
@@ -151,8 +151,9 @@ class ScriptSlideGenerationServiceTest(unittest.TestCase):
         slide = slides._normalize_slide(raw, block)
 
         self.assertEqual(slide["layout_variant"], "source")
-        self.assertEqual(slide["layout_fit"]["status"], "compressed_to_source")
-        self.assertLessEqual(len(slide["data"]["definition"]), slides.SLIDE_LAYOUT_BUDGETS["definition"]["balanced"]["definition"])
+        self.assertEqual(slide["layout_fit"]["status"], "source_over_budget")
+        self.assertGreater(len(slide["data"]["definition"]), slides.SLIDE_LAYOUT_BUDGETS["definition"]["balanced"]["definition"])
+        self.assertNotIn("…", slide["data"]["definition"])
 
     def test_extract_slide_anchor_keeps_pedagogical_shape(self):
         plan = {

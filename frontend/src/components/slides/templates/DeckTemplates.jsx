@@ -12,19 +12,46 @@ const getChapterTitleFit = (chapterLabel = '', title = '') => {
   const longestWord = words.reduce((max, word) => Math.max(max, Array.from(word).length), 0);
 
   let fontSize = 76;
-  if (wordCount >= 13 || charCount >= 86 || longestWord >= 22) {
-    fontSize = 44;
-  } else if (wordCount >= 11 || charCount >= 72 || longestWord >= 18) {
-    fontSize = 48;
-  } else if (wordCount >= 9 || charCount >= 58) {
+  if (wordCount >= 13 || charCount >= 82 || longestWord >= 22) {
+    fontSize = 42;
+  } else if (wordCount >= 11 || charCount >= 68 || longestWord >= 18) {
+    fontSize = 46;
+  } else if (wordCount >= 9 || charCount >= 56) {
     fontSize = 50;
-  } else if (wordCount >= 7 || charCount >= 46) {
-    fontSize = 62;
+  } else if (wordCount >= 7 || charCount >= 42) {
+    fontSize = 60;
   }
 
   return {
     fontSize,
-    shouldWrap: wordCount >= 13 || charCount >= 86 || longestWord >= 22,
+    shouldWrap: wordCount >= 9 || charCount >= 56 || longestWord >= 18,
+  };
+};
+
+const getSourceDisplayFit = (value = '', fallback = '') => {
+  const text = String(value || fallback || '').trim();
+  const words = splitTitle(text).filter(Boolean);
+  const charCount = Array.from(text).length;
+  const longestWord = words.reduce((max, word) => Math.max(max, Array.from(word).length), 0);
+  let fontSize = 108;
+  if (charCount >= 30 || longestWord >= 18) {
+    fontSize = 66;
+  } else if (charCount >= 24 || words.length >= 4 || longestWord >= 14) {
+    fontSize = 76;
+  } else if (charCount >= 18 || words.length >= 3) {
+    fontSize = 88;
+  }
+  return {
+    '--source-title-size': `${fontSize}px`,
+  };
+};
+
+const getDefinitionFit = (word = '', definition = '') => {
+  const wordChars = Array.from(String(word || '')).length;
+  const definitionChars = Array.from(String(definition || '')).length;
+  return {
+    '--definition-word-size': `${wordChars > 24 ? 86 : wordChars > 18 ? 102 : wordChars > 13 ? 118 : 140}px`,
+    '--definition-body-size': `${definitionChars > 190 ? 30 : definitionChars > 145 ? 34 : definitionChars > 105 ? 36 : 40}px`,
   };
 };
 
@@ -535,16 +562,18 @@ export const DeckStatement = ({
 export const DeckDefinition = ({ term, title, eyebrow = 'Définition', definition, text, isItems = [], brandName }) => {
   const word = term || title || 'Définition';
   const tags = Array.isArray(isItems) ? isItems : [];
+  const definitionText = definition || text || 'Une idée centrale formulée de manière simple, mémorisable et directement utilisable.';
+  const definitionStyle = getDefinitionFit(word, definitionText);
   return (
     <SourceSlide className="s-def">
       {sourceChrome(brandName)}
       <div className="left">
         <span className="eyebrow">— {eyebrow}</span>
-        <h2 className="word">{word}</h2>
+        <h2 className="word" style={definitionStyle}>{word}</h2>
       </div>
       <div className="right">
         <div className="label">DÉFINITION DE TRAVAIL</div>
-        <p className="body">{definition || text || 'Une idée centrale formulée de manière simple, mémorisable et directement utilisable.'}</p>
+        <p className="body" style={definitionStyle}>{definitionText}</p>
         <div className="tag-row">
           {(tags.length ? tags : ['RÉPÉTABLE', 'MESURABLE', 'ACTIONNABLE']).slice(0, 4).map((item, i) => <span key={i}>{item}</span>)}
         </div>
@@ -1062,6 +1091,8 @@ export const DeckComparison = ({ title = 'Avant vs après.', cols = [], rows = [
   const right = sourceCols[1] || { label: 'Après', items: [] };
   const leftTitle = splitDisplayTitle(left.label || title, 'Avant');
   const rightTitle = splitDisplayTitle(right.label || 'Après', 'Après');
+  const leftFit = getSourceDisplayFit(left.label || title, 'Avant');
+  const rightFit = getSourceDisplayFit(right.label || 'Après', 'Après');
   const leftItems = normalizeTextList(left.items, 4);
   const rightItems = normalizeTextList(right.items, 4);
   const safeRows = sourceRows.length ? sourceRows : leftItems.map((item, i) => ({ before: item, after: rightItems[i] || 'Bonne pratique' }));
@@ -1070,7 +1101,7 @@ export const DeckComparison = ({ title = 'Avant vs après.', cols = [], rows = [
       {sourceChrome(brandName)}
       <div className="col l">
         <span className="eyebrow">— {left.label || 'Avant'}</span>
-        <h2>{leftTitle.first}<br /><span className="b">{leftTitle.rest || 'actuel.'}</span></h2>
+        <h2 style={leftFit}>{leftTitle.first}<br /><span className="b">{leftTitle.rest || 'actuel.'}</span></h2>
         <ul>
           {(safeRows.length ? safeRows : [{ before: 'Situation actuelle' }]).slice(0, 4).map((row, i) => (
             <li key={i}><span className="ic">−</span>{row.before || row.a || row.label || row.criterion}</li>
@@ -1079,7 +1110,7 @@ export const DeckComparison = ({ title = 'Avant vs après.', cols = [], rows = [
       </div>
       <div className="col r">
         <span className="eyebrow">— {right.label || 'Après'}</span>
-        <h2>{rightTitle.first}<br /><span className="accent">{rightTitle.rest || 'cible.'}</span></h2>
+        <h2 style={rightFit}>{rightTitle.first}<br /><span className="accent">{rightTitle.rest || 'cible.'}</span></h2>
         <ul>
           {(safeRows.length ? safeRows : [{ after: 'Bonne pratique' }]).slice(0, 4).map((row, i) => (
             <li key={i}><span className="ic">✓</span>{row.after || row.b || rightItems[i] || 'Bonne pratique'}</li>
