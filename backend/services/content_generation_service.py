@@ -225,6 +225,15 @@ def _fish_audio_course_workers() -> int:
     return max(1, min(workers, 7))
 
 
+def _break_audio_workers() -> int:
+    """Nombre de Q&A/pauses générés en parallèle lors d'une génération complète."""
+    try:
+        workers = int(os.getenv("BREAK_AUDIO_WORKERS", "4"))
+    except (TypeError, ValueError):
+        workers = 4
+    return max(1, min(workers, 8))
+
+
 def _fish_audio_429_retry_config() -> dict:
     try:
         max_retries = int(os.getenv("FISH_AUDIO_429_MAX_RETRIES", "4"))
@@ -12321,6 +12330,8 @@ def generate_audio_from_script(
     llm_model=None,
     fast_tts_pipeline=False,
     target_filename=None,
+    include_breaks=True,
+    parallel_breaks=False,
 ):
     """
     Génère (ou régénère) la playlist MP3 depuis le script TTS stocké en DB :
@@ -12393,7 +12404,7 @@ def generate_audio_from_script(
     started_at = time.time()
     logger.info(
         "PIPELINE_AUDIO_START formation_job_id=%s content_job_id=%s folder_id=%s platform_id=%s force_all=%s mock=%s basic_tts=%s "
-        "sync_slides=%s auto_generate_slides=%s slide_max_slides=%s slide_pace=%s llm_model=%s fast_tts_pipeline=%s target_filename=%s",
+        "sync_slides=%s auto_generate_slides=%s slide_max_slides=%s slide_pace=%s llm_model=%s fast_tts_pipeline=%s target_filename=%s include_breaks=%s parallel_breaks=%s",
         formation_job_id,
         job_id,
         folder_id,
@@ -12408,6 +12419,8 @@ def generate_audio_from_script(
         llm_model,
         bool(fast_tts_pipeline),
         target_filename,
+        bool(include_breaks),
+        bool(parallel_breaks),
     )
     if next_folder_id is None:
         next_folder_id = _find_next_folder_id(platform_id, folder_id)
@@ -12737,6 +12750,89 @@ def generate_audio_from_script(
                 "duration_ms": int((time.time() - item_started_at) * 1000),
             }
 
+    def _parallel_break_worker(item_idx, filename, duration_sec, file_type, bloc_num):
+        step = item_idx + 1
+        item_started_at = time.time()
+        try:
+            logger.info(
+                "PIPELINE_AUDIO_BREAK_PARALLEL_START formation_job_id=%s content_job_id=%s folder_id=%s item=%s/%s filename=%s type=%s bloc=%s target_sec=%s",
+                formation_job_id,
+                job_id,
+                folder_id,
+                step,
+                len(playlist_items),
+                filename,
+                file_type,
+                bloc_num,
+                duration_sec,
+            )
+            _progress(step, len(playlist_items), f"{filename} — génération parallèle {file_type}...")
+            final_bytes, break_mode = _build_contextual_break_audio(
+                filename=filename,
+                duration_sec=duration_sec,
+                file_type=file_type,
+                bloc_num=bloc_num,
+                item_idx=item_idx,
+                playlist_items=playlist_items,
+                blocs_by_number=blocs_by_number,
+                mock=mock,
+                basic_tts=basic_tts,
+                llm_model=llm_model,
+                on_progress=lambda msg: _progress(step, len(playlist_items), msg),
+                use_runtime_consumed_text=runtime_fit_enabled,
+                break_overrides=saved_script_plan.get("break_overrides"),
+            )
+            try:
+                final_duration = _mp3_duration_seconds_no_ffprobe(final_bytes)
+            except Exception:
+                try:
+                    final_duration = _measure_duration_ms_safe(final_bytes) / 1000
+                except Exception:
+                    final_duration = (
+                        duration_sec
+                        if break_mode == "audioqapause_fallback"
+                        else len(final_bytes) / 6000
+                    )
+            _assert_audio_duration_within_slot(filename, final_duration, duration_sec)
+            upload_blob(CONTAINER_AUDIOS, f"{azure_prefix}{filename}", final_bytes)
+            logger.info(
+                "PIPELINE_AUDIO_BREAK_PARALLEL_DONE formation_job_id=%s content_job_id=%s folder_id=%s filename=%s type=%s mode=%s final_duration=%.1f duration_ms=%s",
+                formation_job_id,
+                job_id,
+                folder_id,
+                filename,
+                file_type,
+                break_mode,
+                final_duration,
+                int((time.time() - item_started_at) * 1000),
+            )
+            return {
+                "item_idx": item_idx,
+                "status": "generated",
+                "filename": filename,
+                "file_type": file_type,
+                "break_mode": break_mode,
+                "final_duration": final_duration,
+                "duration_ms": int((time.time() - item_started_at) * 1000),
+            }
+        except Exception as exc:
+            logger.exception(
+                "PIPELINE_AUDIO_BREAK_PARALLEL_FAILED formation_job_id=%s content_job_id=%s folder_id=%s filename=%s type=%s",
+                formation_job_id,
+                job_id,
+                folder_id,
+                filename,
+                file_type,
+            )
+            return {
+                "item_idx": item_idx,
+                "status": "error",
+                "filename": filename,
+                "file_type": file_type,
+                "error": str(exc),
+                "duration_ms": int((time.time() - item_started_at) * 1000),
+            }
+
     parallel_fish_course_results = {}
     fish_course_workers = _fish_audio_course_workers()
     parallel_fish_courses_enabled = (
@@ -12779,6 +12875,47 @@ def generate_audio_from_script(
         else:
             parallel_fish_courses_enabled = False
 
+    parallel_break_results = {}
+    break_workers = _break_audio_workers()
+    parallel_breaks_enabled = (
+        bool(parallel_breaks)
+        and include_breaks
+        and force_all
+        and not mock
+        and not target_filename
+        and break_workers > 1
+    )
+    if parallel_breaks_enabled:
+        break_items = [
+            (idx, filename, duration_sec, file_type, bloc_num)
+            for idx, (filename, duration_sec, file_type, bloc_num) in enumerate(playlist_items)
+            if file_type != "cours"
+        ]
+        if len(break_items) > 1:
+            import eventlet as _ev
+            workers = min(break_workers, len(break_items))
+            logger.info(
+                "PIPELINE_AUDIO_PARALLEL_BREAKS formation_job_id=%s content_job_id=%s folder_id=%s breaks=%s workers=%s",
+                formation_job_id,
+                job_id,
+                folder_id,
+                len(break_items),
+                workers,
+            )
+            _progress(
+                0,
+                len(playlist_items),
+                f"Q&A/pauses — génération parallèle de {len(break_items)} fichiers ({workers} workers)...",
+            )
+            pool = _ev.GreenPool(size=workers)
+            pile = _ev.GreenPile(pool)
+            for args in break_items:
+                pile.spawn(_parallel_break_worker, *args)
+            for result in pile:
+                parallel_break_results[result["item_idx"]] = result
+        else:
+            parallel_breaks_enabled = False
+
     for item_idx, (filename, duration_sec, file_type, bloc_num) in enumerate(playlist_items):
         if target_filename and filename != target_filename:
             continue
@@ -12799,6 +12936,11 @@ def generate_audio_from_script(
         )
 
         if file_type != "cours":
+            if not include_breaks:
+                logger.info(f"   ⏭️ {filename}: break ignoré (génération cours uniquement)")
+                _progress(step, len(playlist_items), f"{filename} — ignoré")
+                skipped.append(filename)
+                continue
             if mock:
                 logger.info(f"   🧪 [MOCK] {filename}: skip Q&A/pause contextuel")
                 logger.info(
@@ -12823,6 +12965,19 @@ def generate_audio_from_script(
                     int((time.time() - item_started_at) * 1000),
                 )
                 skipped.append(filename)
+                continue
+
+            parallel_break_result = parallel_break_results.get(item_idx)
+            if parallel_break_result:
+                if parallel_break_result.get("status") == "error":
+                    raise RuntimeError(
+                        f"Génération parallèle échouée pour {filename}: "
+                        f"{parallel_break_result.get('error') or 'erreur inconnue'}"
+                    )
+                break_mode = parallel_break_result.get("break_mode") or "parallel_break"
+                final_duration = float(parallel_break_result.get("final_duration") or 0.0)
+                _progress(step, len(playlist_items), f"{filename} — terminé ({break_mode}, {final_duration:.1f}s)")
+                generated.append(filename)
                 continue
 
             _progress(step, len(playlist_items), f"{filename} — génération {file_type} contextuel...")

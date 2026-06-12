@@ -145,6 +145,11 @@ export default function HRDashboard() {
     }
   }
 
+  const handleAudiosPublished = (platformId) => {
+    fetchAudios(platformId)
+    fetchPlatforms(platformId)
+  }
+
   useEffect(() => {
     fetchPlatforms()
   }, [])
@@ -826,6 +831,7 @@ export default function HRDashboard() {
           platformId={selectedCoursPlatform.id}
           platformName={selectedCoursPlatform.name}
           onClose={() => setShowCoursFoldersModal(false)}
+          onAudiosPublished={handleAudiosPublished}
         />
       )}
 

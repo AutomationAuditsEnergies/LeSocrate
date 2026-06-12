@@ -72,7 +72,7 @@ const mergeCourseBlocsForScriptModal = (generated = [], planned = []) => {
 }
 
 // ─── Component ───────────────────────────────────────────────────────────────
-export default function CoursFoldersModal({ platformId, platformName, onClose }) {
+export default function CoursFoldersModal({ platformId, platformName, onClose, onAudiosPublished }) {
   const [view, setView] = useState('folders') // 'folders' | 'documents'
   const [folders, setFolders] = useState([])
   const [documents, setDocuments] = useState([])
@@ -1249,8 +1249,10 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
         if (data.status !== 'running' && playlistPollingRef.current) {
           clearInterval(playlistPollingRef.current)
           playlistPollingRef.current = null
-          // Rafraîchir les audios générés une fois la pipeline terminée
-          if (data.status === 'completed') fetchGeneratedAudios(folderId)
+          if (data.status === 'completed') {
+            fetchGeneratedAudios(folderId)
+            onAudiosPublished?.(platformId)
+          }
         }
       }
     } catch (e) {
@@ -1258,7 +1260,14 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
     }
   }
 
-  const handleGeneratePlaylist = async ({ mock = false, scriptMock = false, forceAll = false, voiceType = playlistVoiceType } = {}) => {
+  const handleGeneratePlaylist = async ({
+    mock = false,
+    scriptMock = false,
+    forceAll = false,
+    voiceType = playlistVoiceType,
+    includeBreaks = true,
+    parallelBreaks = false,
+  } = {}) => {
     if (!selectedFolder) return
     const effectiveVoiceType = mock || scriptMock ? 'mock' : voiceType
     const syncSlides = effectiveVoiceType !== 'mock'
@@ -1274,6 +1283,8 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
           mock,
           script_mock: scriptMock,
           force_all: forceAll,
+          include_breaks: includeBreaks,
+          parallel_breaks: parallelBreaks,
           voice_type: effectiveVoiceType,
           sync_slides: syncSlides,
           auto_generate_slides: syncSlides,
@@ -2221,20 +2232,45 @@ export default function CoursFoldersModal({ platformId, platformName, onClose })
 	                    <option key={option.value} value={option.value}>{option.label}</option>
 	                  ))}
 	                </select>
-	                <button
-	                  type="button"
-	                  onClick={() => handleGeneratePlaylist({ voiceType: playlistVoiceType, forceAll: true })}
-	                  disabled={playlistRunning || !canGeneratePlaylistAudio}
-	                  className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition-opacity disabled:cursor-not-allowed disabled:opacity-50"
-	                  style={{
-	                    backgroundColor: canGeneratePlaylistAudio ? colors.text : colors.textMuted,
-	                    color: colors.cardBg,
-	                  }}
-	                  title={playlistActionLabel}
-	                >
-	                  <Icon name={selectedPlaylistVoice.icon} style={{ fontSize: '14px' }} />
-	                  Générer les 7 cours du dossier
-	                </button>
+                  <button
+                    type="button"
+                    onClick={() => handleGeneratePlaylist({
+                      voiceType: playlistVoiceType,
+                      forceAll: true,
+                      includeBreaks: false,
+                      parallelBreaks: false,
+                    })}
+                    disabled={playlistRunning || !canGeneratePlaylistAudio}
+                    className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition-opacity disabled:cursor-not-allowed disabled:opacity-50"
+                    style={{
+                      border: `1px solid ${colors.border}`,
+                      backgroundColor: colors.cardBg,
+                      color: canGeneratePlaylistAudio ? colors.textSecondary : colors.textMuted,
+                    }}
+                    title="Générer uniquement les 7 cours audio"
+                  >
+                    <Icon name={selectedPlaylistVoice.icon} style={{ fontSize: '14px' }} />
+                    Générer les 7 cours
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleGeneratePlaylist({
+                      voiceType: playlistVoiceType,
+                      forceAll: true,
+                      includeBreaks: true,
+                      parallelBreaks: true,
+                    })}
+                    disabled={playlistRunning || !canGeneratePlaylistAudio}
+                    className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition-opacity disabled:cursor-not-allowed disabled:opacity-50"
+                    style={{
+                      backgroundColor: canGeneratePlaylistAudio ? colors.text : colors.textMuted,
+                      color: colors.cardBg,
+                    }}
+                    title={`${playlistActionLabel} + Q&A et pauses en parallèle`}
+                  >
+                    <Icon name="bolt" style={{ fontSize: '14px' }} />
+                    Générer tout
+                  </button>
 	              </div>
               <button
                 onClick={closeContentScriptModal}

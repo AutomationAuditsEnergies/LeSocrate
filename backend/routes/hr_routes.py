@@ -3259,6 +3259,8 @@ def create_hr_blueprint(socketio):
             playlist_mock = req_body.get("mock", False)   # mock mode classique (sans script)
             script_mock = req_body.get("script_mock", False)  # mock mode script (silence au lieu TTS)
             force_all = req_body.get("force_all", False)
+            include_breaks = bool(req_body.get("include_breaks", True))
+            parallel_breaks = bool(req_body.get("parallel_breaks", False))
             sync_slides = bool(req_body.get("sync_slides", False))
             auto_generate_slides = bool(req_body.get("auto_generate_slides", False))
             slide_max_slides = int(req_body.get("max_slides") or req_body.get("slide_max_slides") or 60)
@@ -3350,13 +3352,18 @@ def create_hr_blueprint(socketio):
                             auto_generate_slides=auto_generate_slides,
                             slide_max_slides=slide_max_slides,
                             slide_pace=slide_pace,
+                            include_breaks=include_breaks,
+                            parallel_breaks=parallel_breaks,
                         )
                         result = {
                             "status": "completed",
                             "generated": result_audio["generated"],
                             "skipped": result_audio["skipped"],
+                            "files": result_audio.get("files", []),
                             "source": "script",
                             "voice_type": voice_type,
+                            "include_breaks": include_breaks,
+                            "parallel_breaks": parallel_breaks,
                         }
                         module_finalize = _finalize_pipeline_module_if_all_course_audios_ready(folder_id, voice_type)
                         if module_finalize:
@@ -3370,12 +3377,16 @@ def create_hr_blueprint(socketio):
                         )
                         result["voice_type"] = voice_type
                     try:
-                        result["publish"] = _publish_playlist_audio_to_platform(platform_id, folder_id)
+                        publish_filenames = None
+                        if has_script and not playlist_mock and not include_breaks:
+                            publish_filenames = result.get("files") or []
+                        result["publish"] = _publish_playlist_audio_to_platform(platform_id, folder_id, publish_filenames)
                     except Exception as publish_error:
                         logger.error(f"❌ Publication playlist P{platform_id}/F{folder_id} échouée: {publish_error}")
                         result["publish"] = {"published": [], "publish_errors": [{"error": str(publish_error)}]}
                     if has_script and not playlist_mock:
-                        done_msg = f"✅ Terminé ({voice_label}) : {result['generated']} bloc(s) régénéré(s), {result.get('skipped', 0)} conservé(s)"
+                        scope_label = "19 audios" if include_breaks else "7 cours"
+                        done_msg = f"✅ Terminé ({voice_label}, {scope_label}) : {result['generated']} généré(s), {result.get('skipped', 0)} conservé(s)"
                     else:
                         done_msg = f"✅ Terminé ({voice_label}) : {result.get('generated', '?')} fichiers générés"
                     _playlist_jobs[folder_id].update({
