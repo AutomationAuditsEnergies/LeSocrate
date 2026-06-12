@@ -1,5 +1,5 @@
 import { useNavigate, useSearchParams } from 'react-router-dom'
-import { lazy, Suspense, useState, useEffect } from 'react'
+import { Component, lazy, Suspense, useState, useEffect } from 'react'
 import { apiUrl, setPlatformId, setPlatformName } from '../api'
 
 // Le runtime Spline pèse plusieurs Mo : chargé en différé pour que le
@@ -7,10 +7,46 @@ import { apiUrl, setPlatformId, setPlatformName } from '../api'
 // fade-in (opacity 0 → 0.8 sur onLoad), l'arrivée tardive est invisible.
 const Spline = lazy(() => import('@splinetool/react-spline'))
 
-export default function Index() {
+function canUseWebGL() {
+  try {
+    const canvas = document.createElement('canvas')
+    const gl =
+      window.WebGLRenderingContext &&
+      (canvas.getContext('webgl2') || canvas.getContext('webgl') || canvas.getContext('experimental-webgl'))
+    if (!gl) return false
+    gl.getExtension('WEBGL_lose_context')?.loseContext()
+    return true
+  } catch {
+    return false
+  }
+}
+
+class SplineErrorBoundary extends Component {
+  constructor(props) {
+    super(props)
+    this.state = { failed: false }
+  }
+
+  static getDerivedStateFromError() {
+    return { failed: true }
+  }
+
+  componentDidCatch(error) {
+    console.warn('Spline désactivé:', error)
+  }
+
+  render() {
+    if (this.state.failed) return null
+    return this.props.children
+  }
+}
+
+export default function Index({ preloadCourseRoutes }) {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
   const [splineLoaded, setSplineLoaded] = useState(false)
+  const [splineEnabled, setSplineEnabled] = useState(false)
+  const [submitting, setSubmitting] = useState(false)
 
   useEffect(() => {
     document.body.style.overflow = 'hidden'
@@ -31,8 +67,34 @@ export default function Index() {
     }
   }, [searchParams])
 
+  useEffect(() => {
+    const preload = () => {
+      preloadCourseRoutes?.().catch(() => {})
+    }
+    if ('requestIdleCallback' in window) {
+      const idleId = window.requestIdleCallback(preload, { timeout: 1500 })
+      return () => window.cancelIdleCallback(idleId)
+    }
+    const timeoutId = window.setTimeout(preload, 800)
+    return () => window.clearTimeout(timeoutId)
+  }, [preloadCourseRoutes])
+
+  useEffect(() => {
+    const enableSpline = () => {
+      if (canUseWebGL()) setSplineEnabled(true)
+    }
+    if ('requestIdleCallback' in window) {
+      const idleId = window.requestIdleCallback(enableSpline, { timeout: 1800 })
+      return () => window.cancelIdleCallback(idleId)
+    }
+    const timeoutId = window.setTimeout(enableSpline, 1000)
+    return () => window.clearTimeout(timeoutId)
+  }, [])
+
   const handleFormSubmit = async (event) => {
     event.preventDefault()
+    if (submitting) return
+    setSubmitting(true)
 
     const formData = new FormData(event.target)
     const nom = formData.get('nom')
@@ -55,6 +117,7 @@ export default function Index() {
         if (data.token) localStorage.setItem('auth_token', data.token)
         // Transmettre le platform_id dans l'URL pour que /video sache quelle plateforme utiliser
         const pId = localStorage.getItem('platform_id')
+        await preloadCourseRoutes?.().catch(() => {})
         navigate(pId && pId !== '1' ? `/video?p=${pId}` : '/video')
       } else {
         alert(data.error || 'Erreur lors de la connexion')
@@ -62,6 +125,8 @@ export default function Index() {
     } catch (error) {
       console.error('Erreur connexion:', error)
       alert('Impossible de se connecter au serveur')
+    } finally {
+      setSubmitting(false)
     }
   }
 
@@ -97,13 +162,17 @@ export default function Index() {
               willChange: 'opacity, transform'
             }}
           >
-            <Suspense fallback={null}>
-              <Spline
-                scene="https://prod.spline.design/Td1yXokrn9dRpNzQ/scene.splinecode"
-                style={{ width: '100%', height: '100%' }}
-                onLoad={() => setTimeout(() => setSplineLoaded(true), 100)}
-              />
-            </Suspense>
+            {splineEnabled && (
+              <SplineErrorBoundary>
+                <Suspense fallback={null}>
+                  <Spline
+                    scene="https://prod.spline.design/Td1yXokrn9dRpNzQ/scene.splinecode"
+                    style={{ width: '100%', height: '100%' }}
+                    onLoad={() => setTimeout(() => setSplineLoaded(true), 100)}
+                  />
+                </Suspense>
+              </SplineErrorBoundary>
+            )}
           </div>
         </div>
 
@@ -142,9 +211,10 @@ export default function Index() {
             </div>
             <button
               type="submit"
+              disabled={submitting}
               className="w-full bg-gradient-to-r from-pink-500 to-fuchsia-600 text-white font-semibold py-2 rounded-full hover:opacity-90 transition duration-200"
             >
-              Entrer au cours
+              {submitting ? 'Connexion...' : 'Entrer au cours'}
             </button>
           </form>
           <p className="mt-6 text-center text-sm text-gray-500">

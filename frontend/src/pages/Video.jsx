@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import ChatPanel from '../components/ChatPanel.jsx'
-import { apiFetch, getPlatformName, setPlatformId } from '../api'
+import { apiFetch, getPlatformId, getPlatformName, setPlatformId } from '../api'
 import { SlidePreviewFrame } from '../components/slides/PipelineSlidePreview.jsx'
 import {
   audioBasename,
@@ -47,9 +47,40 @@ function getBreakSlideCopy(type) {
   }
 }
 
+function CourseStatusScreen({ tone = 'loading', title, message }) {
+  const isError = tone === 'error'
+  const isDone = tone === 'done'
+
+  return (
+    <div
+      className="flex h-screen w-full items-center justify-center px-6"
+      style={{ backgroundColor: '#F8F7F5', fontFamily: 'Inter, sans-serif' }}
+    >
+      <div className="w-full max-w-sm rounded-2xl border border-gray-200 bg-white px-7 py-8 text-center shadow-sm">
+        <div
+          className="mx-auto mb-5 flex h-12 w-12 items-center justify-center rounded-full"
+          style={{
+            backgroundColor: isError ? '#fee2e2' : isDone ? '#ecfdf5' : '#f3e8ff',
+            color: isError ? '#dc2626' : isDone ? '#059669' : '#7c3aed',
+          }}
+        >
+          {tone === 'loading' ? (
+            <div className="h-6 w-6 animate-spin rounded-full border-2 border-violet-200 border-t-violet-600" />
+          ) : (
+            <span className="material-icons text-xl">{isError ? 'warning' : 'check'}</span>
+          )}
+        </div>
+        <h1 className="text-lg font-semibold text-gray-900">{title}</h1>
+        {message && <p className="mt-2 text-sm leading-6 text-gray-500">{message}</p>}
+      </div>
+    </div>
+  )
+}
+
 export default function Video() {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
+  const pParam = searchParams.get('p')
   const [chatOpen, setChatOpen] = useState(false)
   const [muted, setMuted] = useState(false)
   const [audioInfo, setAudioInfo] = useState(null)
@@ -66,11 +97,10 @@ export default function Video() {
   // (React ne met pas à jour muted sur <audio> après le rendu initial)
   // Lire le platform_id depuis l'URL (?p=2) et le stocker
   useEffect(() => {
-    const pParam = searchParams.get('p')
     if (pParam) {
       setPlatformId(pParam)
     }
-  }, [searchParams])
+  }, [pParam])
 
   useEffect(() => {
     document.body.style.overflow = 'hidden'
@@ -134,12 +164,14 @@ export default function Video() {
       const data = await response.json()
 
       if (!data.authenticated) {
-        navigate('/')
+        const platformId = pParam || getPlatformId()
+        navigate(platformId && platformId !== '1' ? `/?p=${platformId}` : '/', { replace: true })
         return
       }
 
       if (data.status === 'waiting') {
-        navigate('/attente')
+        const platformId = pParam || getPlatformId()
+        navigate(platformId && platformId !== '1' ? `/attente?p=${platformId}` : '/attente', { replace: true })
         return
       }
 
@@ -174,7 +206,7 @@ export default function Video() {
       setError('Impossible de charger le cours')
       setLoading(false)
     }
-  }, [navigate])
+  }, [navigate, pParam])
 
   // Charger les informations audio depuis l'API
   useEffect(() => {
@@ -341,27 +373,32 @@ export default function Video() {
   // Afficher le chargement
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-screen bg-gray-900">
-        <div className="text-white text-xl">Chargement du cours...</div>
-      </div>
+      <CourseStatusScreen
+        title="Chargement du cours..."
+        message="Préparation de la session en cours."
+      />
     )
   }
 
   // Afficher une erreur
   if (error) {
     return (
-      <div className="flex items-center justify-center h-screen bg-gray-900">
-        <div className="text-red-500 text-xl">{error}</div>
-      </div>
+      <CourseStatusScreen
+        tone="error"
+        title={error}
+        message="Réessayez dans quelques instants ou revenez à l'accueil."
+      />
     )
   }
 
   // Cours terminé
   if (audioInfo?.status === 'finished') {
     return (
-      <div className="flex items-center justify-center h-screen bg-gray-900">
-        <div className="text-white text-2xl">Le cours est terminé</div>
-      </div>
+      <CourseStatusScreen
+        tone="done"
+        title="Le cours est terminé"
+        message="Merci pour votre participation."
+      />
     )
   }
 

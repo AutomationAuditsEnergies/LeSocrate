@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
-import { apiFetch } from '../api'
+import { useNavigate, useSearchParams } from 'react-router-dom'
+import { apiFetch, getPlatformId, setPlatformId } from '../api'
 
 export default function Attente() {
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
+  const pParam = searchParams.get('p')
   const [timeLeft, setTimeLeft] = useState(null)
-  const [heureDebut, setHeureDebut] = useState(null)
+  const hasCountdownStarted = timeLeft !== null
 
   const countdown = useMemo(() => {
     const t = timeLeft ?? 0
@@ -23,15 +25,17 @@ export default function Attente() {
 
   // Récupérer le temps restant réel depuis le backend
   useEffect(() => {
+    if (pParam) setPlatformId(pParam)
+
     const fetchStatus = async () => {
       try {
         const res = await apiFetch('/api/cours-status')
         const data = await res.json()
         if (data.status === 'waiting' && data.temps_restant > 0) {
           setTimeLeft(Math.ceil(data.temps_restant))
-          if (data.heure_debut) setHeureDebut(data.heure_debut)
         } else if (data.status === 'playing') {
-          window.location.assign('/video')
+          const platformId = pParam || getPlatformId()
+          navigate(platformId && platformId !== '1' ? `/video?p=${platformId}` : '/video', { replace: true })
           return
         } else {
           setTimeLeft(0)
@@ -45,16 +49,16 @@ export default function Attente() {
     // Re-sync avec le backend toutes les 30s pour éviter la dérive
     const syncInterval = setInterval(fetchStatus, 30000)
     return () => clearInterval(syncInterval)
-  }, [])
+  }, [navigate, pParam])
 
   // Décrémenter localement chaque seconde
   useEffect(() => {
-    if (timeLeft === null) return
+    if (!hasCountdownStarted) return
     const interval = setInterval(() => {
       setTimeLeft((prev) => (prev > 0 ? prev - 1 : 0))
     }, 1000)
     return () => clearInterval(interval)
-  }, [timeLeft !== null])
+  }, [hasCountdownStarted])
 
   return (
     <div

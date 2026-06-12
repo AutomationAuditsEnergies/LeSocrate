@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { apiFetch, apiUrl, setPlatformId, setPlatformName } from '../api'
 
-export default function LoginAdmin() {
+export default function LoginAdmin({ preloadAdminRoute }) {
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
@@ -24,6 +24,18 @@ export default function LoginAdmin() {
         .catch(() => {})
     }
   }, [pParam])
+
+  useEffect(() => {
+    const preload = () => {
+      preloadAdminRoute?.().catch(() => {})
+    }
+    if ('requestIdleCallback' in window) {
+      const idleId = window.requestIdleCallback(preload, { timeout: 1500 })
+      return () => window.cancelIdleCallback(idleId)
+    }
+    const timeoutId = window.setTimeout(preload, 800)
+    return () => window.clearTimeout(timeoutId)
+  }, [preloadAdminRoute])
 
   const handleSubmit = async (e) => {
     e.preventDefault()
@@ -50,6 +62,7 @@ export default function LoginAdmin() {
       if (response.ok && data.success) {
         // Propager ?p= vers /admin pour qu'un refresh en navigation privée
         // (localStorage volatile) puisse restaurer le bon tenant.
+        await preloadAdminRoute?.().catch(() => {})
         navigate(pParam ? `/admin?p=${pParam}` : '/admin')
       } else {
         setError(data.error || `Erreur serveur (${response.status})`)
