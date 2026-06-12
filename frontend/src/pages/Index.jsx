@@ -70,7 +70,10 @@ export default function Index() {
     <div
       className="min-h-screen px-4 lg:px-8 relative flex flex-col overflow-hidden"
       style={{
-        backgroundImage: 'url("/static/images/rocket.jpg")',
+        // Dégradé peint immédiatement sous l'image : pas de flash noir
+        // pendant le téléchargement/décodage de rocket.jpg (4K).
+        backgroundImage: 'url("/static/images/rocket.jpg"), linear-gradient(160deg, #0f172a 0%, #1e1b4b 55%, #312e81 100%)',
+        backgroundColor: '#1e1b4b',
         backgroundSize: 'cover',
         backgroundPosition: 'center',
         fontFamily: 'Poppins, sans-serif',
