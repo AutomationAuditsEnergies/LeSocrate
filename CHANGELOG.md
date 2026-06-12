@@ -2,6 +2,15 @@
 
 ## 2026-06-12
 
+### fix(hr): containers audio créés avec accès public blob
+
+Les containers audio créés par « Nouvelle plateforme » étaient privés → le
+lecteur recevait 404 sur tous les MP3 (il streame anonymement via FrontDoor,
+comme formationaudio-dev/p2/p3/p4 qui sont en accès `blob`). Création désormais
+avec `public_access="blob"` pour le container playlist uniquement (archives et
+PDFs restent privés, accès SAS). Les 35 containers existants (p5–p41) ont été
+passés en accès public via az CLI.
+
 ### fix(playlist): URLs audio par plateforme depuis platform_config
 
 La playlist du lecteur construisait toutes ses URLs depuis `AZURE_AUDIO_BASE_URL`

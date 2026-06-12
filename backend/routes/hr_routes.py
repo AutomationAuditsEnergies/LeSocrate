@@ -808,12 +808,25 @@ def create_hr_blueprint(socketio):
                 if cs:
                     bsc = BlobServiceClient.from_connection_string(cs)
                     for cname in containers:
+                        # Le container playlist doit être lisible anonymement :
+                        # le lecteur streame les MP3 via FrontDoor sans SAS
+                        # (même convention que formationaudio-dev/p2/p3/p4).
+                        # Archives et PDFs restent privés (accès via SAS).
+                        public_access = "blob" if cname == audio_container else None
                         try:
-                            bsc.create_container(cname)
+                            bsc.create_container(cname, public_access=public_access)
                             containers_created.append(cname)
-                            logger.info(f"✅ Container Azure créé : {cname}")
+                            logger.info(f"✅ Container Azure créé : {cname} (public={public_access or 'private'})")
                         except ResourceExistsError:
                             containers_created.append(f"{cname} (existait déjà)")
+                            if public_access:
+                                try:
+                                    bsc.get_container_client(cname).set_container_access_policy(
+                                        signed_identifiers={}, public_access=public_access
+                                    )
+                                    logger.info(f"✅ Accès public '{public_access}' appliqué au container existant : {cname}")
+                                except Exception as e:
+                                    logger.warning(f"⚠️ Impossible d'appliquer l'accès public sur {cname}: {e}")
                         except Exception as e:
                             logger.warning(f"⚠️ Erreur création container {cname}: {e}")
 
