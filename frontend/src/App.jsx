@@ -1,4 +1,4 @@
-import { lazy, Suspense, useState, useEffect } from 'react'
+import { Component, lazy, Suspense, useState, useEffect } from 'react'
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
 import { apiUrl } from './api'
 import Index from './pages/Index.jsx'
@@ -29,6 +29,14 @@ function preloadCourseRoutes() {
   return Promise.all([loadVideoPage(), loadAttentePage()])
 }
 
+function preloadAttenteRoute() {
+  return loadAttentePage()
+}
+
+function preloadVideoRoute() {
+  return loadVideoPage()
+}
+
 // Fallback de route volontairement clair : s'il apparaît encore sur une page
 // non préchargée, il ne révèle plus le fond noir global.
 function RouteFallback() {
@@ -37,10 +45,14 @@ function RouteFallback() {
       style={{
         position: 'fixed',
         inset: 0,
-        background: '#F8F7F5',
+        background: 'linear-gradient(160deg, #0f172a 0%, #1e1b4b 55%, #312e81 100%)',
         display: 'flex',
+        flexDirection: 'column',
+        gap: 16,
         alignItems: 'center',
         justifyContent: 'center',
+        color: '#e5e7eb',
+        fontFamily: 'Inter, system-ui, sans-serif',
       }}
     >
       <div
@@ -48,13 +60,85 @@ function RouteFallback() {
           width: 52,
           height: 52,
           borderRadius: '50%',
-          border: '3px solid rgba(15, 23, 42, 0.12)',
-          borderTopColor: '#8B5CF6',
+          border: '3px solid rgba(255, 255, 255, 0.2)',
+          borderTopColor: '#ffffff',
           animation: 'socrate-spin 0.8s linear infinite',
         }}
       />
+      <div style={{ fontSize: 13, fontWeight: 700, letterSpacing: '0.28em', textTransform: 'uppercase' }}>
+        Chargement
+      </div>
     </div>
   )
+}
+
+class AppErrorBoundary extends Component {
+  constructor(props) {
+    super(props)
+    this.state = { error: null }
+  }
+
+  static getDerivedStateFromError(error) {
+    return { error }
+  }
+
+  componentDidCatch(error, info) {
+    console.error('Erreur interface apprenant:', error, info)
+  }
+
+  render() {
+    if (!this.state.error) return this.props.children
+
+    return (
+      <div
+        style={{
+          minHeight: '100vh',
+          background: '#F8F7F5',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          padding: 24,
+          fontFamily: 'Inter, system-ui, sans-serif',
+        }}
+      >
+        <div
+          style={{
+            width: '100%',
+            maxWidth: 440,
+            borderRadius: 20,
+            background: '#fff',
+            border: '1px solid #e5e7eb',
+            boxShadow: '0 18px 45px rgba(15, 23, 42, 0.12)',
+            padding: 28,
+            textAlign: 'center',
+          }}
+        >
+          <h1 style={{ margin: 0, color: '#111827', fontSize: 22, fontWeight: 700 }}>
+            Impossible d'afficher cette page
+          </h1>
+          <p style={{ margin: '12px 0 0', color: '#6b7280', lineHeight: 1.6 }}>
+            Rechargez la page. Si le problème revient, ouvrez la console et gardez le message d'erreur.
+          </p>
+          <button
+            type="button"
+            onClick={() => window.location.reload()}
+            style={{
+              marginTop: 22,
+              border: 0,
+              borderRadius: 12,
+              background: '#8B5CF6',
+              color: '#fff',
+              fontWeight: 700,
+              padding: '12px 18px',
+              cursor: 'pointer',
+            }}
+          >
+            Recharger
+          </button>
+        </div>
+      </div>
+    )
+  }
 }
 
 function ProtectedHRRoute({ children }) {
@@ -74,10 +158,20 @@ function ProtectedHRRoute({ children }) {
 
 export default function App() {
   return (
-    <BrowserRouter>
-      <Suspense fallback={<RouteFallback />}>
-        <Routes>
-          <Route path="/" element={<Index preloadCourseRoutes={preloadCourseRoutes} />} />
+    <AppErrorBoundary>
+      <BrowserRouter>
+        <Suspense fallback={<RouteFallback />}>
+          <Routes>
+          <Route
+            path="/"
+            element={
+              <Index
+                preloadCourseRoutes={preloadCourseRoutes}
+                preloadAttenteRoute={preloadAttenteRoute}
+                preloadVideoRoute={preloadVideoRoute}
+              />
+            }
+          />
           <Route path="/attente" element={<Attente />} />
           <Route path="/video" element={<Video />} />
           <Route path="/login-admin" element={<LoginAdmin preloadAdminRoute={loadAdminPage} />} />
@@ -138,8 +232,9 @@ export default function App() {
             }
           />
           <Route path="*" element={<Navigate to="/" replace />} />
-        </Routes>
-      </Suspense>
-    </BrowserRouter>
+          </Routes>
+        </Suspense>
+      </BrowserRouter>
+    </AppErrorBoundary>
   )
 }

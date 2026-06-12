@@ -1,6 +1,6 @@
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { Component, lazy, Suspense, useState, useEffect } from 'react'
-import { apiUrl, setPlatformId, setPlatformName } from '../api'
+import { apiFetch, apiUrl, setPlatformId, setPlatformName } from '../api'
 
 // Le runtime Spline pèse plusieurs Mo : chargé en différé pour que le
 // formulaire de login s'affiche immédiatement. La scène 3D a déjà un
@@ -41,7 +41,7 @@ class SplineErrorBoundary extends Component {
   }
 }
 
-export default function Index({ preloadCourseRoutes }) {
+export default function Index({ preloadCourseRoutes, preloadAttenteRoute, preloadVideoRoute }) {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
   const [splineLoaded, setSplineLoaded] = useState(false)
@@ -117,8 +117,27 @@ export default function Index({ preloadCourseRoutes }) {
         if (data.token) localStorage.setItem('auth_token', data.token)
         // Transmettre le platform_id dans l'URL pour que /video sache quelle plateforme utiliser
         const pId = localStorage.getItem('platform_id')
-        await preloadCourseRoutes?.().catch(() => {})
-        navigate(pId && pId !== '1' ? `/video?p=${pId}` : '/video')
+        const withPlatform = (path) => (pId && pId !== '1' ? `${path}?p=${pId}` : path)
+
+        try {
+          const statusResponse = await apiFetch('/api/video/status')
+          const statusData = await statusResponse.json().catch(() => ({}))
+          if (statusData.status === 'waiting') {
+            await preloadAttenteRoute?.().catch(() => {})
+            navigate(withPlatform('/attente'), { replace: true })
+            return
+          }
+          if (statusData.status === 'playing' || statusData.status === 'finished') {
+            await preloadVideoRoute?.().catch(() => {})
+            navigate(withPlatform('/video'), { replace: true })
+            return
+          }
+        } catch (statusError) {
+          console.warn('Statut cours indisponible après login:', statusError)
+        }
+
+        await preloadVideoRoute?.().catch(() => {})
+        navigate(withPlatform('/video'), { replace: true })
       } else {
         alert(data.error || 'Erreur lors de la connexion')
       }
