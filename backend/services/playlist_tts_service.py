@@ -130,7 +130,7 @@ def _pad_audio_to_duration(audio_bytes, target_duration_seconds, truncate_overfl
 def _build_pause_audio(intro_text, outro_text, target_duration_seconds, convert_func=None):
     """
     Construit un audio de pause/Q&A :
-    intro TTS optionnelle + silence + outro TTS, le tout padded à la durée cible.
+    intro TTS optionnelle + silence + outro TTS + 2s de silence final.
     """
     tts = convert_func or convert_to_speech
     intro_text = (intro_text or "").strip()
@@ -146,16 +146,19 @@ def _build_pause_audio(intro_text, outro_text, target_duration_seconds, convert_
     if outro_text:
         outro_audio = AudioSegment.from_mp3(io.BytesIO(tts(outro_text)))
 
-    target_ms = target_duration_seconds * 1000
-    silence_ms = target_ms - len(intro_audio) - len(outro_audio) - 17000  # 17s début
+    target_ms = int(target_duration_seconds * 1000)
+    lead_in_ms = 17000
+    outro_tail_ms = 2000
+    silence_ms = target_ms - len(intro_audio) - len(outro_audio) - lead_in_ms - outro_tail_ms
 
-    if silence_ms < 1000:
-        silence_ms = 1000
+    if silence_ms < 0:
+        silence_ms = 0
 
-    start_silence = AudioSegment.silent(duration=17000)
+    start_silence = AudioSegment.silent(duration=lead_in_ms)
     mid_silence = AudioSegment.silent(duration=silence_ms)
+    trailing_silence = AudioSegment.silent(duration=outro_tail_ms)
 
-    full_audio = start_silence + intro_audio + mid_silence + outro_audio
+    full_audio = start_silence + intro_audio + mid_silence + outro_audio + trailing_silence
 
     # Si encore trop court, on pad
     if len(full_audio) < target_ms:

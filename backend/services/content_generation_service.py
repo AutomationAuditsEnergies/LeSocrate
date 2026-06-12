@@ -11709,7 +11709,7 @@ def _build_timed_edge_break_audio(
     *,
     on_progress=None,
 ) -> tuple[bytes, float]:
-    """Build an Edge TTS break with intro at start and outro at slot end."""
+    """Build an Edge TTS break with intro at start and outro ending 2s before slot end."""
     from services.basic_tts_service import convert_to_speech_basic, concat_mp3_bytes
 
     intro_text = (intro_text or "").strip()
@@ -11753,7 +11753,8 @@ def _build_timed_edge_break_audio(
         outro_duration = _mp3_duration_seconds_no_ffprobe(outro_bytes)
 
     target = float(max(int(duration_sec or 0), 0))
-    filler_target = max(0.0, target - cursor_sec - outro_duration)
+    outro_tail_sec = 2.0 if target >= 2.0 else 0.0
+    filler_target = max(0.0, target - cursor_sec - outro_duration - outro_tail_sec)
     filler_bytes, filler_duration = _build_edge_muted_filler_audio(
         filler_target,
         on_progress=on_progress,
@@ -11765,6 +11766,15 @@ def _build_timed_edge_break_audio(
     if outro_bytes:
         parts.append(outro_bytes)
         cursor_sec += outro_duration
+
+    trailing_target = max(0.0, target - cursor_sec)
+    trailing_bytes, trailing_duration = _build_edge_muted_filler_audio(
+        trailing_target,
+        on_progress=on_progress,
+    )
+    if trailing_bytes:
+        parts.append(trailing_bytes)
+        cursor_sec += trailing_duration
 
     return concat_mp3_bytes(parts), cursor_sec
 
@@ -13688,6 +13698,27 @@ def _save_course_script_plan(platform_id: int, folder_id: int, payload: dict) ->
         logger.warning(f"⚠️ Sauvegarde plan script cours impossible folder={folder_id}: {e}")
 
 
+def _merge_course_blocs_for_ui(generated_blocs: list | None, planned_blocs: list | None) -> list:
+    merged = {}
+    for bloc in planned_blocs or []:
+        try:
+            bloc_number = int(bloc.get("bloc_number") or 0)
+        except Exception:
+            bloc_number = 0
+        if bloc_number:
+            merged[bloc_number] = dict(bloc)
+    for bloc in generated_blocs or []:
+        try:
+            bloc_number = int(bloc.get("bloc_number") or 0)
+        except Exception:
+            bloc_number = 0
+        if bloc_number:
+            base = merged.get(bloc_number, {})
+            base.update(bloc)
+            merged[bloc_number] = base
+    return [merged[key] for key in sorted(merged.keys())]
+
+
 def update_course_script_bloc_text(folder_id: int, bloc_number: int, text: str) -> dict:
     job = get_job_from_db(folder_id)
     if not job:
@@ -13699,7 +13730,8 @@ def update_course_script_bloc_text(folder_id: int, bloc_number: int, text: str) 
         "folder_id": folder_id,
         "content_job_id": job["id"],
     }
-    course_blocs = saved.get("course_blocs") or saved.get("planned_course_blocs") or _build_course_blocs_preview(folder_id, job)
+    planned_course_blocs = saved.get("planned_course_blocs") or _build_course_blocs_preview(folder_id, job)
+    course_blocs = _merge_course_blocs_for_ui(saved.get("course_blocs") or [], planned_course_blocs)
     target = None
     for bloc in course_blocs:
         if int(bloc.get("bloc_number") or 0) == int(bloc_number):
@@ -14251,8 +14283,10 @@ def get_course_script_plan_for_ui(folder_id: int, job: dict | None = None) -> di
                 "L'ancienne génération TTS ne contient pas encore de plan prévu dédié."
             )
 
+        saved_course_blocs = saved.get("course_blocs") or []
+        visible_course_blocs = _merge_course_blocs_for_ui(saved_course_blocs, planned_course_blocs)
         return {
-            "course_blocs": saved.get("course_blocs") or planned_course_blocs,
+            "course_blocs": visible_course_blocs,
             "course_blocs_source": "last_audio_generation",
             "course_blocs_generated_at": saved.get("generated_at"),
             "course_blocs_mode": saved.get("mode"),
