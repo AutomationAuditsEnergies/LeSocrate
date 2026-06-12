@@ -59,11 +59,30 @@ BLOC4_HIVER = [
 ]
 
 
+def _platform_audio_base(audio_base_url, audio_container):
+    """Base URL audio propre à la plateforme.
+
+    Priorité : platform_config.audio_base_url > host commun (FrontDoor) +
+    platform_config.audio_container > base env du backend (_AUDIO_BASE).
+    Indispensable pour les plateformes créées depuis le dashboard (P5+) qui
+    partagent le backend socrate1 : sans ça, elles jouaient toutes les audios
+    du container de P1 (formationaudio-dev).
+    """
+    base = (audio_base_url or "").strip().rstrip("/")
+    if base:
+        return base
+    container = (audio_container or "").strip().strip("/")
+    if container:
+        host = _AUDIO_BASE.rsplit("/", 1)[0]
+        return f"{host}/{container}"
+    return _AUDIO_BASE
+
+
 def get_playlist(platform_id=None):
     """
-    Retourne la playlist adaptée selon le mode été/hiver de la plateforme.
-    - playlist_mode = 'ete' → cours/qa/pause (été)
-    - playlist_mode = 'hiver' ou NULL → pause/cours/qa (hiver, défaut)
+    Retourne la playlist adaptée à la plateforme :
+    - mode été/hiver ('ete' → cours/qa/pause ; 'hiver' ou NULL → pause/cours/qa)
+    - URLs réécrites sur le container audio de la plateforme (platform_config)
     """
     playlist = copy.deepcopy(COURS_PLAYLIST)
 
@@ -74,13 +93,16 @@ def get_playlist(platform_id=None):
         from database.db import get_db_connection
         conn = get_db_connection()
         cursor = conn.cursor()
-        cursor.execute("SELECT playlist_mode FROM platform_config WHERE id = ?", (platform_id,))
+        cursor.execute(
+            "SELECT playlist_mode, audio_base_url, audio_container FROM platform_config WHERE id = ?",
+            (platform_id,),
+        )
         row = cursor.fetchone()
         conn.close()
 
-        mode = row[0] if row else None
+        mode, audio_base_url, audio_container = row if row else (None, None, None)
     except Exception as e:
-        logger.warning(f"⚠️ Impossible de lire playlist_mode: {e}")
+        logger.warning(f"⚠️ Impossible de lire platform_config pour la playlist: {e}")
         return playlist
 
     if mode == "ete":
@@ -92,6 +114,15 @@ def get_playlist(platform_id=None):
     playlist[9] = bloc[0]
     playlist[10] = bloc[1]
     playlist[11] = bloc[2]
+
+    # Réécrire les URLs sur le container de la plateforme. Copie des dicts
+    # obligatoire : les items BLOC4_* sont des objets module partagés.
+    base = _platform_audio_base(audio_base_url, audio_container)
+    if base != _AUDIO_BASE:
+        playlist = [
+            {**item, "filename": f"{base}/{item['filename'].rsplit('/', 1)[-1]}"}
+            for item in playlist
+        ]
 
     return playlist
 

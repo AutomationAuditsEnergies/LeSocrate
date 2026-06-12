@@ -1,5 +1,20 @@
 # Changelog
 
+## 2026-06-12
+
+### fix(playlist): URLs audio par plateforme depuis platform_config
+
+La playlist du lecteur construisait toutes ses URLs depuis `AZURE_AUDIO_BASE_URL`
+(env du backend), ignorant le container de la plateforme. Conséquence : les
+plateformes créées depuis le dashboard HR (P5+), servies par le backend socrate1,
+jouaient les audios de P1 (`formationaudio-dev`) au lieu des leurs.
+
+`get_playlist(platform_id)` lit maintenant `audio_base_url` et `audio_container`
+dans `platform_config` et réécrit les URLs : `audio_base_url` explicite >
+host FrontDoor commun + `audio_container` > base env (fallback, comportement
+inchangé). Neutre pour P1–P4 (leurs env vars correspondent déjà à la convention
+`formationaudio-p{id}`).
+
 ## 2026-06-11
 
 ### feat(db): système de sécurité SQLite — backups, intégrité, récupération auto
