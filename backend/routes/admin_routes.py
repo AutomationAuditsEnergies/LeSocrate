@@ -32,6 +32,11 @@ def _get_platform_id():
         arg = request.args.get(key)
         if arg and str(arg).isdigit():
             return int(arg)
+    if request.is_json:
+        body = request.get_json(silent=True) or {}
+        raw_body = body.get("platform_id") or body.get("p")
+        if raw_body and str(raw_body).isdigit():
+            return int(raw_body)
     pid = session.get("platform_id")
     if pid:
         try:

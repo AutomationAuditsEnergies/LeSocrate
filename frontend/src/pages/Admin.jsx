@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import Sidebar from '../components/Sidebar.jsx'
-import { apiFetch, apiUrl, setPlatformId, setPlatformName } from '../api'
+import { apiFetch, apiUrl, getPlatformId, setPlatformId, setPlatformName } from '../api'
 
 export default function Admin() {
   const [search, setSearch] = useState('')
@@ -24,6 +24,7 @@ export default function Admin() {
 
   // Restaurer platform_id depuis ?p= si présent (cas refresh en navigation privée).
   const [searchParams] = useSearchParams()
+  const currentPlatformId = searchParams.get('p') || getPlatformId()
   useEffect(() => {
     const pParam = searchParams.get('p')
     if (pParam) {
@@ -298,7 +299,7 @@ export default function Admin() {
               Dashboard RH
             </a>
             <a
-              href="/debug"
+              href={`/debug?p=${currentPlatformId}`}
               className="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-900 transition hover:-translate-y-0.5 hover:bg-gray-100"
             >
               Debug cours
@@ -460,7 +461,7 @@ export default function Admin() {
                 Rechercher
               </button>
               <a
-                href="/admin"
+                href={`/admin?p=${currentPlatformId}`}
                 className="rounded-lg border border-gray-600 bg-gray-700 px-3 py-2 text-sm text-gray-100 transition hover:bg-gray-600"
               >
                 Réinitialiser
