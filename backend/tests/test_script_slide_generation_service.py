@@ -768,6 +768,55 @@ class ScriptSlideGenerationServiceTest(unittest.TestCase):
         self.assertEqual(normalized["event_type"], "concept")
         self.assertEqual(len(normalized["data"]["items"]), 3)
 
+    def test_course_conclusion_recap_anchor_cannot_reroute_to_situations(self):
+        block = {
+            "source_block_id": 38,
+            "word_start": 25540,
+            "word_end": 26214,
+            "word_count": 674,
+            "sub_part_name": "Ce qu'on retient",
+            "text": (
+                "Enfin, le troisième axe nous a amenés à la posture de diagnostic. "
+                "Voyez comme ces trois axes s'emboîtent. "
+                "Ce lien indissociable entre la qualité de l'accueil, la rigueur de l'enquête "
+                "et la pertinence de la solution, c'est exactement le fil que nous allons continuer."
+            ),
+            "slide_anchors": [
+                {
+                    "anchor_id": "c3-conclusion-recap-slide",
+                    "beat_id": "c3conclusion-recap",
+                    "section_kind": "course_conclusion",
+                    "template_type": "recap",
+                    "pedagogical_shape": "synthese_apres_developpement",
+                    "visual_goal": "Synthétiser ce qu'on retient du chapitre.",
+                }
+            ],
+        }
+        raw = {
+            "template_type": "situations",
+            "event_type": "concept",
+            "pedagogical_shape": "triade_structurante",
+            "event_summary": "Ce qu'on retient",
+            "data": {
+                "title": "Ce qu'on retient",
+                "items": [
+                    {"title": "Traçabilité", "desc": "La mémoire de l'accueil."},
+                    {"title": "Distance", "desc": "La posture émotionnelle."},
+                    {"title": "Diagnostic", "desc": "L'enquête avant l'action."},
+                ],
+            },
+            "slide_anchor_id": "c3-conclusion-recap-slide",
+            "source_quote": block["text"],
+        }
+
+        normalized = slides._normalize_slide(raw, block)
+
+        self.assertEqual(normalized["template_type"], "recap")
+        self.assertEqual(normalized["event_type"], "recap")
+        self.assertEqual(normalized["pedagogical_shape"], "synthese_apres_developpement")
+        self.assertEqual(normalized["slide_anchor_id"], "c3-conclusion-recap-slide")
+        self.assertEqual(len(normalized["data"]["points"]), 3)
+
     def test_single_case_with_advice_reroutes_from_casestudy_to_tip(self):
         block = {
             "source_block_id": 8,

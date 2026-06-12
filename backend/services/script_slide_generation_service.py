@@ -2764,6 +2764,7 @@ RÈGLES:
 - Si le passage pose une distinction en deux familles ou deux modes, comme synchrone/asynchrone, téléphone/courriel, immédiat/différé, rapidité/exhaustivité, utilise `comparison`.
 - Une liste de mots/formules à bannir, expressions interdites, pièges de langage ou erreurs à éviter n'est pas un `recap`: utilise `situations` s'il y a exactement 3 éléments, sinon `warning`.
 - `recap` est réservé à une vraie synthèse après un développement déjà traité: "ce qu'on retient", "en résumé", "nous avons vu".
+- Exception stricte: si l'anchor est une conclusion de cours (`anchor_id` de type `cX-conclusion-recap-slide`), le template doit rester `recap`, même si la synthèse contient trois axes, trois repères ou trois points.
 - Si aucun anchor n'est disponible pour une fenêtre, sélectionne les thèmes, points et idées pédagogiques qui méritent vraiment un visuel.
 - Tu peux produire 0, 1 ou plusieurs slides par fenêtre selon la densité réelle des idées.
 - Maximum {max_batch_slides} slides pour tout ce batch.
@@ -3778,6 +3779,24 @@ def _sort_slides_by_source_order(slides: list[dict], source_blocks: Iterable[dic
     return [slide for _, slide in sorted(enumerate(slides), key=sort_key)]
 
 
+def _is_mandatory_course_recap_anchor(anchor: dict | None) -> bool:
+    if not isinstance(anchor, dict):
+        return False
+    anchor_id = str(anchor.get("anchor_id") or "").strip().lower()
+    beat_id = str(anchor.get("beat_id") or "").strip().lower()
+    section_kind = str(anchor.get("section_kind") or "").strip().lower()
+    template_type = _canonical_template(anchor.get("template_type"), fallback="")
+    return (
+        template_type == "recap"
+        and (
+            anchor_id.endswith("-conclusion-recap-slide")
+            or "conclusion-recap" in anchor_id
+            or beat_id.endswith("conclusion-recap")
+            or section_kind == "course_conclusion"
+        )
+    )
+
+
 def _normalize_slide(raw: dict, block: dict) -> dict:
     if not isinstance(raw, dict):
         return _fallback_slide(block, "invalid_slide")
@@ -3806,10 +3825,15 @@ def _normalize_slide(raw: dict, block: dict) -> dict:
         fallback="reflection",
     )
     template = requested_template
+    mandatory_course_recap = _is_mandatory_course_recap_anchor(anchor)
+    if mandatory_course_recap:
+        template = "recap"
 
     event_type = raw.get("event_type") or "concept"
     if event_type not in EVENT_TYPES:
         event_type = "concept"
+    if mandatory_course_recap:
+        event_type = "recap"
 
     fallback_title = _fallback_title(block)
     fallback_text = _shorten(block.get("text", ""), 260)
@@ -3818,7 +3842,7 @@ def _normalize_slide(raw: dict, block: dict) -> dict:
     slide_data_payload = {**anchor_fields, **raw_data}
     if template == "quotable" and anchor_fields.get("quote"):
         slide_data_payload["quote"] = anchor_fields["quote"]
-    if template == "recap":
+    if template == "recap" and not mandatory_course_recap:
         reroute_event_type = "warning"
         rerouted_template = _forbidden_expression_template(
             slide_data_payload,
@@ -3864,7 +3888,7 @@ def _normalize_slide(raw: dict, block: dict) -> dict:
             template = rerouted_template
             if event_type in {"example", "concept"}:
                 event_type = "tip" if rerouted_template == "tip" else "story"
-    if template != "comparison":
+    if template != "comparison" and not mandatory_course_recap:
         rerouted_template = _two_family_comparison_template(
             slide_data_payload,
             fallback_title,
@@ -3905,7 +3929,7 @@ def _normalize_slide(raw: dict, block: dict) -> dict:
     return {
         "source_block_id": block["source_block_id"],
         "pedagogical_shape": _normalize_pedagogical_shape(
-            raw.get("pedagogical_shape") or (anchor or {}).get("pedagogical_shape"),
+            (anchor or {}).get("pedagogical_shape") if mandatory_course_recap else raw.get("pedagogical_shape") or (anchor or {}).get("pedagogical_shape"),
             template,
         ),
         "shape_evidence": _as_text(raw.get("shape_evidence"), "")[:260],
@@ -3944,6 +3968,7 @@ Cette fois, pour toute fenêtre dont `source_alignment` vaut `section_slide_alig
 - utilise son `source_block_id`;
 - n'invente pas de contenu;
 - choisis le meilleur `template_type` depuis le catalogue selon le texte réel, même s'il diffère du `planned_template_type`.
+- exception stricte: un anchor de conclusion de cours (`cX-conclusion-recap-slide`) doit rester en `recap`.
 - renseigne aussi `pedagogical_shape`, `shape_evidence`, `template_decision_reason` et `rejected_templates`.
 Les autres fenêtres restent facultatives.
 Réponds uniquement avec le JSON demandé.
