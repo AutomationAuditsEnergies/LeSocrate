@@ -11,19 +11,25 @@ Voix françaises disponibles (configurable via `EDGE_TTS_VOICE`) :
 - fr-FR-VivienneMultilingualNeural (féminine, multilingue)
 - fr-FR-RemyMultilingualNeural (masculine, multilingue)
 
-Edge-tts utilise asyncio + websockets en interne. Pour rester compatible
-avec l'eventlet+monkey_patch du serveur Flask/SocketIO, on encapsule la
-coroutine dans `eventlet.tpool.execute` qui la fait tourner dans un vrai
-thread isolé. Le greenlet appelant attend sans bloquer le hub.
+Edge-tts utilise asyncio + websockets en interne, incompatible avec
+l'eventlet+monkey_patch du serveur Flask/SocketIO : même via
+`eventlet.tpool`, la boucle asyncio tourne sur les modules socket/ssl
+patchés et peut se figer sans timeout (observé sur socrate1 le 2026-06-12 :
+4 synthèses parallèles gelées indéfiniment, 0 erreur, 0 retry). La synthèse
+passe donc par le CLI `python -m edge_tts` en sous-processus : process
+propre sans monkeypatch, timeout dur, et toute erreur remonte immédiatement
+aux retries de `convert_to_speech_basic`.
 
 Usage : 3ᵉ option dans l'étape 7 de `/formation-pipeline`, à côté de Fish
 Audio (payant) et du mock silence (gratuit mais pas écoutable).
 """
 
-import asyncio
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import os
 import re
+import subprocess
+import sys
+import tempfile
 import time
 
 from utils.logger import get_logger
@@ -113,26 +119,48 @@ def _speed_to_rate(speed: float) -> str:
     return f"{pct:+d}%"
 
 
-async def _synthesize_chunk_async(text: str, voice: str, rate: str, volume: str) -> bytes:
-    """Synthèse d'un chunk via edge-tts, retourne les bytes MP3."""
-    import edge_tts
-
-    communicate = edge_tts.Communicate(text, voice=voice, rate=rate, volume=volume)
-    audio_chunks = []
-    async for chunk in communicate.stream():
-        if chunk.get("type") == "audio":
-            audio_chunks.append(chunk["data"])
-    return b"".join(audio_chunks)
-
-
 def _synthesize_chunk_sync(text: str, voice: str, rate: str, volume: str) -> bytes:
-    """Wrapper synchrone : asyncio.run dans un thread isolé via tpool."""
-    import eventlet.tpool
-
-    def _runner():
-        return asyncio.run(_synthesize_chunk_async(text, voice, rate, volume))
-
-    return eventlet.tpool.execute(_runner)
+    """Synthèse d'un chunk via le CLI edge-tts, retourne les bytes MP3."""
+    timeout = float(os.getenv("EDGE_TTS_SUBPROCESS_TIMEOUT_SEC", "90"))
+    with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as tmp:
+        output_path = tmp.name
+    try:
+        cmd = [
+            sys.executable,
+            "-m",
+            "edge_tts",
+            "--voice",
+            voice,
+            "--rate",
+            rate,
+            "--volume",
+            volume,
+            "--text",
+            text,
+            "--write-media",
+            output_path,
+        ]
+        proc = subprocess.run(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=timeout,
+            check=False,
+        )
+        if proc.returncode != 0:
+            stderr = proc.stderr.decode("utf-8", errors="replace").strip()
+            stdout = proc.stdout.decode("utf-8", errors="replace").strip()
+            detail = stderr or stdout or f"exit code {proc.returncode}"
+            raise RuntimeError(f"edge-tts CLI a échoué: {detail[:500]}")
+        with open(output_path, "rb") as f:
+            return f.read()
+    except subprocess.TimeoutExpired as exc:
+        raise TimeoutError(f"edge-tts CLI timeout après {timeout:.0f}s") from exc
+    finally:
+        try:
+            os.remove(output_path)
+        except OSError:
+            pass
 
 
 def convert_to_speech_basic(
