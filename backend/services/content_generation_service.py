@@ -11685,12 +11685,23 @@ def _build_edge_muted_filler_audio(duration_sec: float, on_progress=None) -> tup
     if on_progress:
         on_progress(f"filler muet Edge TTS ({duration_sec:.1f}s cible)")
 
-    seed = convert_to_speech_basic(
-        filler_text,
-        volume=filler_volume,
-        **_basic_tts_pipeline_retry_kwargs(),
-    )
-    seed_duration = _mp3_duration_seconds_no_ffprobe(seed)
+    try:
+        seed = convert_to_speech_basic(
+            filler_text,
+            volume=filler_volume,
+            max_429_retries=0,
+            retry_base_wait_sec=1,
+        )
+        seed_duration = _mp3_duration_seconds_no_ffprobe(seed)
+    except Exception as exc:
+        logger.warning(
+            "EDGE_TTS_MUTED_FILLER_SKIPPED duration_sec=%.1f error=%s",
+            duration_sec,
+            str(exc)[:240],
+        )
+        if on_progress:
+            on_progress("filler muet Edge TTS ignoré")
+        return b"", 0.0
     if seed_duration <= 0:
         return b"", 0.0
 
@@ -11728,7 +11739,7 @@ def _build_timed_edge_break_audio(
 
     parts = []
     cursor_sec = 0.0
-    lead_in_sec = _env_float("EDGE_TTS_BREAK_LEAD_IN_SEC", 5.0, min_value=0.0, max_value=30.0)
+    lead_in_sec = _env_float("EDGE_TTS_BREAK_LEAD_IN_SEC", 0.0, min_value=0.0, max_value=30.0)
 
     lead_bytes, lead_duration = _build_edge_muted_filler_audio(
         lead_in_sec,
