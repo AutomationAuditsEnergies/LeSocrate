@@ -120,6 +120,34 @@ class AudioMp3IntegrityTest(unittest.TestCase):
         self.assertNotIn(b"CONCL", audio_bytes)
         self.assertIn(b"PAD", audio_bytes)
 
+    def test_contextual_break_silence_fallback_preserves_slot_duration(self):
+        with patch(
+            "services.break_transition_service.build_break_transition_texts",
+            side_effect=RuntimeError("llm unavailable"),
+        ), patch(
+            "services.playlist_tts_service._get_recycled_qa_pause",
+            side_effect=RuntimeError("azure unavailable"),
+        ), patch(
+            "services.playlist_tts_service._generate_silence_mp3",
+            return_value=b"FULL-SILENCE",
+        ) as silence:
+            audio_bytes, mode = cgs._build_contextual_break_audio(
+                filename="qa_9h45_9h55.mp3",
+                duration_sec=600,
+                file_type="qa",
+                bloc_num=1,
+                item_idx=1,
+                playlist_items=[
+                    ("cours_9h00_9h45.mp3", 2700, "cours", 1),
+                    ("qa_9h45_9h55.mp3", 600, "qa", 1),
+                ],
+                blocs_by_number={1: {"text": "contenu du cours"}},
+            )
+
+        silence.assert_called_once_with(600)
+        self.assertEqual(audio_bytes, b"FULL-SILENCE")
+        self.assertEqual(mode, "silence_fallback")
+
 
 if __name__ == "__main__":
     unittest.main()

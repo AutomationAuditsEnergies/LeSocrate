@@ -12112,7 +12112,8 @@ def _build_contextual_break_audio(
                 "silence de secours"
             )
             _emit(f"{filename} — audio pause réutilisable indisponible, silence de secours")
-            return _generate_silence_mp3(min(max(int(duration_sec or 1), 1), 10)), "silence_fallback"
+            fallback_duration = max(int(duration_sec or 1), 1)
+            return _generate_silence_mp3(fallback_duration), "silence_fallback"
 
     def _generic_break_texts():
         from services.playlist_tts_service import (
