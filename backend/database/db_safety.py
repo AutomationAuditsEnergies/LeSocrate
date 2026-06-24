@@ -233,6 +233,30 @@ def startup_check():
     with _state_lock:
         db_health["checked_at"] = _now_str()
 
+    db_exists = os.path.exists(DB_PATH)
+    db_size = os.path.getsize(DB_PATH) if db_exists else 0
+    if (not db_exists or db_size < MIN_AUTO_RESTORE_BYTES) and list_backups():
+        logger.error(
+            "🚨 Base SQLite absente ou anormalement petite au démarrage: %s octets",
+            db_size,
+        )
+        restored = _restore_latest_healthy_backup()
+        if restored:
+            enable_wal()
+            with _state_lock:
+                db_health["recovery_notice"] = "restored_from_backup"
+                db_health["recovery_detail"] = (
+                    f"Base absente ou anormalement petite ({db_size} octets). "
+                    f"Restaurée depuis le backup {restored}."
+                )
+            logger.warning("♻️ Récupération automatique réussie depuis %s", restored)
+            return
+        if db_exists:
+            set_maintenance(
+                True,
+                "Base de données anormalement petite et aucun backup complet sain disponible.",
+            )
+
     ok, detail = check_integrity()
     if ok:
         logger.info("✅ Intégrité SQLite vérifiée (%s)", detail)
