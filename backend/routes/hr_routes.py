@@ -222,6 +222,31 @@ def create_hr_blueprint(socketio):
             logger.warning(f"⚠️ Erreur lecture PDF Azure: {e}")
             return None, None
 
+    def _make_pdf_url(platform_id, filename):
+        """Build a short-lived read URL for a known PDF blob without scanning Azure."""
+        if not filename:
+            return None
+        connection_string = os.environ.get("AZURE_STORAGE_CONNECTION_STRING")
+        if not connection_string:
+            return None
+        try:
+            pinfo = _get_platform_info(int(platform_id))
+            container_name = pinfo["pdf_container"]
+            blob_service_client = BlobServiceClient.from_connection_string(connection_string)
+            expiry = datetime.now(timezone.utc) + timedelta(hours=2)
+            sas_token = generate_blob_sas(
+                account_name=blob_service_client.account_name,
+                container_name=container_name,
+                blob_name=filename,
+                account_key=blob_service_client.credential.account_key,
+                permission=BlobSasPermissions(read=True),
+                expiry=expiry,
+            )
+            return f"https://{blob_service_client.account_name}.blob.core.windows.net/{container_name}/{filename}?{sas_token}"
+        except Exception as e:
+            logger.warning(f"⚠️ Erreur génération URL PDF P{platform_id}: {e}")
+            return None
+
     # ─── GET /api/hr/formation-modules ───────────────────────────────────
     # Liste des modules maîtres disponibles pour créer une nouvelle plateforme.
     # Principe "1 RNCP = 1 module durable" : un module est un produit fini
@@ -532,10 +557,10 @@ def create_hr_blueprint(socketio):
                 # Pour P2+, chercher dans leur container PDF Azure
                 if pid == 1:
                     real_pdf_filename = azure_pdf_filename if include_blob_stats else pdf_filename
-                    real_pdf_url = azure_pdf_url if include_blob_stats else None
+                    real_pdf_url = azure_pdf_url if include_blob_stats else _make_pdf_url(pid, pdf_filename)
                 else:
                     real_pdf_filename = pdf_filename
-                    real_pdf_url = None
+                    real_pdf_url = _make_pdf_url(pid, pdf_filename)
                     if include_blob_stats and active:
                         try:
                             cs = os.environ.get("AZURE_STORAGE_CONNECTION_STRING")
@@ -1729,7 +1754,13 @@ def create_hr_blueprint(socketio):
                 http_requests.post(f"{search_endpoint}/indexers/{indexer_name}/run?api-version=2024-07-01", headers=headers)
                 logger.info(f"🔄 Indexer P{platform_id} ({indexer_name}) déclenché")
 
-            return jsonify({"success": True, "message": f"PDF '{file.filename}' uploadé pour P{platform_id}, indexation lancée"}), 200
+            return jsonify({
+                "success": True,
+                "message": f"PDF '{file.filename}' uploadé pour P{platform_id}, indexation lancée",
+                "pdf_filename": file.filename,
+                "pdf_uploaded_at": now,
+                "pdf_url": _make_pdf_url(platform_id, file.filename),
+            }), 200
 
         except Exception as e:
             logger.error(f"❌ Erreur upload PDF RAG P{platform_id}: {e}")
