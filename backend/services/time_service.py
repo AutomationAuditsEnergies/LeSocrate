@@ -8,6 +8,23 @@ from utils.logger import get_logger
 logger = get_logger(__name__)
 
 
+def _ensure_cours_config(cursor):
+    """Ensure the course-time table exists before reading/writing it."""
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS cours_config (
+            id INTEGER PRIMARY KEY,
+            heure_debut TEXT NOT NULL
+        )
+        """
+    )
+    cursor.execute("PRAGMA table_info(cours_config)")
+    columns = [col[1] for col in cursor.fetchall()]
+    if "platform_id" not in columns:
+        cursor.execute("ALTER TABLE cours_config ADD COLUMN platform_id INTEGER")
+        cursor.execute("UPDATE cours_config SET platform_id = id WHERE platform_id IS NULL")
+
+
 def get_current_simulated_time(platform_id=None):
     """Retourne l'heure actuelle ou l'heure simulée EN HEURE FRANÇAISE"""
     try:
@@ -37,6 +54,7 @@ def set_heure_debut_cours(nouvelle_heure, platform_id=1):
         logger.info(f"⏰ Mise à jour heure début cours P{platform_id}: {nouvelle_heure}")
         conn = get_db_connection()
         cursor = conn.cursor()
+        _ensure_cours_config(cursor)
 
         if nouvelle_heure.tzinfo is None:
             nouvelle_heure = FRANCE_TZ.localize(nouvelle_heure)
@@ -68,6 +86,7 @@ def get_heure_debut_cours(platform_id=1):
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
+        _ensure_cours_config(cursor)
 
         # Essayer par platform_id d'abord (multi-tenant)
         cursor.execute("SELECT heure_debut FROM cours_config WHERE platform_id = ?", (platform_id,))
