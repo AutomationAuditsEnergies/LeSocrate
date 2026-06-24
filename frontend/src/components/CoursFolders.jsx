@@ -1270,7 +1270,7 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
   } = {}) => {
     if (!selectedFolder) return
     const effectiveVoiceType = mock || scriptMock ? 'mock' : voiceType
-    const syncSlides = effectiveVoiceType !== 'mock'
+    const syncSlides = effectiveVoiceType !== 'mock' && effectiveVoiceType !== 'fish_audio'
     if (effectiveVoiceType === 'fish_audio') {
       const confirmed = window.confirm("Fish Audio consomme des crédits API. Lancer la génération audio de ce dossier avec Fish Audio ?")
       if (!confirmed) return
@@ -1308,7 +1308,7 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
 
   const handleGeneratePlaylistItem = async (filename, voiceType) => {
     if (!selectedFolder || !filename) return
-    const syncSlides = voiceType !== 'mock' && isCourseAudioFilename(filename)
+    const syncSlides = voiceType !== 'mock' && voiceType !== 'fish_audio' && isCourseAudioFilename(filename)
     if (voiceType === 'fish_audio') {
       const confirmed = window.confirm(`Fish Audio consomme des crédits API. Générer ${filename} avec Fish Audio ?`)
       if (!confirmed) return

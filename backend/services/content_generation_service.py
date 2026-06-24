@@ -14412,6 +14412,18 @@ def get_course_script_plan_for_ui(folder_id: int, job: dict | None = None) -> di
         }
 
     saved = _load_saved_course_script_plan(job["platform_id"], folder_id)
+    if saved:
+        saved_course_count = len(saved.get("course_blocs") or [])
+        saved_planned_count = len(saved.get("planned_course_blocs") or [])
+        if max(saved_course_count, saved_planned_count) not in (0, 7):
+            logger.warning(
+                "⚠️ Plan script cours incomplet ignoré folder=%s "
+                "course_blocs=%s planned_course_blocs=%s",
+                folder_id,
+                saved_course_count,
+                saved_planned_count,
+            )
+            saved = None
     breaks = _apply_break_overrides(
         _build_breaks_for_ui(job["platform_id"]),
         (saved or {}).get("break_overrides"),

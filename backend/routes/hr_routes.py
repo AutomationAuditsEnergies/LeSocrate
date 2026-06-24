@@ -3349,6 +3349,12 @@ def create_hr_blueprint(socketio):
             voice_label = "gTTS" if voice_type == "gtts" else "Fish Audio" if voice_type == "fish_audio" else "Mock"
             if "sync_slides" not in req_body:
                 sync_slides = bool(has_script and not playlist_mock and force_all and voice_type in {"gtts", "fish_audio"})
+            if voice_type == "fish_audio":
+                # Fish Audio + sync slides produit des MP3 concaténés qui peuvent
+                # exposer une durée VBR incohérente dans Chrome. Tant que le
+                # réencodage serveur n'est pas disponible sur Azure, Fish reste
+                # sur le chemin audio simple.
+                sync_slides = False
             if "auto_generate_slides" not in req_body:
                 auto_generate_slides = bool(sync_slides)
 
@@ -3500,6 +3506,8 @@ def create_hr_blueprint(socketio):
             voice_label = "gTTS" if voice_type == "gtts" else "Fish Audio"
             is_course_audio = filename.startswith("cours_") and filename.endswith(".mp3")
             sync_slides = bool(req_body.get("sync_slides", is_course_audio)) and is_course_audio
+            if voice_type == "fish_audio":
+                sync_slides = False
             auto_generate_slides = bool(req_body.get("auto_generate_slides", sync_slides))
             slide_max_slides = int(req_body.get("max_slides") or req_body.get("slide_max_slides") or 60)
             slide_pace = str(req_body.get("pace") or req_body.get("slide_pace") or "normal")
