@@ -26,6 +26,7 @@ logger = get_logger(__name__)
 BACKUP_DIR = os.path.join(os.path.dirname(DB_PATH), "backups")
 BACKUP_PREFIX = os.path.splitext(os.path.basename(DB_PATH))[0]
 MAX_BACKUPS = 15
+MIN_AUTO_RESTORE_BYTES = 1024 * 1024
 
 # État de santé partagé, consulté par le before_request de main_app et
 # l'endpoint /api/admin/db/status. Protégé par _state_lock (eventlet-safe :
@@ -184,6 +185,13 @@ def restore_backup(backup_name: str, db_path: str = DB_PATH) -> bool:
 def _restore_latest_healthy_backup(db_path: str = DB_PATH) -> str | None:
     """Tente les backups du plus récent au plus ancien, retourne le nom utilisé."""
     for backup in list_backups():
+        if backup.get("size_bytes", 0) < MIN_AUTO_RESTORE_BYTES:
+            logger.error(
+                "⚠️ Backup %s ignoré pour restauration auto (taille anormale: %s octets)",
+                backup["name"],
+                backup.get("size_bytes", 0),
+            )
+            continue
         ok, detail = check_integrity(os.path.join(BACKUP_DIR, backup["name"]))
         if not ok:
             logger.error("⚠️ Backup %s lui-même corrompu (%s), on passe au suivant", backup["name"], detail)

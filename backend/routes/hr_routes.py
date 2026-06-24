@@ -1943,6 +1943,29 @@ def create_hr_blueprint(socketio):
         try:
             conn = get_db_connection()
             cursor = conn.cursor()
+            effective_platform_id = platform_id
+            cursor.execute(
+                "SELECT COUNT(*) FROM cours_folders WHERE platform_id = ?",
+                (platform_id,),
+            )
+            direct_count = cursor.fetchone()[0]
+            if direct_count == 0:
+                cursor.execute(
+                    """
+                    SELECT pc.id
+                    FROM platform_config pc
+                    JOIN cours_folders cf ON cf.platform_id = pc.id
+                    WHERE pc.source_formation_id = ?
+                    GROUP BY pc.id
+                    ORDER BY pc.id DESC
+                    LIMIT 1
+                    """,
+                    (platform_id,),
+                )
+                source_row = cursor.fetchone()
+                if source_row:
+                    effective_platform_id = source_row[0]
+
             cursor.execute(f"""
                 SELECT
                     cf.id,
@@ -1959,10 +1982,15 @@ def create_hr_blueprint(socketio):
                 WHERE cf.platform_id = ?
                 GROUP BY cf.id
                 ORDER BY cf.position ASC, cf.created_at ASC
-            """, (platform_id,))
+            """, (effective_platform_id,))
             folders = [{"id": row[0], "name": row[1], "created_at": row[2], "document_count": row[3], "position": row[4]} for row in cursor.fetchall()]
             conn.close()
-            return jsonify({"success": True, "folders": folders}), 200
+            return jsonify({
+                "success": True,
+                "folders": folders,
+                "platform_id": platform_id,
+                "source_platform_id": effective_platform_id if effective_platform_id != platform_id else None,
+            }), 200
         except Exception as e:
             logger.error(f"❌ Erreur get_cours_folders: {e}")
             return jsonify({"success": False, "error": str(e)}), 500
@@ -4296,15 +4324,26 @@ def create_hr_blueprint(socketio):
             if not folder_id:
                 return jsonify({"success": False, "error": "folder_id requis"}), 400
 
-            # Vérifier que le dossier appartient à cette plateforme
+            # Vérifier que le dossier appartient à cette plateforme, ou à la
+            # plateforme générée qui sert de source à cette plateforme historique.
             conn = get_db_connection()
             cursor = conn.cursor()
-            cursor.execute("SELECT name FROM cours_folders WHERE id = ? AND platform_id = ?", (folder_id, platform_id))
+            cursor.execute(
+                """
+                SELECT cf.name, cf.platform_id
+                FROM cours_folders cf
+                LEFT JOIN platform_config source_pc ON source_pc.id = cf.platform_id
+                WHERE cf.id = ?
+                  AND (cf.platform_id = ? OR source_pc.source_formation_id = ?)
+                """,
+                (folder_id, platform_id, platform_id),
+            )
             folder_row = cursor.fetchone()
             conn.close()
 
             if not folder_row:
                 return jsonify({"success": False, "error": "Dossier introuvable pour cette plateforme"}), 404
+            source_platform_id = folder_row[1]
 
             tts_conn = os.environ.get("AZURE_TTS_STORAGE_CONNECTION_STRING")
             audio_conn = os.environ.get("AZURE_AUDIO_STORAGE_CONNECTION_STRING")
@@ -4323,7 +4362,7 @@ def create_hr_blueprint(socketio):
             qa_pause_cc = audio_bsc.get_container_client("audioqapause")
             playlist_cc = tts_bsc.get_container_client("audiostts")
 
-            playlist_prefix = f"platform-{platform_id}/folder-{folder_id}/playlist/"
+            playlist_prefix = f"platform-{source_platform_id}/folder-{folder_id}/playlist/"
 
             # Lister tous les MP3 générés dans le dossier. Les pipelines récentes
             # produisent aussi les Q&A/pauses contextuels dans ce préfixe.
