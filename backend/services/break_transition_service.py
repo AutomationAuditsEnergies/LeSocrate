@@ -487,6 +487,22 @@ def build_break_transition_texts(
     `get_bloc_text(bloc_num)` est injecté pour laisser chaque pipeline exposer
     son propre modèle de données sans dupliquer la logique de transition.
     """
+    try:
+        from services.fixed_break_scripts import get_fixed_break_script
+
+        fixed = get_fixed_break_script(
+            filename,
+            intro_owned_by_previous=break_intro_owned_by_previous(
+                playlist_items,
+                item_idx,
+                break_type,
+            ),
+        )
+        if fixed:
+            return fixed["intro"], fixed["outro"]
+    except Exception as e:
+        logger.warning("⚠️ Script fixe break indisponible pour %s: %s", filename, e)
+
     prev_bloc = nearest_course_bloc(playlist_items, item_idx, -1) or bloc_num
     next_bloc = nearest_course_bloc(playlist_items, item_idx, 1)
     prev_text = get_bloc_text(prev_bloc) if prev_bloc else ""

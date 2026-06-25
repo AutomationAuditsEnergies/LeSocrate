@@ -447,6 +447,15 @@ def _build_contextual_break_audio(
     blocs_by_number,
 ):
     from services.break_transition_service import build_break_transition_texts
+    from services.fixed_break_scripts import get_fixed_break_script
+
+    fixed = get_fixed_break_script(filename, intro_owned_by_previous=True)
+    if fixed:
+        try:
+            return _build_pause_audio(fixed["intro"], fixed["outro"], duration_sec)
+        except Exception as e:
+            logger.warning(f"⚠️ Q&A/Pause fixe échoué pour {filename}: {e}; fallback audioqapause")
+            return _get_recycled_qa_pause(filename)
 
     intro, outro = build_break_transition_texts(
         filename=filename,

@@ -4205,6 +4205,14 @@ def _break_intro_text_for_playlist_item(item) -> str:
     if next_type not in {"qa", "pause", "pause_midi"}:
         return ""
     try:
+        from services.fixed_break_scripts import get_fixed_break_script
+
+        fixed = get_fixed_break_script(str(item[0] or ""), intro_owned_by_previous=False)
+        if fixed and fixed.get("handoff"):
+            return re.sub(r"\s+", " ", fixed["handoff"].strip())
+    except Exception:
+        pass
+    try:
         from services.playlist_tts_service import (
             _get_pause_midi_text,
             _get_pause_text,
@@ -12200,6 +12208,37 @@ def _build_contextual_break_audio(
             return audio_bytes, "manual_edge_timed"
         return _build_pause_audio(intro, outro, duration_sec), "manual_fish"
 
+    try:
+        from services.break_transition_service import break_intro_owned_by_previous
+        from services.fixed_break_scripts import get_fixed_break_script
+
+        fixed_break = get_fixed_break_script(
+            filename,
+            intro_owned_by_previous=break_intro_owned_by_previous(
+                playlist_items,
+                item_idx,
+                file_type,
+            ),
+        )
+        if fixed_break:
+            intro = fixed_break["intro"]
+            outro = fixed_break["outro"]
+            _emit(f"{filename} — script fixe...")
+            if basic_tts:
+                audio_bytes, final_duration = _build_timed_edge_break_audio(
+                    intro,
+                    outro,
+                    duration_sec,
+                    on_progress=lambda msg: _emit(f"{filename} — {msg}"),
+                )
+                _emit(
+                    f"{filename} — Edge TTS fixe calé ({final_duration:.1f}s/{duration_sec}s)"
+                )
+                return audio_bytes, "fixed_edge_timed"
+            return _build_pause_audio(intro, outro, duration_sec), "fixed_fish"
+    except Exception as e:
+        logger.warning(f"⚠️ Script fixe {filename} indisponible : {e}")
+
     contextual_basic_tts = os.getenv("BASIC_TTS_CONTEXTUAL_BREAKS", "false").lower() in {
         "1",
         "true",
@@ -14326,15 +14365,10 @@ def _build_breaks_for_ui(platform_id: int) -> list:
     """
     from services.playlist_tts_service import (
         _playlist_items_for_platform,
-        _get_pause_midi_text,
-        _get_pause_text,
-        _get_qa_text,
     )
+    from services.fixed_break_scripts import get_fixed_break_script
     from services.break_transition_service import (
         break_intro_owned_by_previous,
-        duration_label,
-        is_schedule_neutral_break,
-        next_item_type,
     )
 
     items = _playlist_items_for_platform(platform_id)
@@ -14343,48 +14377,18 @@ def _build_breaks_for_ui(platform_id: int) -> list:
         if file_type == "cours":
             continue
         intro_owned = break_intro_owned_by_previous(items, idx, file_type)
-        if file_type == "qa":
-            intro, outro = _get_qa_text(bloc_num)
-            ntype = next_item_type(items, idx)
-            if ntype in {"pause", "pause_midi"} and not is_schedule_neutral_break(filename):
-                next_item = _next_playlist_item_after(items, idx)
-                next_intro = _break_intro_text_for_playlist_item(next_item)
-                label = duration_label(_playlist_item_duration(next_item), ntype)
-                if next_intro:
-                    outro = (
-                        "Très bien, on clôt ce temps de questions. "
-                        f"{next_intro}"
-                    )
-                elif ntype == "pause_midi" or label == "pause déjeuner":
-                    outro = (
-                        "Très bien, on clôt ce temps de questions. "
-                        "On va maintenant marquer la pause déjeuner, prenez le temps de souffler."
-                    )
-                elif label:
-                    outro = (
-                        f"Très bien, on clôt ce temps de questions. "
-                        f"On va maintenant prendre une pause de {label}."
-                    )
-                else:
-                    outro = (
-                        "Très bien, on clôt ce temps de questions. "
-                        "On va maintenant prendre une courte pause."
-                    )
-        elif file_type == "pause_midi" or filename.startswith("pause_midi_"):
-            intro, outro = _get_pause_midi_text()
-        elif file_type == "pause":
-            intro, outro = _get_pause_text(bloc_num)
-        else:
+        fixed = get_fixed_break_script(filename, intro_owned_by_previous=intro_owned)
+        if not fixed:
             continue
-        if intro_owned:
-            intro = ""
         breaks.append({
             "filename": filename,
             "duration_sec": int(duration or 0),
             "type": file_type,
             "bloc_number": int(bloc_num or 0),
-            "intro": intro,
-            "outro": outro,
+            "intro": fixed["intro"],
+            "outro": fixed["outro"],
+            "handoff": fixed["handoff"],
+            "fixed_script": True,
         })
     return breaks
 
