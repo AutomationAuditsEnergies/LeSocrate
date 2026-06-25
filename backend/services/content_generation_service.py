@@ -11804,7 +11804,47 @@ def _build_timed_edge_break_audio(
         parts.append(trailing_bytes)
         cursor_sec += trailing_duration
 
+    if cursor_sec < target - _UPLOAD_DURATION_TOLERANCE_SEC:
+        raise ValueError(
+            f"Break Edge trop court ({cursor_sec:.1f}s < {target:.1f}s), filler indisponible"
+        )
+
     return concat_mp3_bytes(parts), cursor_sec
+
+
+def _build_end_only_fish_break_audio_no_ffmpeg(
+    outro_text: str,
+    duration_sec: int,
+    *,
+    on_progress=None,
+) -> tuple[bytes, float]:
+    """Build a long Q&A/pause with Fish outro at the end, without pydub/ffmpeg."""
+    from services.basic_tts_service import concat_mp3_bytes
+    from services.tts_service import convert_to_speech
+
+    outro_text = (outro_text or "").strip()
+    if not outro_text:
+        raise ValueError("Break Fish end-only vide")
+
+    if on_progress:
+        on_progress("Fish Audio outro")
+    outro_bytes = convert_to_speech(outro_text)
+    outro_duration = _mp3_duration_seconds_no_ffprobe(outro_bytes)
+
+    target = float(max(int(duration_sec or 0), 0))
+    outro_tail_sec = 2.0 if target >= 2.0 else 0.0
+    pre_target = max(0.0, target - outro_duration - outro_tail_sec)
+    pre_bytes, pre_duration = _silent_mp3_approx_no_ffmpeg(pre_target)
+    tail_target = max(0.0, target - pre_duration - outro_duration)
+    tail_bytes, tail_duration = _silent_mp3_approx_no_ffmpeg(tail_target)
+
+    final_duration = pre_duration + outro_duration + tail_duration
+    if final_duration < target - _UPLOAD_DURATION_TOLERANCE_SEC:
+        raise ValueError(
+            f"Fallback Fish end-only trop court ({final_duration:.1f}s < {target:.1f}s)"
+        )
+
+    return concat_mp3_bytes([pre_bytes, outro_bytes, tail_bytes]), final_duration
 
 
 def _course_opening_transitions_enabled() -> bool:
@@ -12240,21 +12280,20 @@ def _build_contextual_break_audio(
             except Exception as fish_break_error:
                 logger.warning(
                     "⚠️ Break Fish fixe %s impossible à assembler (%s); "
-                    "fallback Edge end-only sans intro audible",
+                    "fallback Fish end-only sans ffmpeg",
                     filename,
                     str(fish_break_error)[:240],
                 )
-                audio_bytes, final_duration = _build_timed_edge_break_audio(
-                    "",
+                audio_bytes, final_duration = _build_end_only_fish_break_audio_no_ffmpeg(
                     outro,
                     duration_sec,
                     on_progress=lambda msg: _emit(f"{filename} — {msg}"),
                 )
                 _emit(
-                    f"{filename} — fallback Edge fixe calé "
+                    f"{filename} — fallback Fish fixe calé "
                     f"({final_duration:.1f}s/{duration_sec}s)"
                 )
-                return audio_bytes, "fixed_edge_timed_fallback"
+                return audio_bytes, "fixed_fish_end_only_fallback"
     except Exception as e:
         logger.warning(f"⚠️ Script fixe {filename} indisponible : {e}")
 
