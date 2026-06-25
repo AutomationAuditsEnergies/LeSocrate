@@ -41,50 +41,6 @@ function breakDurationLabelForFilename(filename) {
 //   darkMode      — bool
 //   colors        — objet colors du parent
 //   onClose       — callback fermeture
-function TeacherPresencePanel({ darkMode, colors }) {
-  const panelBg = darkMode
-    ? 'linear-gradient(180deg, #0b1728 0%, #07101d 100%)'
-    : 'linear-gradient(180deg, #13243a 0%, #07111f 100%)'
-
-  return (
-    <aside
-      className="flex min-h-[220px] w-full flex-col overflow-hidden rounded-lg border p-4 sm:w-[176px] md:w-[210px]"
-      style={{
-        background: panelBg,
-        borderColor: darkMode ? '#22324b' : '#d9e1ec',
-        boxShadow: darkMode ? 'none' : '0 8px 18px rgba(15, 23, 42, 0.08)',
-      }}
-      aria-label="Présence professeur"
-    >
-      <div className="flex flex-col items-center text-center">
-        <div
-          className="flex h-16 w-16 items-center justify-center rounded-full"
-          style={{ backgroundColor: 'rgba(2, 6, 23, 0.42)' }}
-        >
-          <Icon name="person" style={{ fontSize: '38px', color: '#ffffff' }} />
-        </div>
-        <p className="mt-3 text-base font-bold text-white">Professeur</p>
-        <div className="mt-1 flex items-center gap-1.5 text-sm" style={{ color: '#cbd5e1' }}>
-          <span className="h-2 w-2 rounded-full" style={{ backgroundColor: '#34d399' }} />
-          En ligne
-        </div>
-      </div>
-
-      <div
-        className="mt-5 flex min-h-0 flex-1 items-end justify-center rounded-md"
-        style={{ backgroundColor: darkMode ? 'rgba(15, 23, 42, 0.35)' : 'rgba(255, 255, 255, 0.06)' }}
-      >
-        <div
-          className="mb-4 flex h-24 w-20 items-center justify-center rounded-t-full"
-          style={{ backgroundColor: '#ffffff' }}
-        >
-          <Icon name="school" style={{ fontSize: '34px', color: colors.textSecondary || '#334155' }} />
-        </div>
-      </div>
-    </aside>
-  )
-}
-
 function AudioSlideSyncPreview({ colors, darkMode, loading, error, slides, timings, activeTiming, breakTemplate, breakDuration }) {
   const previewBg = darkMode ? '#0f172a' : '#f8fafc'
   const headerBg = darkMode ? '#111827' : '#ffffff'
@@ -184,12 +140,11 @@ function AudioSlideSyncPreview({ colors, darkMode, loading, error, slides, timin
         </div>
       </div>
       <div
-        className="flex flex-col gap-3 p-3 sm:flex-row sm:items-stretch"
+        className="p-3"
         style={{ backgroundColor: darkMode ? '#0b1220' : '#f6f8fb' }}
       >
-        <TeacherPresencePanel darkMode={darkMode} colors={colors} />
         <div
-          className="min-w-0 flex-1 rounded-lg border bg-white p-2"
+          className="min-w-0 rounded-lg border bg-white p-2"
           style={{
             borderColor: colors.border,
             backgroundColor: darkMode ? '#020617' : '#ffffff',
