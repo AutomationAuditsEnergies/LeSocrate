@@ -12235,7 +12235,26 @@ def _build_contextual_break_audio(
                     f"{filename} — Edge TTS fixe calé ({final_duration:.1f}s/{duration_sec}s)"
                 )
                 return audio_bytes, "fixed_edge_timed"
-            return _build_pause_audio(intro, outro, duration_sec), "fixed_fish"
+            try:
+                return _build_pause_audio(intro, outro, duration_sec), "fixed_fish"
+            except Exception as fish_break_error:
+                logger.warning(
+                    "⚠️ Break Fish fixe %s impossible à assembler (%s); "
+                    "fallback Edge end-only sans intro audible",
+                    filename,
+                    str(fish_break_error)[:240],
+                )
+                audio_bytes, final_duration = _build_timed_edge_break_audio(
+                    "",
+                    outro,
+                    duration_sec,
+                    on_progress=lambda msg: _emit(f"{filename} — {msg}"),
+                )
+                _emit(
+                    f"{filename} — fallback Edge fixe calé "
+                    f"({final_duration:.1f}s/{duration_sec}s)"
+                )
+                return audio_bytes, "fixed_edge_timed_fallback"
     except Exception as e:
         logger.warning(f"⚠️ Script fixe {filename} indisponible : {e}")
 
