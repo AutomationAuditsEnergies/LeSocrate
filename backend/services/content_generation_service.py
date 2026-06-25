@@ -3504,6 +3504,7 @@ def _mp3_duration_seconds_no_ffprobe(audio_bytes: bytes) -> float:
 
 
 _CONTENT_SILENCE_1S_MP3_CACHE = None
+_FISH_SILENCE_1S_MP3_CACHE = None
 
 
 def _load_content_silence_1s_mp3() -> bytes:
@@ -3515,6 +3516,15 @@ def _load_content_silence_1s_mp3() -> bytes:
     return _CONTENT_SILENCE_1S_MP3_CACHE
 
 
+def _load_fish_silence_1s_mp3() -> bytes:
+    global _FISH_SILENCE_1S_MP3_CACHE
+    if _FISH_SILENCE_1S_MP3_CACHE is None:
+        silence_path = os.path.join(os.path.dirname(__file__), "..", "assets", "fish_silence_1s.mp3")
+        with open(silence_path, "rb") as f:
+            _FISH_SILENCE_1S_MP3_CACHE = f.read()
+    return _FISH_SILENCE_1S_MP3_CACHE
+
+
 def _silent_mp3_approx_no_ffmpeg(duration_sec: float) -> tuple[bytes, float]:
     """Return bundled silent MP3 bytes repeated close to the requested duration."""
     if duration_sec <= 0:
@@ -3524,6 +3534,37 @@ def _silent_mp3_approx_no_ffmpeg(duration_sec: float) -> tuple[bytes, float]:
         one_sec_duration = _mp3_duration_seconds_no_ffprobe(one_sec)
     except Exception:
         one_sec_duration = 1.0
+
+    raw_repeat = duration_sec / max(one_sec_duration, 0.001)
+    floor_repeat = int(raw_repeat)
+    candidates = {floor_repeat, floor_repeat + 1}
+    candidates = {repeat for repeat in candidates if repeat > 0}
+    if not candidates:
+        return b"", 0.0
+
+    max_allowed = duration_sec + 0.45
+    valid_candidates = [
+        repeat for repeat in candidates
+        if repeat * one_sec_duration <= max_allowed
+    ]
+    if valid_candidates:
+        repeat = min(valid_candidates, key=lambda value: abs(duration_sec - value * one_sec_duration))
+    else:
+        repeat = max(0, floor_repeat)
+    if repeat <= 0:
+        return b"", 0.0
+    if repeat == 1:
+        return one_sec, one_sec_duration
+    from services.basic_tts_service import concat_mp3_bytes
+    return concat_mp3_bytes([one_sec] * repeat), one_sec_duration * repeat
+
+
+def _fish_silent_mp3_approx_no_ffmpeg(duration_sec: float) -> tuple[bytes, float]:
+    """Return silent MP3 bytes matching Fish Audio's 44.1 kHz / 128 kbps output."""
+    if duration_sec <= 0:
+        return b"", 0.0
+    one_sec = _load_fish_silence_1s_mp3()
+    one_sec_duration = _mp3_duration_seconds_no_ffprobe(one_sec)
 
     raw_repeat = duration_sec / max(one_sec_duration, 0.001)
     floor_repeat = int(raw_repeat)
@@ -11818,13 +11859,25 @@ def _build_end_only_fish_break_audio_no_ffmpeg(
     *,
     on_progress=None,
 ) -> tuple[bytes, float]:
-    """Build a long Q&A/pause with Fish outro at the end, without pydub/ffmpeg."""
+    """Build a long Q&A/pause with Fish audio, without pydub/ffmpeg.
+
+    Fish break assembly cannot rely on pydub in Azure App Service because the
+    ffmpeg binaries are not installed. We keep the playable file primed with a
+    very short Fish "Ok.", then use Fish-compatible silent MP3 frames until the
+    outro near the end of the slot.
+    """
     from services.basic_tts_service import concat_mp3_bytes
     from services.tts_service import convert_to_speech
 
     outro_text = (outro_text or "").strip()
     if not outro_text:
         raise ValueError("Break Fish end-only vide")
+
+    primer_text = (os.getenv("FISH_BREAK_PRIMER_TEXT") or "Ok.").strip() or "Ok."
+    if on_progress:
+        on_progress("Fish Audio amorce")
+    primer_bytes = convert_to_speech(primer_text)
+    primer_duration = _mp3_duration_seconds_no_ffprobe(primer_bytes)
 
     if on_progress:
         on_progress("Fish Audio outro")
@@ -11833,18 +11886,18 @@ def _build_end_only_fish_break_audio_no_ffmpeg(
 
     target = float(max(int(duration_sec or 0), 0))
     outro_tail_sec = 2.0 if target >= 2.0 else 0.0
-    pre_target = max(0.0, target - outro_duration - outro_tail_sec)
-    pre_bytes, pre_duration = _silent_mp3_approx_no_ffmpeg(pre_target)
-    tail_target = max(0.0, target - pre_duration - outro_duration)
-    tail_bytes, tail_duration = _silent_mp3_approx_no_ffmpeg(tail_target)
+    pre_target = max(0.0, target - primer_duration - outro_duration - outro_tail_sec)
+    pre_bytes, pre_duration = _fish_silent_mp3_approx_no_ffmpeg(pre_target)
+    tail_target = max(0.0, target - primer_duration - pre_duration - outro_duration)
+    tail_bytes, tail_duration = _fish_silent_mp3_approx_no_ffmpeg(tail_target)
 
-    final_duration = pre_duration + outro_duration + tail_duration
+    final_duration = primer_duration + pre_duration + outro_duration + tail_duration
     if final_duration < target - _UPLOAD_DURATION_TOLERANCE_SEC:
         raise ValueError(
             f"Fallback Fish end-only trop court ({final_duration:.1f}s < {target:.1f}s)"
         )
 
-    return concat_mp3_bytes([pre_bytes, outro_bytes, tail_bytes]), final_duration
+    return concat_mp3_bytes([primer_bytes, pre_bytes, outro_bytes, tail_bytes]), final_duration
 
 
 def _course_opening_transitions_enabled() -> bool:
