@@ -4329,6 +4329,23 @@ def _refresh_ap_lock(job_id: int) -> None:
     conn.close()
 
 
+def _ap_lock_age_seconds(job: dict | None) -> float | None:
+    if not job or not job.get("auto_pilot_locked_at"):
+        return None
+    try:
+        import datetime
+        locked_at = job.get("auto_pilot_locked_at")
+        if isinstance(locked_at, str):
+            dt = datetime.datetime.fromisoformat(locked_at)
+        else:
+            dt = locked_at
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=datetime.timezone.utc)
+        return (datetime.datetime.now(datetime.timezone.utc) - dt).total_seconds()
+    except Exception:
+        return None
+
+
 def _determine_next_ap_step(job_id: int) -> str | None:
     """Détermine la prochaine étape à exécuter (checks idempotents). None = terminé."""
     import json as _json
@@ -5459,6 +5476,74 @@ def run_auto_pilot(job_id):
     }), 202
 
 
+@formation_bp.route("/api/formation/<int:job_id>/run-auto/resume", methods=["POST"])
+def resume_auto_pilot(job_id):
+    """Reprend l'auto-pilot sans réinitialiser les flags déjà validés."""
+    if not _require_admin():
+        return jsonify({"error": "Non autorisé"}), 403
+
+    job = get_job(job_id)
+    if not job:
+        return jsonify({"error": "Job introuvable"}), 404
+
+    lock_age = _ap_lock_age_seconds(job)
+    lock_active = lock_age is not None and lock_age < _AP_LOCK_TTL
+    force = bool((request.get_json(silent=True) or {}).get("force"))
+    if lock_active and not force:
+        return jsonify({
+            "error": "Auto-pilot déjà en cours pour ce job",
+            "lock_age_seconds": lock_age,
+        }), 409
+
+    try:
+        next_step = _determine_next_ap_step(job_id)
+    except Exception as e:
+        return jsonify({"error": f"Impossible de calculer la prochaine étape : {str(e)[:300]}"}), 500
+
+    update_job(
+        job_id,
+        auto_pilot_enabled=1,
+        auto_pilot_error=None,
+        auto_pilot_locked_at=None,
+        auto_pilot_lock_owner=None,
+        auto_pilot_step=next_step or "done",
+    )
+
+    if next_step is None:
+        return jsonify({
+            "ok": True,
+            "status": "done",
+            "step": "done",
+            "next_step": None,
+        }), 200
+
+    try:
+        from services.formation_observability_service import log_pipeline_event
+        log_pipeline_event(
+            job_id,
+            "pipeline_resume_requested",
+            step=next_step,
+            status="running",
+            model=job.get("auto_pilot_model"),
+            message=f"Reprise auto-pilot demandée : {next_step}",
+            data={"previous_step": job.get("auto_pilot_step"), "lock_age_seconds": lock_age},
+        )
+    except Exception:
+        pass
+
+    import eventlet
+    eventlet.spawn(_tick_auto_pilot, job_id)
+    return jsonify({
+        "ok": True,
+        "status": "auto_pilot_resumed",
+        "step": next_step,
+        "next_step": next_step,
+        "model": job.get("auto_pilot_model"),
+        "tts_mode": job.get("auto_pilot_tts_mode"),
+        "generate_audio": bool(job.get("auto_pilot_generate_audio")),
+    }), 202
+
+
 @formation_bp.route("/api/formation/<int:job_id>/run-auto/stop", methods=["POST"])
 def stop_auto_pilot(job_id):
     """Stoppe l'auto-pilot persistant pour un job.
@@ -5512,13 +5597,19 @@ def auto_pilot_status(job_id):
     model = job.get("auto_pilot_model")
     tts_mode = job.get("auto_pilot_tts_mode")
     generate_audio = bool(job.get("auto_pilot_generate_audio"))
+    lock_age = _ap_lock_age_seconds(job)
+    lock_stale = lock_age is not None and lock_age >= _AP_LOCK_TTL
+    try:
+        next_step = _determine_next_ap_step(job_id)
+    except Exception:
+        next_step = None
     if step == "done":
-        return jsonify({"status": "done", "step": "done", "model": model, "tts_mode": tts_mode, "generate_audio": generate_audio}), 200
+        return jsonify({"status": "done", "step": "done", "next_step": next_step, "model": model, "tts_mode": tts_mode, "generate_audio": generate_audio}), 200
     if error:
-        return jsonify({"status": "error", "step": step, "error": error, "model": model, "tts_mode": tts_mode, "generate_audio": generate_audio}), 200
+        return jsonify({"status": "error", "step": step, "next_step": next_step, "error": error, "model": model, "tts_mode": tts_mode, "generate_audio": generate_audio, "lock_stale": lock_stale, "lock_age_seconds": lock_age}), 200
     if step:
-        return jsonify({"status": "running", "step": step, "model": model, "tts_mode": tts_mode, "generate_audio": generate_audio}), 200
-    return jsonify({"status": "starting", "model": model, "tts_mode": tts_mode, "generate_audio": generate_audio}), 200
+        return jsonify({"status": "running", "step": step, "next_step": next_step, "model": model, "tts_mode": tts_mode, "generate_audio": generate_audio, "lock_stale": lock_stale, "lock_age_seconds": lock_age}), 200
+    return jsonify({"status": "starting", "next_step": next_step, "model": model, "tts_mode": tts_mode, "generate_audio": generate_audio}), 200
 
 
 @formation_bp.route("/api/formation/<int:job_id>/events", methods=["GET"])
@@ -5589,6 +5680,12 @@ def formation_pipeline_diagnostic(job_id):
     except Exception as e:
         logger.warning(f"⚠️ Diagnostic résolution folders job {job_id} : {e}")
         folder_state = {"expected_count": 0, "folder_ids": [], "duplicates": [], "missing": []}
+
+    try:
+        next_auto_step = _determine_next_ap_step(job_id)
+    except Exception as e:
+        logger.warning(f"⚠️ Diagnostic next auto step job {job_id} : {e}")
+        next_auto_step = None
 
     folders = []
     try:
@@ -5708,6 +5805,7 @@ def formation_pipeline_diagnostic(job_id):
             "duplicates": folder_state.get("duplicates", []),
             "missing": folder_state.get("missing", []),
         },
+        "next_auto_step": next_auto_step,
         "events": events,
         "finalize": finalize_result,
     }), 200

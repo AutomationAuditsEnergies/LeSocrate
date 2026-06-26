@@ -1133,7 +1133,9 @@ function PipelineVisualMap({ job, currentStep, autoPilotState, contentFolders, d
   if (!job) return null
 
   const events = diagnostic?.events || []
-  const activeAutoStep = autoPilotState?.status === 'running' ? autoPilotState.step : null
+  const activeAutoStep = autoPilotState?.status === 'running'
+    ? ((autoPilotState.lock_stale && autoPilotState.next_step) ? autoPilotState.next_step : autoPilotState.step)
+    : null
   const activeAutoIdx = AUTO_PILOT_ORDER_INDEX[activeAutoStep] ?? -1
   const autoDone = autoPilotState?.status === 'done' || job.auto_pilot_step === 'done'
   const autoPassed = key => {
@@ -6554,7 +6556,7 @@ export default function FormationPipeline() {
               diagnostic={pipelineDiagnostic}
               contentFolders={contentFolders}
             />
-            {autoPilotState && autoPilotState.status === 'error' && (
+            {autoPilotState && (autoPilotState.status === 'error' || autoPilotState.lock_stale) && (
               <div style={{
                 padding: '12px 16px',
                 marginBottom: '20px',
@@ -6569,7 +6571,11 @@ export default function FormationPipeline() {
                 flexWrap: 'wrap',
               }}>
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <Icon name="error_outline" /> <strong>Auto-pilot interrompu</strong> à l'étape <em>{autoPilotState.step || '?'}</em> : {autoPilotState.error}
+                  <Icon name="error_outline" /> <strong>Auto-pilot interrompu</strong> à l'étape <em>{autoPilotState.step || '?'}</em>
+                  {autoPilotState.next_step && autoPilotState.next_step !== autoPilotState.step ? (
+                    <> · prochaine étape réelle : <em>{autoPilotState.next_step}</em></>
+                  ) : null}
+                  {autoPilotState.error ? <> : {autoPilotState.error}</> : null}
                 </div>
                 <button
                   style={{
@@ -6582,14 +6588,13 @@ export default function FormationPipeline() {
                   onClick={async () => {
                     try {
                       const resp = await fetch(
-                        apiUrl(`/api/formation/${selectedJobId}/run-auto`),
+                        apiUrl(`/api/formation/${selectedJobId}/run-auto/resume`),
                         {
                           method: 'POST',
                           headers: { 'Content-Type': 'application/json' },
                           credentials: 'include',
                           body: JSON.stringify({
-                            tts_mode: autoPilotState.tts_mode || 'gtts',
-                            model: autoPilotState.model || 'pro',
+                            force: Boolean(autoPilotState.lock_stale),
                           }),
                         },
                       )
