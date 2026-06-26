@@ -12299,7 +12299,26 @@ def _build_contextual_break_audio(
                 f"{filename} — Edge TTS manuel calé ({final_duration:.1f}s/{duration_sec}s)"
             )
             return audio_bytes, "manual_edge_timed"
-        return _build_pause_audio(intro, outro, duration_sec), "manual_fish"
+        try:
+            return _build_pause_audio(intro, outro, duration_sec), "manual_fish"
+        except Exception as fish_break_error:
+            logger.warning(
+                "⚠️ Break Fish manuel %s impossible à assembler (%s); "
+                "fallback Fish end-only sans ffmpeg",
+                filename,
+                str(fish_break_error)[:240],
+            )
+            fallback_outro = outro or intro
+            audio_bytes, final_duration = _build_end_only_fish_break_audio_no_ffmpeg(
+                fallback_outro,
+                duration_sec,
+                on_progress=lambda msg: _emit(f"{filename} — {msg}"),
+            )
+            _emit(
+                f"{filename} — fallback Fish manuel calé "
+                f"({final_duration:.1f}s/{duration_sec}s)"
+            )
+            return audio_bytes, "manual_fish_end_only_fallback"
 
     try:
         from services.break_transition_service import break_intro_owned_by_previous
@@ -12398,7 +12417,26 @@ def _build_contextual_break_audio(
                 f"({final_duration:.1f}s/{duration_sec}s)"
             )
             return audio_bytes, "contextual_edge_timed"
-        return _build_pause_audio(intro, outro, duration_sec), "contextual_fish"
+        try:
+            return _build_pause_audio(intro, outro, duration_sec), "contextual_fish"
+        except Exception as fish_break_error:
+            logger.warning(
+                "⚠️ Break Fish contextuel %s impossible à assembler (%s); "
+                "fallback Fish end-only sans ffmpeg",
+                filename,
+                str(fish_break_error)[:240],
+            )
+            fallback_outro = outro or intro
+            audio_bytes, final_duration = _build_end_only_fish_break_audio_no_ffmpeg(
+                fallback_outro,
+                duration_sec,
+                on_progress=lambda msg: _emit(f"{filename} — {msg}"),
+            )
+            _emit(
+                f"{filename} — fallback Fish contextuel calé "
+                f"({final_duration:.1f}s/{duration_sec}s)"
+            )
+            return audio_bytes, "contextual_fish_end_only_fallback"
     except Exception as e:
         logger.warning(f"⚠️ Break contextuel {filename} échoué : {e}; fallback audioqapause")
         return _fallback(type(e).__name__)
