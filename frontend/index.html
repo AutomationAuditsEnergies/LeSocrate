@@ -12,10 +12,8 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <!-- Plus Jakarta Sans + Space Grotesk (Landing page) -->
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=Space+Grotesk:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-    <!-- Material Icons Round + Symbols Rounded (Landing page) -->
-    <link href="https://fonts.googleapis.com/icon?family=Material+Icons+Round" rel="stylesheet">
-    <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@24,400,0,0" rel="stylesheet">
-    <!-- Material Icons loaded locally via CSS for Windows compatibility -->
+    <!-- Material Icons Round + Symbols Rounded : self-hostés via index.css
+         (plus de dépendance Google Fonts → icônes fiables sur la landing) -->
     <!-- Fond de la page de login : téléchargé dès le HTML, avant même le JS -->
     <link rel="preload" as="image" href="/static/images/rocket.jpg" fetchpriority="high">
     <!-- Wallpaper hero de la landing : préchargé pour un affichage instantané -->
@@ -59,7 +57,28 @@
       @keyframes socrate-spin {
         to { transform: rotate(360deg); }
       }
+
+      /* Sur la landing : pas de splash "plateformes de cours" ni de spinner.
+         On affiche directement le wallpaper de la landing (préchargé) pour une
+         transition invisible vers la page. Classe posée par le script ci-dessous. */
+      html.landing-boot #root:empty {
+        background-color: #03093d;
+        background-image: url("/fond-hero2.webp");
+        background-size: cover;
+        background-position: center 15%;
+      }
+      html.landing-boot #root:empty::before,
+      html.landing-boot #root:empty::after {
+        content: none;
+        display: none;
+      }
     </style>
+    <script>
+      // Détecte la route AVANT le rendu pour adapter le splash (cf. CSS ci-dessus).
+      if (window.location.pathname === '/landing') {
+        document.documentElement.classList.add('landing-boot');
+      }
+    </script>
   </head>
   <body>
     <div id="root"></div>
