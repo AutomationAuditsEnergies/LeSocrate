@@ -13,63 +13,6 @@ function toNumber(value) {
   return Number.isFinite(parsed) ? parsed : null
 }
 
-const COURSE_AUDIO_DURATIONS = {
-  'cours_9h00_9h45.mp3': 2700,
-  'cours_10h05_10h50.mp3': 2700,
-  'cours_11h05_12h00.mp3': 3300,
-  'cours_12h20_13h05.mp3': 2700,
-  'cours_14h45_15h45.mp3': 3600,
-  'cours_16h00_17h00.mp3': 3600,
-  'cours_17h25_18h15.mp3': 3000,
-}
-
-function buildFallbackWordTimings(slides = [], filename = '') {
-  const targetName = audioBasename(filename)
-  const duration = COURSE_AUDIO_DURATIONS[targetName]
-  if (!duration || !slides.length) return []
-
-  const parsed = slides.map((slide, index) => {
-    const sourceRef = slide?.source_ref || {}
-    const startWord = Math.max(0, toNumber(sourceRef.word_start ?? sourceRef.start_word) ?? 0)
-    const endWord = Math.max(0, toNumber(sourceRef.word_end ?? sourceRef.end_word) ?? 0)
-    return { slide, index, startWord, endWord }
-  })
-
-  let maxWord = parsed.reduce((max, item) => Math.max(max, item.startWord, item.endWord), 0)
-  if (maxWord <= 0) {
-    maxWord = Math.max(1, parsed.length)
-    parsed.forEach((item, index) => {
-      item.startWord = index
-      item.endWord = index + 1
-    })
-  }
-
-  let previousEnd = 0
-  return parsed.map((item, index) => {
-    let start = Math.max(previousEnd, (item.startWord / maxWord) * duration)
-    let endWord = item.endWord
-    if (endWord <= item.startWord) {
-      const nextStart = parsed[index + 1]?.startWord ?? maxWord
-      endWord = Math.max(item.startWord + 1, nextStart)
-    }
-    let end = Math.min(duration, Math.max(start + 0.5, (endWord / maxWord) * duration))
-    if (index + 1 < parsed.length) {
-      const nextStart = (parsed[index + 1].startWord / maxWord) * duration
-      end = Math.min(end, Math.max(start + 0.5, nextStart))
-    }
-    previousEnd = end
-    return {
-      slide: item.slide,
-      slideIndex: item.index,
-      audioName: targetName,
-      start,
-      end,
-      duration: end - start,
-      fallback: true,
-    }
-  })
-}
-
 // Libellé de durée pour le slide pause dédié : 600 → "10 minutes", 5400 → "1h30".
 export function breakDurationLabel(seconds) {
   const minutes = Math.round(Math.max(0, Number(seconds) || 0) / 60)
@@ -134,10 +77,6 @@ export function buildAudioSlideTimings(slides = [], audioSync = {}, filename = '
     const resolved = timing?.slide_id ? slideById.get(timing.slide_id) : null
     addTiming(timing, resolved?.slide, resolved?.index)
   })
-
-  if (!rows.length) {
-    return buildFallbackWordTimings(slides, filename)
-  }
 
   return rows.sort((a, b) => a.start - b.start || a.slideIndex - b.slideIndex)
 }
