@@ -18,6 +18,8 @@
     <!-- Material Icons loaded locally via CSS for Windows compatibility -->
     <!-- Fond de la page de login : téléchargé dès le HTML, avant même le JS -->
     <link rel="preload" as="image" href="/static/images/rocket.jpg" fetchpriority="high">
+    <!-- Wallpaper hero de la landing : préchargé pour un affichage instantané -->
+    <link rel="preload" as="image" href="/fond-hero2.webp" fetchpriority="high">
     <style>
       /* Splash affiché pendant le téléchargement du bundle JS — remplacé dès
          que React monte (#root:empty ne matche plus). Évite l'écran noir. */

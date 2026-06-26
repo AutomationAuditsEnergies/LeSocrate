@@ -73,7 +73,7 @@ export default function Landing() {
       </nav>
 
       {/* Hero */}
-      <section className="relative min-h-screen flex flex-col justify-center overflow-hidden" style={{ backgroundColor: '#03093d', backgroundImage: 'url(/fond-hero2.jpg)', backgroundSize: 'cover', backgroundPosition: 'center 15%' }}>
+      <section className="relative min-h-screen flex flex-col justify-center overflow-hidden" style={{ backgroundColor: '#03093d', backgroundImage: 'url(/fond-hero2.webp)', backgroundSize: 'cover', backgroundPosition: 'center 15%' }}>
         <div className="absolute top-0 right-0 -mr-20 -mt-20 w-96 h-96 bg-[#5B5BFF]/10 rounded-full blur-3xl opacity-70"></div>
         <div className="absolute bottom-0 left-0 -ml-20 -mb-20 w-80 h-80 bg-[#FF6B8B]/10 rounded-full blur-3xl opacity-70"></div>
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 relative z-10 pt-24 pb-16">
