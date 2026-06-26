@@ -2258,7 +2258,7 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
                       voiceType: playlistVoiceType,
                       forceAll: true,
                       includeBreaks: true,
-                      parallelBreaks: true,
+                      parallelBreaks: playlistVoiceType !== 'fish_audio',
                     })}
                     disabled={playlistRunning || !canGeneratePlaylistAudio}
                     className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition-opacity disabled:cursor-not-allowed disabled:opacity-50"

@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import ChatPanel from '../components/ChatPanel.jsx'
 import { apiFetch, getPlatformId, getPlatformName, setPlatformId } from '../api'
@@ -194,6 +194,11 @@ export default function Video() {
 
   const currentAudioName = audioInfo?.status === 'playing' ? audioBasename(audioInfo.filename) : ''
   const isCurrentBreakAudio = audioInfo?.status === 'playing' && isBreakAudioType(audioInfo.type)
+  const audioSrc = useMemo(() => {
+    if (audioInfo?.status !== 'playing' || !audioInfo.filename) return ''
+    const separator = audioInfo.filename.includes('?') ? '&' : '?'
+    return `${audioInfo.filename}${separator}v=${encodeURIComponent(`${audioInfo.id || currentAudioName}-${audioInfo.duration || 0}`)}`
+  }, [audioInfo?.status, audioInfo?.filename, audioInfo?.id, audioInfo?.duration, currentAudioName])
 
   useEffect(() => {
     let cancelled = false
@@ -344,7 +349,14 @@ export default function Video() {
         }
       }
     }
-  }, [audioInfo, fetchAudioStatus])
+  }, [
+    audioInfo?.status,
+    audioInfo?.filename,
+    audioInfo?.id,
+    audioInfo?.type,
+    audioInfo?.duration,
+    fetchAudioStatus,
+  ])
 
   // Afficher le chargement
   if (loading) {
@@ -511,7 +523,7 @@ export default function Video() {
                 disablePictureInPicture
                 style={{ display: 'none' }}
               >
-                <source src={audioInfo.filename} type="audio/mpeg" />
+                <source src={audioSrc} type="audio/mpeg" />
               </audio>
             )}
           </div>

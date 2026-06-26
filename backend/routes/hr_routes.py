@@ -3394,6 +3394,8 @@ def create_hr_blueprint(socketio):
 
             use_basic_tts = voice_type == "gtts"
             voice_label = "gTTS" if voice_type == "gtts" else "Fish Audio" if voice_type == "fish_audio" else "Mock"
+            if voice_type == "fish_audio":
+                parallel_breaks = False
             if "sync_slides" not in req_body:
                 sync_slides = bool(has_script and not playlist_mock and force_all and voice_type in {"gtts", "fish_audio"})
             if voice_type == "fish_audio":
