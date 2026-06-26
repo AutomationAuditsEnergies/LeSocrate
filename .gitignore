@@ -37,3 +37,12 @@ output_jour1/
 output_jour2/
 output_qa_pauses/
 test_tags_output/
+
+# Backups SQLite (trop volumineux pour git — 4,4 Go)
+backend/database/backups/
+
+# Artefacts de compilation LaTeX (mémoire)
+memoire/*.aux
+memoire/*.log
+memoire/*.out
+memoire/*.toc

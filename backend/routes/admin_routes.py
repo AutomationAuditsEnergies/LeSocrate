@@ -9,7 +9,7 @@ from azure.storage.blob import BlobServiceClient, generate_blob_sas, BlobSasPerm
 from azure.core.exceptions import ResourceExistsError
 from pydub import AudioSegment
 import state
-from config import FRANCE_TZ, DB_PATH
+from config import FRANCE_TZ, DB_PATH, SUPABASE_SERVICE_ROLE_KEY, SUPABASE_URL
 from database.db import get_db_connection
 from database import db_safety
 from services.time_service import set_heure_debut_cours, get_heure_debut_cours
@@ -409,6 +409,174 @@ def create_admin_blueprint(socketio):
         if not session.get("is_admin"):
             return jsonify({"success": False, "error": "Accès admin requis"}), 401
         return None
+
+    @admin_bp.route("/api/admin/student-accounts", methods=["GET"])
+    def list_student_accounts():
+        denied = _require_admin()
+        if denied:
+            return denied
+        platform_id = _get_platform_id()
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT id, email, nom, prenom, is_active, created_at, updated_at
+            FROM student_profiles
+            WHERE platform_id = ?
+            ORDER BY prenom COLLATE NOCASE, nom COLLATE NOCASE, email COLLATE NOCASE
+            """,
+            (platform_id,),
+        )
+        accounts = [
+            {
+                "id": row[0],
+                "username": row[1],
+                "email": row[1],
+                "nom": row[2],
+                "prenom": row[3],
+                "is_active": bool(row[4]),
+                "created_at": row[5],
+                "updated_at": row[6],
+            }
+            for row in cursor.fetchall()
+        ]
+        conn.close()
+        return jsonify({"success": True, "accounts": accounts}), 200
+
+    @admin_bp.route("/api/admin/student-accounts", methods=["POST"])
+    def create_student_account():
+        denied = _require_admin()
+        if denied:
+            return denied
+        data = request.get_json(silent=True) or {}
+        platform_id = _get_platform_id()
+        email = str(data.get("email") or data.get("username") or "").strip().lower()
+        password = str(data.get("password", ""))
+        nom = str(data.get("nom", "")).strip()
+        prenom = str(data.get("prenom", "")).strip()
+        if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
+            return jsonify({"success": False, "error": "Supabase Admin non configuré"}), 500
+        if not email or not password or not nom or not prenom:
+            return jsonify({"success": False, "error": "Email, mot de passe, nom et prénom requis"}), 400
+        if len(password) < 8:
+            return jsonify({"success": False, "error": "Le mot de passe doit contenir au moins 8 caractères"}), 400
+        supabase_resp = http_requests.post(
+            f"{SUPABASE_URL}/auth/v1/admin/users",
+            headers={
+                "apikey": SUPABASE_SERVICE_ROLE_KEY,
+                "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "email": email,
+                "password": password,
+                "email_confirm": True,
+                "user_metadata": {
+                    "nom": nom,
+                    "prenom": prenom,
+                    "platform_id": platform_id,
+                    "role": "student",
+                },
+            },
+            timeout=15,
+        )
+        if supabase_resp.status_code not in (200, 201):
+            logger.warning("❌ Création utilisateur Supabase refusée: %s", supabase_resp.text[:500])
+            return jsonify({"success": False, "error": "Création Supabase refusée"}), 400
+        supabase_user = supabase_resp.json()
+        auth_user_id = supabase_user.get("id")
+        if not auth_user_id:
+            return jsonify({"success": False, "error": "Réponse Supabase invalide"}), 500
+        now = datetime.now(FRANCE_TZ).strftime("%Y-%m-%d %H:%M:%S")
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        try:
+            cursor.execute(
+                """
+                INSERT INTO student_profiles
+                    (auth_user_id, platform_id, email, nom, prenom, role, is_active, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, 'student', 1, ?, ?)
+                """,
+                (auth_user_id, platform_id, email, nom, prenom, now, now),
+            )
+            conn.commit()
+        except Exception as exc:
+            conn.rollback()
+            if "UNIQUE" in str(exc).upper():
+                return jsonify({"success": False, "error": "Cet email existe déjà"}), 409
+            logger.error(f"❌ Erreur création compte élève: {exc}")
+            return jsonify({"success": False, "error": "Erreur serveur"}), 500
+        finally:
+            conn.close()
+        return jsonify({"success": True, "message": "Compte élève créé"}), 201
+
+    @admin_bp.route("/api/admin/student-accounts/<int:account_id>", methods=["PUT"])
+    def update_student_account(account_id):
+        denied = _require_admin()
+        if denied:
+            return denied
+        data = request.get_json(silent=True) or {}
+        platform_id = _get_platform_id()
+        updates = []
+        params = []
+        password_changed = False
+        for field in ("nom", "prenom"):
+            if field in data:
+                value = str(data.get(field) or "").strip()
+                if not value:
+                    return jsonify({"success": False, "error": "Nom et prénom ne peuvent pas être vides"}), 400
+                updates.append(f"{field} = ?")
+                params.append(value)
+        if "password" in data and data.get("password"):
+            password = str(data.get("password"))
+            if len(password) < 8:
+                return jsonify({"success": False, "error": "Le mot de passe doit contenir au moins 8 caractères"}), 400
+            if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
+                return jsonify({"success": False, "error": "Supabase Admin non configuré"}), 500
+            conn_lookup = get_db_connection()
+            cursor_lookup = conn_lookup.cursor()
+            cursor_lookup.execute(
+                "SELECT auth_user_id FROM student_profiles WHERE id = ? AND platform_id = ?",
+                (account_id, platform_id),
+            )
+            row = cursor_lookup.fetchone()
+            conn_lookup.close()
+            if not row:
+                return jsonify({"success": False, "error": "Compte introuvable"}), 404
+            supabase_resp = http_requests.put(
+                f"{SUPABASE_URL}/auth/v1/admin/users/{row[0]}",
+                headers={
+                    "apikey": SUPABASE_SERVICE_ROLE_KEY,
+                    "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
+                    "Content-Type": "application/json",
+                },
+                json={"password": password},
+                timeout=15,
+            )
+            if supabase_resp.status_code not in (200, 204):
+                logger.warning("❌ Reset password Supabase refusé: %s", supabase_resp.text[:500])
+                return jsonify({"success": False, "error": "Mise à jour Supabase refusée"}), 400
+            password_changed = True
+        if "is_active" in data:
+            updates.append("is_active = ?")
+            params.append(1 if data.get("is_active") else 0)
+        if not updates and not password_changed:
+            return jsonify({"success": False, "error": "Aucune modification fournie"}), 400
+        updates.append("updated_at = ?")
+        params.append(datetime.now(FRANCE_TZ).strftime("%Y-%m-%d %H:%M:%S"))
+        params.extend([account_id, platform_id])
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            f"UPDATE student_profiles SET {', '.join(updates)} WHERE id = ? AND platform_id = ?",
+            params,
+        )
+        conn.commit()
+        changed = cursor.rowcount
+        conn.close()
+        if not changed:
+            return jsonify({"success": False, "error": "Compte introuvable"}), 404
+        return jsonify({"success": True, "message": "Compte élève mis à jour"}), 200
 
     @admin_bp.route("/api/admin/db/status", methods=["GET"])
     def db_status():

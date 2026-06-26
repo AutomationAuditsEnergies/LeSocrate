@@ -17,6 +17,7 @@ const Attente = lazy(loadAttentePage)
 const DebugCours = lazy(() => import('./pages/DebugCours.jsx'))
 const Intro = lazy(() => import('./pages/Intro.jsx'))
 const LoginAdmin = lazy(loadLoginAdminPage)
+const Landing = lazy(() => import('./pages/Landing.jsx'))
 const Video = lazy(loadVideoPage)
 const TestSlides = lazy(() => import('./pages/TestSlides.jsx'))
 const GeneratedSlides = lazy(() => import('./pages/GeneratedSlides.jsx'))
@@ -173,6 +174,7 @@ export default function App() {
             }
           />
           <Route path="/attente" element={<Attente />} />
+          <Route path="/landing" element={<Landing />} />
           <Route path="/video" element={<Video />} />
           <Route path="/login-admin" element={<LoginAdmin preloadAdminRoute={loadAdminPage} />} />
 

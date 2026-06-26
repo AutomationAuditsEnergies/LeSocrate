@@ -13,6 +13,10 @@ export default function Admin() {
   const [configHeure, setConfigHeure] = useState('')
   const [successMessage, setSuccessMessage] = useState('')
   const [errorMessage, setErrorMessage] = useState('')
+  const [studentAccounts, setStudentAccounts] = useState([])
+  const [studentForm, setStudentForm] = useState({ email: '', password: '', nom: '', prenom: '' })
+  const [studentMessage, setStudentMessage] = useState('')
+  const [studentError, setStudentError] = useState('')
 
   // État pour l'upload PDF
   const [pdfFile, setPdfFile] = useState(null)
@@ -39,6 +43,7 @@ export default function Admin() {
   // Charger les logs depuis l'API
   useEffect(() => {
     fetchLogs()
+    fetchStudentAccounts()
   }, [search])
 
   // Vérifier le statut de l'indexer au chargement (persistance après refresh)
@@ -116,6 +121,69 @@ export default function Admin() {
     () => logs,
     [logs]
   )
+
+  const fetchStudentAccounts = async () => {
+    try {
+      const response = await apiFetch('/api/admin/student-accounts')
+      const data = await response.json()
+      if (response.ok && data.success) {
+        setStudentAccounts(data.accounts || [])
+      }
+    } catch (error) {
+      console.error('Erreur chargement comptes élèves:', error)
+    }
+  }
+
+  const handleStudentFormChange = (event) => {
+    const { name, value } = event.target
+    setStudentForm((current) => ({ ...current, [name]: value }))
+  }
+
+  const handleCreateStudent = async (event) => {
+    event.preventDefault()
+    setStudentMessage('')
+    setStudentError('')
+    try {
+      const response = await apiFetch('/api/admin/student-accounts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(studentForm),
+      })
+      const data = await response.json()
+      if (response.ok && data.success) {
+        setStudentMessage(data.message || 'Compte créé')
+        setStudentForm({ email: '', password: '', nom: '', prenom: '' })
+        fetchStudentAccounts()
+      } else {
+        setStudentError(data.error || 'Erreur lors de la création')
+      }
+    } catch (error) {
+      console.error('Erreur création compte élève:', error)
+      setStudentError('Erreur de connexion au serveur')
+    }
+  }
+
+  const handleToggleStudent = async (account) => {
+    setStudentMessage('')
+    setStudentError('')
+    try {
+      const response = await apiFetch(`/api/admin/student-accounts/${account.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ is_active: !account.is_active }),
+      })
+      const data = await response.json()
+      if (response.ok && data.success) {
+        setStudentMessage(data.message || 'Compte mis à jour')
+        fetchStudentAccounts()
+      } else {
+        setStudentError(data.error || 'Erreur lors de la mise à jour')
+      }
+    } catch (error) {
+      console.error('Erreur mise à jour compte élève:', error)
+      setStudentError('Erreur de connexion au serveur')
+    }
+  }
 
   const handleExportExcel = async () => {
     try {
@@ -381,6 +449,119 @@ export default function Admin() {
           >
             Forcer la déconnexion de tous les utilisateurs
           </button>
+        </Sidebar>
+
+        <Sidebar>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h3 className="text-base font-semibold text-white">Comptes élèves</h3>
+              <p className="mt-1 text-sm text-gray-400">
+                Dès qu&apos;un compte existe sur cette plateforme, le login élève exige un identifiant et un mot de passe.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={fetchStudentAccounts}
+              className="rounded-lg border border-gray-600 bg-gray-700 px-3 py-2 text-sm text-gray-100 transition hover:bg-gray-600"
+            >
+              Actualiser
+            </button>
+          </div>
+
+          {studentMessage && (
+            <div className="mt-4 rounded-xl border border-emerald-400/40 bg-emerald-900/30 p-3 text-sm text-emerald-200">
+              {studentMessage}
+            </div>
+          )}
+          {studentError && (
+            <div className="mt-4 rounded-xl border border-rose-400/40 bg-rose-900/30 p-3 text-sm text-rose-200">
+              {studentError}
+            </div>
+          )}
+
+          <form className="mt-4 grid gap-3 md:grid-cols-5" onSubmit={handleCreateStudent}>
+            <input
+              name="email"
+              value={studentForm.email}
+              onChange={handleStudentFormChange}
+              placeholder="Email"
+              type="email"
+              autoComplete="off"
+              className="rounded-lg border border-gray-600 bg-gray-900 px-3 py-2 text-sm text-gray-100 focus:outline-none focus:ring-2 focus:ring-gray-500"
+              required
+            />
+            <input
+              name="password"
+              value={studentForm.password}
+              onChange={handleStudentFormChange}
+              placeholder="Mot de passe"
+              type="password"
+              autoComplete="new-password"
+              className="rounded-lg border border-gray-600 bg-gray-900 px-3 py-2 text-sm text-gray-100 focus:outline-none focus:ring-2 focus:ring-gray-500"
+              required
+              minLength={8}
+            />
+            <input
+              name="nom"
+              value={studentForm.nom}
+              onChange={handleStudentFormChange}
+              placeholder="Nom"
+              className="rounded-lg border border-gray-600 bg-gray-900 px-3 py-2 text-sm text-gray-100 focus:outline-none focus:ring-2 focus:ring-gray-500"
+              required
+            />
+            <input
+              name="prenom"
+              value={studentForm.prenom}
+              onChange={handleStudentFormChange}
+              placeholder="Prénom"
+              className="rounded-lg border border-gray-600 bg-gray-900 px-3 py-2 text-sm text-gray-100 focus:outline-none focus:ring-2 focus:ring-gray-500"
+              required
+            />
+            <button
+              type="submit"
+              className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white shadow-sm transition hover:-translate-y-0.5 hover:bg-blue-700"
+            >
+              Créer
+            </button>
+          </form>
+
+          <div className="mt-4 overflow-x-auto">
+            <table className="w-full min-w-[720px] border-separate border-spacing-0 text-sm text-gray-200">
+              <thead>
+                <tr className="text-left text-xs uppercase tracking-wide text-gray-400">
+                  <th className="border-b border-gray-700 px-3 py-3">Email</th>
+                  <th className="border-b border-gray-700 px-3 py-3">Nom</th>
+                  <th className="border-b border-gray-700 px-3 py-3">Prénom</th>
+                  <th className="border-b border-gray-700 px-3 py-3">Statut</th>
+                  <th className="border-b border-gray-700 px-3 py-3">Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {studentAccounts.map((account) => (
+                  <tr key={account.id} className="transition hover:bg-gray-700/40">
+                    <td className="border-b border-gray-800 px-3 py-3">{account.email || account.username}</td>
+                    <td className="border-b border-gray-800 px-3 py-3">{account.nom}</td>
+                    <td className="border-b border-gray-800 px-3 py-3">{account.prenom}</td>
+                    <td className="border-b border-gray-800 px-3 py-3">
+                      {account.is_active ? 'Actif' : 'Désactivé'}
+                    </td>
+                    <td className="border-b border-gray-800 px-3 py-3">
+                      <button
+                        type="button"
+                        onClick={() => handleToggleStudent(account)}
+                        className="rounded-lg border border-gray-600 bg-gray-700 px-3 py-2 text-xs text-gray-100 transition hover:bg-gray-600"
+                      >
+                        {account.is_active ? 'Désactiver' : 'Réactiver'}
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {studentAccounts.length === 0 && (
+              <p className="mt-3 text-sm text-gray-400">Aucun compte élève créé pour cette plateforme.</p>
+            )}
+          </div>
         </Sidebar>
 
         <Sidebar>

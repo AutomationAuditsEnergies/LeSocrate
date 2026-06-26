@@ -1,0 +1,12 @@
+{"id":"in_001","question":"Pourquoi la régulation du système nerveux autonome est-elle importante pour un conseiller en relation client à distance ?","expected_terms":["système nerveux autonome","SNA","voix"],"out_of_scope":false}
+{"id":"in_002","question":"Quel rôle joue la voix calme d'un conseiller face à un client agité ?","expected_terms":["co-régulation","SNA","client agité"],"out_of_scope":false}
+{"id":"in_003","question":"Quels exercices vocaux simples un conseiller peut-il pratiquer avant sa journée de travail ?","expected_terms":["vibrages des lèvres","sirènes vocales","lecture à voix haute"],"out_of_scope":false}
+{"id":"in_004","question":"Quels effets vocaux peut provoquer une réclamation complexe chez un conseiller débutant ?","expected_terms":["voix","anxiété","débit"],"out_of_scope":false}
+{"id":"in_005","question":"Quels avantages le télétravail peut-il apporter à la qualité vocale du conseiller ?","expected_terms":["télétravail","transport","confort physique"],"out_of_scope":false}
+{"id":"in_006","question":"Pourquoi un microphone externe peut-il être utile pour un conseiller en télétravail ?","expected_terms":["microphone externe","bruits de fond","télétravail"],"out_of_scope":false}
+{"id":"in_007","question":"Qu'est-ce que l'hypothèse de la rétroaction somatique dans le lien entre émotion, SNA et voix ?","expected_terms":["rétroaction somatique","marqueurs somatiques","Antonio Damasio"],"out_of_scope":false}
+{"id":"in_008","question":"Quels effets la pratique régulière de la gratitude peut-elle produire ?","expected_terms":["gratitude","bien-être subjectif","sommeil"],"out_of_scope":false}
+{"id":"out_001","question":"Comment soigner une conjonctivite chez un chat ?","expected_terms":[],"out_of_scope":true}
+{"id":"out_002","question":"Quelle est la réglementation française pour piloter un drone de plus de 800 grammes ?","expected_terms":[],"out_of_scope":true}
+{"id":"out_003","question":"Quelle est la recette traditionnelle du tiramisu italien ?","expected_terms":[],"out_of_scope":true}
+{"id":"out_004","question":"Comment diagnostiquer une panne d'injecteur sur un moteur diesel ?","expected_terms":[],"out_of_scope":true}

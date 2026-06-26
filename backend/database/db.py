@@ -151,6 +151,42 @@ def init_database(_recovered_from_corruption: bool = False):
         )
         logger.info("✅ Table deletion_requests créée/vérifiée")
 
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS student_accounts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                platform_id INTEGER NOT NULL DEFAULT 1,
+                username TEXT NOT NULL,
+                password_hash TEXT NOT NULL,
+                nom TEXT NOT NULL,
+                prenom TEXT NOT NULL,
+                is_active INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(platform_id, username)
+            )
+            """
+        )
+        logger.info("✅ Table student_accounts créée/vérifiée")
+
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS student_profiles (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                auth_user_id TEXT NOT NULL UNIQUE,
+                platform_id INTEGER NOT NULL DEFAULT 1,
+                email TEXT NOT NULL,
+                nom TEXT NOT NULL,
+                prenom TEXT NOT NULL,
+                role TEXT NOT NULL DEFAULT 'student',
+                is_active INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        logger.info("✅ Table student_profiles créée/vérifiée")
+
         # Seed plateformes si la table est vide
         cursor.execute("SELECT COUNT(*) FROM platform_config")
         pc_count = cursor.fetchone()[0]

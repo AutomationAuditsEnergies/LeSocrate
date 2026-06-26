@@ -8,7 +8,7 @@ import os
 
 from dotenv import load_dotenv
 
-load_dotenv()  # Charge le fichier .env
+load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))  # Charge backend/.env quel que soit le dossier de lancement
 
 from main_app import app, socketio
 

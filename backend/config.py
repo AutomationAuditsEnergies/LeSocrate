@@ -7,11 +7,21 @@ FRANCE_TZ = pytz.timezone("Europe/Paris")
 
 # Configuration Flask
 SECRET_KEY = os.getenv("SECRET_KEY", "fallback_secret_key_for_dev")
+STUDENT_AUTH_LEGACY_FALLBACK = os.getenv("STUDENT_AUTH_LEGACY_FALLBACK", "1").lower() in (
+    "1",
+    "true",
+    "yes",
+    "on",
+)
 
 # Configuration Azure - URL du service RAG
 RAG_SERVICE_URL = os.getenv(
     "RAG_SERVICE_URL", "https://rag-b0fndpa9fycaafcr.francecentral-01.azurewebsites.net"
 )
+
+SUPABASE_URL = os.getenv("SUPABASE_URL", "").rstrip("/")
+SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY", "")
+SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
 
 # Base de données - /home est persistant sur Azure App Service, /tmp ne l'est pas.
 # DB_PATH peut être surchargé par environnement Azure. Indispensable pour un
