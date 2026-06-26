@@ -1133,8 +1133,8 @@ function PipelineVisualMap({ job, currentStep, autoPilotState, contentFolders, d
   if (!job) return null
 
   const events = diagnostic?.events || []
-  const activeAutoStep = autoPilotState?.status === 'running'
-    ? ((autoPilotState.lock_stale && autoPilotState.next_step) ? autoPilotState.next_step : autoPilotState.step)
+  const activeAutoStep = ['running', 'stopped'].includes(autoPilotState?.status)
+    ? ((autoPilotState.lock_stale || autoPilotState.status === 'stopped') && autoPilotState.next_step ? autoPilotState.next_step : autoPilotState.step)
     : null
   const activeAutoIdx = AUTO_PILOT_ORDER_INDEX[activeAutoStep] ?? -1
   const autoDone = autoPilotState?.status === 'done' || job.auto_pilot_step === 'done'
@@ -6556,7 +6556,7 @@ export default function FormationPipeline() {
               diagnostic={pipelineDiagnostic}
               contentFolders={contentFolders}
             />
-            {autoPilotState && (autoPilotState.status === 'error' || autoPilotState.lock_stale) && (
+            {autoPilotState && (autoPilotState.status === 'error' || autoPilotState.status === 'stopped' || autoPilotState.lock_stale) && (
               <div style={{
                 padding: '12px 16px',
                 marginBottom: '20px',

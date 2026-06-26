@@ -5591,6 +5591,19 @@ def auto_pilot_status(job_id):
     if not job:
         return jsonify({"error": "Job introuvable"}), 404
     if not job.get("auto_pilot_enabled"):
+        if job.get("auto_pilot_step") == "stopped":
+            try:
+                next_step = _determine_next_ap_step(job_id)
+            except Exception:
+                next_step = None
+            return jsonify({
+                "status": "stopped",
+                "step": "stopped",
+                "next_step": next_step,
+                "model": job.get("auto_pilot_model"),
+                "tts_mode": job.get("auto_pilot_tts_mode"),
+                "generate_audio": bool(job.get("auto_pilot_generate_audio")),
+            }), 200
         return jsonify({"status": "idle"}), 200
     step = job.get("auto_pilot_step")
     error = job.get("auto_pilot_error")
