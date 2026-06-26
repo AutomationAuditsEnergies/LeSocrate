@@ -4509,7 +4509,7 @@ def _synthesize_course_audio_synced_to_slides(
         voice_start_sec = 0.0
         cursor_sec = 0.0
     else:
-        start_bytes, start_duration = _silent_mp3_approx_no_ffmpeg(_COURSE_START_SILENCE_SECONDS)
+        start_bytes, start_duration = _fish_silent_mp3_approx_no_ffmpeg(_COURSE_START_SILENCE_SECONDS)
         if start_bytes:
             audio_parts.append(start_bytes)
         voice_start_sec = start_duration
@@ -4806,7 +4806,7 @@ def _synthesize_course_audio_synced_to_slides(
         final_duration = voice_stop_duration
         output_duration = voice_stop_duration
         if output_duration < target_sec:
-            silence_bytes, silence_duration = _silent_mp3_approx_no_ffmpeg(target_sec - output_duration)
+            silence_bytes, silence_duration = _fish_silent_mp3_approx_no_ffmpeg(target_sec - output_duration)
             if silence_bytes and silence_duration > 0:
                 audio_parts.append(silence_bytes)
                 output_duration += silence_duration
