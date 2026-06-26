@@ -1649,6 +1649,25 @@ def create_hr_blueprint(socketio):
                 job["progress"] = idx + 1
                 logger.info(f"  🗑️ Supprimé : {blob.name}")
 
+            # Second passage : si un blob apparaît après le listing initial, ou
+            # si Azure renvoie une page incomplète pendant le backup, on vide le
+            # container avant de rouvrir les uploads.
+            remaining_deleted = 0
+            while True:
+                remaining_blobs = list(source_client.list_blobs())
+                if not remaining_blobs:
+                    break
+                for blob in remaining_blobs:
+                    source_client.delete_blob(blob.name)
+                    remaining_deleted += 1
+                    logger.info(f"  🗑️ Supprimé après vérification : {blob.name}")
+
+            if remaining_deleted:
+                job["remaining_deleted"] = remaining_deleted
+                logger.info(
+                    f"🧹 Backup P{platform_id} : {remaining_deleted} fichier(s) restant(s) supprimé(s)"
+                )
+
             # ── ÉTAPE 3 : Déverrouillage ─────────────────────────────────
             job["step"] = 3
             job["step_status"] = "running"
