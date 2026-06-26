@@ -15412,6 +15412,8 @@ def _run_content_review_pass(
         bool(force),
     )
     rules_text = _load_review_rules()
+    if review_kind == "local_compliance":
+        rules_text += _ethical_lexical_signature_text()
     review_signature = _review_rules_signature(
         rules_text,
         groups=groups,
