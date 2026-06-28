@@ -262,9 +262,6 @@ def init_database(_recovered_from_corruption: bool = False):
         if "source_formation_id" not in pc_columns:
             cursor.execute("ALTER TABLE platform_config ADD COLUMN source_formation_id INTEGER")
             logger.info("✅ Colonne source_formation_id ajoutée à platform_config")
-        if "email_formation_url" not in pc_columns:
-            cursor.execute("ALTER TABLE platform_config ADD COLUMN email_formation_url TEXT")
-            logger.info("✅ Colonne email_formation_url ajoutée à platform_config")
 
         # Migration multi-tenant : platform_id dans logs
         cursor.execute("PRAGMA table_info(logs)")
