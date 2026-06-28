@@ -2431,7 +2431,21 @@ function PlatformCard({
             pointerEvents: flipped ? 'none' : 'auto',
           }}
         >
-          <div className="flex items-center gap-2 px-6 pt-6">
+          {/* Spotlight clair derrière le robot — pas de cadre. Le PNG a un fond
+              blanc/gris cuit : mix-blend-multiply le fond dans la carte (clair
+              ET sombre), le robot reste seul lisible dans le pool de lumière. */}
+          <div
+            className="pointer-events-none absolute inset-0"
+            style={{ background: 'radial-gradient(circle at 50% 40%, #ffffff 0%, rgba(255,255,255,0.8) 32%, transparent 66%)' }}
+          />
+          {/* Halo de la couleur attitrée à la plateforme */}
+          <div
+            className="pointer-events-none absolute left-1/2 top-[40%] h-44 w-44 -translate-x-1/2 -translate-y-1/2 rounded-full blur-3xl"
+            style={{ backgroundColor: theme.glow, opacity: 0.22 }}
+          />
+
+          {/* Nom plateforme — overlay haut pour laisser le robot plein cadre */}
+          <div className="absolute inset-x-5 top-5 z-20 flex items-center gap-2">
             <span
               className="inline-flex flex-shrink-0 items-center rounded-md px-1.5 py-0.5 text-[10px] font-semibold uppercase"
               style={{
@@ -2449,31 +2463,18 @@ function PlatformCard({
             </h3>
           </div>
 
-          {/* Stage : fond clair (le PNG robot a un fond blanc → mix-blend
-              multiply le fond dans les deux thèmes) + halo de la couleur de la
-              plateforme + ombre au sol. */}
-          <div
-            className="relative mx-6 my-5 flex flex-1 items-center justify-center overflow-hidden rounded-xl"
-            style={{
-              minHeight: '210px',
-              background: `radial-gradient(circle at 50% 42%, ${theme.glow}26 0%, #F4F5FB 68%)`,
-              border: '1px solid #E4E4E4',
-            }}
-          >
-            <div
-              className="absolute bottom-8 left-1/2 h-5 w-32 -translate-x-1/2 rounded-[100%] blur-md"
-              style={{ backgroundColor: theme.glow, opacity: 0.4 }}
-            />
+          {/* Robot plein cadre */}
+          <div className="relative z-10 flex flex-1 items-center justify-center">
             <img
               src="/robot-prof.png"
               alt={`Professeur IA — ${p.name}`}
               draggable={false}
-              className="relative w-44 max-w-[68%] object-contain transition-transform duration-500 group-hover:-translate-y-1"
-              style={{ filter: `hue-rotate(${theme.hue}deg) saturate(1.05)`, mixBlendMode: 'multiply' }}
+              className="w-full max-w-[82%] object-contain transition-transform duration-500 ease-out group-hover:-translate-y-1.5 group-hover:scale-[1.03]"
+              style={{ minHeight: '240px', filter: `hue-rotate(${theme.hue}deg) saturate(1.05)`, mixBlendMode: 'multiply' }}
             />
             {!p.active && (
               <span
-                className="absolute bottom-3 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-full px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide"
+                className="absolute bottom-2 left-1/2 z-20 -translate-x-1/2 whitespace-nowrap rounded-full px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide"
                 style={{ backgroundColor: 'rgba(15,23,42,0.06)', color: '#64748b' }}
               >
                 Bientôt disponible
@@ -2481,7 +2482,7 @@ function PlatformCard({
             )}
           </div>
 
-          <div className="flex items-center justify-center gap-1.5 pb-5 text-xs" style={{ color: colors.textMuted }}>
+          <div className="relative z-20 flex items-center justify-center gap-1.5 pb-5 text-xs" style={{ color: colors.textMuted }}>
             <Icon name="refresh" className="text-sm" />
             <span>Survolez pour la fiche</span>
           </div>
