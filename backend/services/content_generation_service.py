@@ -20,6 +20,7 @@ import json
 import threading
 import time
 import uuid as uuid_mod
+from difflib import SequenceMatcher
 from datetime import datetime
 
 from database.db import get_db_connection
@@ -3688,6 +3689,189 @@ def _slides_for_bloc(slides: list, bloc: dict) -> list:
     return relevant
 
 
+def _slide_declared_course_number(slide: dict) -> int | None:
+    source_ref = slide.get("source_ref") or {}
+    for ref in source_ref.get("segments") or []:
+        try:
+            course_number = int(ref.get("course_number") or 0)
+        except (TypeError, ValueError):
+            continue
+        if course_number:
+            return course_number
+    for anchor in source_ref.get("slide_anchors") or []:
+        try:
+            course_number = int(anchor.get("course_number") or 0)
+        except (TypeError, ValueError):
+            continue
+        if course_number:
+            return course_number
+    return None
+
+
+def _folded_token_values(text: str) -> list[str]:
+    return [token["folded"] for token in _display_text_tokens(text or "")]
+
+
+def _find_token_sequence(haystack: list[str], needle: list[str], min_start: int = 0) -> int | None:
+    if not haystack or not needle or len(needle) > len(haystack):
+        return None
+    min_start = max(0, min_start)
+    last_start = len(haystack) - len(needle)
+    for idx in range(min_start, last_start + 1):
+        if haystack[idx:idx + len(needle)] == needle:
+            return idx
+    return None
+
+
+def _find_fuzzy_token_sequence(
+    haystack: list[str],
+    needle: list[str],
+    min_start: int = 0,
+    *,
+    threshold: float = 0.82,
+) -> int | None:
+    if not haystack or len(needle) < 8 or len(needle) > len(haystack):
+        return None
+    search_start = max(0, min_start - 18)
+    last_start = len(haystack) - len(needle)
+    best_idx = None
+    best_score = 0.0
+    needle_set = set(needle)
+    for idx in range(search_start, last_start + 1):
+        window = haystack[idx:idx + len(needle)]
+        # Cheap prefilter before SequenceMatcher; avoids scoring every window
+        # when the opening words are clearly unrelated.
+        overlap = len(needle_set.intersection(window)) / max(1, len(needle_set))
+        if overlap < 0.45:
+            continue
+        score = SequenceMatcher(None, needle, window).ratio()
+        if score > best_score:
+            best_score = score
+            best_idx = idx
+    return best_idx if best_idx is not None and best_score >= threshold else None
+
+
+def _slide_reprojection_candidates(slide: dict) -> list[list[str]]:
+    source_ref = slide.get("source_ref") or {}
+    texts = [
+        source_ref.get("source_quote") or "",
+        slide.get("source_text") or "",
+    ]
+    seen = set()
+    candidates = []
+    for text in texts:
+        tokens = _folded_token_values(_strip_tts_tags_for_sync(text or ""))
+        if len(tokens) < 8:
+            continue
+        for size in (48, 36, 24, 16, 12, 8):
+            if len(tokens) < size:
+                continue
+            candidate = tuple(tokens[:size])
+            if candidate in seen:
+                continue
+            seen.add(candidate)
+            candidates.append(list(candidate))
+    return candidates
+
+
+def _reproject_slides_to_audio_bloc(slides: list, bloc: dict) -> list:
+    """Recalage des slides sur le texte final réellement envoyé au TTS.
+
+    Les slides sont produites plus tôt dans la pipeline et peuvent porter des
+    `word_start` issus d'une version antérieure du script. Avant de produire les
+    timings audio, on retrouve le début de chaque slide dans le texte du MP3 du
+    cours courant et on remplace ses bornes par des coordonnées du texte audio.
+    """
+    if not slides:
+        return slides
+    bloc_text = _strip_tts_tags_for_sync(bloc.get("text") or "")
+    bloc_tokens = _folded_token_values(bloc_text)
+    if not bloc_tokens:
+        return slides
+
+    try:
+        bloc_number = int(bloc.get("bloc_number") or 0)
+        bloc_start = int(bloc.get("start_w") or 0)
+        bloc_end = int(bloc.get("end_w") or (bloc_start + len(bloc_tokens)))
+    except (TypeError, ValueError):
+        return slides
+    if bloc_end <= bloc_start:
+        bloc_end = bloc_start + len(bloc_tokens)
+
+    ordered = sorted(
+        enumerate(slides),
+        key=lambda pair: (
+            int(((pair[1].get("source_ref") or {}).get("word_start")) or 10**12),
+            pair[0],
+        ),
+    )
+    reprojected_by_index = {}
+    search_cursor = 0
+    matched = 0
+    eligible = 0
+
+    for original_index, slide in ordered:
+        source_ref = slide.get("source_ref") or {}
+        declared_course = _slide_declared_course_number(slide)
+        if declared_course and bloc_number and declared_course != bloc_number:
+            continue
+        candidates = _slide_reprojection_candidates(slide)
+        if not candidates:
+            continue
+        eligible += 1
+        match_start = None
+        for candidate in candidates:
+            match_start = _find_token_sequence(bloc_tokens, candidate, search_cursor)
+            if match_start is None:
+                match_start = _find_fuzzy_token_sequence(bloc_tokens, candidate, search_cursor)
+            if match_start is not None:
+                break
+        if match_start is None:
+            continue
+
+        old_start = source_ref.get("word_start")
+        old_end = source_ref.get("word_end")
+        source_words = len(_folded_token_values(slide.get("source_text") or ""))
+        try:
+            old_span = int(old_end) - int(old_start)
+        except (TypeError, ValueError):
+            old_span = 0
+        span = max(1, source_words or old_span or len(candidates[0]))
+
+        clone = json.loads(json.dumps(slide, ensure_ascii=False))
+        clone_ref = dict(clone.get("source_ref") or {})
+        new_start = bloc_start + match_start
+        new_end = min(bloc_end, new_start + span)
+        clone_ref["word_start"] = new_start
+        clone_ref["word_end"] = max(new_start + 1, new_end)
+        clone_ref["word_count"] = clone_ref["word_end"] - clone_ref["word_start"]
+        clone_ref["audio_reprojection"] = {
+            "method": "source_text_prefix",
+            "old_word_start": old_start,
+            "old_word_end": old_end,
+            "audio_bloc_number": bloc_number,
+            "audio_local_word_start": match_start,
+        }
+        clone["source_ref"] = clone_ref
+        reprojected_by_index[original_index] = clone
+        matched += 1
+        search_cursor = max(search_cursor, match_start + 1)
+
+    if not matched:
+        return slides
+    if eligible and matched < max(1, eligible // 3):
+        logger.warning(
+            "PIPELINE_AUDIO_SLIDE_REPROJECT_LOW_MATCH bloc=%s matched=%s eligible=%s",
+            bloc_number,
+            matched,
+            eligible,
+        )
+    return [
+        reprojected_by_index.get(idx, slide)
+        for idx, slide in enumerate(slides)
+    ]
+
+
 # ── Runtime fit Edge TTS : sub-chunking adaptatif + frontières naturelles ───
 # Plafonds de mots par chunk en fonction du temps restant dans le bloc.
 # Plus on s'approche de la cible, plus les chunks doivent être petits pour
@@ -3930,6 +4114,7 @@ def _build_slide_audio_chunks(bloc: dict, slides: list) -> list:
     if not bloc_words:
         return []
 
+    slides = _reproject_slides_to_audio_bloc(slides, bloc)
     relevant = _slides_for_bloc(slides, bloc)
     if not relevant:
         return [{
