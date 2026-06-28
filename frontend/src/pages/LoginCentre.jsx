@@ -66,12 +66,12 @@ export default function LoginCentre({ preloadDashboardRoute }) {
         <section
           className="relative hidden overflow-hidden bg-[#03093d] lg:flex"
           style={{
-            backgroundImage: 'linear-gradient(90deg, rgba(3,9,61,0.2), rgba(3,9,61,0.74)), url(/fond-hero2.webp)',
+            backgroundImage: 'url(/wallpaper-centre.webp)',
             backgroundSize: 'cover',
-            backgroundPosition: 'center 15%',
+            backgroundPosition: 'center',
           }}
         >
-          <div className="absolute inset-0 bg-[radial-gradient(circle_at_26%_28%,rgba(91,109,255,0.28),transparent_32%),linear-gradient(180deg,rgba(3,9,61,0)_0%,rgba(3,9,61,0.72)_100%)]" />
+          <div className="absolute inset-0 bg-[linear-gradient(180deg,rgba(3,9,61,0.4)_0%,rgba(3,9,61,0)_34%,rgba(3,9,61,0.58)_100%)]" />
           <div className="relative z-10 flex w-full flex-col justify-between p-12 xl:p-16">
             <Link to="/landing" className="inline-flex w-fit items-center gap-3 text-white">
               <span className="h-3 w-3 rounded-full bg-[#8B5CF6]" />
