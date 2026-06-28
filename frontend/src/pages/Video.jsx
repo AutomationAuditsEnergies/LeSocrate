@@ -68,6 +68,15 @@ export default function Video() {
   const [slideView, setSlideView] = useState('professor')
   const [playbackTime, setPlaybackTime] = useState(0)
   const audioRef = useRef(null)
+  const mutedRef = useRef(false)
+  const webAudioRef = useRef({
+    ctx: null,
+    gain: null,
+    source: null,
+    raf: null,
+    startedAt: 0,
+    offset: 0,
+  })
 
   // Synchroniser la propriété muted directement sur l'élément DOM
   // (React ne met pas à jour muted sur <audio> après le rendu initial)
@@ -90,10 +99,48 @@ export default function Video() {
   }, [])
 
   useEffect(() => {
+    mutedRef.current = muted
     if (audioRef.current) {
       audioRef.current.muted = muted
     }
+    if (webAudioRef.current.gain) {
+      webAudioRef.current.gain.gain.value = muted ? 0 : 1
+    }
   }, [muted])
+
+  const stopWebAudioPlayback = useCallback(() => {
+    const state = webAudioRef.current
+    if (state.raf) {
+      window.cancelAnimationFrame(state.raf)
+    }
+    if (state.source) {
+      try {
+        state.source.stop()
+      } catch {
+        // Source déjà arrêtée.
+      }
+      try {
+        state.source.disconnect()
+      } catch {
+        // Source déjà déconnectée.
+      }
+    }
+    if (state.ctx) {
+      try {
+        state.ctx.close()
+      } catch {
+        // Contexte déjà fermé.
+      }
+    }
+    webAudioRef.current = {
+      ctx: null,
+      gain: null,
+      source: null,
+      raf: null,
+      startedAt: 0,
+      offset: 0,
+    }
+  }, [])
 
   // Fonction pour basculer le mute
   const handleToggleMute = () => {
@@ -119,6 +166,18 @@ export default function Video() {
   // Gestionnaire de clic pour dé-muter l'audio si autoplay bloqué
   const handlePageClick = () => {
     if (!showPlayPrompt) return
+    if (webAudioRef.current.ctx) {
+      webAudioRef.current.ctx.resume().then(() => {
+        setMuted(false)
+        if (webAudioRef.current.gain) {
+          webAudioRef.current.gain.gain.value = 1
+        }
+        setShowPlayPrompt(false)
+      }).catch((err) => {
+        console.error('Impossible de reprendre l\'audio WebAudio:', err)
+      })
+      return
+    }
     if (!audioRef.current || audioInfo?.status !== 'playing') return
     const audio = audioRef.current
     audio.muted = false
@@ -248,6 +307,96 @@ export default function Video() {
 
   // Positionner l'audio à l'offset correct quand il est chargé
   useEffect(() => {
+    if (audioInfo?.status === 'playing' && !isBreakAudioType(audioInfo.type)) {
+      let cancelled = false
+      const controller = new AbortController()
+      const targetOffset = Math.max(0, Number(audioInfo.offset) || 0)
+      const duration = Math.max(0, Number(audioInfo.duration) || 0)
+
+      stopWebAudioPlayback()
+      setPlaybackTime(targetOffset * 1000)
+
+      const startWebAudio = async () => {
+        try {
+          const response = await apiFetch(`/api/audio/stream?v=${encodeURIComponent(`${audioInfo.id || currentAudioName}-${duration}`)}`, {
+            signal: controller.signal,
+          })
+          if (!response.ok) {
+            throw new Error(`stream audio indisponible (${response.status})`)
+          }
+          const arrayBuffer = await response.arrayBuffer()
+          if (cancelled) return
+
+          const AudioContextClass = window.AudioContext || window.webkitAudioContext
+          const ctx = new AudioContextClass()
+          const buffer = await ctx.decodeAudioData(arrayBuffer.slice(0))
+          if (cancelled) {
+            ctx.close()
+            return
+          }
+
+          const gain = ctx.createGain()
+          gain.gain.value = mutedRef.current ? 0 : 1
+          gain.connect(ctx.destination)
+
+          const source = ctx.createBufferSource()
+          source.buffer = buffer
+          source.connect(gain)
+
+          const safeOffset = Math.max(0, Math.min(targetOffset, Math.max(0, buffer.duration - 0.05)))
+          webAudioRef.current = {
+            ctx,
+            gain,
+            source,
+            raf: null,
+            startedAt: ctx.currentTime,
+            offset: safeOffset,
+          }
+
+          const tick = () => {
+            const state = webAudioRef.current
+            if (state.ctx !== ctx) return
+            const elapsed = Math.max(0, ctx.currentTime - state.startedAt)
+            const currentSeconds = Math.min(buffer.duration, state.offset + elapsed)
+            setPlaybackTime(currentSeconds * 1000)
+            if (duration > 0 && currentSeconds >= duration - 0.25) {
+              fetchAudioStatus({ silent: true })
+              return
+            }
+            state.raf = window.requestAnimationFrame(tick)
+          }
+
+          source.onended = () => {
+            if (webAudioRef.current.source === source) {
+              fetchAudioStatus({ silent: true })
+            }
+          }
+
+          source.start(0, safeOffset)
+          tick()
+
+          if (ctx.state === 'suspended') {
+            setMuted(true)
+            setShowPlayPrompt(true)
+          } else {
+            setShowPlayPrompt(false)
+          }
+        } catch (err) {
+          if (cancelled || err.name === 'AbortError') return
+          console.error('[WebAudio] Erreur chargement:', err)
+          setError('Impossible de charger le cours')
+        }
+      }
+
+      startWebAudio()
+
+      return () => {
+        cancelled = true
+        controller.abort()
+        stopWebAudioPlayback()
+      }
+    }
+
     if (audioInfo?.status === 'playing' && audioRef.current) {
       const audio = audioRef.current
       const targetOffset = audioInfo.offset || 0
@@ -355,7 +504,11 @@ export default function Video() {
     audioInfo?.id,
     audioInfo?.type,
     audioInfo?.duration,
+    audioInfo?.offset,
+    audioInfo?.remaining,
+    currentAudioName,
     fetchAudioStatus,
+    stopWebAudioPlayback,
   ])
 
   // Afficher le chargement
