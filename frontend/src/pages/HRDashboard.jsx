@@ -23,15 +23,15 @@ const getPlatformThumbnail = (platform = {}) => {
   return null
 }
 
-// Chaque plateforme a son robot prof IA attitré : une teinte (hue-rotate sur
-// le PNG bleu de base) + une couleur d'accent pour le halo/socle. Déterministe
-// sur platform_id pour que P1 garde toujours le même robot.
+// Chaque plateforme a son robot prof IA attitré : un PNG transparent pré-coloré
+// (variantes de teinte cuites depuis l'asset rose détouré) + une couleur de halo
+// assortie. Déterministe sur platform_id → P1 garde toujours le même robot.
 const ROBOT_THEMES = [
-  { hue: 0, glow: '#3b82f6' },   // bleu (natif)
-  { hue: 70, glow: '#8b5cf6' },  // violet
-  { hue: 150, glow: '#ec4899' }, // rose
-  { hue: 230, glow: '#10b981' }, // vert
-  { hue: 300, glow: '#f59e0b' }, // ambre
+  { src: '/robot-blue.png', glow: '#3b82f6' },   // bleu
+  { src: '/robot-violet.png', glow: '#8b5cf6' }, // violet
+  { src: '/robot-pink.png', glow: '#ec4899' },   // rose
+  { src: '/robot-green.png', glow: '#10b981' },  // vert
+  { src: '/robot-amber.png', glow: '#f59e0b' },  // ambre
 ]
 const getRobotTheme = (id = 0) => ROBOT_THEMES[((Number(id) || 1) - 1) % ROBOT_THEMES.length]
 
@@ -2429,25 +2429,21 @@ function PlatformCard({
             pointerEvents: flipped ? 'none' : 'auto',
           }}
         >
-          {/* Halo doux derrière le robot (pas une carte) : sur fond clair il est
-              invisible, sur fond sombre il sert de pool de lumière pour que le
-              PNG (fond blanc cuit, mix-blend-multiply) reste lisible. */}
+          {/* Halo coloré de la plateforme derrière le robot (lueur, pas une
+              carte). PNG transparent → aucun blend nécessaire, le robot flotte
+              proprement sur n'importe quel fond (clair ou sombre). */}
           <div
-            className="pointer-events-none absolute inset-0"
-            style={{ background: 'radial-gradient(circle at 50% 44%, rgba(255,255,255,0.65) 0%, transparent 58%)' }}
-          />
-          <div
-            className="pointer-events-none absolute left-1/2 top-[44%] h-52 w-52 -translate-x-1/2 -translate-y-1/2 rounded-full blur-3xl"
-            style={{ backgroundColor: theme.glow, opacity: 0.28 }}
+            className="pointer-events-none absolute left-1/2 top-[46%] h-56 w-56 -translate-x-1/2 -translate-y-1/2 rounded-full blur-3xl"
+            style={{ backgroundColor: theme.glow, opacity: 0.3 }}
           />
 
           {/* Robot — en grand, sans cadre */}
           <img
-            src="/robot-prof.png"
+            src={theme.src}
             alt={`Professeur IA — ${p.name}`}
             draggable={false}
-            className="relative z-10 w-full max-w-[94%] object-contain transition-transform duration-500 ease-out group-hover:-translate-y-2 group-hover:scale-[1.05]"
-            style={{ minHeight: '300px', filter: `hue-rotate(${theme.hue}deg) saturate(1.05)`, mixBlendMode: 'multiply' }}
+            className="relative z-10 w-full max-w-full object-contain transition-transform duration-500 ease-out group-hover:-translate-y-2 group-hover:scale-[1.05]"
+            style={{ minHeight: '340px' }}
           />
 
           {/* Nom plateforme sous le robot — texte seul, pas de carte */}

@@ -1,5 +1,18 @@
 # Changelog
 
+## 2026-06-29
+
+### feat(hr-dashboard): robots transparents pré-colorés + flip au clic
+
+Suite du recto robot prof IA. Remplacement de l'asset à fond blanc (2,1 Mo +
+hack mix-blend-multiply) par 5 PNG **transparents détourés**, un par teinte
+(bleu/violet/rose/vert/ambre, ~280 Ko chacun), pré-colorés par décalage de
+teinte HSV depuis l'asset rose fourni. Le robot flotte désormais proprement
+sur n'importe quel fond (clair/sombre), en plus grand (`min-height` 340px,
+`max-w-full`), sans cadre. Le flip se déclenche au **clic sur une flèche** sous
+le robot (toggle maintenu), plus au survol. `ROBOT_THEMES` mappe désormais
+`platform_id → { src, glow }`.
+
 ## 2026-06-28
 
 ### feat(hr-dashboard): cartes plateformes en robots prof IA (flip 3D)
