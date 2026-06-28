@@ -16,6 +16,41 @@ function formatTime(ms) {
   return `${m}:${String(s % 60).padStart(2, '0')}`
 }
 
+function waitForMediaReadyAfterSeek(media, targetSeconds, timeoutMs = 1200) {
+  return new Promise(resolve => {
+    if (!media) {
+      resolve()
+      return
+    }
+    const target = Number(targetSeconds)
+    const closeEnough = Number.isFinite(target) && Math.abs((media.currentTime || 0) - target) < 0.08
+    if (!media.seeking && (closeEnough || media.readyState >= 3)) {
+      resolve()
+      return
+    }
+
+    let done = false
+    let timeoutId = null
+    const cleanup = () => {
+      media.removeEventListener('seeked', finish)
+      media.removeEventListener('canplay', finish)
+      media.removeEventListener('canplaythrough', finish)
+      if (timeoutId) window.clearTimeout(timeoutId)
+    }
+    const finish = () => {
+      if (done) return
+      done = true
+      cleanup()
+      resolve()
+    }
+
+    media.addEventListener('seeked', finish, { once: true })
+    media.addEventListener('canplay', finish, { once: true })
+    media.addEventListener('canplaythrough', finish, { once: true })
+    timeoutId = window.setTimeout(finish, timeoutMs)
+  })
+}
+
 // Audios pause/Q&A : pas de synchro deck, on affiche le slide statique dédié
 // (pause_*.mp3 et pause_midi_*.mp3 → pause, qa_*.mp3 → qa).
 function breakSlideTemplateForFilename(filename) {
@@ -162,6 +197,7 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
   const wsRef = useRef(null)         // instance WaveSurfer
   const regionsRef = useRef(null)    // plugin Regions
   const activeRegionRef = useRef(null)
+  const pendingSeekRef = useRef(null)
 
   const audioCtxRef = useRef(null)      // Web Audio API context pour écoute splicée
   const stitchedSourcesRef = useRef([]) // sources planifiées (pour pouvoir stopper)
@@ -342,6 +378,35 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
       setCurrentTime(seconds * 1000)
     }
 
+    const seekToSeconds = async (seconds, { resumePlayback = false } = {}) => {
+      const target = Math.max(0, Math.min(Number(seconds) || 0, ws.getDuration?.() || Infinity))
+      const media = ws.getMediaElement?.()
+      pendingSeekRef.current = target
+
+      if (ws.isPlaying?.()) ws.pause()
+
+      try {
+        if (typeof ws.setTime === 'function') {
+          ws.setTime(target)
+        } else {
+          ws.seekTo((ws.getDuration?.() || 0) ? target / ws.getDuration() : 0)
+        }
+        if (media && Math.abs((media.currentTime || 0) - target) > 0.05) {
+          media.currentTime = target
+        }
+        syncCurrentTime(target)
+        await waitForMediaReadyAfterSeek(media, target)
+        if (pendingSeekRef.current === target) {
+          pendingSeekRef.current = null
+        }
+        if (resumePlayback) {
+          await ws.play()
+        }
+      } catch {
+        pendingSeekRef.current = null
+      }
+    }
+
     ws.on('ready', () => {
       setDuration(ws.getDuration() * 1000)
       syncCurrentTime()
@@ -350,7 +415,11 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
     ws.on('timeupdate', syncCurrentTime)
     ws.on('audioprocess', syncCurrentTime)
     ws.on('seeking', syncCurrentTime)
-    ws.on('interaction', syncCurrentTime)
+    ws.on('interaction', (time) => {
+      const nextTime = Number.isFinite(time) ? time : (ws.getCurrentTime?.() || 0)
+      const wasPlaying = ws.isPlaying?.()
+      seekToSeconds(nextTime, { resumePlayback: wasPlaying })
+    })
     ws.on('play', () => setPlaying(true))
     ws.on('pause', () => setPlaying(false))
     ws.on('finish', () => setPlaying(false))
@@ -413,10 +482,7 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
     // Sinon media.play() est appelé pendant le seeking et produit du silence.
     const media = ws.getMediaElement?.()
     if (media?.seeking) {
-      await new Promise(resolve => {
-        const onSeeked = () => { media.removeEventListener('seeked', onSeeked); resolve() }
-        media.addEventListener('seeked', onSeeked)
-      })
+      await waitForMediaReadyAfterSeek(media, ws.getCurrentTime?.())
     }
 
     try {
