@@ -313,6 +313,7 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
 
     const ws = WaveSurfer.create({
       container: waveRef.current,
+      backend: 'WebAudio',
       waveColor: darkMode ? '#475569' : '#cbd5e1',
       progressColor: darkMode ? '#cbd5e1' : '#334155',
       cursorColor: '#f59e0b',
