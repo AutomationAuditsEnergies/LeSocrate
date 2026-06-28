@@ -1,7 +1,7 @@
 # video_routes.py --- Routes pour l'API vidéo et cours (JSON uniquement)
 from flask import Blueprint, session, jsonify, request, Response
 import requests as http_requests
-from services.audio_service import get_current_audio_info
+from services.audio_service import get_current_audio_info, get_playlist
 from services.script_slide_generation_service import get_latest_script_slide_deck_for_audio
 from services.time_service import get_heure_debut_cours, get_current_simulated_time
 from utils.logger import get_logger
@@ -23,6 +23,17 @@ def _get_platform_id():
         except (TypeError, ValueError):
             pass
     return session.get("platform_id", 1)
+
+
+def _next_playlist_audio(platform_id, current_audio_id):
+    try:
+        playlist = get_playlist(platform_id)
+        for index, item in enumerate(playlist):
+            if item.get("id") == current_audio_id and index + 1 < len(playlist):
+                return playlist[index + 1]
+    except Exception as exc:
+        logger.warning(f"⚠️ Impossible de lire l'audio suivant: {exc}")
+    return None
 
 
 @video_bp.route("/api/video/status")
@@ -84,6 +95,7 @@ def video_status():
 
         # Le cours est en cours
         logger.info(f"▶️ Cours en cours: {audio_info['title']}")
+        next_audio = _next_playlist_audio(platform_id, audio_info.get("id"))
         return (
             jsonify(
                 {
@@ -97,6 +109,10 @@ def video_status():
                     "audio_duration": audio_info.get("duration", 0),
                     "offset": offset,
                     "remaining": max(0, int(audio_info.get("duration", 0)) - int(offset or 0)),
+                    "next_audio_id": next_audio.get("id") if next_audio else None,
+                    "next_audio_title": next_audio.get("title") if next_audio else None,
+                    "next_audio_type": next_audio.get("type") if next_audio else None,
+                    "next_audio_duration": next_audio.get("duration", 0) if next_audio else 0,
                     "cours_termine": False,
                 }
             ),
@@ -206,6 +222,7 @@ def cours_status():
         elif audio_info is None:
             result = {"status": "finished"}
         else:
+            next_audio = _next_playlist_audio(platform_id, audio_info.get("id"))
             result = {
                 "status": "playing",
                 "audio_id": audio_info["id"],
@@ -215,6 +232,10 @@ def cours_status():
                 "audio_duration": audio_info.get("duration", 0),
                 "offset": offset,
                 "remaining": max(0, int(audio_info.get("duration", 0)) - int(offset or 0)),
+                "next_audio_id": next_audio.get("id") if next_audio else None,
+                "next_audio_title": next_audio.get("title") if next_audio else None,
+                "next_audio_type": next_audio.get("type") if next_audio else None,
+                "next_audio_duration": next_audio.get("duration", 0) if next_audio else 0,
             }
 
         logger.debug(f"📊 Statut cours: {result['status']}")

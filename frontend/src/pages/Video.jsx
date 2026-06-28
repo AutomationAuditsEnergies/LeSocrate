@@ -227,6 +227,12 @@ export default function Video() {
           remaining: data.remaining,
           id: data.audio_id,
           type: data.audio_type,
+          nextAudio: {
+            id: data.next_audio_id,
+            title: data.next_audio_title,
+            type: data.next_audio_type,
+            duration: data.next_audio_duration,
+          },
         })
         setPlaybackTime((Number(data.offset) || 0) * 1000)
         if (isBreakAudioType(data.audio_type)) {
@@ -304,6 +310,14 @@ export default function Video() {
   const activeSlideTiming = findActiveAudioSlideTiming(slideTimings, playbackTime)
   const hasProjectedSlides = slideTimings.length > 0 && Boolean(activeSlideTiming)
   const showProjectedSlides = slideView === 'slides' && hasProjectedSlides && !isCurrentBreakAudio
+  const hasCompletedSyncedSpeech = (
+    audioInfo?.status === 'playing'
+    && !isCurrentBreakAudio
+    && slideTimings.length > 0
+    && !activeSlideTiming
+  )
+  const nextBreakType = isBreakAudioType(audioInfo?.nextAudio?.type) ? audioInfo.nextAudio.type : null
+  const showNextBreakPreview = slideView === 'slides' && hasCompletedSyncedSpeech && Boolean(nextBreakType)
 
   // Positionner l'audio à l'offset correct quand il est chargé
   useEffect(() => {
@@ -613,6 +627,19 @@ export default function Video() {
                   </div>
                 </div>
               </div>
+            ) : showNextBreakPreview ? (
+              <div className="absolute inset-0" style={{ backgroundColor: '#020617' }}>
+                <SlidePreviewFrame
+                  slide={{
+                    template_type: nextBreakType === 'qa' ? 'qa' : 'pause',
+                    data: { duration_label: breakDurationLabel(audioInfo.nextAudio.duration) },
+                  }}
+                  maxWidth={896}
+                  padding={0}
+                  className="h-full w-full"
+                  style={{ width: '100%', height: '100%', background: '#020617' }}
+                />
+              </div>
             ) : showProjectedSlides ? (
               <div className="absolute inset-0 flex items-center justify-center bg-[#020617]">
                 <SlidePreviewFrame
@@ -636,11 +663,13 @@ export default function Video() {
 
             {!isBreakScreen && (
               <div className="absolute bottom-6 left-6 bg-black/60 text-white text-xs px-3 py-1.5 rounded-lg backdrop-blur-sm">
-                {showProjectedSlides ? `Slide ${activeSlideTiming.slideIndex + 1}` : 'Professeur'}
+                {showNextBreakPreview
+                  ? (nextBreakType === 'qa' ? 'Questions-réponses' : 'Pause')
+                  : showProjectedSlides ? `Slide ${activeSlideTiming.slideIndex + 1}` : 'Professeur'}
               </div>
             )}
 
-            {audioInfo?.status === 'playing' && !isBreakScreen && hasProjectedSlides && (
+            {audioInfo?.status === 'playing' && !isBreakScreen && (hasProjectedSlides || hasCompletedSyncedSpeech) && (
               <button
                 type="button"
                 onClick={(event) => {

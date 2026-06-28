@@ -85,6 +85,5 @@ export function findActiveAudioSlideTiming(timings = [], currentTimeMs = 0) {
   if (!timings.length) return null
   const seconds = Number(currentTimeMs || 0) / 1000
   return timings.find(item => seconds >= item.start && seconds < item.end)
-    || [...timings].reverse().find(item => seconds >= item.start)
-    || timings[0]
+    || (seconds < timings[0].start ? timings[0] : null)
 }
