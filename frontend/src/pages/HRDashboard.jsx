@@ -2409,11 +2409,8 @@ function PlatformCard({
     // pour révéler au verso la fiche formation (inchangée). Les deux faces se
     // superposent dans la même cellule grid → la cellule prend la hauteur de
     // la plus grande (la fiche).
-    <div
-      className="group [perspective:1600px]"
-      onMouseEnter={() => setFlipped(true)}
-      onMouseLeave={() => setFlipped(false)}
-    >
+    <div className="flex flex-col">
+      <div className="group [perspective:1600px]">
       <div
         className="relative grid transition-transform duration-700 ease-out"
         style={{
@@ -2841,6 +2838,24 @@ function PlatformCard({
       </div>
         </div>
       </div>
+      </div>
+
+      {/* Flèche de bascule : un clic tourne la carte et la maintient, un
+          re-clic remet le robot. Hors du flip pour rester visible des 2 côtés. */}
+      <button
+        type="button"
+        onClick={() => setFlipped((f) => !f)}
+        aria-label={flipped ? 'Revenir au robot' : 'Voir la fiche formation'}
+        className="mx-auto mt-3 flex items-center gap-1.5 rounded-full px-3.5 py-1.5 text-xs font-medium transition-colors hover:bg-black/5 dark:hover:bg-white/5"
+        style={{ color: colors.textMuted, border: `1px solid ${colors.border}` }}
+      >
+        <span>{flipped ? 'Voir le robot' : 'Voir la fiche'}</span>
+        <Icon
+          name="keyboard_arrow_down"
+          className="text-base transition-transform duration-500"
+          style={{ transform: flipped ? 'rotate(180deg)' : 'none' }}
+        />
+      </button>
     </div>
   )
 }
