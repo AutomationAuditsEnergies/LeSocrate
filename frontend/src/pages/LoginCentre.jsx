@@ -71,25 +71,6 @@ export default function LoginCentre({ preloadDashboardRoute }) {
             backgroundPosition: 'center',
           }}
         >
-          <div className="absolute inset-0 bg-[linear-gradient(180deg,rgba(3,9,61,0.4)_0%,rgba(3,9,61,0)_34%,rgba(3,9,61,0.58)_100%)]" />
-          <div className="relative z-10 flex w-full flex-col justify-between p-12 xl:p-16">
-            <Link to="/landing" className="inline-flex w-fit items-center gap-3 text-white">
-              <span className="h-3 w-3 rounded-full bg-[#8B5CF6]" />
-              <span className="text-sm font-semibold uppercase">Le Socrate</span>
-            </Link>
-
-            <div className="max-w-[560px] pb-6">
-              <p className="mb-4 text-sm font-semibold text-white/60 uppercase">
-                Espace centre de formation
-              </p>
-              <h1 className="text-[3.75rem] font-black leading-[1.04] text-white">
-                Pilotez vos formations depuis un seul espace.
-              </h1>
-              <p className="mt-6 max-w-[48ch] text-lg leading-8 text-white/78">
-                Accédez au tableau de bord pour préparer les modules, suivre les plateformes et gérer vos journées de formation.
-              </p>
-            </div>
-          </div>
         </section>
 
         <section className="flex min-h-screen items-center justify-center px-6 py-10 sm:px-10 lg:px-12">
