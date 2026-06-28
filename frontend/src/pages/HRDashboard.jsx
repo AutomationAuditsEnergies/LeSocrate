@@ -2421,70 +2421,54 @@ function PlatformCard({
           transform: flipped ? 'rotateY(180deg)' : 'rotateY(0deg)',
         }}
       >
-        {/* ═══ RECTO — le professeur IA ═══ */}
+        {/* ═══ RECTO — le professeur IA (aucun chrome de carte : juste le robot
+            qui flotte sur le fond du dashboard ; la carte n'apparaît qu'au
+            survol via le flip vers le verso) ═══ */}
         <div
-          className="[grid-area:1/1] relative flex flex-col overflow-hidden rounded-2xl"
+          className="[grid-area:1/1] relative flex flex-col items-center justify-center"
           style={{
-            ...faceStyle,
             backfaceVisibility: 'hidden',
             WebkitBackfaceVisibility: 'hidden',
             pointerEvents: flipped ? 'none' : 'auto',
           }}
         >
-          {/* Spotlight clair derrière le robot — pas de cadre. Le PNG a un fond
-              blanc/gris cuit : mix-blend-multiply le fond dans la carte (clair
-              ET sombre), le robot reste seul lisible dans le pool de lumière. */}
+          {/* Halo doux derrière le robot (pas une carte) : sur fond clair il est
+              invisible, sur fond sombre il sert de pool de lumière pour que le
+              PNG (fond blanc cuit, mix-blend-multiply) reste lisible. */}
           <div
             className="pointer-events-none absolute inset-0"
-            style={{ background: 'radial-gradient(circle at 50% 40%, #ffffff 0%, rgba(255,255,255,0.8) 32%, transparent 66%)' }}
+            style={{ background: 'radial-gradient(circle at 50% 44%, rgba(255,255,255,0.65) 0%, transparent 58%)' }}
           />
-          {/* Halo de la couleur attitrée à la plateforme */}
           <div
-            className="pointer-events-none absolute left-1/2 top-[40%] h-44 w-44 -translate-x-1/2 -translate-y-1/2 rounded-full blur-3xl"
-            style={{ backgroundColor: theme.glow, opacity: 0.22 }}
+            className="pointer-events-none absolute left-1/2 top-[44%] h-52 w-52 -translate-x-1/2 -translate-y-1/2 rounded-full blur-3xl"
+            style={{ backgroundColor: theme.glow, opacity: 0.28 }}
           />
 
-          {/* Nom plateforme — overlay haut pour laisser le robot plein cadre */}
-          <div className="absolute inset-x-5 top-5 z-20 flex items-center gap-2">
+          {/* Robot — en grand, sans cadre */}
+          <img
+            src="/robot-prof.png"
+            alt={`Professeur IA — ${p.name}`}
+            draggable={false}
+            className="relative z-10 w-full max-w-[94%] object-contain transition-transform duration-500 ease-out group-hover:-translate-y-2 group-hover:scale-[1.05]"
+            style={{ minHeight: '300px', filter: `hue-rotate(${theme.hue}deg) saturate(1.05)`, mixBlendMode: 'multiply' }}
+          />
+
+          {/* Nom plateforme sous le robot — texte seul, pas de carte */}
+          <div className="relative z-10 -mt-2 flex items-center gap-2 px-4 pb-1">
             <span
-              className="inline-flex flex-shrink-0 items-center rounded-md px-1.5 py-0.5 text-[10px] font-semibold uppercase"
-              style={{
-                backgroundColor: colors.innerBg,
-                color: colors.textMuted,
-                border: `1px solid ${colors.border}`,
-                letterSpacing: '0.08em',
-                fontVariantNumeric: 'tabular-nums',
-              }}
+              className="text-xs font-semibold tabular-nums"
+              style={{ color: colors.textMuted, letterSpacing: '0.08em' }}
             >
               P{p.id}
             </span>
-            <h3 className="truncate text-lg font-semibold leading-tight tracking-tight" style={{ color: colors.text }}>
+            <h3 className="truncate text-base font-semibold tracking-tight" style={{ color: colors.text }}>
               {p.name}
             </h3>
-          </div>
-
-          {/* Robot plein cadre */}
-          <div className="relative z-10 flex flex-1 items-center justify-center">
-            <img
-              src="/robot-prof.png"
-              alt={`Professeur IA — ${p.name}`}
-              draggable={false}
-              className="w-full max-w-[82%] object-contain transition-transform duration-500 ease-out group-hover:-translate-y-1.5 group-hover:scale-[1.03]"
-              style={{ minHeight: '240px', filter: `hue-rotate(${theme.hue}deg) saturate(1.05)`, mixBlendMode: 'multiply' }}
-            />
             {!p.active && (
-              <span
-                className="absolute bottom-2 left-1/2 z-20 -translate-x-1/2 whitespace-nowrap rounded-full px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide"
-                style={{ backgroundColor: 'rgba(15,23,42,0.06)', color: '#64748b' }}
-              >
-                Bientôt disponible
+              <span className="text-[10px] font-semibold uppercase tracking-wide" style={{ color: '#94a3b8' }}>
+                · bientôt
               </span>
             )}
-          </div>
-
-          <div className="relative z-20 flex items-center justify-center gap-1.5 pb-5 text-xs" style={{ color: colors.textMuted }}>
-            <Icon name="refresh" className="text-sm" />
-            <span>Survolez pour la fiche</span>
           </div>
         </div>
 
