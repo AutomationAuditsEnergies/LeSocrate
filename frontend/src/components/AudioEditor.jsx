@@ -415,10 +415,11 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
     ws.on('timeupdate', syncCurrentTime)
     ws.on('audioprocess', syncCurrentTime)
     ws.on('seeking', syncCurrentTime)
-    ws.on('interaction', (time) => {
-      const nextTime = Number.isFinite(time) ? time : (ws.getCurrentTime?.() || 0)
-      const wasPlaying = ws.isPlaying?.()
-      seekToSeconds(nextTime, { resumePlayback: wasPlaying })
+    ws.on('click', (percent) => {
+      const durationSeconds = ws.getDuration?.() || 0
+      if (!durationSeconds) return
+      const nextTime = Math.max(0, Math.min(Number(percent) || 0, 1)) * durationSeconds
+      seekToSeconds(nextTime, { resumePlayback: true })
     })
     ws.on('play', () => setPlaying(true))
     ws.on('pause', () => setPlaying(false))
