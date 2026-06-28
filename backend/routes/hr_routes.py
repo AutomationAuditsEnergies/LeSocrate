@@ -54,6 +54,14 @@ def _is_local_platform(pid):
     return not info.get("backend_url")
 
 
+def _default_email_formation_url(platform_id):
+    pinfo = _get_platform_info(int(platform_id))
+    frontend_url = (pinfo.get("frontend_url") or "").rstrip("/")
+    if not frontend_url or "localhost" in frontend_url:
+        frontend_url = request.host_url.rstrip("/")
+    return f"{frontend_url}/?p={int(platform_id)}"
+
+
 def _publish_playlist_audio_to_platform(platform_id, folder_id, filenames=None):
     """Copie les MP3 générés du dossier vers le container audio public de la plateforme.
 
@@ -169,7 +177,13 @@ def create_hr_blueprint(socketio):
     def check_hr_enabled():
         from flask import request as req
         # Ces endpoints restent accessibles même si HR est désactivé
-        always_allowed = {"hr.get_hr_enabled", "hr.check_upload_permission", "hr.recorder_audio_list", "hr.auto_schedule"}
+        always_allowed = {
+            "hr.get_hr_enabled",
+            "hr.check_upload_permission",
+            "hr.recorder_audio_list",
+            "hr.auto_schedule",
+            "hr.get_public_email_formation_link",
+        }
         if req.endpoint in always_allowed:
             return None
         if not HR_ENABLED:
@@ -485,6 +499,7 @@ def create_hr_blueprint(socketio):
                     pc.status,
                     pc.source_formation_id,
                     pc.source_module_id,
+                    pc.email_formation_url,
                     COALESCE(fm.rncp_code, fpj.rncp_code) AS source_rncp_code,
                     COALESCE(fm.tp_name, fpj.tp_name) AS source_tp_name
                 FROM platform_config pc
@@ -527,6 +542,7 @@ def create_hr_blueprint(socketio):
                     p_status,
                     p_source_formation_id,
                     p_source_module_id,
+                    p_email_formation_url,
                     p_source_rncp_code,
                     p_source_tp_name,
                 ) = row
@@ -607,6 +623,7 @@ def create_hr_blueprint(socketio):
                     "alerts": alerts,
                     "updated_at": updated_at,
                     "frontend_url": pinfo.get("frontend_url"),
+                    "email_formation_url": p_email_formation_url or _default_email_formation_url(pid),
                     "status": p_status or "ready",
                     "source_formation_id": p_source_formation_id,
                     "source_module_id": p_source_module_id,
@@ -619,6 +636,60 @@ def create_hr_blueprint(socketio):
 
         except Exception as e:
             logger.error(f"❌ Erreur get platforms: {e}")
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    @hr_bp.route("/api/public/email-formation-link", methods=["GET"])
+    def get_public_email_formation_link():
+        """Lien de formation utilisé par les scripts de relance email."""
+        try:
+            platform_id = int(request.args.get("platform_id") or request.args.get("p") or 1)
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT email_formation_url FROM platform_config WHERE id = ?",
+                (platform_id,),
+            )
+            row = cursor.fetchone()
+            conn.close()
+            if not row:
+                return jsonify({"success": False, "error": "Plateforme introuvable"}), 404
+            url = row[0] or _default_email_formation_url(platform_id)
+            return jsonify({"success": True, "platform_id": platform_id, "url": url}), 200
+        except Exception as e:
+            logger.error(f"❌ Erreur public email formation link: {e}")
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    @hr_bp.route("/api/hr/platforms/<int:platform_id>/email-formation-link", methods=["PUT"])
+    def update_email_formation_link(platform_id):
+        """Met à jour le lien de formation injecté dans les mails de relance."""
+        denied = _require_admin()
+        if denied:
+            return denied
+
+        data = request.get_json() or {}
+        url = (data.get("url") or "").strip()
+        if not url:
+            url = _default_email_formation_url(platform_id)
+        if not (url.startswith("http://") or url.startswith("https://")):
+            return jsonify({"success": False, "error": "Le lien doit commencer par http:// ou https://"}), 400
+
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute("SELECT id FROM platform_config WHERE id = ?", (platform_id,))
+            if not cursor.fetchone():
+                conn.close()
+                return jsonify({"success": False, "error": "Plateforme introuvable"}), 404
+            cursor.execute(
+                "UPDATE platform_config SET email_formation_url = ?, updated_at = ? WHERE id = ?",
+                (url, _now_str(), platform_id),
+            )
+            conn.commit()
+            conn.close()
+            logger.info(f"✅ Lien email formation P{platform_id} mis à jour: {url}")
+            return jsonify({"success": True, "platform_id": platform_id, "url": url}), 200
+        except Exception as e:
+            logger.error(f"❌ Erreur update email formation link P{platform_id}: {e}")
             return jsonify({"success": False, "error": str(e)}), 500
 
     def _clone_formation_async(source_platform_id, target_platform_id, source_formation_id):

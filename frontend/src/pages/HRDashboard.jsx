@@ -39,6 +39,8 @@ export default function HRDashboard() {
   const [selectedPlatformId, setSelectedPlatformId] = useState(null)
   const [showPdfModal, setShowPdfModal] = useState(false)
   const [selectedPlatform, setSelectedPlatform] = useState(null)
+  const [showEmailLinkModal, setShowEmailLinkModal] = useState(false)
+  const [selectedEmailLinkPlatform, setSelectedEmailLinkPlatform] = useState(null)
   const [showCourseTimeModal, setShowCourseTimeModal] = useState(false)
   const [currentCourseTime, setCurrentCourseTime] = useState(null)
   const [courseTimePlatformId, setCourseTimePlatformId] = useState(1)
@@ -348,6 +350,23 @@ export default function HRDashboard() {
       return data
     } catch (e) {
       console.error('Erreur config cours:', e)
+      return { success: false, error: e.message }
+    }
+  }
+
+  const handleSaveEmailFormationLink = async (platformId, url) => {
+    try {
+      const resp = await fetch(apiUrl(`/api/hr/platforms/${platformId}/email-formation-link`), {
+        method: 'PUT',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url }),
+      })
+      const data = await resp.json()
+      if (data.success) fetchPlatforms(platformId)
+      return data
+    } catch (e) {
+      console.error('Erreur lien mail formation:', e)
       return { success: false, error: e.message }
     }
   }
@@ -772,6 +791,10 @@ export default function HRDashboard() {
                 } catch { setCurrentCourseTime(null) }
                 setShowCourseTimeModal(true)
               }}
+              onOpenEmailLinkModal={(platform) => {
+                setSelectedEmailLinkPlatform(platform)
+                setShowEmailLinkModal(true)
+              }}
               onDeleteAudio={handleDeleteAudio}
               onOpenCoursFolders={handleOpenCoursFolders}
               onPlayAudio={handlePlayAudio}
@@ -822,6 +845,17 @@ export default function HRDashboard() {
           onSubmit={handleSetCourseTime}
           initialDate={currentCourseTime?.date_cours}
           initialHeure={currentCourseTime?.heure_cours}
+        />
+      )}
+
+      {showEmailLinkModal && selectedEmailLinkPlatform && (
+        <EmailFormationLinkModal
+          platform={selectedEmailLinkPlatform}
+          onClose={() => {
+            setShowEmailLinkModal(false)
+            setSelectedEmailLinkPlatform(null)
+          }}
+          onSubmit={handleSaveEmailFormationLink}
         />
       )}
 
@@ -1271,6 +1305,7 @@ function PlatformCardsView({
   onExpand,
   onOpenPdfModal,
   onOpenCourseTimeModal,
+  onOpenEmailLinkModal,
   onDeleteAudio,
   onOpenCoursFolders,
   onPlayAudio,
@@ -1324,6 +1359,7 @@ function PlatformCardsView({
             onExpand={() => onExpand(p.id)}
             onOpenPdfModal={() => onOpenPdfModal(p)}
             onOpenCourseTimeModal={() => onOpenCourseTimeModal(p)}
+            onOpenEmailLinkModal={() => onOpenEmailLinkModal(p)}
             onDeleteAudio={(fn) => onDeleteAudio(p.id, fn)}
             onOpenCoursFolders={() => onOpenCoursFolders(p)}
             onPlayAudio={onPlayAudio}
@@ -2379,7 +2415,7 @@ function AudioCard({ title, icon, bgColor, audios, iconColor, buttonColor }) {
 // déménagés dans CoursFoldersModal (la vue où l'admin voit les audios).
 function PlatformCard({
   platform: p, expanded, audios, audiosLoading, playingAudio, pdfUploading,
-  audioRef, colors, darkMode, onExpand, onOpenPdfModal, onOpenCourseTimeModal, onDeleteAudio, onPlayAudio, onPdfUpload, onDeletePdf, onOpenCoursFolders, onDeletePlatform,
+  audioRef, colors, darkMode, onExpand, onOpenPdfModal, onOpenCourseTimeModal, onOpenEmailLinkModal, onDeleteAudio, onPlayAudio, onPdfUpload, onDeletePdf, onOpenCoursFolders, onDeletePlatform,
 }) {
   const pdfInputId = `pdf-input-${p.id}`
   const platformThumbnail = getPlatformThumbnail(p)
@@ -2587,6 +2623,20 @@ function PlatformCard({
             >
               <Icon name="schedule" className="text-lg" style={{ color: colors.textMuted }} />
               <span>Heure</span>
+            </button>
+          )}
+
+          {p.active && (
+            <button
+              onClick={onOpenEmailLinkModal}
+              className="group flex items-center gap-2.5 rounded-lg px-3 py-2.5 text-sm font-medium tracking-tight transition-colors hover:bg-black/5 dark:hover:bg-white/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40"
+              style={{
+                border: `1px solid ${colors.border}`,
+                color: colors.textSecondary,
+              }}
+            >
+              <Icon name="alternate_email" className="text-lg" style={{ color: colors.textMuted }} />
+              <span>Lien mail</span>
             </button>
           )}
 
@@ -2913,6 +2963,137 @@ function CourseTimeModal({ onClose, onSubmit, initialDate, initialHeure }) {
             </form>
           )}
         </div>
+      </div>
+    </div>
+  )
+}
+
+function EmailFormationLinkModal({ platform, onClose, onSubmit }) {
+  const defaultUrl = `${platform.frontend_url || window.location.origin}/?p=${platform.id}`
+  const [url, setUrl] = useState(platform.email_formation_url || defaultUrl)
+  const [loading, setLoading] = useState(false)
+  const [result, setResult] = useState(null)
+  const trimmedUrl = url.trim()
+  const isValid = trimmedUrl.startsWith('http://') || trimmedUrl.startsWith('https://')
+
+  const handleSubmit = async (e) => {
+    e.preventDefault()
+    if (!isValid) return
+    setLoading(true)
+    setResult(null)
+    const data = await onSubmit(platform.id, trimmedUrl)
+    setResult(data)
+    setLoading(false)
+    if (data.success) {
+      window.setTimeout(onClose, 450)
+    }
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-4"
+      style={{ backgroundColor: 'rgba(0, 0, 0, 0.7)' }}
+      onClick={onClose}
+    >
+      <div
+        className="overflow-hidden rounded-2xl bg-white shadow-2xl"
+        style={{ width: '100%', maxWidth: '560px' }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between border-b px-6 py-4" style={{ borderColor: '#e2e8f0', backgroundColor: '#0f172a' }}>
+          <div className="flex min-w-0 items-center gap-3 text-white">
+            <Icon name="alternate_email" className="text-2xl" />
+            <div className="min-w-0">
+              <h3 className="truncate text-lg font-bold">Lien des mails</h3>
+              <p className="truncate text-xs text-slate-300">{platform.name}</p>
+            </div>
+          </div>
+          <button
+            onClick={onClose}
+            className="rounded-full p-1 text-white transition-colors hover:bg-white/20"
+            aria-label="Fermer"
+          >
+            <Icon name="close" className="text-2xl" />
+          </button>
+        </div>
+
+        <form onSubmit={handleSubmit} className="space-y-4 p-6">
+          <div>
+            <label className="mb-1.5 block text-xs font-semibold" style={{ color: '#334155' }}>
+              URL envoyée dans les mails de relance
+            </label>
+            <input
+              type="url"
+              value={url}
+              onChange={(e) => {
+                setUrl(e.target.value)
+                setResult(null)
+              }}
+              required
+              autoFocus
+              className="w-full rounded-lg border px-3 py-2.5 text-sm outline-none transition-colors"
+              style={{
+                borderColor: isValid ? '#e2e8f0' : '#fecaca',
+                color: '#0f172a',
+                backgroundColor: '#F8F7F5',
+              }}
+              placeholder={defaultUrl}
+            />
+            <p className="mt-2 text-xs leading-relaxed" style={{ color: '#64748b' }}>
+              Ce lien sera utilisé par le mail de la veille et le mail du matin.
+            </p>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => {
+              setUrl(defaultUrl)
+              setResult(null)
+            }}
+            className="inline-flex items-center gap-2 rounded-lg px-3 py-2 text-xs font-medium transition-colors"
+            style={{ backgroundColor: '#f1f5f9', color: '#475569', border: '1px solid #e2e8f0' }}
+          >
+            <Icon name="restart_alt" className="text-sm" />
+            Remettre le lien du cours
+          </button>
+
+          {result && (
+            <p
+              className="rounded-lg px-3 py-2 text-xs"
+              style={{
+                color: result.success ? '#047857' : '#dc2626',
+                backgroundColor: result.success ? '#d1fae5' : '#fee2e2',
+              }}
+            >
+              {result.success ? 'Lien enregistré.' : (result.error || 'Une erreur est survenue')}
+            </p>
+          )}
+
+          <div className="flex gap-3 pt-1">
+            <button
+              type="button"
+              onClick={onClose}
+              disabled={loading}
+              className="flex-1 rounded-lg px-4 py-2.5 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-60"
+              style={{ backgroundColor: '#f1f5f9', color: '#475569', border: '1px solid #e2e8f0' }}
+            >
+              Annuler
+            </button>
+            <button
+              type="submit"
+              disabled={loading || !isValid}
+              className="flex flex-1 items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm font-semibold text-white transition-opacity disabled:cursor-not-allowed"
+              style={{ backgroundColor: '#0f172a', opacity: (loading || !isValid) ? 0.6 : 1 }}
+            >
+              {loading ? (
+                <div className="h-4 w-4 animate-spin rounded-full border-2 border-white/30 border-t-white" />
+              ) : (
+                <Icon name="save" className="text-base" />
+              )}
+              {loading ? 'Enregistrement...' : 'Enregistrer'}
+            </button>
+          </div>
+        </form>
       </div>
     </div>
   )
