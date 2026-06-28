@@ -187,6 +187,21 @@ def init_database(_recovered_from_corruption: bool = False):
         )
         logger.info("✅ Table student_profiles créée/vérifiée")
 
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS training_center_accounts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT NOT NULL UNIQUE,
+                password_hash TEXT NOT NULL,
+                center_name TEXT NOT NULL,
+                is_active INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        logger.info("✅ Table training_center_accounts créée/vérifiée")
+
         # Seed plateformes si la table est vide
         cursor.execute("SELECT COUNT(*) FROM platform_config")
         pc_count = cursor.fetchone()[0]

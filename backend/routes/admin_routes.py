@@ -3,11 +3,13 @@ from flask import Blueprint, request, session, jsonify, send_file
 from datetime import datetime, timedelta, timezone
 import os
 import re
+import sqlite3
 import tempfile
 import requests as http_requests
 from azure.storage.blob import BlobServiceClient, generate_blob_sas, BlobSasPermissions
 from azure.core.exceptions import ResourceExistsError
 from pydub import AudioSegment
+from werkzeug.security import check_password_hash, generate_password_hash
 import state
 from config import FRANCE_TZ, DB_PATH, SUPABASE_SERVICE_ROLE_KEY, SUPABASE_URL
 from database.db import get_db_connection
@@ -367,32 +369,161 @@ def create_admin_blueprint(socketio):
     @admin_bp.route("/api/admin/login", methods=["POST"])
     def login_admin():
         """Connexion administrateur"""
+        conn = None
         try:
             if session.get("is_admin"):
                 logger.info("👑 Admin déjà connecté")
                 return jsonify({"success": True, "message": "Déjà connecté"}), 200
 
-            data = request.get_json()
-            username = data.get("username", "").strip()
+            data = request.get_json(silent=True) or {}
+            username = data.get("username", "").strip().lower()
             password = data.get("password", "").strip()
 
             logger.info(f"🔐 Tentative connexion admin: {username}")
 
             if username == "admin" and password == "secret123":
                 session["is_admin"] = True
+                session["admin_account_type"] = "legacy_admin"
                 session.permanent = True
                 logger.info("✅ Connexion admin réussie")
                 return jsonify({"success": True, "message": "Connexion réussie"}), 200
-            else:
+
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT id, username, password_hash, center_name, is_active
+                FROM training_center_accounts
+                WHERE username = ?
+                """,
+                (username,),
+            )
+            account = cursor.fetchone() if username else None
+
+            if not account or not password or not check_password_hash(account[2], password):
                 logger.warning("❌ Échec connexion admin - identifiants incorrects")
                 return (
                     jsonify({"success": False, "error": "Identifiants incorrects"}),
                     401,
                 )
 
+            if not account[4]:
+                logger.warning("⚠️ Compte centre désactivé: %s", username)
+                return jsonify({"success": False, "error": "Compte désactivé"}), 403
+
+            session["is_admin"] = True
+            session["admin_account_id"] = account[0]
+            session["admin_account_type"] = "training_center"
+            session["center_name"] = account[3]
+            session.permanent = True
+            logger.info("✅ Connexion centre réussie: %s", username)
+            return (
+                jsonify(
+                    {
+                        "success": True,
+                        "message": "Connexion réussie",
+                        "account": {
+                            "id": account[0],
+                            "username": account[1],
+                            "center_name": account[3],
+                        },
+                    }
+                ),
+                200,
+            )
+
         except Exception as e:
             logger.error(f"❌ Erreur login admin: {e}")
             return jsonify({"success": False, "error": "Erreur serveur"}), 500
+        finally:
+            if conn:
+                conn.close()
+
+    @admin_bp.route("/api/admin/register", methods=["POST"])
+    def register_admin():
+        """Inscription centre de formation"""
+        conn = None
+        try:
+            data = request.get_json(silent=True) or {}
+            username = data.get("username", "").strip().lower()
+            password = data.get("password", "").strip()
+            center_name = data.get("center_name", "").strip()
+
+            if not username or not password or not center_name:
+                return (
+                    jsonify(
+                        {
+                            "success": False,
+                            "error": "Nom du centre, identifiant et mot de passe requis",
+                        }
+                    ),
+                    400,
+                )
+            if len(password) < 8:
+                return (
+                    jsonify(
+                        {
+                            "success": False,
+                            "error": "Le mot de passe doit contenir au moins 8 caractères",
+                        }
+                    ),
+                    400,
+                )
+
+            now_str = datetime.now(FRANCE_TZ).strftime("%Y-%m-%d %H:%M:%S")
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT INTO training_center_accounts
+                    (username, password_hash, center_name, is_active, created_at, updated_at)
+                VALUES (?, ?, ?, 1, ?, ?)
+                """,
+                (
+                    username,
+                    generate_password_hash(password),
+                    center_name,
+                    now_str,
+                    now_str,
+                ),
+            )
+            account_id = cursor.lastrowid
+            conn.commit()
+
+            session["is_admin"] = True
+            session["admin_account_id"] = account_id
+            session["admin_account_type"] = "training_center"
+            session["center_name"] = center_name
+            session.permanent = True
+
+            logger.info("✅ Inscription centre réussie: %s", username)
+            return (
+                jsonify(
+                    {
+                        "success": True,
+                        "message": "Compte créé",
+                        "account": {
+                            "id": account_id,
+                            "username": username,
+                            "center_name": center_name,
+                        },
+                    }
+                ),
+                201,
+            )
+        except sqlite3.IntegrityError:
+            if conn:
+                conn.rollback()
+            logger.warning("❌ Inscription centre refusée, identifiant déjà utilisé")
+            return jsonify({"success": False, "error": "Cet identifiant existe déjà"}), 409
+        except Exception as e:
+            if conn:
+                conn.rollback()
+            logger.error(f"❌ Erreur inscription centre: {e}")
+            return jsonify({"success": False, "error": "Erreur serveur"}), 500
+        finally:
+            if conn:
+                conn.close()
 
     @admin_bp.route("/api/admin/logout", methods=["POST"])
     def logout_admin():
@@ -400,6 +531,9 @@ def create_admin_blueprint(socketio):
         try:
             logger.info("👑 Déconnexion admin")
             session.pop("is_admin", None)
+            session.pop("admin_account_id", None)
+            session.pop("admin_account_type", None)
+            session.pop("center_name", None)
             return jsonify({"success": True, "message": "Déconnexion réussie"}), 200
         except Exception as e:
             logger.error(f"❌ Erreur logout admin: {e}")
