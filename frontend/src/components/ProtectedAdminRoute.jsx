@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { Navigate } from 'react-router-dom'
 import { apiUrl } from '../api'
 
-export default function ProtectedAdminRoute({ children }) {
+export default function ProtectedAdminRoute({ children, loginPath = '/login-admin' }) {
   const [isAuthenticated, setIsAuthenticated] = useState(null) // null = loading, true/false = résultat
   const [isLoading, setIsLoading] = useState(true)
 
@@ -49,8 +49,7 @@ export default function ProtectedAdminRoute({ children }) {
   }
 
   if (!isAuthenticated) {
-    // Rediriger vers la page de login admin
-    return <Navigate to="/login-admin" replace />
+    return <Navigate to={loginPath} replace />
   }
 
   // Afficher la page protégée

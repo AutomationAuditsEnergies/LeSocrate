@@ -58,7 +58,13 @@ export default function Landing() {
                   <a className={`${navLinkClass} px-3 py-2 rounded-md text-sm font-bold transition`} style={{ color: isLightNav ? '#111111' : '#fff', textShadow: navTextShadow }} href="#">Solutions</a>
                   <a className={`${navLinkClass} px-3 py-2 rounded-md text-sm font-bold transition`} style={{ color: isLightNav ? '#111111' : '#fff', textShadow: navTextShadow }} href="#">Tarifs</a>
                   <a className={`${navLinkClass} px-3 py-2 rounded-md text-sm font-bold transition`} style={{ color: isLightNav ? '#111111' : '#fff', textShadow: navTextShadow }} href="#">Ressources</a>
-                  <button className={`${navButtonClass} text-sm font-bold transition`}>Connexion</button>
+                  <button
+                    type="button"
+                    onClick={() => navigate('/connexion-centre')}
+                    className={`${navButtonClass} text-sm font-bold transition`}
+                  >
+                    Connexion
+                  </button>
                   {!isLightNav && (
                     <button className={navTrialButtonClass}>
                       Essai gratuit

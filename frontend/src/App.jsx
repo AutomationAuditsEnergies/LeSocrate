@@ -10,19 +10,22 @@ import ProtectedAdminRoute from './components/ProtectedAdminRoute.jsx'
 const loadAdminPage = () => import('./pages/Admin.jsx')
 const loadAttentePage = () => import('./pages/Attente.jsx')
 const loadLoginAdminPage = () => import('./pages/LoginAdmin.jsx')
+const loadLoginCentrePage = () => import('./pages/LoginCentre.jsx')
 const loadVideoPage = () => import('./pages/Video.jsx')
+const loadHRDashboardPage = () => import('./pages/HRDashboard.jsx')
 
 const Admin = lazy(loadAdminPage)
 const Attente = lazy(loadAttentePage)
 const DebugCours = lazy(() => import('./pages/DebugCours.jsx'))
 const Intro = lazy(() => import('./pages/Intro.jsx'))
 const LoginAdmin = lazy(loadLoginAdminPage)
+const LoginCentre = lazy(loadLoginCentrePage)
 const Landing = lazy(() => import('./pages/Landing.jsx'))
 const Video = lazy(loadVideoPage)
 const TestSlides = lazy(() => import('./pages/TestSlides.jsx'))
 const GeneratedSlides = lazy(() => import('./pages/GeneratedSlides.jsx'))
 const Recorder = lazy(() => import('./pages/Recorder.jsx'))
-const HRDashboard = lazy(() => import('./pages/HRDashboard.jsx'))
+const HRDashboard = lazy(loadHRDashboardPage)
 const ScheduleConfig = lazy(() => import('./pages/ScheduleConfig.jsx'))
 const FormationPipeline = lazy(() => import('./pages/FormationPipeline.jsx'))
 
@@ -177,6 +180,8 @@ export default function App() {
           <Route path="/landing" element={<Landing />} />
           <Route path="/video" element={<Video />} />
           <Route path="/login-admin" element={<LoginAdmin preloadAdminRoute={loadAdminPage} />} />
+          <Route path="/connexion-centre" element={<LoginCentre preloadDashboardRoute={loadHRDashboardPage} />} />
+          <Route path="/login-centre" element={<LoginCentre preloadDashboardRoute={loadHRDashboardPage} />} />
 
           {/* Routes protégées admin */}
           <Route
@@ -200,7 +205,7 @@ export default function App() {
             path="/hr-dashboard"
             element={
               <ProtectedHRRoute>
-                <ProtectedAdminRoute>
+                <ProtectedAdminRoute loginPath="/connexion-centre">
                   <HRDashboard />
                 </ProtectedAdminRoute>
               </ProtectedHRRoute>
