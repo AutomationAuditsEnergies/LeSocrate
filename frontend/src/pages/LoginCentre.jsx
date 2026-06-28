@@ -76,7 +76,7 @@ export default function LoginCentre({ preloadDashboardRoute }) {
               src="/robot-blue.png"
               alt="Professeur IA"
               draggable={false}
-              className="w-full max-w-[520px] object-contain drop-shadow-2xl"
+              className="w-full max-w-[420px] object-contain drop-shadow-2xl"
             />
           </div>
         </section>
