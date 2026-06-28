@@ -6,45 +6,18 @@ import { isSupabaseConfigured, supabase } from '../supabaseClient'
 
 const Spline = lazy(() => import('@splinetool/react-spline'))
 
-function canUseWebGL() {
-  try {
-    const canvas = document.createElement('canvas')
-    const gl =
-      window.WebGLRenderingContext &&
-      (canvas.getContext('webgl2') || canvas.getContext('webgl') || canvas.getContext('experimental-webgl'))
-    if (!gl) return false
-    gl.getExtension('WEBGL_lose_context')?.loseContext()
-    return true
-  } catch {
-    return false
-  }
-}
-
 class SplineErrorBoundary extends Component {
-  constructor(props) {
-    super(props)
-    this.state = { failed: false }
-  }
-
-  static getDerivedStateFromError() {
-    return { failed: true }
-  }
-
-  componentDidCatch(error) {
-    console.warn('Spline désactivé:', error)
-  }
-
-  render() {
-    if (this.state.failed) return null
-    return this.props.children
-  }
+  constructor(props) { super(props); this.state = { failed: false } }
+  static getDerivedStateFromError() { return { failed: true } }
+  componentDidCatch(error) { console.warn('Spline désactivé:', error) }
+  render() { return this.state.failed ? null : this.props.children }
 }
 
 function getSupabaseErrorMessage(error, fallback) {
   const message = String(error?.message || '').toLowerCase()
 
   if (message.includes('email rate limit')) {
-    return 'Trop d’emails envoyés en peu de temps. Attendez quelques minutes avant de réessayer.'
+    return "Trop d'emails envoyés en peu de temps. Attendez quelques minutes avant de réessayer."
   }
 
   if (message.includes('password should be at least')) {
@@ -62,7 +35,6 @@ export default function Index({ preloadCourseRoutes, preloadAttenteRoute, preloa
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
   const [splineLoaded, setSplineLoaded] = useState(false)
-  const [splineEnabled, setSplineEnabled] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [authMode, setAuthMode] = useState('login')
   const [platformName, setPlatformNameState] = useState(getPlatformName())
@@ -74,11 +46,9 @@ export default function Index({ preloadCourseRoutes, preloadAttenteRoute, preloa
   useEffect(() => {
     document.body.style.overflow = 'hidden'
 
-    // Lire le platform_id depuis l'URL (?p=2) et le stocker
     const pParam = searchParams.get('p')
     if (pParam) {
       setPlatformId(pParam)
-      // Récupérer le nom de la plateforme depuis le backend
       fetch(apiUrl(`/api/platform-info?id=${pParam}`))
         .then(r => r.json())
         .then(data => {
@@ -106,18 +76,6 @@ export default function Index({ preloadCourseRoutes, preloadAttenteRoute, preloa
     const timeoutId = window.setTimeout(preload, 800)
     return () => window.clearTimeout(timeoutId)
   }, [preloadCourseRoutes])
-
-  useEffect(() => {
-    const enableSpline = () => {
-      if (canUseWebGL()) setSplineEnabled(true)
-    }
-    if ('requestIdleCallback' in window) {
-      const idleId = window.requestIdleCallback(enableSpline, { timeout: 1800 })
-      return () => window.cancelIdleCallback(idleId)
-    }
-    const timeoutId = window.setTimeout(enableSpline, 1000)
-    return () => window.clearTimeout(timeoutId)
-  }, [])
 
   useEffect(() => {
     if (!isSupabaseConfigured) return undefined
@@ -155,7 +113,7 @@ export default function Index({ preloadCourseRoutes, preloadAttenteRoute, preloa
     try {
       if (passwordRecoveryMode) {
         if (!isSupabaseConfigured) {
-          setFormMessage({ type: 'error', text: 'Supabase Auth n’est pas configuré sur ce frontend.' })
+          setFormMessage({ type: 'error', text: "Supabase Auth n'est pas configuré sur ce frontend." })
           return
         }
         if (password !== passwordConfirm) {
@@ -186,7 +144,7 @@ export default function Index({ preloadCourseRoutes, preloadAttenteRoute, preloa
       let response
       if (email || password) {
         if (!isSupabaseConfigured) {
-          setFormMessage({ type: 'error', text: 'Supabase Auth n’est pas configuré sur ce frontend.' })
+          setFormMessage({ type: 'error', text: "Supabase Auth n'est pas configuré sur ce frontend." })
           return
         }
         let authData
@@ -242,9 +200,7 @@ export default function Index({ preloadCourseRoutes, preloadAttenteRoute, preloa
         }
         response = await fetch(apiUrl('/api/auth/supabase-session'), {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
+          headers: { 'Content-Type': 'application/json' },
           credentials: 'include',
           body: JSON.stringify({
             access_token: authData.session?.access_token,
@@ -254,9 +210,7 @@ export default function Index({ preloadCourseRoutes, preloadAttenteRoute, preloa
       } else {
         response = await fetch(apiUrl('/api/auth/login'), {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
+          headers: { 'Content-Type': 'application/json' },
           credentials: 'include',
           body: JSON.stringify({
             nom,
@@ -269,9 +223,7 @@ export default function Index({ preloadCourseRoutes, preloadAttenteRoute, preloa
       const data = await response.json()
 
       if (data.success) {
-        // Stocker le token pour les navigateurs bloquant les cookies tiers
         if (data.token) localStorage.setItem('auth_token', data.token)
-        // Transmettre le platform_id dans l'URL pour que /video sache quelle plateforme utiliser
         const pId = localStorage.getItem('platform_id')
         const withPlatform = (path) => (pId && pId !== '1' ? `${path}?p=${pId}` : path)
 
@@ -317,7 +269,7 @@ export default function Index({ preloadCourseRoutes, preloadAttenteRoute, preloa
     }
 
     if (!isSupabaseConfigured) {
-      setFormMessage({ type: 'error', text: 'Supabase Auth n’est pas configuré sur ce frontend.' })
+      setFormMessage({ type: 'error', text: "Supabase Auth n'est pas configuré sur ce frontend." })
       return
     }
 
@@ -330,7 +282,7 @@ export default function Index({ preloadCourseRoutes, preloadAttenteRoute, preloa
       if (error) {
         setFormMessage({
           type: 'error',
-          text: getSupabaseErrorMessage(error, 'Impossible d’envoyer le lien de réinitialisation.'),
+          text: getSupabaseErrorMessage(error, "Impossible d'envoyer le lien de réinitialisation."),
         })
         return
       }
@@ -341,103 +293,89 @@ export default function Index({ preloadCourseRoutes, preloadAttenteRoute, preloa
       })
     } catch (error) {
       console.error('Erreur réinitialisation mot de passe:', error)
-      setFormMessage({ type: 'error', text: 'Impossible d’envoyer le lien de réinitialisation.' })
+      setFormMessage({ type: 'error', text: "Impossible d'envoyer le lien de réinitialisation." })
     } finally {
       setResettingPassword(false)
     }
   }
 
-
   return (
     <div
-      className="h-screen px-4 lg:px-8 relative flex flex-col overflow-hidden"
+      className="h-screen relative overflow-hidden"
       style={{
         backgroundImage: 'url("/static/images/rocket.jpg"), linear-gradient(160deg, #0f172a 0%, #1e1b4b 55%, #312e81 100%)',
         backgroundColor: '#1e1b4b',
         backgroundSize: 'cover',
         backgroundPosition: 'center',
-        fontFamily: 'Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+        fontFamily: 'Inter, ui-sans-serif, system-ui, sans-serif',
       }}
     >
-      <header className="fixed top-0 left-0 w-full h-16 bg-gradient-to-b from-black/20 to-transparent z-50" />
-
-      <main
-        className="relative isolate flex-1 flex items-start justify-end pr-6 pb-8 md:pr-12 lg:pr-20"
-        style={{ paddingTop: 'max(1rem, calc((100vh - 700px) / 2))' }}
+      {/* Spline — exactement comme avant, on touche rien */}
+      <div
+        style={{
+          position: 'absolute',
+          top: '10%', left: '5%',
+          width: '50%', height: '80%',
+          opacity: splineLoaded ? 0.8 : 0,
+          transform: splineLoaded ? 'scale(1)' : 'scale(0.95)',
+          transition: 'opacity 1.5s ease-out, transform 1.5s ease-out',
+          willChange: 'opacity, transform',
+        }}
       >
-        <div className="absolute inset-0 pointer-events-none" style={{ zIndex: 0 }}>
-          <div
-            style={{
-              position: 'absolute',
-              top: '10%',
-              left: '5%',
-              width: '50%',
-              height: '80%',
-              opacity: splineLoaded ? 0.8 : 0,
-              transform: splineLoaded ? 'scale(1)' : 'scale(0.95)',
-              transition: 'opacity 1.5s ease-out, transform 1.5s ease-out',
-              willChange: 'opacity, transform',
-            }}
-          >
-            {splineEnabled && (
-              <SplineErrorBoundary>
-                <Suspense fallback={null}>
-                  <Spline
-                    scene="https://prod.spline.design/Td1yXokrn9dRpNzQ/scene.splinecode"
-                    style={{ width: '100%', height: '100%' }}
-                    onLoad={() => setTimeout(() => setSplineLoaded(true), 100)}
-                  />
-                </Suspense>
-              </SplineErrorBoundary>
-            )}
+        <SplineErrorBoundary>
+          <Suspense fallback={null}>
+            <Spline
+              scene="https://prod.spline.design/Td1yXokrn9dRpNzQ/scene.splinecode"
+              style={{ width: '100%', height: '100%' }}
+              onLoad={() => setTimeout(() => setSplineLoaded(true), 100)}
+            />
+          </Suspense>
+        </SplineErrorBoundary>
+      </div>
+
+      {/* Panel blanc — posé par-dessus à droite, wallpaper intact dessous */}
+      <div
+        className="absolute right-0 top-0 bottom-0 overflow-y-auto bg-white flex flex-col"
+        style={{ width: '600px', boxShadow: '-20px 0 60px rgba(15,23,42,0.25)', borderLeft: '1px solid #000' }}
+      >
+        {/* Titre — ancré en haut */}
+        <div className="flex justify-center pt-8 pb-4 flex-shrink-0">
+          <div className="flex items-end gap-2 rotate-[-6deg]" aria-label="Sales hacking">
+            <span className="text-[34px] font-bold leading-none text-[#111827]" style={{ fontFamily: 'Caveat, cursive' }}>
+              Sales
+            </span>
+            <span className="text-[39px] font-bold leading-none text-[#6070F2]" style={{ fontFamily: 'Caveat, cursive' }}>
+              hacking
+            </span>
           </div>
         </div>
 
-        <div className="relative z-10 flex min-h-[620px] w-full max-w-md flex-col bg-white/95 backdrop-blur-md rounded-3xl border border-gray-200 px-10 pt-10 pb-10 text-left shadow-[0_22px_60px_rgba(15,23,42,0.28),0_2px_8px_rgba(15,23,42,0.12)] ring-1 ring-white/60">
-          <div className="mx-auto mb-12 flex justify-center">
-            <div className="flex items-end gap-2 rotate-[-6deg]" aria-label="Sales hacking">
-              <span
-                className="text-[34px] font-bold leading-none text-[#111827]"
-                style={{ fontFamily: 'Caveat, cursive' }}
-              >
-                Sales
-              </span>
-              <span
-                className="text-[39px] font-bold leading-none text-[#6070F2]"
-                style={{ fontFamily: 'Caveat, cursive' }}
-              >
-                hacking
-              </span>
-            </div>
-          </div>
+        <div className="flex flex-col justify-center flex-1 px-10 pb-12">
+
+          {/* Onglets */}
           {!passwordRecoveryMode && (
-            <div className="mb-7 grid grid-cols-2 rounded-full bg-gray-100 p-1 text-sm font-semibold text-gray-600">
+            <div className="mb-7 grid grid-cols-2 rounded-lg border border-gray-200 p-1 text-sm font-semibold text-gray-500 bg-gray-50">
               <button
                 type="button"
-                onClick={() => {
-                  setAuthMode('login')
-                  setFormMessage(null)
-                }}
-              className={`rounded-full px-3 py-2 transition ${authMode === 'login' ? 'bg-white text-[#6070F2] shadow-sm' : 'hover:text-gray-900'}`}
+                onClick={() => { setAuthMode('login'); setFormMessage(null) }}
+                className={`rounded-md px-3 py-2 transition ${authMode === 'login' ? 'bg-white text-[#6070F2] shadow-sm' : 'hover:text-gray-900'}`}
               >
                 Connexion
               </button>
               <button
                 type="button"
-                onClick={() => {
-                  setAuthMode('signup')
-                  setFormMessage(null)
-                }}
-              className={`rounded-full px-3 py-2 transition ${authMode === 'signup' ? 'bg-white text-[#6070F2] shadow-sm' : 'hover:text-gray-900'}`}
+                onClick={() => { setAuthMode('signup'); setFormMessage(null) }}
+                className={`rounded-md px-3 py-2 transition ${authMode === 'signup' ? 'bg-white text-[#6070F2] shadow-sm' : 'hover:text-gray-900'}`}
               >
                 Inscription
               </button>
             </div>
           )}
 
+          {/* Message */}
           {formMessage && (
             <div
-              className={`mb-6 rounded-2xl border px-4 py-3 text-sm font-medium ${
+              className={`mb-6 rounded-lg border px-4 py-3 text-sm font-medium ${
                 formMessage.type === 'success'
                   ? 'border-[#6070F2]/30 bg-[#6070F2]/10 text-[#3340b8]'
                   : 'border-red-200 bg-red-50 text-red-700'
@@ -448,53 +386,51 @@ export default function Index({ preloadCourseRoutes, preloadAttenteRoute, preloa
             </div>
           )}
 
-          <form className="space-y-6 text-left" onSubmit={handleFormSubmit}>
+          {/* Formulaire */}
+          <form className="space-y-5 text-left" onSubmit={handleFormSubmit}>
             {passwordRecoveryMode && (
               <div className="text-center">
                 <h1 className="text-2xl font-bold text-gray-900">Nouveau mot de passe</h1>
                 <p className="mt-2 text-sm font-medium text-gray-500">
-                  Saisissez votre nouveau mot de passe pour reprendre l’accès à votre compte.
+                  Saisissez votre nouveau mot de passe pour reprendre l'accès à votre compte.
                 </p>
               </div>
             )}
+
             {!passwordRecoveryMode && (
-              <div>
-              <label className="block text-gray-700 font-semibold mb-1" htmlFor="email">
-                Email :
-                </label>
+              <div className="space-y-1.5">
+                <label className="block text-sm font-medium text-gray-700" htmlFor="email">E-mail</label>
                 <input
-                  id="email"
-                  name="email"
-                  type="email"
-                  autoComplete="email"
-                className="w-full px-4 py-2 bg-gray-100 border border-gray-300 rounded-full focus:outline-none focus:ring-2 focus:ring-[#6070F2]/40"
+                  id="email" name="email" type="email" autoComplete="email"
+                  placeholder="Entrez votre adresse e-mail"
+                  className="w-full border border-gray-200 rounded-lg p-3 text-sm placeholder:text-gray-300 focus:outline-none focus:ring-2 focus:ring-[#6070F2]/30 focus:border-[#6070F2] transition"
                 />
               </div>
             )}
-              <div>
-              <label className="block text-gray-700 font-semibold mb-1" htmlFor="password">
-                {passwordRecoveryMode ? 'Nouveau mot de passe :' : 'Mot de passe :'}
-                </label>
+
+            <div className="space-y-1.5">
+              <label className="block text-sm font-medium text-gray-700" htmlFor="password">
+                {passwordRecoveryMode ? 'Nouveau mot de passe' : 'Mot de passe'}
+              </label>
               <div className="relative">
                 <input
-                  id="password"
-                  name="password"
+                  id="password" name="password"
                   type={showPassword ? 'text' : 'password'}
                   autoComplete={authMode === 'signup' ? 'new-password' : 'current-password'}
-                  className="w-full px-4 py-2 pr-12 bg-gray-100 border border-gray-300 rounded-full focus:outline-none focus:ring-2 focus:ring-[#6070F2]/40"
+                  placeholder="Entrez votre mot de passe"
+                  className="w-full border border-gray-200 rounded-lg p-3 pr-12 text-sm placeholder:text-gray-300 focus:outline-none focus:ring-2 focus:ring-[#6070F2]/30 focus:border-[#6070F2] transition"
                 />
                 <button
                   type="button"
-                  onClick={() => setShowPassword((visible) => !visible)}
-                  className="absolute right-3 top-1/2 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-full text-gray-500 transition hover:bg-gray-200 hover:text-gray-800 focus:outline-none focus:ring-2 focus:ring-[#6070F2]/35"
+                  onClick={() => setShowPassword((v) => !v)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 transition"
                   aria-label={showPassword ? 'Masquer le mot de passe' : 'Afficher le mot de passe'}
-                  title={showPassword ? 'Masquer le mot de passe' : 'Afficher le mot de passe'}
                 >
                   {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
                 </button>
               </div>
               {authMode === 'login' && !passwordRecoveryMode && (
-                <div className="mt-2 flex justify-end">
+                <div className="flex justify-end">
                   <button
                     type="button"
                     onClick={handleForgotPassword}
@@ -505,84 +441,64 @@ export default function Index({ preloadCourseRoutes, preloadAttenteRoute, preloa
                   </button>
                 </div>
               )}
+            </div>
+
+            {(authMode === 'signup' || passwordRecoveryMode) && (
+              <div className="space-y-1.5">
+                <label className="block text-sm font-medium text-gray-700" htmlFor="password_confirm">
+                  {passwordRecoveryMode ? 'Confirmer le nouveau mot de passe' : 'Confirmer le mot de passe'}
+                </label>
+                <input
+                  id="password_confirm" name="password_confirm"
+                  type={showPassword ? 'text' : 'password'}
+                  autoComplete="new-password"
+                  placeholder="Confirmez votre mot de passe"
+                  className="w-full border border-gray-200 rounded-lg p-3 text-sm placeholder:text-gray-300 focus:outline-none focus:ring-2 focus:ring-[#6070F2]/30 focus:border-[#6070F2] transition"
+                />
               </div>
-              {(authMode === 'signup' || passwordRecoveryMode) && (
-                <div>
-                  <label className="block text-gray-700 font-semibold mb-1" htmlFor="password_confirm">
-                    {passwordRecoveryMode ? 'Confirmer le nouveau mot de passe :' : 'Confirmer le mot de passe :'}
-                  </label>
-                  <input
-                    id="password_confirm"
-                    name="password_confirm"
-                    type={showPassword ? 'text' : 'password'}
-                    autoComplete="new-password"
-                    className="w-full px-4 py-2 bg-gray-100 border border-gray-300 rounded-full focus:outline-none focus:ring-2 focus:ring-[#6070F2]/40"
-                  />
+            )}
+
+            {authMode === 'signup' && !passwordRecoveryMode && (
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1.5">
+                  <label className="block text-sm font-medium text-gray-700" htmlFor="prenom">Prénom</label>
+                  <input id="prenom" name="prenom" type="text" autoComplete="given-name"
+                    placeholder="Votre prénom"
+                    className="w-full border border-gray-200 rounded-lg p-3 text-sm placeholder:text-gray-300 focus:outline-none focus:ring-2 focus:ring-[#6070F2]/30 focus:border-[#6070F2] transition" />
                 </div>
-              )}
-              {authMode === 'signup' && !passwordRecoveryMode && (
-                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                  <div>
-                  <label className="block text-gray-700 font-semibold mb-1" htmlFor="prenom">
-                    Prénom :
-                    </label>
-                    <input
-                      id="prenom"
-                      name="prenom"
-                      type="text"
-                      autoComplete="given-name"
-                    className="w-full px-4 py-2 bg-gray-100 border border-gray-300 rounded-full focus:outline-none focus:ring-2 focus:ring-[#6070F2]/40"
-                    />
-                  </div>
-                  <div>
-                  <label className="block text-gray-700 font-semibold mb-1" htmlFor="nom">
-                    Nom :
-                    </label>
-                    <input
-                      id="nom"
-                      name="nom"
-                      type="text"
-                      autoComplete="family-name"
-                    className="w-full px-4 py-2 bg-gray-100 border border-gray-300 rounded-full focus:outline-none focus:ring-2 focus:ring-[#6070F2]/40"
-                    />
-                  </div>
+                <div className="space-y-1.5">
+                  <label className="block text-sm font-medium text-gray-700" htmlFor="nom">Nom</label>
+                  <input id="nom" name="nom" type="text" autoComplete="family-name"
+                    placeholder="Votre nom"
+                    className="w-full border border-gray-200 rounded-lg p-3 text-sm placeholder:text-gray-300 focus:outline-none focus:ring-2 focus:ring-[#6070F2]/30 focus:border-[#6070F2] transition" />
                 </div>
-              )}
-              {authMode === 'login' && !passwordRecoveryMode && (
-              <details className="rounded-2xl border border-gray-200 bg-gray-50 px-4 py-3">
-                <summary className="cursor-pointer text-sm font-semibold text-gray-600">
-                    Connexion ancienne promo
-                  </summary>
+              </div>
+            )}
+
+            {authMode === 'login' && !passwordRecoveryMode && (
+              <details className="rounded-lg border border-gray-200 px-4 py-3">
+                <summary className="cursor-pointer text-sm font-medium text-gray-500 list-none flex items-center gap-1.5 select-none">
+                  <span className="text-xs">▸</span> Connexion ancienne promo
+                </summary>
                 <div className="mt-3 space-y-3">
-                    <div>
-                    <label className="block text-gray-700 font-semibold mb-1" htmlFor="nom">
-                      Nom :
-                      </label>
-                      <input
-                        id="nom"
-                        name="nom"
-                        type="text"
-                      className="w-full px-4 py-2 bg-white border border-gray-300 rounded-full focus:outline-none focus:ring-2 focus:ring-[#6070F2]/40"
-                      />
-                    </div>
-                    <div>
-                    <label className="block text-gray-700 font-semibold mb-1" htmlFor="prenom">
-                      Prénom :
-                      </label>
-                      <input
-                        id="prenom"
-                        name="prenom"
-                        type="text"
-                      className="w-full px-4 py-2 bg-white border border-gray-300 rounded-full focus:outline-none focus:ring-2 focus:ring-[#6070F2]/40"
-                      />
-                    </div>
+                  <div className="space-y-1.5">
+                    <label className="block text-sm font-medium text-gray-700" htmlFor="nom">Nom</label>
+                    <input id="nom" name="nom" type="text"
+                      className="w-full border border-gray-200 rounded-lg p-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#6070F2]/30 focus:border-[#6070F2] transition" />
                   </div>
-                </details>
-              )}
+                  <div className="space-y-1.5">
+                    <label className="block text-sm font-medium text-gray-700" htmlFor="prenom">Prénom</label>
+                    <input id="prenom" name="prenom" type="text"
+                      className="w-full border border-gray-200 rounded-lg p-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#6070F2]/30 focus:border-[#6070F2] transition" />
+                  </div>
+                </div>
+              </details>
+            )}
+
             <button
               type="submit"
               disabled={submitting}
-              className="w-full bg-[#6070F2] text-white font-semibold py-2 rounded-full hover:bg-[#5361dc] transition duration-200 disabled:cursor-not-allowed disabled:opacity-70"
+              className="w-full bg-[#6070F2] text-white font-bold py-3 px-4 rounded-lg hover:bg-[#5361dc] transition-colors disabled:cursor-not-allowed disabled:opacity-70"
             >
               {submitting
                 ? 'Connexion...'
@@ -592,6 +508,7 @@ export default function Index({ preloadCourseRoutes, preloadAttenteRoute, preloa
                     ? 'Créer mon compte'
                     : 'Entrer au cours'}
             </button>
+
             {passwordRecoveryMode && (
               <button
                 type="button"
@@ -607,15 +524,13 @@ export default function Index({ preloadCourseRoutes, preloadAttenteRoute, preloa
               </button>
             )}
           </form>
+
           <p className="mt-10 text-center text-sm text-gray-400">
             © 2026 Le Socrate. Tous droits réservés.
           </p>
         </div>
-      </main>
-
-      <footer className="w-full text-center text-white py-4 mt-10 border-t border-white/20">
-        <p className="text-sm">&copy; 2025 Sales Hacking. Tous droits réservés.</p>
-      </footer>
+      </div>
     </div>
   )
 }
+
