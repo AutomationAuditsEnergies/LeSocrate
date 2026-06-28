@@ -2442,8 +2442,8 @@ function PlatformCard({
             src={theme.src}
             alt={`Professeur IA — ${p.name}`}
             draggable={false}
-            className="relative z-10 w-full max-w-full object-contain transition-transform duration-500 ease-out group-hover:-translate-y-2 group-hover:scale-[1.05]"
-            style={{ minHeight: '340px' }}
+            className="relative z-10 w-full max-w-[88%] object-contain transition-transform duration-500 ease-out group-hover:-translate-y-2 group-hover:scale-[1.05]"
+            style={{ minHeight: '290px' }}
           />
 
           {/* Nom plateforme sous le robot — texte seul, pas de carte */}
