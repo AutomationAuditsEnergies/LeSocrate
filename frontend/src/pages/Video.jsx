@@ -23,6 +23,10 @@ function formatCountdown(seconds) {
   return `${minutes}:${String(secs).padStart(2, '0')}`
 }
 
+function slideTemplateType(slide) {
+  return String(slide?.template_type || slide?.type || slide?.template || '').toLowerCase()
+}
+
 function CourseStatusScreen({ tone = 'loading', title, message }) {
   const isError = tone === 'error'
   const isDone = tone === 'done'
@@ -317,7 +321,19 @@ export default function Video() {
     && !activeSlideTiming
   )
   const nextBreakType = isBreakAudioType(audioInfo?.nextAudio?.type) ? audioInfo.nextAudio.type : null
-  const showNextBreakPreview = slideView === 'slides' && hasCompletedSyncedSpeech && Boolean(nextBreakType)
+  const secondsRemainingInAudio = Math.max(0, Number(audioInfo?.remaining ?? 0))
+  const activeSlideType = slideTemplateType(activeSlideTiming?.slide)
+  const isLateMisplacedReprise = (
+    slideView === 'slides'
+    && Boolean(nextBreakType)
+    && secondsRemainingInAudio <= 180
+    && ['reprise', 'reprise_recap', 'opening_recap', 'rappel'].includes(activeSlideType)
+  )
+  const showNextBreakPreview = (
+    slideView === 'slides'
+    && Boolean(nextBreakType)
+    && (hasCompletedSyncedSpeech || isLateMisplacedReprise)
+  )
 
   // Positionner l'audio à l'offset correct quand il est chargé
   useEffect(() => {
@@ -674,11 +690,11 @@ export default function Video() {
                 type="button"
                 onClick={(event) => {
                   event.stopPropagation()
-                  setSlideView(showProjectedSlides ? 'professor' : 'slides')
+                  setSlideView((showProjectedSlides || showNextBreakPreview) ? 'professor' : 'slides')
                 }}
                 className="absolute right-5 top-5 rounded-xl bg-white/95 px-4 py-2 text-sm font-semibold text-gray-900 shadow-lg transition hover:bg-white focus:outline-none focus:ring-2 focus:ring-purple-500 focus:ring-offset-2 focus:ring-offset-gray-900"
               >
-                {showProjectedSlides ? 'Professeur' : 'Visualiser les slides'}
+                {(showProjectedSlides || showNextBreakPreview) ? 'Professeur' : 'Visualiser les slides'}
               </button>
             )}
 
