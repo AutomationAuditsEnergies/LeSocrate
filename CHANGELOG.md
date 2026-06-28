@@ -1,5 +1,18 @@
 # Changelog
 
+## 2026-06-28
+
+### feat(hr-dashboard): cartes plateformes en robots prof IA (flip 3D)
+
+Les `PlatformCard` du HR Dashboard deviennent des professeurs IA. Recto : un
+robot coloré sur son socle (PNG `/robot-prof.png` teinté par `hue-rotate` selon
+le `platform_id` — chaque plateforme garde son robot attitré, cf. `ROBOT_THEMES`
++ `getRobotTheme`). Au survol, la carte pivote (`rotateY`) pour révéler au verso
+la fiche formation **inchangée** (chip Pn, audios, actions, liens). Les deux
+faces se superposent dans la même cellule grid ; `backface-visibility` + bascule
+`pointer-events` selon l'état `flipped` pour que seule la face visible capte les
+clics. Prolonge le storytelling « déployez une armée de professeurs IA ».
+
 ## 2026-06-12
 
 ### fix(slides): story — le texte du tableau noir ne déborde plus

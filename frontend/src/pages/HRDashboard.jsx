@@ -23,6 +23,18 @@ const getPlatformThumbnail = (platform = {}) => {
   return null
 }
 
+// Chaque plateforme a son robot prof IA attitré : une teinte (hue-rotate sur
+// le PNG bleu de base) + une couleur d'accent pour le halo/socle. Déterministe
+// sur platform_id pour que P1 garde toujours le même robot.
+const ROBOT_THEMES = [
+  { hue: 0, glow: '#3b82f6' },   // bleu (natif)
+  { hue: 70, glow: '#8b5cf6' },  // violet
+  { hue: 150, glow: '#ec4899' }, // rose
+  { hue: 230, glow: '#10b981' }, // vert
+  { hue: 300, glow: '#f59e0b' }, // ambre
+]
+const getRobotTheme = (id = 0) => ROBOT_THEMES[((Number(id) || 1) - 1) % ROBOT_THEMES.length]
+
 // ─── Component ───────────────────────────────────────────────────────────────
 export default function HRDashboard() {
   const [platforms, setPlatforms] = useState([])
@@ -2384,16 +2396,108 @@ function PlatformCard({
   const pdfInputId = `pdf-input-${p.id}`
   const platformThumbnail = getPlatformThumbnail(p)
   const [deleteHover, setDeleteHover] = useState(false)
+  const [flipped, setFlipped] = useState(false)
+  const theme = getRobotTheme(p.id)
+  const faceStyle = {
+    backgroundColor: colors.cardBg,
+    border: p.active ? '1px solid #E4E4E4' : `1px solid ${colors.border}`,
+    boxShadow: darkMode ? 'none' : '0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px -1px rgba(0, 0, 0, 0.1)',
+  }
 
   return (
+    // Carte robot prof IA : recto = robot coloré, au survol pivote (rotateY)
+    // pour révéler au verso la fiche formation (inchangée). Les deux faces se
+    // superposent dans la même cellule grid → la cellule prend la hauteur de
+    // la plus grande (la fiche).
     <div
-      className="relative rounded-2xl overflow-hidden transition-all duration-300"
-      style={{
-        backgroundColor: colors.cardBg,
-        border: p.active ? '1px solid #E4E4E4' : `1px solid ${colors.border}`,
-        boxShadow: darkMode ? 'none' : '0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px -1px rgba(0, 0, 0, 0.1)'
-      }}
+      className="group [perspective:1600px]"
+      onMouseEnter={() => setFlipped(true)}
+      onMouseLeave={() => setFlipped(false)}
     >
+      <div
+        className="relative grid transition-transform duration-700 ease-out"
+        style={{
+          transformStyle: 'preserve-3d',
+          transform: flipped ? 'rotateY(180deg)' : 'rotateY(0deg)',
+        }}
+      >
+        {/* ═══ RECTO — le professeur IA ═══ */}
+        <div
+          className="[grid-area:1/1] relative flex flex-col overflow-hidden rounded-2xl"
+          style={{
+            ...faceStyle,
+            backfaceVisibility: 'hidden',
+            WebkitBackfaceVisibility: 'hidden',
+            pointerEvents: flipped ? 'none' : 'auto',
+          }}
+        >
+          <div className="flex items-center gap-2 px-6 pt-6">
+            <span
+              className="inline-flex flex-shrink-0 items-center rounded-md px-1.5 py-0.5 text-[10px] font-semibold uppercase"
+              style={{
+                backgroundColor: colors.innerBg,
+                color: colors.textMuted,
+                border: `1px solid ${colors.border}`,
+                letterSpacing: '0.08em',
+                fontVariantNumeric: 'tabular-nums',
+              }}
+            >
+              P{p.id}
+            </span>
+            <h3 className="truncate text-lg font-semibold leading-tight tracking-tight" style={{ color: colors.text }}>
+              {p.name}
+            </h3>
+          </div>
+
+          {/* Stage : fond clair (le PNG robot a un fond blanc → mix-blend
+              multiply le fond dans les deux thèmes) + halo de la couleur de la
+              plateforme + ombre au sol. */}
+          <div
+            className="relative mx-6 my-5 flex flex-1 items-center justify-center overflow-hidden rounded-xl"
+            style={{
+              minHeight: '210px',
+              background: `radial-gradient(circle at 50% 42%, ${theme.glow}26 0%, #F4F5FB 68%)`,
+              border: '1px solid #E4E4E4',
+            }}
+          >
+            <div
+              className="absolute bottom-8 left-1/2 h-5 w-32 -translate-x-1/2 rounded-[100%] blur-md"
+              style={{ backgroundColor: theme.glow, opacity: 0.4 }}
+            />
+            <img
+              src="/robot-prof.png"
+              alt={`Professeur IA — ${p.name}`}
+              draggable={false}
+              className="relative w-44 max-w-[68%] object-contain transition-transform duration-500 group-hover:-translate-y-1"
+              style={{ filter: `hue-rotate(${theme.hue}deg) saturate(1.05)`, mixBlendMode: 'multiply' }}
+            />
+            {!p.active && (
+              <span
+                className="absolute bottom-3 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-full px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide"
+                style={{ backgroundColor: 'rgba(15,23,42,0.06)', color: '#64748b' }}
+              >
+                Bientôt disponible
+              </span>
+            )}
+          </div>
+
+          <div className="flex items-center justify-center gap-1.5 pb-5 text-xs" style={{ color: colors.textMuted }}>
+            <Icon name="refresh" className="text-sm" />
+            <span>Survolez pour la fiche</span>
+          </div>
+        </div>
+
+        {/* ═══ VERSO — la fiche formation (inchangée) ═══ */}
+        <div
+          className="[grid-area:1/1] relative overflow-hidden rounded-2xl transition-all duration-300"
+          style={{
+            ...faceStyle,
+            backfaceVisibility: 'hidden',
+            WebkitBackfaceVisibility: 'hidden',
+            transform: 'rotateY(180deg)',
+            pointerEvents: flipped ? 'auto' : 'none',
+          }}
+        >
       {/* Bouton supprimer plateforme — z-30 pour rester au-dessus des
           overlays inactif/pending/error (z-20). Slate muted au repos avec
           backdrop-blur (visible par-dessus le thumbnail), tinte rose au hover. */}
@@ -2749,6 +2853,8 @@ function PlatformCard({
           </a>
         )}
 
+      </div>
+        </div>
       </div>
     </div>
   )
