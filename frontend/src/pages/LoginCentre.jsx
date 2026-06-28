@@ -71,6 +71,14 @@ export default function LoginCentre({ preloadDashboardRoute }) {
             backgroundPosition: 'center',
           }}
         >
+          <div className="relative z-10 flex w-full items-center justify-center p-12">
+            <img
+              src="/robot-blue.png"
+              alt="Professeur IA"
+              draggable={false}
+              className="w-full max-w-[520px] object-contain drop-shadow-2xl"
+            />
+          </div>
         </section>
 
         <section className="flex min-h-screen items-center justify-center px-6 py-10 sm:px-10 lg:px-12">
