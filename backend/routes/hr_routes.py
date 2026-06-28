@@ -3337,6 +3337,7 @@ def create_hr_blueprint(socketio):
             playlist_mock = req_body.get("mock", False)   # mock mode classique (sans script)
             script_mock = req_body.get("script_mock", False)  # mock mode script (silence au lieu TTS)
             force_all = req_body.get("force_all", False)
+            preserve_existing = bool(req_body.get("preserve_existing", False))
             include_breaks = bool(req_body.get("include_breaks", True))
             parallel_breaks = bool(req_body.get("parallel_breaks", False))
             sync_slides = bool(req_body.get("sync_slides", False))
@@ -3434,6 +3435,7 @@ def create_hr_blueprint(socketio):
                             slide_pace=slide_pace,
                             include_breaks=include_breaks,
                             parallel_breaks=parallel_breaks,
+                            preserve_existing=preserve_existing,
                         )
                         result = {
                             "status": "completed",
@@ -3444,6 +3446,7 @@ def create_hr_blueprint(socketio):
                             "voice_type": voice_type,
                             "include_breaks": include_breaks,
                             "parallel_breaks": parallel_breaks,
+                            "preserve_existing": preserve_existing,
                         }
                         module_finalize = _finalize_pipeline_module_if_all_course_audios_ready(folder_id, voice_type)
                         if module_finalize:

@@ -1264,6 +1264,7 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
     mock = false,
     scriptMock = false,
     forceAll = false,
+    preserveExisting = false,
     voiceType = playlistVoiceType,
     includeBreaks = true,
     parallelBreaks = false,
@@ -1283,6 +1284,7 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
           mock,
           script_mock: scriptMock,
           force_all: forceAll,
+          preserve_existing: preserveExisting,
           include_breaks: includeBreaks,
           parallel_breaks: parallelBreaks,
           voice_type: effectiveVoiceType,
@@ -2236,7 +2238,8 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
                     type="button"
                     onClick={() => handleGeneratePlaylist({
                       voiceType: playlistVoiceType,
-                      forceAll: true,
+                      forceAll: false,
+                      preserveExisting: true,
                       includeBreaks: false,
                       parallelBreaks: false,
                     })}
@@ -2247,7 +2250,7 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
                       backgroundColor: colors.cardBg,
                       color: canGeneratePlaylistAudio ? colors.textSecondary : colors.textMuted,
                     }}
-                    title="Générer uniquement les 7 cours audio"
+                    title="Compléter les cours audio manquants sans écraser les MP3 déjà présents"
                   >
                     <Icon name={selectedPlaylistVoice.icon} style={{ fontSize: '14px' }} />
                     Générer les 7 cours
@@ -2256,7 +2259,8 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
                     type="button"
                     onClick={() => handleGeneratePlaylist({
                       voiceType: playlistVoiceType,
-                      forceAll: true,
+                      forceAll: false,
+                      preserveExisting: true,
                       includeBreaks: true,
                       parallelBreaks: playlistVoiceType !== 'fish_audio',
                     })}
@@ -2266,7 +2270,7 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
                       backgroundColor: canGeneratePlaylistAudio ? colors.text : colors.textMuted,
                       color: colors.cardBg,
                     }}
-                    title={`${playlistActionLabel} + Q&A et pauses en parallèle`}
+                    title={`${playlistActionLabel} + Q&A et pauses, sans écraser les MP3 déjà présents`}
                   >
                     <Icon name="bolt" style={{ fontSize: '14px' }} />
                     Générer tout

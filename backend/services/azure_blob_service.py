@@ -57,6 +57,13 @@ def download_blob(container_name, blob_path):
     return blob_client.download_blob().readall()
 
 
+def blob_exists(container_name, blob_path):
+    """Retourne True si le blob existe dans Azure Storage."""
+    client = _get_blob_service_client()
+    blob_client = client.get_blob_client(container=container_name, blob=blob_path)
+    return blob_client.exists()
+
+
 def delete_blob(container_name, blob_path):
     """Supprime un blob"""
     client = _get_blob_service_client()

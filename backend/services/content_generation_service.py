@@ -12532,6 +12532,7 @@ def generate_audio_from_script(
     target_filename=None,
     include_breaks=True,
     parallel_breaks=False,
+    preserve_existing=False,
 ):
     """
     Génère (ou régénère) la playlist MP3 depuis le script TTS stocké en DB :
@@ -12547,6 +12548,8 @@ def generate_audio_from_script(
     - Découpe le texte total en 7 blocs proportionnels, sur fins de paragraphes/phrases
     - Pour chaque bloc, vérifie si au moins un segment contributeur est dirty=1
     - Si dirty (ou force_all=True) → génère le TTS + upload Azure
+    - Si preserve_existing=True → conserve tout MP3 déjà présent dans Azure,
+      même si le bloc serait dirty ou force_all.
     - sync_slides=True découpe les blocs cours selon le dernier deck de slides
       persistant, puis stocke les timings slide → audio.
     - Si propre → conserve l'ancien MP3
@@ -12557,7 +12560,7 @@ def generate_audio_from_script(
         COURS_DURATIONS_MIN, PLAYLIST_SPEC, _pad_audio_to_duration, _measure_duration_ms
     )
     from services.tts_service import convert_to_speech, convert_to_speech_with_timestamps
-    from services.azure_blob_service import upload_blob, CONTAINER_AUDIOS
+    from services.azure_blob_service import blob_exists, upload_blob, CONTAINER_AUDIOS
 
     def _progress(step, total, msg):
         if on_progress:
@@ -12604,7 +12607,7 @@ def generate_audio_from_script(
     started_at = time.time()
     logger.info(
         "PIPELINE_AUDIO_START formation_job_id=%s content_job_id=%s folder_id=%s platform_id=%s force_all=%s mock=%s basic_tts=%s "
-        "sync_slides=%s auto_generate_slides=%s slide_max_slides=%s slide_pace=%s llm_model=%s fast_tts_pipeline=%s target_filename=%s include_breaks=%s parallel_breaks=%s",
+        "sync_slides=%s auto_generate_slides=%s slide_max_slides=%s slide_pace=%s llm_model=%s fast_tts_pipeline=%s target_filename=%s include_breaks=%s parallel_breaks=%s preserve_existing=%s",
         formation_job_id,
         job_id,
         folder_id,
@@ -12621,6 +12624,7 @@ def generate_audio_from_script(
         target_filename,
         bool(include_breaks),
         bool(parallel_breaks),
+        bool(preserve_existing),
     )
     if next_folder_id is None:
         next_folder_id = _find_next_folder_id(platform_id, folder_id)
@@ -12765,6 +12769,30 @@ def generate_audio_from_script(
 
     # ── 4. Générer la playlist : cours dirty + Q&A/pauses contextuels ──
     azure_prefix = f"platform-{platform_id}/folder-{folder_id}/playlist/"
+    existing_playlist_files = set()
+    if preserve_existing:
+        for item_filename, _duration_sec, _file_type, _bloc_num in playlist_items:
+            blob_path = f"{azure_prefix}{item_filename}"
+            try:
+                if blob_exists(CONTAINER_AUDIOS, blob_path):
+                    existing_playlist_files.add(item_filename)
+            except Exception as exc:
+                logger.warning(
+                    "PIPELINE_AUDIO_EXISTING_CHECK_FAILED formation_job_id=%s content_job_id=%s folder_id=%s filename=%s error=%s",
+                    formation_job_id,
+                    job_id,
+                    folder_id,
+                    item_filename,
+                    str(exc)[:220],
+                )
+        if existing_playlist_files:
+            logger.info(
+                "PIPELINE_AUDIO_PRESERVE_EXISTING formation_job_id=%s content_job_id=%s folder_id=%s existing=%s",
+                formation_job_id,
+                job_id,
+                folder_id,
+                sorted(existing_playlist_files),
+            )
     generated = []
     skipped = []
     slide_audio_timings = []
@@ -13135,6 +13163,34 @@ def generate_audio_from_script(
             duration_sec,
         )
 
+        if preserve_existing and filename in existing_playlist_files:
+            logger.info(f"   ⏭️ {filename}: MP3 existant conservé")
+            _progress(step, len(playlist_items), f"{filename} — conservé (déjà présent)")
+            if file_type == "cours" and bloc:
+                _record_course_bloc(
+                    bloc,
+                    status="preserved",
+                    text=bloc.get("text", ""),
+                    skipped_reason="existing_audio",
+                )
+                _record_course_bloc(
+                    bloc,
+                    status="planned",
+                    text=bloc.get("text", ""),
+                    skipped_reason="existing_audio",
+                    target_plan=planned_course_script_plan,
+                )
+            logger.info(
+                "PIPELINE_AUDIO_ITEM_SKIP formation_job_id=%s content_job_id=%s folder_id=%s filename=%s reason=existing_audio duration_ms=%s",
+                formation_job_id,
+                job_id,
+                folder_id,
+                filename,
+                int((time.time() - item_started_at) * 1000),
+            )
+            skipped.append(filename)
+            continue
+
         if file_type != "cours":
             if not include_breaks:
                 logger.info(f"   ⏭️ {filename}: break ignoré (génération cours uniquement)")
@@ -13153,7 +13209,11 @@ def generate_audio_from_script(
                 )
                 skipped.append(filename)
                 continue
-            if not force_all and dirty_count == 0:
+            if (
+                not force_all
+                and dirty_count == 0
+                and not (preserve_existing and filename not in existing_playlist_files)
+            ):
                 logger.info(f"   ⏭️ {filename}: break conservé (aucun bloc cours dirty)")
                 _progress(step, len(playlist_items), f"{filename} — conservé")
                 logger.info(
@@ -13261,6 +13321,9 @@ def generate_audio_from_script(
             continue
 
         target_sec = bloc["target_sec"]
+
+        if preserve_existing and filename not in existing_playlist_files:
+            bloc["dirty"] = True
 
         # Le carryover intra-jour est désactivé par défaut : un cours ne doit
         # pas commencer en terminant le précédent.
