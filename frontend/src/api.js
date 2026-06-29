@@ -27,7 +27,13 @@ export function setPlatformName(name) {
  * le token X-Auth-Token et le header X-Platform-Id
  */
 export function apiFetch(path, options = {}) {
-  const token = localStorage.getItem('auth_token')
+  const adminToken = localStorage.getItem('admin_auth_token')
+  const userToken = localStorage.getItem('auth_token')
+  const prefersAdminToken = path.startsWith('/api/admin')
+    || path.startsWith('/api/hr')
+    || path.startsWith('/api/formation')
+    || path.startsWith('/api/slides')
+  const token = prefersAdminToken ? (adminToken || userToken) : (userToken || adminToken)
   const platformId = getPlatformId()
   const headers = {
     ...(options.headers || {}),

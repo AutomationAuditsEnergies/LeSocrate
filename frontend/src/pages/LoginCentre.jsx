@@ -46,6 +46,7 @@ export default function LoginCentre({ preloadDashboardRoute }) {
       const data = await response.json().catch(() => ({}))
 
       if (response.ok && data.success) {
+        if (data.token) localStorage.setItem('admin_auth_token', data.token)
         await preloadDashboardRoute?.().catch(() => {})
         navigate('/hr-dashboard')
         return

@@ -111,8 +111,20 @@ def populate_session_from_token():
             "reason": db_safety.db_health.get("maintenance_reason"),
         }), 503
 
+    token = request.headers.get("X-Auth-Token")
+    if not session.get("is_admin") and token:
+        admin_tokens = getattr(_state, "admin_tokens", {})
+        admin_user = admin_tokens.get(token)
+        if admin_user:
+            session["is_admin"] = True
+            session["admin_account_type"] = admin_user.get("account_type", "training_center")
+            if admin_user.get("account_id") is not None:
+                session["admin_account_id"] = admin_user["account_id"]
+            if admin_user.get("center_name"):
+                session["center_name"] = admin_user["center_name"]
+            session.permanent = True
+
     if "nom" not in session:
-        token = request.headers.get("X-Auth-Token")
         if token and token in _state.user_tokens:
             user = _state.user_tokens[token]
             session["nom"] = user["nom"]

@@ -176,6 +176,7 @@ export default function LoginAdmin({ preloadAdminRoute }) {
       const contentType = response.headers.get('content-type') || ''
       const data = contentType.includes('application/json') ? await response.json() : {}
       if (response.ok && data.success) {
+        if (data.token) localStorage.setItem('admin_auth_token', data.token)
         await preloadAdminRoute?.().catch(() => {})
         navigate(pParam ? `/admin?p=${pParam}` : '/admin')
       } else {

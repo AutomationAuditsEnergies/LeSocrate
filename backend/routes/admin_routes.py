@@ -5,6 +5,7 @@ import os
 import re
 import sqlite3
 import tempfile
+import uuid
 import requests as http_requests
 from azure.storage.blob import BlobServiceClient, generate_blob_sas, BlobSasPermissions
 from azure.core.exceptions import ResourceExistsError
@@ -19,6 +20,18 @@ from services.export_service import generate_excel_export
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+
+def _create_admin_token(account_type, account_id=None, center_name=None):
+    if not hasattr(state, "admin_tokens"):
+        state.admin_tokens = {}
+    token = str(uuid.uuid4())
+    state.admin_tokens[token] = {
+        "account_type": account_type,
+        "account_id": account_id,
+        "center_name": center_name,
+    }
+    return token
 
 
 def _get_platform_id():
@@ -373,7 +386,12 @@ def create_admin_blueprint(socketio):
         try:
             if session.get("is_admin"):
                 logger.info("👑 Admin déjà connecté")
-                return jsonify({"success": True, "message": "Déjà connecté"}), 200
+                token = request.headers.get("X-Auth-Token") or _create_admin_token(
+                    session.get("admin_account_type", "legacy_admin"),
+                    session.get("admin_account_id"),
+                    session.get("center_name"),
+                )
+                return jsonify({"success": True, "message": "Déjà connecté", "token": token}), 200
 
             data = request.get_json(silent=True) or {}
             username = data.get("username", "").strip().lower()
@@ -385,8 +403,9 @@ def create_admin_blueprint(socketio):
                 session["is_admin"] = True
                 session["admin_account_type"] = "legacy_admin"
                 session.permanent = True
+                token = _create_admin_token("legacy_admin")
                 logger.info("✅ Connexion admin réussie")
-                return jsonify({"success": True, "message": "Connexion réussie"}), 200
+                return jsonify({"success": True, "message": "Connexion réussie", "token": token}), 200
 
             conn = get_db_connection()
             cursor = conn.cursor()
@@ -416,12 +435,14 @@ def create_admin_blueprint(socketio):
             session["admin_account_type"] = "training_center"
             session["center_name"] = account[3]
             session.permanent = True
+            token = _create_admin_token("training_center", account[0], account[3])
             logger.info("✅ Connexion centre réussie: %s", username)
             return (
                 jsonify(
                     {
                         "success": True,
                         "message": "Connexion réussie",
+                        "token": token,
                         "account": {
                             "id": account[0],
                             "username": account[1],
@@ -495,6 +516,7 @@ def create_admin_blueprint(socketio):
             session["admin_account_type"] = "training_center"
             session["center_name"] = center_name
             session.permanent = True
+            token = _create_admin_token("training_center", account_id, center_name)
 
             logger.info("✅ Inscription centre réussie: %s", username)
             return (
@@ -502,6 +524,7 @@ def create_admin_blueprint(socketio):
                     {
                         "success": True,
                         "message": "Compte créé",
+                        "token": token,
                         "account": {
                             "id": account_id,
                             "username": username,
@@ -534,6 +557,9 @@ def create_admin_blueprint(socketio):
             session.pop("admin_account_id", None)
             session.pop("admin_account_type", None)
             session.pop("center_name", None)
+            token = request.headers.get("X-Auth-Token")
+            if token and hasattr(state, "admin_tokens"):
+                state.admin_tokens.pop(token, None)
             return jsonify({"success": True, "message": "Déconnexion réussie"}), 200
         except Exception as e:
             logger.error(f"❌ Erreur logout admin: {e}")

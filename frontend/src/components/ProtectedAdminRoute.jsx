@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Navigate } from 'react-router-dom'
-import { apiUrl } from '../api'
+import { apiFetch } from '../api'
 
 export default function ProtectedAdminRoute({ children, loginPath = '/login-admin' }) {
   const [isAuthenticated, setIsAuthenticated] = useState(null) // null = loading, true/false = résultat
@@ -10,9 +10,8 @@ export default function ProtectedAdminRoute({ children, loginPath = '/login-admi
     // Vérifier si l'utilisateur est authentifié comme admin
     const checkAuth = async () => {
       try {
-        const response = await fetch(apiUrl('/api/admin/logs'), {
+        const response = await apiFetch('/api/admin/logs', {
           method: 'GET',
-          credentials: 'include', // Important pour envoyer les cookies de session
         })
 
         if (response.ok) {
