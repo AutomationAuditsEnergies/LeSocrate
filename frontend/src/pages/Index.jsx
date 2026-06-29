@@ -301,7 +301,7 @@ export default function Index({ preloadCourseRoutes, preloadAttenteRoute, preloa
 
   return (
     <div
-      className="h-screen relative overflow-hidden"
+      className="relative min-h-dvh overflow-x-hidden overflow-y-auto bg-white md:h-screen md:overflow-hidden"
       style={{
         backgroundImage: 'url("/static/images/rocket.jpg"), linear-gradient(160deg, #0f172a 0%, #1e1b4b 55%, #312e81 100%)',
         backgroundColor: '#1e1b4b',
@@ -312,6 +312,7 @@ export default function Index({ preloadCourseRoutes, preloadAttenteRoute, preloa
     >
       {/* Spline — exactement comme avant, on touche rien */}
       <div
+        className="hidden md:block"
         style={{
           position: 'absolute',
           top: '10%', left: '5%',
@@ -335,26 +336,25 @@ export default function Index({ preloadCourseRoutes, preloadAttenteRoute, preloa
 
       {/* Panel blanc — posé par-dessus à droite, wallpaper intact dessous */}
       <div
-        className="absolute right-0 top-0 bottom-0 overflow-y-auto bg-white flex flex-col"
-        style={{ width: '600px', boxShadow: '-20px 0 60px rgba(15,23,42,0.25)', borderLeft: '1px solid #000' }}
+        className="relative z-10 flex min-h-dvh w-full flex-col overflow-y-auto bg-white md:absolute md:bottom-0 md:right-0 md:top-0 md:w-[600px] md:border-l md:border-black md:shadow-[-20px_0_60px_rgba(15,23,42,0.25)]"
       >
         {/* Titre — ancré en haut */}
-        <div className="flex justify-center pt-8 pb-4 flex-shrink-0">
+        <div className="flex flex-shrink-0 justify-center px-5 pb-4 pt-8 sm:pt-10 md:pt-8">
           <div className="flex items-end gap-2 rotate-[-6deg]" aria-label="Sales hacking">
-            <span className="text-[34px] font-bold leading-none text-[#111827]" style={{ fontFamily: 'Caveat, cursive' }}>
+            <span className="text-[30px] font-bold leading-none text-[#111827] sm:text-[34px]" style={{ fontFamily: 'Caveat, cursive' }}>
               Sales
             </span>
-            <span className="text-[39px] font-bold leading-none text-[#6070F2]" style={{ fontFamily: 'Caveat, cursive' }}>
+            <span className="text-[35px] font-bold leading-none text-[#6070F2] sm:text-[39px]" style={{ fontFamily: 'Caveat, cursive' }}>
               hacking
             </span>
           </div>
         </div>
 
-        <div className="flex flex-col justify-center flex-1 px-10 pb-12">
+        <div className="mx-auto flex w-full max-w-[430px] flex-1 flex-col justify-center px-5 pb-8 pt-2 sm:px-8 md:max-w-none md:px-10 md:pb-12">
 
           {/* Onglets */}
           {!passwordRecoveryMode && (
-            <div className="mb-7 grid grid-cols-2 rounded-lg border border-gray-200 p-1 text-sm font-semibold text-gray-500 bg-gray-50">
+            <div className="mb-6 grid grid-cols-2 rounded-lg border border-gray-200 bg-gray-50 p-1 text-sm font-semibold text-gray-600 sm:mb-7">
               <button
                 type="button"
                 onClick={() => { setAuthMode('login'); setFormMessage(null) }}
@@ -387,7 +387,7 @@ export default function Index({ preloadCourseRoutes, preloadAttenteRoute, preloa
           )}
 
           {/* Formulaire */}
-          <form className="space-y-5 text-left" onSubmit={handleFormSubmit}>
+          <form className="space-y-4 text-left sm:space-y-5" onSubmit={handleFormSubmit}>
             {passwordRecoveryMode && (
               <div className="text-center">
                 <h1 className="text-2xl font-bold text-gray-900">Nouveau mot de passe</h1>
@@ -403,7 +403,7 @@ export default function Index({ preloadCourseRoutes, preloadAttenteRoute, preloa
                 <input
                   id="email" name="email" type="email" autoComplete="email"
                   placeholder="Entrez votre adresse e-mail"
-                  className="w-full border border-gray-200 rounded-lg p-3 text-sm placeholder:text-gray-300 focus:outline-none focus:ring-2 focus:ring-[#6070F2]/30 focus:border-[#6070F2] transition"
+                  className="w-full rounded-lg border border-gray-200 p-3 text-sm placeholder:text-gray-500 focus:border-[#6070F2] focus:outline-none focus:ring-2 focus:ring-[#6070F2]/30"
                 />
               </div>
             )}
@@ -418,7 +418,7 @@ export default function Index({ preloadCourseRoutes, preloadAttenteRoute, preloa
                   type={showPassword ? 'text' : 'password'}
                   autoComplete={authMode === 'signup' ? 'new-password' : 'current-password'}
                   placeholder="Entrez votre mot de passe"
-                  className="w-full border border-gray-200 rounded-lg p-3 pr-12 text-sm placeholder:text-gray-300 focus:outline-none focus:ring-2 focus:ring-[#6070F2]/30 focus:border-[#6070F2] transition"
+                  className="w-full rounded-lg border border-gray-200 p-3 pr-12 text-sm placeholder:text-gray-500 focus:border-[#6070F2] focus:outline-none focus:ring-2 focus:ring-[#6070F2]/30"
                 />
                 <button
                   type="button"
@@ -453,24 +453,24 @@ export default function Index({ preloadCourseRoutes, preloadAttenteRoute, preloa
                   type={showPassword ? 'text' : 'password'}
                   autoComplete="new-password"
                   placeholder="Confirmez votre mot de passe"
-                  className="w-full border border-gray-200 rounded-lg p-3 text-sm placeholder:text-gray-300 focus:outline-none focus:ring-2 focus:ring-[#6070F2]/30 focus:border-[#6070F2] transition"
+                  className="w-full rounded-lg border border-gray-200 p-3 text-sm placeholder:text-gray-500 focus:border-[#6070F2] focus:outline-none focus:ring-2 focus:ring-[#6070F2]/30"
                 />
               </div>
             )}
 
             {authMode === 'signup' && !passwordRecoveryMode && (
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <div className="space-y-1.5">
                   <label className="block text-sm font-medium text-gray-700" htmlFor="prenom">Prénom</label>
                   <input id="prenom" name="prenom" type="text" autoComplete="given-name"
                     placeholder="Votre prénom"
-                    className="w-full border border-gray-200 rounded-lg p-3 text-sm placeholder:text-gray-300 focus:outline-none focus:ring-2 focus:ring-[#6070F2]/30 focus:border-[#6070F2] transition" />
+                    className="w-full rounded-lg border border-gray-200 p-3 text-sm placeholder:text-gray-500 focus:border-[#6070F2] focus:outline-none focus:ring-2 focus:ring-[#6070F2]/30" />
                 </div>
                 <div className="space-y-1.5">
                   <label className="block text-sm font-medium text-gray-700" htmlFor="nom">Nom</label>
                   <input id="nom" name="nom" type="text" autoComplete="family-name"
                     placeholder="Votre nom"
-                    className="w-full border border-gray-200 rounded-lg p-3 text-sm placeholder:text-gray-300 focus:outline-none focus:ring-2 focus:ring-[#6070F2]/30 focus:border-[#6070F2] transition" />
+                    className="w-full rounded-lg border border-gray-200 p-3 text-sm placeholder:text-gray-500 focus:border-[#6070F2] focus:outline-none focus:ring-2 focus:ring-[#6070F2]/30" />
                 </div>
               </div>
             )}
@@ -484,12 +484,12 @@ export default function Index({ preloadCourseRoutes, preloadAttenteRoute, preloa
                   <div className="space-y-1.5">
                     <label className="block text-sm font-medium text-gray-700" htmlFor="nom">Nom</label>
                     <input id="nom" name="nom" type="text"
-                      className="w-full border border-gray-200 rounded-lg p-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#6070F2]/30 focus:border-[#6070F2] transition" />
+                      className="w-full rounded-lg border border-gray-200 p-3 text-sm focus:border-[#6070F2] focus:outline-none focus:ring-2 focus:ring-[#6070F2]/30" />
                   </div>
                   <div className="space-y-1.5">
                     <label className="block text-sm font-medium text-gray-700" htmlFor="prenom">Prénom</label>
                     <input id="prenom" name="prenom" type="text"
-                      className="w-full border border-gray-200 rounded-lg p-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#6070F2]/30 focus:border-[#6070F2] transition" />
+                      className="w-full rounded-lg border border-gray-200 p-3 text-sm focus:border-[#6070F2] focus:outline-none focus:ring-2 focus:ring-[#6070F2]/30" />
                   </div>
                 </div>
               </details>
@@ -525,7 +525,7 @@ export default function Index({ preloadCourseRoutes, preloadAttenteRoute, preloa
             )}
           </form>
 
-          <p className="mt-10 text-center text-sm text-gray-400">
+          <p className="mt-8 text-center text-sm text-gray-500 sm:mt-10">
             © 2026 Le Socrate. Tous droits réservés.
           </p>
         </div>
@@ -533,4 +533,3 @@ export default function Index({ preloadCourseRoutes, preloadAttenteRoute, preloa
     </div>
   )
 }
-

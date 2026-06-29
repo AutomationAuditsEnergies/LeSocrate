@@ -587,7 +587,7 @@ export default function Video() {
   return (
     <>
       <div
-        className="h-screen w-full flex"
+        className="flex h-dvh w-full overflow-hidden"
         style={{ backgroundColor: '#F8F7F5' }}
         onClick={handlePageClick}
       >
@@ -598,20 +598,20 @@ export default function Video() {
         >
 
       {/* Header */}
-      <div className="border-b border-gray-200 px-8 flex items-center justify-between flex-shrink-0" style={{ height: '64px', backgroundColor: '#FFFFFF' }}>
-        <div>
-          <h1 className="text-xl font-semibold text-gray-800">{getPlatformName()}</h1>
+      <div className="flex h-[72px] flex-shrink-0 items-center justify-between border-b border-gray-200 bg-white px-5 sm:h-16 sm:px-8">
+        <div className="min-w-0">
+          <h1 className="truncate text-lg font-semibold text-gray-800 sm:text-xl">{getPlatformName()}</h1>
           <p className="text-sm text-gray-500">{new Date().toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' })}</p>
         </div>
       </div>
 
       {/* Main content */}
-      <div className="flex-1 flex flex-col items-center justify-center p-8 overflow-hidden">
-        <div className="w-full max-w-4xl">
+      <div className="flex-1 overflow-y-auto px-4 pb-28 pt-5 sm:flex sm:flex-col sm:items-center sm:justify-center sm:overflow-hidden sm:p-8">
+        <div className="mx-auto w-full max-w-4xl">
           <div
             id="video-zone"
-            className="relative aspect-video w-full rounded-3xl overflow-hidden flex items-center justify-center shadow-2xl border-4 bg-gradient-to-br from-gray-700 to-gray-900"
-            style={{ transform: 'translateY(-20px)', borderColor: '#E4E4E4' }}
+            className="relative flex aspect-video w-full items-center justify-center overflow-hidden rounded-2xl border-2 bg-gradient-to-br from-gray-700 to-gray-900 shadow-lg sm:rounded-3xl sm:border-4 sm:shadow-2xl"
+            style={{ borderColor: '#E4E4E4' }}
           >
             {isBreakScreen ? (
               <div className="absolute inset-0" style={{ backgroundColor: '#020617' }}>
@@ -678,7 +678,7 @@ export default function Video() {
             )}
 
             {!isBreakScreen && (
-              <div className="absolute bottom-6 left-6 bg-black/60 text-white text-xs px-3 py-1.5 rounded-lg backdrop-blur-sm">
+              <div className="absolute bottom-3 left-3 rounded-lg bg-black/60 px-3 py-1.5 text-xs text-white backdrop-blur-sm sm:bottom-6 sm:left-6">
                 {showNextBreakPreview
                   ? (nextBreakType === 'qa' ? 'Questions-réponses' : 'Pause')
                   : showProjectedSlides ? `Slide ${activeSlideTiming.slideIndex + 1}` : 'Professeur'}
@@ -692,7 +692,7 @@ export default function Video() {
                   event.stopPropagation()
                   setSlideView((showProjectedSlides || showNextBreakPreview) ? 'professor' : 'slides')
                 }}
-                className="absolute right-5 top-5 rounded-xl bg-white/95 px-4 py-2 text-sm font-semibold text-gray-900 shadow-lg transition hover:bg-white focus:outline-none focus:ring-2 focus:ring-purple-500 focus:ring-offset-2 focus:ring-offset-gray-900"
+                className="absolute right-3 top-3 rounded-lg bg-white/95 px-3 py-2 text-xs font-semibold text-gray-900 shadow-md transition hover:bg-white focus:outline-none focus:ring-2 focus:ring-purple-500 focus:ring-offset-2 focus:ring-offset-gray-900 sm:right-5 sm:top-5 sm:rounded-xl sm:px-4 sm:text-sm sm:shadow-lg"
               >
                 {(showProjectedSlides || showNextBreakPreview) ? 'Professeur' : 'Visualiser les slides'}
               </button>
@@ -727,11 +727,11 @@ export default function Video() {
           </div>
 
           {/* Boutons de contrôle */}
-          <div className="flex items-center justify-center gap-4 mt-6">
+          <div className="fixed inset-x-0 bottom-[max(1rem,env(safe-area-inset-bottom))] z-20 flex items-center justify-center gap-4 px-4 sm:static sm:mt-6 sm:px-0">
             {/* Bouton micro/son */}
             <button
               onClick={handleToggleMute}
-              className="w-14 h-14 rounded-xl bg-white hover:shadow-lg flex items-center justify-center transition-all duration-200 border-2 hover:border-gray-400"
+              className="flex h-14 w-14 items-center justify-center rounded-xl border-2 bg-white transition-all duration-200 hover:border-gray-400 hover:shadow-lg"
               style={{ borderColor: '#E4E4E4', boxShadow: '0 2px 8px rgba(0,0,0,0.08), 0 0 0 4px #E4E4E4' }}
               title={muted ? "Activer le son" : "Couper le son"}
             >
@@ -756,7 +756,7 @@ export default function Video() {
             {/* Bouton raccrocher */}
             <button
               onClick={handleHangup}
-              className="w-16 h-16 rounded-xl bg-purple-600 hover:bg-purple-700 flex items-center justify-center transition-all duration-200"
+              className="flex h-16 w-16 items-center justify-center rounded-xl bg-purple-600 transition-all duration-200 hover:bg-purple-700"
               style={{ boxShadow: '0 4px 12px rgba(147, 51, 234, 0.3), 0 0 0 4px #E4E4E4' }}
               title="Quitter le cours"
             >
@@ -768,7 +768,7 @@ export default function Video() {
             {/* Bouton chat */}
             <button
               onClick={handleToggleChat}
-              className="w-14 h-14 rounded-xl flex items-center justify-center transition-all duration-200 border-2 bg-white hover:shadow-lg hover:border-gray-400"
+              className="flex h-14 w-14 items-center justify-center rounded-xl border-2 bg-white transition-all duration-200 hover:border-gray-400 hover:shadow-lg"
               style={{ borderColor: '#E4E4E4', boxShadow: '0 2px 8px rgba(0,0,0,0.08), 0 0 0 4px #E4E4E4' }}
               title={chatOpen ? "Fermer le chat" : "Ouvrir le chat"}
             >
