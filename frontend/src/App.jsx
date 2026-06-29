@@ -156,7 +156,62 @@ function ProtectedHRRoute({ children }) {
   }, [])
 
   if (status === 'loading') return <RouteFallback />
-  if (status === 'disabled') return <Navigate to="/" replace />
+  if (status === 'disabled') {
+    return (
+      <div
+        style={{
+          minHeight: '100vh',
+          background: '#f8fafc',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          padding: 24,
+          fontFamily: 'Inter, system-ui, sans-serif',
+        }}
+      >
+        <div
+          style={{
+            width: '100%',
+            maxWidth: 460,
+            borderRadius: 16,
+            background: '#fff',
+            border: '1px solid #e2e8f0',
+            boxShadow: '0 18px 45px rgba(15, 23, 42, 0.10)',
+            padding: 28,
+          }}
+        >
+          <p style={{ margin: 0, color: '#7c3aed', fontSize: 14, fontWeight: 700 }}>
+            Centre de formation
+          </p>
+          <h1 style={{ margin: '10px 0 0', color: '#0f172a', fontSize: 26, lineHeight: 1.2 }}>
+            Tableau de bord indisponible
+          </h1>
+          <p style={{ margin: '14px 0 0', color: '#64748b', lineHeight: 1.6 }}>
+            Le serveur n'a pas confirmé l'activation de l'espace centre. Vous n'êtes pas redirigé vers
+            l'application élève.
+          </p>
+          <a
+            href="/connexion-centre"
+            style={{
+              display: 'inline-flex',
+              marginTop: 22,
+              minHeight: 44,
+              alignItems: 'center',
+              justifyContent: 'center',
+              borderRadius: 10,
+              background: '#8B5CF6',
+              color: '#fff',
+              fontWeight: 700,
+              padding: '0 18px',
+              textDecoration: 'none',
+            }}
+          >
+            Retour à la connexion
+          </a>
+        </div>
+      </div>
+    )
+  }
   return children
 }
 
