@@ -5,8 +5,8 @@ import { apiFetch } from '../api'
 export default function LoginCentre({ preloadDashboardRoute }) {
   const [authMode, setAuthMode] = useState('login')
   const [centerName, setCenterName] = useState('')
-  const [username, setUsername] = useState('')
-  const [password, setPassword] = useState('')
+  const [username, setUsername] = useState('admin')
+  const [password, setPassword] = useState('secret123')
   const [confirmPassword, setConfirmPassword] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)

@@ -399,7 +399,7 @@ def create_admin_blueprint(socketio):
 
             logger.info(f"🔐 Tentative connexion admin: {username}")
 
-            if username == "admin" and password == "secret123":
+            if username == "admin" and password.replace(" ", "") == "secret123":
                 session["is_admin"] = True
                 session["admin_account_type"] = "legacy_admin"
                 session.permanent = True
