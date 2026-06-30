@@ -145,7 +145,15 @@ def populate_session_from_token():
 def platform_info():
     """Retourne les infos d'une plateforme (nom, slug)"""
     from database.db import get_db_connection
+    from database.postgres import postgres_enabled
+    from repositories.core_repository import get_platform_info
+
     pid = request.args.get("id", 1, type=int)
+    if postgres_enabled():
+        row = get_platform_info(pid)
+        if row:
+            return _jsonify({"id": row["id"], "name": row["name"], "slug": row["slug"]})
+
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT id, name, slug FROM platform_config WHERE id = ?", (pid,))
@@ -154,6 +162,80 @@ def platform_info():
     if not row:
         return _jsonify({"error": "Platform not found"}), 404
     return _jsonify({"id": row[0], "name": row[1], "slug": row[2]})
+
+
+@app.route("/api/class-access/<center_slug>/<platform_slug>")
+def class_access(center_slug, platform_slug):
+    """Résout l'URL publique élève vers la plateforme interne.
+
+    Le contrat produit est l'URL lisible /classe/<centre>/<formation>. Le
+    platform_id reste une clé interne, gardée pour les services existants.
+    """
+    from database.db import get_db_connection
+    from database.postgres import postgres_enabled
+    from repositories.core_repository import resolve_class_access
+
+    row = resolve_class_access(center_slug, platform_slug) if postgres_enabled() else None
+    if row:
+        if not row["public_access_enabled"]:
+            return _jsonify({"success": False, "error": "Classe non publiée"}), 403
+        return _jsonify({
+            "success": True,
+            "platform": {
+                "id": row["id"],
+                "name": row["name"],
+                "slug": row["slug"],
+                "status": row["status"],
+            },
+            "center": {
+                "slug": row["center_slug"],
+                "name": row["center_name"],
+            },
+        })
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        SELECT
+            pc.id,
+            pc.name,
+            pc.slug,
+            COALESCE(tca.slug, 'le-socrate') AS center_slug,
+            COALESCE(tca.center_name, 'Le Socrate') AS center_name,
+            COALESCE(pc.public_access_enabled, 1) AS public_access_enabled,
+            COALESCE(pc.status, 'ready') AS status
+        FROM platform_config pc
+        LEFT JOIN training_center_accounts tca ON tca.id = pc.center_account_id
+        WHERE pc.slug = ?
+          AND COALESCE(tca.slug, 'le-socrate') = ?
+        LIMIT 1
+        """,
+        (platform_slug, center_slug),
+    )
+    row = cursor.fetchone()
+    conn.close()
+
+    if not row:
+        return _jsonify({"success": False, "error": "Classe introuvable"}), 404
+
+    platform_id, name, slug, resolved_center_slug, center_name, public_access_enabled, status = row
+    if not public_access_enabled:
+        return _jsonify({"success": False, "error": "Classe non publiée"}), 403
+
+    return _jsonify({
+        "success": True,
+        "platform": {
+            "id": platform_id,
+            "name": name,
+            "slug": slug,
+            "status": status,
+        },
+        "center": {
+            "slug": resolved_center_slug,
+            "name": center_name,
+        },
+    })
 
 # Enregistrement des gestionnaires SocketIO
 register_socketio_handlers(socketio)

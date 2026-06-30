@@ -22,6 +22,14 @@ export function setPlatformName(name) {
   localStorage.setItem('platform_name', name)
 }
 
+export function getStudentLoginPath() {
+  return localStorage.getItem('student_login_path') || '/'
+}
+
+export function setStudentLoginPath(path) {
+  localStorage.setItem('student_login_path', path || '/')
+}
+
 /**
  * Wrapper autour de fetch qui ajoute automatiquement credentials: 'include',
  * le token X-Auth-Token et le header X-Platform-Id

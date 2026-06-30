@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { Navigate } from 'react-router-dom'
 import { apiFetch } from '../api'
 
-export default function ProtectedAdminRoute({ children, loginPath = '/login-admin' }) {
+export default function ProtectedAdminRoute({ children, loginPath = '/login-admin', allowedAccountTypes = null }) {
   const [isAuthenticated, setIsAuthenticated] = useState(null) // null = loading, true/false = résultat
   const [isLoading, setIsLoading] = useState(true)
 
@@ -10,13 +10,14 @@ export default function ProtectedAdminRoute({ children, loginPath = '/login-admi
     // Vérifier si l'utilisateur est authentifié comme admin
     const checkAuth = async () => {
       try {
-        const response = await apiFetch('/api/admin/logs', {
+        const response = await apiFetch('/api/admin/session', {
           method: 'GET',
         })
 
         if (response.ok) {
-          // Si on peut accéder aux logs, c'est qu'on est admin
-          setIsAuthenticated(true)
+          const data = await response.json().catch(() => ({}))
+          const accountType = data.account?.type
+          setIsAuthenticated(!allowedAccountTypes || allowedAccountTypes.includes(accountType))
         } else if (response.status === 403 || response.status === 401) {
           // Non authentifié
           setIsAuthenticated(false)
@@ -33,7 +34,7 @@ export default function ProtectedAdminRoute({ children, loginPath = '/login-admi
     }
 
     checkAuth()
-  }, [])
+  }, [allowedAccountTypes])
 
   if (isLoading) {
     // Afficher un loader pendant la vérification

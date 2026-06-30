@@ -1,7 +1,7 @@
-import { useNavigate, useSearchParams } from 'react-router-dom'
+import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import { Component, lazy, Suspense, useState, useEffect } from 'react'
 import { Eye, EyeOff } from 'lucide-react'
-import { apiFetch, apiUrl, getPlatformName, setPlatformId, setPlatformName } from '../api'
+import { apiFetch, apiUrl, getStudentLoginPath, setPlatformId, setPlatformName, setStudentLoginPath } from '../api'
 import { isSupabaseConfigured, supabase } from '../supabaseClient'
 
 const Spline = lazy(() => import('@splinetool/react-spline'))
@@ -33,11 +33,11 @@ function getSupabaseErrorMessage(error, fallback) {
 
 export default function Index({ preloadCourseRoutes, preloadAttenteRoute, preloadVideoRoute }) {
   const navigate = useNavigate()
+  const location = useLocation()
   const [searchParams] = useSearchParams()
   const [splineLoaded, setSplineLoaded] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [authMode, setAuthMode] = useState('login')
-  const [platformName, setPlatformNameState] = useState(getPlatformName())
   const [showPassword, setShowPassword] = useState(false)
   const [formMessage, setFormMessage] = useState(null)
   const [resettingPassword, setResettingPassword] = useState(false)
@@ -49,21 +49,23 @@ export default function Index({ preloadCourseRoutes, preloadAttenteRoute, preloa
     const pParam = searchParams.get('p')
     if (pParam) {
       setPlatformId(pParam)
+      setStudentLoginPath(`/?p=${pParam}`)
       fetch(apiUrl(`/api/platform-info?id=${pParam}`))
         .then(r => r.json())
         .then(data => {
           if (data.name) {
             setPlatformName(data.name)
-            setPlatformNameState(data.name)
           }
         })
         .catch(() => {})
+    } else if (location.pathname === '/') {
+      setStudentLoginPath('/')
     }
 
     return () => {
       document.body.style.overflow = ''
     }
-  }, [searchParams])
+  }, [location.pathname, searchParams])
 
   useEffect(() => {
     const preload = () => {
@@ -225,7 +227,10 @@ export default function Index({ preloadCourseRoutes, preloadAttenteRoute, preloa
       if (data.success) {
         if (data.token) localStorage.setItem('auth_token', data.token)
         const pId = localStorage.getItem('platform_id')
-        const withPlatform = (path) => (pId && pId !== '1' ? `${path}?p=${pId}` : path)
+        const withPlatform = (path) => {
+          if (getStudentLoginPath().startsWith('/classe/')) return path
+          return pId && pId !== '1' ? `${path}?p=${pId}` : path
+        }
 
         try {
           const statusResponse = await apiFetch('/api/video/status')

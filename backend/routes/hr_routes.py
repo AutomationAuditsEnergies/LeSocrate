@@ -8,7 +8,14 @@ from azure.storage.blob import BlobServiceClient, ContentSettings, generate_blob
 from azure.core.exceptions import ResourceExistsError
 from config import FRANCE_TZ
 from database.db import get_db_connection
+from database.postgres import postgres_enabled
+from repositories.core_repository import (
+    get_training_center_by_id,
+    upsert_cours_config,
+    upsert_platform_config,
+)
 from utils.logger import get_logger
+from utils.slug import slugify, unique_slug
 import state
 
 logger = get_logger(__name__)
@@ -52,6 +59,16 @@ def _is_local_platform(pid):
     """True si la plateforme tourne sur ce backend (pas de backend_url distant)"""
     info = _get_platform_info(pid)
     return not info.get("backend_url")
+
+
+def _class_public_path(center_slug, platform_slug):
+    return f"/classe/{center_slug or 'le-socrate'}/{platform_slug}"
+
+
+def _class_public_url(frontend_url, center_slug, platform_slug):
+    base_url = (frontend_url or request.headers.get("Origin") or "").rstrip("/")
+    path = _class_public_path(center_slug, platform_slug)
+    return f"{base_url}{path}" if base_url else path
 
 
 def _publish_playlist_audio_to_platform(platform_id, folder_id, filenames=None):
@@ -474,10 +491,17 @@ def create_hr_blueprint(socketio):
             if conn.total_changes > 0:
                 conn.commit()
 
-            cursor.execute("""
+            platform_where = ""
+            platform_params = []
+            if session.get("admin_account_type") == "training_center":
+                platform_where = "WHERE pc.center_account_id = ?"
+                platform_params.append(session.get("admin_account_id"))
+
+            cursor.execute(f"""
                 SELECT
                     pc.id,
                     pc.name,
+                    pc.slug,
                     pc.upload_locked,
                     pc.pdf_filename,
                     pc.pdf_uploaded_at,
@@ -485,13 +509,17 @@ def create_hr_blueprint(socketio):
                     pc.status,
                     pc.source_formation_id,
                     pc.source_module_id,
+                    pc.center_account_id,
+                    COALESCE(tca.slug, 'le-socrate') AS center_slug,
                     COALESCE(fm.rncp_code, fpj.rncp_code) AS source_rncp_code,
                     COALESCE(fm.tp_name, fpj.tp_name) AS source_tp_name
                 FROM platform_config pc
+                LEFT JOIN training_center_accounts tca ON tca.id = pc.center_account_id
                 LEFT JOIN formation_modules fm ON fm.id = pc.source_module_id
                 LEFT JOIN formation_pipeline_jobs fpj ON fpj.id = pc.source_formation_id
+                {platform_where}
                 ORDER BY pc.id
-            """)
+            """, platform_params)
             rows = cursor.fetchall()
 
             # Compter demandes en attente par plateforme
@@ -520,6 +548,7 @@ def create_hr_blueprint(socketio):
                 (
                     pid,
                     name,
+                    slug,
                     upload_locked,
                     pdf_filename,
                     pdf_uploaded_at,
@@ -527,6 +556,8 @@ def create_hr_blueprint(socketio):
                     p_status,
                     p_source_formation_id,
                     p_source_module_id,
+                    p_center_account_id,
+                    p_center_slug,
                     p_source_rncp_code,
                     p_source_tp_name,
                 ) = row
@@ -597,6 +628,9 @@ def create_hr_blueprint(socketio):
                 platforms.append({
                     "id": pid,
                     "name": name,
+                    "slug": slug,
+                    "center_account_id": p_center_account_id,
+                    "center_slug": p_center_slug,
                     "active": active,
                     "upload_locked": bool(upload_locked),
                     "audio_count": audio_count,
@@ -607,6 +641,8 @@ def create_hr_blueprint(socketio):
                     "alerts": alerts,
                     "updated_at": updated_at,
                     "frontend_url": pinfo.get("frontend_url"),
+                    "public_path": _class_public_path(p_center_slug, slug),
+                    "public_url": _class_public_url(pinfo.get("frontend_url"), p_center_slug, slug),
                     "status": p_status or "ready",
                     "source_formation_id": p_source_formation_id,
                     "source_module_id": p_source_module_id,
@@ -742,15 +778,28 @@ def create_hr_blueprint(socketio):
             conn = get_db_connection()
             cursor = conn.cursor()
 
-            # Générer le slug depuis le nom
-            import re
-            slug = re.sub(r'[^a-z0-9]+', '-', name.lower()).strip('-')
+            center_account_id = None
+            center_slug = "le-socrate"
+            if session.get("admin_account_type") == "training_center":
+                center_account_id = session.get("admin_account_id")
+                cursor.execute(
+                    "SELECT slug FROM training_center_accounts WHERE id = ?",
+                    (center_account_id,),
+                )
+                row = cursor.fetchone()
+                center_slug = row[0] if row and row[0] else center_slug
+                if center_slug == "le-socrate" and postgres_enabled():
+                    pg_center = get_training_center_by_id(center_account_id)
+                    if pg_center and pg_center["slug"]:
+                        center_slug = pg_center["slug"]
 
-            # Vérifier unicité du slug
-            cursor.execute("SELECT COUNT(*) FROM platform_config WHERE slug = ?", (slug,))
-            if cursor.fetchone()[0] > 0:
-                conn.close()
-                return jsonify({"success": False, "error": "Ce nom de plateforme existe déjà"}), 409
+            slug = unique_slug(
+                cursor,
+                "platform_config",
+                slugify(name, fallback="formation"),
+                scope_column="center_account_id",
+                scope_value=center_account_id,
+            )
 
             source_platform_id = None
 
@@ -822,9 +871,10 @@ def create_hr_blueprint(socketio):
 
             # Insérer la plateforme
             cursor.execute(
-                """INSERT INTO platform_config (name, upload_locked, updated_at, slug, status, source_formation_id, source_module_id)
-                   VALUES (?, 1, ?, ?, ?, ?, ?)""",
-                (name, now_str, slug, initial_status, formation_id, module_id),
+                """INSERT INTO platform_config
+                   (name, upload_locked, updated_at, slug, status, source_formation_id, source_module_id, center_account_id, public_access_enabled)
+                   VALUES (?, 1, ?, ?, ?, ?, ?, ?, 1)""",
+                (name, now_str, slug, initial_status, formation_id, module_id, center_account_id),
             )
             new_id = cursor.lastrowid
 
@@ -867,6 +917,42 @@ def create_hr_blueprint(socketio):
                     (None, name, manual_version, new_id, now_str),
                 )
                 logger.info(f"✏️  Module 'fait main' inscrit au catalogue : {name} ({manual_version}) → P{new_id}")
+
+            postgres_synced = False
+            if postgres_enabled():
+                try:
+                    upsert_platform_config({
+                        "id": new_id,
+                        "center_account_id": center_account_id,
+                        "name": name,
+                        "slug": slug,
+                        "upload_locked": True,
+                        "public_access_enabled": True,
+                        "pdf_filename": None,
+                        "pdf_uploaded_at": None,
+                        "updated_at": now_str,
+                        "playlist_mode": None,
+                        "audio_container": audio_container,
+                        "pdf_container": pdf_container,
+                        "archive_container": archive_container,
+                        "audio_base_url": None,
+                        "status": initial_status,
+                        "source_formation_id": formation_id,
+                        "source_module_id": module_id,
+                    })
+                    upsert_cours_config({
+                        "id": new_id,
+                        "platform_id": new_id,
+                        "heure_debut": default_heure,
+                    })
+                    postgres_synced = True
+                except Exception:
+                    conn.rollback()
+                    logger.exception("❌ Synchronisation Postgres plateforme échouée")
+                    return jsonify({
+                        "success": False,
+                        "error": "Plateforme non créée: synchronisation Postgres impossible",
+                    }), 500
 
             conn.commit()
             conn.close()
@@ -938,6 +1024,9 @@ def create_hr_blueprint(socketio):
                     "id": new_id,
                     "name": name,
                     "slug": slug,
+                    "center_slug": center_slug,
+                    "public_path": _class_public_path(center_slug, slug),
+                    "public_url": _class_public_url(_get_platform_info(new_id).get("frontend_url"), center_slug, slug),
                     "status": initial_status,
                     "source_formation_id": formation_id,
                     "source_module_id": module_id,
@@ -946,6 +1035,7 @@ def create_hr_blueprint(socketio):
                     "pdf_container": pdf_container,
                     "archive_container": archive_container,
                     "containers_created": containers_created,
+                    "postgres_synced": postgres_synced,
                 },
             }), 201
 
@@ -3639,6 +3729,64 @@ def create_hr_blueprint(socketio):
 
         except Exception as e:
             logger.error(f"❌ Erreur generate_playlist_item: {e}")
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/repair-audio-sync", methods=["POST"])
+    def repair_audio_sync(folder_id):
+        """Répare la synchro slides/audio depuis les timelines Fish déjà générées."""
+        denied = _require_admin()
+        if denied:
+            return denied
+
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute("SELECT platform_id FROM cours_folders WHERE id = ?", (folder_id,))
+            row = cursor.fetchone()
+            conn.close()
+
+            if not row:
+                return jsonify({"success": False, "error": "Dossier introuvable"}), 404
+
+            if folder_id in _playlist_jobs and _playlist_jobs[folder_id].get("status") == "running":
+                return jsonify({
+                    "success": False,
+                    "error": "Une génération est déjà en cours pour ce dossier"
+                }), 409
+
+            req_body = request.get_json(silent=True) or {}
+            dry_run = bool(req_body.get("dry_run", False))
+            _playlist_jobs[folder_id] = {
+                "status": "running",
+                "step": 0,
+                "total_steps": 1,
+                "message": "Réparation synchro slides/audio...",
+                "result": None,
+                "repair_audio_sync": True,
+                "dry_run": dry_run,
+            }
+
+            from services.content_generation_service import repair_audio_sync_from_existing_timelines
+            result = repair_audio_sync_from_existing_timelines(folder_id, dry_run=dry_run)
+            repaired_count = len(result.get("repaired_files") or [])
+            _playlist_jobs[folder_id].update({
+                "status": "completed",
+                "step": 1,
+                "result": result,
+                "message": f"✅ Synchro réparée : {repaired_count} fichier(s)",
+            })
+            return jsonify(result), 200
+
+        except Exception as e:
+            logger.error(f"❌ Erreur repair_audio_sync: {e}")
+            _playlist_jobs[folder_id] = {
+                "status": "error",
+                "step": 0,
+                "total_steps": 1,
+                "message": str(e),
+                "result": None,
+                "repair_audio_sync": True,
+            }
             return jsonify({"success": False, "error": str(e)}), 500
 
     @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/playlist-script", methods=["GET"])

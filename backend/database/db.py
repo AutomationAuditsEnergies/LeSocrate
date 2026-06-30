@@ -5,6 +5,7 @@ import sqlite3
 from datetime import datetime
 from config import DB_PATH, FRANCE_TZ
 from utils.logger import get_logger
+from utils.slug import slugify, unique_slug
 
 logger = get_logger(__name__)
 
@@ -202,6 +203,28 @@ def init_database(_recovered_from_corruption: bool = False):
         )
         logger.info("✅ Table training_center_accounts créée/vérifiée")
 
+        cursor.execute("PRAGMA table_info(training_center_accounts)")
+        center_columns = [col[1] for col in cursor.fetchall()]
+        if "slug" not in center_columns:
+            cursor.execute("ALTER TABLE training_center_accounts ADD COLUMN slug TEXT")
+            logger.info("✅ Colonne slug ajoutée à training_center_accounts")
+        cursor.execute("SELECT id, center_name, username, slug FROM training_center_accounts")
+        for center_id, center_name, username, existing_slug in cursor.fetchall():
+            if existing_slug:
+                continue
+            base_slug = slugify(center_name or username, fallback=f"centre-{center_id}")
+            slug = unique_slug(cursor, "training_center_accounts", base_slug, exclude_id=center_id)
+            cursor.execute(
+                "UPDATE training_center_accounts SET slug = ? WHERE id = ?",
+                (slug, center_id),
+            )
+        try:
+            cursor.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_training_center_accounts_slug ON training_center_accounts(slug)"
+            )
+        except sqlite3.IntegrityError:
+            logger.warning("⚠️ Impossible de créer l'index unique centre slug : doublons existants")
+
         # Seed plateformes si la table est vide
         cursor.execute("SELECT COUNT(*) FROM platform_config")
         pc_count = cursor.fetchone()[0]
@@ -277,6 +300,24 @@ def init_database(_recovered_from_corruption: bool = False):
         if "source_formation_id" not in pc_columns:
             cursor.execute("ALTER TABLE platform_config ADD COLUMN source_formation_id INTEGER")
             logger.info("✅ Colonne source_formation_id ajoutée à platform_config")
+        if "center_account_id" not in pc_columns:
+            cursor.execute("ALTER TABLE platform_config ADD COLUMN center_account_id INTEGER")
+            logger.info("✅ Colonne center_account_id ajoutée à platform_config")
+        if "public_access_enabled" not in pc_columns:
+            cursor.execute("ALTER TABLE platform_config ADD COLUMN public_access_enabled INTEGER DEFAULT 1")
+            cursor.execute("UPDATE platform_config SET public_access_enabled = 1 WHERE public_access_enabled IS NULL")
+            logger.info("✅ Colonne public_access_enabled ajoutée à platform_config")
+        if "slug" in pc_columns:
+            cursor.execute("SELECT id, name, slug FROM platform_config")
+            for platform_id, platform_name, existing_slug in cursor.fetchall():
+                if existing_slug:
+                    continue
+                base_slug = slugify(platform_name, fallback=f"formation-{platform_id}")
+                slug = unique_slug(cursor, "platform_config", base_slug, exclude_id=platform_id)
+                cursor.execute(
+                    "UPDATE platform_config SET slug = ? WHERE id = ?",
+                    (slug, platform_id),
+                )
 
         # Migration multi-tenant : platform_id dans logs
         cursor.execute("PRAGMA table_info(logs)")

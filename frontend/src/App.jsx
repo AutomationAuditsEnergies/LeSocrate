@@ -13,6 +13,10 @@ const loadLoginAdminPage = () => import('./pages/LoginAdmin.jsx')
 const loadLoginCentrePage = () => import('./pages/LoginCentre.jsx')
 const loadVideoPage = () => import('./pages/Video.jsx')
 const loadHRDashboardPage = () => import('./pages/HRDashboard.jsx')
+const loadClassEntryPage = () => import('./pages/ClassEntry.jsx')
+
+const INTERNAL_ADMIN_TYPES = ['legacy_admin']
+const CENTER_DASHBOARD_TYPES = ['legacy_admin', 'training_center']
 
 const Admin = lazy(loadAdminPage)
 const Attente = lazy(loadAttentePage)
@@ -28,6 +32,7 @@ const Recorder = lazy(() => import('./pages/Recorder.jsx'))
 const HRDashboard = lazy(loadHRDashboardPage)
 const ScheduleConfig = lazy(() => import('./pages/ScheduleConfig.jsx'))
 const FormationPipeline = lazy(() => import('./pages/FormationPipeline.jsx'))
+const ClassEntry = lazy(loadClassEntryPage)
 
 function preloadCourseRoutes() {
   return Promise.all([loadVideoPage(), loadAttentePage()])
@@ -232,6 +237,16 @@ export default function App() {
             }
           />
           <Route path="/attente" element={<Attente />} />
+          <Route
+            path="/classe/:centerSlug/:platformSlug"
+            element={
+              <ClassEntry
+                preloadCourseRoutes={preloadCourseRoutes}
+                preloadAttenteRoute={preloadAttenteRoute}
+                preloadVideoRoute={preloadVideoRoute}
+              />
+            }
+          />
           <Route path="/landing" element={<Landing />} />
           <Route path="/video" element={<Video />} />
           <Route path="/login-admin" element={<LoginAdmin preloadAdminRoute={loadAdminPage} />} />
@@ -242,7 +257,7 @@ export default function App() {
           <Route
             path="/admin"
             element={
-              <ProtectedAdminRoute>
+              <ProtectedAdminRoute allowedAccountTypes={INTERNAL_ADMIN_TYPES}>
                 <Admin />
               </ProtectedAdminRoute>
             }
@@ -250,7 +265,7 @@ export default function App() {
           <Route
             path="/debug"
             element={
-              <ProtectedAdminRoute>
+              <ProtectedAdminRoute allowedAccountTypes={INTERNAL_ADMIN_TYPES}>
                 <DebugCours />
               </ProtectedAdminRoute>
             }
@@ -260,7 +275,7 @@ export default function App() {
             path="/hr-dashboard"
             element={
               <ProtectedHRRoute>
-                <ProtectedAdminRoute loginPath="/connexion-centre">
+                <ProtectedAdminRoute loginPath="/connexion-centre" allowedAccountTypes={CENTER_DASHBOARD_TYPES}>
                   <HRDashboard />
                 </ProtectedAdminRoute>
               </ProtectedHRRoute>
@@ -270,7 +285,7 @@ export default function App() {
           <Route
             path="/schedule-config"
             element={
-              <ProtectedAdminRoute>
+              <ProtectedAdminRoute allowedAccountTypes={INTERNAL_ADMIN_TYPES}>
                 <ScheduleConfig />
               </ProtectedAdminRoute>
             }
@@ -278,7 +293,7 @@ export default function App() {
           <Route
             path="/formation-pipeline"
             element={
-              <ProtectedAdminRoute>
+              <ProtectedAdminRoute allowedAccountTypes={INTERNAL_ADMIN_TYPES}>
                 <FormationPipeline />
               </ProtectedAdminRoute>
             }
@@ -288,7 +303,7 @@ export default function App() {
           <Route
             path="/generated-slides"
             element={
-              <ProtectedAdminRoute>
+              <ProtectedAdminRoute allowedAccountTypes={INTERNAL_ADMIN_TYPES}>
                 <GeneratedSlides />
               </ProtectedAdminRoute>
             }

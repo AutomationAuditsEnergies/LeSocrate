@@ -15,9 +15,19 @@ import state
 from config import FRANCE_TZ, DB_PATH, SUPABASE_SERVICE_ROLE_KEY, SUPABASE_URL
 from database.db import get_db_connection
 from database import db_safety
+from database.postgres import postgres_enabled
+from repositories.core_repository import (
+    DuplicateTrainingCenterUsername,
+    create_ai_teacher_order,
+    create_training_center,
+    get_training_center_by_username,
+    list_ai_teacher_orders,
+    upsert_student_profile_with_id,
+)
 from services.time_service import set_heure_debut_cours, get_heure_debut_cours
 from services.export_service import generate_excel_export
 from utils.logger import get_logger
+from utils.slug import slugify, unique_slug
 
 logger = get_logger(__name__)
 
@@ -62,9 +72,51 @@ def _get_platform_id():
     return 1
 
 
+def _mirror_training_center_to_sqlite(cursor, account, password_hash, now_str):
+    cursor.execute(
+        """
+        INSERT INTO training_center_accounts
+            (id, username, password_hash, center_name, slug, is_active, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+            username = excluded.username,
+            password_hash = excluded.password_hash,
+            center_name = excluded.center_name,
+            slug = excluded.slug,
+            is_active = excluded.is_active,
+            updated_at = excluded.updated_at
+        """,
+        (
+            account["id"],
+            account["username"],
+            password_hash,
+            account["center_name"],
+            account["slug"],
+            1 if account["is_active"] else 0,
+            now_str,
+            now_str,
+        ),
+    )
+
+
 def create_admin_blueprint(socketio):
     """Factory pour créer le blueprint admin avec accès à socketio"""
     admin_bp = Blueprint("admin", __name__)
+
+    @admin_bp.route("/api/admin/session", methods=["GET"])
+    def get_admin_session():
+        """Retourne l'état de session admin sans lire de données métier."""
+        if not session.get("is_admin"):
+            return jsonify({"authenticated": False, "error": "Accès refusé"}), 403
+
+        return jsonify({
+            "authenticated": True,
+            "account": {
+                "type": session.get("admin_account_type", "legacy_admin"),
+                "id": session.get("admin_account_id"),
+                "center_name": session.get("center_name"),
+            },
+        }), 200
 
     @admin_bp.route("/api/admin/logs", methods=["GET"])
     def get_logs():
@@ -407,11 +459,45 @@ def create_admin_blueprint(socketio):
                 logger.info("✅ Connexion admin réussie")
                 return jsonify({"success": True, "message": "Connexion réussie", "token": token}), 200
 
+            if postgres_enabled():
+                account = get_training_center_by_username(username)
+                if account:
+                    if not password or not check_password_hash(account["password_hash"], password):
+                        logger.warning("❌ Échec connexion centre Postgres - identifiants incorrects")
+                        return jsonify({"success": False, "error": "Identifiants incorrects"}), 401
+                    if not account["is_active"]:
+                        logger.warning("⚠️ Compte centre Postgres désactivé: %s", username)
+                        return jsonify({"success": False, "error": "Compte désactivé"}), 403
+
+                    session["is_admin"] = True
+                    session["admin_account_id"] = account["id"]
+                    session["admin_account_type"] = "training_center"
+                    session["center_name"] = account["center_name"]
+                    session.permanent = True
+                    token = _create_admin_token("training_center", account["id"], account["center_name"])
+                    logger.info("✅ Connexion centre Postgres réussie: %s", username)
+                    return (
+                        jsonify(
+                            {
+                                "success": True,
+                                "message": "Connexion réussie",
+                                "token": token,
+                                "account": {
+                                    "id": account["id"],
+                                    "username": account["username"],
+                                    "center_name": account["center_name"],
+                                    "slug": account["slug"],
+                                },
+                            }
+                        ),
+                        200,
+                    )
+
             conn = get_db_connection()
             cursor = conn.cursor()
             cursor.execute(
                 """
-                SELECT id, username, password_hash, center_name, is_active
+                SELECT id, username, password_hash, center_name, is_active, slug
                 FROM training_center_accounts
                 WHERE username = ?
                 """,
@@ -447,6 +533,7 @@ def create_admin_blueprint(socketio):
                             "id": account[0],
                             "username": account[1],
                             "center_name": account[3],
+                            "slug": account[5],
                         },
                     }
                 ),
@@ -492,18 +579,68 @@ def create_admin_blueprint(socketio):
                 )
 
             now_str = datetime.now(FRANCE_TZ).strftime("%Y-%m-%d %H:%M:%S")
+            password_hash = generate_password_hash(password)
+
+            if postgres_enabled():
+                try:
+                    account = create_training_center(
+                        username=username,
+                        password_hash=password_hash,
+                        center_name=center_name,
+                        slug_base=center_name or username,
+                        now=now_str,
+                    )
+                except DuplicateTrainingCenterUsername:
+                    return jsonify({"success": False, "error": "Cet identifiant existe déjà"}), 409
+
+                conn = get_db_connection()
+                cursor = conn.cursor()
+                _mirror_training_center_to_sqlite(cursor, account, password_hash, now_str)
+                conn.commit()
+
+                session["is_admin"] = True
+                session["admin_account_id"] = account["id"]
+                session["admin_account_type"] = "training_center"
+                session["center_name"] = account["center_name"]
+                session.permanent = True
+                token = _create_admin_token("training_center", account["id"], account["center_name"])
+
+                logger.info("✅ Inscription centre Postgres réussie: %s", username)
+                return (
+                    jsonify(
+                        {
+                            "success": True,
+                            "message": "Compte créé",
+                            "token": token,
+                            "account": {
+                                "id": account["id"],
+                                "username": account["username"],
+                                "center_name": account["center_name"],
+                                "slug": account["slug"],
+                            },
+                        }
+                    ),
+                    201,
+                )
+
             conn = get_db_connection()
             cursor = conn.cursor()
+            center_slug = unique_slug(
+                cursor,
+                "training_center_accounts",
+                slugify(center_name or username, fallback="centre"),
+            )
             cursor.execute(
                 """
                 INSERT INTO training_center_accounts
-                    (username, password_hash, center_name, is_active, created_at, updated_at)
-                VALUES (?, ?, ?, 1, ?, ?)
+                    (username, password_hash, center_name, slug, is_active, created_at, updated_at)
+                VALUES (?, ?, ?, ?, 1, ?, ?)
                 """,
                 (
                     username,
-                    generate_password_hash(password),
+                    password_hash,
                     center_name,
+                    center_slug,
                     now_str,
                     now_str,
                 ),
@@ -529,6 +666,7 @@ def create_admin_blueprint(socketio):
                             "id": account_id,
                             "username": username,
                             "center_name": center_name,
+                            "slug": center_slug,
                         },
                     }
                 ),
@@ -547,6 +685,63 @@ def create_admin_blueprint(socketio):
         finally:
             if conn:
                 conn.close()
+
+    @admin_bp.route("/api/admin/ai-teacher-orders", methods=["GET"])
+    def list_orders():
+        """Liste les commandes d'agents IA du centre connecté."""
+        if not session.get("is_admin") or session.get("admin_account_type") != "training_center":
+            return jsonify({"success": False, "error": "Accès refusé"}), 403
+        if not postgres_enabled():
+            return jsonify({"success": False, "error": "Postgres non activé"}), 503
+
+        try:
+            orders = list_ai_teacher_orders(session.get("admin_account_id"))
+            return jsonify({"success": True, "orders": orders}), 200
+        except Exception:
+            logger.exception("❌ Erreur lecture commandes IA")
+            return jsonify({"success": False, "error": "Erreur serveur"}), 500
+
+    @admin_bp.route("/api/admin/ai-teacher-orders", methods=["POST"])
+    def create_order():
+        """Crée une commande d'agent IA en brouillon côté SaaS core."""
+        if not session.get("is_admin") or session.get("admin_account_type") != "training_center":
+            return jsonify({"success": False, "error": "Accès refusé"}), 403
+        if not postgres_enabled():
+            return jsonify({"success": False, "error": "Postgres non activé"}), 503
+
+        data = request.get_json(silent=True) or {}
+        training_title = str(data.get("training_title") or "").strip()
+        rncp_code = str(data.get("rncp_code") or "").strip() or None
+        platform_id = data.get("platform_id")
+        quoted_amount_cents = data.get("quoted_amount_cents")
+        try:
+            total_hours = int(data.get("total_hours") or 0)
+        except (TypeError, ValueError):
+            total_hours = 0
+
+        if not training_title or total_hours <= 0:
+            return jsonify({
+                "success": False,
+                "error": "training_title et total_hours sont requis",
+            }), 400
+
+        try:
+            order = create_ai_teacher_order({
+                "center_account_id": session.get("admin_account_id"),
+                "platform_id": int(platform_id) if platform_id else None,
+                "status": "draft",
+                "training_title": training_title,
+                "rncp_code": rncp_code,
+                "total_hours": total_hours,
+                "quoted_amount_cents": int(quoted_amount_cents) if quoted_amount_cents else None,
+                "currency": "eur",
+                "stripe_checkout_session_id": None,
+                "stripe_payment_intent_id": None,
+            })
+            return jsonify({"success": True, "order": order}), 201
+        except Exception:
+            logger.exception("❌ Erreur création commande IA")
+            return jsonify({"success": False, "error": "Erreur serveur"}), 500
 
     @admin_bp.route("/api/admin/logout", methods=["POST"])
     def logout_admin():
@@ -659,6 +854,7 @@ def create_admin_blueprint(socketio):
                 """,
                 (auth_user_id, platform_id, email, nom, prenom, now, now),
             )
+            profile_id = cursor.lastrowid
             conn.commit()
         except Exception as exc:
             conn.rollback()
@@ -668,7 +864,31 @@ def create_admin_blueprint(socketio):
             return jsonify({"success": False, "error": "Erreur serveur"}), 500
         finally:
             conn.close()
-        return jsonify({"success": True, "message": "Compte élève créé"}), 201
+
+        postgres_synced = False
+        if postgres_enabled():
+            try:
+                upsert_student_profile_with_id({
+                    "id": profile_id,
+                    "auth_user_id": auth_user_id,
+                    "platform_id": platform_id,
+                    "email": email,
+                    "nom": nom,
+                    "prenom": prenom,
+                    "role": "student",
+                    "is_active": True,
+                    "created_at": now,
+                    "updated_at": now,
+                })
+                postgres_synced = True
+            except Exception:
+                logger.warning("⚠️ Miroir Postgres profil élève impossible", exc_info=True)
+
+        return jsonify({
+            "success": True,
+            "message": "Compte élève créé",
+            "postgres_synced": postgres_synced,
+        }), 201
 
     @admin_bp.route("/api/admin/student-accounts/<int:account_id>", methods=["PUT"])
     def update_student_account(account_id):
@@ -733,10 +953,45 @@ def create_admin_blueprint(socketio):
         )
         conn.commit()
         changed = cursor.rowcount
+        profile_row = None
+        if changed:
+            cursor.execute(
+                """
+                SELECT id, auth_user_id, platform_id, email, nom, prenom, role, is_active, created_at, updated_at
+                FROM student_profiles
+                WHERE id = ? AND platform_id = ?
+                """,
+                (account_id, platform_id),
+            )
+            profile_row = cursor.fetchone()
         conn.close()
         if not changed:
             return jsonify({"success": False, "error": "Compte introuvable"}), 404
-        return jsonify({"success": True, "message": "Compte élève mis à jour"}), 200
+
+        postgres_synced = False
+        if postgres_enabled() and profile_row:
+            try:
+                upsert_student_profile_with_id({
+                    "id": profile_row[0],
+                    "auth_user_id": profile_row[1],
+                    "platform_id": profile_row[2],
+                    "email": profile_row[3],
+                    "nom": profile_row[4],
+                    "prenom": profile_row[5],
+                    "role": profile_row[6],
+                    "is_active": bool(profile_row[7]),
+                    "created_at": profile_row[8],
+                    "updated_at": profile_row[9],
+                })
+                postgres_synced = True
+            except Exception:
+                logger.warning("⚠️ Synchronisation Postgres profil élève impossible", exc_info=True)
+
+        return jsonify({
+            "success": True,
+            "message": "Compte élève mis à jour",
+            "postgres_synced": postgres_synced,
+        }), 200
 
     @admin_bp.route("/api/admin/db/status", methods=["GET"])
     def db_status():

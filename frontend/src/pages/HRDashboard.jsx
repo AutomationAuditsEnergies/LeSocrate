@@ -2798,7 +2798,7 @@ function PlatformCard({
         {/* Lien vers la page apprenant — l'admin clique pour vérifier ce que voit l'apprenant */}
         {p.active && (
           <a
-            href={`${p.frontend_url || window.location.origin}/?p=${p.id}`}
+            href={p.public_url || `${p.frontend_url || window.location.origin}/?p=${p.id}`}
             target="_blank"
             rel="noopener noreferrer"
             className="flex w-full items-center justify-between rounded-md px-3 py-2 text-sm transition-colors hover:bg-black/5 dark:hover:bg-white/5"

@@ -6,6 +6,15 @@ import requests
 from werkzeug.security import check_password_hash
 from config import FRANCE_TZ, STUDENT_AUTH_LEGACY_FALLBACK, SUPABASE_ANON_KEY, SUPABASE_URL
 from database.db import get_db_connection
+from database.postgres import postgres_enabled
+from repositories.core_repository import (
+    count_student_accounts,
+    get_student_account,
+    get_student_profile,
+    update_log_depart,
+    upsert_log,
+    upsert_student_profile,
+)
 from utils.logger import get_logger
 import state
 
@@ -33,6 +42,18 @@ def _create_local_student_session(cursor, nom, prenom, platform_id):
         "log_id": log_id,
         "platform_id": platform_id,
     }
+    if postgres_enabled():
+        try:
+            upsert_log({
+                "id": log_id,
+                "platform_id": platform_id,
+                "nom": nom,
+                "prenom": prenom,
+                "arrivee": arrivee_time,
+                "depart": None,
+            })
+        except Exception:
+            logger.warning("⚠️ Miroir Postgres du log élève impossible", exc_info=True)
     return log_id, token
 
 
@@ -83,8 +104,23 @@ def create_auth_blueprint(socketio):
                 (platform_id, username),
             )
             account = cursor.fetchone() if username else None
+            pg_account = None
+            if postgres_enabled() and username:
+                try:
+                    pg_account = get_student_account(platform_id, username)
+                except Exception:
+                    logger.warning("⚠️ Lecture compte élève Postgres impossible", exc_info=True)
 
-            if account:
+            if pg_account:
+                if not pg_account["is_active"]:
+                    logger.warning("⚠️ Compte élève Postgres désactivé: %s P%s", username, platform_id)
+                    return jsonify({"success": False, "error": "Compte désactivé"}), 403
+                if not password or not check_password_hash(pg_account["password_hash"], password):
+                    logger.warning("❌ Échec connexion élève Postgres: %s P%s", username, platform_id)
+                    return jsonify({"success": False, "error": "Identifiants incorrects"}), 401
+                nom = pg_account["nom"]
+                prenom = pg_account["prenom"]
+            elif account:
                 if not account[5]:
                     logger.warning("⚠️ Compte élève désactivé: %s P%s", username, platform_id)
                     return jsonify({"success": False, "error": "Compte désactivé"}), 403
@@ -99,6 +135,11 @@ def create_auth_blueprint(socketio):
                     (platform_id,),
                 )
                 has_accounts = cursor.fetchone()[0] > 0
+                if postgres_enabled():
+                    try:
+                        has_accounts = has_accounts or count_student_accounts(platform_id) > 0
+                    except Exception:
+                        logger.warning("⚠️ Comptage comptes élèves Postgres impossible", exc_info=True)
                 if has_accounts or not STUDENT_AUTH_LEGACY_FALLBACK:
                     logger.warning("❌ Compte élève inconnu: %s P%s", username, platform_id)
                     return jsonify({"success": False, "error": "Identifiants incorrects"}), 401
@@ -157,17 +198,34 @@ def create_auth_blueprint(socketio):
             auth_user_id = supabase_user.get("id")
             email = supabase_user.get("email") or ""
             metadata = supabase_user.get("user_metadata") or {}
+            pg_profile = None
+            if postgres_enabled():
+                try:
+                    pg_profile = get_student_profile(auth_user_id)
+                except Exception:
+                    logger.warning("⚠️ Lecture profil élève Postgres impossible", exc_info=True)
+
             conn = get_db_connection()
             cursor = conn.cursor()
-            cursor.execute(
-                """
-                SELECT nom, prenom, platform_id, is_active, role
-                FROM student_profiles
-                WHERE auth_user_id = ?
-                """,
-                (auth_user_id,),
-            )
-            profile = cursor.fetchone()
+            if pg_profile:
+                profile = (
+                    pg_profile["nom"],
+                    pg_profile["prenom"],
+                    pg_profile["platform_id"],
+                    pg_profile["is_active"],
+                    pg_profile["role"],
+                )
+            else:
+                cursor.execute(
+                    """
+                    SELECT nom, prenom, platform_id, is_active, role
+                    FROM student_profiles
+                    WHERE auth_user_id = ?
+                    """,
+                    (auth_user_id,),
+                )
+                profile = cursor.fetchone()
+
             if not profile:
                 nom = str(metadata.get("nom") or metadata.get("last_name") or "").strip()
                 prenom = str(metadata.get("prenom") or metadata.get("first_name") or "").strip()
@@ -183,12 +241,43 @@ def create_auth_blueprint(socketio):
                     """,
                     (auth_user_id, platform_id, email, nom, prenom, now, now),
                 )
+                if postgres_enabled():
+                    try:
+                        upsert_student_profile({
+                            "auth_user_id": auth_user_id,
+                            "platform_id": platform_id,
+                            "email": email,
+                            "nom": nom,
+                            "prenom": prenom,
+                            "role": "student",
+                            "is_active": True,
+                            "created_at": now,
+                            "updated_at": now,
+                        })
+                    except Exception:
+                        logger.warning("⚠️ Miroir Postgres profil élève impossible", exc_info=True)
             else:
                 nom, prenom, platform_id, is_active, role = profile
                 if not is_active:
                     return jsonify({"success": False, "error": "Compte désactivé"}), 403
                 if int(platform_id) != requested_platform_id:
                     return jsonify({"success": False, "error": "Compte non autorisé sur cette plateforme"}), 403
+                if postgres_enabled() and not pg_profile:
+                    try:
+                        now = datetime.now(FRANCE_TZ).strftime("%Y-%m-%d %H:%M:%S")
+                        upsert_student_profile({
+                            "auth_user_id": auth_user_id,
+                            "platform_id": int(platform_id),
+                            "email": email,
+                            "nom": nom,
+                            "prenom": prenom,
+                            "role": role or "student",
+                            "is_active": bool(is_active),
+                            "created_at": now,
+                            "updated_at": now,
+                        })
+                    except Exception:
+                        logger.warning("⚠️ Synchronisation profil élève Postgres impossible", exc_info=True)
 
             log_id, token = _create_local_student_session(cursor, nom, prenom, int(platform_id))
             conn.commit()
@@ -223,6 +312,10 @@ def create_auth_blueprint(socketio):
                 )
                 conn.commit()
                 conn.close()
+                try:
+                    update_log_depart(session["log_id"], depart)
+                except Exception:
+                    logger.warning("⚠️ Miroir Postgres du départ impossible", exc_info=True)
                 logger.info(f"✅ Départ enregistré: {depart}")
 
             token = request.headers.get("X-Auth-Token")
@@ -256,6 +349,10 @@ def create_auth_blueprint(socketio):
                 )
                 conn.commit()
                 conn.close()
+                try:
+                    update_log_depart(session["log_id"], depart)
+                except Exception:
+                    logger.warning("⚠️ Miroir Postgres du départ auto impossible", exc_info=True)
                 logger.info(f"✅ Déconnexion auto enregistrée: {depart}")
 
             return "", 204
