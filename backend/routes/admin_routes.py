@@ -73,18 +73,37 @@ def _get_platform_id():
 
 
 def _mirror_training_center_to_sqlite(cursor, account, password_hash, now_str):
+    cursor.execute("SELECT id FROM training_center_accounts WHERE id = ?", (account["id"],))
+    existing = cursor.fetchone()
+    if existing:
+        cursor.execute(
+            """
+            UPDATE training_center_accounts
+            SET username = ?,
+                password_hash = ?,
+                center_name = ?,
+                slug = ?,
+                is_active = ?,
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (
+                account["username"],
+                password_hash,
+                account["center_name"],
+                account["slug"],
+                1 if account["is_active"] else 0,
+                now_str,
+                account["id"],
+            ),
+        )
+        return
+
     cursor.execute(
         """
         INSERT INTO training_center_accounts
             (id, username, password_hash, center_name, slug, is_active, created_at, updated_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(id) DO UPDATE SET
-            username = excluded.username,
-            password_hash = excluded.password_hash,
-            center_name = excluded.center_name,
-            slug = excluded.slug,
-            is_active = excluded.is_active,
-            updated_at = excluded.updated_at
         """,
         (
             account["id"],
