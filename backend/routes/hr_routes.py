@@ -74,7 +74,7 @@ def _class_public_url(frontend_url, center_slug, platform_slug):
 def _module_scope_clause(alias="m"):
     if session.get("admin_account_type") == "training_center":
         return f"{alias}.center_account_id = ?", [session.get("admin_account_id")]
-    return f"{alias}.center_account_id IS NULL", []
+    return "1 = 1", []
 
 
 def _module_version_count(cursor, rncp_code, center_account_id):
@@ -412,8 +412,6 @@ def create_hr_blueprint(socketio):
             if session.get("admin_account_type") == "training_center":
                 platform_where = "WHERE pc.center_account_id = ?"
                 platform_params.append(session.get("admin_account_id"))
-            else:
-                platform_where = "WHERE pc.center_account_id IS NULL"
             cursor.execute("""
                 SELECT j.id, j.tp_name, j.rncp_code, j.total_hours, j.nb_days,
                        j.status, j.platform_id, pc.name,
