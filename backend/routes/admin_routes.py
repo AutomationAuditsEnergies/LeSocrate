@@ -228,6 +228,171 @@ def create_admin_blueprint(socketio):
             logger.error(f"❌ Erreur récupération logs admin: {e}")
             return jsonify({"success": False, "error": "Erreur serveur"}), 500
 
+    @admin_bp.route("/api/admin/internal-dashboard", methods=["GET"])
+    def internal_dashboard():
+        """Vue interne SaaS : centres, comptes élèves et derniers logs.
+
+        Réservé au legacy admin. Les mots de passe ne sont jamais exposés :
+        seulement un statut indiquant qu'un secret hashé existe.
+        """
+        if not session.get("is_admin") or session.get("admin_account_type") != "legacy_admin":
+            return jsonify({"success": False, "error": "Accès refusé"}), 403
+
+        conn = None
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+
+            cursor.execute("""
+                SELECT
+                    pc.center_account_id,
+                    COUNT(*) AS platform_count,
+                    COALESCE(SUM((
+                        SELECT COUNT(*)
+                        FROM student_profiles sp
+                        WHERE sp.platform_id = pc.id
+                    )), 0) AS student_count,
+                    COALESCE(SUM((
+                        SELECT COUNT(*)
+                        FROM logs l
+                        WHERE l.platform_id = pc.id
+                    )), 0) AS log_count
+                FROM platform_config pc
+                GROUP BY pc.center_account_id
+            """)
+            center_stats = {
+                row[0]: {
+                    "platform_count": int(row[1] or 0),
+                    "student_count": int(row[2] or 0),
+                    "log_count": int(row[3] or 0),
+                }
+                for row in cursor.fetchall()
+            }
+
+            centers = [{
+                "id": None,
+                "center_name": "Sales Hacking / Le Socrate interne",
+                "slug": "le-socrate",
+                "username": "admin",
+                "email": "",
+                "is_active": True,
+                "created_at": "",
+                "updated_at": "",
+                "password_status": "Mot de passe défini, non affichable",
+                "internal": True,
+                **center_stats.get(None, {"platform_count": 0, "student_count": 0, "log_count": 0}),
+            }]
+
+            cursor.execute("""
+                SELECT id, username, center_name, slug, is_active, created_at, updated_at, password_hash
+                FROM training_center_accounts
+                ORDER BY created_at DESC, id DESC
+            """)
+            for row in cursor.fetchall():
+                username = row[1] or ""
+                stats = center_stats.get(row[0], {"platform_count": 0, "student_count": 0, "log_count": 0})
+                centers.append({
+                    "id": row[0],
+                    "username": username,
+                    "email": username if "@" in username else "",
+                    "center_name": row[2],
+                    "slug": row[3],
+                    "is_active": bool(row[4]),
+                    "created_at": row[5],
+                    "updated_at": row[6],
+                    "password_status": "Mot de passe défini, non affichable" if row[7] else "Non défini",
+                    "internal": False,
+                    **stats,
+                })
+
+            cursor.execute("""
+                SELECT
+                    sp.id,
+                    sp.email,
+                    sp.nom,
+                    sp.prenom,
+                    sp.role,
+                    sp.is_active,
+                    sp.created_at,
+                    sp.updated_at,
+                    sp.platform_id,
+                    pc.name AS platform_name,
+                    COALESCE(tca.center_name, 'Sales Hacking / Le Socrate interne') AS center_name
+                FROM student_profiles sp
+                LEFT JOIN platform_config pc ON pc.id = sp.platform_id
+                LEFT JOIN training_center_accounts tca ON tca.id = pc.center_account_id
+                ORDER BY sp.created_at DESC, sp.id DESC
+                LIMIT 100
+            """)
+            students = [{
+                "id": row[0],
+                "email": row[1],
+                "username": row[1],
+                "nom": row[2],
+                "prenom": row[3],
+                "role": row[4],
+                "is_active": bool(row[5]),
+                "created_at": row[6],
+                "updated_at": row[7],
+                "platform_id": row[8],
+                "platform_name": row[9],
+                "center_name": row[10],
+                "password_status": "Mot de passe géré par Supabase Auth",
+            } for row in cursor.fetchall()]
+
+            cursor.execute("""
+                SELECT
+                    l.id,
+                    l.nom,
+                    l.prenom,
+                    l.arrivee,
+                    l.depart,
+                    l.platform_id,
+                    pc.name AS platform_name,
+                    COALESCE(tca.center_name, 'Sales Hacking / Le Socrate interne') AS center_name
+                FROM logs l
+                LEFT JOIN platform_config pc ON pc.id = l.platform_id
+                LEFT JOIN training_center_accounts tca ON tca.id = pc.center_account_id
+                ORDER BY l.arrivee DESC, l.id DESC
+                LIMIT 120
+            """)
+            recent_logs = []
+            active_count = 0
+            for row in cursor.fetchall():
+                if not row[4]:
+                    active_count += 1
+                recent_logs.append({
+                    "id": row[0],
+                    "nom": row[1],
+                    "prenom": row[2],
+                    "arrivee": row[3],
+                    "depart": row[4],
+                    "platform_id": row[5],
+                    "platform_name": row[6],
+                    "center_name": row[7],
+                    "status": "En cours" if not row[4] else "Terminé",
+                })
+
+            return jsonify({
+                "success": True,
+                "summary": {
+                    "center_count": len(centers),
+                    "external_center_count": max(len(centers) - 1, 0),
+                    "student_count": len(students),
+                    "recent_log_count": len(recent_logs),
+                    "active_session_count": active_count,
+                },
+                "centers": centers,
+                "students": students,
+                "recent_logs": recent_logs,
+            }), 200
+        except Exception as e:
+            logger.exception("❌ Erreur dashboard interne")
+            return jsonify({"success": False, "error": "Erreur serveur"}), 500
+        finally:
+            if conn:
+                conn.close()
+
     @admin_bp.route("/api/admin/course-time", methods=["GET"])
     def get_course_time():
         """Retourne l'heure de début du cours actuellement configurée"""
