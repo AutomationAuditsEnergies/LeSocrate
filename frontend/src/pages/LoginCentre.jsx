@@ -5,8 +5,8 @@ import { apiFetch } from '../api'
 export default function LoginCentre({ preloadDashboardRoute }) {
   const [authMode, setAuthMode] = useState('login')
   const [centerName, setCenterName] = useState('')
-  const [username, setUsername] = useState('admin')
-  const [password, setPassword] = useState('secret123')
+  const [username, setUsername] = useState('')
+  const [password, setPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
@@ -84,7 +84,7 @@ export default function LoginCentre({ preloadDashboardRoute }) {
 
         <section className="flex min-h-screen items-center justify-center px-6 py-10 sm:px-10 lg:px-12">
           <div className="w-full max-w-[420px]">
-            <Link to="/landing" className="mb-10 inline-flex items-center gap-3 text-slate-950 lg:hidden">
+            <Link to="/" className="mb-10 inline-flex items-center gap-3 text-slate-950 lg:hidden">
               <span className="h-3 w-3 rounded-full bg-[#8B5CF6]" />
               <span className="text-sm font-semibold uppercase">Le Socrate</span>
             </Link>

@@ -228,6 +228,10 @@ export default function App() {
           <Routes>
           <Route
             path="/"
+            element={<Landing />}
+          />
+          <Route
+            path="/cours"
             element={
               <Index
                 preloadCourseRoutes={preloadCourseRoutes}
@@ -236,6 +240,7 @@ export default function App() {
               />
             }
           />
+          <Route path="/landing" element={<Landing />} />
           <Route path="/attente" element={<Attente />} />
           <Route
             path="/classe/:centerSlug/:platformSlug"
@@ -247,7 +252,6 @@ export default function App() {
               />
             }
           />
-          <Route path="/landing" element={<Landing />} />
           <Route path="/video" element={<Video />} />
           <Route path="/login-admin" element={<LoginAdmin preloadAdminRoute={loadAdminPage} />} />
           <Route path="/connexion-centre" element={<LoginCentre preloadDashboardRoute={loadHRDashboardPage} />} />
