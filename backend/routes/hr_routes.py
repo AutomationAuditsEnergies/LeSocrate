@@ -71,6 +71,26 @@ def _class_public_url(frontend_url, center_slug, platform_slug):
     return f"{base_url}{path}" if base_url else path
 
 
+def _module_scope_clause(alias="m"):
+    if session.get("admin_account_type") == "training_center":
+        return f"{alias}.center_account_id = ?", [session.get("admin_account_id")]
+    return f"{alias}.center_account_id IS NULL", []
+
+
+def _module_version_count(cursor, rncp_code, center_account_id):
+    if center_account_id is None:
+        cursor.execute(
+            "SELECT COUNT(*) FROM formation_modules WHERE rncp_code = ? AND center_account_id IS NULL",
+            (rncp_code or "",),
+        )
+    else:
+        cursor.execute(
+            "SELECT COUNT(*) FROM formation_modules WHERE rncp_code = ? AND center_account_id = ?",
+            (rncp_code or "", center_account_id),
+        )
+    return cursor.fetchone()[0]
+
+
 def _publish_playlist_audio_to_platform(platform_id, folder_id, filenames=None):
     """Copie les MP3 générés du dossier vers le container audio public de la plateforme.
 
@@ -279,6 +299,7 @@ def create_hr_blueprint(socketio):
         try:
             conn = get_db_connection()
             cursor = conn.cursor()
+            module_scope_sql, module_scope_params = _module_scope_clause("m")
             cursor.execute("""
                 SELECT m.id, m.rncp_code, m.tp_name, m.version, m.status,
                        m.source_pipeline_job_id, m.source_platform_id, m.created_at,
@@ -288,8 +309,9 @@ def create_hr_blueprint(socketio):
                 FROM formation_modules m
                 LEFT JOIN platform_config pc ON pc.id = m.source_platform_id
                 WHERE m.status != 'archived'
+                  AND """ + module_scope_sql + """
                 ORDER BY m.created_at DESC
-            """)
+            """, module_scope_params)
             rows = cursor.fetchall()
             conn.close()
             modules = [{
@@ -328,10 +350,11 @@ def create_hr_blueprint(socketio):
         try:
             conn = get_db_connection()
             cursor = conn.cursor()
+            module_scope_sql, module_scope_params = _module_scope_clause("formation_modules")
 
             cursor.execute(
-                "SELECT id, tp_name, version FROM formation_modules WHERE id = ?",
-                (module_id,),
+                f"SELECT id, tp_name, version FROM formation_modules WHERE id = ? AND {module_scope_sql}",
+                [module_id] + module_scope_params,
             )
             row = cursor.fetchone()
             if not row:
@@ -384,6 +407,13 @@ def create_hr_blueprint(socketio):
         try:
             conn = get_db_connection()
             cursor = conn.cursor()
+            platform_where = ""
+            platform_params = []
+            if session.get("admin_account_type") == "training_center":
+                platform_where = "WHERE pc.center_account_id = ?"
+                platform_params.append(session.get("admin_account_id"))
+            else:
+                platform_where = "WHERE pc.center_account_id IS NULL"
             cursor.execute("""
                 SELECT j.id, j.tp_name, j.rncp_code, j.total_hours, j.nb_days,
                        j.status, j.platform_id, pc.name,
@@ -391,8 +421,9 @@ def create_hr_blueprint(socketio):
                        j.created_at
                 FROM formation_pipeline_jobs j
                 LEFT JOIN platform_config pc ON pc.id = j.platform_id
+                """ + platform_where + """
                 ORDER BY j.created_at DESC
-            """)
+            """, platform_params)
             rows = cursor.fetchall()
             conn.close()
             formations = [{
@@ -805,9 +836,11 @@ def create_hr_blueprint(socketio):
 
             # Mode module_id (nouveau — priorité sur formation_id si les deux présents)
             if module_id:
+                module_scope_sql, module_scope_params = _module_scope_clause("formation_modules")
                 cursor.execute(
-                    "SELECT source_platform_id, status, source_pipeline_job_id, voice_type FROM formation_modules WHERE id = ?",
-                    (module_id,),
+                    "SELECT source_platform_id, status, source_pipeline_job_id, voice_type "
+                    f"FROM formation_modules WHERE id = ? AND {module_scope_sql}",
+                    [module_id] + module_scope_params,
                 )
                 row = cursor.fetchone()
                 if not row:
@@ -905,16 +938,23 @@ def create_hr_blueprint(socketio):
             # et soient supprimables via le bouton catalogue. Pas de
             # source_pipeline_job_id (NULL — distinguable des modules pipeline).
             if not has_content:
-                cursor.execute(
-                    "SELECT COUNT(*) FROM formation_modules WHERE source_pipeline_job_id IS NULL"
-                )
+                if center_account_id is None:
+                    cursor.execute(
+                        "SELECT COUNT(*) FROM formation_modules WHERE source_pipeline_job_id IS NULL AND center_account_id IS NULL"
+                    )
+                else:
+                    cursor.execute(
+                        "SELECT COUNT(*) FROM formation_modules WHERE source_pipeline_job_id IS NULL AND center_account_id = ?",
+                        (center_account_id,),
+                    )
                 n_manual = cursor.fetchone()[0] + 1
                 manual_version = f"manuel-v{n_manual}"
                 cursor.execute(
                     """INSERT INTO formation_modules
-                       (rncp_code, tp_name, version, status, source_pipeline_job_id, source_platform_id, validated_at)
-                       VALUES (?, ?, ?, 'validated', NULL, ?, ?)""",
-                    (None, name, manual_version, new_id, now_str),
+                       (rncp_code, tp_name, version, status, source_pipeline_job_id,
+                        source_platform_id, center_account_id, validated_at)
+                       VALUES (?, ?, ?, 'validated', NULL, ?, ?, ?)""",
+                    (None, name, manual_version, new_id, center_account_id, now_str),
                 )
                 logger.info(f"✏️  Module 'fait main' inscrit au catalogue : {name} ({manual_version}) → P{new_id}")
 
@@ -3341,6 +3381,9 @@ def create_hr_blueprint(socketio):
         conn = get_db_connection()
         cursor = conn.cursor()
         try:
+            cursor.execute("SELECT center_account_id FROM platform_config WHERE id = ?", (platform_id,))
+            center_row = cursor.fetchone()
+            center_account_id = center_row[0] if center_row else None
             cursor.execute(
                 "UPDATE platform_config SET status = 'ready' WHERE id = ? AND status = 'pending'",
                 (platform_id,),
@@ -3356,27 +3399,27 @@ def create_hr_blueprint(socketio):
                     """
                     UPDATE formation_modules
                     SET source_platform_id = COALESCE(source_platform_id, ?),
+                        center_account_id = COALESCE(center_account_id, ?),
                         voice_type = ?,
                         voice_updated_at = CURRENT_TIMESTAMP,
                         status = 'validated',
                         validated_at = COALESCE(validated_at, CURRENT_TIMESTAMP)
                     WHERE id = ?
                     """,
-                    (platform_id, voice_type, module_id),
+                    (platform_id, center_account_id, voice_type, module_id),
                 )
                 module_created = False
             else:
-                cursor.execute("SELECT COUNT(*) FROM formation_modules WHERE rncp_code = ?", (rncp or "",))
-                n = cursor.fetchone()[0] + 1
+                n = _module_version_count(cursor, rncp or "", center_account_id) + 1
                 version = f"{datetime.now(FRANCE_TZ).year}-v{n}"
                 cursor.execute(
                     """
                     INSERT INTO formation_modules
                     (rncp_code, tp_name, version, status, source_pipeline_job_id,
-                     source_platform_id, voice_type, voice_updated_at, validated_at)
-                    VALUES (?, ?, ?, 'validated', ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                     source_platform_id, center_account_id, voice_type, voice_updated_at, validated_at)
+                    VALUES (?, ?, ?, 'validated', ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
                     """,
-                    (rncp or "", tp_name or f"Job {formation_job_id}", version, formation_job_id, platform_id, voice_type),
+                    (rncp or "", tp_name or f"Job {formation_job_id}", version, formation_job_id, platform_id, center_account_id, voice_type),
                 )
                 module_id = cursor.lastrowid
                 module_created = True

@@ -2501,6 +2501,9 @@ def _finalize_audio_ready_state(job_id: int, voice_type: str) -> dict:
     conn = get_db_connection()
     cursor = conn.cursor()
     try:
+        cursor.execute("SELECT center_account_id FROM platform_config WHERE id = ?", (platform_id,))
+        center_row = cursor.fetchone()
+        center_account_id = center_row[0] if center_row else None
         cursor.execute(
             "UPDATE platform_config SET status = 'ready' WHERE id = ? AND status = 'pending'",
             (platform_id,),
@@ -2519,24 +2522,34 @@ def _finalize_audio_ready_state(job_id: int, voice_type: str) -> dict:
                 """UPDATE formation_modules
                    SET voice_type = ?, voice_updated_at = CURRENT_TIMESTAMP,
                        source_platform_id = COALESCE(source_platform_id, ?),
+                       center_account_id = COALESCE(center_account_id, ?),
                        status = 'validated',
                        validated_at = COALESCE(validated_at, CURRENT_TIMESTAMP)
                    WHERE id = ?""",
-                (voice_type, platform_id, module_id),
+                (voice_type, platform_id, center_account_id, module_id),
             )
             module_created = False
         else:
-            cursor.execute("SELECT COUNT(*) FROM formation_modules WHERE rncp_code = ?", (rncp,))
+            if center_account_id is None:
+                cursor.execute(
+                    "SELECT COUNT(*) FROM formation_modules WHERE rncp_code = ? AND center_account_id IS NULL",
+                    (rncp,),
+                )
+            else:
+                cursor.execute(
+                    "SELECT COUNT(*) FROM formation_modules WHERE rncp_code = ? AND center_account_id = ?",
+                    (rncp, center_account_id),
+                )
             n = cursor.fetchone()[0] + 1
             version = f"{_dt.now(_tz).year}-v{n}"
             cursor.execute(
                 """
                 INSERT INTO formation_modules
                 (rncp_code, tp_name, version, status, source_pipeline_job_id,
-                 source_platform_id, voice_type, voice_updated_at, validated_at)
-                VALUES (?, ?, ?, 'validated', ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                 source_platform_id, center_account_id, voice_type, voice_updated_at, validated_at)
+                VALUES (?, ?, ?, 'validated', ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
                 """,
-                (rncp, tp_name, version, job_id, platform_id, voice_type),
+                (rncp, tp_name, version, job_id, platform_id, center_account_id, voice_type),
             )
             module_id = cursor.lastrowid
             module_created = True
@@ -2583,6 +2596,9 @@ def _finalize_text_ready_state(job_id: int) -> dict:
     conn = get_db_connection()
     cursor = conn.cursor()
     try:
+        cursor.execute("SELECT center_account_id FROM platform_config WHERE id = ?", (platform_id,))
+        center_row = cursor.fetchone()
+        center_account_id = center_row[0] if center_row else None
         cursor.execute(
             "UPDATE platform_config SET status = 'ready' WHERE id = ? AND status = 'pending'",
             (platform_id,),
@@ -2600,24 +2616,34 @@ def _finalize_text_ready_state(job_id: int) -> dict:
             cursor.execute(
                 """UPDATE formation_modules
                    SET source_platform_id = COALESCE(source_platform_id, ?),
+                       center_account_id = COALESCE(center_account_id, ?),
                        status = CASE WHEN status = 'validated' THEN status ELSE 'draft' END
                    WHERE id = ?""",
-                (platform_id, module_id),
+                (platform_id, center_account_id, module_id),
             )
             module_created = False
             module_status = status if status == "validated" else "draft"
         else:
-            cursor.execute("SELECT COUNT(*) FROM formation_modules WHERE rncp_code = ?", (rncp,))
+            if center_account_id is None:
+                cursor.execute(
+                    "SELECT COUNT(*) FROM formation_modules WHERE rncp_code = ? AND center_account_id IS NULL",
+                    (rncp,),
+                )
+            else:
+                cursor.execute(
+                    "SELECT COUNT(*) FROM formation_modules WHERE rncp_code = ? AND center_account_id = ?",
+                    (rncp, center_account_id),
+                )
             n = cursor.fetchone()[0] + 1
             version = f"{_dt.now(_tz).year}-v{n}"
             cursor.execute(
                 """
                 INSERT INTO formation_modules
                 (rncp_code, tp_name, version, status, source_pipeline_job_id,
-                 source_platform_id, voice_type, voice_updated_at, validated_at)
-                VALUES (?, ?, ?, 'draft', ?, ?, NULL, NULL, NULL)
+                 source_platform_id, center_account_id, voice_type, voice_updated_at, validated_at)
+                VALUES (?, ?, ?, 'draft', ?, ?, ?, NULL, NULL, NULL)
                 """,
-                (rncp, tp_name, version, job_id, platform_id),
+                (rncp, tp_name, version, job_id, platform_id, center_account_id),
             )
             module_id = cursor.lastrowid
             module_created = True
@@ -3164,15 +3190,28 @@ def launch_audio(job_id):
         _cur2 = _c2.cursor()
         year = _dt.now(_tz).year
         rncp = job.get("rncp_code") or ""
-        _cur2.execute("SELECT COUNT(*) FROM formation_modules WHERE rncp_code = ?", (rncp,))
+        platform_id = job["platform_id"]
+        _cur2.execute("SELECT center_account_id FROM platform_config WHERE id = ?", (platform_id,))
+        center_row = _cur2.fetchone()
+        center_account_id = center_row[0] if center_row else None
+        if center_account_id is None:
+            _cur2.execute(
+                "SELECT COUNT(*) FROM formation_modules WHERE rncp_code = ? AND center_account_id IS NULL",
+                (rncp,),
+            )
+        else:
+            _cur2.execute(
+                "SELECT COUNT(*) FROM formation_modules WHERE rncp_code = ? AND center_account_id = ?",
+                (rncp, center_account_id),
+            )
         n = _cur2.fetchone()[0] + 1
         version = f"{year}-v{n}"
         _cur2.execute("""
             INSERT OR IGNORE INTO formation_modules
             (rncp_code, tp_name, version, status, source_pipeline_job_id,
-             source_platform_id, voice_type, voice_updated_at, validated_at)
-            VALUES (?, ?, ?, 'validated', ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-        """, (rncp, job["tp_name"], version, job_id, job["platform_id"], voice_type))
+             source_platform_id, center_account_id, voice_type, voice_updated_at, validated_at)
+            VALUES (?, ?, ?, 'validated', ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        """, (rncp, job["tp_name"], version, job_id, platform_id, center_account_id, voice_type))
         if _cur2.rowcount > 0:
             logger.info(
                 f"📦 Module créé : {job['tp_name']} {version} (job {job_id}) "
@@ -3186,10 +3225,11 @@ def launch_audio(job_id):
                    SET voice_type = ?,
                        voice_updated_at = CURRENT_TIMESTAMP,
                        source_platform_id = COALESCE(source_platform_id, ?),
+                       center_account_id = COALESCE(center_account_id, ?),
                        status = 'validated',
                        validated_at = COALESCE(validated_at, CURRENT_TIMESTAMP)
                    WHERE source_pipeline_job_id = ?""",
-                (voice_type, job["platform_id"], job_id),
+                (voice_type, platform_id, center_account_id, job_id),
             )
             logger.info(
                 f"♻️ Module mis à jour pour job {job_id} : voix={voice_type} "
@@ -5178,20 +5218,33 @@ def _execute_ap_step(job_id: int, step: str, job: dict) -> None:
             conn = get_db_connection()
             cur = conn.cursor()
             rncp = j2.get("rncp_code") or ""
-            cur.execute("SELECT COUNT(*) FROM formation_modules WHERE rncp_code = ?", (rncp,))
+            cur.execute("SELECT center_account_id FROM platform_config WHERE id = ?", (platform_id,))
+            center_row = cur.fetchone()
+            center_account_id = center_row[0] if center_row else None
+            if center_account_id is None:
+                cur.execute(
+                    "SELECT COUNT(*) FROM formation_modules WHERE rncp_code = ? AND center_account_id IS NULL",
+                    (rncp,),
+                )
+            else:
+                cur.execute(
+                    "SELECT COUNT(*) FROM formation_modules WHERE rncp_code = ? AND center_account_id = ?",
+                    (rncp, center_account_id),
+                )
             n = cur.fetchone()[0] + 1
             version = f"{_dt.now(_tz).year}-v{n}"
             cur.execute("""
                 INSERT OR IGNORE INTO formation_modules
                 (rncp_code, tp_name, version, status, source_pipeline_job_id,
-                 source_platform_id, voice_type, voice_updated_at, validated_at)
-                VALUES (?, ?, ?, 'validated', ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-            """, (rncp, j2["tp_name"], version, job_id, platform_id, voice_type))
+                 source_platform_id, center_account_id, voice_type, voice_updated_at, validated_at)
+                VALUES (?, ?, ?, 'validated', ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            """, (rncp, j2["tp_name"], version, job_id, platform_id, center_account_id, voice_type))
             if cur.rowcount == 0:
                 cur.execute(
-                    "UPDATE formation_modules SET voice_type=?, voice_updated_at=CURRENT_TIMESTAMP "
+                    "UPDATE formation_modules SET voice_type=?, voice_updated_at=CURRENT_TIMESTAMP, "
+                    "center_account_id=COALESCE(center_account_id, ?) "
                     "WHERE source_pipeline_job_id=?",
-                    (voice_type, job_id),
+                    (voice_type, center_account_id, job_id),
                 )
             conn.commit()
             conn.close()

@@ -741,6 +741,25 @@ def init_database(_recovered_from_corruption: bool = False):
         if "voice_updated_at" not in fm_cols:
             cursor.execute("ALTER TABLE formation_modules ADD COLUMN voice_updated_at TIMESTAMP")
             logger.info("✅ Colonne voice_updated_at ajoutée à formation_modules")
+        if "center_account_id" not in fm_cols:
+            cursor.execute("ALTER TABLE formation_modules ADD COLUMN center_account_id INTEGER")
+            logger.info("✅ Colonne center_account_id ajoutée à formation_modules")
+        cursor.execute("""
+            UPDATE formation_modules
+            SET center_account_id = (
+                SELECT pc.center_account_id
+                FROM platform_config pc
+                WHERE pc.id = formation_modules.source_platform_id
+            )
+            WHERE center_account_id IS NULL
+              AND source_platform_id IS NOT NULL
+              AND EXISTS (
+                SELECT 1
+                FROM platform_config pc
+                WHERE pc.id = formation_modules.source_platform_id
+                  AND pc.center_account_id IS NOT NULL
+              )
+        """)
 
         # ─── Observabilité pipeline : rapports conformité + événements ───────
         # Les rapports de conformité ne peuvent pas dépendre uniquement du
@@ -817,16 +836,29 @@ def init_database(_recovered_from_corruption: bool = False):
         for j_id, j_rncp, j_tp, j_pid, j_created in jobs_to_migrate:
             # Version = {year}-v{n} où n = modules existants pour ce RNCP + 1
             cursor.execute(
-                "SELECT COUNT(*) FROM formation_modules WHERE rncp_code = ?",
-                (j_rncp or "",),
+                "SELECT center_account_id FROM platform_config WHERE id = ?",
+                (j_pid,),
             )
+            center_row = cursor.fetchone()
+            j_center_account_id = center_row[0] if center_row else None
+            if j_center_account_id is None:
+                cursor.execute(
+                    "SELECT COUNT(*) FROM formation_modules WHERE rncp_code = ? AND center_account_id IS NULL",
+                    (j_rncp or "",),
+                )
+            else:
+                cursor.execute(
+                    "SELECT COUNT(*) FROM formation_modules WHERE rncp_code = ? AND center_account_id = ?",
+                    (j_rncp or "", j_center_account_id),
+                )
             n = cursor.fetchone()[0] + 1
             version = f"{current_year}-v{n}"
             cursor.execute("""
                 INSERT OR IGNORE INTO formation_modules
-                (rncp_code, tp_name, version, status, source_pipeline_job_id, source_platform_id, validated_at)
-                VALUES (?, ?, ?, 'validated', ?, ?, CURRENT_TIMESTAMP)
-            """, (j_rncp, j_tp, version, j_id, j_pid))
+                (rncp_code, tp_name, version, status, source_pipeline_job_id,
+                 source_platform_id, center_account_id, validated_at)
+                VALUES (?, ?, ?, 'validated', ?, ?, ?, CURRENT_TIMESTAMP)
+            """, (j_rncp, j_tp, version, j_id, j_pid, j_center_account_id))
             if cursor.rowcount > 0:
                 logger.info(f"🔄 Module rétro-créé : {j_tp} {version} (job {j_id})")
         if jobs_to_migrate:
