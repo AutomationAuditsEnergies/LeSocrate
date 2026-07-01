@@ -22,6 +22,10 @@ journee (`get_expected_course_folders`, reparation des dossiers orphelins) passe
 elles aussi par le repository pipeline, toujours avec SQLite comme comportement
 par defaut.
 
+Troisieme tranche : l'observabilite pipeline (`content_review_reports` et
+`formation_pipeline_events`) passe par le meme repository, avec conservation de
+la creation lazy des tables en SQLite et schema explicite en Postgres.
+
 ## 2026-06-29
 
 ### feat(hr-dashboard): robots transparents pré-colorés + flip au clic

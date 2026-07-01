@@ -11,6 +11,7 @@ if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
 from repositories import pipeline_repository as repo
+from services import formation_observability_service as obs
 
 
 def _connect(path):
@@ -229,6 +230,37 @@ class PipelineRepositoryTest(unittest.TestCase):
         self.assertEqual(repo.find_orphan_course_folder(7, "Jour 2 — Vente"), orphan_id)
         self.assertTrue(repo.attach_course_folder_to_job(job_id, orphan_id))
         self.assertTrue(repo.course_folder_exists_for_job(job_id, "Jour 2 — Vente"))
+
+    def test_observability_service_uses_pipeline_repository_storage(self):
+        report_id = obs.persist_review_report(
+            99,
+            10,
+            {
+                "generated_via": "api",
+                "summary": {"segments_reviewed": 3},
+                "by_segment": [],
+            },
+        )
+        latest = obs.get_latest_review_report(99, 10)
+
+        self.assertEqual(latest["persisted_report_id"], report_id)
+        self.assertEqual(latest["summary"]["segments_reviewed"], 3)
+        self.assertEqual(latest["generated_via"], "api")
+
+        event_id = obs.log_pipeline_event(
+            99,
+            "review_finished",
+            step="review",
+            folder_id=10,
+            message="ok",
+            data={"segments": 3},
+        )
+        events = obs.list_pipeline_events(99)
+
+        self.assertEqual([event["id"] for event in events], [event_id])
+        self.assertEqual(events[0]["data"], {"segments": 3})
+        self.assertEqual(obs.clear_pipeline_events(99), 1)
+        self.assertEqual(obs.list_pipeline_events(99), [])
 
 
 if __name__ == "__main__":

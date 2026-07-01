@@ -329,6 +329,277 @@ def attach_course_folder_to_job(job_id: int, folder_id: int) -> bool:
         conn.close()
 
 
+def ensure_pipeline_observability_tables() -> None:
+    """Create observability tables for SQLite deployments.
+
+    Postgres deployments rely on postgres_schema.sql so schema management stays
+    explicit and migration-friendly.
+    """
+    if _pipeline_primary_backend() == "postgres":
+        return
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS content_review_reports (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                job_id INTEGER NOT NULL,
+                folder_id INTEGER NOT NULL,
+                source TEXT DEFAULT 'api',
+                generated_via TEXT,
+                summary_json TEXT DEFAULT '{}',
+                report_json TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        cursor.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_content_review_reports_job_folder
+            ON content_review_reports(job_id, folder_id, created_at)
+            """
+        )
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS formation_pipeline_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                job_id INTEGER NOT NULL,
+                folder_id INTEGER,
+                step TEXT,
+                event_type TEXT NOT NULL,
+                status TEXT DEFAULT 'info',
+                message TEXT,
+                model TEXT,
+                duration_ms INTEGER,
+                data_json TEXT DEFAULT '{}',
+                error TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        cursor.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_formation_pipeline_events_job
+            ON formation_pipeline_events(job_id, created_at)
+            """
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def insert_review_report(
+    *,
+    job_id: int,
+    folder_id: int,
+    source: str,
+    generated_via: str | None,
+    summary_json: str,
+    report_json: str,
+) -> int:
+    ensure_pipeline_observability_tables()
+    if _pipeline_primary_backend() == "postgres":
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO content_review_reports
+                    (job_id, folder_id, source, generated_via, summary_json, report_json)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                    RETURNING id
+                    """,
+                    (job_id, folder_id, source, generated_via, summary_json, report_json),
+                )
+                return int(cur.fetchone()["id"])
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            """
+            INSERT INTO content_review_reports
+            (job_id, folder_id, source, generated_via, summary_json, report_json)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (job_id, folder_id, source, generated_via, summary_json, report_json),
+        )
+        report_id = int(cursor.lastrowid)
+        conn.commit()
+        return report_id
+    finally:
+        conn.close()
+
+
+def get_latest_review_report_row(
+    *,
+    job_id: int,
+    folder_id: int,
+    kind: str = "compliance",
+) -> dict[str, Any] | None:
+    ensure_pipeline_observability_tables()
+    ph = _placeholder()
+    source_filter = "source LIKE '%humanization%'" if kind == "humanization" else "source NOT LIKE '%humanization%'"
+    query = f"""
+        SELECT id, source, generated_via, report_json, created_at
+        FROM content_review_reports
+        WHERE job_id = {ph} AND folder_id = {ph} AND {source_filter}
+        ORDER BY created_at DESC, id DESC
+        LIMIT 1
+    """
+    if _pipeline_primary_backend() == "postgres":
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, (job_id, folder_id))
+                row = cur.fetchone()
+                return dict(row) if row else None
+
+    conn = _as_sqlite_row_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(query, (job_id, folder_id))
+        row = cursor.fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def insert_pipeline_event(
+    *,
+    job_id: int,
+    event_type: str,
+    step: str | None,
+    status: str,
+    folder_id: int | None,
+    message: str | None,
+    model: str | None,
+    duration_ms: int | None,
+    data_json: str,
+    error: str | None,
+) -> int:
+    ensure_pipeline_observability_tables()
+    if _pipeline_primary_backend() == "postgres":
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO formation_pipeline_events
+                    (job_id, folder_id, step, event_type, status, message, model,
+                     duration_ms, data_json, error)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    RETURNING id
+                    """,
+                    (
+                        job_id,
+                        folder_id,
+                        step,
+                        event_type,
+                        status,
+                        message,
+                        model,
+                        duration_ms,
+                        data_json,
+                        error,
+                    ),
+                )
+                return int(cur.fetchone()["id"])
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            """
+            INSERT INTO formation_pipeline_events
+            (job_id, folder_id, step, event_type, status, message, model,
+             duration_ms, data_json, error)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                job_id,
+                folder_id,
+                step,
+                event_type,
+                status,
+                message,
+                model,
+                duration_ms,
+                data_json,
+                error,
+            ),
+        )
+        event_id = int(cursor.lastrowid)
+        conn.commit()
+        return event_id
+    finally:
+        conn.close()
+
+
+def list_pipeline_event_rows(job_id: int, *, limit: int = 200) -> list[dict[str, Any]]:
+    ensure_pipeline_observability_tables()
+    limit = max(1, min(int(limit or 200), 500))
+    ph = _placeholder()
+    query = f"""
+        SELECT id, job_id, folder_id, step, event_type, status, message, model,
+               duration_ms, data_json, error, created_at
+        FROM formation_pipeline_events
+        WHERE job_id = {ph}
+        ORDER BY created_at DESC, id DESC
+        LIMIT {ph}
+    """
+    if _pipeline_primary_backend() == "postgres":
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, (job_id, limit))
+                return [dict(row) for row in cur.fetchall()]
+
+    conn = _as_sqlite_row_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(query, (job_id, limit))
+        return [dict(row) for row in cursor.fetchall()]
+    finally:
+        conn.close()
+
+
+def delete_pipeline_events(
+    *,
+    job_id: int,
+    folder_id: int | None = None,
+    include_global_events: bool = True,
+) -> int:
+    ensure_pipeline_observability_tables()
+    ph = _placeholder()
+    if folder_id is None:
+        query = f"DELETE FROM formation_pipeline_events WHERE job_id = {ph}"
+        params = (job_id,)
+    elif include_global_events:
+        query = f"""
+            DELETE FROM formation_pipeline_events
+            WHERE job_id = {ph} AND (folder_id = {ph} OR folder_id IS NULL)
+        """
+        params = (job_id, folder_id)
+    else:
+        query = f"DELETE FROM formation_pipeline_events WHERE job_id = {ph} AND folder_id = {ph}"
+        params = (job_id, folder_id)
+
+    if _pipeline_primary_backend() == "postgres":
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, params)
+                return int(cur.rowcount or 0)
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(query, params)
+        deleted = int(cursor.rowcount or 0)
+        conn.commit()
+        return deleted
+    finally:
+        conn.close()
+
+
 def _upsert_postgres_job(payload: dict[str, Any]) -> None:
     payload = _normalize_job_payload(payload)
     columns = [column for column in PIPELINE_JOB_COLUMNS if column in payload]
