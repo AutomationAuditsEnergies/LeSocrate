@@ -320,6 +320,35 @@ def _platform_class_url(cursor, platform_id, base_url=None):
 
 def _student_recipients(cursor, platform_id):
     recipients = {}
+    try:
+        ensure_course_schedule_tables(cursor)
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS course_reminder_recipients (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                platform_id INTEGER NOT NULL,
+                email TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                UNIQUE(platform_id, email)
+            )
+            """
+        )
+        cursor.execute(
+            """
+            SELECT email
+            FROM course_reminder_recipients
+            WHERE platform_id = ?
+            ORDER BY email COLLATE NOCASE
+            """,
+            (platform_id,),
+        )
+        for (email,) in cursor.fetchall():
+            email = str(email or "").strip().lower()
+            if email:
+                recipients[email] = {"email": email, "nom": "", "prenom": ""}
+    except Exception as exc:
+        logger.warning("⚠️ Lecture course_reminder_recipients impossible: %s", exc)
+
     cursor.execute(
         """
         SELECT email, nom, prenom

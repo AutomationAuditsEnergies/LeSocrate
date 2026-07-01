@@ -42,6 +42,11 @@ export default function HRDashboard() {
   const [platformsError, setPlatformsError] = useState('')
   const [expandedPlatform, setExpandedPlatform] = useState(null)
   const [platformAudios, setPlatformAudios] = useState({})
+  const [studentEmailsByPlatform, setStudentEmailsByPlatform] = useState({})
+  const [studentEmailsLoading, setStudentEmailsLoading] = useState(null)
+  const [studentEmailsSaving, setStudentEmailsSaving] = useState(null)
+  const [studentEmailDrafts, setStudentEmailDrafts] = useState({})
+  const [expandedStudentsPlatform, setExpandedStudentsPlatform] = useState(null)
   const [playingAudio, setPlayingAudio] = useState(null)
   const [pdfUploading, setPdfUploading] = useState(null)
   const [audiosLoading, setAudiosLoading] = useState(null)
@@ -156,6 +161,78 @@ export default function HRDashboard() {
       console.error('Erreur chargement audios:', e)
     } finally {
       setAudiosLoading(null)
+    }
+  }
+
+  const fetchStudentEmails = async (platformId) => {
+    setStudentEmailsLoading(platformId)
+    try {
+      const resp = await apiFetch(`/api/hr/platforms/${platformId}/student-emails`)
+      const data = await resp.json()
+      if (data.success) {
+        setStudentEmailsByPlatform(prev => ({ ...prev, [platformId]: data.recipients || [] }))
+      }
+    } catch (e) {
+      console.error('Erreur chargement emails élèves:', e)
+    } finally {
+      setStudentEmailsLoading(null)
+    }
+  }
+
+  const handleToggleStudentEmails = (platformId) => {
+    setExpandedStudentsPlatform(prev => {
+      const next = prev === platformId ? null : platformId
+      if (next && !studentEmailsByPlatform[platformId]) fetchStudentEmails(platformId)
+      return next
+    })
+  }
+
+  const handleStudentEmailDraftChange = (platformId, value) => {
+    setStudentEmailDrafts(prev => ({ ...prev, [platformId]: value }))
+  }
+
+  const handleAddStudentEmails = async (platformId) => {
+    const draft = studentEmailDrafts[platformId] || ''
+    if (!draft.trim()) return
+    setStudentEmailsSaving(platformId)
+    try {
+      const resp = await apiFetch(`/api/hr/platforms/${platformId}/student-emails`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ emails: draft }),
+      })
+      const data = await resp.json()
+      if (data.success) {
+        setStudentEmailsByPlatform(prev => ({ ...prev, [platformId]: data.recipients || [] }))
+        setStudentEmailDrafts(prev => ({ ...prev, [platformId]: '' }))
+      } else {
+        alert(data.error || 'Impossible d’ajouter les emails')
+      }
+    } catch (e) {
+      console.error('Erreur ajout emails élèves:', e)
+      alert('Impossible d’ajouter les emails')
+    } finally {
+      setStudentEmailsSaving(null)
+    }
+  }
+
+  const handleDeleteStudentEmail = async (platformId, recipientId) => {
+    try {
+      const resp = await apiFetch(`/api/hr/platforms/${platformId}/student-emails/${recipientId}`, {
+        method: 'DELETE',
+      })
+      const data = await resp.json().catch(() => ({}))
+      if (!resp.ok || data.success === false) {
+        alert(data.error || 'Impossible de supprimer cet email')
+        return
+      }
+      setStudentEmailsByPlatform(prev => ({
+        ...prev,
+        [platformId]: (prev[platformId] || []).filter((item) => item.id !== recipientId),
+      }))
+    } catch (e) {
+      console.error('Erreur suppression email élève:', e)
+      alert('Impossible de supprimer cet email')
     }
   }
 
@@ -787,7 +864,16 @@ export default function HRDashboard() {
               audioRef={audioRef}
               colors={colors}
               darkMode={darkMode}
+              studentEmailsByPlatform={studentEmailsByPlatform}
+              expandedStudentsPlatform={expandedStudentsPlatform}
+              studentEmailsLoading={studentEmailsLoading}
+              studentEmailsSaving={studentEmailsSaving}
+              studentEmailDrafts={studentEmailDrafts}
               onExpand={handleExpandPlatform}
+              onToggleStudentEmails={handleToggleStudentEmails}
+              onStudentEmailDraftChange={handleStudentEmailDraftChange}
+              onAddStudentEmails={handleAddStudentEmails}
+              onDeleteStudentEmail={handleDeleteStudentEmail}
               onOpenPdfModal={(platform) => {
                 setSelectedPlatform(platform)
                 setShowPdfModal(true)
@@ -1298,7 +1384,16 @@ function PlatformCardsView({
   audioRef,
   colors,
   darkMode,
+  studentEmailsByPlatform,
+  expandedStudentsPlatform,
+  studentEmailsLoading,
+  studentEmailsSaving,
+  studentEmailDrafts,
   onExpand,
+  onToggleStudentEmails,
+  onStudentEmailDraftChange,
+  onAddStudentEmails,
+  onDeleteStudentEmail,
   onOpenPdfModal,
   onOpenCourseTimeModal,
   onDeleteAudio,
@@ -1351,7 +1446,16 @@ function PlatformCardsView({
             audioRef={audioRef}
             colors={colors}
             darkMode={darkMode}
+            studentEmails={studentEmailsByPlatform[p.id] || []}
+            studentsExpanded={expandedStudentsPlatform === p.id}
+            studentEmailsLoading={studentEmailsLoading === p.id}
+            studentEmailsSaving={studentEmailsSaving === p.id}
+            studentEmailDraft={studentEmailDrafts[p.id] || ''}
             onExpand={() => onExpand(p.id)}
+            onToggleStudentEmails={() => onToggleStudentEmails(p.id)}
+            onStudentEmailDraftChange={(value) => onStudentEmailDraftChange(p.id, value)}
+            onAddStudentEmails={() => onAddStudentEmails(p.id)}
+            onDeleteStudentEmail={(recipientId) => onDeleteStudentEmail(p.id, recipientId)}
             onOpenPdfModal={() => onOpenPdfModal(p)}
             onOpenCourseTimeModal={() => onOpenCourseTimeModal(p)}
             onDeleteAudio={(fn) => onDeleteAudio(p.id, fn)}
@@ -2377,7 +2481,10 @@ function AudioCard({ title, icon, bgColor, audios, iconColor, buttonColor }) {
 // déménagés dans CoursFoldersModal (la vue où l'admin voit les audios).
 function PlatformCard({
   platform: p, expanded, audios, audiosLoading, playingAudio, pdfUploading,
-  audioRef, colors, darkMode, onExpand, onOpenPdfModal, onOpenCourseTimeModal, onDeleteAudio, onPlayAudio, onPdfUpload, onDeletePdf, onOpenCoursFolders, onDeletePlatform,
+  audioRef, colors, darkMode, studentEmails = [], studentsExpanded = false, studentEmailsLoading = false,
+  studentEmailsSaving = false, studentEmailDraft = '', onExpand, onToggleStudentEmails,
+  onStudentEmailDraftChange, onAddStudentEmails, onDeleteStudentEmail, onOpenPdfModal, onOpenCourseTimeModal,
+  onDeleteAudio, onPlayAudio, onPdfUpload, onDeletePdf, onOpenCoursFolders, onDeletePlatform,
 }) {
   const pdfInputId = `pdf-input-${p.id}`
   const platformThumbnail = getPlatformThumbnail(p)
@@ -2718,6 +2825,33 @@ function PlatformCard({
               <span>Cours</span>
             </button>
           )}
+
+          {/* Élèves — emails utilisés pour les rappels automatiques */}
+          {p.active && (
+            <button
+              onClick={onToggleStudentEmails}
+              className="group flex items-center gap-2.5 rounded-lg px-3 py-2.5 text-sm font-medium tracking-tight transition-colors hover:bg-black/5 dark:hover:bg-white/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40"
+              style={
+                studentsExpanded
+                  ? {
+                      backgroundColor: 'rgba(139, 92, 246, 0.10)',
+                      border: '1px solid rgba(139, 92, 246, 0.35)',
+                      color: darkMode ? '#c4b5fd' : '#7c3aed',
+                    }
+                  : {
+                      border: `1px solid ${colors.border}`,
+                      color: colors.textSecondary,
+                    }
+              }
+            >
+              <Icon
+                name="group"
+                className="text-lg"
+                style={{ color: studentsExpanded ? (darkMode ? '#c4b5fd' : '#7c3aed') : colors.textMuted }}
+              />
+              <span>Élèves</span>
+            </button>
+          )}
         </div>
 
         {/* Audio list — dépliée pleine largeur sous la grille quand la tuile Audios est active */}
@@ -2785,6 +2919,84 @@ function PlatformCard({
                   )}
                 </div>
               ))
+            )}
+          </div>
+        )}
+
+        {/* Emails élèves — liste de destinataires des rappels de cours */}
+        {studentsExpanded && p.active && (
+          <div
+            className="mb-3 rounded-xl p-3"
+            style={{ backgroundColor: colors.innerBg, border: `1px solid ${colors.border}` }}
+          >
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <span className="text-sm font-semibold" style={{ color: colors.text }}>
+                Emails élèves
+              </span>
+              <span className="text-xs tabular-nums" style={{ color: colors.textMuted }}>
+                {studentEmails.length}
+              </span>
+            </div>
+
+            <textarea
+              value={studentEmailDraft}
+              onChange={(e) => onStudentEmailDraftChange(e.target.value)}
+              rows={3}
+              placeholder="prenom@exemple.com, autre@exemple.com"
+              className="mb-2 w-full resize-none rounded-lg px-3 py-2 text-sm outline-none transition-shadow focus:ring-2 focus:ring-violet-500/30"
+              style={{
+                backgroundColor: colors.cardBg,
+                border: `1px solid ${colors.border}`,
+                color: colors.text,
+              }}
+            />
+            <button
+              type="button"
+              onClick={onAddStudentEmails}
+              disabled={!studentEmailDraft.trim() || studentEmailsSaving}
+              className="mb-3 inline-flex items-center gap-2 rounded-lg px-3 py-2 text-xs font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+              style={{ backgroundColor: '#8B5CF6', color: 'white' }}
+            >
+              {studentEmailsSaving ? (
+                <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-white/40 border-t-white" />
+              ) : (
+                <Icon name="add" className="text-sm" />
+              )}
+              Ajouter
+            </button>
+
+            {studentEmailsLoading ? (
+              <div className="flex items-center justify-center py-4">
+                <div className="h-5 w-5 animate-spin rounded-full border-2" style={{ borderColor: colors.border, borderTopColor: '#8B5CF6' }} />
+              </div>
+            ) : studentEmails.length === 0 ? (
+              <p className="py-3 text-xs" style={{ color: colors.textMuted }}>
+                Aucun email élève ajouté.
+              </p>
+            ) : (
+              <div className="max-h-36 space-y-1 overflow-y-auto pr-1">
+                {studentEmails.map((recipient) => (
+                  <div
+                    key={recipient.id}
+                    className="flex items-center gap-2 rounded-lg px-2 py-1.5"
+                    style={{ backgroundColor: colors.cardBg, border: `1px solid ${colors.border}` }}
+                  >
+                    <Icon name="mail" className="text-sm" style={{ color: colors.textMuted }} />
+                    <span className="min-w-0 flex-1 truncate text-xs" style={{ color: colors.textSecondary }} title={recipient.email}>
+                      {recipient.email}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => onDeleteStudentEmail(recipient.id)}
+                      className="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-md transition-colors hover:bg-rose-50"
+                      style={{ color: colors.textMuted }}
+                      title="Supprimer l'email"
+                    >
+                      <Icon name="close" className="text-sm" />
+                    </button>
+                  </div>
+                ))}
+              </div>
             )}
           </div>
         )}

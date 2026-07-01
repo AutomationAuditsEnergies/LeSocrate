@@ -141,6 +141,22 @@ def init_database(_recovered_from_corruption: bool = False):
         )
         logger.info("✅ Tables course_schedule_config/course_sessions créées/vérifiées")
 
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS course_reminder_recipients (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                platform_id INTEGER NOT NULL,
+                email TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                UNIQUE(platform_id, email)
+            )
+            """
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_course_reminder_recipients_platform ON course_reminder_recipients(platform_id)"
+        )
+        logger.info("✅ Table course_reminder_recipients créée/vérifiée")
+
         # Insérer une heure par défaut si la table est vide
         cursor.execute("SELECT COUNT(*) FROM cours_config")
         count = cursor.fetchone()[0]

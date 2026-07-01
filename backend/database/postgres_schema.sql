@@ -73,6 +73,14 @@ CREATE TABLE IF NOT EXISTS course_sessions (
     UNIQUE(platform_id, session_index)
 );
 
+CREATE TABLE IF NOT EXISTS course_reminder_recipients (
+    id BIGSERIAL PRIMARY KEY,
+    platform_id BIGINT NOT NULL REFERENCES platform_config(id) ON DELETE CASCADE,
+    email TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(platform_id, email)
+);
+
 CREATE TABLE IF NOT EXISTS logs (
     id BIGSERIAL PRIMARY KEY,
     platform_id BIGINT REFERENCES platform_config(id) ON DELETE SET NULL,
@@ -135,6 +143,7 @@ CREATE INDEX IF NOT EXISTS idx_platform_config_center ON platform_config(center_
 CREATE INDEX IF NOT EXISTS idx_cours_config_platform ON cours_config(platform_id);
 CREATE INDEX IF NOT EXISTS idx_course_sessions_platform_scheduled ON course_sessions(platform_id, scheduled_at);
 CREATE INDEX IF NOT EXISTS idx_course_sessions_status_scheduled ON course_sessions(status, scheduled_at);
+CREATE INDEX IF NOT EXISTS idx_course_reminder_recipients_platform ON course_reminder_recipients(platform_id);
 CREATE INDEX IF NOT EXISTS idx_logs_platform_arrivee ON logs(platform_id, arrivee);
 CREATE INDEX IF NOT EXISTS idx_video_visits_platform ON video_visits(platform_id);
 CREATE INDEX IF NOT EXISTS idx_video_visits_log ON video_visits(log_id);

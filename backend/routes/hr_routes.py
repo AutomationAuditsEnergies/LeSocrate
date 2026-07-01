@@ -1216,6 +1216,8 @@ def create_hr_blueprint(socketio):
             cursor.execute("DELETE FROM cours_config WHERE platform_id = ?", (platform_id,))
             cursor.execute("DELETE FROM course_sessions WHERE platform_id = ?", (platform_id,))
             cursor.execute("DELETE FROM course_schedule_config WHERE platform_id = ?", (platform_id,))
+            _ensure_course_reminder_recipients(cursor)
+            cursor.execute("DELETE FROM course_reminder_recipients WHERE platform_id = ?", (platform_id,))
 
             # 4a. Modules "fait main" liés (la plateforme EST le module) → DELETE
             cursor.execute(
@@ -1969,6 +1971,130 @@ def create_hr_blueprint(socketio):
             if result is None:
                 return jsonify({"success": False, "error": "Plateforme non configurée"}), 400
             return jsonify(result), 200
+
+    def _ensure_course_reminder_recipients(cursor):
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS course_reminder_recipients (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                platform_id INTEGER NOT NULL,
+                email TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                UNIQUE(platform_id, email)
+            )
+            """
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_course_reminder_recipients_platform ON course_reminder_recipients(platform_id)"
+        )
+
+    @hr_bp.route("/api/hr/platforms/<int:platform_id>/student-emails", methods=["GET"])
+    def get_platform_student_emails(platform_id):
+        denied = _require_admin()
+        if denied:
+            return denied
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            _ensure_course_reminder_recipients(cursor)
+            cursor.execute(
+                """
+                SELECT id, email, created_at
+                FROM course_reminder_recipients
+                WHERE platform_id = ?
+                ORDER BY email COLLATE NOCASE
+                """,
+                (platform_id,),
+            )
+            recipients = [
+                {"id": row[0], "email": row[1], "created_at": row[2]}
+                for row in cursor.fetchall()
+            ]
+            conn.close()
+            return jsonify({"success": True, "recipients": recipients}), 200
+        except Exception as e:
+            logger.error(f"❌ Erreur get student emails P{platform_id}: {e}")
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    @hr_bp.route("/api/hr/platforms/<int:platform_id>/student-emails", methods=["POST"])
+    def add_platform_student_emails(platform_id):
+        denied = _require_admin()
+        if denied:
+            return denied
+        data = request.get_json(silent=True) or {}
+        raw_emails = data.get("emails")
+        if raw_emails is None:
+            raw_emails = data.get("email", "")
+        if isinstance(raw_emails, str):
+            candidates = raw_emails.replace(";", ",").replace("\n", ",").split(",")
+        else:
+            candidates = raw_emails or []
+        emails = []
+        for item in candidates:
+            email = str(item or "").strip().lower()
+            if not email:
+                continue
+            if "@" not in email or "." not in email.rsplit("@", 1)[-1]:
+                return jsonify({"success": False, "error": f"Email invalide: {email}"}), 400
+            if email not in emails:
+                emails.append(email)
+        if not emails:
+            return jsonify({"success": False, "error": "Ajoute au moins un email"}), 400
+        try:
+            now = datetime.now(FRANCE_TZ).strftime("%Y-%m-%d %H:%M:%S")
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            _ensure_course_reminder_recipients(cursor)
+            for email in emails:
+                cursor.execute(
+                    """
+                    INSERT OR IGNORE INTO course_reminder_recipients (platform_id, email, created_at)
+                    VALUES (?, ?, ?)
+                    """,
+                    (platform_id, email, now),
+                )
+            conn.commit()
+            cursor.execute(
+                """
+                SELECT id, email, created_at
+                FROM course_reminder_recipients
+                WHERE platform_id = ?
+                ORDER BY email COLLATE NOCASE
+                """,
+                (platform_id,),
+            )
+            recipients = [
+                {"id": row[0], "email": row[1], "created_at": row[2]}
+                for row in cursor.fetchall()
+            ]
+            conn.close()
+            return jsonify({"success": True, "recipients": recipients}), 201
+        except Exception as e:
+            logger.error(f"❌ Erreur add student emails P{platform_id}: {e}")
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    @hr_bp.route("/api/hr/platforms/<int:platform_id>/student-emails/<int:recipient_id>", methods=["DELETE"])
+    def delete_platform_student_email(platform_id, recipient_id):
+        denied = _require_admin()
+        if denied:
+            return denied
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            _ensure_course_reminder_recipients(cursor)
+            cursor.execute(
+                "DELETE FROM course_reminder_recipients WHERE id = ? AND platform_id = ?",
+                (recipient_id, platform_id),
+            )
+            changed = cursor.rowcount
+            conn.commit()
+            conn.close()
+            if not changed:
+                return jsonify({"success": False, "error": "Email introuvable"}), 404
+            return jsonify({"success": True}), 200
+        except Exception as e:
+            logger.error(f"❌ Erreur delete student email P{platform_id}: {e}")
+            return jsonify({"success": False, "error": str(e)}), 500
 
     # ─── POST /api/hr/platforms/<id>/config-cours ─────────────────────────
     @hr_bp.route("/api/hr/platforms/<int:platform_id>/config-cours", methods=["POST"])
