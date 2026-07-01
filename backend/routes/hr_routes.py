@@ -25,6 +25,7 @@ from services.course_schedule_service import (
     update_course_schedule_start_time,
 )
 from services.export_service import generate_attendance_excel_export
+from services.scheduled_audio_service import process_due_audio_generations
 from utils.logger import get_logger
 from utils.slug import slugify, unique_slug
 import state
@@ -2613,7 +2614,8 @@ def create_hr_blueprint(socketio):
           weekday : 0=lundi, 1=mardi, 2=mercredi, 3=jeudi, 4=vendredi, 5=samedi, 6=dimanche
 
         Sans corps `schedule`, utilise le planning persistant créé par le flow
-        "Nouveau professeur IA" et pousse la prochaine séance dans cours_config.
+        "Nouveau professeur IA", pousse la prochaine séance dans cours_config,
+        puis lance l'audio uniquement pour les séances dues dans la fenêtre 24h.
         """
         api_key = request.headers.get("X-Platform-Key", "")
         expected_key = os.environ.get("PLATFORM_API_KEY", "")
@@ -2631,8 +2633,17 @@ def create_hr_blueprint(socketio):
         if "schedule" not in data:
             try:
                 results = run_scheduler_tick(data.get("platform_ids"))
-                if results:
-                    return jsonify({"success": True, "mode": "course_sessions", "results": results}), 200
+                audio_results = process_due_audio_generations(
+                    data.get("platform_ids"),
+                    dry_run=bool(data.get("dry_run_audio", False)),
+                    horizon_hours=data.get("audio_horizon_hours"),
+                )
+                return jsonify({
+                    "success": True,
+                    "mode": "course_sessions",
+                    "results": results,
+                    "audio_results": audio_results,
+                }), 200
             except Exception as e:
                 logger.error(f"❌ Auto-schedule course_sessions : {e}")
                 return jsonify({"success": False, "error": str(e)}), 500

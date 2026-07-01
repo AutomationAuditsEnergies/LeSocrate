@@ -2736,32 +2736,32 @@ def _folder_text_reviews_ready(job_id: int, folder_id: int) -> tuple[bool, dict]
     return total > 0 and detail["reviewed_current"] >= total, detail
 
 
-@formation_bp.route("/api/formation/<int:job_id>/content/<int:folder_id>/generate-audio", methods=["POST"])
-def generate_folder_audio(job_id, folder_id):
-    """Génère l'audio d'une seule journée/semaine, après pipeline texte complète."""
-    if not _require_admin():
-        return jsonify({"error": "Non autorisé"}), 403
+def start_folder_audio_generation(job_id, folder_id, payload=None, *, schedule_session_id=None, trigger_source="manual"):
+    """Lance l'audio d'une seule journée.
 
+    Utilisé par le bouton manuel d'une journée et par le timer 24h avant cours.
+    Retourne (payload, http_status) pour rester réutilisable hors route Flask.
+    """
     job = get_job(job_id)
     if not job:
-        return jsonify({"error": "Job introuvable"}), 404
+        return {"error": "Job introuvable"}, 404
 
     try:
         folder_id, folder_resolution = _resolve_continue_after_text_folder(job_id, int(folder_id))
     except ValueError as e:
-        return jsonify({"error": str(e)}), 400
+        return {"error": str(e)}, 400
 
-    data = request.get_json(silent=True) or {}
+    data = payload or {}
     reviews_ready, review_detail = _folder_text_reviews_ready(job_id, folder_id)
     if not reviews_ready and not bool(data.get("allow_unreviewed")):
-        return jsonify({
+        return {
             "error": "Texte pas prêt pour l'audio : la conformité locale par morceau doit être terminée.",
             "review_detail": review_detail,
-        }), 400
+        }, 400
 
     tts_mode = (data.get("tts_mode") or job.get("auto_pilot_tts_mode") or "gtts").lower()
     if tts_mode not in ("fish_audio", "gtts", "mock"):
-        return jsonify({"error": "tts_mode invalide (fish_audio | gtts | mock)"}), 400
+        return {"error": "tts_mode invalide (fish_audio | gtts | mock)"}, 400
     mock = tts_mode == "mock"
     basic_tts = tts_mode == "gtts"
     voice_type = "mock" if mock else ("gtts" if basic_tts else "fish_audio")
@@ -2775,12 +2775,49 @@ def generate_folder_audio(job_id, folder_id):
     from services.formation_pipeline_service import get_expected_course_folders
     folder_ids = get_expected_course_folders(job_id).get("folder_ids") or []
     if folder_id not in folder_ids:
-        return jsonify({"error": "Folder hors journées attendues"}), 400
+        return {"error": "Folder hors journées attendues"}, 400
     idx = folder_ids.index(folder_id)
     next_folder_id = folder_ids[idx + 1] if idx + 1 < len(folder_ids) else None
 
     import eventlet
+    from datetime import datetime
+    from config import FRANCE_TZ
     from services.content_generation_service import generate_audio_from_script
+
+    if schedule_session_id:
+        _conn = None
+        try:
+            from database.db import get_db_connection as _get_conn
+            now_str = datetime.now(FRANCE_TZ).strftime("%Y-%m-%d %H:%M:%S")
+            _conn = _get_conn()
+            _cur = _conn.cursor()
+            _cur.execute(
+                """
+                UPDATE course_sessions
+                SET audio_generation_status = 'running',
+                    audio_generation_started_at = COALESCE(audio_generation_started_at, ?),
+                    audio_generation_error = NULL,
+                    audio_job_id = ?,
+                    audio_folder_id = ?,
+                    updated_at = ?
+                WHERE id = ?
+                  AND audio_generation_started_at IS NULL
+                """,
+                (now_str, job_id, folder_id, now_str, schedule_session_id),
+            )
+            if _cur.rowcount == 0:
+                _conn.close()
+                return {"error": "Audio déjà lancé pour cette séance"}, 409
+            _conn.commit()
+            _conn.close()
+        except Exception as exc:
+            try:
+                if _conn:
+                    _conn.close()
+            except Exception:
+                pass
+            logger.warning("⚠️ Impossible de marquer la séance audio running", exc_info=True)
+            return {"error": f"Impossible de verrouiller la séance audio: {str(exc)[:200]}"}, 500
 
     def _run_one():
         started_at = time.time()
@@ -2801,6 +2838,8 @@ def generate_folder_audio(job_id, folder_id):
                     "sync_slides": sync_slides,
                     "auto_generate_slides": auto_generate_slides,
                     "single_folder": True,
+                    "trigger_source": trigger_source,
+                    "schedule_session_id": schedule_session_id,
                 },
             )
             generate_audio_from_script(
@@ -2838,8 +2877,31 @@ def generate_folder_audio(job_id, folder_id):
                     "finalized": False,
                     "finalize_result": finalize_result,
                     "single_folder": True,
+                    "trigger_source": trigger_source,
+                    "schedule_session_id": schedule_session_id,
                 },
             )
+            if schedule_session_id:
+                try:
+                    from database.db import get_db_connection as _get_conn
+                    now_str = datetime.now(FRANCE_TZ).strftime("%Y-%m-%d %H:%M:%S")
+                    _conn = _get_conn()
+                    _cur = _conn.cursor()
+                    _cur.execute(
+                        """
+                        UPDATE course_sessions
+                        SET audio_generation_status = 'completed',
+                            audio_generation_completed_at = ?,
+                            audio_generation_error = NULL,
+                            updated_at = ?
+                        WHERE id = ?
+                        """,
+                        (now_str, now_str, schedule_session_id),
+                    )
+                    _conn.commit()
+                    _conn.close()
+                except Exception:
+                    logger.warning("⚠️ Impossible de marquer la séance audio completed", exc_info=True)
         except Exception as e:
             update_job(job_id, status="text_ready", error_message=f"audio folder {folder_id}: {str(e)[:500]}")
             try:
@@ -2853,15 +2915,39 @@ def generate_folder_audio(job_id, folder_id):
                     model=str(model) if model else None,
                     duration_ms=int((time.time() - started_at) * 1000),
                     message="Synthèse audio journée échouée",
-                    data={"voice_type": voice_type},
+                    data={
+                        "voice_type": voice_type,
+                        "trigger_source": trigger_source,
+                        "schedule_session_id": schedule_session_id,
+                    },
                     error=str(e)[:500],
                 )
             except Exception:
                 pass
+            if schedule_session_id:
+                try:
+                    from database.db import get_db_connection as _get_conn
+                    now_str = datetime.now(FRANCE_TZ).strftime("%Y-%m-%d %H:%M:%S")
+                    _conn = _get_conn()
+                    _cur = _conn.cursor()
+                    _cur.execute(
+                        """
+                        UPDATE course_sessions
+                        SET audio_generation_status = 'error',
+                            audio_generation_error = ?,
+                            updated_at = ?
+                        WHERE id = ?
+                        """,
+                        (str(e)[:500], now_str, schedule_session_id),
+                    )
+                    _conn.commit()
+                    _conn.close()
+                except Exception:
+                    logger.warning("⚠️ Impossible de marquer la séance audio error", exc_info=True)
             logger.error("❌ Audio folder job=%s folder=%s : %s", job_id, folder_id, e, exc_info=True)
 
     eventlet.spawn(_run_one)
-    return jsonify({
+    return {
         "message": "Synthèse audio lancée pour cette journée",
         "job_id": job_id,
         "folder_id": folder_id,
@@ -2871,7 +2957,23 @@ def generate_folder_audio(job_id, folder_id):
         "tts_mode": tts_mode,
         "voice_type": voice_type,
         "status": "audio_running",
-    }), 202
+        "schedule_session_id": schedule_session_id,
+        "trigger_source": trigger_source,
+    }, 202
+
+
+@formation_bp.route("/api/formation/<int:job_id>/content/<int:folder_id>/generate-audio", methods=["POST"])
+def generate_folder_audio(job_id, folder_id):
+    """Génère l'audio d'une seule journée/semaine, après pipeline texte complète."""
+    if not _require_admin():
+        return jsonify({"error": "Non autorisé"}), 403
+    payload, status = start_folder_audio_generation(
+        job_id,
+        folder_id,
+        request.get_json(silent=True) or {},
+        trigger_source="manual",
+    )
+    return jsonify(payload), status
 
 
 @formation_bp.route("/api/formation/<int:job_id>/launch-audio", methods=["POST"])

@@ -68,6 +68,12 @@ CREATE TABLE IF NOT EXISTS course_sessions (
     completed_at TIMESTAMPTZ,
     reminder_previous_evening_sent_at TIMESTAMPTZ,
     reminder_5min_sent_at TIMESTAMPTZ,
+    audio_generation_status TEXT NOT NULL DEFAULT 'pending',
+    audio_generation_started_at TIMESTAMPTZ,
+    audio_generation_completed_at TIMESTAMPTZ,
+    audio_generation_error TEXT,
+    audio_job_id BIGINT,
+    audio_folder_id BIGINT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE(platform_id, session_index)

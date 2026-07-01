@@ -127,6 +127,12 @@ def init_database(_recovered_from_corruption: bool = False):
                 completed_at TEXT,
                 reminder_previous_evening_sent_at TEXT,
                 reminder_5min_sent_at TEXT,
+                audio_generation_status TEXT DEFAULT 'pending',
+                audio_generation_started_at TEXT,
+                audio_generation_completed_at TEXT,
+                audio_generation_error TEXT,
+                audio_job_id INTEGER,
+                audio_folder_id INTEGER,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 UNIQUE(platform_id, session_index)
@@ -139,6 +145,20 @@ def init_database(_recovered_from_corruption: bool = False):
         cursor.execute(
             "CREATE INDEX IF NOT EXISTS idx_course_sessions_status_scheduled ON course_sessions(status, scheduled_at)"
         )
+        cursor.execute("PRAGMA table_info(course_sessions)")
+        course_session_columns = [col[1] for col in cursor.fetchall()]
+        _course_session_audio_cols = {
+            "audio_generation_status": "TEXT DEFAULT 'pending'",
+            "audio_generation_started_at": "TEXT",
+            "audio_generation_completed_at": "TEXT",
+            "audio_generation_error": "TEXT",
+            "audio_job_id": "INTEGER",
+            "audio_folder_id": "INTEGER",
+        }
+        for col, col_type in _course_session_audio_cols.items():
+            if col not in course_session_columns:
+                cursor.execute(f"ALTER TABLE course_sessions ADD COLUMN {col} {col_type}")
+                logger.info(f"✅ Colonne {col} ajoutée à course_sessions")
         logger.info("✅ Tables course_schedule_config/course_sessions créées/vérifiées")
 
         cursor.execute(

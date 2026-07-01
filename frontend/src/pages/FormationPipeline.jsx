@@ -7784,7 +7784,7 @@ export default function FormationPipeline() {
                       onClick={() => handleLaunchTTS()}
                       disabled={launchingTTS || actionLoading || !job.daily_programs_validated}
                     >
-                      <Icon name="edit_note" /> {launchingTTS ? 'Lancement…' : `Générer — ${selectedPipelineModel} (${job.nb_days} journées)`}
+                      <Icon name="edit_note" /> {launchingTTS ? 'Lancement…' : `Générer les textes — ${selectedPipelineModel} (${job.nb_days} journées)`}
                     </button>
                     <button
                       style={S.btn('neutral')}
