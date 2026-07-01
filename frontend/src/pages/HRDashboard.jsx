@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo } from 'react'
-import { apiUrl } from '../api'
+import { apiFetch } from '../api'
 import CoursFoldersModal from '../components/CoursFolders'
 import SlideToConfirm, { BackupPipeline } from '../components/SlideToConfirm'
 
@@ -106,8 +106,7 @@ export default function HRDashboard() {
     const timeoutId = window.setTimeout(() => controller.abort(), 15000)
     try {
       setPlatformsError('')
-      const resp = await fetch(apiUrl('/api/hr/platforms?include_blob_stats=0'), {
-        credentials: 'include',
+      const resp = await apiFetch('/api/hr/platforms?include_blob_stats=0', {
         signal: controller.signal,
       })
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
@@ -145,7 +144,7 @@ export default function HRDashboard() {
   const fetchAudios = async (platformId) => {
     setAudiosLoading(platformId)
     try {
-      const resp = await fetch(apiUrl(`/api/hr/platforms/${platformId}/audios`), { credentials: 'include' })
+      const resp = await apiFetch(`/api/hr/platforms/${platformId}/audios`)
       const data = await resp.json()
       if (data.success) {
         setPlatformAudios(prev => ({ ...prev, [platformId]: data.audios }))
@@ -179,8 +178,8 @@ export default function HRDashboard() {
   // ─── Actions ─────────────────────────────────────────────────────────
   const handleLock = async (platformId) => {
     try {
-      const resp = await fetch(apiUrl(`/api/hr/platforms/${platformId}/toggle-lock`), {
-        method: 'POST', credentials: 'include',
+      const resp = await apiFetch(`/api/hr/platforms/${platformId}/toggle-lock`, {
+        method: 'POST',
       })
       const data = await resp.json()
       if (data.success) fetchPlatforms()
@@ -191,8 +190,8 @@ export default function HRDashboard() {
 
   const handleBackupAndUnlock = async (platformId) => {
     try {
-      const resp = await fetch(apiUrl(`/api/hr/platforms/${platformId}/backup-and-unlock`), {
-        method: 'POST', credentials: 'include',
+      const resp = await apiFetch(`/api/hr/platforms/${platformId}/backup-and-unlock`, {
+        method: 'POST',
       })
       const data = await resp.json()
       if (!data.success) {
@@ -210,7 +209,7 @@ export default function HRDashboard() {
     if (backupPollingRef.current[platformId]) clearInterval(backupPollingRef.current[platformId])
     backupPollingRef.current[platformId] = setInterval(async () => {
       try {
-        const resp = await fetch(apiUrl(`/api/hr/platforms/${platformId}/backup-status`), { credentials: 'include' })
+        const resp = await apiFetch(`/api/hr/platforms/${platformId}/backup-status`)
         const data = await resp.json()
         if (!data.success) return
         setBackupJobs(prev => ({ ...prev, [platformId]: data }))
@@ -239,8 +238,8 @@ export default function HRDashboard() {
 
     try {
       if (deleteConfirm.type === 'audio') {
-        const resp = await fetch(apiUrl(`/api/hr/platforms/${deleteConfirm.platformId}/audios/${encodeURIComponent(deleteConfirm.filename)}`), {
-          method: 'DELETE', credentials: 'include',
+        const resp = await apiFetch(`/api/hr/platforms/${deleteConfirm.platformId}/audios/${encodeURIComponent(deleteConfirm.filename)}`, {
+          method: 'DELETE',
         })
         const data = await resp.json()
         if (data.success) {
@@ -249,8 +248,8 @@ export default function HRDashboard() {
           setDeleteConfirm(null)
         }
       } else if (deleteConfirm.type === 'pdf') {
-        const resp = await fetch(apiUrl(`/api/hr/platforms/${deleteConfirm.platformId}/pdf`), {
-          method: 'DELETE', credentials: 'include',
+        const resp = await apiFetch(`/api/hr/platforms/${deleteConfirm.platformId}/pdf`, {
+          method: 'DELETE',
         })
         const data = await resp.json()
         if (data.success) {
@@ -259,8 +258,8 @@ export default function HRDashboard() {
         }
       } else if (deleteConfirm.type === 'module') {
         if (deleteConfirmTypedName !== deleteConfirm.confirmKey) return
-        const resp = await fetch(apiUrl(`/api/hr/formation-modules/${deleteConfirm.moduleId}`), {
-          method: 'DELETE', credentials: 'include',
+        const resp = await apiFetch(`/api/hr/formation-modules/${deleteConfirm.moduleId}`, {
+          method: 'DELETE',
         })
         const data = await resp.json()
         if (data.success) {
@@ -272,8 +271,8 @@ export default function HRDashboard() {
         }
       } else if (deleteConfirm.type === 'platform') {
         if (deleteConfirmTypedName !== deleteConfirm.platformName) return
-        const resp = await fetch(apiUrl(`/api/hr/platforms/${deleteConfirm.platformId}`), {
-          method: 'DELETE', credentials: 'include',
+        const resp = await apiFetch(`/api/hr/platforms/${deleteConfirm.platformId}`, {
+          method: 'DELETE',
         })
         const data = await resp.json()
         if (data.success) {
@@ -336,8 +335,9 @@ export default function HRDashboard() {
       const formData = new FormData()
       formData.append('file', file)
 
-      const resp = await fetch(apiUrl(`/api/hr/platforms/${platformId}/upload-pdf-rag`), {
-        method: 'POST', credentials: 'include', body: formData,
+      const resp = await apiFetch(`/api/hr/platforms/${platformId}/upload-pdf-rag`, {
+        method: 'POST',
+        body: formData,
       })
       const data = await resp.json()
       if (data.success) fetchPlatforms(platformId)
@@ -350,9 +350,8 @@ export default function HRDashboard() {
 
   const handleSetCourseTime = async (dateCours, heureCours) => {
     try {
-      const resp = await fetch(apiUrl(`/api/hr/platforms/${courseTimePlatformId}/config-cours`), {
+      const resp = await apiFetch(`/api/hr/platforms/${courseTimePlatformId}/config-cours`, {
         method: 'POST',
-        credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ date_cours: dateCours, heure_cours: heureCours }),
       })
@@ -376,7 +375,7 @@ export default function HRDashboard() {
 
   const fetchModules = async () => {
     try {
-      const resp = await fetch(apiUrl('/api/hr/formation-modules'), { credentials: 'include' })
+      const resp = await apiFetch('/api/hr/formation-modules')
       const data = await resp.json()
       if (data.success) setModules(data.modules || [])
     } catch (e) {
@@ -477,9 +476,8 @@ export default function HRDashboard() {
         fd.append('auto_pilot', 'true')
         testDocs.forEach((f) => fd.append('docs', f))
 
-        const resp = await fetch(apiUrl('/api/formation/init-test'), {
+        const resp = await apiFetch('/api/formation/init-test', {
           method: 'POST',
-          credentials: 'include',
           body: fd,
         })
         const data = await resp.json()
@@ -524,10 +522,9 @@ export default function HRDashboard() {
 
     setCreating(true)
     try {
-      const resp = await fetch(apiUrl('/api/hr/platforms'), {
+      const resp = await apiFetch('/api/hr/platforms', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
         body: JSON.stringify(body),
       })
       const data = await resp.json()
@@ -537,12 +534,11 @@ export default function HRDashboard() {
         // déclenche l'enchaînement automatique avant de fermer la modale.
         if (pipelineJobId && formationMode === 'new' && autoPilot) {
           try {
-            const autoResp = await fetch(
-              apiUrl(`/api/formation/${pipelineJobId}/run-auto`),
+            const autoResp = await apiFetch(
+              `/api/formation/${pipelineJobId}/run-auto`,
               {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                credentials: 'include',
                 body: JSON.stringify({
                   tts_mode: autoPilotTts,
                   use_claude_code: autoPilotMode === 'claude_code',
@@ -777,7 +773,7 @@ export default function HRDashboard() {
               onOpenCourseTimeModal={async (platform) => {
                 setCourseTimePlatformId(platform.id)
                 try {
-                  const resp = await fetch(apiUrl(`/api/hr/platforms/${platform.id}/course-time`), { credentials: 'include' })
+                  const resp = await apiFetch(`/api/hr/platforms/${platform.id}/course-time`)
                   const data = await resp.json()
                   if (data.success) setCurrentCourseTime(data)
                   else setCurrentCourseTime(null)
@@ -1954,7 +1950,7 @@ function AudiosModal({
     setSelectedFillFolderId('')
     setLoadingFolders(true)
     try {
-      const resp = await fetch(apiUrl(`/api/hr/platforms/${platformId}/cours-folders`), { credentials: 'include' })
+      const resp = await apiFetch(`/api/hr/platforms/${platformId}/cours-folders`)
       const data = await resp.json()
       if (data.success) setFolders(data.folders)
     } catch (e) {
@@ -1969,10 +1965,9 @@ function AudiosModal({
     setFilling(true)
     setFillResult(null)
     try {
-      const resp = await fetch(apiUrl(`/api/hr/platforms/${platformId}/fill-from-folder`), {
+      const resp = await apiFetch(`/api/hr/platforms/${platformId}/fill-from-folder`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
         body: JSON.stringify({ folder_id: parseInt(selectedFillFolderId) }),
       })
       const data = await resp.json()
