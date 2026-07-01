@@ -1,5 +1,5 @@
 import { Component, lazy, Suspense, useState, useEffect } from 'react'
-import { BrowserRouter, Route, Routes } from 'react-router-dom'
+import { BrowserRouter, Route, Routes, useNavigate } from 'react-router-dom'
 import { apiUrl } from './api'
 import Index from './pages/Index.jsx'
 import ProtectedAdminRoute from './components/ProtectedAdminRoute.jsx'
@@ -228,6 +228,25 @@ function CenterDashboardRoute() {
   )
 }
 
+function hasSupabaseRecoveryHash() {
+  if (typeof window === 'undefined' || !window.location.hash) return false
+  const hashParams = new URLSearchParams(window.location.hash.slice(1))
+  return hashParams.get('type') === 'recovery'
+    || (hashParams.has('access_token') && hashParams.has('refresh_token'))
+}
+
+function AuthRecoveryRedirect() {
+  const navigate = useNavigate()
+
+  useEffect(() => {
+    if (window.location.pathname === '/' && hasSupabaseRecoveryHash()) {
+      navigate(`/connexion-centre${window.location.hash}`, { replace: true })
+    }
+  }, [navigate])
+
+  return null
+}
+
 function NotFound() {
   return (
     <main className="flex min-h-screen items-center justify-center bg-slate-950 px-6 text-white">
@@ -249,6 +268,7 @@ export default function App() {
   return (
     <AppErrorBoundary>
       <BrowserRouter>
+        <AuthRecoveryRedirect />
         <Suspense fallback={<RouteFallback />}>
           <Routes>
           <Route

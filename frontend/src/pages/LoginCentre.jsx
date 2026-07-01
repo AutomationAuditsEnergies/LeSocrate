@@ -22,8 +22,14 @@ function getSupabaseErrorMessage(error, fallback) {
 }
 
 export default function LoginCentre({ preloadAdminRoute, preloadDashboardRoute }) {
-  const initialPasswordRecoveryMode = typeof window !== 'undefined'
-    && new URLSearchParams(window.location.search).get('auth') === 'recovery'
+  const initialPasswordRecoveryMode = (() => {
+    if (typeof window === 'undefined') return false
+    const searchParams = new URLSearchParams(window.location.search)
+    const hashParams = new URLSearchParams(window.location.hash.slice(1))
+    return searchParams.get('auth') === 'recovery'
+      || hashParams.get('type') === 'recovery'
+      || (hashParams.has('access_token') && hashParams.has('refresh_token'))
+  })()
   const [authMode, setAuthMode] = useState('login')
   const [centerName, setCenterName] = useState('')
   const [username, setUsername] = useState('')
