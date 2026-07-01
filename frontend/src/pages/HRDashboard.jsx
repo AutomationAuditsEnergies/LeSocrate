@@ -573,11 +573,9 @@ export default function HRDashboard() {
         }
         setShowCreateModal(false)
         resetCreateForm()
+        setShowModulesModal(false)
+        setCardPage(Math.floor(platforms.length / CARDS_PER_PAGE))
         fetchPlatforms()
-        // Redirection vers /formation-pipeline pour suivi (auto ou manuel)
-        if (pipelineJobId) {
-          window.open(`/formation-pipeline?job=${pipelineJobId}`, '_blank')
-        }
       } else {
         alert(data.error || 'Erreur lors de la création')
       }
@@ -2460,6 +2458,25 @@ function PlatformCard({
               </span>
             )}
           </div>
+          {p.active && p.status === 'pending' && (
+            <div
+              className="relative z-10 mt-4 w-full max-w-[280px] rounded-xl px-4 py-3"
+              style={{ backgroundColor: darkMode ? 'rgba(15, 23, 42, 0.72)' : 'rgba(255, 255, 255, 0.86)', border: `1px solid ${colors.border}`, backdropFilter: 'blur(6px)' }}
+            >
+              <div className="mb-2 flex items-center justify-between gap-3">
+                <span className="text-xs font-semibold" style={{ color: colors.text }}>
+                  Création en cours
+                </span>
+                <span className="inline-flex h-4 w-4 animate-spin rounded-full border-2" style={{ borderColor: '#ddd6fe', borderTopColor: '#8B5CF6' }} />
+              </div>
+              <div className="h-1.5 overflow-hidden rounded-full" style={{ backgroundColor: darkMode ? '#334155' : '#ede9fe' }}>
+                <div className="h-full w-2/3 animate-pulse rounded-full" style={{ backgroundColor: '#8B5CF6' }} />
+              </div>
+              <p className="mt-2 text-[11px] leading-4" style={{ color: colors.textMuted }}>
+                DeepSeek prépare la formation. Fish Audio sera utilisé pour la voix.
+              </p>
+            </div>
+          )}
         </div>
 
         {/* ═══ VERSO — la fiche formation (inchangée) ═══ */}
