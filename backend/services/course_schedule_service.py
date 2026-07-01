@@ -186,6 +186,79 @@ def save_course_schedule(cursor, platform_id, schedule):
     }
 
 
+def get_course_schedule_summary(cursor, platform_id):
+    ensure_course_schedule_tables(cursor)
+    cursor.execute(
+        """
+        SELECT total_training_days, weekly_course_count, weekdays_json, start_time, timezone
+        FROM course_schedule_config
+        WHERE platform_id = ?
+        """,
+        (platform_id,),
+    )
+    row = cursor.fetchone()
+    if not row:
+        return None
+    total_training_days, weekly_course_count, weekdays_json, start_time, timezone_name = row
+    try:
+        weekdays = json.loads(weekdays_json or "[]")
+    except Exception:
+        weekdays = []
+    cursor.execute(
+        """
+        SELECT scheduled_at
+        FROM course_sessions
+        WHERE platform_id = ?
+          AND status IN ('planned', 'active')
+        ORDER BY scheduled_at ASC
+        LIMIT 1
+        """,
+        (platform_id,),
+    )
+    next_row = cursor.fetchone()
+    cursor.execute(
+        """
+        SELECT scheduled_at
+        FROM course_sessions
+        WHERE platform_id = ?
+        ORDER BY session_index DESC
+        LIMIT 1
+        """,
+        (platform_id,),
+    )
+    last_row = cursor.fetchone()
+    return {
+        "total_training_days": total_training_days,
+        "weekly_course_count": weekly_course_count,
+        "weekdays": weekdays,
+        "start_time": start_time,
+        "timezone": timezone_name,
+        "next_session_at": next_row[0] if next_row else None,
+        "last_session_at": last_row[0] if last_row else None,
+    }
+
+
+def update_course_schedule_start_time(cursor, platform_id, start_time):
+    ensure_course_schedule_tables(cursor)
+    summary = get_course_schedule_summary(cursor, platform_id)
+    if not summary:
+        return None
+
+    result = save_course_schedule(
+        cursor,
+        platform_id,
+        {
+            "total_training_days": summary["total_training_days"],
+            "weekly_course_count": summary["weekly_course_count"],
+            "weekdays": summary["weekdays"],
+            "start_time": start_time,
+        },
+    )
+    if result.get("first_session_at"):
+        _upsert_course_time(cursor, platform_id, result["first_session_at"])
+    return {**summary, **result, "start_time": start_time}
+
+
 def create_course_schedule(platform_id, schedule):
     conn = get_db_connection()
     try:

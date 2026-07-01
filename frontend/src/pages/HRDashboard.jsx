@@ -938,6 +938,7 @@ export default function HRDashboard() {
           onSubmit={handleSetCourseTime}
           initialDate={currentCourseTime?.date_cours}
           initialHeure={currentCourseTime?.heure_cours}
+          schedule={currentCourseTime?.schedule}
         />
       )}
 
@@ -2780,7 +2781,7 @@ function PlatformCard({
               }}
             >
               <Icon name="schedule" className="text-lg" style={{ color: colors.textMuted }} />
-              <span>Heure</span>
+              <span>Horaire</span>
             </button>
           )}
 
@@ -3110,20 +3111,38 @@ function formatRelativeTime(dateStr) {
 // `components/SlideToConfirm.jsx` pour être partagés avec CoursFoldersModal,
 // qui héberge maintenant l'action lock/unlock + le pipeline de backup.
 
+const COURSE_WEEKDAY_LABELS = ['Lun.', 'Mar.', 'Mer.', 'Jeu.', 'Ven.', 'Sam.', 'Dim.']
+
+function formatScheduleDateTime(value) {
+  if (!value) return 'Non programmé'
+  const normalized = String(value).includes('T') ? value : String(value).replace(' ', 'T')
+  const date = new Date(normalized)
+  if (Number.isNaN(date.getTime())) return value
+  return date.toLocaleDateString('fr-FR', {
+    weekday: 'short',
+    day: '2-digit',
+    month: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+}
+
 // ─── Course Time Modal ───────────────────────────────────────────────────────
-function CourseTimeModal({ onClose, onSubmit, initialDate, initialHeure }) {
+function CourseTimeModal({ onClose, onSubmit, initialDate, initialHeure, schedule }) {
   const today = new Date().toISOString().split('T')[0]
+  const hasSchedule = !!schedule
   const [date, setDate] = useState(initialDate || today)
-  const [heure, setHeure] = useState(initialHeure || '')
+  const [heure, setHeure] = useState(schedule?.start_time || initialHeure || '')
   const [loading, setLoading] = useState(false)
   const [result, setResult] = useState(null)
+  const weekdayLabels = (schedule?.weekdays || []).map((day) => COURSE_WEEKDAY_LABELS[Number(day)]).filter(Boolean)
 
   const handleSubmit = async (e) => {
     e.preventDefault()
-    if (!date || !heure) return
+    if ((!hasSchedule && !date) || !heure) return
     setLoading(true)
     setResult(null)
-    const data = await onSubmit(date, heure)
+    const data = await onSubmit(hasSchedule ? '' : date, heure)
     setResult(data)
     setLoading(false)
   }
@@ -3143,7 +3162,7 @@ function CourseTimeModal({ onClose, onSubmit, initialDate, initialHeure }) {
         <div className="flex items-center justify-between px-6 py-4 border-b" style={{ borderColor: '#e2e8f0', backgroundColor: '#137fec' }}>
           <div className="flex items-center gap-3 text-white">
             <Icon name="schedule" className="text-2xl" />
-            <h3 className="text-lg font-bold">HEURE DU COURS</h3>
+            <h3 className="text-lg font-bold">{hasSchedule ? 'HORAIRE DES JOURNÉES' : 'HEURE DU COURS'}</h3>
           </div>
           <button
             onClick={onClose}
@@ -3171,21 +3190,47 @@ function CourseTimeModal({ onClose, onSubmit, initialDate, initialHeure }) {
             </div>
           ) : (
             <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+              {hasSchedule ? (
+                <div className="rounded-xl px-4 py-3" style={{ backgroundColor: '#f8fafc', border: '1px solid #e2e8f0' }}>
+                  <p className="text-xs font-semibold uppercase tracking-wide mb-2" style={{ color: '#64748b' }}>
+                    Planning automatique
+                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    {weekdayLabels.map((label) => (
+                      <span
+                        key={label}
+                        className="rounded-full px-2.5 py-1 text-xs font-semibold"
+                        style={{ backgroundColor: '#ede9fe', color: '#7c3aed' }}
+                      >
+                        {label}
+                      </span>
+                    ))}
+                  </div>
+                  <div className="mt-3 space-y-1 text-xs" style={{ color: '#64748b' }}>
+                    <p>{schedule.total_training_days} journée{schedule.total_training_days > 1 ? 's' : ''} au total</p>
+                    <p>Prochaine journée : {formatScheduleDateTime(schedule.next_session_at)}</p>
+                    <p>Dernière journée prévue : {formatScheduleDateTime(schedule.last_session_at)}</p>
+                  </div>
+                </div>
+              ) : (
+                <div>
+                  <label className="block text-xs font-semibold mb-1.5" style={{ color: '#334155' }}>Date du cours</label>
+                  <input
+                    type="date"
+                    value={date}
+                    onChange={(e) => setDate(e.target.value)}
+                    required
+                    className="w-full rounded-lg border px-3 py-2.5 text-sm outline-none transition-colors"
+                    style={{ borderColor: '#e2e8f0', color: '#0f172a', backgroundColor: '#F8F7F5' }}
+                    onFocus={(e) => { e.currentTarget.style.borderColor = '#137fec' }}
+                    onBlur={(e) => { e.currentTarget.style.borderColor = '#e2e8f0' }}
+                  />
+                </div>
+              )}
               <div>
-                <label className="block text-xs font-semibold mb-1.5" style={{ color: '#334155' }}>Date du cours</label>
-                <input
-                  type="date"
-                  value={date}
-                  onChange={(e) => setDate(e.target.value)}
-                  required
-                  className="w-full rounded-lg border px-3 py-2.5 text-sm outline-none transition-colors"
-                  style={{ borderColor: '#e2e8f0', color: '#0f172a', backgroundColor: '#F8F7F5' }}
-                  onFocus={(e) => { e.currentTarget.style.borderColor = '#137fec' }}
-                  onBlur={(e) => { e.currentTarget.style.borderColor = '#e2e8f0' }}
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-semibold mb-1.5" style={{ color: '#334155' }}>Heure de début</label>
+                <label className="block text-xs font-semibold mb-1.5" style={{ color: '#334155' }}>
+                  {hasSchedule ? 'Heure de début de chaque journée' : 'Heure de début'}
+                </label>
                 <input
                   type="time"
                   value={heure}
@@ -3215,16 +3260,16 @@ function CourseTimeModal({ onClose, onSubmit, initialDate, initialHeure }) {
                 </button>
                 <button
                   type="submit"
-                  disabled={loading || !date || !heure}
+                  disabled={loading || (!hasSchedule && !date) || !heure}
                   className="flex-1 flex items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm font-semibold text-white transition-opacity"
-                  style={{ backgroundColor: '#137fec', opacity: (loading || !date || !heure) ? 0.6 : 1 }}
+                  style={{ backgroundColor: '#137fec', opacity: (loading || (!hasSchedule && !date) || !heure) ? 0.6 : 1 }}
                 >
                   {loading ? (
                     <div className="h-4 w-4 animate-spin rounded-full border-2 border-white/30 border-t-white" />
                   ) : (
                     <Icon name="save" className="text-base" />
                   )}
-                  {loading ? 'Enregistrement...' : 'Enregistrer'}
+                  {loading ? 'Enregistrement...' : hasSchedule ? 'Mettre à jour' : 'Enregistrer'}
                 </button>
               </div>
             </form>

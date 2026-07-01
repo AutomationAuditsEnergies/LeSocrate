@@ -15,9 +15,11 @@ from repositories.core_repository import (
     upsert_platform_config,
 )
 from services.course_schedule_service import (
+    get_course_schedule_summary,
     process_due_reminders,
     run_scheduler_tick,
     save_course_schedule,
+    update_course_schedule_start_time,
 )
 from utils.logger import get_logger
 from utils.slug import slugify, unique_slug
@@ -1955,13 +1957,24 @@ def create_hr_blueprint(socketio):
 
         if _is_local_platform(platform_id):
             try:
+                conn = get_db_connection()
+                cursor = conn.cursor()
+                schedule_summary = get_course_schedule_summary(cursor, platform_id)
+                conn.close()
                 from services.time_service import get_heure_debut_cours
                 heure = get_heure_debut_cours(platform_id)
-                return jsonify({
+                payload = {
                     "success": True,
                     "date_cours": heure.strftime("%Y-%m-%d"),
                     "heure_cours": heure.strftime("%H:%M"),
-                }), 200
+                    "has_schedule": bool(schedule_summary),
+                }
+                if schedule_summary:
+                    payload.update({
+                        "heure_cours": schedule_summary.get("start_time") or payload["heure_cours"],
+                        "schedule": schedule_summary,
+                    })
+                return jsonify(payload), 200
             except Exception as e:
                 return jsonify({"success": False, "error": str(e)}), 500
         else:
@@ -2107,12 +2120,27 @@ def create_hr_blueprint(socketio):
         data = request.get_json()
         date_str = (data or {}).get("date_cours", "").strip()
         heure_str = (data or {}).get("heure_cours", "").strip()
-        if not date_str or not heure_str:
-            return jsonify({"success": False, "error": "date_cours et heure_cours requis"}), 400
+        if not heure_str:
+            return jsonify({"success": False, "error": "heure_cours requis"}), 400
 
         if _is_local_platform(platform_id):
             # Appel direct au service local
             try:
+                conn = get_db_connection()
+                cursor = conn.cursor()
+                schedule_update = update_course_schedule_start_time(cursor, platform_id, heure_str)
+                if schedule_update:
+                    conn.commit()
+                    conn.close()
+                    return jsonify({
+                        "success": True,
+                        "message": f"Heure des journées mise à jour à {heure_str}",
+                        "schedule": schedule_update,
+                    }), 200
+                conn.close()
+
+                if not date_str:
+                    return jsonify({"success": False, "error": "date_cours requis pour une plateforme sans planning automatique"}), 400
                 from services.time_service import set_heure_debut_cours
                 if heure_str.count(':') == 1:
                     datetime_str = f"{date_str} {heure_str}:00"
