@@ -21,7 +21,7 @@ function getSupabaseErrorMessage(error, fallback) {
   return error?.message || fallback
 }
 
-export default function LoginCentre({ preloadAdminRoute, preloadDashboardRoute }) {
+export default function LoginCentre({ preloadDashboardRoute }) {
   const initialPasswordRecoveryMode = (() => {
     if (typeof window === 'undefined') return false
     const searchParams = new URLSearchParams(window.location.search)
@@ -128,8 +128,8 @@ export default function LoginCentre({ preloadAdminRoute, preloadDashboardRoute }
       if (response.ok && data.success) {
         if (data.token) localStorage.setItem('admin_auth_token', data.token)
         if (data.account?.type === 'legacy_admin') {
-          await preloadAdminRoute?.().catch(() => {})
-          navigate('/admin')
+          await preloadDashboardRoute?.().catch(() => {})
+          navigate('/dashboard-centre')
         } else {
           await preloadDashboardRoute?.().catch(() => {})
           navigate('/dashboard-centre')

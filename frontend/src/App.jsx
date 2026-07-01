@@ -300,7 +300,7 @@ export default function App() {
           <Route path="/video" element={<Video />} />
           <Route
             path="/connexion-centre"
-            element={<LoginCentre preloadAdminRoute={loadAdminPage} preloadDashboardRoute={loadHRDashboardPage} />}
+            element={<LoginCentre preloadDashboardRoute={loadHRDashboardPage} />}
           />
 
           {/* Routes protégées admin */}
