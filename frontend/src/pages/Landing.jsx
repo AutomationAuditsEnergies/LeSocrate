@@ -113,10 +113,10 @@ export default function Landing() {
                 className="absolute left-[4%] top-[9%] w-[330px] select-none object-contain drop-shadow-[0_34px_72px_rgba(91,91,255,0.38)] xl:w-[380px]"
               />
               <img
-                src="/robot-green.png"
+                src="/robot-violet.png"
                 alt=""
                 draggable={false}
-                className="absolute bottom-[3%] right-[1%] w-[270px] select-none object-contain drop-shadow-[0_30px_64px_rgba(16,185,129,0.28)] xl:w-[320px]"
+                className="absolute bottom-[3%] right-[1%] w-[270px] select-none object-contain drop-shadow-[0_30px_64px_rgba(139,92,246,0.30)] xl:w-[320px]"
               />
             </div>
           </div>
