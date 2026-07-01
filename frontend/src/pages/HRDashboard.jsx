@@ -669,7 +669,7 @@ export default function HRDashboard() {
               <SkoolTab
                 active={showModulesModal}
                 onClick={showModulesView}
-                label="Modules"
+                label="Réutiliser un ancien professeur IA"
                 colors={colors}
               />
               <SkoolTab
