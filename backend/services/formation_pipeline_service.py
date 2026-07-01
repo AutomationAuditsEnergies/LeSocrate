@@ -22,6 +22,13 @@ from urllib.parse import quote
 import requests as _http
 
 from database.db import get_db_connection
+from repositories.pipeline_repository import (
+    create_pipeline_job,
+    get_auto_pilot_pipeline_jobs_to_resume,
+    get_pipeline_job,
+    list_pipeline_jobs,
+    update_pipeline_job,
+)
 from utils.anthropic_client import (
     AnthropicRateLimitError,
     default_model,
@@ -1619,159 +1626,30 @@ def _format_day_program_text(day_data: dict, tp_name: str) -> str:
 def create_job(platform_id: int, tp_name: str, rncp_code: str,
                total_hours: int, nb_days: int) -> int:
     """Crée un job pipeline formation en DB. Retourne l'id."""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        INSERT INTO formation_pipeline_jobs
-            (platform_id, tp_name, rncp_code, total_hours, nb_days, status)
-        VALUES (?, ?, ?, ?, ?, 'init')
-    """, (platform_id, tp_name, rncp_code, total_hours, nb_days))
-    job_id = cursor.lastrowid
-    conn.commit()
-    conn.close()
-    return job_id
+    return create_pipeline_job(
+        platform_id=platform_id,
+        tp_name=tp_name,
+        rncp_code=rncp_code,
+        total_hours=total_hours,
+        nb_days=nb_days,
+    )
 
 
 def update_job(job_id: int, **kwargs):
     """Met à jour les champs d'un job."""
-    if not kwargs:
-        return
-    allowed = {
-        "status", "rncp_code", "reac_text", "rc_text", "rome_text",
-        "global_program", "global_program_validated",
-        "daily_programs", "daily_programs_validated",
-        "error_message",
-        # Origine de chaque artefact (audit fix #5) — 'api' / 'claude_code_haiku' / 'claude_code_sonnet'
-        "kb_generated_via", "global_program_generated_via", "daily_programs_generated_via",
-        # State machine auto-pilot persistée (résiste aux restarts Azure)
-        "auto_pilot_enabled", "auto_pilot_step", "auto_pilot_model",
-        "auto_pilot_tts_mode", "auto_pilot_use_cc", "auto_pilot_skip_vs",
-        "auto_pilot_generate_audio",
-        "auto_pilot_volume_done", "auto_pilot_post_review_docs_done", "auto_pilot_error",
-        "auto_pilot_locked_at", "auto_pilot_lock_owner",
-    }
-    fields = {k: v for k, v in kwargs.items() if k in allowed}
-    # Effacer automatiquement error_message quand on passe à un statut non-erreur
-    if "status" in fields and fields["status"] != "error" and "error_message" not in fields:
-        fields["error_message"] = None
-    if not fields:
-        return
-
-    set_clause = ", ".join(f"{k} = ?" for k in fields)
-    values = list(fields.values()) + [job_id]
-
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        f"UPDATE formation_pipeline_jobs SET {set_clause}, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-        values,
-    )
-    conn.commit()
-    conn.close()
+    update_pipeline_job(job_id, **kwargs)
 
 
 def get_job(job_id: int) -> dict | None:
     """Retourne le job ou None."""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        SELECT j.id, j.platform_id, j.tp_name, j.rncp_code, j.total_hours, j.nb_days,
-               j.reac_text, j.rc_text, j.rome_text, j.global_program, j.global_program_validated,
-               j.daily_programs, j.daily_programs_validated, j.status, j.error_message,
-               j.created_at, j.updated_at,
-               j.kb_generated_via, j.global_program_generated_via, j.daily_programs_generated_via,
-               p.name AS platform_name,
-               j.auto_pilot_enabled, j.auto_pilot_step, j.auto_pilot_model,
-               j.auto_pilot_tts_mode, j.auto_pilot_use_cc, j.auto_pilot_skip_vs,
-               COALESCE(j.auto_pilot_generate_audio, 0),
-               j.auto_pilot_volume_done, j.auto_pilot_post_review_docs_done,
-               j.auto_pilot_error,
-               j.auto_pilot_locked_at, j.auto_pilot_lock_owner
-        FROM formation_pipeline_jobs j
-        LEFT JOIN platform_config p ON p.id = j.platform_id
-        WHERE j.id = ?
-    """, (job_id,))
-    row = cursor.fetchone()
-    conn.close()
-    if not row:
-        return None
-    return {
-        "id": row[0], "job_label": f"Job #{row[0]}",
-        "platform_id": row[1],
-        "platform_label": f"P{row[1]}" if row[1] is not None else None,
-        "tp_name": row[2],
-        "rncp_code": row[3], "total_hours": row[4], "nb_days": row[5],
-        "reac_text": row[6], "rc_text": row[7], "rome_text": row[8],
-        "global_program": row[9],
-        "global_program_validated": bool(row[10]),
-        "daily_programs": row[11], "daily_programs_validated": bool(row[12]),
-        "status": row[13], "error_message": row[14],
-        "created_at": row[15], "updated_at": row[16],
-        "kb_generated_via": row[17],
-        "global_program_generated_via": row[18],
-        "daily_programs_generated_via": row[19],
-        "platform_name": row[20],
-        # State machine auto-pilot persistée
-        "auto_pilot_enabled": bool(row[21]),
-        "auto_pilot_step": row[22],
-        "auto_pilot_model": row[23],
-        "auto_pilot_tts_mode": row[24],
-        "auto_pilot_use_cc": bool(row[25]),
-        "auto_pilot_skip_vs": bool(row[26]),
-        "auto_pilot_generate_audio": bool(row[27]),
-        "auto_pilot_volume_done": bool(row[28]),
-        "auto_pilot_post_review_docs_done": bool(row[29]),
-        "auto_pilot_error": row[30],
-        "auto_pilot_locked_at": row[31],
-        "auto_pilot_lock_owner": row[32],
-    }
+    return get_pipeline_job(job_id)
 
 
 def get_auto_pilot_jobs_to_resume() -> list:
     """Retourne les job_ids auto-pilot interrompus : activés, pas terminés, lock absent ou périmé."""
-    import time as _time
-    stale_cutoff = int(_time.time()) - 300  # lock > 5 min = périmé
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        SELECT id FROM formation_pipeline_jobs
-        WHERE auto_pilot_enabled = 1
-          AND (auto_pilot_step IS NULL OR auto_pilot_step != 'done')
-          AND auto_pilot_error IS NULL
-          AND (auto_pilot_locked_at IS NULL
-               OR CAST(strftime('%s', auto_pilot_locked_at) AS INTEGER) < ?)
-    """, (stale_cutoff,))
-    rows = cursor.fetchall()
-    conn.close()
-    return [r[0] for r in rows]
+    return get_auto_pilot_pipeline_jobs_to_resume()
 
 
 def list_jobs(platform_id: int = None) -> list:
     """Liste tous les jobs (toutes plateformes), avec le nom de la plateforme."""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        SELECT j.id, j.tp_name, j.rncp_code, j.total_hours, j.nb_days, j.status,
-               j.global_program_validated, j.daily_programs_validated,
-               j.created_at, j.updated_at, j.platform_id,
-               p.name AS platform_name
-        FROM formation_pipeline_jobs j
-        LEFT JOIN platform_config p ON p.id = j.platform_id
-        ORDER BY j.created_at DESC
-    """)
-    rows = cursor.fetchall()
-    conn.close()
-    return [
-        {
-            "id": r[0], "tp_name": r[1], "rncp_code": r[2],
-            "job_label": f"Job #{r[0]}",
-            "total_hours": r[3], "nb_days": r[4], "status": r[5],
-            "global_program_validated": bool(r[6]),
-            "daily_programs_validated": bool(r[7]),
-            "created_at": r[8], "updated_at": r[9],
-            "platform_id": r[10],
-            "platform_label": f"P{r[10]}" if r[10] is not None else None,
-            "platform_name": r[11],
-        }
-        for r in rows
-    ]
+    return list_pipeline_jobs(platform_id)

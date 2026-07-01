@@ -30,6 +30,7 @@ Dans Supabase, prendre de preference le connection string du pooler transaction 
 - `backend/database/postgres_schema.sql` : schema Postgres cible pour le coeur SaaS.
 - `backend/tools/database/apply_postgres_schema.py` : applique le schema sur Supabase/Postgres.
 - `backend/tools/database/migrate_sqlite_core_to_postgres.py` : copie les donnees coeur depuis SQLite.
+- `backend/tools/database/migrate_sqlite_pipeline_to_postgres.py` : copie les donnees pipeline depuis SQLite.
 - `backend/.env.example` : variables attendues.
 
 ## Bootstrap Supabase
@@ -54,6 +55,13 @@ DATABASE_URL='postgresql://...' \
 python backend/tools/database/migrate_sqlite_core_to_postgres.py --apply-schema
 ```
 
+Copier ensuite les donnees pipeline :
+
+```bash
+DATABASE_URL='postgresql://...' \
+python backend/tools/database/migrate_sqlite_pipeline_to_postgres.py --apply-schema
+```
+
 Pour repartir d'une base cible vide sur les tables coeur :
 
 ```bash
@@ -74,6 +82,23 @@ Le script migre volontairement le coeur SaaS :
 - `student_profiles`
 
 Les tables lourdes de pipeline pedagogique restent a migrer dans une seconde passe. Elles contiennent beaucoup de JSON/artefacts intermediaires et demandent une decision produit : tout garder dans Postgres, archiver une partie en Blob, ou repartir uniquement des modules valides.
+
+## Pipeline Migration
+
+La premiere passe Postgres de la pipeline garde le comportement historique par
+defaut :
+
+- `PIPELINE_DATABASE_BACKEND=sqlite` : la pipeline lit/ecrit SQLite.
+- `PIPELINE_POSTGRES_MIRROR=1` : la pipeline garde SQLite comme source de verite
+  mais miroir-ecrit `formation_pipeline_jobs` vers Postgres quand
+  `DATABASE_BACKEND` et `DATABASE_URL` activent Postgres.
+- `PIPELINE_DATABASE_BACKEND=postgres` : les fonctions centralisees de job
+  pipeline (`create_job`, `update_job`, `get_job`, `list_jobs`, reprise
+  auto-pilot) utilisent Postgres. A activer seulement apres migration des tables
+  pipeline et validation des routes qui ont encore du SQL direct.
+
+Le rollback le plus simple est de remettre `PIPELINE_DATABASE_BACKEND=sqlite`
+et de desactiver `PIPELINE_POSTGRES_MIRROR`.
 
 ## Runtime Switch
 

@@ -1,5 +1,22 @@
 # Changelog
 
+## 2026-07-01
+
+### feat(database): socle de migration pipeline vers Postgres
+
+Premiere tranche de migration progressive de la pipeline formation vers
+Postgres, sans changer le comportement metier visible. Le schema Postgres couvre
+desormais les tables pipeline principales : jobs, knowledge base, dossiers,
+documents, jobs/segments de generation, annotations, regles, rapports de revue,
+evenements, modules durables et decks slides.
+
+Ajout du script `migrate_sqlite_pipeline_to_postgres.py` pour copier les tables
+pipeline depuis SQLite apres la migration du coeur SaaS. Ajout d'un repository
+`pipeline_repository.py` qui conserve SQLite comme source de verite par defaut,
+peut miroir-ecrire les jobs vers Postgres avec `PIPELINE_POSTGRES_MIRROR=1`, et
+peut basculer les fonctions centralisees de jobs avec
+`PIPELINE_DATABASE_BACKEND=postgres`.
+
 ## 2026-06-29
 
 ### feat(hr-dashboard): robots transparents pré-colorés + flip au clic
