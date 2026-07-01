@@ -1677,15 +1677,6 @@ function CreatePlatformView({
             Nouveau professeur IA
           </h2>
         </div>
-        <button
-          onClick={onCancel}
-          disabled={creating}
-          className="flex flex-shrink-0 items-center gap-2 rounded-lg px-3.5 py-2 text-sm font-medium transition-colors hover:bg-black/5 dark:hover:bg-white/5 disabled:cursor-not-allowed disabled:opacity-50"
-          style={{ color: colors.textMuted, border: `1px solid ${colors.border}` }}
-        >
-          <Icon name="view_module" className="text-base" />
-          <span>Plateformes</span>
-        </button>
       </header>
 
       <div>
@@ -1840,20 +1831,6 @@ function CreatePlatformView({
                   </button>
                 )
               })}
-            </div>
-          </div>
-        </div>
-
-        <div className="mt-5 rounded-lg p-4" style={{ backgroundColor: darkMode ? '#0f172a' : '#F8F7F5', border: `1px solid ${colors.border}` }}>
-          <div className="flex items-start gap-3">
-            <Icon name="auto_mode" className="mt-0.5 text-base" style={{ color: '#8B5CF6' }} />
-            <div>
-              <div className="text-sm font-semibold" style={{ color: colors.text }}>
-                Lancement automatique
-              </div>
-              <div className="mt-1 text-xs leading-5" style={{ color: colors.textSecondary }}>
-                La formation part directement en auto-pilot avec DeepSeek pour les étapes IA et Fish Audio pour la voix. Ces paramètres ne sont plus à choisir ici.
-              </div>
             </div>
           </div>
         </div>
