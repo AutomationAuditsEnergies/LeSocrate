@@ -480,6 +480,12 @@ def _reminder_html(payload):
     reminder_type = payload.get("type")
     class_url = payload.get("class_url") or "#"
     scheduled_at = payload.get("scheduled_at") or ""
+    session_password = os.environ.get("COURSE_SESSION_PASSWORD", "").strip()
+    password_line = (
+        f'<div class="meta">Mot de passe de session : <strong>{session_password}</strong></div>'
+        if session_password
+        else ""
+    )
     try:
         scheduled = _parse_local_datetime(scheduled_at)
         date_label = scheduled.strftime("%d/%m/%Y")
@@ -532,6 +538,7 @@ def _reminder_html(payload):
       <p>{body}</p>
       <p><a class="cta" href="{class_url}" target="_blank">{button}</a></p>
       <div class="meta">Horaire prévu : {date_label} à {time_label}</div>
+      {password_line}
       <p style="margin-top:26px;">{closing}</p>
       <p>L'équipe Le Socrate</p>
     </div>

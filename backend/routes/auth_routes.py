@@ -1,4 +1,5 @@
 # auth_routes.py -- Routes d'authentification et connexion utilisateur (API JSON)
+import os
 from flask import Blueprint, request, session, jsonify
 from datetime import datetime
 import uuid
@@ -71,6 +72,13 @@ def _get_supabase_user(access_token):
     if response.status_code != 200:
         return None
     return response.json()
+
+
+def _course_session_password_valid(password):
+    expected = os.environ.get("COURSE_SESSION_PASSWORD", "").strip()
+    if not expected:
+        return STUDENT_AUTH_LEGACY_FALLBACK
+    return password == expected
 
 
 def create_auth_blueprint(socketio):
@@ -157,6 +165,9 @@ def create_auth_blueprint(socketio):
                 if not nom or not prenom:
                     logger.warning("⚠️ Identifiants élève manquants")
                     return jsonify({"success": False, "error": "Identifiant et mot de passe requis"}), 400
+                if not _course_session_password_valid(password):
+                    logger.warning("❌ Mot de passe session invalide: %s %s P%s", prenom, nom, platform_id)
+                    return jsonify({"success": False, "error": "Mot de passe incorrect"}), 401
                 logger.warning(
                     "⚠️ Connexion élève legacy nom/prénom acceptée sur P%s car aucun compte n'existe",
                     platform_id,
