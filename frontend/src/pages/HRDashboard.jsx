@@ -1663,11 +1663,11 @@ function CreatePlatformView({
 
   return (
     <section
-      className="mx-auto max-w-3xl overflow-hidden rounded-2xl"
+      className="mx-auto w-full max-w-7xl overflow-hidden rounded-2xl"
       style={{ backgroundColor: colors.cardBg, border: `1px solid ${colors.border}` }}
     >
       <header
-        className="flex items-start justify-between gap-4 px-7 py-5"
+        className="flex items-start justify-between gap-4 px-7 py-5 lg:px-9"
         style={{ borderBottom: `1px solid ${colors.border}` }}
       >
         <div className="flex flex-col leading-tight">
@@ -1692,8 +1692,8 @@ function CreatePlatformView({
         </button>
       </header>
 
-      <div className="p-7">
-        <div className="grid gap-5 md:grid-cols-[1fr_180px]">
+      <div className="p-7 lg:p-9">
+        <div className="grid gap-7 lg:grid-cols-[minmax(0,1fr)_300px]">
           <div className="space-y-5">
             <div>
               <label className="mb-2 block text-sm font-medium" style={{ color: darkMode ? '#94a3b8' : '#64748b' }}>
@@ -1729,7 +1729,7 @@ function CreatePlatformView({
             className="flex items-center justify-center rounded-xl"
             style={{ backgroundColor: darkMode ? '#0f172a' : '#F8F7F5', border: `1px solid ${colors.border}` }}
           >
-            <img src={selectedColor.image} alt="" className="h-36 w-36 object-contain" draggable="false" />
+            <img src={selectedColor.image} alt="" className="h-56 w-56 object-contain" draggable="false" />
           </div>
         </div>
 
@@ -1737,7 +1737,7 @@ function CreatePlatformView({
           <label className="mb-2 block text-sm font-medium" style={{ color: darkMode ? '#94a3b8' : '#64748b' }}>
             Couleur du professeur IA
           </label>
-          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+          <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
             {teacherColors.map((color) => {
               const selected = teacherColor === color.id
               return (
@@ -1760,7 +1760,7 @@ function CreatePlatformView({
           </div>
         </div>
 
-        <div className="mt-5 grid gap-4 md:grid-cols-2">
+        <div className="mt-5 grid gap-5 lg:grid-cols-2">
           <div>
             <label className="mb-2 block text-sm font-medium" style={{ color: darkMode ? '#94a3b8' : '#64748b' }}>
               Code RNCP
@@ -1806,7 +1806,7 @@ function CreatePlatformView({
           </div>
         </div>
 
-        <div className="mt-5 grid gap-4 md:grid-cols-[180px_1fr]">
+        <div className="mt-5 grid gap-5 lg:grid-cols-[260px_1fr]">
           <div>
             <label className="mb-2 block text-sm font-medium" style={{ color: darkMode ? '#94a3b8' : '#64748b' }}>
               Cours par semaine
