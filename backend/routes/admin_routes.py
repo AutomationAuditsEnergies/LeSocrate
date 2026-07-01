@@ -620,7 +620,11 @@ def create_admin_blueprint(socketio):
         """Connexion administrateur"""
         conn = None
         try:
-            if session.get("is_admin"):
+            data = request.get_json(silent=True) or {}
+            username = data.get("username", "").strip().lower()
+            password = data.get("password", "").strip()
+
+            if session.get("is_admin") and not username and not password:
                 logger.info("👑 Admin déjà connecté")
                 token = request.headers.get("X-Auth-Token") or _create_admin_token(
                     session.get("admin_account_type", "legacy_admin"),
@@ -628,10 +632,6 @@ def create_admin_blueprint(socketio):
                     session.get("center_name"),
                 )
                 return jsonify({"success": True, "message": "Déjà connecté", "token": token}), 200
-
-            data = request.get_json(silent=True) or {}
-            username = data.get("username", "").strip().lower()
-            password = data.get("password", "").strip()
 
             logger.info(f"🔐 Tentative connexion admin: {username}")
 

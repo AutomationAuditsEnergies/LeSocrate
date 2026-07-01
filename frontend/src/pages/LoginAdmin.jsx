@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
-import { apiFetch, apiUrl, setPlatformId, setPlatformName } from '../api'
+import { apiUrl, setPlatformId, setPlatformName } from '../api'
 
 const STARS = [
   [45, 55, 1.5, 0.7], [120, 30, 1, 0.5], [180, 80, 2, 0.8], [250, 25, 1.5, 0.6],
@@ -168,8 +168,10 @@ export default function LoginAdmin({ preloadAdminRoute }) {
     setError('')
     setLoading(true)
     try {
-      const response = await apiFetch('/api/admin/login', {
+      localStorage.removeItem('admin_auth_token')
+      const response = await fetch(apiUrl('/api/admin/login'), {
         method: 'POST',
+        credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username: username.trim(), password: password.trim() }),
       })
