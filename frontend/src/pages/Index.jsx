@@ -1,16 +1,7 @@
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
-import { Component, lazy, Suspense, useState, useEffect } from 'react'
+import { useState, useEffect } from 'react'
 import { apiFetch, apiUrl, getStudentLoginPath, setPlatformId, setPlatformName, setStudentLoginPath } from '../api'
 import { getSupabaseClient } from '../supabaseClient'
-
-const Spline = lazy(() => import('@splinetool/react-spline'))
-
-class SplineErrorBoundary extends Component {
-  constructor(props) { super(props); this.state = { failed: false } }
-  static getDerivedStateFromError() { return { failed: true } }
-  componentDidCatch(error) { console.warn('Spline désactivé:', error) }
-  render() { return this.state.failed ? null : this.props.children }
-}
 
 function getSupabaseErrorMessage(error, fallback) {
   const message = String(error?.message || '').toLowerCase()
@@ -34,7 +25,6 @@ export default function Index({ preloadCourseRoutes, preloadAttenteRoute, preloa
   const navigate = useNavigate()
   const location = useLocation()
   const [searchParams] = useSearchParams()
-  const [splineLoaded, setSplineLoaded] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [authMode, setAuthMode] = useState('login')
   const [formMessage, setFormMessage] = useState(null)
@@ -320,30 +310,11 @@ export default function Index({ preloadCourseRoutes, preloadAttenteRoute, preloa
         <section
           className="relative hidden overflow-hidden bg-[#03093d] lg:flex"
           style={{
-            backgroundImage: 'url(/wallpaper-centre.webp)',
+            backgroundImage: 'url(/static/images/rocket.jpg)',
             backgroundSize: 'cover',
             backgroundPosition: 'center',
           }}
-        >
-          <div
-            className="relative z-10 flex w-full items-center justify-center p-12"
-            style={{
-              opacity: splineLoaded ? 1 : 0,
-              transform: splineLoaded ? 'scale(1)' : 'scale(0.96)',
-              transition: 'opacity 1s ease-out, transform 1s ease-out',
-            }}
-          >
-            <SplineErrorBoundary>
-              <Suspense fallback={null}>
-                <Spline
-                  scene="https://prod.spline.design/Td1yXokrn9dRpNzQ/scene.splinecode"
-                  style={{ width: '100%', height: '70vh', maxWidth: '560px' }}
-                  onLoad={() => setTimeout(() => setSplineLoaded(true), 100)}
-                />
-              </Suspense>
-            </SplineErrorBoundary>
-          </div>
-        </section>
+        />
 
         <section className="flex min-h-screen items-center justify-center px-6 py-10 sm:px-10 lg:px-12">
           <div className="w-full max-w-[420px]">
