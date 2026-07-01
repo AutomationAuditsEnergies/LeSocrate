@@ -1,4 +1,5 @@
 # hr_routes.py - Routes du Dashboard RH (centre de contrôle multi-plateformes)
+import json
 import os
 import time
 import requests as http_requests
@@ -15,6 +16,7 @@ from repositories.core_repository import (
     upsert_platform_config,
 )
 from services.course_schedule_service import (
+    ensure_course_schedule_tables,
     get_course_schedule_summary,
     process_due_reminders,
     run_scheduler_tick,
@@ -320,6 +322,31 @@ def create_hr_blueprint(socketio):
                 ORDER BY m.created_at DESC
             """, module_scope_params)
             rows = cursor.fetchall()
+            ensure_course_schedule_tables(cursor)
+            source_ids = sorted({r[6] for r in rows if r[6]})
+            schedules_by_platform = {}
+            if source_ids:
+                placeholders = ",".join("?" for _ in source_ids)
+                cursor.execute(
+                    f"""
+                    SELECT platform_id, total_training_days, weekly_course_count,
+                           weekdays_json, start_time
+                    FROM course_schedule_config
+                    WHERE platform_id IN ({placeholders})
+                    """,
+                    source_ids,
+                )
+                for platform_id, total_days, weekly_count, weekdays_json, start_time in cursor.fetchall():
+                    try:
+                        weekdays = json.loads(weekdays_json or "[]")
+                    except Exception:
+                        weekdays = []
+                    schedules_by_platform[platform_id] = {
+                        "total_training_days": total_days,
+                        "weekly_course_count": weekly_count,
+                        "weekdays": weekdays,
+                        "start_time": start_time,
+                    }
             conn.close()
             modules = [{
                 "id": r[0],
@@ -334,6 +361,7 @@ def create_hr_blueprint(socketio):
                 "source_platform_name": r[9],
                 "voice_type": r[10],
                 "voice_updated_at": r[11],
+                "schedule": schedules_by_platform.get(r[6]),
                 "reusable": r[4] == "validated" and r[8] > 0 and r[10] != "mock",
             } for r in rows]
             return jsonify({"success": True, "modules": modules}), 200

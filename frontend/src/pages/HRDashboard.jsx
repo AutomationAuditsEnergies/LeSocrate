@@ -1497,6 +1497,29 @@ function ModuleDeleteButton({ onClick, colors, label }) {
   )
 }
 
+const MODULE_WEEKDAY_LABELS = ['Lun.', 'Mar.', 'Mer.', 'Jeu.', 'Ven.', 'Sam.', 'Dim.']
+
+function inferTeacherName(module = {}) {
+  const source = module.source_platform_name || ''
+  if (source.includes('·')) return source.split('·')[0].trim()
+  if (source && source !== module.tp_name) return source
+  return 'Professeur IA'
+}
+
+function formatModuleCadence(module = {}) {
+  const schedule = module.schedule
+  if (!schedule) {
+    return `${module.nb_folders || 0} journée${(module.nb_folders || 0) > 1 ? 's' : ''}`
+  }
+  const days = (schedule.weekdays || [])
+    .map((day) => MODULE_WEEKDAY_LABELS[Number(day)])
+    .filter(Boolean)
+    .join(', ')
+  const total = schedule.total_training_days || module.nb_folders || 0
+  const weekly = schedule.weekly_course_count || (schedule.weekdays || []).length
+  return `${total} journée${total > 1 ? 's' : ''} · ${weekly}/semaine${days ? ` · ${days}` : ''} · ${schedule.start_time || '09:00'}`
+}
+
 function ModulesCatalogueView({
   colors,
   modules,
@@ -1508,41 +1531,37 @@ function ModulesCatalogueView({
   onDeleteModule,
 }) {
   return (
-    <section
-      className="overflow-hidden rounded-2xl"
-      style={{ backgroundColor: colors.cardBg, border: `1px solid ${colors.border}` }}
-    >
+    <section className="mx-auto w-full max-w-5xl">
       <header
-        className="flex items-start justify-between gap-4 px-7 py-5"
+        className="mb-7 flex items-end justify-between gap-4"
         style={{ borderBottom: `1px solid ${colors.border}` }}
       >
-        <div className="flex flex-col leading-tight">
+        <div className="flex flex-col pb-5 leading-tight">
           <span
             className="text-[10px] font-semibold uppercase"
             style={{ color: colors.textMuted, letterSpacing: '0.22em' }}
           >
-            Catalogue
+            Bibliothèque
           </span>
           <h2 className="mt-1 text-xl font-semibold tracking-tight" style={{ color: colors.text }}>
-            Modules de formation
+            Anciens professeurs IA
           </h2>
           <p className="mt-1 text-xs" style={{ color: colors.textMuted }}>
-            Produits durables des pipelines, réutilisables pour créer une nouvelle plateforme.
+            Professeurs terminés ou réutilisables pour lancer une nouvelle période de formation.
           </p>
         </div>
         <button
           onClick={onBack}
-          className="flex flex-shrink-0 items-center gap-2 rounded-lg px-3.5 py-2 text-sm font-medium transition-colors hover:bg-black/5 dark:hover:bg-white/5"
+          className="mb-4 flex flex-shrink-0 items-center gap-2 rounded-lg px-3.5 py-2 text-sm font-medium transition-colors hover:bg-black/5 dark:hover:bg-white/5"
           style={{ color: colors.textMuted, border: `1px solid ${colors.border}` }}
         >
-          <Icon name="view_module" className="text-base" />
-          <span>Plateformes</span>
+          <Icon name="school" className="text-base" />
+          <span>Mes professeurs IA</span>
         </button>
       </header>
 
       <div
-        className="flex items-center gap-3 px-7 py-4"
-        style={{ borderBottom: `1px solid ${colors.border}` }}
+        className="mb-5 flex items-center gap-3"
       >
         <div className="relative flex-1">
           <Icon
@@ -1554,7 +1573,7 @@ function ModulesCatalogueView({
             type="text"
             value={moduleSearchQuery}
             onChange={(e) => onModuleSearchChange(e.target.value)}
-            placeholder="Filtrer par nom de TP ou code RNCP..."
+            placeholder="Rechercher par professeur, formation ou code RNCP..."
             className="w-full rounded-lg py-2 pl-10 pr-3 text-sm outline-none transition-colors"
             style={{
               backgroundColor: colors.innerBg,
@@ -1569,66 +1588,60 @@ function ModulesCatalogueView({
           style={{ backgroundColor: '#8B5CF6' }}
           onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = '#7c3aed' }}
           onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = '#8B5CF6' }}
-          title="Lance une pipeline formation. Mode auto-pilot pour enchaîner toutes les étapes, ou manuel pour valider une à une."
+          title="Créer un nouveau professeur IA"
         >
           <Icon name="add" className="text-base" />
-          <span>Nouveau module</span>
+          <span>Nouveau professeur IA</span>
         </button>
       </div>
 
-      <div className="px-7 py-2">
+      <div>
         {modules.length === 0 ? (
-          <div className="py-16 text-center">
+          <div
+            className="py-16 text-center"
+            style={{ backgroundColor: colors.cardBg, border: `1px solid ${colors.border}`, borderRadius: 14 }}
+          >
             <p className="text-sm font-medium" style={{ color: colors.text }}>
               {moduleSearchQuery
-                ? 'Aucun module ne correspond à ce filtre.'
-                : 'Aucun module catalogué pour l’instant.'}
+                ? 'Aucun professeur IA ne correspond à ce filtre.'
+                : 'Aucun ancien professeur IA disponible pour l’instant.'}
             </p>
             <p className="mt-2 text-xs" style={{ color: colors.textMuted }}>
               {moduleSearchQuery
-                ? 'Essaie un autre nom de TP ou un code RNCP.'
-                : 'Lance une pipeline formation pour produire le premier module durable.'}
+                ? 'Essaie un prénom, un titre de formation ou un code RNCP.'
+                : 'Les professeurs terminés apparaîtront ici pour être réutilisés.'}
             </p>
           </div>
         ) : (
-          <ul>
+          <ul className="space-y-3">
             {modules.map((m, idx) => (
               <li
                 key={m.id}
-                className="flex items-center gap-5 py-4"
+                className="flex items-center gap-4 rounded-2xl px-4 py-3"
                 style={{
-                  borderTop: idx === 0 ? 'none' : `1px solid ${colors.border}`,
+                  backgroundColor: colors.cardBg,
+                  border: `1px solid ${colors.border}`,
                   opacity: m.reusable ? 1 : 0.55,
                 }}
               >
-                <div className="flex w-32 flex-shrink-0 flex-col gap-0.5">
-                  <span
-                    className="text-[10px] font-semibold uppercase"
-                    style={{
-                      color: colors.textMuted,
-                      letterSpacing: '0.12em',
-                      fontVariantNumeric: 'tabular-nums',
-                    }}
-                  >
-                    RNCP {m.rncp_code || '—'}
-                  </span>
-                  <span
-                    className="text-xs"
-                    style={{
-                      color: colors.textSecondary,
-                      fontFamily: '"Fira Code", ui-monospace, SFMono-Regular, monospace',
-                      fontVariantNumeric: 'tabular-nums',
-                    }}
-                  >
-                    {m.version}
-                  </span>
+                <div className="relative flex h-20 w-20 flex-shrink-0 items-center justify-center">
+                  <div
+                    className="absolute inset-2 rounded-full blur-xl"
+                    style={{ backgroundColor: getRobotTheme(m.source_platform_id || m.id).glow, opacity: 0.22 }}
+                  />
+                  <img
+                    src={getRobotTheme(m.source_platform_id || m.id).src}
+                    alt=""
+                    className="relative h-20 w-20 object-contain"
+                    draggable={false}
+                  />
                 </div>
 
                 <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2">
-                    <span className="truncate text-sm font-semibold" style={{ color: colors.text }}>
-                      {m.tp_name}
-                    </span>
+                  <div className="flex min-w-0 flex-wrap items-center gap-2">
+                    <h3 className="truncate text-base font-semibold" style={{ color: colors.text }}>
+                      {inferTeacherName(m)}
+                    </h3>
                     {m.status === 'validated' && (
                       <span
                         className="flex-shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase"
@@ -1638,7 +1651,7 @@ function ModulesCatalogueView({
                           letterSpacing: '0.15em',
                         }}
                       >
-                        Validé
+                        Réutilisable
                       </span>
                     )}
                     {m.status === 'draft' && (
@@ -1650,33 +1663,18 @@ function ModulesCatalogueView({
                           letterSpacing: '0.15em',
                         }}
                       >
-                        Brouillon
-                      </span>
-                    )}
-                    {/* Badge "Fait main" — modules sans pipeline source
-                        (plateformes vides où l'admin uploade le contenu lui-même).
-                        Slate neutre, lecture rapide, ne consomme pas l'accent violet. */}
-                    {!m.source_pipeline_job_id && (
-                      <span
-                        className="flex-shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium uppercase"
-                        style={{
-                          backgroundColor: colors.innerBg,
-                          color: colors.textMuted,
-                          border: `1px solid ${colors.border}`,
-                          letterSpacing: '0.15em',
-                        }}
-                      >
-                        Fait main
+                        En préparation
                       </span>
                     )}
                   </div>
+                  <p className="mt-1 truncate text-sm font-medium" style={{ color: colors.textSecondary }}>
+                    {m.tp_name}
+                  </p>
                   <p
                     className="mt-1 truncate text-xs"
                     style={{ color: colors.textMuted, fontVariantNumeric: 'tabular-nums' }}
                   >
-                    {m.nb_folders} journée{m.nb_folders > 1 ? 's' : ''}
-                    {' · Source '}
-                    <span style={{ color: colors.textSecondary }}>P{m.source_platform_id}</span>
+                    RNCP {m.rncp_code || '—'} · {formatModuleCadence(m)}
                     {m.created_at && (
                       <>
                         {' · créé le '}
@@ -1690,16 +1688,18 @@ function ModulesCatalogueView({
                   {m.reusable ? (
                     <button
                       onClick={() => onUseModule(m.id)}
-                      className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition-colors hover:bg-black/5 dark:hover:bg-white/5"
-                      style={{ color: colors.textSecondary, border: `1px solid ${colors.border}` }}
-                      title="Créer une nouvelle plateforme à partir de ce module"
+                      className="flex items-center gap-1.5 rounded-lg px-3.5 py-2 text-xs font-semibold text-white transition-colors"
+                      style={{ backgroundColor: '#8B5CF6' }}
+                      onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = '#7c3aed' }}
+                      onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = '#8B5CF6' }}
+                      title="Restaurer ce professeur IA dans Mes professeurs IA"
                     >
-                      <span>Utiliser</span>
+                      <span>Réutiliser</span>
                       <Icon name="arrow_forward" className="text-sm" />
                     </button>
                   ) : (
                     <span className="text-xs" style={{ color: colors.textMuted }}>
-                      {m.nb_folders === 0 ? 'Cours non générés' : 'Non réutilisable'}
+                      {m.nb_folders === 0 ? 'Cours non générés' : 'Bientôt'}
                     </span>
                   )}
                   {/* Bouton supprimer module — icône seule, slate au repos,
