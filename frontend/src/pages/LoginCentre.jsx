@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { apiFetch } from '../api'
-import { isSupabaseConfigured, supabase } from '../supabaseClient'
+import { getSupabaseClient } from '../supabaseClient'
 
 function getSupabaseErrorMessage(error, fallback) {
   const message = String(error?.message || '').toLowerCase()
@@ -47,17 +47,25 @@ export default function LoginCentre({ preloadAdminRoute, preloadDashboardRoute }
   }, [preloadDashboardRoute])
 
   useEffect(() => {
-    if (!isSupabaseConfigured) return undefined
+    let cancelled = false
+    let subscription = null
 
-    const { data } = supabase.auth.onAuthStateChange((event) => {
-      if (event === 'PASSWORD_RECOVERY') {
-        setPasswordRecoveryMode(true)
-        setAuthMode('login')
-        setNotice('Choisissez un nouveau mot de passe.')
-      }
+    getSupabaseClient().then((client) => {
+      if (cancelled || !client) return
+      const { data } = client.auth.onAuthStateChange((event) => {
+        if (event === 'PASSWORD_RECOVERY') {
+          setPasswordRecoveryMode(true)
+          setAuthMode('login')
+          setNotice('Choisissez un nouveau mot de passe.')
+        }
+      })
+      subscription = data.subscription
     })
 
-    return () => data.subscription.unsubscribe()
+    return () => {
+      cancelled = true
+      subscription?.unsubscribe()
+    }
   }, [])
 
   const handleSubmit = async (event) => {
@@ -74,7 +82,8 @@ export default function LoginCentre({ preloadAdminRoute, preloadDashboardRoute }
 
     try {
       if (passwordRecoveryMode) {
-        if (!isSupabaseConfigured) {
+        const supabaseClient = await getSupabaseClient()
+        if (!supabaseClient) {
           setError("Supabase Auth n'est pas configuré sur ce frontend.")
           return
         }
@@ -83,13 +92,13 @@ export default function LoginCentre({ preloadAdminRoute, preloadDashboardRoute }
           return
         }
 
-        const { error: updateError } = await supabase.auth.updateUser({ password })
+        const { error: updateError } = await supabaseClient.auth.updateUser({ password })
         if (updateError) {
           setError(getSupabaseErrorMessage(updateError, 'Impossible de modifier le mot de passe.'))
           return
         }
 
-        await supabase.auth.signOut()
+        await supabaseClient.auth.signOut()
         window.history.replaceState({}, '', '/connexion-centre')
         setPasswordRecoveryMode(false)
         setPassword('')
@@ -139,7 +148,8 @@ export default function LoginCentre({ preloadAdminRoute, preloadDashboardRoute }
       setError("Entrez votre adresse email dans le champ identifiant.")
       return
     }
-    if (!isSupabaseConfigured) {
+    const supabaseClient = await getSupabaseClient()
+    if (!supabaseClient) {
       setError("Supabase Auth n'est pas configuré sur ce frontend.")
       return
     }
@@ -156,7 +166,7 @@ export default function LoginCentre({ preloadAdminRoute, preloadDashboardRoute }
         return
       }
 
-      const { error: resetError } = await supabase.auth.resetPasswordForEmail(email, {
+      const { error: resetError } = await supabaseClient.auth.resetPasswordForEmail(email, {
         redirectTo: `${window.location.origin}/connexion-centre?auth=recovery`,
       })
       if (resetError) {

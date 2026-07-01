@@ -2,7 +2,7 @@ import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import { Component, lazy, Suspense, useState, useEffect } from 'react'
 import { Eye, EyeOff } from 'lucide-react'
 import { apiFetch, apiUrl, getStudentLoginPath, setPlatformId, setPlatformName, setStudentLoginPath } from '../api'
-import { isSupabaseConfigured, supabase } from '../supabaseClient'
+import { getSupabaseClient } from '../supabaseClient'
 
 const Spline = lazy(() => import('@splinetool/react-spline'))
 
@@ -80,23 +80,32 @@ export default function Index({ preloadCourseRoutes, preloadAttenteRoute, preloa
   }, [preloadCourseRoutes])
 
   useEffect(() => {
-    if (!isSupabaseConfigured) return undefined
+    let cancelled = false
+    let subscription = null
 
-    if (searchParams.get('auth') === 'recovery') {
-      setPasswordRecoveryMode(true)
-      setAuthMode('login')
-      setFormMessage({ type: 'success', text: 'Choisissez un nouveau mot de passe.' })
-    }
+    getSupabaseClient().then((client) => {
+      if (cancelled || !client) return
 
-    const { data } = supabase.auth.onAuthStateChange((event) => {
-      if (event === 'PASSWORD_RECOVERY') {
+      if (searchParams.get('auth') === 'recovery') {
         setPasswordRecoveryMode(true)
         setAuthMode('login')
         setFormMessage({ type: 'success', text: 'Choisissez un nouveau mot de passe.' })
       }
+
+      const { data } = client.auth.onAuthStateChange((event) => {
+        if (event === 'PASSWORD_RECOVERY') {
+          setPasswordRecoveryMode(true)
+          setAuthMode('login')
+          setFormMessage({ type: 'success', text: 'Choisissez un nouveau mot de passe.' })
+        }
+      })
+      subscription = data.subscription
     })
 
-    return () => data.subscription.unsubscribe()
+    return () => {
+      cancelled = true
+      subscription?.unsubscribe()
+    }
   }, [searchParams])
 
   const handleFormSubmit = async (event) => {
@@ -114,7 +123,8 @@ export default function Index({ preloadCourseRoutes, preloadAttenteRoute, preloa
 
     try {
       if (passwordRecoveryMode) {
-        if (!isSupabaseConfigured) {
+        const supabaseClient = await getSupabaseClient()
+        if (!supabaseClient) {
           setFormMessage({ type: 'error', text: "Supabase Auth n'est pas configuré sur ce frontend." })
           return
         }
@@ -123,7 +133,7 @@ export default function Index({ preloadCourseRoutes, preloadAttenteRoute, preloa
           return
         }
 
-        const { error } = await supabase.auth.updateUser({ password })
+        const { error } = await supabaseClient.auth.updateUser({ password })
         if (error) {
           setFormMessage({
             type: 'error',
@@ -132,7 +142,7 @@ export default function Index({ preloadCourseRoutes, preloadAttenteRoute, preloa
           return
         }
 
-        await supabase.auth.signOut()
+        await supabaseClient.auth.signOut()
         window.history.replaceState({}, '', '/')
         setPasswordRecoveryMode(false)
         setAuthMode('login')
@@ -145,7 +155,8 @@ export default function Index({ preloadCourseRoutes, preloadAttenteRoute, preloa
 
       let response
       if (email || password) {
-        if (!isSupabaseConfigured) {
+        const supabaseClient = await getSupabaseClient()
+        if (!supabaseClient) {
           setFormMessage({ type: 'error', text: "Supabase Auth n'est pas configuré sur ce frontend." })
           return
         }
@@ -159,7 +170,7 @@ export default function Index({ preloadCourseRoutes, preloadAttenteRoute, preloa
             setFormMessage({ type: 'error', text: 'Nom et prénom sont requis pour créer un compte.' })
             return
           }
-          const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
+          const { data: signUpData, error: signUpError } = await supabaseClient.auth.signUp({
             email,
             password,
             options: {
@@ -187,7 +198,7 @@ export default function Index({ preloadCourseRoutes, preloadAttenteRoute, preloa
           }
           authData = signUpData
         } else {
-          const { data: signInData, error: signInError } = await supabase.auth.signInWithPassword({
+          const { data: signInData, error: signInError } = await supabaseClient.auth.signInWithPassword({
             email,
             password,
           })
@@ -273,14 +284,15 @@ export default function Index({ preloadCourseRoutes, preloadAttenteRoute, preloa
       return
     }
 
-    if (!isSupabaseConfigured) {
+    const supabaseClient = await getSupabaseClient()
+    if (!supabaseClient) {
       setFormMessage({ type: 'error', text: "Supabase Auth n'est pas configuré sur ce frontend." })
       return
     }
 
     setResettingPassword(true)
     try {
-      const { error } = await supabase.auth.resetPasswordForEmail(email, {
+      const { error } = await supabaseClient.auth.resetPasswordForEmail(email, {
         redirectTo: `${window.location.origin}/?auth=recovery`,
       })
 
@@ -518,7 +530,8 @@ export default function Index({ preloadCourseRoutes, preloadAttenteRoute, preloa
               <button
                 type="button"
                 onClick={async () => {
-                  await supabase?.auth.signOut()
+                  const supabaseClient = await getSupabaseClient()
+                  await supabaseClient?.auth.signOut()
                   window.history.replaceState({}, '', '/')
                   setPasswordRecoveryMode(false)
                   setFormMessage(null)

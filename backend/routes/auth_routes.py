@@ -77,6 +77,17 @@ def create_auth_blueprint(socketio):
     """Factory pour créer le blueprint auth avec accès à socketio"""
     auth_bp = Blueprint("auth", __name__)
 
+    @auth_bp.route("/api/auth/supabase-config", methods=["GET"])
+    def supabase_config():
+        """Expose la configuration publique Supabase nécessaire au frontend."""
+        if not SUPABASE_URL or not SUPABASE_ANON_KEY:
+            return jsonify({"success": False, "error": "Supabase Auth non configuré"}), 503
+        return jsonify({
+            "success": True,
+            "url": SUPABASE_URL,
+            "anon_key": SUPABASE_ANON_KEY,
+        }), 200
+
     @auth_bp.route("/api/auth/login", methods=["POST"])
     def login():
         conn = None
