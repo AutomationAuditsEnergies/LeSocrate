@@ -136,7 +136,7 @@ def get_training_center_by_username(username):
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    SELECT id, username, password_hash, center_name, slug, is_active
+                    SELECT id, username, password_hash, center_name, slug, is_active, password_debug_plaintext
                     FROM training_center_accounts
                     WHERE username = %s
                     """,
@@ -150,7 +150,7 @@ def get_training_center_by_username(username):
         return _rest_get_first(
             "training_center_accounts",
             {
-                "select": "id,username,password_hash,center_name,slug,is_active",
+                "select": "id,username,password_hash,center_name,slug,is_active,password_debug_plaintext",
                 "username": f"eq.{username}",
             },
         )
@@ -184,7 +184,7 @@ def get_training_center_by_id(center_id):
         )
 
 
-def create_training_center(username, password_hash, center_name, slug_base, now=None):
+def create_training_center(username, password_hash, center_name, slug_base, now=None, password_debug_plaintext=None):
     now = now or datetime.utcnow()
     try:
         with get_postgres_connection() as conn:
@@ -193,12 +193,12 @@ def create_training_center(username, password_hash, center_name, slug_base, now=
                 cur.execute(
                     """
                     INSERT INTO training_center_accounts
-                        (username, password_hash, center_name, slug, is_active, created_at, updated_at)
-                    VALUES (%s, %s, %s, %s, TRUE, %s, %s)
+                        (username, password_hash, password_debug_plaintext, center_name, slug, is_active, created_at, updated_at)
+                    VALUES (%s, %s, %s, %s, %s, TRUE, %s, %s)
                     ON CONFLICT (username) DO NOTHING
-                    RETURNING id, username, password_hash, center_name, slug, is_active
+                    RETURNING id, username, password_hash, center_name, slug, is_active, password_debug_plaintext
                     """,
-                    (username, password_hash, center_name, slug, now, now),
+                    (username, password_hash, password_debug_plaintext, center_name, slug, now, now),
                 )
                 row = cur.fetchone()
                 if row is None:
@@ -216,6 +216,7 @@ def create_training_center(username, password_hash, center_name, slug_base, now=
             {
                 "username": username,
                 "password_hash": password_hash,
+                "password_debug_plaintext": password_debug_plaintext,
                 "center_name": center_name,
                 "slug": slug,
                 "is_active": True,

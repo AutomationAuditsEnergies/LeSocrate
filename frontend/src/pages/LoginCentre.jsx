@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { apiFetch } from '../api'
 
-export default function LoginCentre({ preloadDashboardRoute }) {
+export default function LoginCentre({ preloadAdminRoute, preloadDashboardRoute }) {
   const [authMode, setAuthMode] = useState('login')
   const [centerName, setCenterName] = useState('')
   const [username, setUsername] = useState('')
@@ -34,6 +34,7 @@ export default function LoginCentre({ preloadDashboardRoute }) {
     setLoading(true)
 
     try {
+      localStorage.removeItem('admin_auth_token')
       const response = await apiFetch(authMode === 'signup' ? '/api/admin/register' : '/api/admin/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -47,8 +48,13 @@ export default function LoginCentre({ preloadDashboardRoute }) {
 
       if (response.ok && data.success) {
         if (data.token) localStorage.setItem('admin_auth_token', data.token)
-        await preloadDashboardRoute?.().catch(() => {})
-        navigate('/hr-dashboard')
+        if (data.account?.type === 'legacy_admin') {
+          await preloadAdminRoute?.().catch(() => {})
+          navigate('/admin')
+        } else {
+          await preloadDashboardRoute?.().catch(() => {})
+          navigate('/dashboard-centre')
+        }
         return
       }
 

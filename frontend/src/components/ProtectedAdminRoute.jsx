@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { Navigate } from 'react-router-dom'
 import { apiFetch } from '../api'
 
-export default function ProtectedAdminRoute({ children, loginPath = '/login-admin', allowedAccountTypes = null }) {
+export default function ProtectedAdminRoute({ children, loginPath = '/connexion-centre', allowedAccountTypes = null }) {
   const [isAuthenticated, setIsAuthenticated] = useState(null) // null = loading, true/false = résultat
   const [isLoading, setIsLoading] = useState(true)
 

@@ -194,6 +194,7 @@ def init_database(_recovered_from_corruption: bool = False):
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 username TEXT NOT NULL UNIQUE,
                 password_hash TEXT NOT NULL,
+                password_debug_plaintext TEXT,
                 center_name TEXT NOT NULL,
                 is_active INTEGER NOT NULL DEFAULT 1,
                 created_at TEXT NOT NULL,
@@ -208,6 +209,9 @@ def init_database(_recovered_from_corruption: bool = False):
         if "slug" not in center_columns:
             cursor.execute("ALTER TABLE training_center_accounts ADD COLUMN slug TEXT")
             logger.info("✅ Colonne slug ajoutée à training_center_accounts")
+        if "password_debug_plaintext" not in center_columns:
+            cursor.execute("ALTER TABLE training_center_accounts ADD COLUMN password_debug_plaintext TEXT")
+            logger.info("✅ Colonne password_debug_plaintext ajoutée à training_center_accounts")
         cursor.execute("SELECT id, center_name, username, slug FROM training_center_accounts")
         for center_id, center_name, username, existing_slug in cursor.fetchall():
             if existing_slug:

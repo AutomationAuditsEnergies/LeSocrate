@@ -1,5 +1,5 @@
 import { Component, lazy, Suspense, useState, useEffect } from 'react'
-import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
+import { BrowserRouter, Route, Routes } from 'react-router-dom'
 import { apiUrl } from './api'
 import Index from './pages/Index.jsx'
 import ProtectedAdminRoute from './components/ProtectedAdminRoute.jsx'
@@ -9,7 +9,6 @@ import ProtectedAdminRoute from './components/ProtectedAdminRoute.jsx'
 // le flash de fallback après validation du formulaire.
 const loadAdminPage = () => import('./pages/Admin.jsx')
 const loadAttentePage = () => import('./pages/Attente.jsx')
-const loadLoginAdminPage = () => import('./pages/LoginAdmin.jsx')
 const loadLoginCentrePage = () => import('./pages/LoginCentre.jsx')
 const loadVideoPage = () => import('./pages/Video.jsx')
 const loadHRDashboardPage = () => import('./pages/HRDashboard.jsx')
@@ -22,7 +21,6 @@ const Admin = lazy(loadAdminPage)
 const Attente = lazy(loadAttentePage)
 const DebugCours = lazy(() => import('./pages/DebugCours.jsx'))
 const Intro = lazy(() => import('./pages/Intro.jsx'))
-const LoginAdmin = lazy(loadLoginAdminPage)
 const LoginCentre = lazy(loadLoginCentrePage)
 const Landing = lazy(() => import('./pages/Landing.jsx'))
 const Video = lazy(loadVideoPage)
@@ -220,6 +218,33 @@ function ProtectedHRRoute({ children }) {
   return children
 }
 
+function CenterDashboardRoute() {
+  return (
+    <ProtectedHRRoute>
+      <ProtectedAdminRoute loginPath="/connexion-centre" allowedAccountTypes={CENTER_DASHBOARD_TYPES}>
+        <HRDashboard />
+      </ProtectedAdminRoute>
+    </ProtectedHRRoute>
+  )
+}
+
+function NotFound() {
+  return (
+    <main className="flex min-h-screen items-center justify-center bg-slate-950 px-6 text-white">
+      <div className="max-w-md">
+        <p className="text-sm font-semibold text-violet-300">Page introuvable</p>
+        <h1 className="mt-3 text-3xl font-bold">Cette adresse n'existe pas.</h1>
+        <a
+          href="/connexion-centre"
+          className="mt-8 inline-flex h-11 items-center justify-center rounded-lg bg-violet-500 px-5 text-sm font-semibold text-white transition hover:bg-violet-400"
+        >
+          Aller à la connexion
+        </a>
+      </div>
+    </main>
+  )
+}
+
 export default function App() {
   return (
     <AppErrorBoundary>
@@ -253,9 +278,10 @@ export default function App() {
             }
           />
           <Route path="/video" element={<Video />} />
-          <Route path="/login-admin" element={<LoginAdmin preloadAdminRoute={loadAdminPage} />} />
-          <Route path="/connexion-centre" element={<LoginCentre preloadDashboardRoute={loadHRDashboardPage} />} />
-          <Route path="/login-centre" element={<LoginCentre preloadDashboardRoute={loadHRDashboardPage} />} />
+          <Route
+            path="/connexion-centre"
+            element={<LoginCentre preloadAdminRoute={loadAdminPage} preloadDashboardRoute={loadHRDashboardPage} />}
+          />
 
           {/* Routes protégées admin */}
           <Route
@@ -276,14 +302,8 @@ export default function App() {
           />
           <Route path="/recorder" element={<Recorder />} />
           <Route
-            path="/hr-dashboard"
-            element={
-              <ProtectedHRRoute>
-                <ProtectedAdminRoute loginPath="/connexion-centre" allowedAccountTypes={CENTER_DASHBOARD_TYPES}>
-                  <HRDashboard />
-                </ProtectedAdminRoute>
-              </ProtectedHRRoute>
-            }
+            path="/dashboard-centre"
+            element={<CenterDashboardRoute />}
           />
 
           <Route
@@ -312,7 +332,7 @@ export default function App() {
               </ProtectedAdminRoute>
             }
           />
-          <Route path="*" element={<Navigate to="/" replace />} />
+          <Route path="*" element={<NotFound />} />
           </Routes>
         </Suspense>
       </BrowserRouter>

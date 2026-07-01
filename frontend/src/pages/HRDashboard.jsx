@@ -2807,12 +2807,10 @@ function PlatformCard({
           </a>
         )}
 
-        {/* Lien vers la page admin de la plateforme (login-admin sur le domaine
-            distant pour que la session admin se crée localement sur le bon
-            backend ; ?p= garantit le platform_id correct dans le localStorage). */}
+        {/* Accès au dashboard centre sur le domaine de la plateforme. */}
         {p.active && (
           <a
-            href={`${p.frontend_url || window.location.origin}/login-admin?p=${p.id}`}
+            href={`${p.frontend_url || window.location.origin}/dashboard-centre?p=${p.id}`}
             target="_blank"
             rel="noopener noreferrer"
             className="flex w-full items-center justify-between rounded-md px-3 py-2 text-sm transition-colors hover:bg-black/5 dark:hover:bg-white/5"
@@ -2821,7 +2819,7 @@ function PlatformCard({
               textDecoration: 'none',
             }}
           >
-            <span>Admin</span>
+            <span>Dashboard centre</span>
             <Icon name="open_in_new" className="text-base" style={{ color: colors.textMuted }} />
           </a>
         )}

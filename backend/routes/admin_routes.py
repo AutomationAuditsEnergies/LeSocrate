@@ -72,7 +72,7 @@ def _get_platform_id():
     return 1
 
 
-def _mirror_training_center_to_sqlite(cursor, account, password_hash, now_str):
+def _mirror_training_center_to_sqlite(cursor, account, password_hash, now_str, password_debug_plaintext=None):
     cursor.execute("SELECT id FROM training_center_accounts WHERE id = ?", (account["id"],))
     existing = cursor.fetchone()
     if existing:
@@ -81,6 +81,7 @@ def _mirror_training_center_to_sqlite(cursor, account, password_hash, now_str):
             UPDATE training_center_accounts
             SET username = ?,
                 password_hash = ?,
+                password_debug_plaintext = ?,
                 center_name = ?,
                 slug = ?,
                 is_active = ?,
@@ -90,6 +91,7 @@ def _mirror_training_center_to_sqlite(cursor, account, password_hash, now_str):
             (
                 account["username"],
                 password_hash,
+                password_debug_plaintext,
                 account["center_name"],
                 account["slug"],
                 1 if account["is_active"] else 0,
@@ -102,13 +104,14 @@ def _mirror_training_center_to_sqlite(cursor, account, password_hash, now_str):
     cursor.execute(
         """
         INSERT INTO training_center_accounts
-            (id, username, password_hash, center_name, slug, is_active, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            (id, username, password_hash, password_debug_plaintext, center_name, slug, is_active, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             account["id"],
             account["username"],
             password_hash,
+            password_debug_plaintext,
             account["center_name"],
             account["slug"],
             1 if account["is_active"] else 0,
@@ -278,13 +281,13 @@ def create_admin_blueprint(socketio):
                 "is_active": True,
                 "created_at": "",
                 "updated_at": "",
-                "password_status": "Mot de passe défini, non affichable",
+                "password_status": "secret123",
                 "internal": True,
                 **center_stats.get(None, {"platform_count": 0, "student_count": 0, "log_count": 0}),
             }]
 
             cursor.execute("""
-                SELECT id, username, center_name, slug, is_active, created_at, updated_at, password_hash
+                SELECT id, username, center_name, slug, is_active, created_at, updated_at, password_hash, password_debug_plaintext
                 FROM training_center_accounts
                 ORDER BY created_at DESC, id DESC
             """)
@@ -300,7 +303,7 @@ def create_admin_blueprint(socketio):
                     "is_active": bool(row[4]),
                     "created_at": row[5],
                     "updated_at": row[6],
-                    "password_status": "Mot de passe défini, non affichable" if row[7] else "Non défini",
+                    "password_status": row[8] or ("Hashé, non récupérable" if row[7] else "Non défini"),
                     "internal": False,
                     **stats,
                 })
@@ -641,7 +644,16 @@ def create_admin_blueprint(socketio):
                 session.permanent = True
                 token = _create_admin_token("legacy_admin")
                 logger.info("✅ Connexion admin réussie")
-                return jsonify({"success": True, "message": "Connexion réussie", "token": token}), 200
+                return jsonify({
+                    "success": True,
+                    "message": "Connexion réussie",
+                    "token": token,
+                    "account": {
+                        "type": "legacy_admin",
+                        "username": "admin",
+                        "center_name": "Sales Hacking / Le Socrate interne",
+                    },
+                }), 200
 
             if postgres_enabled():
                 account = get_training_center_by_username(username)
@@ -667,6 +679,7 @@ def create_admin_blueprint(socketio):
                                 "message": "Connexion réussie",
                                 "token": token,
                                 "account": {
+                                    "type": "training_center",
                                     "id": account["id"],
                                     "username": account["username"],
                                     "center_name": account["center_name"],
@@ -714,6 +727,7 @@ def create_admin_blueprint(socketio):
                         "message": "Connexion réussie",
                         "token": token,
                         "account": {
+                            "type": "training_center",
                             "id": account[0],
                             "username": account[1],
                             "center_name": account[3],
@@ -770,6 +784,7 @@ def create_admin_blueprint(socketio):
                     account = create_training_center(
                         username=username,
                         password_hash=password_hash,
+                        password_debug_plaintext=password,
                         center_name=center_name,
                         slug_base=center_name or username,
                         now=now_str,
@@ -779,7 +794,7 @@ def create_admin_blueprint(socketio):
 
                 conn = get_db_connection()
                 cursor = conn.cursor()
-                _mirror_training_center_to_sqlite(cursor, account, password_hash, now_str)
+                _mirror_training_center_to_sqlite(cursor, account, password_hash, now_str, password)
                 conn.commit()
 
                 session["is_admin"] = True
@@ -797,6 +812,7 @@ def create_admin_blueprint(socketio):
                             "message": "Compte créé",
                             "token": token,
                             "account": {
+                                "type": "training_center",
                                 "id": account["id"],
                                 "username": account["username"],
                                 "center_name": account["center_name"],
@@ -817,12 +833,13 @@ def create_admin_blueprint(socketio):
             cursor.execute(
                 """
                 INSERT INTO training_center_accounts
-                    (username, password_hash, center_name, slug, is_active, created_at, updated_at)
-                VALUES (?, ?, ?, ?, 1, ?, ?)
+                    (username, password_hash, password_debug_plaintext, center_name, slug, is_active, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, 1, ?, ?)
                 """,
                 (
                     username,
                     password_hash,
+                    password,
                     center_name,
                     center_slug,
                     now_str,
@@ -847,6 +864,7 @@ def create_admin_blueprint(socketio):
                         "message": "Compte créé",
                         "token": token,
                         "account": {
+                            "type": "training_center",
                             "id": account_id,
                             "username": username,
                             "center_name": center_name,

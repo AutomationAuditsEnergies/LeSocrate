@@ -8,6 +8,7 @@ CREATE TABLE IF NOT EXISTS training_center_accounts (
     id BIGSERIAL PRIMARY KEY,
     username TEXT NOT NULL UNIQUE,
     password_hash TEXT NOT NULL,
+    password_debug_plaintext TEXT,
     center_name TEXT NOT NULL,
     slug TEXT NOT NULL UNIQUE,
     is_active BOOLEAN NOT NULL DEFAULT TRUE,
