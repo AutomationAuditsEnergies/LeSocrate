@@ -16,7 +16,6 @@ POST /api/formation/<job_id>/launch-audio Lance la synthèse TTS Fish Audio sur 
 GET  /api/formation/list                  Liste les jobs de la plateforme
 """
 
-import math
 import os
 import threading
 import time
@@ -252,7 +251,11 @@ def init_formation():
         return jsonify({"error": "Le champ 'total_hours' doit être > 0"}), 400
 
     total_hours = int(total_hours)
-    nb_days = math.ceil(total_hours / HOURS_PER_DAY)
+    if total_hours % HOURS_PER_DAY != 0:
+        return jsonify({
+            "error": f"Le champ 'total_hours' doit être un multiple de {HOURS_PER_DAY} (1 journée = {HOURS_PER_DAY}h)",
+        }), 400
+    nb_days = total_hours // HOURS_PER_DAY
 
     try:
         from database.db import get_db_connection
@@ -365,8 +368,12 @@ def init_test_pipeline():
         return jsonify({"error": "total_hours doit être un entier"}), 400
     if total_hours <= 0:
         return jsonify({"error": "total_hours doit être > 0"}), 400
+    if total_hours % HOURS_PER_DAY != 0:
+        return jsonify({
+            "error": f"total_hours doit être un multiple de {HOURS_PER_DAY} (1 journée = {HOURS_PER_DAY}h)",
+        }), 400
 
-    nb_days = math.ceil(total_hours / HOURS_PER_DAY)
+    nb_days = total_hours // HOURS_PER_DAY
     docs = request.files.getlist("docs")
     if len(docs) != nb_days:
         return jsonify({

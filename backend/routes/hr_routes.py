@@ -1022,6 +1022,18 @@ def create_hr_blueprint(socketio):
                 if not tp_name or not rncp_code or not total_hours:
                     conn.close()
                     return jsonify({"success": False, "error": "tp_name, rncp_code et total_hours requis pour une nouvelle formation"}), 400
+                try:
+                    total_hours = int(total_hours)
+                except (TypeError, ValueError):
+                    conn.close()
+                    return jsonify({"success": False, "error": "total_hours doit être un entier"}), 400
+                from services.formation_pipeline_service import HOURS_PER_DAY
+                if total_hours <= 0 or total_hours % HOURS_PER_DAY != 0:
+                    conn.close()
+                    return jsonify({
+                        "success": False,
+                        "error": f"La durée doit être un multiple de {HOURS_PER_DAY}h : 1 journée = {HOURS_PER_DAY}h.",
+                    }), 400
                 schedule_config = new_formation.get("schedule") or {}
                 if schedule_config:
                     try:
@@ -1192,10 +1204,9 @@ def create_hr_blueprint(socketio):
 
             # Mode nouvelle formation : créer le job pipeline (l'admin finit les étapes sur /formation-pipeline)
             elif new_formation:
-                import math
                 from services.formation_pipeline_service import create_job, HOURS_PER_DAY
                 th = int(total_hours)
-                nb_days = math.ceil(th / HOURS_PER_DAY)
+                nb_days = th // HOURS_PER_DAY
                 linked_job_id = create_job(
                     platform_id=new_id,
                     tp_name=tp_name,

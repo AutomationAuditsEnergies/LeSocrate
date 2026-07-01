@@ -661,12 +661,13 @@ export default function HRDashboard() {
     if (formationMode === 'new' && autoPilot && autoPilotMode === 'test') {
       const tpName = newFormTpName.trim()
       const rncp = newFormRncp.trim()
-      const hours = parseInt(newFormHours, 10)
-      if (!tpName || !rncp || !hours || hours <= 0) {
-        alert('Nom du TP, code RNCP et durée (h) requis')
+      const trainingDaysCount = parseInt(newFormHours, 10)
+      if (!tpName || !rncp || !trainingDaysCount || trainingDaysCount <= 0) {
+        alert('Nom du TP, code RNCP et nombre de journées requis')
         return
       }
-      const expectedDocs = Math.ceil(hours / 7)
+      const totalHours = trainingDaysCount * 7
+      const expectedDocs = trainingDaysCount
       if (testDocs.length !== expectedDocs) {
         alert(`Tu dois fournir exactement ${expectedDocs} fichier(s) (1 par journée de 7h). Reçu : ${testDocs.length}`)
         return
@@ -678,7 +679,7 @@ export default function HRDashboard() {
         fd.append('platform_name', newPlatformName.trim())
         fd.append('tp_name', tpName)
         fd.append('rncp_code', rncp)
-        fd.append('total_hours', String(hours))
+        fd.append('total_hours', String(totalHours))
         fd.append('tts_mode', 'mock')  // forcé en test
         fd.append('auto_pilot', 'true')
         testDocs.forEach((f) => fd.append('docs', f))
