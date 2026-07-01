@@ -246,6 +246,31 @@ def init_database(_recovered_from_corruption: bool = False):
 
         cursor.execute(
             """
+            CREATE TABLE IF NOT EXISTS student_attendance_records (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                platform_id INTEGER NOT NULL,
+                student_profile_id INTEGER NOT NULL,
+                course_date TEXT NOT NULL,
+                slots_json TEXT NOT NULL DEFAULT '[]',
+                total_minutes INTEGER NOT NULL DEFAULT 0,
+                status TEXT NOT NULL DEFAULT 'absent',
+                notes TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(platform_id, student_profile_id, course_date)
+            )
+            """
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_student_attendance_platform_date ON student_attendance_records(platform_id, course_date)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_student_attendance_student ON student_attendance_records(student_profile_id)"
+        )
+        logger.info("✅ Table student_attendance_records créée/vérifiée")
+
+        cursor.execute(
+            """
             CREATE TABLE IF NOT EXISTS training_center_accounts (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 username TEXT NOT NULL UNIQUE,

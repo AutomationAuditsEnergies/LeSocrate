@@ -123,6 +123,20 @@ CREATE TABLE IF NOT EXISTS student_profiles (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS student_attendance_records (
+    id BIGSERIAL PRIMARY KEY,
+    platform_id BIGINT NOT NULL REFERENCES platform_config(id) ON DELETE CASCADE,
+    student_profile_id BIGINT NOT NULL REFERENCES student_profiles(id) ON DELETE CASCADE,
+    course_date DATE NOT NULL,
+    slots_json TEXT NOT NULL DEFAULT '[]',
+    total_minutes INTEGER NOT NULL DEFAULT 0,
+    status TEXT NOT NULL DEFAULT 'absent',
+    notes TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(platform_id, student_profile_id, course_date)
+);
+
 CREATE TABLE IF NOT EXISTS ai_teacher_orders (
     id BIGSERIAL PRIMARY KEY,
     center_account_id BIGINT NOT NULL REFERENCES training_center_accounts(id) ON DELETE CASCADE,
@@ -148,5 +162,7 @@ CREATE INDEX IF NOT EXISTS idx_logs_platform_arrivee ON logs(platform_id, arrive
 CREATE INDEX IF NOT EXISTS idx_video_visits_platform ON video_visits(platform_id);
 CREATE INDEX IF NOT EXISTS idx_video_visits_log ON video_visits(log_id);
 CREATE INDEX IF NOT EXISTS idx_student_profiles_platform ON student_profiles(platform_id);
+CREATE INDEX IF NOT EXISTS idx_student_attendance_platform_date ON student_attendance_records(platform_id, course_date);
+CREATE INDEX IF NOT EXISTS idx_student_attendance_student ON student_attendance_records(student_profile_id);
 CREATE INDEX IF NOT EXISTS idx_ai_teacher_orders_center ON ai_teacher_orders(center_account_id);
 CREATE INDEX IF NOT EXISTS idx_ai_teacher_orders_platform ON ai_teacher_orders(platform_id);

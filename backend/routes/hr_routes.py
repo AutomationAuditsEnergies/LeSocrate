@@ -1,10 +1,11 @@
 # hr_routes.py - Routes du Dashboard RH (centre de contrôle multi-plateformes)
 import json
 import os
+import re
 import time
 import requests as http_requests
 from datetime import datetime, timedelta, timezone
-from flask import Blueprint, request, session, jsonify, Response, stream_with_context
+from flask import Blueprint, request, session, jsonify, Response, stream_with_context, send_file
 from azure.storage.blob import BlobServiceClient, ContentSettings, generate_blob_sas, BlobSasPermissions
 from azure.core.exceptions import ResourceExistsError
 from config import FRANCE_TZ
@@ -23,6 +24,7 @@ from services.course_schedule_service import (
     save_course_schedule,
     update_course_schedule_start_time,
 )
+from services.export_service import generate_attendance_excel_export
 from utils.logger import get_logger
 from utils.slug import slugify, unique_slug
 import state
@@ -228,6 +230,98 @@ def create_hr_blueprint(socketio):
 
     def _now_str():
         return datetime.now(FRANCE_TZ).strftime("%Y-%m-%d %H:%M:%S")
+
+    def _platform_access_clause(alias="pc"):
+        if session.get("admin_account_type") == "training_center":
+            return f"{alias}.center_account_id = ?", [session.get("admin_account_id")]
+        return "1 = 1", []
+
+    def _get_accessible_platform(cursor, platform_id):
+        scope_sql, scope_params = _platform_access_clause("pc")
+        cursor.execute(
+            f"SELECT pc.id, pc.name FROM platform_config pc WHERE pc.id = ? AND {scope_sql}",
+            [platform_id] + scope_params,
+        )
+        return cursor.fetchone()
+
+    def _ensure_student_attendance_records(cursor):
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS student_attendance_records (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                platform_id INTEGER NOT NULL,
+                student_profile_id INTEGER NOT NULL,
+                course_date TEXT NOT NULL,
+                slots_json TEXT NOT NULL DEFAULT '[]',
+                total_minutes INTEGER NOT NULL DEFAULT 0,
+                status TEXT NOT NULL DEFAULT 'absent',
+                notes TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(platform_id, student_profile_id, course_date)
+            )
+            """
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_student_attendance_platform_date ON student_attendance_records(platform_id, course_date)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_student_attendance_student ON student_attendance_records(student_profile_id)"
+        )
+
+    def _parse_course_date(value):
+        raw = str(value or "").strip()
+        if not raw:
+            return datetime.now(FRANCE_TZ).strftime("%Y-%m-%d")
+        try:
+            return datetime.strptime(raw, "%Y-%m-%d").strftime("%Y-%m-%d")
+        except ValueError:
+            raise ValueError("Date du cours invalide")
+
+    def _time_to_minutes(value):
+        raw = str(value or "").strip()
+        if not re.match(r"^\d{2}:\d{2}$", raw):
+            raise ValueError("Les heures doivent être au format HH:MM")
+        hours, minutes = [int(part) for part in raw.split(":")]
+        if hours > 23 or minutes > 59:
+            raise ValueError("Heure invalide")
+        return hours * 60 + minutes
+
+    def _normalize_attendance_slots(raw_slots):
+        slots = []
+        total_minutes = 0
+        for raw_slot in raw_slots or []:
+            start = str((raw_slot or {}).get("start") or "").strip()
+            end = str((raw_slot or {}).get("end") or "").strip()
+            if not start and not end:
+                continue
+            start_minutes = _time_to_minutes(start)
+            end_minutes = _time_to_minutes(end)
+            if end_minutes <= start_minutes:
+                raise ValueError("L'heure de départ doit être après l'heure d'arrivée")
+            slots.append({"start": start, "end": end})
+            total_minutes += end_minutes - start_minutes
+        return slots, total_minutes
+
+    def _serialize_attendance_row(row, slots_index=4):
+        slots = []
+        try:
+            slots = json.loads(row[slots_index] or "[]")
+        except Exception:
+            slots = []
+        return {
+            "id": row[0],
+            "platform_id": row[1],
+            "student_profile_id": row[2],
+            "course_date": row[3],
+            "slots": slots,
+            "total_minutes": int(row[slots_index + 1] or 0),
+            "status": row[slots_index + 2] or "absent",
+            "notes": row[slots_index + 3] or "",
+            "created_at": row[slots_index + 4],
+            "updated_at": row[slots_index + 5],
+            "source": "saved",
+        }
 
     def _get_azure_audio_clients():
         """Retourne (blob_service_client, container_client) pour le conteneur audio P1"""
@@ -1246,6 +1340,8 @@ def create_hr_blueprint(socketio):
             cursor.execute("DELETE FROM cours_config WHERE platform_id = ?", (platform_id,))
             cursor.execute("DELETE FROM course_sessions WHERE platform_id = ?", (platform_id,))
             cursor.execute("DELETE FROM course_schedule_config WHERE platform_id = ?", (platform_id,))
+            _ensure_student_attendance_records(cursor)
+            cursor.execute("DELETE FROM student_attendance_records WHERE platform_id = ?", (platform_id,))
             _ensure_course_reminder_recipients(cursor)
             cursor.execute("DELETE FROM course_reminder_recipients WHERE platform_id = ?", (platform_id,))
 
@@ -2028,6 +2124,302 @@ def create_hr_blueprint(socketio):
         cursor.execute(
             "CREATE INDEX IF NOT EXISTS idx_course_reminder_recipients_platform ON course_reminder_recipients(platform_id)"
         )
+
+    def _attendance_record_from_logs(log_rows):
+        slots = []
+        total = 0
+        for arrivee, depart in log_rows:
+            if not arrivee or not depart:
+                continue
+            try:
+                start = str(arrivee)[11:16]
+                end = str(depart)[11:16]
+                start_minutes = _time_to_minutes(start)
+                end_minutes = _time_to_minutes(end)
+                if end_minutes <= start_minutes:
+                    continue
+            except Exception:
+                continue
+            slots.append({"start": start, "end": end})
+            total += end_minutes - start_minutes
+        return {
+            "id": None,
+            "slots": slots,
+            "total_minutes": total,
+            "status": "present" if total > 0 else "absent",
+            "notes": "",
+            "source": "logs" if slots else "empty",
+        }
+
+    @hr_bp.route("/api/hr/platforms/<int:platform_id>/attendance", methods=["GET"])
+    def get_platform_attendance(platform_id):
+        denied = _require_admin()
+        if denied:
+            return denied
+        try:
+            course_date = _parse_course_date(request.args.get("course_date"))
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            _ensure_student_attendance_records(cursor)
+
+            platform = _get_accessible_platform(cursor, platform_id)
+            if not platform:
+                conn.close()
+                return jsonify({"success": False, "error": "Plateforme introuvable"}), 404
+
+            cursor.execute(
+                """
+                SELECT id, email, nom, prenom, is_active
+                FROM student_profiles
+                WHERE platform_id = ?
+                ORDER BY prenom COLLATE NOCASE, nom COLLATE NOCASE, email COLLATE NOCASE
+                """,
+                (platform_id,),
+            )
+            student_rows = cursor.fetchall()
+            student_ids = [row[0] for row in student_rows]
+
+            saved_by_student = {}
+            if student_ids:
+                placeholders = ",".join("?" for _ in student_ids)
+                cursor.execute(
+                    f"""
+                    SELECT id, platform_id, student_profile_id, course_date, slots_json,
+                           total_minutes, status, notes, created_at, updated_at
+                    FROM student_attendance_records
+                    WHERE platform_id = ?
+                      AND course_date = ?
+                      AND student_profile_id IN ({placeholders})
+                    """,
+                    [platform_id, course_date] + student_ids,
+                )
+                saved_by_student = {
+                    row[2]: _serialize_attendance_row(row)
+                    for row in cursor.fetchall()
+                }
+
+            cursor.execute(
+                """
+                SELECT nom, prenom, arrivee, depart
+                FROM logs
+                WHERE platform_id = ?
+                  AND substr(arrivee, 1, 10) = ?
+                ORDER BY arrivee ASC
+                """,
+                (platform_id, course_date),
+            )
+            logs_by_name = {}
+            for nom, prenom, arrivee, depart in cursor.fetchall():
+                key = (str(nom or "").strip().lower(), str(prenom or "").strip().lower())
+                logs_by_name.setdefault(key, []).append((arrivee, depart))
+
+            cursor.execute(
+                """
+                SELECT student_profile_id, SUM(total_minutes), COUNT(DISTINCT course_date), MAX(course_date)
+                FROM student_attendance_records
+                WHERE platform_id = ?
+                GROUP BY student_profile_id
+                """,
+                (platform_id,),
+            )
+            totals_by_student = {
+                row[0]: {
+                    "total_minutes": int(row[1] or 0),
+                    "recorded_days": int(row[2] or 0),
+                    "last_course_date": row[3],
+                }
+                for row in cursor.fetchall()
+            }
+
+            cursor.execute(
+                """
+                SELECT course_date, COUNT(*), SUM(total_minutes)
+                FROM student_attendance_records
+                WHERE platform_id = ?
+                GROUP BY course_date
+                ORDER BY course_date DESC
+                LIMIT 20
+                """,
+                (platform_id,),
+            )
+            recent_dates = [
+                {
+                    "course_date": row[0],
+                    "student_count": int(row[1] or 0),
+                    "total_minutes": int(row[2] or 0),
+                }
+                for row in cursor.fetchall()
+            ]
+            conn.close()
+
+            students = []
+            for row in student_rows:
+                student_id, email, nom, prenom, is_active = row
+                attendance = saved_by_student.get(student_id)
+                if not attendance:
+                    key = (str(nom or "").strip().lower(), str(prenom or "").strip().lower())
+                    attendance = {
+                        "platform_id": platform_id,
+                        "student_profile_id": student_id,
+                        "course_date": course_date,
+                        **_attendance_record_from_logs(logs_by_name.get(key, [])),
+                    }
+                students.append({
+                    "id": student_id,
+                    "email": email,
+                    "nom": nom,
+                    "prenom": prenom,
+                    "is_active": bool(is_active),
+                    "attendance": attendance,
+                    "totals": totals_by_student.get(student_id, {
+                        "total_minutes": 0,
+                        "recorded_days": 0,
+                        "last_course_date": None,
+                    }),
+                })
+
+            return jsonify({
+                "success": True,
+                "platform": {"id": platform[0], "name": platform[1]},
+                "course_date": course_date,
+                "students": students,
+                "recent_dates": recent_dates,
+            }), 200
+        except ValueError as exc:
+            return jsonify({"success": False, "error": str(exc)}), 400
+        except Exception as e:
+            logger.error(f"❌ Erreur get attendance P{platform_id}: {e}")
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    @hr_bp.route("/api/hr/platforms/<int:platform_id>/attendance/<int:student_id>", methods=["POST"])
+    def save_student_attendance(platform_id, student_id):
+        denied = _require_admin()
+        if denied:
+            return denied
+        try:
+            data = request.get_json(silent=True) or {}
+            course_date = _parse_course_date(data.get("course_date"))
+            slots, total_minutes = _normalize_attendance_slots(data.get("slots") or [])
+            requested_status = str(data.get("status") or "").strip().lower()
+            allowed_statuses = {"present", "partial", "absent", "excused"}
+            if requested_status not in allowed_statuses:
+                requested_status = "present" if total_minutes > 0 else "absent"
+            if total_minutes == 0 and requested_status == "present":
+                requested_status = "absent"
+            notes = str(data.get("notes") or "").strip()[:1000]
+            now = _now_str()
+
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            _ensure_student_attendance_records(cursor)
+            platform = _get_accessible_platform(cursor, platform_id)
+            if not platform:
+                conn.close()
+                return jsonify({"success": False, "error": "Plateforme introuvable"}), 404
+            cursor.execute(
+                "SELECT id FROM student_profiles WHERE id = ? AND platform_id = ?",
+                (student_id, platform_id),
+            )
+            if not cursor.fetchone():
+                conn.close()
+                return jsonify({"success": False, "error": "Élève introuvable"}), 404
+
+            cursor.execute(
+                """
+                INSERT INTO student_attendance_records
+                    (platform_id, student_profile_id, course_date, slots_json, total_minutes, status, notes, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(platform_id, student_profile_id, course_date)
+                DO UPDATE SET
+                    slots_json = excluded.slots_json,
+                    total_minutes = excluded.total_minutes,
+                    status = excluded.status,
+                    notes = excluded.notes,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    platform_id,
+                    student_id,
+                    course_date,
+                    json.dumps(slots, ensure_ascii=False),
+                    total_minutes,
+                    requested_status,
+                    notes,
+                    now,
+                    now,
+                ),
+            )
+            conn.commit()
+            cursor.execute(
+                """
+                SELECT id, platform_id, student_profile_id, course_date, slots_json,
+                       total_minutes, status, notes, created_at, updated_at
+                FROM student_attendance_records
+                WHERE platform_id = ? AND student_profile_id = ? AND course_date = ?
+                """,
+                (platform_id, student_id, course_date),
+            )
+            record = _serialize_attendance_row(cursor.fetchone())
+            conn.close()
+            return jsonify({"success": True, "record": record}), 200
+        except ValueError as exc:
+            return jsonify({"success": False, "error": str(exc)}), 400
+        except Exception as e:
+            logger.error(f"❌ Erreur save attendance P{platform_id} S{student_id}: {e}")
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    @hr_bp.route("/api/hr/platforms/<int:platform_id>/attendance/export", methods=["GET"])
+    def export_platform_attendance(platform_id):
+        denied = _require_admin()
+        if denied:
+            return denied
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            _ensure_student_attendance_records(cursor)
+            platform = _get_accessible_platform(cursor, platform_id)
+            if not platform:
+                conn.close()
+                return jsonify({"success": False, "error": "Plateforme introuvable"}), 404
+            cursor.execute(
+                """
+                SELECT ar.course_date, sp.nom, sp.prenom, sp.email, ar.status,
+                       ar.slots_json, ar.total_minutes, ar.notes
+                FROM student_attendance_records ar
+                JOIN student_profiles sp ON sp.id = ar.student_profile_id
+                WHERE ar.platform_id = ?
+                ORDER BY ar.course_date ASC, sp.nom COLLATE NOCASE, sp.prenom COLLATE NOCASE
+                """,
+                (platform_id,),
+            )
+            records = []
+            for course_date, nom, prenom, email, status, slots_json, total_minutes, notes in cursor.fetchall():
+                try:
+                    slots = json.loads(slots_json or "[]")
+                except Exception:
+                    slots = []
+                records.append({
+                    "course_date": course_date,
+                    "nom": nom,
+                    "prenom": prenom,
+                    "email": email,
+                    "status": status,
+                    "slots": slots,
+                    "total_minutes": int(total_minutes or 0),
+                    "notes": notes or "",
+                })
+            conn.close()
+            tmp_file = generate_attendance_excel_export(records, platform_name=platform[1])
+            filename = f"presences-{slugify(platform[1], fallback=f'plateforme-{platform_id}')}.xlsx"
+            return send_file(
+                tmp_file,
+                as_attachment=True,
+                download_name=filename,
+                mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+        except Exception as e:
+            logger.error(f"❌ Erreur export attendance P{platform_id}: {e}")
+            return jsonify({"success": False, "error": str(e)}), 500
 
     @hr_bp.route("/api/hr/platforms/<int:platform_id>/student-emails", methods=["GET"])
     def get_platform_student_emails(platform_id):

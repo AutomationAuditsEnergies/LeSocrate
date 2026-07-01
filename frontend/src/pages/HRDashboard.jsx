@@ -34,6 +34,11 @@ const ROBOT_THEMES = [
   { src: '/robot-amber.png', glow: '#f59e0b' },  // ambre
 ]
 const getRobotTheme = (id = 0) => ROBOT_THEMES[((Number(id) || 1) - 1) % ROBOT_THEMES.length]
+const todayDateInput = () => {
+  const now = new Date()
+  const offset = now.getTimezoneOffset() * 60000
+  return new Date(now.getTime() - offset).toISOString().slice(0, 10)
+}
 
 // ─── Component ───────────────────────────────────────────────────────────────
 export default function HRDashboard() {
@@ -66,6 +71,7 @@ export default function HRDashboard() {
   // proportionnelle à l'irréversibilité de l'action).
   const [deleteConfirmTypedName, setDeleteConfirmTypedName] = useState('')
   const [showCreateModal, setShowCreateModal] = useState(false)
+  const [showAttendanceView, setShowAttendanceView] = useState(false)
   const [newPlatformName, setNewPlatformName] = useState('')
   const [creating, setCreating] = useState(false)
   // Modules formation disponibles (produits persistants des pipelines terminées).
@@ -106,6 +112,12 @@ export default function HRDashboard() {
   const [showCoursFoldersModal, setShowCoursFoldersModal] = useState(false)
   const [selectedCoursPlatform, setSelectedCoursPlatform] = useState(null)
   const [cardPage, setCardPage] = useState(0)
+  const [attendancePlatformId, setAttendancePlatformId] = useState('')
+  const [attendanceDate, setAttendanceDate] = useState(todayDateInput)
+  const [attendanceData, setAttendanceData] = useState(null)
+  const [attendanceLoading, setAttendanceLoading] = useState(false)
+  const [attendanceError, setAttendanceError] = useState('')
+  const [attendanceSavingStudentId, setAttendanceSavingStudentId] = useState(null)
   const CARDS_PER_PAGE = 3
 
   // ─── Fetch data ──────────────────────────────────────────────────────
@@ -244,6 +256,12 @@ export default function HRDashboard() {
   useEffect(() => {
     fetchPlatforms()
   }, [])
+
+  useEffect(() => {
+    if (platforms.length > 0 && !attendancePlatformId) {
+      setAttendancePlatformId(String(platforms[0].id))
+    }
+  }, [platforms, attendancePlatformId])
 
   useEffect(() => {
     const bg = darkMode ? '#0f172a' : '#F8F7F5'
@@ -453,6 +471,91 @@ export default function HRDashboard() {
     setShowCoursFoldersModal(true)
   }
 
+  const fetchAttendance = async (platformId = attendancePlatformId, courseDate = attendanceDate) => {
+    if (!platformId || !courseDate) return
+    setAttendanceLoading(true)
+    setAttendanceError('')
+    try {
+      const resp = await apiFetch(`/api/hr/platforms/${platformId}/attendance?course_date=${encodeURIComponent(courseDate)}`)
+      const data = await resp.json()
+      if (resp.ok && data.success) {
+        setAttendanceData(data)
+      } else {
+        setAttendanceError(data.error || 'Impossible de charger les présences')
+      }
+    } catch (e) {
+      console.error('Erreur chargement présences:', e)
+      setAttendanceError('Impossible de charger les présences')
+    } finally {
+      setAttendanceLoading(false)
+    }
+  }
+
+  const updateAttendanceDraft = (studentId, updater) => {
+    setAttendanceData((current) => {
+      if (!current) return current
+      return {
+        ...current,
+        students: current.students.map((student) => {
+          if (student.id !== studentId) return student
+          const nextAttendance = typeof updater === 'function'
+            ? updater(student.attendance)
+            : { ...student.attendance, ...updater }
+          return { ...student, attendance: nextAttendance }
+        }),
+      }
+    })
+  }
+
+  const handleSaveAttendance = async (student) => {
+    setAttendanceSavingStudentId(student.id)
+    setAttendanceError('')
+    try {
+      const resp = await apiFetch(`/api/hr/platforms/${attendancePlatformId}/attendance/${student.id}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          course_date: attendanceDate,
+          slots: student.attendance?.slots || [],
+          status: student.attendance?.status || '',
+          notes: student.attendance?.notes || '',
+        }),
+      })
+      const data = await resp.json()
+      if (resp.ok && data.success) {
+        updateAttendanceDraft(student.id, { ...data.record, source: 'saved' })
+      } else {
+        setAttendanceError(data.error || 'Impossible d’enregistrer la présence')
+      }
+    } catch (e) {
+      console.error('Erreur sauvegarde présence:', e)
+      setAttendanceError('Impossible d’enregistrer la présence')
+    } finally {
+      setAttendanceSavingStudentId(null)
+    }
+  }
+
+  const handleExportAttendance = async () => {
+    if (!attendancePlatformId) return
+    try {
+      const resp = await apiFetch(`/api/hr/platforms/${attendancePlatformId}/attendance/export`)
+      if (!resp.ok) {
+        setAttendanceError('Impossible de générer l’export Excel')
+        return
+      }
+      const blob = await resp.blob()
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `presences-${attendancePlatformId}.xlsx`
+      a.click()
+      URL.revokeObjectURL(url)
+    } catch (e) {
+      console.error('Erreur export présences:', e)
+      setAttendanceError('Impossible de générer l’export Excel')
+    }
+  }
+
   const fetchModules = async () => {
     try {
       const resp = await apiFetch('/api/hr/formation-modules')
@@ -506,6 +609,7 @@ export default function HRDashboard() {
     resetCreateForm()
     fetchModules()
     setFormationMode('new')
+    setShowAttendanceView(false)
     setShowModulesModal(false)
     setShowCreateModal(true)
   }
@@ -513,11 +617,13 @@ export default function HRDashboard() {
   const openCreateModal = () => {
     resetCreateForm()
     fetchModules()
+    setShowAttendanceView(false)
     setShowModulesModal(false)
     setShowCreateModal(true)
   }
 
   const showDashboardView = () => {
+    setShowAttendanceView(false)
     setShowModulesModal(false)
     setShowCreateModal(false)
     setModuleSearchQuery('')
@@ -525,9 +631,23 @@ export default function HRDashboard() {
 
   const showModulesView = () => {
     fetchModules()
+    setShowAttendanceView(false)
     setShowCreateModal(false)
     setShowModulesModal(true)
   }
+
+  const openAttendanceView = () => {
+    setShowCreateModal(false)
+    setShowModulesModal(false)
+    setModuleSearchQuery('')
+    setShowAttendanceView(true)
+  }
+
+  useEffect(() => {
+    if (showAttendanceView && attendancePlatformId) {
+      fetchAttendance(attendancePlatformId, attendanceDate)
+    }
+  }, [showAttendanceView, attendancePlatformId, attendanceDate])
 
   const handleCreatePlatform = async () => {
     const teacherName = teacherFirstName.trim()
@@ -750,9 +870,15 @@ export default function HRDashboard() {
 
             <nav className="mt-5 flex items-end gap-10" aria-label="Navigation dashboard formations">
               <SkoolTab
-                active={!showModulesModal && !showCreateModal}
+                active={!showModulesModal && !showCreateModal && !showAttendanceView}
                 onClick={showDashboardView}
                 label="Mes professeurs IA"
+                colors={colors}
+              />
+              <SkoolTab
+                active={showAttendanceView}
+                onClick={openAttendanceView}
+                label="Présences"
                 colors={colors}
               />
               <SkoolTab
@@ -800,7 +926,25 @@ export default function HRDashboard() {
             </div>
           )}
 
-          {showModulesModal ? (
+          {showAttendanceView ? (
+            <AttendanceRegisterView
+              colors={colors}
+              darkMode={darkMode}
+              platforms={platforms}
+              selectedPlatformId={attendancePlatformId}
+              onPlatformChange={setAttendancePlatformId}
+              courseDate={attendanceDate}
+              onCourseDateChange={setAttendanceDate}
+              data={attendanceData}
+              loading={attendanceLoading}
+              error={attendanceError}
+              savingStudentId={attendanceSavingStudentId}
+              onRefresh={() => fetchAttendance()}
+              onUpdateDraft={updateAttendanceDraft}
+              onSaveStudent={handleSaveAttendance}
+              onExport={handleExportAttendance}
+            />
+          ) : showModulesModal ? (
             <ModulesCatalogueView
               colors={colors}
               modules={filteredModules}
@@ -1469,6 +1613,345 @@ function PlatformCardsView({
         ))}
       </div>
     </>
+  )
+}
+
+const ATTENDANCE_STATUS_LABELS = {
+  present: 'Présent',
+  partial: 'Partiel',
+  absent: 'Absent',
+  excused: 'Absence justifiée',
+}
+
+function attendanceMinutes(slots = []) {
+  return slots.reduce((total, slot) => {
+    if (!slot?.start || !slot?.end) return total
+    const [sh, sm] = slot.start.split(':').map(Number)
+    const [eh, em] = slot.end.split(':').map(Number)
+    if ([sh, sm, eh, em].some((value) => Number.isNaN(value))) return total
+    const start = sh * 60 + sm
+    const end = eh * 60 + em
+    return end > start ? total + (end - start) : total
+  }, 0)
+}
+
+function formatAttendanceMinutes(totalMinutes = 0) {
+  const total = Number(totalMinutes) || 0
+  const hours = Math.floor(total / 60)
+  const minutes = total % 60
+  if (hours && minutes) return `${hours}h ${String(minutes).padStart(2, '0')}`
+  if (hours) return `${hours}h`
+  return `${minutes}min`
+}
+
+function AttendanceRegisterView({
+  colors,
+  darkMode,
+  platforms,
+  selectedPlatformId,
+  onPlatformChange,
+  courseDate,
+  onCourseDateChange,
+  data,
+  loading,
+  error,
+  savingStudentId,
+  onRefresh,
+  onUpdateDraft,
+  onSaveStudent,
+  onExport,
+}) {
+  const inputStyle = {
+    backgroundColor: colors.innerBg,
+    color: colors.text,
+    border: `1px solid ${colors.border}`,
+  }
+
+  const updateSlot = (studentId, index, field, value) => {
+    onUpdateDraft(studentId, (attendance) => {
+      const slots = [...(attendance?.slots || [])]
+      slots[index] = { ...(slots[index] || {}), [field]: value }
+      const total = attendanceMinutes(slots)
+      const nextStatus = total > 0 && attendance.status === 'absent' ? 'present' : attendance.status
+      return { ...attendance, slots, total_minutes: total, status: nextStatus }
+    })
+  }
+
+  const addSlot = (studentId) => {
+    onUpdateDraft(studentId, (attendance) => ({
+      ...attendance,
+      slots: [...(attendance?.slots || []), { start: '09:00', end: '12:00' }],
+    }))
+  }
+
+  const removeSlot = (studentId, index) => {
+    onUpdateDraft(studentId, (attendance) => {
+      const slots = (attendance?.slots || []).filter((_, slotIndex) => slotIndex !== index)
+      const total = attendanceMinutes(slots)
+      return {
+        ...attendance,
+        slots,
+        total_minutes: total,
+        status: total > 0 ? attendance.status : 'absent',
+      }
+    })
+  }
+
+  const totals = (data?.students || []).reduce((acc, student) => {
+    acc.minutes += Number(student.attendance?.total_minutes || 0)
+    acc.saved += student.attendance?.source === 'saved' ? 1 : 0
+    return acc
+  }, { minutes: 0, saved: 0 })
+
+  return (
+    <section className="mx-auto w-full max-w-6xl">
+      <header
+        className="mb-6 flex flex-wrap items-end justify-between gap-4"
+        style={{ borderBottom: `1px solid ${colors.border}` }}
+      >
+        <div className="pb-5">
+          <span
+            className="text-[10px] font-semibold uppercase"
+            style={{ color: colors.textMuted, letterSpacing: '0.22em' }}
+          >
+            Dossier formation
+          </span>
+          <h2 className="mt-1 text-xl font-semibold tracking-tight" style={{ color: colors.text }}>
+            Présences élèves
+          </h2>
+          <p className="mt-1 text-xs" style={{ color: colors.textMuted }}>
+            Relevé journalier par élève, consolidé sur toute la durée de la formation.
+          </p>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2 pb-4">
+          <select
+            value={selectedPlatformId}
+            onChange={(e) => onPlatformChange(e.target.value)}
+            className="rounded-lg px-3 py-2 text-sm outline-none transition-colors"
+            style={inputStyle}
+          >
+            {platforms.map((platform) => (
+              <option key={platform.id} value={platform.id}>
+                {platform.name}
+              </option>
+            ))}
+          </select>
+          <input
+            type="date"
+            value={courseDate}
+            onChange={(e) => onCourseDateChange(e.target.value)}
+            className="rounded-lg px-3 py-2 text-sm outline-none transition-colors"
+            style={inputStyle}
+          />
+          <button
+            type="button"
+            onClick={onRefresh}
+            className="flex items-center gap-1.5 rounded-lg px-3.5 py-2 text-sm font-medium transition-colors hover:bg-black/5 dark:hover:bg-white/5"
+            style={{ color: colors.textSecondary, border: `1px solid ${colors.border}` }}
+          >
+            <Icon name="refresh" className="text-base" />
+            <span>Actualiser</span>
+          </button>
+          <button
+            type="button"
+            onClick={onExport}
+            className="flex items-center gap-1.5 rounded-lg px-3.5 py-2 text-sm font-medium text-white transition-colors"
+            style={{ backgroundColor: '#8B5CF6' }}
+            onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = '#7c3aed' }}
+            onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = '#8B5CF6' }}
+          >
+            <Icon name="download" className="text-base" />
+            <span>Exporter Excel</span>
+          </button>
+        </div>
+      </header>
+
+      {error && (
+        <div
+          className="mb-4 flex items-center gap-2 rounded-lg px-4 py-3 text-sm"
+          style={{
+            backgroundColor: darkMode ? 'rgba(127, 29, 29, 0.18)' : '#fef2f2',
+            border: darkMode ? '1px solid rgba(248, 113, 113, 0.28)' : '1px solid #fecaca',
+            color: darkMode ? '#fecaca' : '#991b1b',
+          }}
+        >
+          <Icon name="warning" className="text-base" />
+          <span>{error}</span>
+        </div>
+      )}
+
+      <div className="mb-4 grid gap-3 sm:grid-cols-3">
+        {[
+          ['Élèves', data?.students?.length || 0],
+          ['Relevés enregistrés', totals.saved],
+          ['Temps total du jour', formatAttendanceMinutes(totals.minutes)],
+        ].map(([label, value]) => (
+          <div
+            key={label}
+            className="rounded-xl px-4 py-3"
+            style={{ backgroundColor: colors.cardBg, border: `1px solid ${colors.border}` }}
+          >
+            <p className="text-[10px] font-semibold uppercase" style={{ color: colors.textMuted, letterSpacing: '0.18em' }}>
+              {label}
+            </p>
+            <p className="mt-1 text-lg font-semibold" style={{ color: colors.text }}>{value}</p>
+          </div>
+        ))}
+      </div>
+
+      <div
+        className="overflow-x-auto rounded-2xl"
+        style={{ backgroundColor: colors.cardBg, border: `1px solid ${colors.border}` }}
+      >
+        <table className="w-full min-w-[1080px] border-separate border-spacing-0 text-sm">
+          <thead>
+            <tr className="text-left text-[10px] font-semibold uppercase" style={{ color: colors.textMuted, letterSpacing: '0.16em' }}>
+              <th className="border-b px-4 py-3" style={{ borderColor: colors.border }}>Élève</th>
+              <th className="border-b px-4 py-3" style={{ borderColor: colors.border }}>Créneaux</th>
+              <th className="border-b px-4 py-3" style={{ borderColor: colors.border }}>Statut</th>
+              <th className="border-b px-4 py-3" style={{ borderColor: colors.border }}>Total</th>
+              <th className="border-b px-4 py-3" style={{ borderColor: colors.border }}>Notes</th>
+              <th className="border-b px-4 py-3 text-right" style={{ borderColor: colors.border }}>Action</th>
+            </tr>
+          </thead>
+          <tbody>
+            {loading ? (
+              <tr>
+                <td colSpan={6} className="px-4 py-10 text-center text-sm" style={{ color: colors.textMuted }}>
+                  Chargement des présences...
+                </td>
+              </tr>
+            ) : (data?.students || []).length === 0 ? (
+              <tr>
+                <td colSpan={6} className="px-4 py-10 text-center text-sm" style={{ color: colors.textMuted }}>
+                  Aucun compte élève n’est rattaché à cette formation.
+                </td>
+              </tr>
+            ) : (
+              data.students.map((student) => {
+                const attendance = student.attendance || {}
+                const slots = attendance.slots || []
+                return (
+                  <tr key={student.id} className="align-top transition-colors hover:bg-black/5 dark:hover:bg-white/5">
+                    <td className="border-b px-4 py-4" style={{ borderColor: colors.border }}>
+                      <div className="font-semibold" style={{ color: colors.text }}>
+                        {student.prenom} {student.nom}
+                      </div>
+                      <div className="mt-0.5 text-xs" style={{ color: colors.textMuted }}>{student.email}</div>
+                      <div className="mt-2 text-xs" style={{ color: colors.textMuted }}>
+                        Cumul: {formatAttendanceMinutes(student.totals?.total_minutes || 0)}
+                      </div>
+                    </td>
+                    <td className="border-b px-4 py-4" style={{ borderColor: colors.border }}>
+                      <div className="space-y-2">
+                        {slots.map((slot, index) => (
+                          <div key={`${student.id}-${index}`} className="flex items-center gap-2">
+                            <input
+                              type="time"
+                              value={slot.start || ''}
+                              onChange={(e) => updateSlot(student.id, index, 'start', e.target.value)}
+                              className="w-28 rounded-lg px-2 py-1.5 text-sm outline-none"
+                              style={inputStyle}
+                            />
+                            <span className="text-xs" style={{ color: colors.textMuted }}>à</span>
+                            <input
+                              type="time"
+                              value={slot.end || ''}
+                              onChange={(e) => updateSlot(student.id, index, 'end', e.target.value)}
+                              className="w-28 rounded-lg px-2 py-1.5 text-sm outline-none"
+                              style={inputStyle}
+                            />
+                            <button
+                              type="button"
+                              onClick={() => removeSlot(student.id, index)}
+                              aria-label="Retirer le créneau"
+                              className="flex h-8 w-8 items-center justify-center rounded-lg transition-colors hover:bg-rose-500/10"
+                              style={{ color: colors.textMuted, border: `1px solid ${colors.border}` }}
+                            >
+                              <Icon name="close" className="text-base" />
+                            </button>
+                          </div>
+                        ))}
+                        <button
+                          type="button"
+                          onClick={() => addSlot(student.id)}
+                          className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition-colors hover:bg-black/5 dark:hover:bg-white/5"
+                          style={{ color: colors.textSecondary, border: `1px solid ${colors.border}` }}
+                        >
+                          <Icon name="add" className="text-sm" />
+                          <span>Ajouter un créneau</span>
+                        </button>
+                        {attendance.source === 'logs' && (
+                          <p className="text-xs" style={{ color: colors.textMuted }}>
+                            Prérempli depuis les logs de connexion.
+                          </p>
+                        )}
+                      </div>
+                    </td>
+                    <td className="border-b px-4 py-4" style={{ borderColor: colors.border }}>
+                      <select
+                        value={attendance.status || 'absent'}
+                        onChange={(e) => onUpdateDraft(student.id, { ...attendance, status: e.target.value })}
+                        className="rounded-lg px-3 py-2 text-sm outline-none"
+                        style={inputStyle}
+                      >
+                        {Object.entries(ATTENDANCE_STATUS_LABELS).map(([value, label]) => (
+                          <option key={value} value={value}>{label}</option>
+                        ))}
+                      </select>
+                    </td>
+                    <td className="border-b px-4 py-4 font-semibold" style={{ borderColor: colors.border, color: colors.text }}>
+                      {formatAttendanceMinutes(attendance.total_minutes || 0)}
+                    </td>
+                    <td className="border-b px-4 py-4" style={{ borderColor: colors.border }}>
+                      <input
+                        type="text"
+                        value={attendance.notes || ''}
+                        onChange={(e) => onUpdateDraft(student.id, { ...attendance, notes: e.target.value })}
+                        placeholder="Retard, départ anticipé..."
+                        className="w-full rounded-lg px-3 py-2 text-sm outline-none"
+                        style={inputStyle}
+                      />
+                    </td>
+                    <td className="border-b px-4 py-4 text-right" style={{ borderColor: colors.border }}>
+                      <button
+                        type="button"
+                        onClick={() => onSaveStudent(student)}
+                        disabled={savingStudentId === student.id}
+                        className="rounded-lg px-3.5 py-2 text-xs font-semibold text-white transition-colors disabled:cursor-not-allowed disabled:opacity-60"
+                        style={{ backgroundColor: '#8B5CF6' }}
+                      >
+                        {savingStudentId === student.id ? 'Enregistrement...' : 'Enregistrer'}
+                      </button>
+                    </td>
+                  </tr>
+                )
+              })
+            )}
+          </tbody>
+        </table>
+      </div>
+
+      {(data?.recent_dates || []).length > 0 && (
+        <div className="mt-5">
+          <h3 className="mb-2 text-sm font-semibold" style={{ color: colors.text }}>Journées déjà consignées</h3>
+          <div className="flex flex-wrap gap-2">
+            {data.recent_dates.map((item) => (
+              <button
+                key={item.course_date}
+                type="button"
+                onClick={() => onCourseDateChange(item.course_date)}
+                className="rounded-lg px-3 py-2 text-xs font-medium transition-colors hover:bg-black/5 dark:hover:bg-white/5"
+                style={{ color: colors.textSecondary, border: `1px solid ${colors.border}` }}
+              >
+                {new Date(`${item.course_date}T00:00:00`).toLocaleDateString('fr-FR')} · {item.student_count} élève{item.student_count > 1 ? 's' : ''}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+    </section>
   )
 }
 
