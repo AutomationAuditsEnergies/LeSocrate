@@ -101,6 +101,46 @@ def init_database(_recovered_from_corruption: bool = False):
         )
         logger.info("✅ Table cours_config créée/vérifiée")
 
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS course_schedule_config (
+                platform_id INTEGER PRIMARY KEY,
+                total_training_days INTEGER NOT NULL,
+                weekly_course_count INTEGER NOT NULL,
+                weekdays_json TEXT NOT NULL,
+                start_time TEXT NOT NULL DEFAULT '09:00',
+                timezone TEXT NOT NULL DEFAULT 'Europe/Paris',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS course_sessions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                platform_id INTEGER NOT NULL,
+                session_index INTEGER NOT NULL,
+                scheduled_at TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'planned',
+                activated_at TEXT,
+                completed_at TEXT,
+                reminder_previous_evening_sent_at TEXT,
+                reminder_5min_sent_at TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(platform_id, session_index)
+            )
+            """
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_course_sessions_platform_scheduled ON course_sessions(platform_id, scheduled_at)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_course_sessions_status_scheduled ON course_sessions(status, scheduled_at)"
+        )
+        logger.info("✅ Tables course_schedule_config/course_sessions créées/vérifiées")
+
         # Insérer une heure par défaut si la table est vide
         cursor.execute("SELECT COUNT(*) FROM cours_config")
         count = cursor.fetchone()[0]

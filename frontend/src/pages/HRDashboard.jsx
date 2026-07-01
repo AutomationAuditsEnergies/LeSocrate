@@ -531,7 +531,21 @@ export default function HRDashboard() {
         alert('Indique la fréquence de cours et au moins un jour')
         return
       }
-      body.new_formation = { tp_name: tpName, rncp_code: rncp, total_hours: trainingDaysCount * 7 }
+      if (weeklyCount !== teachingDays.length) {
+        alert('Le nombre de cours par semaine doit correspondre aux jours sélectionnés')
+        return
+      }
+      body.new_formation = {
+        tp_name: tpName,
+        rncp_code: rncp,
+        total_hours: trainingDaysCount * 7,
+        schedule: {
+          total_training_days: trainingDaysCount,
+          weekly_course_count: weeklyCount,
+          weekdays: teachingDays,
+          start_time: '09:00',
+        },
+      }
     }
     // formationMode === 'none' → body reste {name} (plateforme vide, comportement historique)
 

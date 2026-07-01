@@ -47,6 +47,32 @@ CREATE TABLE IF NOT EXISTS cours_config (
     heure_debut TIMESTAMPTZ NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS course_schedule_config (
+    platform_id BIGINT PRIMARY KEY REFERENCES platform_config(id) ON DELETE CASCADE,
+    total_training_days INTEGER NOT NULL,
+    weekly_course_count INTEGER NOT NULL,
+    weekdays_json TEXT NOT NULL,
+    start_time TEXT NOT NULL DEFAULT '09:00',
+    timezone TEXT NOT NULL DEFAULT 'Europe/Paris',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS course_sessions (
+    id BIGSERIAL PRIMARY KEY,
+    platform_id BIGINT NOT NULL REFERENCES platform_config(id) ON DELETE CASCADE,
+    session_index INTEGER NOT NULL,
+    scheduled_at TIMESTAMPTZ NOT NULL,
+    status TEXT NOT NULL DEFAULT 'planned',
+    activated_at TIMESTAMPTZ,
+    completed_at TIMESTAMPTZ,
+    reminder_previous_evening_sent_at TIMESTAMPTZ,
+    reminder_5min_sent_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(platform_id, session_index)
+);
+
 CREATE TABLE IF NOT EXISTS logs (
     id BIGSERIAL PRIMARY KEY,
     platform_id BIGINT REFERENCES platform_config(id) ON DELETE SET NULL,
@@ -107,6 +133,8 @@ CREATE TABLE IF NOT EXISTS ai_teacher_orders (
 
 CREATE INDEX IF NOT EXISTS idx_platform_config_center ON platform_config(center_account_id);
 CREATE INDEX IF NOT EXISTS idx_cours_config_platform ON cours_config(platform_id);
+CREATE INDEX IF NOT EXISTS idx_course_sessions_platform_scheduled ON course_sessions(platform_id, scheduled_at);
+CREATE INDEX IF NOT EXISTS idx_course_sessions_status_scheduled ON course_sessions(status, scheduled_at);
 CREATE INDEX IF NOT EXISTS idx_logs_platform_arrivee ON logs(platform_id, arrivee);
 CREATE INDEX IF NOT EXISTS idx_video_visits_platform ON video_visits(platform_id);
 CREATE INDEX IF NOT EXISTS idx_video_visits_log ON video_visits(log_id);

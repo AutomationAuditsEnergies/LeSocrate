@@ -14,6 +14,11 @@ from repositories.core_repository import (
     upsert_cours_config,
     upsert_platform_config,
 )
+from services.course_schedule_service import (
+    process_due_reminders,
+    run_scheduler_tick,
+    save_course_schedule,
+)
 from utils.logger import get_logger
 from utils.slug import slugify, unique_slug
 import state
@@ -790,7 +795,7 @@ def create_hr_blueprint(socketio):
         if denied:
             return denied
 
-        data = request.get_json() or {}
+        data = request.get_json(silent=True) or {}
         name = data.get("name", "").strip()
         module_id = data.get("module_id")         # NOUVEAU — mode module maître
         formation_id = data.get("formation_id")   # legacy
@@ -885,6 +890,7 @@ def create_hr_blueprint(socketio):
                     return jsonify({"success": False, "error": "La formation n'a pas encore de cours générés"}), 400
 
             # Valider le mode new_formation
+            schedule_config_result = None
             if new_formation:
                 tp_name = (new_formation.get("tp_name") or "").strip()
                 rncp_code = (new_formation.get("rncp_code") or "").strip()
@@ -892,6 +898,14 @@ def create_hr_blueprint(socketio):
                 if not tp_name or not rncp_code or not total_hours:
                     conn.close()
                     return jsonify({"success": False, "error": "tp_name, rncp_code et total_hours requis pour une nouvelle formation"}), 400
+                schedule_config = new_formation.get("schedule") or {}
+                if schedule_config:
+                    try:
+                        int(schedule_config.get("total_training_days") or 0)
+                        int(schedule_config.get("weekly_course_count") or 0)
+                    except (TypeError, ValueError):
+                        conn.close()
+                        return jsonify({"success": False, "error": "Planning professeur IA invalide"}), 400
 
             now_str = datetime.now(FRANCE_TZ).strftime("%Y-%m-%d %H:%M:%S")
 
@@ -927,6 +941,19 @@ def create_hr_blueprint(socketio):
                 "INSERT INTO cours_config (id, heure_debut, platform_id) VALUES (?, ?, ?)",
                 (new_id, default_heure, new_id),
             )
+
+            if new_formation and (new_formation.get("schedule") or None):
+                schedule_config_result = save_course_schedule(
+                    cursor,
+                    new_id,
+                    new_formation.get("schedule"),
+                )
+                if schedule_config_result.get("first_session_at"):
+                    default_heure = schedule_config_result["first_session_at"]
+                    cursor.execute(
+                        "UPDATE cours_config SET heure_debut = ? WHERE platform_id = ?",
+                        (default_heure, new_id),
+                    )
 
             # ─── Plateforme "fait main" — module catalogue auto ──────────────
             # Quand l'admin crée une plateforme VIDE (sans pipeline ni clone),
@@ -1069,6 +1096,7 @@ def create_hr_blueprint(socketio):
                     "source_formation_id": formation_id,
                     "source_module_id": module_id,
                     "pipeline_job_id": linked_job_id,
+                    "schedule": schedule_config_result,
                     "audio_container": audio_container,
                     "pdf_container": pdf_container,
                     "archive_container": archive_container,
@@ -1186,6 +1214,8 @@ def create_hr_blueprint(socketio):
             )
             cursor.execute("DELETE FROM cours_folders WHERE platform_id = ?", (platform_id,))
             cursor.execute("DELETE FROM cours_config WHERE platform_id = ?", (platform_id,))
+            cursor.execute("DELETE FROM course_sessions WHERE platform_id = ?", (platform_id,))
+            cursor.execute("DELETE FROM course_schedule_config WHERE platform_id = ?", (platform_id,))
 
             # 4a. Modules "fait main" liés (la plateforme EST le module) → DELETE
             cursor.execute(
@@ -1996,6 +2026,9 @@ def create_hr_blueprint(socketio):
         Corps JSON optionnel pour surcharger :
           { "schedule": [{"platform_id": 1, "weekday": 4, "hour": 9}] }
           weekday : 0=lundi, 1=mardi, 2=mercredi, 3=jeudi, 4=vendredi, 5=samedi, 6=dimanche
+
+        Sans corps `schedule`, utilise le planning persistant créé par le flow
+        "Nouveau professeur IA" et pousse la prochaine séance dans cours_config.
         """
         api_key = request.headers.get("X-Platform-Key", "")
         expected_key = os.environ.get("PLATFORM_API_KEY", "")
@@ -2009,7 +2042,16 @@ def create_hr_blueprint(socketio):
             {"platform_id": 4, "weekday": 3, "hour": 9},  # jeudi
         ]
 
-        data = request.get_json() or {}
+        data = request.get_json(silent=True) or {}
+        if "schedule" not in data:
+            try:
+                results = run_scheduler_tick(data.get("platform_ids"))
+                if results:
+                    return jsonify({"success": True, "mode": "course_sessions", "results": results}), 200
+            except Exception as e:
+                logger.error(f"❌ Auto-schedule course_sessions : {e}")
+                return jsonify({"success": False, "error": str(e)}), 500
+
         schedule = data.get("schedule", DEFAULT_SCHEDULE)
 
         today = datetime.now(FRANCE_TZ)
@@ -2058,6 +2100,41 @@ def create_hr_blueprint(socketio):
 
         all_ok = all(r["success"] for r in results)
         return jsonify({"success": all_ok, "results": results}), 200
+
+    @hr_bp.route("/api/internal/reminders/tick", methods=["POST"])
+    def reminders_tick():
+        """Traite les rappels élèves dus.
+
+        Le backend calcule les rappels depuis course_sessions :
+        - veille au soir (18h par défaut)
+        - 5 minutes avant le cours
+
+        Si REMINDER_WEBHOOK_URL est configuré, il poste les rappels dessus et
+        marque les séances comme envoyées. Sinon, `dry_run=true` permet de
+        récupérer les rappels dus sans mutation pour brancher l'automatisation
+        existante.
+        """
+        api_key = request.headers.get("X-Platform-Key", "")
+        expected_key = os.environ.get("PLATFORM_API_KEY", "")
+        if not expected_key or api_key != expected_key:
+            return jsonify({"success": False, "error": "Clé invalide"}), 403
+
+        data = request.get_json(silent=True) or {}
+        origin = (
+            data.get("frontend_url")
+            or os.environ.get("FRONTEND_PUBLIC_URL")
+            or os.environ.get("PLATFORM_1_FRONTEND_URL")
+            or request.headers.get("Origin")
+        )
+        dry_run = bool(data.get("dry_run", False))
+
+        try:
+            results = process_due_reminders(base_url=origin, dry_run=dry_run)
+            all_ok = all(item.get("success") for item in results)
+            return jsonify({"success": all_ok, "results": results}), 200
+        except Exception as e:
+            logger.error(f"❌ Reminders tick : {e}")
+            return jsonify({"success": False, "error": str(e)}), 500
 
     # ─── GET /api/hr/platforms/<id>/backup-status ─────────────────────────
     @hr_bp.route("/api/hr/platforms/<int:platform_id>/backup-status", methods=["GET"])
