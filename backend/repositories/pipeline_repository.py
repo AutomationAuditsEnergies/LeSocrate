@@ -600,6 +600,205 @@ def delete_pipeline_events(
         conn.close()
 
 
+def clear_knowledge_base(job_id: int) -> None:
+    ph = _placeholder()
+    query = f"DELETE FROM formation_knowledge_base WHERE job_id = {ph}"
+    if _pipeline_primary_backend() == "postgres":
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, (job_id,))
+        return
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(query, (job_id,))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def upsert_pending_knowledge_base_entries(job_id: int, competences: list[dict[str, Any]]) -> None:
+    if _pipeline_primary_backend() == "postgres":
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                for idx, competence in enumerate(competences):
+                    cur.execute(
+                        """
+                        INSERT INTO formation_knowledge_base
+                            (job_id, competence_index, competence_key, competence_title,
+                             bloc, raw_source, status, updated_at)
+                        VALUES (%s, %s, %s, %s, %s, %s, 'pending', NOW())
+                        ON CONFLICT (job_id, competence_index) DO UPDATE SET
+                            competence_key = EXCLUDED.competence_key,
+                            competence_title = EXCLUDED.competence_title,
+                            bloc = EXCLUDED.bloc,
+                            raw_source = EXCLUDED.raw_source,
+                            status = 'pending',
+                            updated_at = NOW()
+                        """,
+                        (
+                            job_id,
+                            idx,
+                            competence["competence_key"],
+                            competence["competence_title"],
+                            competence.get("bloc", ""),
+                            competence.get("raw_source", ""),
+                        ),
+                    )
+        return
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        for idx, competence in enumerate(competences):
+            cursor.execute(
+                """INSERT OR REPLACE INTO formation_knowledge_base
+                   (job_id, competence_index, competence_key, competence_title, bloc, raw_source, status, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, 'pending', CURRENT_TIMESTAMP)""",
+                (
+                    job_id,
+                    idx,
+                    competence["competence_key"],
+                    competence["competence_title"],
+                    competence.get("bloc", ""),
+                    competence.get("raw_source", ""),
+                ),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def save_enriched_knowledge_base_entry(
+    *,
+    job_id: int,
+    competence_index: int,
+    definition_pedagogique: str,
+    etudes_de_cas_json: str,
+    pieges_frequents_json: str,
+    vocabulaire_metier_json: str,
+    contexte_terrain: str,
+    liens_connexes_json: str,
+    word_count: int,
+) -> None:
+    ph = _placeholder()
+    now_sql = "NOW()" if _pipeline_primary_backend() == "postgres" else "CURRENT_TIMESTAMP"
+    query = f"""
+        UPDATE formation_knowledge_base
+        SET definition_pedagogique = {ph},
+            etudes_de_cas = {ph},
+            pieges_frequents = {ph},
+            vocabulaire_metier = {ph},
+            contexte_terrain = {ph},
+            liens_connexes = {ph},
+            total_words = {ph},
+            status = 'completed',
+            dirty = {ph},
+            error_message = NULL,
+            updated_at = {now_sql}
+        WHERE job_id = {ph} AND competence_index = {ph}
+    """
+    params = (
+        definition_pedagogique,
+        etudes_de_cas_json,
+        pieges_frequents_json,
+        vocabulaire_metier_json,
+        contexte_terrain,
+        liens_connexes_json,
+        word_count,
+        False if _pipeline_primary_backend() == "postgres" else 0,
+        job_id,
+        competence_index,
+    )
+    if _pipeline_primary_backend() == "postgres":
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, params)
+        return
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(query, params)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def mark_knowledge_base_entry_error(job_id: int, competence_index: int, error_msg: str) -> None:
+    ph = _placeholder()
+    now_sql = "NOW()" if _pipeline_primary_backend() == "postgres" else "CURRENT_TIMESTAMP"
+    query = f"""
+        UPDATE formation_knowledge_base
+        SET status = 'error', error_message = {ph}, updated_at = {now_sql}
+        WHERE job_id = {ph} AND competence_index = {ph}
+    """
+    params = (error_msg, job_id, competence_index)
+    if _pipeline_primary_backend() == "postgres":
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, params)
+        return
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(query, params)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def list_knowledge_base_rows(job_id: int) -> list[dict[str, Any]]:
+    ph = _placeholder()
+    query = f"""
+        SELECT id, competence_index, competence_key, competence_title, bloc,
+               definition_pedagogique, etudes_de_cas, pieges_frequents,
+               vocabulaire_metier, contexte_terrain, liens_connexes,
+               status, total_words, error_message, raw_source
+        FROM formation_knowledge_base
+        WHERE job_id = {ph}
+        ORDER BY competence_index
+    """
+    if _pipeline_primary_backend() == "postgres":
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, (job_id,))
+                return [dict(row) for row in cur.fetchall()]
+
+    conn = _as_sqlite_row_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(query, (job_id,))
+        return [dict(row) for row in cursor.fetchall()]
+    finally:
+        conn.close()
+
+
+def knowledge_base_stats_rows(job_id: int) -> list[dict[str, Any]]:
+    ph = _placeholder()
+    query = f"""
+        SELECT status, COUNT(*) AS count, COALESCE(SUM(total_words), 0) AS words
+        FROM formation_knowledge_base
+        WHERE job_id = {ph}
+        GROUP BY status
+    """
+    if _pipeline_primary_backend() == "postgres":
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, (job_id,))
+                return [dict(row) for row in cur.fetchall()]
+
+    conn = _as_sqlite_row_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(query, (job_id,))
+        return [dict(row) for row in cursor.fetchall()]
+    finally:
+        conn.close()
+
+
 def _upsert_postgres_job(payload: dict[str, Any]) -> None:
     payload = _normalize_job_payload(payload)
     columns = [column for column in PIPELINE_JOB_COLUMNS if column in payload]

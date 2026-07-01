@@ -26,6 +26,10 @@ Troisieme tranche : l'observabilite pipeline (`content_review_reports` et
 `formation_pipeline_events`) passe par le meme repository, avec conservation de
 la creation lazy des tables en SQLite et schema explicite en Postgres.
 
+Quatrieme tranche : les checkpoints `formation_knowledge_base` (clear, insert
+pending, save enriched, mark error, list, stats) passent par le repository
+pipeline afin de preparer leur lecture/ecriture Postgres.
+
 ## 2026-06-29
 
 ### feat(hr-dashboard): robots transparents pré-colorés + flip au clic

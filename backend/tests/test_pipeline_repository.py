@@ -12,6 +12,7 @@ if str(BACKEND_DIR) not in sys.path:
 
 from repositories import pipeline_repository as repo
 from services import formation_observability_service as obs
+from services import knowledge_base_service as kbs
 
 
 def _connect(path):
@@ -87,6 +88,29 @@ def _make_pipeline_db():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             job_id INTEGER NOT NULL,
             status TEXT DEFAULT 'pending'
+        );
+
+        CREATE TABLE formation_knowledge_base (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            job_id INTEGER NOT NULL,
+            competence_index INTEGER NOT NULL,
+            competence_key TEXT NOT NULL,
+            competence_title TEXT NOT NULL,
+            bloc TEXT,
+            raw_source TEXT,
+            definition_pedagogique TEXT DEFAULT '',
+            etudes_de_cas TEXT DEFAULT '[]',
+            pieges_frequents TEXT DEFAULT '[]',
+            vocabulaire_metier TEXT DEFAULT '{}',
+            contexte_terrain TEXT DEFAULT '',
+            liens_connexes TEXT DEFAULT '[]',
+            status TEXT DEFAULT 'pending',
+            dirty INTEGER DEFAULT 0,
+            error_message TEXT,
+            total_words INTEGER DEFAULT 0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(job_id, competence_index)
         );
         """
     )
@@ -261,6 +285,57 @@ class PipelineRepositoryTest(unittest.TestCase):
         self.assertEqual(events[0]["data"], {"segments": 3})
         self.assertEqual(obs.clear_pipeline_events(99), 1)
         self.assertEqual(obs.list_pipeline_events(99), [])
+
+    def test_knowledge_base_checkpoint_helpers_use_repository_storage(self):
+        competences = [
+            {
+                "competence_key": "accueillir-client",
+                "competence_title": "Accueillir le client",
+                "bloc": "CCP1",
+                "raw_source": "source 1",
+            },
+            {
+                "competence_key": "vendre-produit",
+                "competence_title": "Vendre un produit",
+                "bloc": "CCP1",
+                "raw_source": "source 2",
+            },
+        ]
+        kbs.insert_pending_competences(123, competences)
+
+        pending = kbs.list_kb(123)
+        self.assertEqual([row["competence_key"] for row in pending], ["accueillir-client", "vendre-produit"])
+        self.assertEqual(kbs.kb_stats(123)["pending"], 2)
+
+        kbs.save_enriched_competence(
+            123,
+            0,
+            {
+                "definition_pedagogique": "Definition",
+                "etudes_de_cas": [{"titre": "Cas"}],
+                "pieges_frequents": [{"piege": "Piege"}],
+                "vocabulaire_metier": {"terme": "definition"},
+                "contexte_terrain": "Terrain",
+                "liens_connexes": ["vendre-produit"],
+            },
+            42,
+        )
+        kbs.mark_competence_error(123, 1, "erreur test")
+
+        rows = kbs.list_kb(123)
+        self.assertEqual(rows[0]["status"], "completed")
+        self.assertEqual(rows[0]["etudes_de_cas"], [{"titre": "Cas"}])
+        self.assertEqual(rows[0]["vocabulaire_metier"], {"terme": "definition"})
+        self.assertEqual(rows[1]["status"], "error")
+        self.assertEqual(rows[1]["error_message"], "erreur test")
+
+        stats = kbs.kb_stats(123)
+        self.assertEqual(stats["completed"], 1)
+        self.assertEqual(stats["error"], 1)
+        self.assertEqual(stats["total_words"], 42)
+
+        kbs.clear_kb(123)
+        self.assertEqual(kbs.list_kb(123), [])
 
 
 if __name__ == "__main__":
