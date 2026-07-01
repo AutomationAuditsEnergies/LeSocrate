@@ -74,6 +74,10 @@ export default function HRDashboard() {
   const [moduleSearchQuery, setModuleSearchQuery] = useState('')
   const [formationMode, setFormationMode] = useState('existing') // 'existing' | 'new' | 'none'
   const [selectedModuleId, setSelectedModuleId] = useState('')
+  const [teacherFirstName, setTeacherFirstName] = useState('')
+  const [teacherColor, setTeacherColor] = useState('violet')
+  const [weeklyCourseCount, setWeeklyCourseCount] = useState('2')
+  const [teachingDays, setTeachingDays] = useState(['mardi', 'jeudi'])
   const [newFormTpName, setNewFormTpName] = useState('')
   const [newFormRncp, setNewFormRncp] = useState('')
   const [newFormHours, setNewFormHours] = useState('')
@@ -83,7 +87,6 @@ export default function HRDashboard() {
   // Sinon, comportement historique : redirection vers
   // /formation-pipeline pour validation manuelle étape par étape.
   const [autoPilot, setAutoPilot] = useState(false)
-  const [autoPilotTts, setAutoPilotTts] = useState('gtts')  // 'fish_audio' | 'gtts' | 'mock'
   // Mode d'exécution des étapes IA (KB, global, daily, content, review) :
   // - 'api'          : appels directs à l'API Anthropic (consomme ANTHROPIC_API_KEY)
   // - 'api_deepseek' : appels directs à l'API DeepSeek (consomme DEEPSEEK_API_KEY)
@@ -407,13 +410,17 @@ export default function HRDashboard() {
 
   const resetCreateForm = () => {
     setNewPlatformName('')
-    setFormationMode('existing')
+    setFormationMode('new')
     setSelectedModuleId('')
+    setTeacherFirstName('')
+    setTeacherColor('violet')
+    setWeeklyCourseCount('2')
+    setTeachingDays(['mardi', 'jeudi'])
     setNewFormTpName('')
     setNewFormRncp('')
     setNewFormHours('')
-    setAutoPilot(false)
-    setAutoPilotTts('gtts')
+    setAutoPilot(true)
+    setAutoPilotMode('api_deepseek')
   }
 
   // Ouvre la modale en pré-sélectionnant le mode "Nouvelle formation".
@@ -446,7 +453,10 @@ export default function HRDashboard() {
   }
 
   const handleCreatePlatform = async () => {
-    if (!newPlatformName.trim()) return
+    const teacherName = teacherFirstName.trim()
+    const trainingTitle = newFormTpName.trim()
+    const platformName = newPlatformName.trim() || (teacherName && trainingTitle ? `${teacherName} · ${trainingTitle}` : '')
+    if (!platformName) return
 
     // ─── Branche TEST : bypass /api/hr/platforms, envoie multipart à /init-test ─
     // Crée plateforme + job + folders + segments depuis les DOCX, lance auto-pilot
@@ -501,7 +511,7 @@ export default function HRDashboard() {
 
     // ─── Flow normal (API ou Claude Code) ─────────────────────────────────────
     // Validation selon le mode
-    let body = { name: newPlatformName.trim() }
+    let body = { name: platformName }
     if (formationMode === 'existing') {
       if (!selectedModuleId) {
         alert('Sélectionne un module ou bascule sur "Nouvelle formation"')
@@ -509,11 +519,16 @@ export default function HRDashboard() {
       }
       body.module_id = parseInt(selectedModuleId, 10)
     } else if (formationMode === 'new') {
-      const tpName = newFormTpName.trim()
+      const tpName = trainingTitle
       const rncp = newFormRncp.trim()
       const hours = parseInt(newFormHours, 10)
-      if (!tpName || !rncp || !hours || hours <= 0) {
-        alert('Nom du TP, code RNCP et durée (h) requis pour une nouvelle formation')
+      const weeklyCount = parseInt(weeklyCourseCount, 10)
+      if (!teacherName || !tpName || !rncp || !hours || hours <= 0) {
+        alert('Prénom du professeur IA, nom de formation, code RNCP et durée requis')
+        return
+      }
+      if (!weeklyCount || weeklyCount <= 0 || teachingDays.length === 0) {
+        alert('Indique la fréquence de cours et au moins un jour')
         return
       }
       body.new_formation = { tp_name: tpName, rncp_code: rncp, total_hours: hours }
@@ -540,9 +555,9 @@ export default function HRDashboard() {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                  tts_mode: autoPilotTts,
-                  use_claude_code: autoPilotMode === 'claude_code',
-                  model: autoPilotMode === 'api_deepseek' ? 'pro' : 'sonnet',
+                  tts_mode: 'fish_audio',
+                  use_claude_code: false,
+                  model: 'pro',
                   generate_audio: false,
                 }),
               },
@@ -660,7 +675,7 @@ export default function HRDashboard() {
               <SkoolTab
                 active={showCreateModal}
                 onClick={openCreateModal}
-                label="Nouvelle plateforme"
+                label="Nouveau professeur IA"
                 colors={colors}
               />
             </nav>
@@ -718,6 +733,14 @@ export default function HRDashboard() {
               modules={modules}
               newPlatformName={newPlatformName}
               setNewPlatformName={setNewPlatformName}
+              teacherFirstName={teacherFirstName}
+              setTeacherFirstName={setTeacherFirstName}
+              teacherColor={teacherColor}
+              setTeacherColor={setTeacherColor}
+              weeklyCourseCount={weeklyCourseCount}
+              setWeeklyCourseCount={setWeeklyCourseCount}
+              teachingDays={teachingDays}
+              setTeachingDays={setTeachingDays}
               formationMode={formationMode}
               setFormationMode={setFormationMode}
               selectedModuleId={selectedModuleId}
@@ -730,8 +753,6 @@ export default function HRDashboard() {
               setNewFormHours={setNewFormHours}
               autoPilot={autoPilot}
               setAutoPilot={setAutoPilot}
-              autoPilotTts={autoPilotTts}
-              setAutoPilotTts={setAutoPilotTts}
               autoPilotMode={autoPilotMode}
               setAutoPilotMode={setAutoPilotMode}
               testDocs={testDocs}
@@ -1587,36 +1608,62 @@ function ModulesCatalogueView({
 function CreatePlatformView({
   colors,
   darkMode,
-  modules,
-  newPlatformName,
-  setNewPlatformName,
-  formationMode,
-  setFormationMode,
-  selectedModuleId,
-  setSelectedModuleId,
+  teacherFirstName,
+  setTeacherFirstName,
+  teacherColor,
+  setTeacherColor,
+  weeklyCourseCount,
+  setWeeklyCourseCount,
+  teachingDays,
+  setTeachingDays,
   newFormTpName,
   setNewFormTpName,
   newFormRncp,
   setNewFormRncp,
   newFormHours,
   setNewFormHours,
-  autoPilot,
-  setAutoPilot,
-  autoPilotTts,
-  setAutoPilotTts,
-  autoPilotMode,
-  setAutoPilotMode,
-  testDocs,
-  setTestDocs,
   creating,
   onCreate,
   onCancel,
 }) {
-  const reusable = modules.filter(m => m.reusable)
+  const teacherColors = [
+    { id: 'violet', label: 'Violet', swatch: '#8B5CF6', image: '/robot-violet.png' },
+    { id: 'blue', label: 'Bleu', swatch: '#3B82F6', image: '/robot-blue.png' },
+    { id: 'pink', label: 'Rose', swatch: '#EC4899', image: '/robot-pink.png' },
+    { id: 'amber', label: 'Ambre', swatch: '#F59E0B', image: '/robot-amber.png' },
+  ]
+  const weekDays = [
+    { id: 'lundi', label: 'Lun.' },
+    { id: 'mardi', label: 'Mar.' },
+    { id: 'mercredi', label: 'Mer.' },
+    { id: 'jeudi', label: 'Jeu.' },
+    { id: 'vendredi', label: 'Ven.' },
+  ]
+  const selectedColor = teacherColors.find((color) => color.id === teacherColor) || teacherColors[0]
+  const canCreateTeacher = (
+    teacherFirstName.trim()
+    && newFormTpName.trim()
+    && newFormRncp.trim()
+    && Number(newFormHours) > 0
+    && Number(weeklyCourseCount) > 0
+    && teachingDays.length > 0
+  )
+  const inputStyle = {
+    backgroundColor: darkMode ? '#0f172a' : '#F8F7F5',
+    color: darkMode ? '#f1f5f9' : '#1e293b',
+    border: `1px solid ${darkMode ? '#334155' : '#e2e8f0'}`,
+  }
+  const toggleTeachingDay = (dayId) => {
+    setTeachingDays((current) => (
+      current.includes(dayId)
+        ? current.filter((day) => day !== dayId)
+        : [...current, dayId]
+    ))
+  }
 
   return (
     <section
-      className="mx-auto max-w-2xl overflow-hidden rounded-2xl"
+      className="mx-auto max-w-3xl overflow-hidden rounded-2xl"
       style={{ backgroundColor: colors.cardBg, border: `1px solid ${colors.border}` }}
     >
       <header
@@ -1631,7 +1678,7 @@ function CreatePlatformView({
             Création
           </span>
           <h2 className="mt-1 text-xl font-semibold tracking-tight" style={{ color: colors.text }}>
-            Nouvelle plateforme
+            Nouveau professeur IA
           </h2>
         </div>
         <button
@@ -1646,208 +1693,160 @@ function CreatePlatformView({
       </header>
 
       <div className="p-7">
-        <div className="mb-5">
-          <label className="mb-2 block text-sm font-medium" style={{ color: darkMode ? '#94a3b8' : '#64748b' }}>
-            Nom de la plateforme
-          </label>
-          <input
-            type="text"
-            value={newPlatformName}
-            onChange={(e) => setNewPlatformName(e.target.value)}
-            placeholder="Ex: TP CRCD Septembre 2026"
-            autoFocus
-            className="w-full rounded-lg px-4 py-3 text-sm outline-none transition-all"
-            style={{
-              backgroundColor: darkMode ? '#0f172a' : '#F8F7F5',
-              color: darkMode ? '#f1f5f9' : '#1e293b',
-              border: `1px solid ${darkMode ? '#334155' : '#e2e8f0'}`,
-            }}
-          />
-          <p className="mt-2 text-xs" style={{ color: darkMode ? '#64748b' : '#94a3b8' }}>
-            Nom libre, identifie la promo/session. Ex: "TP CRCD Septembre 2026".
-          </p>
-        </div>
-
-        <div className="mb-5">
-          <label className="mb-2 block text-sm font-medium" style={{ color: darkMode ? '#94a3b8' : '#64748b' }}>
-            Module formation
-          </label>
-          <select
-            value={formationMode === 'existing' ? selectedModuleId : (formationMode === 'new' ? '__new__' : '__none__')}
-            onChange={(e) => {
-              const v = e.target.value
-              if (v === '__new__') { setFormationMode('new'); setSelectedModuleId('') }
-              else if (v === '__none__') { setFormationMode('none'); setSelectedModuleId('') }
-              else { setFormationMode('existing'); setSelectedModuleId(v) }
-            }}
-            className="w-full rounded-lg px-4 py-3 text-sm outline-none transition-all"
-            style={{
-              backgroundColor: darkMode ? '#0f172a' : '#F8F7F5',
-              color: darkMode ? '#f1f5f9' : '#1e293b',
-              border: `1px solid ${darkMode ? '#334155' : '#e2e8f0'}`,
-            }}
-          >
-            <option value="" disabled>Sélectionner un module...</option>
-            {reusable.length > 0 && (
-              <optgroup label="Modules disponibles (cours + audios prêts)">
-                {reusable.map(m => (
-                  <option key={m.id} value={m.id}>
-                    {m.tp_name} — RNCP {m.rncp_code || '?'} — {m.version} — {m.nb_folders} journée{m.nb_folders > 1 ? 's' : ''}
-                  </option>
-                ))}
-              </optgroup>
-            )}
-            <option value="__new__">+ Nouvelle formation (lance la pipeline)</option>
-            <option value="__none__">Plateforme vide (sans cours)</option>
-          </select>
-          {formationMode === 'existing' && selectedModuleId && (
-            <p className="mt-2 text-xs" style={{ color: '#10b981' }}>
-              ✓ Les cours + audios du module seront clonés vers la nouvelle plateforme. Module intact.
-            </p>
-          )}
-          {formationMode === 'new' && (
-            <p className="mt-2 text-xs" style={{ color: '#a78bfa' }}>
-              ⚙ Un job pipeline va être initié, tu finiras les étapes de validation sur /formation-pipeline.
-            </p>
-          )}
-          {formationMode === 'none' && (
-            <p className="mt-2 text-xs" style={{ color: darkMode ? '#64748b' : '#94a3b8' }}>
-              Plateforme sans cours, tu pourras uploader du contenu manuellement.
-            </p>
-          )}
-        </div>
-
-        {formationMode === 'new' && (
-          <div className="mb-5 rounded-lg p-4" style={{ backgroundColor: darkMode ? '#0f172a' : '#F8F7F5', border: `1px dashed ${darkMode ? '#334155' : '#cbd5e1'}` }}>
-            <div className="mb-3">
-              <label className="mb-1 block text-xs font-medium" style={{ color: darkMode ? '#94a3b8' : '#64748b' }}>Nom du TP</label>
-              <input type="text" value={newFormTpName} onChange={(e) => setNewFormTpName(e.target.value)} placeholder="Ex: TP CRCD"
-                className="w-full rounded-lg px-3 py-2 text-sm outline-none"
-                style={{ backgroundColor: darkMode ? '#1e293b' : '#ffffff', color: darkMode ? '#f1f5f9' : '#1e293b', border: `1px solid ${darkMode ? '#334155' : '#e2e8f0'}` }} />
-            </div>
-            <div className="mb-3">
-              <label className="mb-1 block text-xs font-medium" style={{ color: darkMode ? '#94a3b8' : '#64748b' }}>Code RNCP</label>
-              <input type="text" value={newFormRncp} onChange={(e) => setNewFormRncp(e.target.value)} placeholder="Ex: 35304"
-                className="w-full rounded-lg px-3 py-2 text-sm outline-none"
-                style={{ backgroundColor: darkMode ? '#1e293b' : '#ffffff', color: darkMode ? '#f1f5f9' : '#1e293b', border: `1px solid ${darkMode ? '#334155' : '#e2e8f0'}` }} />
-            </div>
+        <div className="grid gap-5 md:grid-cols-[1fr_180px]">
+          <div className="space-y-5">
             <div>
-              <label className="mb-1 block text-xs font-medium" style={{ color: darkMode ? '#94a3b8' : '#64748b' }}>Durée totale (heures)</label>
-              <input type="number" value={newFormHours} onChange={(e) => setNewFormHours(e.target.value)} placeholder="Ex: 70" min="1"
-                className="w-full rounded-lg px-3 py-2 text-sm outline-none"
-                style={{ backgroundColor: darkMode ? '#1e293b' : '#ffffff', color: darkMode ? '#f1f5f9' : '#1e293b', border: `1px solid ${darkMode ? '#334155' : '#e2e8f0'}` }} />
+              <label className="mb-2 block text-sm font-medium" style={{ color: darkMode ? '#94a3b8' : '#64748b' }}>
+                Prénom du professeur IA
+              </label>
+              <input
+                type="text"
+                value={teacherFirstName}
+                onChange={(e) => setTeacherFirstName(e.target.value)}
+                placeholder="Ex: Lina"
+                autoFocus
+                className="w-full rounded-lg px-4 py-3 text-sm outline-none transition-all"
+                style={inputStyle}
+              />
             </div>
 
-            <div className="mt-4 pt-4" style={{ borderTop: `1px dashed ${darkMode ? '#334155' : '#cbd5e1'}` }}>
-              <label className="flex cursor-pointer items-start gap-3">
-                <input
-                  type="checkbox"
-                  checked={autoPilot}
-                  onChange={(e) => setAutoPilot(e.target.checked)}
-                  className="mt-1"
-                  style={{ accentColor: '#8B5CF6' }}
-                />
-                <div>
-                  <div className="text-xs font-semibold" style={{ color: darkMode ? '#f1f5f9' : '#1e293b' }}>
-                    Lancer en mode auto-pilot
-                  </div>
-                  <div className="mt-1 text-xs" style={{ color: darkMode ? '#94a3b8' : '#64748b' }}>
-                    Toutes les étapes texte s'enchaînent automatiquement jusqu'aux Word 2 et rapports. Les audios se génèrent ensuite à la demande, journée par journée.
-                  </div>
-                </div>
+            <div>
+              <label className="mb-2 block text-sm font-medium" style={{ color: darkMode ? '#94a3b8' : '#64748b' }}>
+                Nom de la formation
               </label>
-
-              {autoPilot && (
-                <div className="ml-7 mt-3 space-y-3">
-                  <div>
-                    <label className="mb-1 block text-xs font-medium" style={{ color: darkMode ? '#94a3b8' : '#64748b' }}>
-                      Voix par défaut pour les audios ultérieurs
-                      {autoPilotMode === 'test' && (
-                        <span className="ml-2" style={{ color: '#a78bfa' }}>
-                          (forcé en mock pour le mode test)
-                        </span>
-                      )}
-                    </label>
-                    <select
-                      value={autoPilotMode === 'test' ? 'mock' : autoPilotTts}
-                      onChange={(e) => setAutoPilotTts(e.target.value)}
-                      disabled={autoPilotMode === 'test'}
-                      className="w-full rounded-lg px-3 py-2 text-sm outline-none"
-                      style={{
-                        backgroundColor: darkMode ? '#1e293b' : '#ffffff',
-                        color: darkMode ? '#f1f5f9' : '#1e293b',
-                        border: `1px solid ${darkMode ? '#334155' : '#e2e8f0'}`,
-                        opacity: autoPilotMode === 'test' ? 0.5 : 1,
-                      }}
-                    >
-                      <option value="gtts">Edge TTS — voix basique gratuite Microsoft (recommandé pour test)</option>
-                      <option value="mock">Mock — silence 1 s (gratuit, pour tester l'orchestration)</option>
-                      <option value="fish_audio">Fish Audio S2-Pro (payant, ~9$/journée)</option>
-                    </select>
-                  </div>
-                  <div>
-                    <label className="mb-1 block text-xs font-medium" style={{ color: darkMode ? '#94a3b8' : '#64748b' }}>
-                      Mode d'exécution des étapes IA (KB · global · daily · content · review)
-                    </label>
-                    <select
-                      value={autoPilotMode}
-                      onChange={(e) => setAutoPilotMode(e.target.value)}
-                      className="w-full rounded-lg px-3 py-2 text-sm outline-none"
-                      style={{ backgroundColor: darkMode ? '#1e293b' : '#ffffff', color: darkMode ? '#f1f5f9' : '#1e293b', border: `1px solid ${darkMode ? '#334155' : '#e2e8f0'}` }}
-                    >
-                      <option value="api">API Anthropic — paie ta clé ANTHROPIC_API_KEY (~5–7$ pour 7h Sonnet)</option>
-                      <option value="api_deepseek">API DeepSeek — paie ta clé DEEPSEEK_API_KEY (deepseek-v4-pro, top modèle)</option>
-                      <option value="claude_code">Claude Code local — forfait Pro/Max via OAuth (gratuit côté API)</option>
-                      <option value="test">TEST — injecte des DOCX/TXT pré-rédigés (skip génération, ~5 min)</option>
-                    </select>
-                    <div className="mt-1 text-xs" style={{ color: darkMode ? '#64748b' : '#94a3b8' }}>
-                      {autoPilotMode === 'claude_code' && 'Le backend doit avoir LOCAL_DEV=true et le binaire `claude` dans son PATH.'}
-                      {autoPilotMode === 'api' && 'Mode standard, aucune dépendance locale requise.'}
-                      {autoPilotMode === 'api_deepseek' && 'Le backend doit avoir DEEPSEEK_API_KEY dans son .env. Endpoint compatible Anthropic, route automatique sur api.deepseek.com.'}
-                      {autoPilotMode === 'test' && 'Skip KB/global/daily/content (tu fournis 1 DOCX/TXT par journée). Conformité locale par morceau puis Word 2 tournent ensuite.'}
-                    </div>
-                  </div>
-
-                  {autoPilotMode === 'test' && (
-                    <div
-                      className="rounded-lg border-2 border-dashed p-3"
-                      style={{
-                        borderColor: '#a78bfa',
-                        backgroundColor: darkMode ? '#1e293b' : '#faf7ff',
-                      }}
-                    >
-                      <label className="mb-2 block text-xs font-semibold" style={{ color: '#8B5CF6' }}>
-                        📄 Documents source (1 par journée — total {Math.max(1, Math.ceil((parseInt(newFormHours, 10) || 7) / 7))})
-                      </label>
-                      <input
-                        type="file"
-                        accept=".docx,.txt"
-                        multiple
-                        onChange={(e) => setTestDocs(Array.from(e.target.files || []))}
-                        className="block w-full text-xs"
-                        style={{ color: darkMode ? '#cbd5e1' : '#475569' }}
-                      />
-                      {testDocs.length > 0 && (
-                        <ul className="mt-2 space-y-1 text-xs" style={{ color: darkMode ? '#94a3b8' : '#64748b' }}>
-                          {testDocs.map((f, i) => (
-                            <li key={i}>
-                              <span className="font-mono">Jour {i + 1}</span> · {f.name} ({(f.size / 1024).toFixed(1)} ko)
-                            </li>
-                          ))}
-                        </ul>
-                      )}
-                      <div className="mt-2 text-xs" style={{ color: '#a78bfa' }}>
-                        Chaque fichier sera découpé en 18 segments (6 sous-parties × 3 passes). Les 18 segments alimenteront review + audio.
-                      </div>
-                    </div>
-                  )}
-                </div>
-              )}
+              <input
+                type="text"
+                value={newFormTpName}
+                onChange={(e) => setNewFormTpName(e.target.value)}
+                placeholder="Ex: TP CRCD"
+                className="w-full rounded-lg px-4 py-3 text-sm outline-none transition-all"
+                style={inputStyle}
+              />
             </div>
           </div>
-        )}
 
-        <div className="flex justify-end gap-3">
+          <div
+            className="flex items-center justify-center rounded-xl"
+            style={{ backgroundColor: darkMode ? '#0f172a' : '#F8F7F5', border: `1px solid ${colors.border}` }}
+          >
+            <img src={selectedColor.image} alt="" className="h-36 w-36 object-contain" draggable="false" />
+          </div>
+        </div>
+
+        <div className="mt-5">
+          <label className="mb-2 block text-sm font-medium" style={{ color: darkMode ? '#94a3b8' : '#64748b' }}>
+            Couleur du professeur IA
+          </label>
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+            {teacherColors.map((color) => {
+              const selected = teacherColor === color.id
+              return (
+                <button
+                  key={color.id}
+                  type="button"
+                  onClick={() => setTeacherColor(color.id)}
+                  className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition-all"
+                  style={{
+                    color: selected ? colors.text : colors.textSecondary,
+                    border: `1px solid ${selected ? color.swatch : colors.border}`,
+                    backgroundColor: selected ? `${color.swatch}14` : 'transparent',
+                  }}
+                >
+                  <span className="h-3 w-3 rounded-full" style={{ backgroundColor: color.swatch }} />
+                  {color.label}
+                </button>
+              )
+            })}
+          </div>
+        </div>
+
+        <div className="mt-5 grid gap-4 md:grid-cols-2">
+          <div>
+            <label className="mb-2 block text-sm font-medium" style={{ color: darkMode ? '#94a3b8' : '#64748b' }}>
+              Code RNCP
+            </label>
+            <input
+              type="text"
+              value={newFormRncp}
+              onChange={(e) => setNewFormRncp(e.target.value)}
+              placeholder="Ex: 35304"
+              className="w-full rounded-lg px-4 py-3 text-sm outline-none transition-all"
+              style={inputStyle}
+            />
+          </div>
+          <div>
+            <label className="mb-2 block text-sm font-medium" style={{ color: darkMode ? '#94a3b8' : '#64748b' }}>
+              Durée totale de la formation
+            </label>
+            <input
+              type="number"
+              value={newFormHours}
+              onChange={(e) => setNewFormHours(e.target.value)}
+              placeholder="Ex: 70"
+              min="1"
+              className="w-full rounded-lg px-4 py-3 text-sm outline-none transition-all"
+              style={inputStyle}
+            />
+          </div>
+        </div>
+
+        <div className="mt-5 grid gap-4 md:grid-cols-[180px_1fr]">
+          <div>
+            <label className="mb-2 block text-sm font-medium" style={{ color: darkMode ? '#94a3b8' : '#64748b' }}>
+              Cours par semaine
+            </label>
+            <input
+              type="number"
+              value={weeklyCourseCount}
+              onChange={(e) => setWeeklyCourseCount(e.target.value)}
+              min="1"
+              max="5"
+              className="w-full rounded-lg px-4 py-3 text-sm outline-none transition-all"
+              style={inputStyle}
+            />
+          </div>
+          <div>
+            <label className="mb-2 block text-sm font-medium" style={{ color: darkMode ? '#94a3b8' : '#64748b' }}>
+              Jours de cours
+            </label>
+            <div className="grid grid-cols-5 gap-2">
+              {weekDays.map((day) => {
+                const selected = teachingDays.includes(day.id)
+                return (
+                  <button
+                    key={day.id}
+                    type="button"
+                    onClick={() => toggleTeachingDay(day.id)}
+                    className="rounded-lg px-2 py-3 text-xs font-semibold transition-all"
+                    style={{
+                      color: selected ? '#ffffff' : colors.textSecondary,
+                      backgroundColor: selected ? '#8B5CF6' : darkMode ? '#0f172a' : '#F8F7F5',
+                      border: `1px solid ${selected ? '#8B5CF6' : colors.border}`,
+                    }}
+                  >
+                    {day.label}
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+        </div>
+
+        <div className="mt-5 rounded-lg p-4" style={{ backgroundColor: darkMode ? '#0f172a' : '#F8F7F5', border: `1px solid ${colors.border}` }}>
+          <div className="flex items-start gap-3">
+            <Icon name="auto_mode" className="mt-0.5 text-base" style={{ color: '#8B5CF6' }} />
+            <div>
+              <div className="text-sm font-semibold" style={{ color: colors.text }}>
+                Lancement automatique
+              </div>
+              <div className="mt-1 text-xs leading-5" style={{ color: colors.textSecondary }}>
+                La formation part directement en auto-pilot avec DeepSeek pour les étapes IA et Fish Audio pour la voix. Ces paramètres ne sont plus à choisir ici.
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="mt-6 flex justify-end gap-3">
           <button
             onClick={onCancel}
             disabled={creating}
@@ -1858,14 +1857,14 @@ function CreatePlatformView({
           </button>
           <button
             onClick={onCreate}
-            disabled={creating || !newPlatformName.trim()}
+            disabled={creating || !canCreateTeacher}
             className="rounded-lg px-5 py-2 text-sm font-medium text-white transition-all"
             style={{
-              backgroundColor: creating || !newPlatformName.trim() ? '#a78bfa' : '#8B5CF6',
-              opacity: creating || !newPlatformName.trim() ? 0.6 : 1,
+              backgroundColor: creating || !canCreateTeacher ? '#a78bfa' : '#8B5CF6',
+              opacity: creating || !canCreateTeacher ? 0.6 : 1,
             }}
           >
-            {creating ? 'Création...' : 'Créer la plateforme'}
+            {creating ? 'Création...' : 'Créer le professeur IA'}
           </button>
         </div>
       </div>
