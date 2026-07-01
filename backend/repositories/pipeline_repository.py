@@ -110,6 +110,10 @@ def _pipeline_mirror_enabled() -> bool:
     )
 
 
+def _placeholder() -> str:
+    return "%s" if _pipeline_primary_backend() == "postgres" else "?"
+
+
 def _normalize_job_payload(row: dict[str, Any]) -> dict[str, Any]:
     payload = dict(row)
     for column in PIPELINE_JOB_BOOL_COLUMNS:
@@ -134,6 +138,193 @@ def _fetch_sqlite_job_payload(job_id: int) -> dict[str, Any] | None:
         )
         row = cursor.fetchone()
         return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def list_expected_course_folder_matches(job_id: int, folder_name: str) -> list[dict[str, Any]]:
+    """Return candidate folders for one expected day, best candidate first."""
+    ph = _placeholder()
+    query = f"""
+        SELECT
+            cf.id,
+            cf.name,
+            cf.position,
+            cf.platform_id,
+            cf.formation_job_id,
+            cgj.id AS content_job_id,
+            cgj.status AS content_status,
+            COALESCE(cgj.total_words, 0) AS total_words,
+            COALESCE(SUM(CASE WHEN cgs.status = 'completed' THEN 1 ELSE 0 END), 0) AS segments_completed
+        FROM cours_folders cf
+        LEFT JOIN content_generation_jobs cgj ON cgj.folder_id = cf.id
+        LEFT JOIN content_generation_segments cgs ON cgs.job_id = cgj.id
+        WHERE cf.formation_job_id = {ph} AND cf.name = {ph}
+        GROUP BY cf.id, cf.name, cf.position, cf.platform_id, cf.formation_job_id,
+                 cgj.id, cgj.status, cgj.total_words
+        ORDER BY
+            CASE
+                WHEN cgj.status = 'completed' THEN 0
+                WHEN COALESCE(cgj.total_words, 0) > 0 THEN 1
+                WHEN cgj.status = 'running' THEN 2
+                WHEN cgj.status = 'idle' THEN 3
+                WHEN cgj.id IS NULL THEN 5
+                ELSE 4
+            END,
+            COALESCE(cgj.total_words, 0) DESC,
+            COALESCE(SUM(CASE WHEN cgs.status = 'completed' THEN 1 ELSE 0 END), 0) DESC,
+            cf.position ASC,
+            cf.id ASC
+    """
+
+    if _pipeline_primary_backend() == "postgres":
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, (job_id, folder_name))
+                return [dict(row) for row in cur.fetchall()]
+
+    conn = _as_sqlite_row_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(query, (job_id, folder_name))
+        return [dict(row) for row in cursor.fetchall()]
+    finally:
+        conn.close()
+
+
+def create_course_folder_for_job(
+    *,
+    platform_id: int,
+    folder_name: str,
+    formation_job_id: int,
+) -> dict[str, Any]:
+    """Create a course folder at the next platform position."""
+    ph = _placeholder()
+    if _pipeline_primary_backend() == "postgres":
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"SELECT COALESCE(MAX(position), -1) + 1 AS position FROM cours_folders WHERE platform_id = {ph}",
+                    (platform_id,),
+                )
+                position = int(cur.fetchone()["position"])
+                cur.execute(
+                    """
+                    INSERT INTO cours_folders (platform_id, name, position, formation_job_id)
+                    VALUES (%s, %s, %s, %s)
+                    RETURNING id, name, position, platform_id, formation_job_id
+                    """,
+                    (platform_id, folder_name, position, formation_job_id),
+                )
+                row = dict(cur.fetchone())
+    else:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        try:
+            cursor.execute(
+                "SELECT COALESCE(MAX(position), -1) + 1 FROM cours_folders WHERE platform_id = ?",
+                (platform_id,),
+            )
+            position = int(cursor.fetchone()[0])
+            cursor.execute(
+                "INSERT INTO cours_folders (platform_id, name, position, formation_job_id) VALUES (?, ?, ?, ?)",
+                (platform_id, folder_name, position, formation_job_id),
+            )
+            folder_id = int(cursor.lastrowid)
+            conn.commit()
+            row = {
+                "id": folder_id,
+                "name": folder_name,
+                "position": position,
+                "platform_id": platform_id,
+                "formation_job_id": formation_job_id,
+            }
+        finally:
+            conn.close()
+
+    return {
+        **row,
+        "content_job_id": None,
+        "content_status": None,
+        "total_words": 0,
+        "segments_completed": 0,
+    }
+
+
+def course_folder_exists_for_job(job_id: int, folder_name: str) -> bool:
+    ph = _placeholder()
+    query = f"""
+        SELECT 1
+        FROM cours_folders
+        WHERE formation_job_id = {ph} AND name = {ph}
+        LIMIT 1
+    """
+    if _pipeline_primary_backend() == "postgres":
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, (job_id, folder_name))
+                return cur.fetchone() is not None
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(query, (job_id, folder_name))
+        return cursor.fetchone() is not None
+    finally:
+        conn.close()
+
+
+def find_orphan_course_folder(platform_id: int, folder_name: str) -> int | None:
+    ph = _placeholder()
+    query = f"""
+        SELECT cf.id
+        FROM cours_folders cf
+        LEFT JOIN content_generation_jobs cgj ON cgj.folder_id = cf.id
+        WHERE cf.platform_id = {ph}
+          AND cf.name = {ph}
+          AND cf.formation_job_id IS NULL
+        ORDER BY CASE WHEN cgj.id IS NULL THEN 1 ELSE 0 END,
+                 cf.created_at DESC,
+                 cf.id DESC
+        LIMIT 1
+    """
+    if _pipeline_primary_backend() == "postgres":
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, (platform_id, folder_name))
+                row = cur.fetchone()
+                return int(row["id"]) if row else None
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(query, (platform_id, folder_name))
+        row = cursor.fetchone()
+        return int(row[0]) if row else None
+    finally:
+        conn.close()
+
+
+def attach_course_folder_to_job(job_id: int, folder_id: int) -> bool:
+    ph = _placeholder()
+    query = f"""
+        UPDATE cours_folders
+        SET formation_job_id = {ph}
+        WHERE id = {ph} AND formation_job_id IS NULL
+    """
+    if _pipeline_primary_backend() == "postgres":
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, (job_id, folder_id))
+                return cur.rowcount > 0
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(query, (job_id, folder_id))
+        changed = cursor.rowcount > 0
+        conn.commit()
+        return changed
     finally:
         conn.close()
 

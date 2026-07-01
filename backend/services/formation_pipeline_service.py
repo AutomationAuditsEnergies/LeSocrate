@@ -23,9 +23,14 @@ import requests as _http
 
 from database.db import get_db_connection
 from repositories.pipeline_repository import (
+    attach_course_folder_to_job,
+    course_folder_exists_for_job,
     create_pipeline_job,
+    create_course_folder_for_job,
+    find_orphan_course_folder,
     get_auto_pilot_pipeline_jobs_to_resume,
     get_pipeline_job,
+    list_expected_course_folder_matches,
     list_pipeline_jobs,
     update_pipeline_job,
 )
@@ -1283,17 +1288,17 @@ def expected_course_folder_name(day_data: dict, fallback_day_number: int) -> str
 
 def _folder_row_to_dict(row, day_data: dict, day_index: int, duplicate_of: int = None) -> dict:
     return {
-        "folder_id": row[0],
-        "name": row[1],
-        "position": row[2],
-        "platform_id": row[3],
-        "formation_job_id": row[4],
-        "content_job_id": row[5],
-        "content_status": row[6],
-        "total_words": row[7] or 0,
-        "segments_completed": row[8] or 0,
+        "folder_id": row["id"],
+        "name": row["name"],
+        "position": row["position"],
+        "platform_id": row["platform_id"],
+        "formation_job_id": row["formation_job_id"],
+        "content_job_id": row.get("content_job_id"),
+        "content_status": row.get("content_status"),
+        "total_words": row.get("total_words") or 0,
+        "segments_completed": row.get("segments_completed") or 0,
         "day_number": (day_data or {}).get("day_number") or day_index + 1,
-        "day_title": (day_data or {}).get("title") or row[1],
+        "day_title": (day_data or {}).get("title") or row["name"],
         "expected_name": expected_course_folder_name(day_data, day_index + 1),
         "duplicate_of": duplicate_of,
     }
@@ -1322,94 +1327,37 @@ def get_expected_course_folders(
     missing = []
     created = []
 
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    try:
-        for idx, day_data in enumerate(daily_programs):
-            folder_name = expected_course_folder_name(day_data, idx + 1)
-            cursor.execute(
-                """
-                SELECT
-                    cf.id,
-                    cf.name,
-                    cf.position,
-                    cf.platform_id,
-                    cf.formation_job_id,
-                    cgj.id,
-                    cgj.status,
-                    COALESCE(cgj.total_words, 0),
-                    COALESCE(SUM(CASE WHEN cgs.status = 'completed' THEN 1 ELSE 0 END), 0)
-                FROM cours_folders cf
-                LEFT JOIN content_generation_jobs cgj ON cgj.folder_id = cf.id
-                LEFT JOIN content_generation_segments cgs ON cgs.job_id = cgj.id
-                WHERE cf.formation_job_id = ? AND cf.name = ?
-                GROUP BY cf.id, cf.name, cf.position, cf.platform_id, cf.formation_job_id,
-                         cgj.id, cgj.status, cgj.total_words
-                ORDER BY
-                    CASE
-                        WHEN cgj.status = 'completed' THEN 0
-                        WHEN COALESCE(cgj.total_words, 0) > 0 THEN 1
-                        WHEN cgj.status = 'running' THEN 2
-                        WHEN cgj.status = 'idle' THEN 3
-                        WHEN cgj.id IS NULL THEN 5
-                        ELSE 4
-                    END,
-                    COALESCE(cgj.total_words, 0) DESC,
-                    COALESCE(SUM(CASE WHEN cgs.status = 'completed' THEN 1 ELSE 0 END), 0) DESC,
-                    cf.position ASC,
-                    cf.id ASC
-                """,
-                (job_id, folder_name),
+    for idx, day_data in enumerate(daily_programs):
+        folder_name = expected_course_folder_name(day_data, idx + 1)
+        matches = list_expected_course_folder_matches(job_id, folder_name)
+
+        if not matches and create_missing:
+            created_row = create_course_folder_for_job(
+                platform_id=resolved_platform_id,
+                folder_name=folder_name,
+                formation_job_id=job_id,
             )
-            matches = cursor.fetchall()
+            created.append({"folder_id": created_row["id"], "name": folder_name})
+            matches = [created_row]
 
-            if not matches and create_missing:
-                cursor.execute(
-                    "SELECT COALESCE(MAX(position), -1) + 1 FROM cours_folders WHERE platform_id = ?",
-                    (resolved_platform_id,),
+        if not matches:
+            missing.append({
+                "day_number": (day_data or {}).get("day_number") or idx + 1,
+                "name": folder_name,
+            })
+            continue
+
+        canonical = _folder_row_to_dict(matches[0], day_data, idx)
+        folders.append(canonical)
+        for duplicate in matches[1:]:
+            duplicates.append(
+                _folder_row_to_dict(
+                    duplicate,
+                    day_data,
+                    idx,
+                    duplicate_of=canonical["folder_id"],
                 )
-                position = cursor.fetchone()[0]
-                cursor.execute(
-                    "INSERT INTO cours_folders (platform_id, name, position, formation_job_id) VALUES (?, ?, ?, ?)",
-                    (resolved_platform_id, folder_name, position, job_id),
-                )
-                folder_id = cursor.lastrowid
-                created.append({"folder_id": folder_id, "name": folder_name})
-                matches = [(
-                    folder_id,
-                    folder_name,
-                    position,
-                    resolved_platform_id,
-                    job_id,
-                    None,
-                    None,
-                    0,
-                    0,
-                )]
-
-            if not matches:
-                missing.append({
-                    "day_number": (day_data or {}).get("day_number") or idx + 1,
-                    "name": folder_name,
-                })
-                continue
-
-            canonical = _folder_row_to_dict(matches[0], day_data, idx)
-            folders.append(canonical)
-            for duplicate in matches[1:]:
-                duplicates.append(
-                    _folder_row_to_dict(
-                        duplicate,
-                        day_data,
-                        idx,
-                        duplicate_of=canonical["folder_id"],
-                    )
-                )
-
-        if created:
-            conn.commit()
-    finally:
-        conn.close()
+            )
 
     return {
         "expected_count": len(daily_programs),
@@ -1531,62 +1479,23 @@ def repair_orphan_content_folders(job_id: int) -> dict:
     if not daily_programs:
         return {"repaired": 0, "missing": 0, "folders": []}
 
-    conn = get_db_connection()
-    cursor = conn.cursor()
     repaired = []
     missing = 0
-    try:
-        for day_data in daily_programs:
-            day_num = day_data.get("day_number", len(repaired) + missing + 1)
-            day_title = day_data.get("title", f"Jour {day_num}")
-            folder_name = f"Jour {day_num} — {day_title}"
+    for day_data in daily_programs:
+        day_num = day_data.get("day_number", len(repaired) + missing + 1)
+        day_title = day_data.get("title", f"Jour {day_num}")
+        folder_name = f"Jour {day_num} — {day_title}"
 
-            cursor.execute(
-                """
-                SELECT id FROM cours_folders
-                WHERE formation_job_id = ? AND name = ?
-                LIMIT 1
-                """,
-                (job_id, folder_name),
-            )
-            if cursor.fetchone():
-                continue
+        if course_folder_exists_for_job(job_id, folder_name):
+            continue
 
-            cursor.execute(
-                """
-                SELECT cf.id
-                FROM cours_folders cf
-                LEFT JOIN content_generation_jobs cgj ON cgj.folder_id = cf.id
-                WHERE cf.platform_id = ?
-                  AND cf.name = ?
-                  AND cf.formation_job_id IS NULL
-                ORDER BY CASE WHEN cgj.id IS NULL THEN 1 ELSE 0 END,
-                         cf.created_at DESC,
-                         cf.id DESC
-                LIMIT 1
-                """,
-                (job["platform_id"], folder_name),
-            )
-            row = cursor.fetchone()
-            if not row:
-                missing += 1
-                continue
+        folder_id = find_orphan_course_folder(job["platform_id"], folder_name)
+        if not folder_id:
+            missing += 1
+            continue
 
-            folder_id = row[0]
-            cursor.execute(
-                """
-                UPDATE cours_folders
-                SET formation_job_id = ?
-                WHERE id = ? AND formation_job_id IS NULL
-                """,
-                (job_id, folder_id),
-            )
-            if cursor.rowcount:
-                repaired.append({"folder_id": folder_id, "name": folder_name})
-
-        conn.commit()
-    finally:
-        conn.close()
+        if attach_course_folder_to_job(job_id, folder_id):
+            repaired.append({"folder_id": folder_id, "name": folder_name})
 
     if repaired:
         logger.warning(

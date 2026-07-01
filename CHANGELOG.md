@@ -17,6 +17,11 @@ peut miroir-ecrire les jobs vers Postgres avec `PIPELINE_POSTGRES_MIRROR=1`, et
 peut basculer les fonctions centralisees de jobs avec
 `PIPELINE_DATABASE_BACKEND=postgres`.
 
+Deuxieme tranche : les operations canoniques sur `cours_folders` attendus par
+journee (`get_expected_course_folders`, reparation des dossiers orphelins) passent
+elles aussi par le repository pipeline, toujours avec SQLite comme comportement
+par defaut.
+
 ## 2026-06-29
 
 ### feat(hr-dashboard): robots transparents pré-colorés + flip au clic

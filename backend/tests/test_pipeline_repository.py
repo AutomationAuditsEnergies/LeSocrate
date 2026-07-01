@@ -63,6 +63,30 @@ def _make_pipeline_db():
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
+
+        CREATE TABLE cours_folders (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            platform_id INTEGER NOT NULL DEFAULT 1,
+            name TEXT NOT NULL,
+            position INTEGER NOT NULL DEFAULT 0,
+            formation_job_id INTEGER,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE content_generation_jobs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            folder_id INTEGER NOT NULL UNIQUE,
+            platform_id INTEGER NOT NULL,
+            program_text TEXT NOT NULL DEFAULT '',
+            status TEXT DEFAULT 'idle',
+            total_words INTEGER DEFAULT 0
+        );
+
+        CREATE TABLE content_generation_segments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            job_id INTEGER NOT NULL,
+            status TEXT DEFAULT 'pending'
+        );
         """
     )
     conn.commit()
@@ -138,6 +162,73 @@ class PipelineRepositoryTest(unittest.TestCase):
         conn.close()
 
         self.assertEqual(repo.get_auto_pilot_pipeline_jobs_to_resume(), [job_id])
+
+    def test_expected_course_folder_queries_rank_best_candidate(self):
+        job_id = repo.create_pipeline_job(
+            platform_id=7,
+            tp_name="TP Test",
+            rncp_code="RNCP123",
+            total_hours=7,
+            nb_days=1,
+        )
+        conn = sqlite3.connect(self.db_path)
+        conn.executescript(
+            f"""
+            INSERT INTO cours_folders (id, platform_id, name, position, formation_job_id)
+            VALUES
+                (10, 7, 'Jour 1 — Accueil', 0, {job_id}),
+                (11, 7, 'Jour 1 — Accueil', 1, {job_id});
+
+            INSERT INTO content_generation_jobs (id, folder_id, platform_id, program_text, status, total_words)
+            VALUES
+                (20, 10, 7, 'a', 'idle', 100),
+                (21, 11, 7, 'b', 'completed', 50);
+
+            INSERT INTO content_generation_segments (job_id, status)
+            VALUES (21, 'completed'), (21, 'completed'), (20, 'completed');
+            """
+        )
+        conn.commit()
+        conn.close()
+
+        matches = repo.list_expected_course_folder_matches(job_id, "Jour 1 — Accueil")
+
+        self.assertEqual([row["id"] for row in matches], [11, 10])
+        self.assertEqual(matches[0]["content_status"], "completed")
+        self.assertEqual(matches[0]["segments_completed"], 2)
+
+    def test_create_and_attach_course_folder_for_job(self):
+        job_id = repo.create_pipeline_job(
+            platform_id=7,
+            tp_name="TP Test",
+            rncp_code="RNCP123",
+            total_hours=7,
+            nb_days=1,
+        )
+
+        created = repo.create_course_folder_for_job(
+            platform_id=7,
+            folder_name="Jour 1 — Accueil",
+            formation_job_id=job_id,
+        )
+        self.assertEqual(created["position"], 0)
+        self.assertEqual(created["content_job_id"], None)
+        self.assertTrue(repo.course_folder_exists_for_job(job_id, "Jour 1 — Accueil"))
+
+        conn = sqlite3.connect(self.db_path)
+        conn.execute(
+            """
+            INSERT INTO cours_folders (platform_id, name, position, formation_job_id)
+            VALUES (7, 'Jour 2 — Vente', 1, NULL)
+            """
+        )
+        orphan_id = conn.execute("SELECT MAX(id) FROM cours_folders").fetchone()[0]
+        conn.commit()
+        conn.close()
+
+        self.assertEqual(repo.find_orphan_course_folder(7, "Jour 2 — Vente"), orphan_id)
+        self.assertTrue(repo.attach_course_folder_to_job(job_id, orphan_id))
+        self.assertTrue(repo.course_folder_exists_for_job(job_id, "Jour 2 — Vente"))
 
 
 if __name__ == "__main__":
