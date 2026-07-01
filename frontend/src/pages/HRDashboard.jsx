@@ -521,17 +521,17 @@ export default function HRDashboard() {
     } else if (formationMode === 'new') {
       const tpName = trainingTitle
       const rncp = newFormRncp.trim()
-      const hours = parseInt(newFormHours, 10)
+      const trainingDaysCount = parseInt(newFormHours, 10)
       const weeklyCount = parseInt(weeklyCourseCount, 10)
-      if (!teacherName || !tpName || !rncp || !hours || hours <= 0) {
-        alert('Prénom du professeur IA, nom de formation, code RNCP et durée requis')
+      if (!teacherName || !tpName || !rncp || !trainingDaysCount || trainingDaysCount <= 0) {
+        alert('Prénom du professeur IA, nom de formation, code RNCP et nombre de journées requis')
         return
       }
       if (!weeklyCount || weeklyCount <= 0 || teachingDays.length === 0) {
         alert('Indique la fréquence de cours et au moins un jour')
         return
       }
-      body.new_formation = { tp_name: tpName, rncp_code: rncp, total_hours: hours }
+      body.new_formation = { tp_name: tpName, rncp_code: rncp, total_hours: trainingDaysCount * 7 }
     }
     // formationMode === 'none' → body reste {name} (plateforme vide, comportement historique)
 
@@ -1775,14 +1775,30 @@ function CreatePlatformView({
             />
           </div>
           <div>
-            <label className="mb-2 block text-sm font-medium" style={{ color: darkMode ? '#94a3b8' : '#64748b' }}>
-              Durée totale de la formation
+            <label className="mb-2 flex items-center gap-2 text-sm font-medium" style={{ color: darkMode ? '#94a3b8' : '#64748b' }}>
+              <span>Nombre de journées que doit durer la formation</span>
+              <span className="group relative inline-flex">
+                <button
+                  type="button"
+                  className="inline-flex h-5 w-5 items-center justify-center rounded-full text-xs font-bold"
+                  style={{ color: '#8B5CF6', border: '1px solid rgba(139, 92, 246, 0.35)', backgroundColor: 'rgba(139, 92, 246, 0.08)' }}
+                  aria-label="Aide sur le nombre de journées"
+                >
+                  i
+                </button>
+                <span
+                  className="pointer-events-none absolute bottom-7 right-0 z-30 hidden w-72 rounded-lg px-3 py-2 text-xs font-medium leading-5 shadow-lg group-hover:block group-focus-within:block"
+                  style={{ color: '#334155', backgroundColor: '#ffffff', border: '1px solid #e2e8f0' }}
+                >
+                  Si la formation dure 52 semaines à raison de 1 jour par semaine, indiquez 52. Si elle dure 52 semaines à raison de 2 jours par semaine, indiquez 104.
+                </span>
+              </span>
             </label>
             <input
               type="number"
               value={newFormHours}
               onChange={(e) => setNewFormHours(e.target.value)}
-              placeholder="Ex: 70"
+              placeholder="Ex: 52"
               min="1"
               className="w-full rounded-lg px-4 py-3 text-sm outline-none transition-all"
               style={inputStyle}
