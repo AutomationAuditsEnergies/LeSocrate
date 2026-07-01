@@ -1,12 +1,10 @@
 # admin_routes.py --- Routes d'administration (API JSON uniquement)
 from flask import Blueprint, request, session, jsonify, send_file
 from datetime import datetime, timedelta, timezone
-from email.message import EmailMessage
 import os
 import re
 import secrets
 import sqlite3
-import smtplib
 import string
 import tempfile
 import uuid
@@ -16,7 +14,7 @@ from azure.core.exceptions import ResourceExistsError
 from pydub import AudioSegment
 from werkzeug.security import check_password_hash, generate_password_hash
 import state
-from config import FRANCE_TZ, DB_PATH, SUPABASE_SERVICE_ROLE_KEY, SUPABASE_URL
+from config import FRANCE_TZ, DB_PATH, SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY, SUPABASE_URL
 from database.db import get_db_connection
 from database import db_safety
 from database.postgres import postgres_enabled
@@ -54,54 +52,82 @@ def _generate_temporary_password(length=12):
     return "".join(secrets.choice(alphabet) for _ in range(length))
 
 
-def _send_training_center_password_email(to_email, temporary_password):
-    smtp_host = os.getenv("SMTP_HOST", "").strip()
-    smtp_port = int(os.getenv("SMTP_PORT", "587"))
-    smtp_username = os.getenv("SMTP_USERNAME", "").strip()
-    smtp_password = os.getenv("SMTP_PASSWORD", "")
-    from_email = os.getenv("SMTP_FROM_EMAIL", smtp_username).strip()
-    from_name = os.getenv("SMTP_FROM_NAME", "Le Socrate").strip()
-    use_tls = os.getenv("SMTP_USE_TLS", "1").lower() in ("1", "true", "yes", "on")
-    use_ssl = os.getenv("SMTP_USE_SSL", "0").lower() in ("1", "true", "yes", "on")
+def _supabase_admin_headers():
+    return {
+        "apikey": SUPABASE_SERVICE_ROLE_KEY,
+        "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
+        "Content-Type": "application/json",
+    }
 
-    if not smtp_host or not from_email:
-        return False, "Service email non configuré"
 
-    message = EmailMessage()
-    message["Subject"] = "Votre mot de passe temporaire Le Socrate"
-    message["From"] = f"{from_name} <{from_email}>"
-    message["To"] = to_email
-    message.set_content(
-        "\n".join([
-            "Bonjour,",
-            "",
-            "Une réinitialisation de mot de passe a été demandée pour votre espace centre de formation Le Socrate.",
-            "",
-            f"Mot de passe temporaire : {temporary_password}",
-            "",
-            "Connectez-vous avec ce mot de passe, puis remplacez-le dès que possible.",
-            "",
-            "Si vous n'êtes pas à l'origine de cette demande, contactez l'équipe Le Socrate.",
-        ])
+def _supabase_public_headers():
+    return {
+        "apikey": SUPABASE_ANON_KEY,
+        "Authorization": f"Bearer {SUPABASE_ANON_KEY}",
+        "Content-Type": "application/json",
+    }
+
+
+def _is_supabase_duplicate_user(response):
+    text = response.text.lower()
+    return response.status_code in (400, 409, 422) and (
+        "already" in text
+        or "registered" in text
+        or "exists" in text
+        or "duplicate" in text
     )
 
+
+def _ensure_training_center_supabase_user(email, password=None, center_name=None):
+    if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
+        return False, "Supabase Admin non configuré"
+
+    auth_password = password if password and len(password) >= 6 else _generate_temporary_password()
     try:
-        if use_ssl:
-            with smtplib.SMTP_SSL(smtp_host, smtp_port, timeout=15) as smtp:
-                if smtp_username:
-                    smtp.login(smtp_username, smtp_password)
-                smtp.send_message(message)
-        else:
-            with smtplib.SMTP(smtp_host, smtp_port, timeout=15) as smtp:
-                if use_tls:
-                    smtp.starttls()
-                if smtp_username:
-                    smtp.login(smtp_username, smtp_password)
-                smtp.send_message(message)
-        return True, None
+        response = http_requests.post(
+            f"{SUPABASE_URL}/auth/v1/admin/users",
+            headers=_supabase_admin_headers(),
+            json={
+                "email": email,
+                "password": auth_password,
+                "email_confirm": True,
+                "user_metadata": {
+                    "role": "training_center",
+                    "center_name": center_name or "",
+                },
+            },
+            timeout=15,
+        )
+        if response.status_code in (200, 201):
+            return True, None
+        if _is_supabase_duplicate_user(response):
+            return True, None
+
+        logger.warning("❌ Provisioning Supabase centre refusé: %s", response.text[:500])
+        return False, "Création Supabase refusée"
     except Exception as exc:
-        logger.exception("❌ Envoi email reset centre impossible")
+        logger.warning("❌ Provisioning Supabase centre impossible", exc_info=True)
         return False, str(exc)
+
+
+def _authenticate_training_center_with_supabase(email, password):
+    if not SUPABASE_URL or not SUPABASE_ANON_KEY or not email or "@" not in email or not password:
+        return False
+
+    try:
+        response = http_requests.post(
+            f"{SUPABASE_URL}/auth/v1/token?grant_type=password",
+            headers=_supabase_public_headers(),
+            json={"email": email, "password": password},
+            timeout=15,
+        )
+        if response.status_code != 200:
+            return False
+        data = response.json()
+        return bool(data.get("access_token") or data.get("session", {}).get("access_token"))
+    except Exception:
+        logger.warning("⚠️ Auth Supabase centre indisponible", exc_info=True)
+        return False
 
 
 def _update_training_center_password_sqlite(cursor, username, password_hash, password_debug_plaintext):
@@ -737,12 +763,27 @@ def create_admin_blueprint(socketio):
             if postgres_enabled():
                 account = get_training_center_by_username(username)
                 if account:
-                    if not password or not check_password_hash(account["password_hash"], password):
-                        logger.warning("❌ Échec connexion centre Postgres - identifiants incorrects")
-                        return jsonify({"success": False, "error": "Identifiants incorrects"}), 401
                     if not account["is_active"]:
                         logger.warning("⚠️ Compte centre Postgres désactivé: %s", username)
                         return jsonify({"success": False, "error": "Compte désactivé"}), 403
+
+                    password_ok = bool(password and check_password_hash(account["password_hash"], password))
+                    if not password_ok and _authenticate_training_center_with_supabase(username, password):
+                        password_ok = True
+                        new_hash = generate_password_hash(password)
+                        update_training_center_password(username, new_hash, password)
+                        try:
+                            mirror_conn = get_db_connection()
+                            mirror_cursor = mirror_conn.cursor()
+                            _update_training_center_password_sqlite(mirror_cursor, username, new_hash, password)
+                            mirror_conn.commit()
+                            mirror_conn.close()
+                        except Exception:
+                            logger.warning("⚠️ Miroir SQLite mot de passe centre impossible", exc_info=True)
+
+                    if not password_ok:
+                        logger.warning("❌ Échec connexion centre Postgres - identifiants incorrects")
+                        return jsonify({"success": False, "error": "Identifiants incorrects"}), 401
 
                     session["is_admin"] = True
                     session["admin_account_id"] = account["id"]
@@ -781,7 +822,7 @@ def create_admin_blueprint(socketio):
             )
             account = cursor.fetchone() if username else None
 
-            if not account or not password or not check_password_hash(account[2], password):
+            if not account:
                 logger.warning("❌ Échec connexion admin - identifiants incorrects")
                 return (
                     jsonify({"success": False, "error": "Identifiants incorrects"}),
@@ -791,6 +832,24 @@ def create_admin_blueprint(socketio):
             if not account[4]:
                 logger.warning("⚠️ Compte centre désactivé: %s", username)
                 return jsonify({"success": False, "error": "Compte désactivé"}), 403
+
+            password_ok = bool(password and check_password_hash(account[2], password))
+            if not password_ok and _authenticate_training_center_with_supabase(username, password):
+                password_ok = True
+                _update_training_center_password_sqlite(
+                    cursor,
+                    username,
+                    generate_password_hash(password),
+                    password,
+                )
+                conn.commit()
+
+            if not password_ok:
+                logger.warning("❌ Échec connexion admin - identifiants incorrects")
+                return (
+                    jsonify({"success": False, "error": "Identifiants incorrects"}),
+                    401,
+                )
 
             session["is_admin"] = True
             session["admin_account_id"] = account[0]
@@ -826,7 +885,7 @@ def create_admin_blueprint(socketio):
 
     @admin_bp.route("/api/admin/forgot-password", methods=["POST"])
     def forgot_training_center_password():
-        """Envoie un mot de passe temporaire au centre de formation."""
+        """Prépare le compte centre pour le reset Supabase côté frontend."""
         conn = None
         try:
             data = request.get_json(silent=True) or {}
@@ -846,34 +905,18 @@ def create_admin_blueprint(socketio):
 
             account = get_training_center_by_username(username) if postgres_enabled() else None
             if account:
-                old_hash = account["password_hash"]
-                old_plaintext = account.get("password_debug_plaintext")
-                temporary_password = _generate_temporary_password()
-                new_hash = generate_password_hash(temporary_password)
+                ensured, ensure_error = _ensure_training_center_supabase_user(
+                    username,
+                    account.get("password_debug_plaintext"),
+                    account.get("center_name"),
+                )
+                if not ensured:
+                    return jsonify({"success": False, "error": ensure_error}), 503
 
-                if not update_training_center_password(username, new_hash, temporary_password):
-                    return jsonify({"success": False, "error": "Compte introuvable"}), 404
-
-                sent, send_error = _send_training_center_password_email(username, temporary_password)
-                if not sent:
-                    update_training_center_password(username, old_hash, old_plaintext)
-                    conn = get_db_connection()
-                    cursor = conn.cursor()
-                    _update_training_center_password_sqlite(cursor, username, old_hash, old_plaintext)
-                    conn.commit()
-                    return jsonify({
-                        "success": False,
-                        "error": send_error or "Impossible d'envoyer l'email",
-                    }), 503
-
-                conn = get_db_connection()
-                cursor = conn.cursor()
-                _update_training_center_password_sqlite(cursor, username, new_hash, temporary_password)
-                conn.commit()
-                logger.info("✅ Mot de passe temporaire envoyé au centre Postgres: %s", username)
+                logger.info("✅ Compte centre Postgres prêt pour reset Supabase: %s", username)
                 return jsonify({
                     "success": True,
-                    "message": "Un mot de passe temporaire vient d'être envoyé par email.",
+                    "message": "Un email de réinitialisation va être envoyé.",
                 }), 200
 
             conn = get_db_connection()
@@ -893,26 +936,14 @@ def create_admin_blueprint(socketio):
                     "message": "Si un compte existe pour cette adresse, un email va être envoyé.",
                 }), 200
 
-            old_hash = row[1]
-            old_plaintext = row[2]
-            temporary_password = _generate_temporary_password()
-            new_hash = generate_password_hash(temporary_password)
-            _update_training_center_password_sqlite(cursor, username, new_hash, temporary_password)
-            conn.commit()
+            ensured, ensure_error = _ensure_training_center_supabase_user(username, row[2])
+            if not ensured:
+                return jsonify({"success": False, "error": ensure_error}), 503
 
-            sent, send_error = _send_training_center_password_email(username, temporary_password)
-            if not sent:
-                _update_training_center_password_sqlite(cursor, username, old_hash, old_plaintext)
-                conn.commit()
-                return jsonify({
-                    "success": False,
-                    "error": send_error or "Impossible d'envoyer l'email",
-                }), 503
-
-            logger.info("✅ Mot de passe temporaire envoyé au centre SQLite: %s", username)
+            logger.info("✅ Compte centre SQLite prêt pour reset Supabase: %s", username)
             return jsonify({
                 "success": True,
-                "message": "Un mot de passe temporaire vient d'être envoyé par email.",
+                "message": "Un email de réinitialisation va être envoyé.",
             }), 200
         except Exception as e:
             if conn:
@@ -975,6 +1006,15 @@ def create_admin_blueprint(socketio):
                 _mirror_training_center_to_sqlite(cursor, account, password_hash, now_str, password)
                 conn.commit()
 
+                if "@" in username:
+                    ensured, ensure_error = _ensure_training_center_supabase_user(
+                        username,
+                        password,
+                        center_name,
+                    )
+                    if not ensured:
+                        logger.warning("⚠️ Compte centre créé sans provisioning Supabase: %s", ensure_error)
+
                 session["is_admin"] = True
                 session["admin_account_id"] = account["id"]
                 session["admin_account_type"] = "training_center"
@@ -1026,6 +1066,15 @@ def create_admin_blueprint(socketio):
             )
             account_id = cursor.lastrowid
             conn.commit()
+
+            if "@" in username:
+                ensured, ensure_error = _ensure_training_center_supabase_user(
+                    username,
+                    password,
+                    center_name,
+                )
+                if not ensured:
+                    logger.warning("⚠️ Compte centre créé sans provisioning Supabase: %s", ensure_error)
 
             session["is_admin"] = True
             session["admin_account_id"] = account_id
