@@ -629,18 +629,7 @@ export default function HRDashboard() {
           }}
         >
           <div className="mx-auto max-w-7xl px-6 pt-4">
-            <div className="flex items-center justify-between gap-4">
-              <div className="flex flex-col leading-tight min-w-0">
-                <span
-                  className="text-[10px] font-semibold uppercase"
-                  style={{ fontFamily: 'Inter, sans-serif', color: colors.textMuted, letterSpacing: '0.2em' }}
-                >
-                  Le Socrate · HR
-                </span>
-                <h1 className="mt-1 text-2xl font-semibold tracking-tight" style={{ fontFamily: 'Inter, sans-serif', color: colors.text }}>
-                  Dashboard Formations
-                </h1>
-              </div>
+            <div className="flex items-center justify-end gap-4">
               <div className="flex items-center gap-2">
                 {/* Back to admin — tertiary navigation, muted text */}
                 <a
@@ -659,7 +648,7 @@ export default function HRDashboard() {
               <SkoolTab
                 active={!showModulesModal && !showCreateModal}
                 onClick={showDashboardView}
-                label="Dashboard"
+                label="Mes professeurs IA"
                 colors={colors}
               />
               <SkoolTab
