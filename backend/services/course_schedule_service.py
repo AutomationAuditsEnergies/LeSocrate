@@ -1,6 +1,12 @@
 import json
 import os
+import smtplib
+import imaplib
+import time as time_module
 from datetime import datetime, time, timedelta
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from email.utils import make_msgid
 
 import requests as http_requests
 
@@ -358,6 +364,145 @@ def _post_reminder_webhook(payload):
     return True, None
 
 
+def _email_configured():
+    return bool(os.environ.get("EMAIL_USERNAME") and os.environ.get("EMAIL_PASSWORD"))
+
+
+def _reminder_subject(reminder_type):
+    if reminder_type == "five_minutes_before":
+        return "Le cours commence dans 5 minutes !"
+    return "Votre formation commence demain"
+
+
+def _reminder_html(payload):
+    reminder_type = payload.get("type")
+    class_url = payload.get("class_url") or "#"
+    scheduled_at = payload.get("scheduled_at") or ""
+    try:
+        scheduled = _parse_local_datetime(scheduled_at)
+        date_label = scheduled.strftime("%d/%m/%Y")
+        time_label = scheduled.strftime("%H:%M")
+    except Exception:
+        date_label = "demain"
+        time_label = "09:00"
+
+    if reminder_type == "five_minutes_before":
+        headline = "C'est parti !"
+        body = (
+            f"Votre cours démarre dans 5 minutes, à {time_label}. "
+            "Connectez-vous maintenant à la plateforme pour ne rien manquer."
+        )
+        button = "Se connecter maintenant"
+        closing = "On vous attend !"
+    else:
+        headline = "Votre formation commence demain"
+        body = (
+            f"Votre prochaine journée de formation aura lieu le {date_label} à {time_label}. "
+            "Connectez-vous quelques minutes avant le début avec le lien ci-dessous."
+        )
+        button = "Accéder à la formation"
+        closing = "À demain et bonne soirée."
+
+    return f"""<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    body {{ margin:0; padding:0; background:#f6f7fb; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif; color:#0f172a; }}
+    .wrap {{ max-width:680px; margin:0 auto; padding:28px 18px; }}
+    .header {{ background:linear-gradient(135deg,#5b4bff,#8b5cf6); color:#fff; padding:34px 36px; border-radius:18px 18px 0 0; }}
+    .brand {{ font-size:24px; font-weight:800; margin:0; }}
+    .card {{ background:#fff; padding:38px 36px; border:1px solid #e2e8f0; border-top:0; border-radius:0 0 18px 18px; box-shadow:0 12px 32px rgba(15,23,42,.08); }}
+    h1 {{ font-size:30px; line-height:1.15; margin:0 0 20px; color:#111827; }}
+    p {{ font-size:16px; line-height:1.65; margin:0 0 22px; color:#334155; }}
+    .cta {{ display:inline-block; background:#8b5cf6; color:#fff !important; text-decoration:none; padding:15px 24px; border-radius:12px; font-weight:700; }}
+    .meta {{ margin-top:26px; padding:14px 16px; background:#f8fafc; border:1px solid #e2e8f0; border-radius:12px; font-size:14px; color:#64748b; }}
+    .footer {{ text-align:center; color:#94a3b8; font-size:12px; margin-top:18px; }}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="header"><p class="brand">Le Socrate</p></div>
+    <div class="card">
+      <h1>{headline}</h1>
+      <p>Bonjour,</p>
+      <p>{body}</p>
+      <p><a class="cta" href="{class_url}" target="_blank">{button}</a></p>
+      <div class="meta">Horaire prévu : {date_label} à {time_label}</div>
+      <p style="margin-top:26px;">{closing}</p>
+      <p>L'équipe Le Socrate</p>
+    </div>
+    <div class="footer">Email automatique de rappel de formation.</div>
+  </div>
+</body>
+</html>"""
+
+
+def _send_reminder_emails(payload):
+    if not _email_configured():
+        return False, "EMAIL_USERNAME/EMAIL_PASSWORD non configurés"
+
+    recipients = payload.get("recipients") or []
+    if not recipients:
+        return True, None
+
+    smtp_server = os.environ.get("SMTP_SERVER", "mail.infomaniak.com")
+    smtp_port = int(os.environ.get("SMTP_PORT", "465"))
+    imap_server = os.environ.get("IMAP_SERVER", "mail.infomaniak.com")
+    imap_port = int(os.environ.get("IMAP_PORT", "993"))
+    username = os.environ.get("EMAIL_USERNAME")
+    password = os.environ.get("EMAIL_PASSWORD")
+    sender = os.environ.get("EMAIL_FROM") or username
+    sender_name = os.environ.get("EMAIL_FROM_NAME", "Le Socrate")
+    subject = _reminder_subject(payload.get("type"))
+    html = _reminder_html(payload)
+
+    errors = []
+    for recipient in recipients:
+        receiver = (recipient.get("email") if isinstance(recipient, dict) else recipient) or ""
+        receiver = str(receiver).strip()
+        if not receiver:
+            continue
+
+        try:
+            msg = MIMEMultipart("alternative")
+            msg["Message-ID"] = make_msgid()
+            msg["Subject"] = subject
+            msg["From"] = f"{sender_name} <{sender}>"
+            msg["To"] = receiver
+            msg.attach(MIMEText(html, "html", "utf-8"))
+            raw_message = msg.as_string()
+
+            with smtplib.SMTP_SSL(smtp_server, smtp_port) as smtp:
+                smtp.login(username, password)
+                smtp.sendmail(sender, receiver, raw_message)
+
+            if os.environ.get("EMAIL_COPY_TO_SENT", "1") != "0":
+                with imaplib.IMAP4_SSL(imap_server, imap_port) as imap:
+                    imap.login(username, password)
+                    imap.append(
+                        '"Sent"',
+                        "",
+                        imaplib.Time2Internaldate(time_module.time()),
+                        raw_message.encode("utf8"),
+                    )
+            time_module.sleep(float(os.environ.get("EMAIL_SEND_PAUSE_SECONDS", "0.5")))
+        except Exception as exc:
+            logger.error("❌ Rappel email non envoyé à %s: %s", receiver, exc)
+            errors.append(f"{receiver}: {exc}")
+
+    if errors:
+        return False, "; ".join(errors[:3])
+    return True, None
+
+
+def _dispatch_reminder(payload):
+    if os.environ.get("REMINDER_WEBHOOK_URL"):
+        return _post_reminder_webhook(payload)
+    return _send_reminder_emails(payload)
+
+
 def process_due_reminders(base_url=None, dry_run=False):
     conn = get_db_connection()
     try:
@@ -414,7 +559,7 @@ def process_due_reminders(base_url=None, dry_run=False):
                     results.append({**payload, "success": True, "dry_run": True})
                     continue
 
-                ok, error = _post_reminder_webhook(payload)
+                ok, error = _dispatch_reminder(payload)
                 if ok:
                     cursor.execute(
                         f"UPDATE course_sessions SET {sent_column} = ?, updated_at = ? WHERE id = ?",
