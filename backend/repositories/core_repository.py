@@ -227,6 +227,42 @@ def create_training_center(username, password_hash, center_name, slug_base, now=
         return row
 
 
+def update_training_center_password(username, password_hash, password_debug_plaintext=None):
+    if not postgres_enabled() or not username:
+        return False
+    try:
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE training_center_accounts
+                    SET password_hash = %s,
+                        password_debug_plaintext = %s,
+                        updated_at = NOW()
+                    WHERE username = %s
+                    """,
+                    (password_hash, password_debug_plaintext, username),
+                )
+                return cur.rowcount > 0
+    except Exception as exc:
+        if not _supabase_rest_enabled():
+            raise
+        _log_pg_fallback("update_training_center_password", exc)
+        response = requests.patch(
+            _rest_table_url("training_center_accounts"),
+            headers=_rest_headers("return=minimal"),
+            params={"username": f"eq.{username}"},
+            json={
+                "password_hash": password_hash,
+                "password_debug_plaintext": password_debug_plaintext,
+                "updated_at": datetime.utcnow().isoformat(),
+            },
+            timeout=12,
+        )
+        response.raise_for_status()
+        return True
+
+
 def resolve_class_access(center_slug, platform_slug):
     if not postgres_enabled():
         return None

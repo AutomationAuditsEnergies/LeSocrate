@@ -9,7 +9,9 @@ export default function LoginCentre({ preloadAdminRoute, preloadDashboardRoute }
   const [password, setPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
   const [error, setError] = useState('')
+  const [notice, setNotice] = useState('')
   const [loading, setLoading] = useState(false)
+  const [resetLoading, setResetLoading] = useState(false)
   const navigate = useNavigate()
 
   useEffect(() => {
@@ -25,6 +27,7 @@ export default function LoginCentre({ preloadAdminRoute, preloadDashboardRoute }
   const handleSubmit = async (event) => {
     event.preventDefault()
     setError('')
+    setNotice('')
 
     if (authMode === 'signup' && password !== confirmPassword) {
       setError('Les deux mots de passe ne correspondent pas')
@@ -64,6 +67,35 @@ export default function LoginCentre({ preloadAdminRoute, preloadDashboardRoute }
       setError('Erreur de connexion au serveur')
     } finally {
       setLoading(false)
+    }
+  }
+
+  const handleForgotPassword = async () => {
+    const email = username.trim().toLowerCase()
+    setError('')
+    setNotice('')
+    if (!email) {
+      setError("Entrez votre adresse email dans le champ identifiant.")
+      return
+    }
+    setResetLoading(true)
+    try {
+      const response = await apiFetch('/api/admin/forgot-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: email }),
+      })
+      const data = await response.json().catch(() => ({}))
+      if (response.ok && data.success) {
+        setNotice(data.message || "Si un compte existe, un email va être envoyé.")
+      } else {
+        setError(data.error || `Erreur serveur (${response.status})`)
+      }
+    } catch (err) {
+      console.error('Erreur mot de passe oublié:', err)
+      setError("Impossible d'envoyer l'email de réinitialisation.")
+    } finally {
+      setResetLoading(false)
     }
   }
 
@@ -118,6 +150,7 @@ export default function LoginCentre({ preloadAdminRoute, preloadDashboardRoute }
                   onClick={() => {
                     setAuthMode(mode)
                     setError('')
+                    setNotice('')
                   }}
                   className={`rounded-md text-sm font-semibold transition ${
                     authMode === mode
@@ -133,6 +166,11 @@ export default function LoginCentre({ preloadAdminRoute, preloadDashboardRoute }
             {error && (
               <div className="mb-6 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-700">
                 {error}
+              </div>
+            )}
+            {notice && (
+              <div className="mb-6 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-800">
+                {notice}
               </div>
             )}
 
@@ -174,9 +212,21 @@ export default function LoginCentre({ preloadAdminRoute, preloadDashboardRoute }
               </div>
 
               <div>
-                <label htmlFor="centre-password" className="mb-1.5 block text-sm font-medium text-slate-800">
-                  Mot de passe
-                </label>
+                <div className="mb-1.5 flex items-center justify-between gap-3">
+                  <label htmlFor="centre-password" className="block text-sm font-medium text-slate-800">
+                    Mot de passe
+                  </label>
+                  {authMode === 'login' && (
+                    <button
+                      type="button"
+                      onClick={handleForgotPassword}
+                      disabled={resetLoading}
+                      className="text-sm font-semibold text-violet-700 transition hover:text-violet-900 disabled:cursor-not-allowed disabled:text-slate-400"
+                    >
+                      {resetLoading ? 'Envoi...' : 'Mot de passe oublié ?'}
+                    </button>
+                  )}
+                </div>
                 <input
                   id="centre-password"
                   name="password"

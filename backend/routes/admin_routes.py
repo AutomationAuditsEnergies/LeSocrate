@@ -1,9 +1,13 @@
 # admin_routes.py --- Routes d'administration (API JSON uniquement)
 from flask import Blueprint, request, session, jsonify, send_file
 from datetime import datetime, timedelta, timezone
+from email.message import EmailMessage
 import os
 import re
+import secrets
 import sqlite3
+import smtplib
+import string
 import tempfile
 import uuid
 import requests as http_requests
@@ -22,6 +26,7 @@ from repositories.core_repository import (
     create_training_center,
     get_training_center_by_username,
     list_ai_teacher_orders,
+    update_training_center_password,
     upsert_student_profile_with_id,
 )
 from services.time_service import set_heure_debut_cours, get_heure_debut_cours
@@ -42,6 +47,80 @@ def _create_admin_token(account_type, account_id=None, center_name=None):
         "center_name": center_name,
     }
     return token
+
+
+def _generate_temporary_password(length=12):
+    alphabet = string.ascii_letters + string.digits
+    return "".join(secrets.choice(alphabet) for _ in range(length))
+
+
+def _send_training_center_password_email(to_email, temporary_password):
+    smtp_host = os.getenv("SMTP_HOST", "").strip()
+    smtp_port = int(os.getenv("SMTP_PORT", "587"))
+    smtp_username = os.getenv("SMTP_USERNAME", "").strip()
+    smtp_password = os.getenv("SMTP_PASSWORD", "")
+    from_email = os.getenv("SMTP_FROM_EMAIL", smtp_username).strip()
+    from_name = os.getenv("SMTP_FROM_NAME", "Le Socrate").strip()
+    use_tls = os.getenv("SMTP_USE_TLS", "1").lower() in ("1", "true", "yes", "on")
+    use_ssl = os.getenv("SMTP_USE_SSL", "0").lower() in ("1", "true", "yes", "on")
+
+    if not smtp_host or not from_email:
+        return False, "Service email non configuré"
+
+    message = EmailMessage()
+    message["Subject"] = "Votre mot de passe temporaire Le Socrate"
+    message["From"] = f"{from_name} <{from_email}>"
+    message["To"] = to_email
+    message.set_content(
+        "\n".join([
+            "Bonjour,",
+            "",
+            "Une réinitialisation de mot de passe a été demandée pour votre espace centre de formation Le Socrate.",
+            "",
+            f"Mot de passe temporaire : {temporary_password}",
+            "",
+            "Connectez-vous avec ce mot de passe, puis remplacez-le dès que possible.",
+            "",
+            "Si vous n'êtes pas à l'origine de cette demande, contactez l'équipe Le Socrate.",
+        ])
+    )
+
+    try:
+        if use_ssl:
+            with smtplib.SMTP_SSL(smtp_host, smtp_port, timeout=15) as smtp:
+                if smtp_username:
+                    smtp.login(smtp_username, smtp_password)
+                smtp.send_message(message)
+        else:
+            with smtplib.SMTP(smtp_host, smtp_port, timeout=15) as smtp:
+                if use_tls:
+                    smtp.starttls()
+                if smtp_username:
+                    smtp.login(smtp_username, smtp_password)
+                smtp.send_message(message)
+        return True, None
+    except Exception as exc:
+        logger.exception("❌ Envoi email reset centre impossible")
+        return False, str(exc)
+
+
+def _update_training_center_password_sqlite(cursor, username, password_hash, password_debug_plaintext):
+    cursor.execute(
+        """
+        UPDATE training_center_accounts
+        SET password_hash = ?,
+            password_debug_plaintext = ?,
+            updated_at = ?
+        WHERE username = ?
+        """,
+        (
+            password_hash,
+            password_debug_plaintext,
+            datetime.now(FRANCE_TZ).strftime("%Y-%m-%d %H:%M:%S"),
+            username,
+        ),
+    )
+    return cursor.rowcount > 0
 
 
 def _get_platform_id():
@@ -740,6 +819,105 @@ def create_admin_blueprint(socketio):
 
         except Exception as e:
             logger.error(f"❌ Erreur login admin: {e}")
+            return jsonify({"success": False, "error": "Erreur serveur"}), 500
+        finally:
+            if conn:
+                conn.close()
+
+    @admin_bp.route("/api/admin/forgot-password", methods=["POST"])
+    def forgot_training_center_password():
+        """Envoie un mot de passe temporaire au centre de formation."""
+        conn = None
+        try:
+            data = request.get_json(silent=True) or {}
+            username = str(data.get("username") or data.get("email") or "").strip().lower()
+            if not username:
+                return jsonify({"success": False, "error": "Adresse email requise"}), 400
+            if username == "admin":
+                return jsonify({
+                    "success": False,
+                    "error": "Le compte admin interne n'utilise pas la réinitialisation par email.",
+                }), 400
+            if "@" not in username:
+                return jsonify({
+                    "success": False,
+                    "error": "Entrez l'adresse email utilisée comme identifiant.",
+                }), 400
+
+            account = get_training_center_by_username(username) if postgres_enabled() else None
+            if account:
+                old_hash = account["password_hash"]
+                old_plaintext = account.get("password_debug_plaintext")
+                temporary_password = _generate_temporary_password()
+                new_hash = generate_password_hash(temporary_password)
+
+                if not update_training_center_password(username, new_hash, temporary_password):
+                    return jsonify({"success": False, "error": "Compte introuvable"}), 404
+
+                sent, send_error = _send_training_center_password_email(username, temporary_password)
+                if not sent:
+                    update_training_center_password(username, old_hash, old_plaintext)
+                    conn = get_db_connection()
+                    cursor = conn.cursor()
+                    _update_training_center_password_sqlite(cursor, username, old_hash, old_plaintext)
+                    conn.commit()
+                    return jsonify({
+                        "success": False,
+                        "error": send_error or "Impossible d'envoyer l'email",
+                    }), 503
+
+                conn = get_db_connection()
+                cursor = conn.cursor()
+                _update_training_center_password_sqlite(cursor, username, new_hash, temporary_password)
+                conn.commit()
+                logger.info("✅ Mot de passe temporaire envoyé au centre Postgres: %s", username)
+                return jsonify({
+                    "success": True,
+                    "message": "Un mot de passe temporaire vient d'être envoyé par email.",
+                }), 200
+
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT id, password_hash, password_debug_plaintext
+                FROM training_center_accounts
+                WHERE username = ?
+                """,
+                (username,),
+            )
+            row = cursor.fetchone()
+            if not row:
+                return jsonify({
+                    "success": True,
+                    "message": "Si un compte existe pour cette adresse, un email va être envoyé.",
+                }), 200
+
+            old_hash = row[1]
+            old_plaintext = row[2]
+            temporary_password = _generate_temporary_password()
+            new_hash = generate_password_hash(temporary_password)
+            _update_training_center_password_sqlite(cursor, username, new_hash, temporary_password)
+            conn.commit()
+
+            sent, send_error = _send_training_center_password_email(username, temporary_password)
+            if not sent:
+                _update_training_center_password_sqlite(cursor, username, old_hash, old_plaintext)
+                conn.commit()
+                return jsonify({
+                    "success": False,
+                    "error": send_error or "Impossible d'envoyer l'email",
+                }), 503
+
+            logger.info("✅ Mot de passe temporaire envoyé au centre SQLite: %s", username)
+            return jsonify({
+                "success": True,
+                "message": "Un mot de passe temporaire vient d'être envoyé par email.",
+            }), 200
+        except Exception as e:
+            if conn:
+                conn.rollback()
+            logger.error("❌ Erreur reset mot de passe centre: %s", e)
             return jsonify({"success": False, "error": "Erreur serveur"}), 500
         finally:
             if conn:
