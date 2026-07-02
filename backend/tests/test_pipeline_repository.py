@@ -566,6 +566,116 @@ class PipelineRepositoryTest(unittest.TestCase):
         conn.close()
         self.assertEqual(remaining_sources, [("source.pdf",)])
 
+    def test_content_review_helpers_use_repository_storage(self):
+        conn = sqlite3.connect(self.db_path)
+        conn.execute(
+            """
+            INSERT INTO cours_folders (id, platform_id, name, position, formation_job_id)
+            VALUES (90, 7, 'Jour 1 — Review', 0, NULL)
+            """
+        )
+        conn.commit()
+        conn.close()
+
+        repo.reset_and_upsert_content_generation_job(
+            folder_id=90,
+            platform_id=7,
+            program_text="Programme",
+            program_title="TP Test",
+            sub_parts_json='["Cours 1"]',
+            from_scratch=True,
+            module_contents_json='{}',
+        )
+        job = cgs.get_job_from_db(90)
+        repo.save_completed_content_segment(
+            job_id=job["id"],
+            sub_part_index=0,
+            sub_part_name="Cours 1",
+            passe=1,
+            text_content="Texte a reviser",
+            word_count=3,
+        )
+
+        repo.ensure_content_review_state_columns()
+        self.assertEqual(repo.snapshot_content_segments_pre_review(job["id"]), 1)
+        self.assertEqual(repo.snapshot_content_segments_pre_review(job["id"]), 0)
+
+        total, rows = repo.select_content_segments_for_review(
+            job_id=job["id"],
+            reviewed_column="reviewed",
+            signature_column="review_signature",
+            review_signature="sig-review",
+            force=False,
+        )
+        self.assertEqual(total, 1)
+        self.assertEqual(len(rows), 1)
+        seg_id = rows[0]["id"]
+
+        repo.reset_content_segments_review_state(
+            segment_ids=[seg_id],
+            reviewed_column="reviewed",
+            error_column="review_error",
+        )
+        repo.record_content_segment_review_error(
+            segment_id=seg_id,
+            error_column="review_error",
+            error_message="erreur reviewer",
+        )
+        conn = sqlite3.connect(self.db_path)
+        review_error = conn.execute(
+            "SELECT review_error FROM content_generation_segments WHERE id = ?",
+            (seg_id,),
+        ).fetchone()[0]
+        conn.close()
+        self.assertEqual(review_error, "erreur reviewer")
+
+        repo.mark_content_segment_review_clean(
+            segment_id=seg_id,
+            reviewed_column="reviewed",
+            error_column="review_error",
+            signature_column="review_signature",
+            review_signature="sig-review",
+        )
+        total, rows = repo.select_content_segments_for_review(
+            job_id=job["id"],
+            reviewed_column="reviewed",
+            signature_column="review_signature",
+            review_signature="sig-review",
+            force=False,
+        )
+        self.assertEqual(total, 1)
+        self.assertEqual(rows, [])
+
+        repo.mark_content_segment_review_patched(
+            segment_id=seg_id,
+            text_content="Texte humanise",
+            word_count=2,
+            reviewed_column="humanized",
+            error_column="humanization_error",
+            signature_column="humanization_signature",
+            review_signature="sig-human",
+            invalidate_compliance_on_change=True,
+        )
+        conn = sqlite3.connect(self.db_path)
+        row = conn.execute(
+            """
+            SELECT text_content, word_count, dirty, humanized, humanization_signature,
+                   reviewed, review_signature, text_content_pre_review
+            FROM content_generation_segments
+            WHERE id = ?
+            """,
+            (seg_id,),
+        ).fetchone()
+        conn.close()
+        self.assertEqual(row[0], "Texte humanise")
+        self.assertEqual(row[1], 2)
+        self.assertEqual(row[2], 1)
+        self.assertEqual(row[3], 1)
+        self.assertEqual(row[4], "sig-human")
+        self.assertEqual(row[5], 0)
+        self.assertIsNone(row[6])
+        self.assertEqual(row[7], "Texte a reviser")
+
 
 if __name__ == "__main__":
     unittest.main()

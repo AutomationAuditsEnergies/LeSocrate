@@ -95,6 +95,15 @@ PIPELINE_JOB_BOOL_COLUMNS = {
     "auto_pilot_post_review_docs_done",
 }
 
+CONTENT_REVIEW_STATE_COLUMNS = {
+    "reviewed",
+    "review_error",
+    "review_signature",
+    "humanized",
+    "humanization_error",
+    "humanization_signature",
+}
+
 
 def _pipeline_primary_backend() -> str:
     if PIPELINE_DATABASE_BACKEND in {"postgres", "postgresql", "supabase"}:
@@ -112,6 +121,12 @@ def _pipeline_mirror_enabled() -> bool:
 
 def _placeholder() -> str:
     return "%s" if _pipeline_primary_backend() == "postgres" else "?"
+
+
+def _validate_content_review_columns(*columns: str) -> None:
+    for column in columns:
+        if column not in CONTENT_REVIEW_STATE_COLUMNS:
+            raise ValueError(f"Colonne review non autorisée : {column}")
 
 
 def _normalize_job_payload(row: dict[str, Any]) -> dict[str, Any]:
@@ -1235,6 +1250,285 @@ def update_content_segment_plan_repair(
         return
 
     params = (text_content, word_count, 1, 0, 0, segment_id)
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(query, params)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def ensure_content_review_state_columns() -> None:
+    """Ensure SQLite has the review state columns. Postgres schema owns this."""
+    if _pipeline_primary_backend() == "postgres":
+        return
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        for sql in (
+            "ALTER TABLE content_generation_segments ADD COLUMN review_signature TEXT",
+            "ALTER TABLE content_generation_segments ADD COLUMN humanized INTEGER DEFAULT 0",
+            "ALTER TABLE content_generation_segments ADD COLUMN humanization_error TEXT",
+            "ALTER TABLE content_generation_segments ADD COLUMN humanization_signature TEXT",
+        ):
+            try:
+                cursor.execute(sql)
+            except Exception:
+                pass
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def snapshot_content_segments_pre_review(job_id: int) -> int:
+    ph = _placeholder()
+    if _pipeline_primary_backend() == "postgres":
+        query = f"""
+            UPDATE content_generation_segments
+            SET text_content_pre_review = text_content
+            WHERE job_id = {ph}
+              AND status = 'completed'
+              AND text_content_pre_review IS NULL
+        """
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, (job_id,))
+                return int(cur.rowcount or 0)
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        try:
+            cursor.execute(
+                "ALTER TABLE content_generation_segments ADD COLUMN text_content_pre_review TEXT"
+            )
+            conn.commit()
+        except Exception:
+            pass
+        cursor.execute(
+            f"""
+            UPDATE content_generation_segments
+            SET text_content_pre_review = text_content
+            WHERE job_id = {ph}
+              AND status = 'completed'
+              AND text_content_pre_review IS NULL
+            """,
+            (job_id,),
+        )
+        snapshotted = int(cursor.rowcount or 0)
+        conn.commit()
+        return snapshotted
+    finally:
+        conn.close()
+
+
+def select_content_segments_for_review(
+    *,
+    job_id: int,
+    reviewed_column: str,
+    signature_column: str,
+    review_signature: str,
+    force: bool,
+) -> tuple[int, list[dict[str, Any]]]:
+    _validate_content_review_columns(reviewed_column, signature_column)
+    ph = _placeholder()
+    total_query = f"""
+        SELECT COUNT(*) AS total
+        FROM content_generation_segments
+        WHERE job_id = {ph} AND status = 'completed'
+    """
+    base_select = f"""
+        SELECT id, sub_part_index, sub_part_name, passe, text_content
+        FROM content_generation_segments
+        WHERE job_id = {ph} AND status = 'completed'
+    """
+    order_sql = " ORDER BY sub_part_index ASC, passe ASC"
+
+    if _pipeline_primary_backend() == "postgres":
+        if force:
+            select_query = base_select + order_sql
+            params = (job_id,)
+        else:
+            select_query = (
+                base_select
+                + f"""
+                  AND (
+                        COALESCE({reviewed_column}, FALSE) = FALSE
+                     OR {signature_column} IS NULL
+                     OR {signature_column} != {ph}
+                  )
+                """
+                + order_sql
+            )
+            params = (job_id, review_signature)
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(total_query, (job_id,))
+                total_completed = int(cur.fetchone()["total"] or 0)
+                cur.execute(select_query, params)
+                return total_completed, [dict(row) for row in cur.fetchall()]
+
+    if force:
+        select_query = base_select + order_sql
+        params = (job_id,)
+    else:
+        select_query = (
+            base_select
+            + f"""
+              AND (
+                    COALESCE({reviewed_column}, 0) = 0
+                 OR {signature_column} IS NULL
+                 OR {signature_column} != {ph}
+              )
+            """
+            + order_sql
+        )
+        params = (job_id, review_signature)
+
+    conn = _as_sqlite_row_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(total_query, (job_id,))
+        total_completed = int(cursor.fetchone()["total"] or 0)
+        cursor.execute(select_query, params)
+        return total_completed, [dict(row) for row in cursor.fetchall()]
+    finally:
+        conn.close()
+
+
+def reset_content_segments_review_state(
+    *,
+    segment_ids: list[int],
+    reviewed_column: str,
+    error_column: str,
+) -> None:
+    _validate_content_review_columns(reviewed_column, error_column)
+    if not segment_ids:
+        return
+
+    ph = _placeholder()
+    placeholders = ", ".join([ph] * len(segment_ids))
+    query = f"""
+        UPDATE content_generation_segments
+        SET {reviewed_column} = {ph}, {error_column} = NULL
+        WHERE id IN ({placeholders})
+    """
+    reviewed_value = False if _pipeline_primary_backend() == "postgres" else 0
+    params = [reviewed_value, *segment_ids]
+    if _pipeline_primary_backend() == "postgres":
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, params)
+        return
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(query, params)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def record_content_segment_review_error(
+    *,
+    segment_id: int,
+    error_column: str,
+    error_message: str,
+) -> None:
+    _validate_content_review_columns(error_column)
+    ph = _placeholder()
+    query = f"UPDATE content_generation_segments SET {error_column} = {ph} WHERE id = {ph}"
+    params = ((error_message or "")[:500], segment_id)
+    if _pipeline_primary_backend() == "postgres":
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, params)
+        return
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(query, params)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def mark_content_segment_review_patched(
+    *,
+    segment_id: int,
+    text_content: str,
+    word_count: int,
+    reviewed_column: str,
+    error_column: str,
+    signature_column: str,
+    review_signature: str,
+    invalidate_compliance_on_change: bool,
+) -> None:
+    _validate_content_review_columns(reviewed_column, error_column, signature_column)
+    ph = _placeholder()
+    if _pipeline_primary_backend() == "postgres":
+        bool_dirty = True
+        bool_reviewed = True
+        query = f"""
+            UPDATE content_generation_segments
+            SET text_content = {ph}, word_count = {ph}, dirty = {ph},
+                {reviewed_column} = {ph}, {error_column} = NULL, {signature_column} = {ph}
+                {", reviewed = FALSE, review_error = NULL, review_signature = NULL" if invalidate_compliance_on_change else ""}
+            WHERE id = {ph}
+        """
+    else:
+        bool_dirty = 1
+        bool_reviewed = 1
+        query = f"""
+            UPDATE content_generation_segments
+            SET text_content = {ph}, word_count = {ph}, dirty = {ph},
+                {reviewed_column} = {ph}, {error_column} = NULL, {signature_column} = {ph}
+                {", reviewed = 0, review_error = NULL, review_signature = NULL" if invalidate_compliance_on_change else ""}
+            WHERE id = {ph}
+        """
+    params = (text_content, word_count, bool_dirty, bool_reviewed, review_signature, segment_id)
+    if _pipeline_primary_backend() == "postgres":
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, params)
+        return
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(query, params)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def mark_content_segment_review_clean(
+    *,
+    segment_id: int,
+    reviewed_column: str,
+    error_column: str,
+    signature_column: str,
+    review_signature: str,
+) -> None:
+    _validate_content_review_columns(reviewed_column, error_column, signature_column)
+    ph = _placeholder()
+    reviewed_value = True if _pipeline_primary_backend() == "postgres" else 1
+    query = f"""
+        UPDATE content_generation_segments
+        SET {reviewed_column} = {ph}, {error_column} = NULL, {signature_column} = {ph}
+        WHERE id = {ph}
+    """
+    params = (reviewed_value, review_signature, segment_id)
+    if _pipeline_primary_backend() == "postgres":
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, params)
+        return
+
     conn = get_db_connection()
     cursor = conn.cursor()
     try:

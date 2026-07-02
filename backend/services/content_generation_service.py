@@ -28,6 +28,7 @@ from repositories.pipeline_repository import (
     clear_cross_day_carryover,
     completed_content_segment_keys,
     delete_content_segments_for_job,
+    ensure_content_review_state_columns,
     find_next_course_folder_id,
     get_existing_carryover_out_row,
     get_content_generation_job_by_folder,
@@ -36,10 +37,16 @@ from repositories.pipeline_repository import (
     list_content_segment_status_rows,
     list_final_script_document_rows,
     mark_content_segment_modified,
+    mark_content_segment_review_clean,
+    mark_content_segment_review_patched,
     mark_content_segments_clean,
     replace_final_script_document_record,
+    record_content_segment_review_error,
     reset_and_upsert_content_generation_job,
+    reset_content_segments_review_state,
     save_completed_content_segment,
+    select_content_segments_for_review,
+    snapshot_content_segments_pre_review,
     store_cross_day_carryover,
     update_content_segment_audio_calibration,
     update_content_segment_plan_repair,
@@ -14830,25 +14837,7 @@ def _ensure_review_state_columns() -> None:
     global _REVIEW_SIGNATURE_COLUMNS_READY
     if _REVIEW_SIGNATURE_COLUMNS_READY:
         return
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    try:
-        cursor.execute("ALTER TABLE content_generation_segments ADD COLUMN review_signature TEXT")
-        logger.info("✅ Colonne review_signature ajoutée à content_generation_segments")
-    except Exception:
-        pass
-    for sql, label in (
-        ("ALTER TABLE content_generation_segments ADD COLUMN humanized INTEGER DEFAULT 0", "humanized"),
-        ("ALTER TABLE content_generation_segments ADD COLUMN humanization_error TEXT", "humanization_error"),
-        ("ALTER TABLE content_generation_segments ADD COLUMN humanization_signature TEXT", "humanization_signature"),
-    ):
-        try:
-            cursor.execute(sql)
-            logger.info("✅ Colonne %s ajoutée à content_generation_segments", label)
-        except Exception:
-            pass
-    conn.commit()
-    conn.close()
+    ensure_content_review_state_columns()
     _REVIEW_SIGNATURE_COLUMNS_READY = True
 
 
@@ -15273,28 +15262,7 @@ def _apply_review_budget_guard(
 
 def _snapshot_pre_review_for_content_job(job_id: int) -> int:
     """Persist the exact text state before API review mutates segments."""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    try:
-        cursor.execute(
-            "ALTER TABLE content_generation_segments ADD COLUMN text_content_pre_review TEXT"
-        )
-        conn.commit()
-    except Exception:
-        pass
-    cursor.execute(
-        """
-        UPDATE content_generation_segments
-        SET text_content_pre_review = text_content
-        WHERE job_id = ?
-          AND status = 'completed'
-          AND text_content_pre_review IS NULL
-        """,
-        (job_id,),
-    )
-    snapshotted = cursor.rowcount or 0
-    conn.commit()
-    conn.close()
+    snapshotted = snapshot_content_segments_pre_review(job_id)
     if snapshotted:
         logger.info(
             "PIPELINE_REVIEW_SNAPSHOT content_job_id=%s segments=%s",
@@ -15371,51 +15339,18 @@ def _run_content_review_pass(
     )
     _ensure_review_state_columns()
     _snapshot_pre_review_for_content_job(job_id)
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        "SELECT COUNT(*) FROM content_generation_segments WHERE job_id = ? AND status = 'completed'",
-        (job_id,),
+    total_completed, rows = select_content_segments_for_review(
+        job_id=job_id,
+        reviewed_column=reviewed_column,
+        signature_column=signature_column,
+        review_signature=review_signature,
+        force=force,
     )
-    total_completed = int(cursor.fetchone()[0] or 0)
-    if force:
-        cursor.execute(
-            """
-            SELECT id, sub_part_index, sub_part_name, passe, text_content
-            FROM content_generation_segments
-            WHERE job_id = ? AND status = 'completed'
-            ORDER BY sub_part_index ASC, passe ASC
-            """,
-            (job_id,),
-        )
-    else:
-        cursor.execute(
-            f"""
-            SELECT id, sub_part_index, sub_part_name, passe, text_content
-            FROM content_generation_segments
-            WHERE job_id = ? AND status = 'completed'
-              AND (
-                    COALESCE({reviewed_column}, 0) = 0
-                 OR {signature_column} IS NULL
-                 OR {signature_column} != ?
-              )
-            ORDER BY sub_part_index ASC, passe ASC
-            """,
-            (job_id, review_signature),
-        )
-    rows = cursor.fetchall()
-    if rows:
-        placeholders = ",".join("?" * len(rows))
-        cursor.execute(
-            f"""
-            UPDATE content_generation_segments
-            SET {reviewed_column} = 0, {error_column} = NULL
-            WHERE id IN ({placeholders})
-            """,
-            tuple(row[0] for row in rows),
-        )
-        conn.commit()
-    conn.close()
+    reset_content_segments_review_state(
+        segment_ids=[int(row["id"]) for row in rows],
+        reviewed_column=reviewed_column,
+        error_column=error_column,
+    )
 
     total = len(rows)
     total_already_current = max(0, total_completed - total) if not force else 0
@@ -15477,7 +15412,11 @@ def _run_content_review_pass(
 
     for step, row in enumerate(rows, start=1):
         segment_started_at = time.time()
-        seg_id, sub_idx, sub_part_name, passe, text_content = row
+        seg_id = row["id"]
+        sub_idx = row["sub_part_index"]
+        sub_part_name = row["sub_part_name"]
+        passe = row["passe"]
+        text_content = row.get("text_content") or ""
         label = f"sous-partie {sub_idx + 1} / passe {passe}"
         _progress(step, total, f"{review_label} {label} ({len(groups)} salves)…")
         logger.info(
@@ -15688,18 +15627,13 @@ def _run_content_review_pass(
                     segment_error[:300],
                 )
 
-        # Écriture finale en DB (une seule transaction par segment)
-        conn = get_db_connection()
-        cursor = conn.cursor()
-
         if segment_error:
             # Une salve a échoué : review_error, PAS reviewed=1
-            cursor.execute(
-                f"UPDATE content_generation_segments SET {error_column} = ? WHERE id = ?",
-                (segment_error[:500], seg_id),
+            record_content_segment_review_error(
+                segment_id=seg_id,
+                error_column=error_column,
+                error_message=segment_error,
             )
-            conn.commit()
-            conn.close()
             total_failed += 1
             details.append({
                 "segment_id": seg_id,
@@ -15725,15 +15659,15 @@ def _run_content_review_pass(
         # Toutes les salves ont réussi
         if all_applied:
             new_word_count = count_tts_spoken_words(current_text)
-            cursor.execute(
-                f"""
-                UPDATE content_generation_segments
-                SET text_content = ?, word_count = ?, dirty = 1,
-                    {reviewed_column} = 1, {error_column} = NULL, {signature_column} = ?
-                    {", reviewed = 0, review_error = NULL, review_signature = NULL" if invalidate_compliance_on_change else ""}
-                WHERE id = ?
-                """,
-                (current_text, new_word_count, review_signature, seg_id),
+            mark_content_segment_review_patched(
+                segment_id=seg_id,
+                text_content=current_text,
+                word_count=new_word_count,
+                reviewed_column=reviewed_column,
+                error_column=error_column,
+                signature_column=signature_column,
+                review_signature=review_signature,
+                invalidate_compliance_on_change=invalidate_compliance_on_change,
             )
             logger.info(
                 "PIPELINE_REVIEW_SEGMENT_PATCHED formation_job_id=%s content_job_id=%s folder_id=%s segment_id=%s proposed=%s applied=%s rejected=%s new_words=%s",
@@ -15747,13 +15681,12 @@ def _run_content_review_pass(
                 new_word_count,
             )
         else:
-            cursor.execute(
-                f"""
-                UPDATE content_generation_segments
-                SET {reviewed_column} = 1, {error_column} = NULL, {signature_column} = ?
-                WHERE id = ?
-                """,
-                (review_signature, seg_id),
+            mark_content_segment_review_clean(
+                segment_id=seg_id,
+                reviewed_column=reviewed_column,
+                error_column=error_column,
+                signature_column=signature_column,
+                review_signature=review_signature,
             )
             logger.info(
                 "PIPELINE_REVIEW_SEGMENT_CLEAN formation_job_id=%s content_job_id=%s folder_id=%s segment_id=%s proposed=%s rejected=%s",
@@ -15764,8 +15697,6 @@ def _run_content_review_pass(
                 all_proposed,
                 len(all_rejected),
             )
-        conn.commit()
-        conn.close()
 
         total_applied += len(all_applied)
         total_rejected += len(all_rejected)
