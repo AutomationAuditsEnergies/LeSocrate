@@ -76,6 +76,17 @@ def _make_pipeline_db():
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
 
+        CREATE TABLE cours_documents (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            folder_id INTEGER NOT NULL,
+            filename TEXT NOT NULL,
+            original_name TEXT NOT NULL,
+            doc_type TEXT DEFAULT 'source',
+            status TEXT DEFAULT 'uploaded',
+            audio_filename TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+
         CREATE TABLE content_generation_jobs (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             folder_id INTEGER NOT NULL UNIQUE,
@@ -455,6 +466,105 @@ class PipelineRepositoryTest(unittest.TestCase):
         cgs._clear_cross_day_carryover_from_source(60, 61)
         self.assertEqual(cgs.get_job_from_db(60)["carryover_out_text"], "")
         self.assertEqual(cgs.get_job_from_db(61)["carryover_in_text"], "")
+
+    def test_content_segment_helpers_use_repository_storage(self):
+        conn = sqlite3.connect(self.db_path)
+        conn.execute(
+            """
+            INSERT INTO cours_folders (id, platform_id, name, position, formation_job_id)
+            VALUES (70, 7, 'Jour 1 — Segments', 0, NULL)
+            """
+        )
+        conn.commit()
+        conn.close()
+
+        repo.reset_and_upsert_content_generation_job(
+            folder_id=70,
+            platform_id=7,
+            program_text="Programme",
+            program_title="TP Test",
+            sub_parts_json='["Cours 1"]',
+            from_scratch=True,
+            module_contents_json='{}',
+        )
+        job = cgs.get_job_from_db(70)
+        repo.save_completed_content_segment(
+            job_id=job["id"],
+            sub_part_index=0,
+            sub_part_name="Cours 1",
+            passe=1,
+            text_content="Texte initial",
+            word_count=2,
+        )
+
+        rows = repo.list_completed_content_segment_rows(job["id"])
+        self.assertEqual(len(rows), 1)
+        self.assertIn("id", rows[0])
+        self.assertTrue(rows[0]["dirty"])
+
+        repo.mark_content_segments_clean(job["id"], {(0, 1)})
+        self.assertFalse(repo.list_completed_content_segment_rows(job["id"])[0]["dirty"])
+
+        repo.update_content_segment_audio_calibration(
+            segment_id=rows[0]["id"],
+            text_content="<<<BLOC_AUDIO_1>>>\n\nTexte calibre",
+            word_count=2,
+            humanization_signature="sig-audio",
+        )
+        calibrated = repo.list_completed_content_segment_rows(job["id"])[0]
+        self.assertEqual(calibrated["text_content"], "<<<BLOC_AUDIO_1>>>\n\nTexte calibre")
+        self.assertTrue(calibrated["humanized"])
+        self.assertFalse(calibrated["reviewed"])
+
+        repo.update_content_segment_plan_repair(
+            segment_id=rows[0]["id"],
+            text_content="Texte repare",
+            word_count=2,
+        )
+        repaired = repo.list_completed_content_segment_rows(job["id"])[0]
+        self.assertEqual(repaired["text_content"], "Texte repare")
+        self.assertFalse(repaired["humanized"])
+        self.assertFalse(repaired["reviewed"])
+
+        repo.delete_content_segments_for_job(job["id"])
+        self.assertEqual(repo.list_completed_content_segment_rows(job["id"]), [])
+
+    def test_final_script_document_helpers_replace_existing_rows(self):
+        conn = sqlite3.connect(self.db_path)
+        conn.executescript(
+            """
+            INSERT INTO cours_folders (id, platform_id, name, position, formation_job_id)
+            VALUES (80, 7, 'Jour 1 — Documents', 0, NULL);
+
+            INSERT INTO cours_documents
+                (folder_id, filename, original_name, doc_type, status, audio_filename)
+            VALUES
+                (80, 'old-final.txt', 'script_tts_final.txt', 'final_script', 'uploaded', 'old-final.mp3'),
+                (80, 'legacy.txt', 'cours_genere_123.txt', 'source', 'uploaded', NULL),
+                (80, 'source.pdf', 'source.pdf', 'source', 'uploaded', NULL);
+            """
+        )
+        conn.commit()
+        conn.close()
+
+        old_docs = repo.list_final_script_document_rows(80)
+        self.assertEqual({row["filename"] for row in old_docs}, {"old-final.txt", "legacy.txt"})
+
+        repo.replace_final_script_document_record(
+            folder_id=80,
+            filename="new-final.txt",
+            original_name="script_tts_final.txt",
+        )
+
+        final_docs = repo.list_final_script_document_rows(80)
+        self.assertEqual([row["filename"] for row in final_docs], ["new-final.txt"])
+
+        conn = sqlite3.connect(self.db_path)
+        remaining_sources = conn.execute(
+            "SELECT filename FROM cours_documents WHERE folder_id = 80 AND doc_type = 'source'"
+        ).fetchall()
+        conn.close()
+        self.assertEqual(remaining_sources, [("source.pdf",)])
 
 
 if __name__ == "__main__":

@@ -27,16 +27,22 @@ from database.db import get_db_connection
 from repositories.pipeline_repository import (
     clear_cross_day_carryover,
     completed_content_segment_keys,
+    delete_content_segments_for_job,
     find_next_course_folder_id,
     get_existing_carryover_out_row,
     get_content_generation_job_by_folder,
     get_content_segment_text,
     list_completed_content_segment_rows,
     list_content_segment_status_rows,
+    list_final_script_document_rows,
     mark_content_segment_modified,
+    mark_content_segments_clean,
+    replace_final_script_document_record,
     reset_and_upsert_content_generation_job,
     save_completed_content_segment,
     store_cross_day_carryover,
+    update_content_segment_audio_calibration,
+    update_content_segment_plan_repair,
     update_content_generation_job,
 )
 from utils.anthropic_client import (
@@ -3341,27 +3347,13 @@ def compute_course_day_word_budget_audit(folder_id: int, job: dict | None = None
             "overflow": 0,
         }
 
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        """
-        SELECT COALESCE(text_content, ''), COALESCE(word_count, 0)
-        FROM content_generation_segments
-        WHERE job_id = ? AND status = 'completed'
-        ORDER BY sub_part_index ASC, passe ASC
-        """,
-        (job["id"],),
-    )
-    rows = cursor.fetchall()
-    conn.close()
+    rows = list_completed_content_segment_rows(job["id"])
 
     raw_words = 0
     spoken_words = 0
     for row in rows:
-        if len(row) >= 4 and not isinstance(row[0], str):
-            text, wc = row[2], row[3]
-        else:
-            text, wc = row[0], row[1]
+        text = row.get("text_content") or ""
+        wc = row.get("word_count") or 0
         raw_words += int(wc or len((text or "").split()))
         spoken_words += count_tts_spoken_words(text)
 
@@ -5824,20 +5816,8 @@ def _persist_calibrated_audio_blocks(job: dict, calibrated_blocks: list[dict]) -
         return 0
 
     review_signature = _current_humanization_review_signature()
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        """
-        SELECT id, sub_part_index, sub_part_name, passe
-        FROM content_generation_segments
-        WHERE job_id = ? AND status = 'completed'
-        ORDER BY sub_part_index ASC, passe ASC
-        """,
-        (job["id"],),
-    )
-    rows = cursor.fetchall()
+    rows = list_completed_content_segment_rows(job["id"])
     if len(rows) < len(calibrated_blocks):
-        conn.close()
         raise ValueError(
             f"Calibrage blocs impossible : {len(rows)} segment(s) disponibles "
             f"pour {len(calibrated_blocks)} bloc(s) audio"
@@ -5845,45 +5825,28 @@ def _persist_calibrated_audio_blocks(job: dict, calibrated_blocks: list[dict]) -
 
     total_words = 0
     for idx, block in enumerate(calibrated_blocks):
-        seg_id = rows[idx][0]
+        seg_id = rows[idx]["id"]
         bloc_num = int(block["bloc_number"])
         text = (block.get("text") or "").strip()
         stored_text = f"<<<BLOC_AUDIO_{bloc_num}>>>\n\n{text}".strip()
         words = count_tts_spoken_words(text)
         total_words += words
-        cursor.execute(
-            """
-            UPDATE content_generation_segments
-            SET text_content = ?, word_count = ?, dirty = 1,
-                humanized = 1, humanization_error = NULL, humanization_signature = ?,
-                reviewed = 0, review_error = NULL, review_signature = NULL
-            WHERE id = ?
-            """,
-            (stored_text, words, review_signature, seg_id),
+        update_content_segment_audio_calibration(
+            segment_id=seg_id,
+            text_content=stored_text,
+            word_count=words,
+            humanization_signature=review_signature,
         )
 
     for row in rows[len(calibrated_blocks):]:
-        cursor.execute(
-            """
-            UPDATE content_generation_segments
-            SET text_content = '', word_count = 0, dirty = 1,
-                humanized = 1, humanization_error = NULL, humanization_signature = ?,
-                reviewed = 0, review_error = NULL, review_signature = NULL
-            WHERE id = ?
-            """,
-            (review_signature, row[0]),
+        update_content_segment_audio_calibration(
+            segment_id=row["id"],
+            text_content="",
+            word_count=0,
+            humanization_signature=review_signature,
         )
 
-    cursor.execute(
-        """
-        UPDATE content_generation_jobs
-        SET total_words = ?, updated_at = CURRENT_TIMESTAMP
-        WHERE id = ?
-        """,
-        (total_words, job["id"]),
-    )
-    conn.commit()
-    conn.close()
+    update_content_generation_job(job["id"], total_words=total_words)
     return total_words
 
 
@@ -6927,20 +6890,14 @@ def _assemble_and_upload(folder_id, platform_id, job_id):
         upload_blob,
     )
 
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        SELECT sub_part_index, passe, text_content
-        FROM content_generation_segments
-        WHERE job_id = ? AND status = 'completed'
-        ORDER BY sub_part_index ASC, passe ASC
-    """, (job_id,))
-    rows = cursor.fetchall()
-    conn.close()
+    rows = list_completed_content_segment_rows(job_id)
 
     # Assembler dans l'ordre sous-partie → passe
     parts_by_idx = {}
-    for sub_idx, passe, text in rows:
+    for row in rows:
+        sub_idx = row["sub_part_index"]
+        passe = row["passe"]
+        text = row.get("text_content") or ""
         parts_by_idx.setdefault(sub_idx, {})[passe] = text
 
     final_parts = []
@@ -6961,16 +6918,10 @@ def _assemble_and_upload(folder_id, platform_id, job_id):
 
     # Remplacer les anciennes versions finales du script TTS pour garder un seul
     # document exploitable par cours.
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        SELECT id, filename, audio_filename
-        FROM cours_documents
-        WHERE folder_id = ?
-          AND (doc_type = 'final_script' OR original_name LIKE 'cours_genere_%.txt')
-    """, (folder_id,))
-    old_final_docs = cursor.fetchall()
-    for _doc_id, old_filename, old_audio_filename in old_final_docs:
+    old_final_docs = list_final_script_document_rows(folder_id)
+    for old_doc in old_final_docs:
+        old_filename = old_doc.get("filename")
+        old_audio_filename = old_doc.get("audio_filename")
         try:
             delete_blob(CONTAINER_DOCUMENTS, old_filename)
         except Exception as e:
@@ -6980,17 +6931,11 @@ def _assemble_and_upload(folder_id, platform_id, job_id):
                 delete_blob(CONTAINER_AUDIOS, old_audio_filename)
             except Exception as e:
                 logger.warning(f"⚠️ Ancien audio final non supprimé ({old_audio_filename}): {e}")
-    cursor.execute("""
-        DELETE FROM cours_documents
-        WHERE folder_id = ?
-          AND (doc_type = 'final_script' OR original_name LIKE 'cours_genere_%.txt')
-    """, (folder_id,))
-    cursor.execute("""
-        INSERT INTO cours_documents (folder_id, filename, original_name, doc_type, status)
-        VALUES (?, ?, ?, 'final_script', 'uploaded')
-    """, (folder_id, blob_path, original_name))
-    conn.commit()
-    conn.close()
+    replace_final_script_document_record(
+        folder_id=folder_id,
+        filename=blob_path,
+        original_name=original_name,
+    )
 
     logger.info(f"✅ Texte final : {total_words} mots → {blob_path}")
     return total_words, original_name
@@ -10474,11 +10419,7 @@ def _run_plan_adherence_on_generated_drafts(
 
 
 def _clear_content_segments_for_structured(job_id: int) -> None:
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("DELETE FROM content_generation_segments WHERE job_id = ?", (job_id,))
-    conn.commit()
-    conn.close()
+    delete_content_segments_for_job(job_id)
 
 
 def _save_structured_course_segment(job_id: int, course_plan: dict, text: str) -> None:
@@ -12442,22 +12383,7 @@ def _build_contextual_break_audio(
 
 
 def _mark_content_segments_clean(job_id: int, seg_keys) -> None:
-    unique_keys = sorted(set(seg_keys or []))
-    if not unique_keys:
-        return
-
-    conn = get_db_connection()
-    cur = conn.cursor()
-    try:
-        for sub_idx, passe in unique_keys:
-            cur.execute("""
-                UPDATE content_generation_segments
-                SET dirty = 0
-                WHERE job_id = ? AND sub_part_index = ? AND passe = ?
-            """, (job_id, sub_idx, passe))
-        conn.commit()
-    finally:
-        conn.close()
+    mark_content_segments_clean(job_id, seg_keys)
 
 
 def _allow_audio_overflow_lost() -> bool:
@@ -12660,16 +12586,7 @@ def generate_audio_from_script(
         )
 
     # ── 1. Charger tous les segments complétés dans l'ordre ──
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        SELECT sub_part_index, passe, text_content, word_count, dirty
-        FROM content_generation_segments
-        WHERE job_id = ? AND status = 'completed'
-        ORDER BY sub_part_index ASC, passe ASC
-    """, (job_id,))
-    rows = cursor.fetchall()
-    conn.close()
+    rows = list_completed_content_segment_rows(job_id)
 
     if not rows:
         raise ValueError("Aucun segment généré — lancez d'abord la génération du script")
@@ -12677,15 +12594,15 @@ def generate_audio_from_script(
     # Construire la liste ordonnée des segments avec leur index global
     segments = []
     for r in rows:
-        text = r[2] or ""
+        text = r.get("text_content") or ""
         if sync_slides:
             text = _strip_tts_tags_for_sync(text)
         segments.append({
-            "sub_idx": r[0],
-            "passe": r[1],
+            "sub_idx": r["sub_part_index"],
+            "passe": r["passe"],
             "text": text,
-            "word_count": len(text.split()) if sync_slides else r[3],
-            "dirty": bool(r[4]),
+            "word_count": len(text.split()) if sync_slides else r["word_count"],
+            "dirty": bool(r["dirty"]),
         })
 
     carryover_in = (job.get("carryover_in_text") or "").strip()
@@ -14031,28 +13948,19 @@ def _serialize_course_bloc(
 
 
 def _load_segments_for_course_plan(job: dict, *, sync_slides: bool = False) -> list:
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        SELECT sub_part_index, passe, text_content, word_count, dirty
-        FROM content_generation_segments
-        WHERE job_id = ? AND status = 'completed'
-        ORDER BY sub_part_index ASC, passe ASC
-    """, (job["id"],))
-    rows = cursor.fetchall()
-    conn.close()
+    rows = list_completed_content_segment_rows(job["id"])
 
     segments = []
     for r in rows:
-        text = r[2] or ""
+        text = r.get("text_content") or ""
         if sync_slides:
             text = _strip_tts_tags_for_sync(text)
         segments.append({
-            "sub_idx": r[0],
-            "passe": r[1],
+            "sub_idx": r["sub_part_index"],
+            "passe": r["passe"],
             "text": text,
-            "word_count": len(text.split()) if sync_slides else r[3],
-            "dirty": bool(r[4]),
+            "word_count": len(text.split()) if sync_slides else r["word_count"],
+            "dirty": bool(r["dirty"]),
         })
 
     carryover_in = (job.get("carryover_in_text") or "").strip()
@@ -14271,20 +14179,11 @@ def _update_segment_after_plan_adherence_repair(seg_id: int, original_text: str,
     if marker_course_number and not _extract_audio_block_number(stored_text):
         stored_text = f"<<<BLOC_AUDIO_{marker_course_number}>>>\n\n{stored_text}".strip()
     word_count = count_tts_spoken_words(stored_text)
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        """
-        UPDATE content_generation_segments
-        SET text_content = ?, word_count = ?, dirty = 1,
-            humanized = 0, humanization_error = NULL, humanization_signature = NULL,
-            reviewed = 0, review_error = NULL, review_signature = NULL
-        WHERE id = ?
-        """,
-        (stored_text, word_count, seg_id),
+    update_content_segment_plan_repair(
+        segment_id=seg_id,
+        text_content=stored_text,
+        word_count=word_count,
     )
-    conn.commit()
-    conn.close()
     return word_count
 
 
@@ -14399,19 +14298,7 @@ def run_plan_adherence_review(folder_id, on_progress=None, model=None, force: bo
         if isinstance(record, dict)
     }
 
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        """
-        SELECT id, sub_part_index, sub_part_name, passe, text_content
-        FROM content_generation_segments
-        WHERE job_id = ? AND status = 'completed'
-        ORDER BY sub_part_index ASC, passe ASC
-        """,
-        (job["id"],),
-    )
-    rows = cursor.fetchall()
-    conn.close()
+    rows = list_completed_content_segment_rows(job["id"])
 
     total = len(rows)
     details = []
@@ -14434,8 +14321,10 @@ def run_plan_adherence_review(folder_id, on_progress=None, model=None, force: bo
     )
 
     for step, row in enumerate(rows, start=1):
-        seg_id, sub_idx, _sub_part_name, passe, text_content = row
-        original_text = text_content or ""
+        seg_id = row["id"]
+        sub_idx = row["sub_part_index"]
+        passe = row["passe"]
+        original_text = row.get("text_content") or ""
         course_number = _extract_audio_block_number(original_text) or int(sub_idx or 0) + 1
         course_plan = _course_plan_for_number(structured_plan, course_number)
         clean_text = _strip_audio_block_markers(original_text)
@@ -14732,21 +14621,20 @@ def get_script_dirty_blocs(folder_id):
     if not job:
         return {"dirty_blocs": 0, "total_blocs": 7, "has_script": False}
 
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        SELECT sub_part_index, passe, word_count, dirty
-        FROM content_generation_segments
-        WHERE job_id = ? AND status = 'completed'
-        ORDER BY sub_part_index ASC, passe ASC
-    """, (job["id"],))
-    rows = cursor.fetchall()
-    conn.close()
+    rows = list_completed_content_segment_rows(job["id"])
 
     if not rows:
         return {"dirty_blocs": 0, "total_blocs": 7, "has_script": True}
 
-    segments = [{"sub_idx": r[0], "passe": r[1], "wc": r[2], "dirty": bool(r[3])} for r in rows]
+    segments = [
+        {
+            "sub_idx": r["sub_part_index"],
+            "passe": r["passe"],
+            "wc": r["word_count"],
+            "dirty": bool(r["dirty"]),
+        }
+        for r in rows
+    ]
     total_words = sum(s["wc"] for s in segments)
 
     word_to_seg_idx = []

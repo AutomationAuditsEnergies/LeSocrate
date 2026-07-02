@@ -1104,7 +1104,7 @@ def get_content_segment_text(job_id: int, sub_part_index: int, passe: int) -> st
 def list_completed_content_segment_rows(job_id: int) -> list[dict[str, Any]]:
     ph = _placeholder()
     query = f"""
-        SELECT sub_part_index, sub_part_name, passe, text_content, word_count, dirty,
+        SELECT id, sub_part_index, sub_part_name, passe, text_content, word_count, dirty,
                COALESCE(humanized, 0) AS humanized, COALESCE(reviewed, 0) AS reviewed,
                humanization_error, review_error
         FROM content_generation_segments
@@ -1122,6 +1122,180 @@ def list_completed_content_segment_rows(job_id: int) -> list[dict[str, Any]]:
         cursor = conn.cursor()
         cursor.execute(query, (job_id,))
         return [dict(row) for row in cursor.fetchall()]
+    finally:
+        conn.close()
+
+
+def delete_content_segments_for_job(job_id: int) -> None:
+    ph = _placeholder()
+    query = f"DELETE FROM content_generation_segments WHERE job_id = {ph}"
+    if _pipeline_primary_backend() == "postgres":
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, (job_id,))
+        return
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(query, (job_id,))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def mark_content_segments_clean(job_id: int, seg_keys) -> None:
+    unique_keys = sorted(set(seg_keys or []))
+    if not unique_keys:
+        return
+
+    ph = _placeholder()
+    query = f"""
+        UPDATE content_generation_segments
+        SET dirty = {ph}
+        WHERE job_id = {ph} AND sub_part_index = {ph} AND passe = {ph}
+    """
+    clean_value = False if _pipeline_primary_backend() == "postgres" else 0
+    if _pipeline_primary_backend() == "postgres":
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                for sub_idx, passe in unique_keys:
+                    cur.execute(query, (clean_value, job_id, sub_idx, passe))
+        return
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        for sub_idx, passe in unique_keys:
+            cursor.execute(query, (clean_value, job_id, sub_idx, passe))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def update_content_segment_audio_calibration(
+    *,
+    segment_id: int,
+    text_content: str,
+    word_count: int,
+    humanization_signature: str,
+) -> None:
+    ph = _placeholder()
+    query = f"""
+        UPDATE content_generation_segments
+        SET text_content = {ph}, word_count = {ph}, dirty = {ph},
+            humanized = {ph}, humanization_error = NULL, humanization_signature = {ph},
+            reviewed = {ph}, review_error = NULL, review_signature = NULL
+        WHERE id = {ph}
+    """
+    if _pipeline_primary_backend() == "postgres":
+        params = (
+            text_content,
+            word_count,
+            True,
+            True,
+            humanization_signature,
+            False,
+            segment_id,
+        )
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, params)
+        return
+
+    params = (text_content, word_count, 1, 1, humanization_signature, 0, segment_id)
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(query, params)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def update_content_segment_plan_repair(
+    *,
+    segment_id: int,
+    text_content: str,
+    word_count: int,
+) -> None:
+    ph = _placeholder()
+    query = f"""
+        UPDATE content_generation_segments
+        SET text_content = {ph}, word_count = {ph}, dirty = {ph},
+            humanized = {ph}, humanization_error = NULL, humanization_signature = NULL,
+            reviewed = {ph}, review_error = NULL, review_signature = NULL
+        WHERE id = {ph}
+    """
+    if _pipeline_primary_backend() == "postgres":
+        params = (text_content, word_count, True, False, False, segment_id)
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, params)
+        return
+
+    params = (text_content, word_count, 1, 0, 0, segment_id)
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(query, params)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def list_final_script_document_rows(folder_id: int) -> list[dict[str, Any]]:
+    ph = _placeholder()
+    query = f"""
+        SELECT id, filename, audio_filename
+        FROM cours_documents
+        WHERE folder_id = {ph}
+          AND (doc_type = 'final_script' OR original_name LIKE 'cours_genere_%.txt')
+    """
+    if _pipeline_primary_backend() == "postgres":
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, (folder_id,))
+                return [dict(row) for row in cur.fetchall()]
+
+    conn = _as_sqlite_row_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(query, (folder_id,))
+        return [dict(row) for row in cursor.fetchall()]
+    finally:
+        conn.close()
+
+
+def replace_final_script_document_record(
+    *,
+    folder_id: int,
+    filename: str,
+    original_name: str,
+) -> None:
+    ph = _placeholder()
+    delete_query = f"""
+        DELETE FROM cours_documents
+        WHERE folder_id = {ph}
+          AND (doc_type = 'final_script' OR original_name LIKE 'cours_genere_%.txt')
+    """
+    insert_query = f"""
+        INSERT INTO cours_documents (folder_id, filename, original_name, doc_type, status)
+        VALUES ({ph}, {ph}, {ph}, 'final_script', 'uploaded')
+    """
+    if _pipeline_primary_backend() == "postgres":
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(delete_query, (folder_id,))
+                cur.execute(insert_query, (folder_id, filename, original_name))
+        return
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(delete_query, (folder_id,))
+        cursor.execute(insert_query, (folder_id, filename, original_name))
+        conn.commit()
     finally:
         conn.close()
 
