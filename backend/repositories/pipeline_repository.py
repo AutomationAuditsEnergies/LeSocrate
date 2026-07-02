@@ -1594,6 +1594,65 @@ def replace_final_script_document_record(
         conn.close()
 
 
+def list_due_audio_generation_sessions(
+    *,
+    lower_bound,
+    upper_bound,
+    platform_ids: list[int] | None = None,
+) -> list[dict[str, Any]]:
+    ph = _placeholder()
+    params: list[Any] = [lower_bound, upper_bound]
+    platform_filter = ""
+    if platform_ids:
+        ids = [int(pid) for pid in platform_ids]
+        placeholders = ", ".join([ph] * len(ids))
+        platform_filter = f"AND cs.platform_id IN ({placeholders})"
+        params.extend(ids)
+
+    query = f"""
+        SELECT
+            cs.id,
+            cs.platform_id,
+            cs.session_index,
+            cs.scheduled_at,
+            pc.name,
+            COALESCE(
+                pc.source_formation_id,
+                (
+                    SELECT j.id
+                    FROM formation_pipeline_jobs j
+                    WHERE j.platform_id = cs.platform_id
+                    ORDER BY j.id DESC
+                    LIMIT 1
+                )
+            ) AS formation_job_id
+        FROM course_sessions cs
+        JOIN platform_config pc ON pc.id = cs.platform_id
+        WHERE cs.status IN ('planned', 'active')
+          AND cs.scheduled_at >= {ph}
+          AND cs.scheduled_at <= {ph}
+          AND cs.audio_generation_started_at IS NULL
+          {platform_filter}
+        ORDER BY cs.scheduled_at ASC, cs.platform_id ASC
+    """
+    if _pipeline_primary_backend() == "postgres":
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, params)
+                return [dict(row) for row in cur.fetchall()]
+
+    conn = _as_sqlite_row_connection()
+    try:
+        from services.course_schedule_service import ensure_course_schedule_tables
+
+        cursor = conn.cursor()
+        ensure_course_schedule_tables(cursor)
+        cursor.execute(query, params)
+        return [dict(row) for row in cursor.fetchall()]
+    finally:
+        conn.close()
+
+
 def find_next_course_folder_id(platform_id: int, folder_id: int) -> int | None:
     ph = _placeholder()
     current_query = f"SELECT position, id FROM cours_folders WHERE id = {ph} AND platform_id = {ph}"

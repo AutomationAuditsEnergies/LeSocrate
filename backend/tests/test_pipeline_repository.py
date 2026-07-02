@@ -28,9 +28,31 @@ def _make_pipeline_db():
         """
         CREATE TABLE platform_config (
             id INTEGER PRIMARY KEY,
-            name TEXT NOT NULL
+            name TEXT NOT NULL,
+            source_formation_id INTEGER
         );
         INSERT INTO platform_config (id, name) VALUES (7, 'Centre A - TP Test');
+
+        CREATE TABLE course_sessions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            platform_id INTEGER NOT NULL,
+            session_index INTEGER NOT NULL,
+            scheduled_at TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'planned',
+            activated_at TEXT,
+            completed_at TEXT,
+            reminder_previous_evening_sent_at TEXT,
+            reminder_5min_sent_at TEXT,
+            audio_generation_status TEXT DEFAULT 'pending',
+            audio_generation_started_at TEXT,
+            audio_generation_completed_at TEXT,
+            audio_generation_error TEXT,
+            audio_job_id INTEGER,
+            audio_folder_id INTEGER,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(platform_id, session_index)
+        );
 
         CREATE TABLE formation_pipeline_jobs (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -226,6 +248,58 @@ class PipelineRepositoryTest(unittest.TestCase):
         conn.close()
 
         self.assertEqual(repo.get_auto_pilot_pipeline_jobs_to_resume(), [job_id])
+
+    def test_due_audio_generation_sessions_use_repository_storage(self):
+        old_job_id = repo.create_pipeline_job(
+            platform_id=7,
+            tp_name="TP Test A",
+            rncp_code="RNCP123",
+            total_hours=7,
+            nb_days=1,
+        )
+        new_job_id = repo.create_pipeline_job(
+            platform_id=7,
+            tp_name="TP Test B",
+            rncp_code="RNCP456",
+            total_hours=7,
+            nb_days=1,
+        )
+        conn = sqlite3.connect(self.db_path)
+        conn.executescript(
+            """
+            INSERT INTO course_sessions
+                (id, platform_id, session_index, scheduled_at, status, audio_generation_started_at)
+            VALUES
+                (100, 7, 1, '2026-01-01 10:00:00', 'planned', NULL),
+                (101, 7, 2, '2026-01-01 11:00:00', 'active', '2026-01-01 08:00:00'),
+                (102, 7, 3, '2026-01-03 10:00:00', 'planned', NULL);
+            """
+        )
+        conn.commit()
+        conn.close()
+
+        rows = repo.list_due_audio_generation_sessions(
+            lower_bound="2026-01-01 00:00:00",
+            upper_bound="2026-01-02 00:00:00",
+            platform_ids=[7],
+        )
+        self.assertEqual([row["id"] for row in rows], [100])
+        self.assertEqual(rows[0]["formation_job_id"], new_job_id)
+
+        conn = sqlite3.connect(self.db_path)
+        conn.execute(
+            "UPDATE platform_config SET source_formation_id = ? WHERE id = 7",
+            (old_job_id,),
+        )
+        conn.commit()
+        conn.close()
+
+        rows = repo.list_due_audio_generation_sessions(
+            lower_bound="2026-01-01 00:00:00",
+            upper_bound="2026-01-02 00:00:00",
+            platform_ids=[7],
+        )
+        self.assertEqual(rows[0]["formation_job_id"], old_job_id)
 
     def test_expected_course_folder_queries_rank_best_candidate(self):
         job_id = repo.create_pipeline_job(

@@ -2,8 +2,7 @@ import os
 from datetime import datetime, timedelta
 
 from config import FRANCE_TZ
-from database.db import get_db_connection
-from services.course_schedule_service import ensure_course_schedule_tables
+from repositories.pipeline_repository import list_due_audio_generation_sessions
 from services.formation_pipeline_service import get_expected_course_folders
 from utils.logger import get_logger
 
@@ -26,54 +25,20 @@ def process_due_audio_generations(platform_ids=None, dry_run=False, horizon_hour
     lower_bound = (now - timedelta(hours=late_grace)).strftime("%Y-%m-%d %H:%M:%S")
     upper_bound = (now + timedelta(hours=horizon)).strftime("%Y-%m-%d %H:%M:%S")
 
-    conn = get_db_connection()
-    try:
-        cursor = conn.cursor()
-        ensure_course_schedule_tables(cursor)
-
-        params = [lower_bound, upper_bound]
-        platform_filter = ""
-        if platform_ids:
-            ids = [int(pid) for pid in platform_ids]
-            placeholders = ",".join("?" for _ in ids)
-            platform_filter = f"AND cs.platform_id IN ({placeholders})"
-            params.extend(ids)
-
-        cursor.execute(
-            f"""
-            SELECT
-                cs.id,
-                cs.platform_id,
-                cs.session_index,
-                cs.scheduled_at,
-                pc.name,
-                COALESCE(
-                    pc.source_formation_id,
-                    (
-                        SELECT j.id
-                        FROM formation_pipeline_jobs j
-                        WHERE j.platform_id = cs.platform_id
-                        ORDER BY j.id DESC
-                        LIMIT 1
-                    )
-                ) AS formation_job_id
-            FROM course_sessions cs
-            JOIN platform_config pc ON pc.id = cs.platform_id
-            WHERE cs.status IN ('planned', 'active')
-              AND cs.scheduled_at >= ?
-              AND cs.scheduled_at <= ?
-              AND cs.audio_generation_started_at IS NULL
-              {platform_filter}
-            ORDER BY cs.scheduled_at ASC, cs.platform_id ASC
-            """,
-            params,
-        )
-        due_sessions = cursor.fetchall()
-    finally:
-        conn.close()
+    due_sessions = list_due_audio_generation_sessions(
+        lower_bound=lower_bound,
+        upper_bound=upper_bound,
+        platform_ids=platform_ids,
+    )
 
     results = []
-    for session_id, platform_id, session_index, scheduled_at, platform_name, job_id in due_sessions:
+    for session in due_sessions:
+        session_id = session["id"]
+        platform_id = session["platform_id"]
+        session_index = session["session_index"]
+        scheduled_at = session["scheduled_at"]
+        platform_name = session["name"]
+        job_id = session["formation_job_id"]
         result = {
             "session_id": session_id,
             "platform_id": platform_id,
