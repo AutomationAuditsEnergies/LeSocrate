@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { apiUrl } from '../api'
+import { apiFetch, apiUrl } from '../api'
 import AudioEditor from './AudioEditor'
 
 // ─── Material Icon Component ─────────────────────────────────────────────────
@@ -449,7 +449,7 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
     if (!selectedFolder) return
     setLoadingContentScript(true)
     try {
-      const resp = await fetch(apiUrl(`/api/hr/cours-folders/${selectedFolder.id}/content-job/script`), { credentials: 'include' })
+      const resp = await apiFetch(`/api/hr/cours-folders/${selectedFolder.id}/content-job/script`)
       const data = await resp.json()
       if (data.success) {
         const visibleCourseBlocs = mergeCourseBlocsForScriptModal(data.course_blocs, data.planned_course_blocs)

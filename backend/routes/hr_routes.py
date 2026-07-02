@@ -3539,27 +3539,24 @@ def create_hr_blueprint(socketio):
             get_course_script_plan_for_ui,
             get_job_from_db,
         )
+        from repositories.pipeline_repository import list_completed_content_segment_rows
         job = get_job_from_db(folder_id)
         if not job:
             return jsonify({"success": False, "error": "Aucun job pour ce dossier"}), 404
 
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute("""
-            SELECT sub_part_index, sub_part_name, passe, text_content, word_count
-            FROM content_generation_segments
-            WHERE job_id = ? AND status = 'completed'
-            ORDER BY sub_part_index ASC, passe ASC
-        """, (job["id"],))
-        rows = cursor.fetchall()
-        conn.close()
+        rows = list_completed_content_segment_rows(job["id"])
 
         if not rows:
             return jsonify({"success": False, "error": "Aucun segment généré"}), 404
 
         # Grouper par sous-partie
         sub_parts_data = {}
-        for sub_idx, sub_name, passe, text, word_count in rows:
+        for row in rows:
+            sub_idx = row["sub_part_index"]
+            sub_name = row["sub_part_name"]
+            passe = row["passe"]
+            text = row["text_content"]
+            word_count = row["word_count"] or 0
             if sub_idx not in sub_parts_data:
                 sub_parts_data[sub_idx] = {"name": sub_name, "passes": {}, "total_words": 0}
             sub_parts_data[sub_idx]["passes"][passe] = {"text": text, "word_count": word_count}

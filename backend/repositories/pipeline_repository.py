@@ -1118,6 +1118,21 @@ def get_content_segment_text(job_id: int, sub_part_index: int, passe: int) -> st
 
 def list_completed_content_segment_rows(job_id: int) -> list[dict[str, Any]]:
     ph = _placeholder()
+    if _pipeline_primary_backend() == "postgres":
+        query = f"""
+            SELECT id, sub_part_index, sub_part_name, passe, text_content, word_count, dirty,
+                   COALESCE(humanized, FALSE) AS humanized,
+                   COALESCE(reviewed, FALSE) AS reviewed,
+                   humanization_error, review_error
+            FROM content_generation_segments
+            WHERE job_id = {ph} AND status = 'completed'
+            ORDER BY sub_part_index ASC, passe ASC
+        """
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, (job_id,))
+                return [dict(row) for row in cur.fetchall()]
+
     query = f"""
         SELECT id, sub_part_index, sub_part_name, passe, text_content, word_count, dirty,
                COALESCE(humanized, 0) AS humanized, COALESCE(reviewed, 0) AS reviewed,
@@ -1126,12 +1141,6 @@ def list_completed_content_segment_rows(job_id: int) -> list[dict[str, Any]]:
         WHERE job_id = {ph} AND status = 'completed'
         ORDER BY sub_part_index ASC, passe ASC
     """
-    if _pipeline_primary_backend() == "postgres":
-        with get_postgres_connection() as conn:
-            with conn.cursor() as cur:
-                cur.execute(query, (job_id,))
-                return [dict(row) for row in cur.fetchall()]
-
     conn = _as_sqlite_row_connection()
     try:
         cursor = conn.cursor()
