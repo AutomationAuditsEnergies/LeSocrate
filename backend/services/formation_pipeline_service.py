@@ -21,7 +21,6 @@ from urllib.parse import quote
 
 import requests as _http
 
-from database.db import get_db_connection
 from repositories.pipeline_repository import (
     attach_course_folder_to_job,
     course_folder_exists_for_job,
