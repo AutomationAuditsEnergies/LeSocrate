@@ -407,6 +407,55 @@ class PipelineRepositoryTest(unittest.TestCase):
         self.assertTrue(snapshot[0]["dirty"])
         self.assertFalse(snapshot[0]["reviewed"])
 
+    def test_cross_day_carryover_uses_repository_storage(self):
+        conn = sqlite3.connect(self.db_path)
+        conn.executescript(
+            """
+            INSERT INTO cours_folders (id, platform_id, name, position, formation_job_id)
+            VALUES
+                (60, 7, 'Jour 1 — Accueil', 0, NULL),
+                (61, 7, 'Jour 2 — Vente', 1, NULL);
+            """
+        )
+        conn.commit()
+        conn.close()
+
+        for folder_id in (60, 61):
+            repo.reset_and_upsert_content_generation_job(
+                folder_id=folder_id,
+                platform_id=7,
+                program_text="Programme",
+                program_title="TP Test",
+                sub_parts_json='["Cours 1"]',
+                from_scratch=True,
+                module_contents_json='{}',
+            )
+            job = cgs.get_job_from_db(folder_id)
+            cgs._save_segment_db(job["id"], 0, "Cours 1", 1, "Texte initial")
+
+        target_job = cgs.get_job_from_db(61)
+        conn = sqlite3.connect(self.db_path)
+        conn.execute("UPDATE content_generation_segments SET dirty = 0 WHERE job_id = ?", (target_job["id"],))
+        conn.commit()
+        conn.close()
+
+        self.assertEqual(cgs._find_next_folder_id(7, 60), 61)
+
+        cgs._store_cross_day_carryover(60, 61, "Synthese du jour 1")
+        source_job = cgs.get_job_from_db(60)
+        target_job = cgs.get_job_from_db(61)
+
+        self.assertEqual(source_job["carryover_out_text"], "Synthese du jour 1")
+        self.assertEqual(source_job["carryover_out_target_folder_id"], 61)
+        self.assertIn("Synthese du jour 1", target_job["carryover_in_text"])
+        self.assertEqual(target_job["carryover_in_source_folder_id"], 60)
+        self.assertEqual(cgs._get_existing_carryover_out(60, 61), "Synthese du jour 1")
+        self.assertTrue(cgs._content_segments_artifact_snapshot(target_job["id"])[0]["dirty"])
+
+        cgs._clear_cross_day_carryover_from_source(60, 61)
+        self.assertEqual(cgs.get_job_from_db(60)["carryover_out_text"], "")
+        self.assertEqual(cgs.get_job_from_db(61)["carryover_in_text"], "")
+
 
 if __name__ == "__main__":
     unittest.main()

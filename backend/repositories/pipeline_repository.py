@@ -1126,6 +1126,190 @@ def list_completed_content_segment_rows(job_id: int) -> list[dict[str, Any]]:
         conn.close()
 
 
+def find_next_course_folder_id(platform_id: int, folder_id: int) -> int | None:
+    ph = _placeholder()
+    current_query = f"SELECT position, id FROM cours_folders WHERE id = {ph} AND platform_id = {ph}"
+    next_query = f"""
+        SELECT id
+        FROM cours_folders
+        WHERE platform_id = {ph}
+          AND (position > {ph} OR (position = {ph} AND id > {ph}))
+        ORDER BY position ASC, id ASC
+        LIMIT 1
+    """
+    if _pipeline_primary_backend() == "postgres":
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(current_query, (folder_id, platform_id))
+                row = cur.fetchone()
+                if not row:
+                    return None
+                cur.execute(next_query, (platform_id, row["position"], row["position"], row["id"]))
+                next_row = cur.fetchone()
+                return int(next_row["id"]) if next_row else None
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(current_query, (folder_id, platform_id))
+        row = cursor.fetchone()
+        if not row:
+            return None
+        position, current_id = row
+        cursor.execute(next_query, (platform_id, position, position, current_id))
+        next_row = cursor.fetchone()
+        return int(next_row[0]) if next_row else None
+    finally:
+        conn.close()
+
+
+def store_cross_day_carryover(
+    *,
+    source_folder_id: int,
+    target_folder_id: int,
+    carryover_out_text: str,
+    carryover_in_text: str,
+) -> None:
+    ph = _placeholder()
+    now_sql = "NOW()" if _pipeline_primary_backend() == "postgres" else "CURRENT_TIMESTAMP"
+    clean = (carryover_out_text or "").strip()
+    source_target = target_folder_id if clean else None
+    source_query = f"""
+        UPDATE content_generation_jobs
+        SET carryover_out_text = {ph}, carryover_out_target_folder_id = {ph},
+            updated_at = {now_sql}
+        WHERE folder_id = {ph}
+    """
+    target_query = f"""
+        UPDATE content_generation_jobs
+        SET carryover_in_text = {ph}, carryover_in_source_folder_id = {ph},
+            updated_at = {now_sql}
+        WHERE folder_id = {ph}
+    """
+    dirty_query = f"""
+        UPDATE content_generation_segments
+        SET dirty = {ph}
+        WHERE job_id = (SELECT id FROM content_generation_jobs WHERE folder_id = {ph})
+          AND sub_part_index = 0 AND passe = 1
+    """
+    if _pipeline_primary_backend() == "postgres":
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(source_query, (clean, source_target, source_folder_id))
+                cur.execute(
+                    target_query,
+                    (carryover_in_text if clean else "", source_folder_id if clean else None, target_folder_id),
+                )
+                cur.execute(dirty_query, (True, target_folder_id))
+        return
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(source_query, (clean, source_target, source_folder_id))
+        cursor.execute(
+            target_query,
+            (carryover_in_text if clean else "", source_folder_id if clean else None, target_folder_id),
+        )
+        cursor.execute(dirty_query, (1, target_folder_id))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def clear_cross_day_carryover(
+    *,
+    source_folder_id: int,
+    target_folder_id: int | None = None,
+) -> None:
+    ph = _placeholder()
+    now_sql = "NOW()" if _pipeline_primary_backend() == "postgres" else "CURRENT_TIMESTAMP"
+    source_query = f"""
+        UPDATE content_generation_jobs
+        SET carryover_out_text = '', carryover_out_target_folder_id = NULL,
+            updated_at = {now_sql}
+        WHERE folder_id = {ph}
+    """
+    target_query = f"""
+        UPDATE content_generation_jobs
+        SET carryover_in_text = '', carryover_in_source_folder_id = NULL,
+            updated_at = {now_sql}
+        WHERE folder_id = {ph} AND carryover_in_source_folder_id = {ph}
+    """
+    select_targets_query = f"""
+        SELECT folder_id
+        FROM content_generation_jobs
+        WHERE carryover_in_source_folder_id = {ph}
+    """
+    clear_all_targets_query = f"""
+        UPDATE content_generation_jobs
+        SET carryover_in_text = '', carryover_in_source_folder_id = NULL,
+            updated_at = {now_sql}
+        WHERE carryover_in_source_folder_id = {ph}
+    """
+    dirty_query = f"""
+        UPDATE content_generation_segments
+        SET dirty = {ph}
+        WHERE job_id = (SELECT id FROM content_generation_jobs WHERE folder_id = {ph})
+          AND sub_part_index = 0 AND passe = 1
+    """
+    if _pipeline_primary_backend() == "postgres":
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(source_query, (source_folder_id,))
+                if target_folder_id:
+                    cur.execute(target_query, (target_folder_id, source_folder_id))
+                    cur.execute(dirty_query, (True, target_folder_id))
+                else:
+                    cur.execute(select_targets_query, (source_folder_id,))
+                    target_rows = [int(row["folder_id"]) for row in cur.fetchall()]
+                    cur.execute(clear_all_targets_query, (source_folder_id,))
+                    for target_id in target_rows:
+                        cur.execute(dirty_query, (True, target_id))
+        return
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(source_query, (source_folder_id,))
+        if target_folder_id:
+            cursor.execute(target_query, (target_folder_id, source_folder_id))
+            cursor.execute(dirty_query, (1, target_folder_id))
+        else:
+            cursor.execute(select_targets_query, (source_folder_id,))
+            target_rows = [int(row[0]) for row in cursor.fetchall()]
+            cursor.execute(clear_all_targets_query, (source_folder_id,))
+            for target_id in target_rows:
+                cursor.execute(dirty_query, (1, target_id))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_existing_carryover_out_row(source_folder_id: int) -> dict[str, Any] | None:
+    ph = _placeholder()
+    query = f"""
+        SELECT carryover_out_text, carryover_out_target_folder_id
+        FROM content_generation_jobs
+        WHERE folder_id = {ph}
+    """
+    if _pipeline_primary_backend() == "postgres":
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, (source_folder_id,))
+                row = cur.fetchone()
+                return dict(row) if row else None
+
+    conn = _as_sqlite_row_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(query, (source_folder_id,))
+        row = cursor.fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
 def _upsert_postgres_job(payload: dict[str, Any]) -> None:
     payload = _normalize_job_payload(payload)
     columns = [column for column in PIPELINE_JOB_COLUMNS if column in payload]

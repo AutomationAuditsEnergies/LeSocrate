@@ -25,7 +25,10 @@ from datetime import datetime
 
 from database.db import get_db_connection
 from repositories.pipeline_repository import (
+    clear_cross_day_carryover,
     completed_content_segment_keys,
+    find_next_course_folder_id,
+    get_existing_carryover_out_row,
     get_content_generation_job_by_folder,
     get_content_segment_text,
     list_completed_content_segment_rows,
@@ -33,6 +36,7 @@ from repositories.pipeline_repository import (
     mark_content_segment_modified,
     reset_and_upsert_content_generation_job,
     save_completed_content_segment,
+    store_cross_day_carryover,
     update_content_generation_job,
 )
 from utils.anthropic_client import (
@@ -5070,151 +5074,37 @@ def _ensure_carryover_columns() -> None:
 
 def _find_next_folder_id(platform_id: int, folder_id: int) -> int | None:
     """Retourne le dossier suivant de la même plateforme, selon position/id."""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        "SELECT position, id FROM cours_folders WHERE id = ? AND platform_id = ?",
-        (folder_id, platform_id),
-    )
-    row = cursor.fetchone()
-    if not row:
-        conn.close()
-        return None
-    position, current_id = row
-    cursor.execute(
-        """
-        SELECT id FROM cours_folders
-        WHERE platform_id = ?
-          AND (position > ? OR (position = ? AND id > ?))
-        ORDER BY position ASC, id ASC
-        LIMIT 1
-        """,
-        (platform_id, position, position, current_id),
-    )
-    next_row = cursor.fetchone()
-    conn.close()
-    return next_row[0] if next_row else None
+    return find_next_course_folder_id(platform_id, folder_id)
 
 
 def _store_cross_day_carryover(source_folder_id: int, target_folder_id: int, text: str) -> None:
     """Persiste le report J→J+1 de manière idempotente."""
     _ensure_carryover_columns()
     clean = (text or "").strip()
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        """
-        UPDATE content_generation_jobs
-        SET carryover_out_text = ?, carryover_out_target_folder_id = ?,
-            updated_at = CURRENT_TIMESTAMP
-        WHERE folder_id = ?
-        """,
-        (clean, target_folder_id if clean else None, source_folder_id),
+    store_cross_day_carryover(
+        source_folder_id=source_folder_id,
+        target_folder_id=target_folder_id,
+        carryover_out_text=clean,
+        carryover_in_text=_format_carryover_for_next_course(clean) if clean else "",
     )
-    cursor.execute(
-        """
-        UPDATE content_generation_jobs
-        SET carryover_in_text = ?, carryover_in_source_folder_id = ?,
-            updated_at = CURRENT_TIMESTAMP
-        WHERE folder_id = ?
-        """,
-        (_format_carryover_for_next_course(clean) if clean else "", source_folder_id if clean else None, target_folder_id),
-    )
-    cursor.execute(
-        """
-        UPDATE content_generation_segments
-        SET dirty = 1
-        WHERE job_id = (SELECT id FROM content_generation_jobs WHERE folder_id = ?)
-          AND sub_part_index = 0 AND passe = 1
-        """,
-        (target_folder_id,),
-    )
-    conn.commit()
-    conn.close()
 
 
 def _clear_cross_day_carryover_from_source(source_folder_id: int, target_folder_id: int | None = None) -> None:
     """Nettoie un ancien report si le nouveau découpage n'en produit plus."""
     _ensure_carryover_columns()
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        """
-        UPDATE content_generation_jobs
-        SET carryover_out_text = '', carryover_out_target_folder_id = NULL,
-            updated_at = CURRENT_TIMESTAMP
-        WHERE folder_id = ?
-        """,
-        (source_folder_id,),
+    clear_cross_day_carryover(
+        source_folder_id=source_folder_id,
+        target_folder_id=target_folder_id,
     )
-    if target_folder_id:
-        cursor.execute(
-            """
-            UPDATE content_generation_jobs
-            SET carryover_in_text = '', carryover_in_source_folder_id = NULL,
-                updated_at = CURRENT_TIMESTAMP
-            WHERE folder_id = ? AND carryover_in_source_folder_id = ?
-            """,
-            (target_folder_id, source_folder_id),
-        )
-        cursor.execute(
-            """
-            UPDATE content_generation_segments
-            SET dirty = 1
-            WHERE job_id = (SELECT id FROM content_generation_jobs WHERE folder_id = ?)
-              AND sub_part_index = 0 AND passe = 1
-            """,
-            (target_folder_id,),
-        )
-    else:
-        cursor.execute(
-            """
-            SELECT folder_id FROM content_generation_jobs
-            WHERE carryover_in_source_folder_id = ?
-            """,
-            (source_folder_id,),
-        )
-        target_rows = cursor.fetchall()
-        cursor.execute(
-            """
-            UPDATE content_generation_jobs
-            SET carryover_in_text = '', carryover_in_source_folder_id = NULL,
-                updated_at = CURRENT_TIMESTAMP
-            WHERE carryover_in_source_folder_id = ?
-            """,
-            (source_folder_id,),
-        )
-        for (target_id,) in target_rows:
-            cursor.execute(
-                """
-                UPDATE content_generation_segments
-                SET dirty = 1
-                WHERE job_id = (SELECT id FROM content_generation_jobs WHERE folder_id = ?)
-                  AND sub_part_index = 0 AND passe = 1
-                """,
-                (target_id,),
-            )
-    conn.commit()
-    conn.close()
 
 
 def _get_existing_carryover_out(source_folder_id: int, target_folder_id: int | None) -> str:
     _ensure_carryover_columns()
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        """
-        SELECT carryover_out_text, carryover_out_target_folder_id
-        FROM content_generation_jobs
-        WHERE folder_id = ?
-        """,
-        (source_folder_id,),
-    )
-    row = cursor.fetchone()
-    conn.close()
+    row = get_existing_carryover_out_row(source_folder_id)
     if not row:
         return ""
-    text, stored_target = row
+    text = row.get("carryover_out_text")
+    stored_target = row.get("carryover_out_target_folder_id")
     if target_folder_id is not None and stored_target != target_folder_id:
         return ""
     return (text or "").strip()

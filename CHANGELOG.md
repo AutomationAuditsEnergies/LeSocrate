@@ -35,6 +35,10 @@ Cinquieme tranche : les primitives centralisees de `content_generation_jobs` et
 checkpoint segment, dirty flag, texte segment, snapshot artefact) passent par le
 repository pipeline, tout en conservant SQLite comme backend par defaut.
 
+Sixieme tranche : le report inter-journees `carryover` (dossier suivant, stockage
+source/cible, nettoyage et dirty flag du premier segment cible) passe par le
+repository pipeline.
+
 ## 2026-06-29
 
 ### feat(hr-dashboard): robots transparents pré-colorés + flip au clic
