@@ -133,8 +133,24 @@ def _normalize_job_payload(row: dict[str, Any]) -> dict[str, Any]:
     payload = dict(row)
     for column in PIPELINE_JOB_BOOL_COLUMNS:
         if payload.get(column) is not None:
-            payload[column] = bool(payload[column])
+            payload[column] = _coerce_bool(payload[column])
     return payload
+
+
+def _coerce_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(value)
+
+
+def _normalize_job_update_fields(fields: dict[str, Any]) -> dict[str, Any]:
+    normalized = dict(fields)
+    for column in PIPELINE_JOB_BOOL_COLUMNS:
+        if column in normalized and normalized[column] is not None:
+            normalized[column] = _coerce_bool(normalized[column])
+    return normalized
 
 
 def _as_sqlite_row_connection():
@@ -3176,6 +3192,7 @@ def update_pipeline_job(job_id: int, **kwargs) -> None:
         return
 
     if _pipeline_primary_backend() == "postgres":
+        fields = _normalize_job_update_fields(fields)
         set_clause = ", ".join(f"{column} = %s" for column in fields)
         values = list(fields.values()) + [job_id]
         with get_postgres_connection() as conn:
@@ -3207,6 +3224,110 @@ def update_pipeline_job(job_id: int, **kwargs) -> None:
     finally:
         conn.close()
     _mirror_sqlite_job_to_postgres(job_id)
+
+
+def acquire_auto_pilot_lock(job_id: int, *, owner: str, ttl_seconds: int) -> bool:
+    if _pipeline_primary_backend() == "postgres":
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE formation_pipeline_jobs
+                    SET auto_pilot_locked_at = NOW(),
+                        auto_pilot_lock_owner = %s
+                    WHERE id = %s
+                      AND auto_pilot_enabled = TRUE
+                      AND (
+                            auto_pilot_locked_at IS NULL
+                            OR auto_pilot_locked_at < NOW() - (%s * INTERVAL '1 second')
+                          )
+                    """,
+                    (owner, job_id, ttl_seconds),
+                )
+                return cur.rowcount == 1
+
+    stale_cutoff = int(time.time()) - ttl_seconds
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            """
+            UPDATE formation_pipeline_jobs
+            SET auto_pilot_locked_at = CURRENT_TIMESTAMP,
+                auto_pilot_lock_owner = ?
+            WHERE id = ?
+              AND auto_pilot_enabled = 1
+              AND (auto_pilot_locked_at IS NULL
+                   OR CAST(strftime('%s', auto_pilot_locked_at) AS INTEGER) < ?)
+            """,
+            (owner, job_id, stale_cutoff),
+        )
+        acquired = cursor.rowcount == 1
+        conn.commit()
+        return acquired
+    finally:
+        conn.close()
+
+
+def release_auto_pilot_lock(job_id: int) -> None:
+    if _pipeline_primary_backend() == "postgres":
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE formation_pipeline_jobs
+                    SET auto_pilot_locked_at = NULL,
+                        auto_pilot_lock_owner = NULL
+                    WHERE id = %s
+                    """,
+                    (job_id,),
+                )
+        return
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            """
+            UPDATE formation_pipeline_jobs
+            SET auto_pilot_locked_at = NULL, auto_pilot_lock_owner = NULL
+            WHERE id = ?
+            """,
+            (job_id,),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def refresh_auto_pilot_lock(job_id: int, *, owner: str) -> None:
+    if _pipeline_primary_backend() == "postgres":
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE formation_pipeline_jobs
+                    SET auto_pilot_locked_at = NOW()
+                    WHERE id = %s AND auto_pilot_lock_owner = %s
+                    """,
+                    (job_id, owner),
+                )
+        return
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            """
+            UPDATE formation_pipeline_jobs
+            SET auto_pilot_locked_at = CURRENT_TIMESTAMP
+            WHERE id = ? AND auto_pilot_lock_owner = ?
+            """,
+            (job_id, owner),
+        )
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def get_pipeline_job(job_id: int) -> dict[str, Any] | None:

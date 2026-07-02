@@ -4430,52 +4430,21 @@ _AP_WATCHDOG_STARTED = False
 
 def _acquire_ap_lock(job_id: int) -> bool:
     """Pose un lock optimiste sur l'auto-pilot. Retourne True si acquis."""
-    from database.db import get_db_connection
+    from repositories.pipeline_repository import acquire_auto_pilot_lock
     owner = str(os.getpid())
-    stale_cutoff = int(time.time()) - _AP_LOCK_TTL
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        UPDATE formation_pipeline_jobs
-        SET auto_pilot_locked_at = CURRENT_TIMESTAMP,
-            auto_pilot_lock_owner = ?
-        WHERE id = ?
-          AND auto_pilot_enabled = 1
-          AND (auto_pilot_locked_at IS NULL
-               OR CAST(strftime('%s', auto_pilot_locked_at) AS INTEGER) < ?)
-    """, (owner, job_id, stale_cutoff))
-    acquired = cursor.rowcount == 1
-    conn.commit()
-    conn.close()
-    return acquired
+    return acquire_auto_pilot_lock(job_id, owner=owner, ttl_seconds=_AP_LOCK_TTL)
 
 
 def _release_ap_lock(job_id: int) -> None:
-    from database.db import get_db_connection
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        UPDATE formation_pipeline_jobs
-        SET auto_pilot_locked_at = NULL, auto_pilot_lock_owner = NULL
-        WHERE id = ?
-    """, (job_id,))
-    conn.commit()
-    conn.close()
+    from repositories.pipeline_repository import release_auto_pilot_lock
+    release_auto_pilot_lock(job_id)
 
 
 def _refresh_ap_lock(job_id: int) -> None:
     """Rafraîchit le timestamp du lock pour éviter l'expiration pendant une étape longue."""
-    from database.db import get_db_connection
+    from repositories.pipeline_repository import refresh_auto_pilot_lock
     owner = str(os.getpid())
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        UPDATE formation_pipeline_jobs
-        SET auto_pilot_locked_at = CURRENT_TIMESTAMP
-        WHERE id = ? AND auto_pilot_lock_owner = ?
-    """, (job_id, owner))
-    conn.commit()
-    conn.close()
+    refresh_auto_pilot_lock(job_id, owner=owner)
 
 
 def _ap_lock_age_seconds(job: dict | None) -> float | None:

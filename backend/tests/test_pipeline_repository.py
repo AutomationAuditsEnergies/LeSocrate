@@ -266,6 +266,66 @@ class PipelineRepositoryTest(unittest.TestCase):
 
         self.assertEqual(repo.get_auto_pilot_pipeline_jobs_to_resume(), [job_id])
 
+    def test_postgres_update_pipeline_job_coerces_auto_pilot_booleans(self):
+        class FakeCursor:
+            def __init__(self):
+                self.rowcount = 1
+                self.calls = []
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def execute(self, sql, params=None):
+                self.calls.append((sql, params))
+
+        class FakeConn:
+            def __init__(self, cursor):
+                self.cursor_obj = cursor
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def cursor(self):
+                return self.cursor_obj
+
+        cursor = FakeCursor()
+        with (
+            patch.object(repo, "_pipeline_primary_backend", lambda: "postgres"),
+            patch.object(repo, "get_postgres_connection", lambda: FakeConn(cursor)),
+        ):
+            repo.update_pipeline_job(
+                42,
+                auto_pilot_enabled=1,
+                auto_pilot_use_cc=0,
+                auto_pilot_generate_audio="true",
+            )
+
+        self.assertEqual(cursor.calls[0][1], [True, False, True, 42])
+
+    def test_auto_pilot_lock_helpers_keep_sqlite_lock_semantics(self):
+        job_id = repo.create_pipeline_job(
+            platform_id=7,
+            tp_name="TP Test",
+            rncp_code="RNCP123",
+            total_hours=7,
+            nb_days=1,
+        )
+        repo.update_pipeline_job(job_id, auto_pilot_enabled=1)
+
+        self.assertTrue(repo.acquire_auto_pilot_lock(job_id, owner="worker-a", ttl_seconds=300))
+        self.assertFalse(repo.acquire_auto_pilot_lock(job_id, owner="worker-b", ttl_seconds=300))
+
+        repo.refresh_auto_pilot_lock(job_id, owner="worker-a")
+        repo.release_auto_pilot_lock(job_id)
+
+        self.assertTrue(repo.acquire_auto_pilot_lock(job_id, owner="worker-b", ttl_seconds=300))
+
     def test_due_audio_generation_sessions_use_repository_storage(self):
         old_job_id = repo.create_pipeline_job(
             platform_id=7,
