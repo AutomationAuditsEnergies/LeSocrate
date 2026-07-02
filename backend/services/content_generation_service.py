@@ -5079,7 +5079,6 @@ def _find_next_folder_id(platform_id: int, folder_id: int) -> int | None:
 
 def _store_cross_day_carryover(source_folder_id: int, target_folder_id: int, text: str) -> None:
     """Persiste le report J→J+1 de manière idempotente."""
-    _ensure_carryover_columns()
     clean = (text or "").strip()
     store_cross_day_carryover(
         source_folder_id=source_folder_id,
@@ -5091,7 +5090,6 @@ def _store_cross_day_carryover(source_folder_id: int, target_folder_id: int, tex
 
 def _clear_cross_day_carryover_from_source(source_folder_id: int, target_folder_id: int | None = None) -> None:
     """Nettoie un ancien report si le nouveau découpage n'en produit plus."""
-    _ensure_carryover_columns()
     clear_cross_day_carryover(
         source_folder_id=source_folder_id,
         target_folder_id=target_folder_id,
@@ -5099,7 +5097,6 @@ def _clear_cross_day_carryover_from_source(source_folder_id: int, target_folder_
 
 
 def _get_existing_carryover_out(source_folder_id: int, target_folder_id: int | None) -> str:
-    _ensure_carryover_columns()
     row = get_existing_carryover_out_row(source_folder_id)
     if not row:
         return ""
@@ -6782,7 +6779,6 @@ def start_generation_job(folder_id: int, platform_id: int, program_text: str,
 
 def get_job_from_db(folder_id):
     """Retourne le job DB pour un dossier, ou None."""
-    _ensure_carryover_columns()
     row = get_content_generation_job_by_folder(folder_id)
     if not row:
         return None
