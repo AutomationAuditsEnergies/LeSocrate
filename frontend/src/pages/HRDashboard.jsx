@@ -71,7 +71,7 @@ export default function HRDashboard() {
   // proportionnelle à l'irréversibilité de l'action).
   const [deleteConfirmTypedName, setDeleteConfirmTypedName] = useState('')
   const [showCreateModal, setShowCreateModal] = useState(false)
-  const [showAttendanceView, setShowAttendanceView] = useState(false)
+  const [expandedAttendancePlatform, setExpandedAttendancePlatform] = useState(null)
   const [newPlatformName, setNewPlatformName] = useState('')
   const [creating, setCreating] = useState(false)
   // Modules formation disponibles (produits persistants des pipelines terminées).
@@ -195,6 +195,17 @@ export default function HRDashboard() {
     setExpandedStudentsPlatform(prev => {
       const next = prev === platformId ? null : platformId
       if (next && !studentEmailsByPlatform[platformId]) fetchStudentEmails(platformId)
+      return next
+    })
+  }
+
+  const handleToggleAttendance = (platformId) => {
+    setExpandedAttendancePlatform(prev => {
+      const next = prev === platformId ? null : platformId
+      if (next) {
+        setAttendancePlatformId(String(platformId))
+        fetchAttendance(platformId, attendanceDate)
+      }
       return next
     })
   }
@@ -507,15 +518,15 @@ export default function HRDashboard() {
     })
   }
 
-  const handleSaveAttendance = async (student) => {
+  const handleSaveAttendance = async (student, platformId = attendancePlatformId, courseDate = attendanceDate) => {
     setAttendanceSavingStudentId(student.id)
     setAttendanceError('')
     try {
-      const resp = await apiFetch(`/api/hr/platforms/${attendancePlatformId}/attendance/${student.id}`, {
+      const resp = await apiFetch(`/api/hr/platforms/${platformId}/attendance/${student.id}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          course_date: attendanceDate,
+          course_date: courseDate,
           slots: student.attendance?.slots || [],
           status: student.attendance?.status || '',
           notes: student.attendance?.notes || '',
@@ -535,10 +546,13 @@ export default function HRDashboard() {
     }
   }
 
-  const handleExportAttendance = async () => {
-    if (!attendancePlatformId) return
+  const handleExportAttendance = async (week = null, platformId = attendancePlatformId) => {
+    if (!platformId) return
     try {
-      const resp = await apiFetch(`/api/hr/platforms/${attendancePlatformId}/attendance/export`)
+      const params = week?.week_start
+        ? `?week_start=${encodeURIComponent(week.week_start)}&week_end=${encodeURIComponent(week.week_end || week.week_start)}`
+        : ''
+      const resp = await apiFetch(`/api/hr/platforms/${platformId}/attendance/export${params}`)
       if (!resp.ok) {
         setAttendanceError('Impossible de générer l’export Excel')
         return
@@ -547,7 +561,9 @@ export default function HRDashboard() {
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
       a.href = url
-      a.download = `presences-${attendancePlatformId}.xlsx`
+      a.download = week?.week_start
+        ? `presences-${platformId}-semaine-${week.week_start}.xlsx`
+        : `presences-${platformId}.xlsx`
       a.click()
       URL.revokeObjectURL(url)
     } catch (e) {
@@ -609,7 +625,6 @@ export default function HRDashboard() {
     resetCreateForm()
     fetchModules()
     setFormationMode('new')
-    setShowAttendanceView(false)
     setShowModulesModal(false)
     setShowCreateModal(true)
   }
@@ -617,13 +632,11 @@ export default function HRDashboard() {
   const openCreateModal = () => {
     resetCreateForm()
     fetchModules()
-    setShowAttendanceView(false)
     setShowModulesModal(false)
     setShowCreateModal(true)
   }
 
   const showDashboardView = () => {
-    setShowAttendanceView(false)
     setShowModulesModal(false)
     setShowCreateModal(false)
     setModuleSearchQuery('')
@@ -631,23 +644,15 @@ export default function HRDashboard() {
 
   const showModulesView = () => {
     fetchModules()
-    setShowAttendanceView(false)
     setShowCreateModal(false)
     setShowModulesModal(true)
   }
 
-  const openAttendanceView = () => {
-    setShowCreateModal(false)
-    setShowModulesModal(false)
-    setModuleSearchQuery('')
-    setShowAttendanceView(true)
-  }
-
   useEffect(() => {
-    if (showAttendanceView && attendancePlatformId) {
-      fetchAttendance(attendancePlatformId, attendanceDate)
+    if (expandedAttendancePlatform) {
+      fetchAttendance(expandedAttendancePlatform, attendanceDate)
     }
-  }, [showAttendanceView, attendancePlatformId, attendanceDate])
+  }, [expandedAttendancePlatform, attendanceDate])
 
   const handleCreatePlatform = async () => {
     const teacherName = teacherFirstName.trim()
@@ -871,15 +876,9 @@ export default function HRDashboard() {
 
             <nav className="mt-5 flex items-end gap-10" aria-label="Navigation dashboard formations">
               <SkoolTab
-                active={!showModulesModal && !showCreateModal && !showAttendanceView}
+                active={!showModulesModal && !showCreateModal}
                 onClick={showDashboardView}
                 label="Mes professeurs IA"
-                colors={colors}
-              />
-              <SkoolTab
-                active={showAttendanceView}
-                onClick={openAttendanceView}
-                label="Présences"
                 colors={colors}
               />
               <SkoolTab
@@ -927,25 +926,7 @@ export default function HRDashboard() {
             </div>
           )}
 
-          {showAttendanceView ? (
-            <AttendanceRegisterView
-              colors={colors}
-              darkMode={darkMode}
-              platforms={platforms}
-              selectedPlatformId={attendancePlatformId}
-              onPlatformChange={setAttendancePlatformId}
-              courseDate={attendanceDate}
-              onCourseDateChange={setAttendanceDate}
-              data={attendanceData}
-              loading={attendanceLoading}
-              error={attendanceError}
-              savingStudentId={attendanceSavingStudentId}
-              onRefresh={() => fetchAttendance()}
-              onUpdateDraft={updateAttendanceDraft}
-              onSaveStudent={handleSaveAttendance}
-              onExport={handleExportAttendance}
-            />
-          ) : showModulesModal ? (
+          {showModulesModal ? (
             <ModulesCatalogueView
               colors={colors}
               modules={filteredModules}
@@ -1011,14 +992,26 @@ export default function HRDashboard() {
               darkMode={darkMode}
               studentEmailsByPlatform={studentEmailsByPlatform}
               expandedStudentsPlatform={expandedStudentsPlatform}
+              expandedAttendancePlatform={expandedAttendancePlatform}
               studentEmailsLoading={studentEmailsLoading}
               studentEmailsSaving={studentEmailsSaving}
               studentEmailDrafts={studentEmailDrafts}
+              attendanceDate={attendanceDate}
+              attendanceData={attendanceData}
+              attendanceLoading={attendanceLoading}
+              attendanceError={attendanceError}
+              attendanceSavingStudentId={attendanceSavingStudentId}
               onExpand={handleExpandPlatform}
               onToggleStudentEmails={handleToggleStudentEmails}
+              onToggleAttendance={handleToggleAttendance}
               onStudentEmailDraftChange={handleStudentEmailDraftChange}
               onAddStudentEmails={handleAddStudentEmails}
               onDeleteStudentEmail={handleDeleteStudentEmail}
+              onAttendanceDateChange={setAttendanceDate}
+              onRefreshAttendance={(platformId) => fetchAttendance(platformId, attendanceDate)}
+              onUpdateAttendanceDraft={updateAttendanceDraft}
+              onSaveAttendance={(student, platformId) => handleSaveAttendance(student, platformId, attendanceDate)}
+              onExportAttendance={(week, platformId) => handleExportAttendance(week, platformId)}
               onOpenPdfModal={(platform) => {
                 setSelectedPlatform(platform)
                 setShowPdfModal(true)
@@ -1532,14 +1525,26 @@ function PlatformCardsView({
   darkMode,
   studentEmailsByPlatform,
   expandedStudentsPlatform,
+  expandedAttendancePlatform,
   studentEmailsLoading,
   studentEmailsSaving,
   studentEmailDrafts,
+  attendanceDate,
+  attendanceData,
+  attendanceLoading,
+  attendanceError,
+  attendanceSavingStudentId,
   onExpand,
   onToggleStudentEmails,
+  onToggleAttendance,
   onStudentEmailDraftChange,
   onAddStudentEmails,
   onDeleteStudentEmail,
+  onAttendanceDateChange,
+  onRefreshAttendance,
+  onUpdateAttendanceDraft,
+  onSaveAttendance,
+  onExportAttendance,
   onOpenPdfModal,
   onOpenCourseTimeModal,
   onDeleteAudio,
@@ -1594,14 +1599,26 @@ function PlatformCardsView({
             darkMode={darkMode}
             studentEmails={studentEmailsByPlatform[p.id] || []}
             studentsExpanded={expandedStudentsPlatform === p.id}
+            attendanceExpanded={expandedAttendancePlatform === p.id}
+            attendanceDate={attendanceDate}
+            attendanceData={expandedAttendancePlatform === p.id ? attendanceData : null}
+            attendanceLoading={attendanceLoading && expandedAttendancePlatform === p.id}
+            attendanceError={expandedAttendancePlatform === p.id ? attendanceError : ''}
+            attendanceSavingStudentId={attendanceSavingStudentId}
             studentEmailsLoading={studentEmailsLoading === p.id}
             studentEmailsSaving={studentEmailsSaving === p.id}
             studentEmailDraft={studentEmailDrafts[p.id] || ''}
             onExpand={() => onExpand(p.id)}
             onToggleStudentEmails={() => onToggleStudentEmails(p.id)}
+            onToggleAttendance={() => onToggleAttendance(p.id)}
             onStudentEmailDraftChange={(value) => onStudentEmailDraftChange(p.id, value)}
             onAddStudentEmails={() => onAddStudentEmails(p.id)}
             onDeleteStudentEmail={(recipientId) => onDeleteStudentEmail(p.id, recipientId)}
+            onAttendanceDateChange={onAttendanceDateChange}
+            onRefreshAttendance={() => onRefreshAttendance(p.id)}
+            onUpdateAttendanceDraft={onUpdateAttendanceDraft}
+            onSaveAttendance={(student) => onSaveAttendance(student, p.id)}
+            onExportAttendance={(week) => onExportAttendance(week, p.id)}
             onOpenPdfModal={() => onOpenPdfModal(p)}
             onOpenCourseTimeModal={() => onOpenCourseTimeModal(p)}
             onDeleteAudio={(fn) => onDeleteAudio(p.id, fn)}
@@ -1953,6 +1970,274 @@ function AttendanceRegisterView({
         </div>
       )}
     </section>
+  )
+}
+
+function AttendanceCardPanel({
+  colors,
+  darkMode,
+  courseDate,
+  data,
+  loading,
+  error,
+  savingStudentId,
+  onCourseDateChange,
+  onRefresh,
+  onUpdateDraft,
+  onSaveStudent,
+  onExport,
+}) {
+  const inputStyle = {
+    backgroundColor: colors.cardBg,
+    color: colors.text,
+    border: `1px solid ${colors.border}`,
+  }
+  const students = data?.students || []
+  const weeks = data?.recent_weeks || []
+  const totals = students.reduce((acc, student) => {
+    acc.minutes += Number(student.attendance?.total_minutes || 0)
+    acc.saved += student.attendance?.source === 'saved' ? 1 : 0
+    return acc
+  }, { minutes: 0, saved: 0 })
+
+  const formatDate = (value) => {
+    if (!value) return ''
+    return new Date(`${value}T00:00:00`).toLocaleDateString('fr-FR')
+  }
+
+  const updateSlot = (studentId, index, field, value) => {
+    onUpdateDraft(studentId, (attendance = {}) => {
+      const slots = [...(attendance.slots || [])]
+      slots[index] = { ...(slots[index] || {}), [field]: value }
+      const total = attendanceMinutes(slots)
+      const nextStatus = total > 0 && attendance.status === 'absent' ? 'present' : attendance.status
+      return { ...attendance, slots, total_minutes: total, status: nextStatus || (total > 0 ? 'present' : 'absent') }
+    })
+  }
+
+  const addSlot = (studentId) => {
+    onUpdateDraft(studentId, (attendance = {}) => ({
+      ...attendance,
+      slots: [...(attendance.slots || []), { start: '09:00', end: '12:00' }],
+    }))
+  }
+
+  const removeSlot = (studentId, index) => {
+    onUpdateDraft(studentId, (attendance = {}) => {
+      const slots = (attendance.slots || []).filter((_, slotIndex) => slotIndex !== index)
+      const total = attendanceMinutes(slots)
+      return {
+        ...attendance,
+        slots,
+        total_minutes: total,
+        status: total > 0 ? (attendance.status || 'present') : 'absent',
+      }
+    })
+  }
+
+  return (
+    <div
+      className="mb-3 rounded-xl p-3"
+      style={{ backgroundColor: colors.innerBg, border: `1px solid ${colors.border}` }}
+    >
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <span className="text-sm font-semibold" style={{ color: colors.text }}>
+            Présence
+          </span>
+          <p className="mt-0.5 text-xs" style={{ color: colors.textMuted }}>
+            {students.length} élève{students.length > 1 ? 's' : ''} · {totals.saved} relevé{totals.saved > 1 ? 's' : ''} enregistré{totals.saved > 1 ? 's' : ''}
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => onExport(null)}
+          className="inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-semibold text-white transition-colors"
+          style={{ backgroundColor: '#8B5CF6' }}
+        >
+          <Icon name="download" className="text-sm" />
+          Excel complet
+        </button>
+      </div>
+
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        <input
+          type="date"
+          value={courseDate}
+          onChange={(e) => onCourseDateChange(e.target.value)}
+          className="min-w-0 flex-1 rounded-lg px-3 py-2 text-sm outline-none transition-shadow focus:ring-2 focus:ring-violet-500/30"
+          style={inputStyle}
+        />
+        <button
+          type="button"
+          onClick={onRefresh}
+          className="flex h-10 w-10 items-center justify-center rounded-lg transition-colors hover:bg-black/5 dark:hover:bg-white/5"
+          style={{ color: colors.textMuted, border: `1px solid ${colors.border}` }}
+          title="Actualiser les présences"
+          aria-label="Actualiser les présences"
+        >
+          <Icon name="refresh" className="text-base" />
+        </button>
+      </div>
+
+      {error && (
+        <div
+          className="mb-3 flex items-center gap-2 rounded-lg px-3 py-2 text-xs"
+          style={{
+            backgroundColor: darkMode ? 'rgba(127, 29, 29, 0.18)' : '#fef2f2',
+            border: darkMode ? '1px solid rgba(248, 113, 113, 0.28)' : '1px solid #fecaca',
+            color: darkMode ? '#fecaca' : '#991b1b',
+          }}
+        >
+          <Icon name="warning" className="text-sm" />
+          <span>{error}</span>
+        </div>
+      )}
+
+      <div className="mb-3 rounded-lg p-2" style={{ backgroundColor: colors.cardBg, border: `1px solid ${colors.border}` }}>
+        <div className="mb-2 flex items-center justify-between gap-2">
+          <span className="text-xs font-semibold" style={{ color: colors.text }}>
+            Fichiers Excel par semaine
+          </span>
+          <span className="text-[10px] tabular-nums" style={{ color: colors.textMuted }}>
+            {weeks.length}
+          </span>
+        </div>
+        {weeks.length === 0 ? (
+          <p className="py-2 text-xs" style={{ color: colors.textMuted }}>
+            Aucune semaine exportable pour le moment.
+          </p>
+        ) : (
+          <div className="max-h-32 space-y-1 overflow-y-auto pr-1">
+            {weeks.map((week) => (
+              <button
+                key={week.week_start}
+                type="button"
+                onClick={() => onExport(week)}
+                className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left transition-colors hover:bg-black/5 dark:hover:bg-white/5"
+                style={{ color: colors.textSecondary, border: `1px solid ${colors.border}` }}
+              >
+                <Icon name="table_chart" className="text-sm" style={{ color: colors.textMuted }} />
+                <span className="min-w-0 flex-1 truncate text-xs">
+                  Semaine du {formatDate(week.week_start)} au {formatDate(week.week_end)}
+                </span>
+                <Icon name="download" className="text-sm" style={{ color: colors.textMuted }} />
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {loading ? (
+        <div className="flex items-center justify-center py-5">
+          <div className="h-5 w-5 animate-spin rounded-full border-2" style={{ borderColor: colors.border, borderTopColor: '#8B5CF6' }} />
+        </div>
+      ) : students.length === 0 ? (
+        <p className="py-3 text-xs" style={{ color: colors.textMuted }}>
+          Aucun compte élève n’est rattaché à cette formation.
+        </p>
+      ) : (
+        <div className="max-h-[420px] space-y-2 overflow-y-auto pr-1">
+          {students.map((student) => {
+            const attendance = student.attendance || {}
+            const slots = attendance.slots || []
+            return (
+              <div
+                key={student.id}
+                className="rounded-lg p-2"
+                style={{ backgroundColor: colors.cardBg, border: `1px solid ${colors.border}` }}
+              >
+                <div className="mb-2 flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-semibold" style={{ color: colors.text }}>
+                      {student.prenom} {student.nom}
+                    </p>
+                    <p className="truncate text-xs" style={{ color: colors.textMuted }} title={student.email}>
+                      {student.email}
+                    </p>
+                  </div>
+                  <span className="flex-shrink-0 text-xs font-semibold tabular-nums" style={{ color: colors.textSecondary }}>
+                    {formatAttendanceMinutes(attendance.total_minutes || 0)}
+                  </span>
+                </div>
+
+                <div className="space-y-2">
+                  {slots.map((slot, index) => (
+                    <div key={`${student.id}-${index}`} className="flex items-center gap-1.5">
+                      <input
+                        type="time"
+                        value={slot.start || ''}
+                        onChange={(e) => updateSlot(student.id, index, 'start', e.target.value)}
+                        className="min-w-0 flex-1 rounded-lg px-2 py-1.5 text-xs outline-none"
+                        style={inputStyle}
+                      />
+                      <span className="text-xs" style={{ color: colors.textMuted }}>à</span>
+                      <input
+                        type="time"
+                        value={slot.end || ''}
+                        onChange={(e) => updateSlot(student.id, index, 'end', e.target.value)}
+                        className="min-w-0 flex-1 rounded-lg px-2 py-1.5 text-xs outline-none"
+                        style={inputStyle}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => removeSlot(student.id, index)}
+                        className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg transition-colors hover:bg-rose-500/10"
+                        style={{ color: colors.textMuted, border: `1px solid ${colors.border}` }}
+                        aria-label="Retirer le créneau"
+                      >
+                        <Icon name="close" className="text-sm" />
+                      </button>
+                    </div>
+                  ))}
+
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => addSlot(student.id)}
+                      className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium transition-colors hover:bg-black/5 dark:hover:bg-white/5"
+                      style={{ color: colors.textSecondary, border: `1px solid ${colors.border}` }}
+                    >
+                      <Icon name="add" className="text-sm" />
+                      Créneau
+                    </button>
+                    <select
+                      value={attendance.status || 'absent'}
+                      onChange={(e) => onUpdateDraft(student.id, { ...attendance, status: e.target.value })}
+                      className="min-w-0 flex-1 rounded-lg px-2.5 py-1.5 text-xs outline-none"
+                      style={inputStyle}
+                    >
+                      {Object.entries(ATTENDANCE_STATUS_LABELS).map(([value, label]) => (
+                        <option key={value} value={value}>{label}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <input
+                    type="text"
+                    value={attendance.notes || ''}
+                    onChange={(e) => onUpdateDraft(student.id, { ...attendance, notes: e.target.value })}
+                    placeholder="Retard, départ anticipé..."
+                    className="w-full rounded-lg px-2.5 py-1.5 text-xs outline-none"
+                    style={inputStyle}
+                  />
+
+                  <button
+                    type="button"
+                    onClick={() => onSaveStudent(student)}
+                    disabled={savingStudentId === student.id}
+                    className="w-full rounded-lg px-3 py-2 text-xs font-semibold text-white transition-colors disabled:cursor-not-allowed disabled:opacity-60"
+                    style={{ backgroundColor: '#8B5CF6' }}
+                  >
+                    {savingStudentId === student.id ? 'Enregistrement...' : 'Enregistrer la présence'}
+                  </button>
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -2967,8 +3252,12 @@ function AudioCard({ title, icon, bgColor, audios, iconColor, buttonColor }) {
 function PlatformCard({
   platform: p, expanded, audios, audiosLoading, playingAudio, pdfUploading,
   audioRef, colors, darkMode, studentEmails = [], studentsExpanded = false, studentEmailsLoading = false,
-  studentEmailsSaving = false, studentEmailDraft = '', onExpand, onToggleStudentEmails,
-  onStudentEmailDraftChange, onAddStudentEmails, onDeleteStudentEmail, onOpenPdfModal, onOpenCourseTimeModal,
+  studentEmailsSaving = false, studentEmailDraft = '', attendanceExpanded = false,
+  attendanceDate, attendanceData, attendanceLoading = false, attendanceError = '',
+  attendanceSavingStudentId = null, onExpand, onToggleStudentEmails, onToggleAttendance,
+  onStudentEmailDraftChange, onAddStudentEmails, onDeleteStudentEmail,
+  onAttendanceDateChange, onRefreshAttendance, onUpdateAttendanceDraft, onSaveAttendance,
+  onExportAttendance, onOpenPdfModal, onOpenCourseTimeModal,
   onDeleteAudio, onPlayAudio, onPdfUpload, onDeletePdf, onOpenCoursFolders, onDeletePlatform,
 }) {
   const pdfInputId = `pdf-input-${p.id}`
@@ -3337,6 +3626,33 @@ function PlatformCard({
               <span>Élèves</span>
             </button>
           )}
+
+          {/* Présence — relevés journaliers et exports Excel hebdomadaires */}
+          {p.active && (
+            <button
+              onClick={onToggleAttendance}
+              className="group flex items-center gap-2.5 rounded-lg px-3 py-2.5 text-sm font-medium tracking-tight transition-colors hover:bg-black/5 dark:hover:bg-white/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40"
+              style={
+                attendanceExpanded
+                  ? {
+                      backgroundColor: 'rgba(139, 92, 246, 0.10)',
+                      border: '1px solid rgba(139, 92, 246, 0.35)',
+                      color: darkMode ? '#c4b5fd' : '#7c3aed',
+                    }
+                  : {
+                      border: `1px solid ${colors.border}`,
+                      color: colors.textSecondary,
+                    }
+              }
+            >
+              <Icon
+                name="fact_check"
+                className="text-lg"
+                style={{ color: attendanceExpanded ? (darkMode ? '#c4b5fd' : '#7c3aed') : colors.textMuted }}
+              />
+              <span>Présence</span>
+            </button>
+          )}
         </div>
 
         {/* Audio list — dépliée pleine largeur sous la grille quand la tuile Audios est active */}
@@ -3484,6 +3800,23 @@ function PlatformCard({
               </div>
             )}
           </div>
+        )}
+
+        {attendanceExpanded && p.active && (
+          <AttendanceCardPanel
+            colors={colors}
+            darkMode={darkMode}
+            courseDate={attendanceDate}
+            data={attendanceData}
+            loading={attendanceLoading}
+            error={attendanceError}
+            savingStudentId={attendanceSavingStudentId}
+            onCourseDateChange={onAttendanceDateChange}
+            onRefresh={onRefreshAttendance}
+            onUpdateDraft={onUpdateAttendanceDraft}
+            onSaveStudent={onSaveAttendance}
+            onExport={onExportAttendance}
+          />
         )}
 
         {/* === Divider entre groupes A (boxed) et B (linky externes) === */}

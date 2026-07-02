@@ -279,6 +279,12 @@ def create_hr_blueprint(socketio):
         except ValueError:
             raise ValueError("Date du cours invalide")
 
+    def _attendance_week_bounds(value):
+        date_value = datetime.strptime(_parse_course_date(value), "%Y-%m-%d")
+        week_start = date_value - timedelta(days=date_value.weekday())
+        week_end = week_start + timedelta(days=6)
+        return week_start.strftime("%Y-%m-%d"), week_end.strftime("%Y-%m-%d")
+
     def _time_to_minutes(value):
         raw = str(value or "").strip()
         if not re.match(r"^\d{2}:\d{2}$", raw):
@@ -2262,6 +2268,36 @@ def create_hr_blueprint(socketio):
                 }
                 for row in cursor.fetchall()
             ]
+
+            cursor.execute(
+                """
+                SELECT course_date, COUNT(*), SUM(total_minutes)
+                FROM student_attendance_records
+                WHERE platform_id = ?
+                GROUP BY course_date
+                ORDER BY course_date DESC
+                LIMIT 120
+                """,
+                (platform_id,),
+            )
+            weeks_by_start = {}
+            for course_date_row, student_count, total_minutes in cursor.fetchall():
+                week_start, week_end = _attendance_week_bounds(course_date_row)
+                week = weeks_by_start.setdefault(week_start, {
+                    "week_start": week_start,
+                    "week_end": week_end,
+                    "date_count": 0,
+                    "student_count": 0,
+                    "total_minutes": 0,
+                })
+                week["date_count"] += 1
+                week["student_count"] += int(student_count or 0)
+                week["total_minutes"] += int(total_minutes or 0)
+            recent_weeks = sorted(
+                weeks_by_start.values(),
+                key=lambda item: item["week_start"],
+                reverse=True,
+            )[:12]
             conn.close()
 
             students = []
@@ -2296,6 +2332,7 @@ def create_hr_blueprint(socketio):
                 "course_date": course_date,
                 "students": students,
                 "recent_dates": recent_dates,
+                "recent_weeks": recent_weeks,
             }), 200
         except ValueError as exc:
             return jsonify({"success": False, "error": str(exc)}), 400
@@ -2393,16 +2430,29 @@ def create_hr_blueprint(socketio):
             if not platform:
                 conn.close()
                 return jsonify({"success": False, "error": "Plateforme introuvable"}), 404
+            week_start = request.args.get("week_start")
+            week_end = request.args.get("week_end")
+            where_sql = "ar.platform_id = ?"
+            query_params = [platform_id]
+            export_label = ""
+            if week_start or week_end:
+                start_date = _parse_course_date(week_start)
+                end_date = _parse_course_date(week_end or week_start)
+                if end_date < start_date:
+                    start_date, end_date = end_date, start_date
+                where_sql += " AND ar.course_date BETWEEN ? AND ?"
+                query_params.extend([start_date, end_date])
+                export_label = f"-semaine-{start_date}"
             cursor.execute(
-                """
+                f"""
                 SELECT ar.course_date, sp.nom, sp.prenom, sp.email, ar.status,
                        ar.slots_json, ar.total_minutes, ar.notes
                 FROM student_attendance_records ar
                 JOIN student_profiles sp ON sp.id = ar.student_profile_id
-                WHERE ar.platform_id = ?
+                WHERE {where_sql}
                 ORDER BY ar.course_date ASC, sp.nom COLLATE NOCASE, sp.prenom COLLATE NOCASE
                 """,
-                (platform_id,),
+                query_params,
             )
             records = []
             for course_date, nom, prenom, email, status, slots_json, total_minutes, notes in cursor.fetchall():
@@ -2422,7 +2472,7 @@ def create_hr_blueprint(socketio):
                 })
             conn.close()
             tmp_file = generate_attendance_excel_export(records, platform_name=platform[1])
-            filename = f"presences-{slugify(platform[1], fallback=f'plateforme-{platform_id}')}.xlsx"
+            filename = f"presences-{slugify(platform[1], fallback=f'plateforme-{platform_id}')}{export_label}.xlsx"
             return send_file(
                 tmp_file,
                 as_attachment=True,
