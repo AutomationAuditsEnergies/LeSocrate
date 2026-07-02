@@ -263,6 +263,7 @@ class PipelineRepositoryTest(unittest.TestCase):
         self.assertEqual([row["id"] for row in matches], [11, 10])
         self.assertEqual(matches[0]["content_status"], "completed")
         self.assertEqual(matches[0]["segments_completed"], 2)
+        self.assertEqual(repo.list_course_folder_ids_for_platform(7), [10, 11])
 
     def test_create_and_attach_course_folder_for_job(self):
         job_id = repo.create_pipeline_job(

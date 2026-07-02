@@ -1631,6 +1631,29 @@ def find_next_course_folder_id(platform_id: int, folder_id: int) -> int | None:
         conn.close()
 
 
+def list_course_folder_ids_for_platform(platform_id: int) -> list[int]:
+    ph = _placeholder()
+    query = f"""
+        SELECT id
+        FROM cours_folders
+        WHERE platform_id = {ph}
+        ORDER BY position ASC, id ASC
+    """
+    if _pipeline_primary_backend() == "postgres":
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, (platform_id,))
+                return [int(row["id"]) for row in cur.fetchall()]
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(query, (platform_id,))
+        return [int(row[0]) for row in cursor.fetchall()]
+    finally:
+        conn.close()
+
+
 def store_cross_day_carryover(
     *,
     source_folder_id: int,
