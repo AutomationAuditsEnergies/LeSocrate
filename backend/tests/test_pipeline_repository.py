@@ -1064,6 +1064,96 @@ class PipelineRepositoryTest(unittest.TestCase):
         )
         self.assertEqual(repo.get_content_segment_text_by_id(segment_id), "Segment corrige")
 
+    def test_script_slide_deck_helpers_use_repository_storage(self):
+        conn = sqlite3.connect(self.db_path)
+        conn.executescript(
+            """
+            ALTER TABLE platform_config ADD COLUMN source_module_id INTEGER;
+
+            INSERT INTO formation_pipeline_jobs
+                (id, platform_id, tp_name, total_hours, nb_days, status)
+            VALUES
+                (999, 7, 'TP Slides', 7, 1, 'completed');
+
+            INSERT INTO formation_modules
+                (id, source_pipeline_job_id, source_platform_id, tp_name, rncp_code, version, status)
+            VALUES
+                (77, 888, 42, 'Module Slides', 'RNCP777', 'v1', 'validated');
+
+            UPDATE platform_config
+            SET source_formation_id = 999, source_module_id = 77
+            WHERE id = 7;
+
+            INSERT INTO cours_folders (id, platform_id, name, position, formation_job_id)
+            VALUES (140, 7, 'Jour 1 - Slides', 0, 999);
+            """
+        )
+        conn.commit()
+        conn.close()
+
+        repo.reset_and_upsert_content_generation_job(
+            folder_id=140,
+            platform_id=7,
+            program_text="Programme",
+            program_title="TP Slides",
+            sub_parts_json='["Cours 1"]',
+            from_scratch=True,
+            module_contents_json='{}',
+        )
+        job = cgs.get_job_from_db(140)
+        cgs._save_segment_db(job["id"], 0, "Cours 1", 1, "Segment slide complet")
+
+        source = repo.get_script_slide_source_row(140)
+        self.assertEqual(source["folder_name"], "Jour 1 - Slides")
+        self.assertEqual(source["content_job_id"], job["id"])
+
+        formation_job = repo.get_formation_pipeline_job_identity(999)
+        self.assertEqual(formation_job["tp_name"], "TP Slides")
+
+        refs = repo.get_platform_slide_source_refs(7)
+        self.assertEqual(refs["source_formation_id"], 999)
+        self.assertEqual(refs["source_pipeline_job_id"], 888)
+        self.assertEqual(refs["source_platform_id"], 42)
+
+        repo.ensure_script_slide_decks_table()
+        deck_id = repo.insert_script_slide_deck(
+            folder_id=140,
+            content_job_id=job["id"],
+            formation_job_id=999,
+            platform_id=7,
+            generation_mode="script",
+            pace="normal",
+            max_slides=12,
+            model="model-slides",
+            slides_json='[{"slide_id":"s1"}]',
+            timeline_json='[{"slide_index":0}]',
+            stats_json='{"generation_mode":"script"}',
+            pipeline_debug_json='{"ok":true}',
+        )
+
+        latest = repo.get_latest_script_slide_deck_row(folder_id=140, content_job_id=job["id"])
+        self.assertEqual(latest["id"], deck_id)
+        self.assertEqual(latest["model"], "model-slides")
+
+        lookup_rows = repo.list_script_slide_deck_rows_for_audio_lookup(
+            platform_ids=[7],
+            job_ids=[999],
+            limit=10,
+        )
+        self.assertEqual([row["id"] for row in lookup_rows], [deck_id])
+
+        repo.update_script_slide_deck_audio_sync_row(
+            deck_id=deck_id,
+            slides_json='[{"slide_id":"s1","audio_filename":"cours_1.mp3"}]',
+            timeline_json='[{"slide_index":0,"audio_filename":"cours_1.mp3"}]',
+            stats_json='{"audio_sync":{"enabled":true}}',
+            pipeline_debug_json='{"audio_sync":{"mode":"test"}}',
+            audio_sync_json='{"timings":[{"audio_filename":"cours_1.mp3"}]}',
+        )
+        updated = repo.get_script_slide_deck_row(deck_id)
+        self.assertIn("cours_1.mp3", updated["slides_json"])
+        self.assertIn("timings", updated["audio_sync_json"])
+
 
 if __name__ == "__main__":
     unittest.main()

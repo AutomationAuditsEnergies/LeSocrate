@@ -23,11 +23,11 @@ import uuid as uuid_mod
 from difflib import SequenceMatcher
 from datetime import datetime
 
-from database.db import get_db_connection
 from repositories.pipeline_repository import (
     clear_cross_day_carryover,
     completed_content_segment_keys,
     delete_content_segments_for_job,
+    ensure_content_generation_carryover_columns,
     ensure_content_review_state_columns,
     find_next_course_folder_id,
     get_existing_carryover_out_row,
@@ -5053,21 +5053,7 @@ def _ensure_carryover_columns() -> None:
     global _CARRYOVER_COLUMNS_READY
     if _CARRYOVER_COLUMNS_READY:
         return
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("PRAGMA table_info(content_generation_jobs)")
-    cols = {row[1] for row in cursor.fetchall()}
-    wanted = {
-        "carryover_in_text": "TEXT DEFAULT ''",
-        "carryover_in_source_folder_id": "INTEGER",
-        "carryover_out_text": "TEXT DEFAULT ''",
-        "carryover_out_target_folder_id": "INTEGER",
-    }
-    for col, col_type in wanted.items():
-        if col not in cols:
-            cursor.execute(f"ALTER TABLE content_generation_jobs ADD COLUMN {col} {col_type}")
-    conn.commit()
-    conn.close()
+    ensure_content_generation_carryover_columns()
     _CARRYOVER_COLUMNS_READY = True
 
 

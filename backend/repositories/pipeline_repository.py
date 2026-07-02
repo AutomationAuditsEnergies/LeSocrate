@@ -2514,6 +2514,375 @@ def get_script_rules_row(*, folder_id: int, job_id: int) -> dict[str, Any] | Non
         conn.close()
 
 
+SCRIPT_SLIDE_DECK_COLUMNS = """
+    id, folder_id, content_job_id, formation_job_id, platform_id, pace,
+    max_slides, model, slides_json, timeline_json, stats_json,
+    pipeline_debug_json, audio_sync_json, created_at, updated_at
+"""
+
+
+def ensure_script_slide_decks_table() -> None:
+    """Ensure SQLite has script slide deck storage. Postgres schema owns this."""
+    if _pipeline_primary_backend() == "postgres":
+        return
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS script_slide_decks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                folder_id INTEGER NOT NULL,
+                content_job_id INTEGER NOT NULL,
+                formation_job_id INTEGER,
+                platform_id INTEGER,
+                generation_mode TEXT DEFAULT 'script',
+                pace TEXT,
+                max_slides INTEGER,
+                model TEXT,
+                slides_json TEXT NOT NULL,
+                timeline_json TEXT,
+                stats_json TEXT,
+                pipeline_debug_json TEXT,
+                audio_sync_json TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        cursor.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_script_slide_decks_folder
+            ON script_slide_decks(folder_id, content_job_id, created_at)
+            """
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def insert_script_slide_deck(
+    *,
+    folder_id: int,
+    content_job_id: int,
+    formation_job_id: int | None,
+    platform_id: int | None,
+    generation_mode: str,
+    pace: str,
+    max_slides: int,
+    model: str,
+    slides_json: str,
+    timeline_json: str,
+    stats_json: str,
+    pipeline_debug_json: str,
+) -> int:
+    ensure_script_slide_decks_table()
+    if _pipeline_primary_backend() == "postgres":
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO script_slide_decks
+                    (folder_id, content_job_id, formation_job_id, platform_id, generation_mode,
+                     pace, max_slides, model, slides_json, timeline_json, stats_json,
+                     pipeline_debug_json)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    RETURNING id
+                    """,
+                    (
+                        folder_id,
+                        content_job_id,
+                        formation_job_id,
+                        platform_id,
+                        generation_mode,
+                        pace,
+                        max_slides,
+                        model,
+                        slides_json,
+                        timeline_json,
+                        stats_json,
+                        pipeline_debug_json,
+                    ),
+                )
+                return int(cur.fetchone()["id"])
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            """
+            INSERT INTO script_slide_decks
+            (folder_id, content_job_id, formation_job_id, platform_id, generation_mode,
+             pace, max_slides, model, slides_json, timeline_json, stats_json,
+             pipeline_debug_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                folder_id,
+                content_job_id,
+                formation_job_id,
+                platform_id,
+                generation_mode,
+                pace,
+                max_slides,
+                model,
+                slides_json,
+                timeline_json,
+                stats_json,
+                pipeline_debug_json,
+            ),
+        )
+        deck_id = int(cursor.lastrowid)
+        conn.commit()
+        return deck_id
+    finally:
+        conn.close()
+
+
+def get_latest_script_slide_deck_row(
+    *,
+    folder_id: int,
+    content_job_id: int | None = None,
+) -> dict[str, Any] | None:
+    ensure_script_slide_decks_table()
+    ph = _placeholder()
+    params: list[Any] = [folder_id]
+    where = f"folder_id = {ph}"
+    if content_job_id is not None:
+        where += f" AND content_job_id = {ph}"
+        params.append(content_job_id)
+    query = f"""
+        SELECT {SCRIPT_SLIDE_DECK_COLUMNS}
+        FROM script_slide_decks
+        WHERE {where}
+        ORDER BY id DESC
+        LIMIT 1
+    """
+    if _pipeline_primary_backend() == "postgres":
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, params)
+                row = cur.fetchone()
+                return dict(row) if row else None
+
+    conn = _as_sqlite_row_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(query, params)
+        row = cursor.fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def get_script_slide_deck_row(deck_id: int) -> dict[str, Any] | None:
+    ensure_script_slide_decks_table()
+    ph = _placeholder()
+    query = f"""
+        SELECT {SCRIPT_SLIDE_DECK_COLUMNS}
+        FROM script_slide_decks
+        WHERE id = {ph}
+    """
+    if _pipeline_primary_backend() == "postgres":
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, (deck_id,))
+                row = cur.fetchone()
+                return dict(row) if row else None
+
+    conn = _as_sqlite_row_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(query, (deck_id,))
+        row = cursor.fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def list_script_slide_deck_rows_for_audio_lookup(
+    *,
+    platform_ids: list[int] | None = None,
+    job_ids: list[int] | None = None,
+    limit: int = 200,
+) -> list[dict[str, Any]]:
+    ensure_script_slide_decks_table()
+    where_parts: list[str] = []
+    params: list[Any] = []
+    platform_placeholders, platform_params = _in_clause([int(pid) for pid in (platform_ids or [])])
+    if platform_placeholders:
+        where_parts.append(f"platform_id IN ({platform_placeholders})")
+        params.extend(platform_params)
+    job_placeholders, job_params = _in_clause([int(jid) for jid in (job_ids or [])])
+    if job_placeholders:
+        where_parts.append(
+            f"(formation_job_id IN ({job_placeholders}) OR content_job_id IN ({job_placeholders}))"
+        )
+        params.extend(job_params)
+        params.extend(job_params)
+    where_sql = f"WHERE {' OR '.join(where_parts)}" if where_parts else ""
+    ph = _placeholder()
+    query = f"""
+        SELECT {SCRIPT_SLIDE_DECK_COLUMNS}
+        FROM script_slide_decks
+        {where_sql}
+        ORDER BY id DESC
+        LIMIT {ph}
+    """
+    params.append(limit)
+    if _pipeline_primary_backend() == "postgres":
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, params)
+                return [dict(row) for row in cur.fetchall()]
+
+    conn = _as_sqlite_row_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(query, params)
+        return [dict(row) for row in cursor.fetchall()]
+    finally:
+        conn.close()
+
+
+def update_script_slide_deck_audio_sync_row(
+    *,
+    deck_id: int,
+    slides_json: str,
+    timeline_json: str,
+    stats_json: str,
+    pipeline_debug_json: str,
+    audio_sync_json: str,
+) -> None:
+    ph = _placeholder()
+    now_sql = "NOW()" if _pipeline_primary_backend() == "postgres" else "CURRENT_TIMESTAMP"
+    query = f"""
+        UPDATE script_slide_decks
+        SET slides_json = {ph}, timeline_json = {ph}, stats_json = {ph},
+            pipeline_debug_json = {ph}, audio_sync_json = {ph},
+            updated_at = {now_sql}
+        WHERE id = {ph}
+    """
+    params = (slides_json, timeline_json, stats_json, pipeline_debug_json, audio_sync_json, deck_id)
+    if _pipeline_primary_backend() == "postgres":
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, params)
+        return
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(query, params)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_script_slide_source_row(folder_id: int) -> dict[str, Any] | None:
+    ph = _placeholder()
+    query = f"""
+        SELECT cf.id AS folder_id, cf.name AS folder_name, cf.platform_id AS folder_platform_id,
+               cg.id AS content_job_id, cg.program_title, cg.sub_parts,
+               cg.status AS content_status, cg.total_words
+        FROM cours_folders cf
+        JOIN content_generation_jobs cg ON cg.folder_id = cf.id
+        WHERE cf.id = {ph}
+    """
+    if _pipeline_primary_backend() == "postgres":
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, (folder_id,))
+                row = cur.fetchone()
+                return dict(row) if row else None
+
+    conn = _as_sqlite_row_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(query, (folder_id,))
+        row = cursor.fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def get_formation_pipeline_job_identity(job_id: int) -> dict[str, Any] | None:
+    ph = _placeholder()
+    query = f"""
+        SELECT id, tp_name, platform_id
+        FROM formation_pipeline_jobs
+        WHERE id = {ph}
+    """
+    if _pipeline_primary_backend() == "postgres":
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, (job_id,))
+                row = cur.fetchone()
+                return dict(row) if row else None
+
+    conn = _as_sqlite_row_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(query, (job_id,))
+        row = cursor.fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def get_platform_slide_source_refs(platform_id: int) -> dict[str, Any] | None:
+    ph = _placeholder()
+    query = f"""
+        SELECT pc.source_formation_id,
+               pc.source_module_id,
+               fm.source_pipeline_job_id,
+               fm.source_platform_id
+        FROM platform_config pc
+        LEFT JOIN formation_modules fm ON fm.id = pc.source_module_id
+        WHERE pc.id = {ph}
+    """
+    if _pipeline_primary_backend() == "postgres":
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, (platform_id,))
+                row = cur.fetchone()
+                return dict(row) if row else None
+
+    conn = _as_sqlite_row_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(query, (platform_id,))
+        row = cursor.fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def ensure_content_generation_carryover_columns() -> None:
+    """Ensure SQLite has cross-day carryover columns. Postgres schema owns this."""
+    if _pipeline_primary_backend() == "postgres":
+        return
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("PRAGMA table_info(content_generation_jobs)")
+        cols = {row[1] for row in cursor.fetchall()}
+        wanted = {
+            "carryover_in_text": "TEXT DEFAULT ''",
+            "carryover_in_source_folder_id": "INTEGER",
+            "carryover_out_text": "TEXT DEFAULT ''",
+            "carryover_out_target_folder_id": "INTEGER",
+        }
+        for col, col_type in wanted.items():
+            if col not in cols:
+                cursor.execute(f"ALTER TABLE content_generation_jobs ADD COLUMN {col} {col_type}")
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def store_cross_day_carryover(
     *,
     source_folder_id: int,
