@@ -147,8 +147,25 @@ def _make_pipeline_db():
             reviewed INTEGER DEFAULT 0,
             review_error TEXT,
             review_signature TEXT,
+            text_content_pre_review TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             UNIQUE(job_id, sub_part_index, passe)
+        );
+
+        CREATE TABLE formation_modules (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            center_account_id INTEGER,
+            rncp_code TEXT,
+            tp_name TEXT NOT NULL,
+            version TEXT NOT NULL,
+            status TEXT DEFAULT 'validated',
+            source_pipeline_job_id INTEGER UNIQUE,
+            source_platform_id INTEGER,
+            voice_type TEXT,
+            voice_updated_at TIMESTAMP,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            validated_at TIMESTAMP,
+            archived_at TIMESTAMP
         );
 
         CREATE TABLE formation_knowledge_base (
@@ -750,6 +767,65 @@ class PipelineRepositoryTest(unittest.TestCase):
         self.assertEqual(row[5], 0)
         self.assertIsNone(row[6])
         self.assertEqual(row[7], "Texte a reviser")
+
+    def test_health_helpers_use_repository_storage(self):
+        job_id = repo.create_pipeline_job(
+            platform_id=7,
+            tp_name="TP Health",
+            rncp_code="RNCP999",
+            total_hours=14,
+            nb_days=2,
+        )
+        conn = sqlite3.connect(self.db_path)
+        conn.executescript(
+            f"""
+            INSERT INTO cours_folders (id, platform_id, name, position, formation_job_id)
+            VALUES
+                (110, 7, 'Jour 1 — Health', 0, {job_id}),
+                (111, 7, 'Jour 2 — Health', 1, {job_id});
+
+            INSERT INTO content_generation_jobs
+                (id, folder_id, platform_id, program_text, program_title, sub_parts, status)
+            VALUES
+                (210, 110, 7, 'p', 'TP', '["Cours 1"]', 'completed'),
+                (211, 111, 7, 'p', 'TP', '["Cours 1"]', 'idle');
+
+            INSERT INTO content_generation_segments
+                (job_id, sub_part_index, sub_part_name, passe, status, text_content,
+                 word_count, dirty, humanized, humanization_error, reviewed, review_error,
+                 text_content_pre_review)
+            VALUES
+                (210, 0, 'Cours 1', 1, 'completed', 'Texte 1', 2, 1, 0, NULL, 1, NULL, 'Avant 1'),
+                (210, 0, 'Cours 1', 2, 'completed', 'Texte 2', 2, 0, 1, NULL, 0, NULL, NULL),
+                (211, 0, 'Cours 1', 1, 'pending', 'Texte 3', 2, 0, 0, NULL, 0, NULL, NULL);
+
+            INSERT INTO formation_modules
+                (source_pipeline_job_id, source_platform_id, tp_name, rncp_code, version, status)
+            VALUES
+                ({job_id}, 7, 'TP Health', 'RNCP999', 'v1', 'validated');
+            """
+        )
+        conn.commit()
+        conn.close()
+
+        folders = repo.list_health_course_folder_rows([110, 111])
+        self.assertEqual([row["id"] for row in folders], [110, 111])
+        self.assertEqual(folders[0]["content_job_id"], 210)
+        self.assertEqual(folders[1]["content_status"], "idle")
+
+        self.assertEqual(repo.count_completed_segments_for_folders([110, 111]), 2)
+        self.assertEqual(repo.count_segments_with_pre_review_snapshot_for_folders([110, 111]), 1)
+        self.assertEqual(repo.count_unhumanized_segments_without_error_for_folders([110, 111]), 1)
+        self.assertEqual(repo.count_unreviewed_segments_without_error_for_folders([110, 111]), 1)
+        self.assertEqual(repo.count_dirty_completed_segments_for_folders([110, 111]), 1)
+
+        docx_state = repo.get_content_job_docx_state(210)
+        self.assertEqual(docx_state["completed_count"], 2)
+        self.assertEqual(docx_state["sub_parts"], '["Cours 1"]')
+
+        module = repo.get_formation_module_for_pipeline_job(job_id)
+        self.assertEqual(module["version"], "v1")
+        self.assertEqual(module["status"], "validated")
 
 
 if __name__ == "__main__":

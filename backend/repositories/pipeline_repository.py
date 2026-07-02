@@ -1713,6 +1713,159 @@ def list_course_folder_ids_for_platform(platform_id: int) -> list[int]:
         conn.close()
 
 
+def _in_clause(values: list[Any] | tuple[Any, ...]) -> tuple[str, list[Any]]:
+    items = list(values or [])
+    if not items:
+        return "", []
+    return ", ".join([_placeholder()] * len(items)), items
+
+
+def list_health_course_folder_rows(folder_ids: list[int]) -> list[dict[str, Any]]:
+    placeholders, params = _in_clause([int(fid) for fid in folder_ids])
+    if not placeholders:
+        return []
+    query = f"""
+        SELECT cf.id, cf.name, cf.position,
+               cj.id AS content_job_id, cj.status AS content_status
+        FROM cours_folders cf
+        LEFT JOIN content_generation_jobs cj ON cj.folder_id = cf.id
+        WHERE cf.id IN ({placeholders})
+        ORDER BY cf.position ASC
+    """
+    if _pipeline_primary_backend() == "postgres":
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, params)
+                return [dict(row) for row in cur.fetchall()]
+
+    conn = _as_sqlite_row_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(query, params)
+        return [dict(row) for row in cursor.fetchall()]
+    finally:
+        conn.close()
+
+
+def _count_completed_segments_for_folder_filter(folder_ids: list[int], extra_sql: str = "") -> int:
+    placeholders, params = _in_clause([int(fid) for fid in folder_ids])
+    if not placeholders:
+        return 0
+    query = f"""
+        SELECT COUNT(*) AS total
+        FROM content_generation_segments s
+        JOIN content_generation_jobs cj ON cj.id = s.job_id
+        WHERE cj.folder_id IN ({placeholders})
+          AND s.status = 'completed'
+          {extra_sql}
+    """
+    if _pipeline_primary_backend() == "postgres":
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, params)
+                return int(cur.fetchone()["total"] or 0)
+
+    conn = _as_sqlite_row_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(query, params)
+        return int(cursor.fetchone()["total"] or 0)
+    finally:
+        conn.close()
+
+
+def count_completed_segments_for_folders(folder_ids: list[int]) -> int:
+    return _count_completed_segments_for_folder_filter(folder_ids)
+
+
+def count_segments_with_pre_review_snapshot_for_folders(folder_ids: list[int]) -> int:
+    return _count_completed_segments_for_folder_filter(
+        folder_ids,
+        "AND s.text_content_pre_review IS NOT NULL",
+    )
+
+
+def count_unhumanized_segments_without_error_for_folders(folder_ids: list[int]) -> int:
+    if _pipeline_primary_backend() == "postgres":
+        return _count_completed_segments_for_folder_filter(
+            folder_ids,
+            "AND COALESCE(s.humanized, FALSE) = FALSE AND s.humanization_error IS NULL",
+        )
+    return _count_completed_segments_for_folder_filter(
+        folder_ids,
+        "AND COALESCE(s.humanized, 0) = 0 AND s.humanization_error IS NULL",
+    )
+
+
+def count_unreviewed_segments_without_error_for_folders(folder_ids: list[int]) -> int:
+    if _pipeline_primary_backend() == "postgres":
+        return _count_completed_segments_for_folder_filter(
+            folder_ids,
+            "AND COALESCE(s.reviewed, FALSE) = FALSE AND s.review_error IS NULL",
+        )
+    return _count_completed_segments_for_folder_filter(
+        folder_ids,
+        "AND COALESCE(s.reviewed, 0) = 0 AND s.review_error IS NULL",
+    )
+
+
+def count_dirty_completed_segments_for_folders(folder_ids: list[int]) -> int:
+    if _pipeline_primary_backend() == "postgres":
+        return _count_completed_segments_for_folder_filter(folder_ids, "AND s.dirty = TRUE")
+    return _count_completed_segments_for_folder_filter(folder_ids, "AND s.dirty = 1")
+
+
+def get_content_job_docx_state(content_job_id: int) -> dict[str, Any] | None:
+    ph = _placeholder()
+    query = f"""
+        SELECT COUNT(*) AS completed_count, cj.sub_parts
+        FROM content_generation_jobs cj
+        LEFT JOIN content_generation_segments s
+          ON s.job_id = cj.id AND s.status = 'completed'
+        WHERE cj.id = {ph}
+        GROUP BY cj.id, cj.sub_parts
+    """
+    if _pipeline_primary_backend() == "postgres":
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, (content_job_id,))
+                row = cur.fetchone()
+                return dict(row) if row else None
+
+    conn = _as_sqlite_row_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(query, (content_job_id,))
+        row = cursor.fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def get_formation_module_for_pipeline_job(job_id: int) -> dict[str, Any] | None:
+    ph = _placeholder()
+    query = f"""
+        SELECT id, version, status
+        FROM formation_modules
+        WHERE source_pipeline_job_id = {ph}
+    """
+    if _pipeline_primary_backend() == "postgres":
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, (job_id,))
+                row = cur.fetchone()
+                return dict(row) if row else None
+
+    conn = _as_sqlite_row_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(query, (job_id,))
+        row = cursor.fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
 def store_cross_day_carryover(
     *,
     source_folder_id: int,
