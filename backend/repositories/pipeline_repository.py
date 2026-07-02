@@ -2212,6 +2212,26 @@ def get_content_segment_row_for_key(
         conn.close()
 
 
+def get_content_segment_text_by_id(segment_id: int) -> str:
+    ph = _placeholder()
+    query = f"SELECT text_content FROM content_generation_segments WHERE id = {ph}"
+    if _pipeline_primary_backend() == "postgres":
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, (segment_id,))
+                row = cur.fetchone()
+                return (row["text_content"] or "") if row else ""
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(query, (segment_id,))
+        row = cursor.fetchone()
+        return (row[0] or "") if row else ""
+    finally:
+        conn.close()
+
+
 def mark_script_annotation_applied(annotation_id: int) -> None:
     ph = _placeholder()
     now_sql = "NOW()" if _pipeline_primary_backend() == "postgres" else "CURRENT_TIMESTAMP"
@@ -2289,6 +2309,207 @@ def mark_script_annotation_rejected(*, annotation_id: int, folder_id: int, job_i
         changed = int(cursor.rowcount or 0)
         conn.commit()
         return changed
+    finally:
+        conn.close()
+
+
+def ensure_script_rules_table() -> None:
+    """Ensure SQLite has script rules storage. Postgres schema owns this."""
+    if _pipeline_primary_backend() == "postgres":
+        return
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS content_script_rules (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                folder_id INTEGER NOT NULL,
+                job_id INTEGER NOT NULL,
+                rules_markdown TEXT NOT NULL DEFAULT '',
+                rules_count INTEGER DEFAULT 0,
+                source_annotations_count INTEGER DEFAULT 0,
+                model TEXT,
+                markdown_path TEXT,
+                generated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(folder_id, job_id)
+            )
+            """
+        )
+        cursor.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_content_script_rules_folder_job
+            ON content_script_rules(folder_id, job_id)
+            """
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_script_rules_context(folder_id: int) -> dict[str, Any] | None:
+    ph = _placeholder()
+    query = f"""
+        SELECT j.id AS job_id, j.platform_id, j.program_title, f.name AS folder_name
+        FROM content_generation_jobs j
+        JOIN cours_folders f ON f.id = j.folder_id
+        WHERE j.folder_id = {ph}
+    """
+    if _pipeline_primary_backend() == "postgres":
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, (folder_id,))
+                row = cur.fetchone()
+                return dict(row) if row else None
+
+    conn = _as_sqlite_row_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(query, (folder_id,))
+        row = cursor.fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def list_script_rule_annotation_rows(*, folder_id: int, job_id: int) -> list[dict[str, Any]]:
+    ensure_script_annotations_table()
+    ph = _placeholder()
+    query = f"""
+        SELECT id, source_type, selected_text, comment, original_paragraph,
+               proposed_text, correction_status, bloc_number, filename
+        FROM content_script_annotations
+        WHERE folder_id = {ph} AND job_id = {ph}
+          AND status != 'deleted'
+          AND correction_status IN ('applied', 'rejected', 'proposed')
+        ORDER BY created_at ASC, id ASC
+    """
+    if _pipeline_primary_backend() == "postgres":
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, (folder_id, job_id))
+                return [dict(row) for row in cur.fetchall()]
+
+    conn = _as_sqlite_row_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(query, (folder_id, job_id))
+        return [dict(row) for row in cursor.fetchall()]
+    finally:
+        conn.close()
+
+
+def upsert_generated_script_rules(
+    *,
+    folder_id: int,
+    job_id: int,
+    rules_markdown: str,
+    rules_count: int,
+    source_annotations_count: int,
+    model: str,
+    markdown_path: str,
+) -> None:
+    ensure_script_rules_table()
+    ph = _placeholder()
+    query = f"""
+        INSERT INTO content_script_rules
+            (folder_id, job_id, rules_markdown, rules_count, source_annotations_count,
+             model, markdown_path, generated_at, updated_at)
+        VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        ON CONFLICT(folder_id, job_id) DO UPDATE SET
+            rules_markdown = excluded.rules_markdown,
+            rules_count = excluded.rules_count,
+            source_annotations_count = excluded.source_annotations_count,
+            model = excluded.model,
+            markdown_path = excluded.markdown_path,
+            generated_at = CURRENT_TIMESTAMP,
+            updated_at = CURRENT_TIMESTAMP
+    """
+    params = (
+        folder_id,
+        job_id,
+        rules_markdown,
+        rules_count,
+        source_annotations_count,
+        model,
+        markdown_path,
+    )
+    if _pipeline_primary_backend() == "postgres":
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, params)
+        return
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(query, params)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def upsert_manual_script_rules(
+    *,
+    folder_id: int,
+    job_id: int,
+    rules_markdown: str,
+    rules_count: int,
+    markdown_path: str,
+) -> None:
+    ensure_script_rules_table()
+    ph = _placeholder()
+    query = f"""
+        INSERT INTO content_script_rules
+            (folder_id, job_id, rules_markdown, rules_count, source_annotations_count,
+             model, markdown_path, generated_at, updated_at)
+        VALUES ({ph}, {ph}, {ph}, {ph}, 0, 'manual', {ph}, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        ON CONFLICT(folder_id, job_id) DO UPDATE SET
+            rules_markdown = excluded.rules_markdown,
+            rules_count = excluded.rules_count,
+            markdown_path = excluded.markdown_path,
+            updated_at = CURRENT_TIMESTAMP
+    """
+    params = (folder_id, job_id, rules_markdown, rules_count, markdown_path)
+    if _pipeline_primary_backend() == "postgres":
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, params)
+        return
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(query, params)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_script_rules_row(*, folder_id: int, job_id: int) -> dict[str, Any] | None:
+    ensure_script_rules_table()
+    ph = _placeholder()
+    query = f"""
+        SELECT rules_markdown, rules_count, source_annotations_count,
+               model, markdown_path, generated_at, updated_at
+        FROM content_script_rules
+        WHERE folder_id = {ph} AND job_id = {ph}
+    """
+    if _pipeline_primary_backend() == "postgres":
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, (folder_id, job_id))
+                row = cur.fetchone()
+                return dict(row) if row else None
+
+    conn = _as_sqlite_row_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(query, (folder_id, job_id))
+        row = cursor.fetchone()
+        return dict(row) if row else None
     finally:
         conn.close()
 

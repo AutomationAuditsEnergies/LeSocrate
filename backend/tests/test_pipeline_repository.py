@@ -933,6 +933,137 @@ class PipelineRepositoryTest(unittest.TestCase):
             1,
         )
 
+    def test_script_rules_helpers_use_repository_storage(self):
+        conn = sqlite3.connect(self.db_path)
+        conn.execute(
+            """
+            INSERT INTO cours_folders (id, platform_id, name, position, formation_job_id)
+            VALUES (130, 7, 'Jour 1 - Rules', 0, NULL)
+            """
+        )
+        conn.commit()
+        conn.close()
+
+        repo.reset_and_upsert_content_generation_job(
+            folder_id=130,
+            platform_id=7,
+            program_text="Programme",
+            program_title="TP Rules",
+            sub_parts_json='["Cours 1"]',
+            from_scratch=True,
+            module_contents_json='{}',
+        )
+        job = cgs.get_job_from_db(130)
+        cgs._save_segment_db(job["id"], 0, "Cours 1", 1, "Segment a corriger")
+
+        repo.ensure_script_annotations_table()
+        applied_id = repo.create_script_annotation_row(
+            folder_id=130,
+            job_id=job["id"],
+            source_type="segment",
+            sub_part_index=0,
+            passe=1,
+            bloc_number=None,
+            filename="",
+            selected_text="corriger",
+            comment="plus oral",
+            original_paragraph="Segment a corriger",
+        )
+        repo.update_script_annotation_correction(
+            annotation_id=applied_id,
+            folder_id=130,
+            job_id=job["id"],
+            original_paragraph="Segment a corriger",
+            proposed_text="Segment corrige",
+            correction_status="applied",
+            correction_error=None,
+        )
+        proposed_id = repo.create_script_annotation_row(
+            folder_id=130,
+            job_id=job["id"],
+            source_type="course",
+            sub_part_index=None,
+            passe=None,
+            bloc_number=1,
+            filename="bloc_1.mp3",
+            selected_text="texte propose",
+            comment="test",
+            original_paragraph="texte propose",
+        )
+        repo.update_script_annotation_correction(
+            annotation_id=proposed_id,
+            folder_id=130,
+            job_id=job["id"],
+            original_paragraph="texte propose",
+            proposed_text="texte propose modifie",
+            correction_status="proposed",
+            correction_error=None,
+        )
+        deleted_id = repo.create_script_annotation_row(
+            folder_id=130,
+            job_id=job["id"],
+            source_type="segment",
+            sub_part_index=0,
+            passe=1,
+            bloc_number=None,
+            filename="",
+            selected_text="ignore",
+            comment="ignore",
+            original_paragraph="ignore",
+        )
+        repo.mark_script_annotation_deleted(
+            annotation_id=deleted_id,
+            folder_id=130,
+            job_id=job["id"],
+        )
+
+        rule_annotations = repo.list_script_rule_annotation_rows(folder_id=130, job_id=job["id"])
+        self.assertEqual([row["id"] for row in rule_annotations], [applied_id, proposed_id])
+        self.assertEqual(rule_annotations[0]["correction_status"], "applied")
+
+        context = repo.get_script_rules_context(130)
+        self.assertEqual(context["job_id"], job["id"])
+        self.assertEqual(context["folder_name"], "Jour 1 - Rules")
+
+        repo.ensure_script_rules_table()
+        repo.upsert_generated_script_rules(
+            folder_id=130,
+            job_id=job["id"],
+            rules_markdown="# Règles\n\n## Règle 1\n",
+            rules_count=1,
+            source_annotations_count=2,
+            model="model-a",
+            markdown_path="/tmp/generated-rules.md",
+        )
+        rules = repo.get_script_rules_row(folder_id=130, job_id=job["id"])
+        self.assertEqual(rules["rules_count"], 1)
+        self.assertEqual(rules["source_annotations_count"], 2)
+        self.assertEqual(rules["model"], "model-a")
+
+        repo.upsert_manual_script_rules(
+            folder_id=130,
+            job_id=job["id"],
+            rules_markdown="# Manuel\n\n## Règle 2\n",
+            rules_count=1,
+            markdown_path="/tmp/manual-rules.md",
+        )
+        manual_rules = repo.get_script_rules_row(folder_id=130, job_id=job["id"])
+        self.assertEqual(manual_rules["rules_markdown"], "# Manuel\n\n## Règle 2\n")
+        self.assertEqual(manual_rules["markdown_path"], "/tmp/manual-rules.md")
+        self.assertEqual(manual_rules["source_annotations_count"], 2)
+        self.assertEqual(manual_rules["model"], "model-a")
+
+        segments = repo.list_completed_content_segment_rows(job["id"])
+        self.assertEqual(len(segments), 1)
+        segment_id = segments[0]["id"]
+        self.assertEqual(repo.get_content_segment_text_by_id(segment_id), "Segment a corriger")
+        repo.update_content_segment_plan_repair(
+            segment_id=segment_id,
+            text_content="Segment corrige",
+            word_count=2,
+        )
+        self.assertEqual(repo.get_content_segment_text_by_id(segment_id), "Segment corrige")
+
 
 if __name__ == "__main__":
     unittest.main()
