@@ -799,6 +799,333 @@ def knowledge_base_stats_rows(job_id: int) -> list[dict[str, Any]]:
         conn.close()
 
 
+def reset_and_upsert_content_generation_job(
+    *,
+    folder_id: int,
+    platform_id: int,
+    program_text: str,
+    program_title: str,
+    sub_parts_json: str,
+    from_scratch: bool,
+    module_contents_json: str,
+) -> None:
+    """Reset segments for a folder and create/update its content generation job."""
+    if _pipeline_primary_backend() == "postgres":
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    DELETE FROM content_generation_segments
+                    WHERE job_id IN (
+                        SELECT id FROM content_generation_jobs WHERE folder_id = %s
+                    )
+                    """,
+                    (folder_id,),
+                )
+                cur.execute(
+                    """
+                    INSERT INTO content_generation_jobs
+                        (folder_id, platform_id, program_text, program_title, sub_parts,
+                         from_scratch, module_contents,
+                         status, current_sub_part, current_passe, total_words, error_message,
+                         updated_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, 'idle', 0, 1, 0, NULL, NOW())
+                    ON CONFLICT (folder_id) DO UPDATE SET
+                        platform_id = EXCLUDED.platform_id,
+                        program_text = EXCLUDED.program_text,
+                        program_title = EXCLUDED.program_title,
+                        sub_parts = EXCLUDED.sub_parts,
+                        from_scratch = EXCLUDED.from_scratch,
+                        module_contents = EXCLUDED.module_contents,
+                        status = 'idle',
+                        current_sub_part = 0,
+                        current_passe = 1,
+                        total_words = 0,
+                        error_message = NULL,
+                        updated_at = NOW()
+                    """,
+                    (
+                        folder_id,
+                        platform_id,
+                        program_text,
+                        program_title,
+                        sub_parts_json,
+                        bool(from_scratch),
+                        module_contents_json,
+                    ),
+                )
+        return
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            """
+            DELETE FROM content_generation_segments WHERE job_id IN (
+                SELECT id FROM content_generation_jobs WHERE folder_id = ?
+            )
+            """,
+            (folder_id,),
+        )
+        cursor.execute(
+            """
+            INSERT OR REPLACE INTO content_generation_jobs
+                (folder_id, platform_id, program_text, program_title, sub_parts,
+                 from_scratch, module_contents,
+                 status, current_sub_part, current_passe, total_words, error_message)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 'idle', 0, 1, 0, NULL)
+            """,
+            (
+                folder_id,
+                platform_id,
+                program_text,
+                program_title,
+                sub_parts_json,
+                1 if from_scratch else 0,
+                module_contents_json,
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_content_generation_job_by_folder(folder_id: int) -> dict[str, Any] | None:
+    ph = _placeholder()
+    query = f"""
+        SELECT cgj.id, cgj.platform_id, cgj.program_text, cgj.program_title,
+               cgj.sub_parts, cgj.status, cgj.current_sub_part,
+               cgj.current_passe, cgj.total_words, cgj.error_message,
+               cgj.from_scratch, cgj.module_contents,
+               cgj.carryover_in_text, cgj.carryover_in_source_folder_id,
+               cgj.carryover_out_text, cgj.carryover_out_target_folder_id,
+               cf.formation_job_id, cf.name, cf.position,
+               fpj.nb_days, fpj.total_hours
+        FROM content_generation_jobs cgj
+        LEFT JOIN cours_folders cf ON cf.id = cgj.folder_id
+        LEFT JOIN formation_pipeline_jobs fpj ON fpj.id = cf.formation_job_id
+        WHERE cgj.folder_id = {ph}
+    """
+    if _pipeline_primary_backend() == "postgres":
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, (folder_id,))
+                row = cur.fetchone()
+                return dict(row) if row else None
+
+    conn = _as_sqlite_row_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(query, (folder_id,))
+        row = cursor.fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def list_content_segment_status_rows(job_id: int) -> list[dict[str, Any]]:
+    ph = _placeholder()
+    query = f"""
+        SELECT sub_part_index, sub_part_name, passe, status, word_count
+        FROM content_generation_segments
+        WHERE job_id = {ph}
+        ORDER BY sub_part_index ASC, passe ASC
+    """
+    if _pipeline_primary_backend() == "postgres":
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, (job_id,))
+                return [dict(row) for row in cur.fetchall()]
+
+    conn = _as_sqlite_row_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(query, (job_id,))
+        return [dict(row) for row in cursor.fetchall()]
+    finally:
+        conn.close()
+
+
+def update_content_generation_job(job_id: int, **kwargs) -> None:
+    if not kwargs:
+        return
+    ph = _placeholder()
+    now_sql = "NOW()" if _pipeline_primary_backend() == "postgres" else "CURRENT_TIMESTAMP"
+    set_clause = ", ".join(f"{key} = {ph}" for key in kwargs)
+    query = f"""
+        UPDATE content_generation_jobs
+        SET {set_clause}, updated_at = {now_sql}
+        WHERE id = {ph}
+    """
+    values = list(kwargs.values()) + [job_id]
+    if _pipeline_primary_backend() == "postgres":
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, values)
+        return
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(query, values)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def completed_content_segment_keys(job_id: int) -> set[tuple[int, int]]:
+    ph = _placeholder()
+    query = f"""
+        SELECT sub_part_index, passe
+        FROM content_generation_segments
+        WHERE job_id = {ph} AND status = 'completed'
+    """
+    if _pipeline_primary_backend() == "postgres":
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, (job_id,))
+                return {(int(row["sub_part_index"]), int(row["passe"])) for row in cur.fetchall()}
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(query, (job_id,))
+        return {(int(row[0]), int(row[1])) for row in cursor.fetchall()}
+    finally:
+        conn.close()
+
+
+def save_completed_content_segment(
+    *,
+    job_id: int,
+    sub_part_index: int,
+    sub_part_name: str,
+    passe: int,
+    text_content: str,
+    word_count: int,
+) -> None:
+    if _pipeline_primary_backend() == "postgres":
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO content_generation_segments
+                        (job_id, sub_part_index, sub_part_name, passe, status,
+                         text_content, word_count, dirty,
+                         humanized, humanization_error, humanization_signature,
+                         reviewed, review_error, review_signature)
+                    VALUES (%s, %s, %s, %s, 'completed', %s, %s, TRUE, FALSE, NULL, NULL, FALSE, NULL, NULL)
+                    ON CONFLICT (job_id, sub_part_index, passe) DO UPDATE SET
+                         sub_part_name = EXCLUDED.sub_part_name,
+                         status = 'completed',
+                         text_content = EXCLUDED.text_content,
+                         word_count = EXCLUDED.word_count,
+                         dirty = TRUE,
+                         humanized = FALSE,
+                         humanization_error = NULL,
+                         humanization_signature = NULL,
+                         reviewed = FALSE,
+                         review_error = NULL,
+                         review_signature = NULL
+                    """,
+                    (job_id, sub_part_index, sub_part_name, passe, text_content, word_count),
+                )
+        return
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            """
+            INSERT OR REPLACE INTO content_generation_segments
+                (job_id, sub_part_index, sub_part_name, passe, status,
+                 text_content, word_count, dirty,
+                 humanized, humanization_error, humanization_signature,
+                 reviewed, review_error, review_signature)
+            VALUES (?, ?, ?, ?, 'completed', ?, ?, 1, 0, NULL, NULL, 0, NULL, NULL)
+            """,
+            (job_id, sub_part_index, sub_part_name, passe, text_content, word_count),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def mark_content_segment_modified(job_id: int, sub_part_index: int, passe: int) -> None:
+    ph = _placeholder()
+    query = f"""
+        UPDATE content_generation_segments
+        SET dirty = {ph},
+            humanized = {ph}, humanization_error = NULL, humanization_signature = NULL,
+            reviewed = {ph}, review_error = NULL, review_signature = NULL
+        WHERE job_id = {ph} AND sub_part_index = {ph} AND passe = {ph}
+    """
+    if _pipeline_primary_backend() == "postgres":
+        params = (True, False, False, job_id, sub_part_index, passe)
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, params)
+        return
+
+    params = (1, 0, 0, job_id, sub_part_index, passe)
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(query, params)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_content_segment_text(job_id: int, sub_part_index: int, passe: int) -> str:
+    ph = _placeholder()
+    query = f"""
+        SELECT text_content
+        FROM content_generation_segments
+        WHERE job_id = {ph} AND sub_part_index = {ph} AND passe = {ph}
+    """
+    if _pipeline_primary_backend() == "postgres":
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, (job_id, sub_part_index, passe))
+                row = cur.fetchone()
+                return row["text_content"] if row else ""
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(query, (job_id, sub_part_index, passe))
+        row = cursor.fetchone()
+        return row[0] if row else ""
+    finally:
+        conn.close()
+
+
+def list_completed_content_segment_rows(job_id: int) -> list[dict[str, Any]]:
+    ph = _placeholder()
+    query = f"""
+        SELECT sub_part_index, sub_part_name, passe, text_content, word_count, dirty,
+               COALESCE(humanized, 0) AS humanized, COALESCE(reviewed, 0) AS reviewed,
+               humanization_error, review_error
+        FROM content_generation_segments
+        WHERE job_id = {ph} AND status = 'completed'
+        ORDER BY sub_part_index ASC, passe ASC
+    """
+    if _pipeline_primary_backend() == "postgres":
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, (job_id,))
+                return [dict(row) for row in cur.fetchall()]
+
+    conn = _as_sqlite_row_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(query, (job_id,))
+        return [dict(row) for row in cursor.fetchall()]
+    finally:
+        conn.close()
+
+
 def _upsert_postgres_job(payload: dict[str, Any]) -> None:
     payload = _normalize_job_payload(payload)
     columns = [column for column in PIPELINE_JOB_COLUMNS if column in payload]

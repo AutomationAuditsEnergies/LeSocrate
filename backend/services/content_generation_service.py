@@ -24,6 +24,17 @@ from difflib import SequenceMatcher
 from datetime import datetime
 
 from database.db import get_db_connection
+from repositories.pipeline_repository import (
+    completed_content_segment_keys,
+    get_content_generation_job_by_folder,
+    get_content_segment_text,
+    list_completed_content_segment_rows,
+    list_content_segment_status_rows,
+    mark_content_segment_modified,
+    reset_and_upsert_content_generation_job,
+    save_completed_content_segment,
+    update_content_generation_job,
+)
 from utils.anthropic_client import (
     AnthropicAPIError,
     AnthropicRateLimitError,
@@ -6857,28 +6868,15 @@ def start_generation_job(folder_id: int, platform_id: int, program_text: str,
         sub_parts = extracted["sub_parts"]
         title = extracted.get("title", program_title) or program_title
 
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    # Supprimer anciens segments si réinitialisation
-    cursor.execute("""
-        DELETE FROM content_generation_segments WHERE job_id IN (
-            SELECT id FROM content_generation_jobs WHERE folder_id = ?
-        )
-    """, (folder_id,))
-    cursor.execute("""
-        INSERT OR REPLACE INTO content_generation_jobs
-            (folder_id, platform_id, program_text, program_title, sub_parts,
-             from_scratch, module_contents,
-             status, current_sub_part, current_passe, total_words, error_message)
-        VALUES (?, ?, ?, ?, ?, ?, ?, 'idle', 0, 1, 0, NULL)
-    """, (
-        folder_id, platform_id, program_text, title,
-        json.dumps(sub_parts, ensure_ascii=False),
-        1 if from_scratch else 0,
-        json.dumps(module_contents or {}, ensure_ascii=False),
-    ))
-    conn.commit()
-    conn.close()
+    reset_and_upsert_content_generation_job(
+        folder_id=folder_id,
+        platform_id=platform_id,
+        program_text=program_text,
+        program_title=title,
+        sub_parts_json=json.dumps(sub_parts, ensure_ascii=False),
+        from_scratch=from_scratch,
+        module_contents_json=json.dumps(module_contents or {}, ensure_ascii=False),
+    )
 
     # Lancer génération en background
     def _run():
@@ -6895,106 +6893,56 @@ def start_generation_job(folder_id: int, platform_id: int, program_text: str,
 def get_job_from_db(folder_id):
     """Retourne le job DB pour un dossier, ou None."""
     _ensure_carryover_columns()
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        SELECT cgj.id, cgj.platform_id, cgj.program_text, cgj.program_title,
-               cgj.sub_parts, cgj.status, cgj.current_sub_part,
-               cgj.current_passe, cgj.total_words, cgj.error_message,
-               cgj.from_scratch, cgj.module_contents,
-               cgj.carryover_in_text, cgj.carryover_in_source_folder_id,
-               cgj.carryover_out_text, cgj.carryover_out_target_folder_id,
-               cf.formation_job_id, cf.name, cf.position,
-               fpj.nb_days, fpj.total_hours
-        FROM content_generation_jobs cgj
-        LEFT JOIN cours_folders cf ON cf.id = cgj.folder_id
-        LEFT JOIN formation_pipeline_jobs fpj ON fpj.id = cf.formation_job_id
-        WHERE cgj.folder_id = ?
-    """, (folder_id,))
-    row = cursor.fetchone()
-    conn.close()
+    row = get_content_generation_job_by_folder(folder_id)
     if not row:
         return None
     return {
-        "id": row[0], "folder_id": folder_id, "platform_id": row[1], "program_text": row[2],
-        "program_title": row[3], "sub_parts": json.loads(row[4] or "[]"),
-        "status": row[5], "current_sub_part": row[6], "current_passe": row[7],
-        "total_words": row[8], "error_message": row[9],
-        "from_scratch": bool(row[10]),
-        "module_contents": json.loads(row[11] or "{}"),
-        "carryover_in_text": row[12] or "",
-        "carryover_in_source_folder_id": row[13],
-        "carryover_out_text": row[14] or "",
-        "carryover_out_target_folder_id": row[15],
-        "formation_job_id": row[16],
-        "folder_name": row[17],
-        "folder_position": row[18],
-        "nb_days": row[19],
-        "total_hours": row[20],
+        "id": row["id"], "folder_id": folder_id, "platform_id": row["platform_id"], "program_text": row["program_text"],
+        "program_title": row["program_title"], "sub_parts": json.loads(row["sub_parts"] or "[]"),
+        "status": row["status"], "current_sub_part": row["current_sub_part"], "current_passe": row["current_passe"],
+        "total_words": row["total_words"], "error_message": row["error_message"],
+        "from_scratch": bool(row["from_scratch"]),
+        "module_contents": json.loads(row["module_contents"] or "{}"),
+        "carryover_in_text": row["carryover_in_text"] or "",
+        "carryover_in_source_folder_id": row["carryover_in_source_folder_id"],
+        "carryover_out_text": row["carryover_out_text"] or "",
+        "carryover_out_target_folder_id": row["carryover_out_target_folder_id"],
+        "formation_job_id": row["formation_job_id"],
+        "folder_name": row["name"],
+        "folder_position": row["position"],
+        "nb_days": row["nb_days"],
+        "total_hours": row["total_hours"],
     }
 
 
 def get_segments_status(job_id):
     """Retourne la liste des segments avec leur statut."""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        SELECT sub_part_index, sub_part_name, passe, status, word_count
-        FROM content_generation_segments
-        WHERE job_id = ?
-        ORDER BY sub_part_index ASC, passe ASC
-    """, (job_id,))
-    rows = cursor.fetchall()
-    conn.close()
+    rows = list_content_segment_status_rows(job_id)
     return [
-        {"sub_part_index": r[0], "sub_part_name": r[1], "passe": r[2],
-         "status": r[3], "word_count": r[4]}
+        {"sub_part_index": r["sub_part_index"], "sub_part_name": r["sub_part_name"], "passe": r["passe"],
+         "status": r["status"], "word_count": r["word_count"]}
         for r in rows
     ]
 
 
 def _update_job_db(job_id, **kwargs):
-    if not kwargs:
-        return
-    fields = ", ".join(f"{k} = ?" for k in kwargs)
-    values = list(kwargs.values()) + [job_id]
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        f"UPDATE content_generation_jobs SET {fields}, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-        values,
-    )
-    conn.commit()
-    conn.close()
+    update_content_generation_job(job_id, **kwargs)
 
 
 def _get_completed_segments(job_id):
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        SELECT sub_part_index, passe FROM content_generation_segments
-        WHERE job_id = ? AND status = 'completed'
-    """, (job_id,))
-    done = set((r[0], r[1]) for r in cursor.fetchall())
-    conn.close()
-    return done
+    return completed_content_segment_keys(job_id)
 
 
 def _save_segment_db(job_id, sub_idx, sub_part_name, passe, text):
     word_count = len(text.split())
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    # Un texte nouveau/réécrit doit repasser par conformité locale.
-    cursor.execute("""
-        INSERT OR REPLACE INTO content_generation_segments
-            (job_id, sub_part_index, sub_part_name, passe, status,
-             text_content, word_count, dirty,
-             humanized, humanization_error, humanization_signature,
-             reviewed, review_error, review_signature)
-        VALUES (?, ?, ?, ?, 'completed', ?, ?, 1, 0, NULL, NULL, 0, NULL, NULL)
-    """, (job_id, sub_idx, sub_part_name, passe, text, word_count))
-    conn.commit()
-    conn.close()
+    save_completed_content_segment(
+        job_id=job_id,
+        sub_part_index=sub_idx,
+        sub_part_name=sub_part_name,
+        passe=passe,
+        text_content=text,
+        word_count=word_count,
+    )
     logger.info(f"  💾 Checkpoint : sous-partie {sub_idx+1}, passe {passe} ({word_count} mots)")
 
 
@@ -7009,48 +6957,28 @@ def mark_segment_modified(job_id: int, sub_idx: int, passe: int) -> None:
     - route d'édition UI d'un segment — à appeler explicitement
     - apply_review_patch ci-dessous — à appeler explicitement
     """
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        UPDATE content_generation_segments
-        SET dirty = 1,
-            humanized = 0, humanization_error = NULL, humanization_signature = NULL,
-            reviewed = 0, review_error = NULL, review_signature = NULL
-        WHERE job_id = ? AND sub_part_index = ? AND passe = ?
-    """, (job_id, sub_idx, passe))
-    conn.commit()
-    conn.close()
+    mark_content_segment_modified(job_id, sub_idx, passe)
 
 
 def _get_segment_text(job_id, sub_idx, passe):
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        SELECT text_content FROM content_generation_segments
-        WHERE job_id = ? AND sub_part_index = ? AND passe = ?
-    """, (job_id, sub_idx, passe))
-    row = cursor.fetchone()
-    conn.close()
-    return row[0] if row else ""
+    return get_content_segment_text(job_id, sub_idx, passe)
 
 
 def _content_segments_artifact_snapshot(job_id: int) -> list[dict]:
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        SELECT sub_part_index, sub_part_name, passe, text_content, word_count, dirty,
-               COALESCE(humanized, 0), COALESCE(reviewed, 0),
-               humanization_error, review_error
-        FROM content_generation_segments
-        WHERE job_id = ? AND status = 'completed'
-        ORDER BY sub_part_index ASC, passe ASC
-    """, (job_id,))
-    rows = cursor.fetchall()
-    conn.close()
+    rows = list_completed_content_segment_rows(job_id)
 
     courses = []
     for row in rows:
-        sub_idx, sub_name, passe, text, word_count, dirty, humanized, reviewed, humanization_error, review_error = row
+        sub_idx = row["sub_part_index"]
+        sub_name = row["sub_part_name"]
+        passe = row["passe"]
+        text = row["text_content"]
+        word_count = row["word_count"]
+        dirty = row["dirty"]
+        humanized = row["humanized"]
+        reviewed = row["reviewed"]
+        humanization_error = row["humanization_error"]
+        review_error = row["review_error"]
         marker_course_number = _extract_audio_block_number(text or "")
         course_number = marker_course_number or int(sub_idx or 0) + 1
         clean_text = _strip_audio_block_markers(text or "")

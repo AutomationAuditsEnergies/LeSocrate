@@ -30,6 +30,11 @@ Quatrieme tranche : les checkpoints `formation_knowledge_base` (clear, insert
 pending, save enriched, mark error, list, stats) passent par le repository
 pipeline afin de preparer leur lecture/ecriture Postgres.
 
+Cinquieme tranche : les primitives centralisees de `content_generation_jobs` et
+`content_generation_segments` (creation/reset de job, lecture du job, statuts,
+checkpoint segment, dirty flag, texte segment, snapshot artefact) passent par le
+repository pipeline, tout en conservant SQLite comme backend par defaut.
+
 ## 2026-06-29
 
 ### feat(hr-dashboard): robots transparents pré-colorés + flip au clic

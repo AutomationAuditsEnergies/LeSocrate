@@ -11,6 +11,7 @@ if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
 from repositories import pipeline_repository as repo
+from services import content_generation_service as cgs
 from services import formation_observability_service as obs
 from services import knowledge_base_service as kbs
 
@@ -79,15 +80,42 @@ def _make_pipeline_db():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             folder_id INTEGER NOT NULL UNIQUE,
             platform_id INTEGER NOT NULL,
-            program_text TEXT NOT NULL DEFAULT '',
+            program_text TEXT NOT NULL,
+            program_title TEXT DEFAULT '',
+            sub_parts TEXT DEFAULT '[]',
             status TEXT DEFAULT 'idle',
-            total_words INTEGER DEFAULT 0
+            current_sub_part INTEGER DEFAULT 0,
+            current_passe INTEGER DEFAULT 1,
+            total_words INTEGER DEFAULT 0,
+            error_message TEXT,
+            from_scratch INTEGER DEFAULT 0,
+            module_contents TEXT DEFAULT '{}',
+            carryover_in_text TEXT DEFAULT '',
+            carryover_in_source_folder_id INTEGER,
+            carryover_out_text TEXT DEFAULT '',
+            carryover_out_target_folder_id INTEGER,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
 
         CREATE TABLE content_generation_segments (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             job_id INTEGER NOT NULL,
-            status TEXT DEFAULT 'pending'
+            sub_part_index INTEGER NOT NULL,
+            sub_part_name TEXT NOT NULL,
+            passe INTEGER NOT NULL,
+            status TEXT DEFAULT 'pending',
+            text_content TEXT DEFAULT '',
+            word_count INTEGER DEFAULT 0,
+            dirty INTEGER DEFAULT 0,
+            humanized INTEGER DEFAULT 0,
+            humanization_error TEXT,
+            humanization_signature TEXT,
+            reviewed INTEGER DEFAULT 0,
+            review_error TEXT,
+            review_signature TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(job_id, sub_part_index, passe)
         );
 
         CREATE TABLE formation_knowledge_base (
@@ -209,8 +237,11 @@ class PipelineRepositoryTest(unittest.TestCase):
                 (20, 10, 7, 'a', 'idle', 100),
                 (21, 11, 7, 'b', 'completed', 50);
 
-            INSERT INTO content_generation_segments (job_id, status)
-            VALUES (21, 'completed'), (21, 'completed'), (20, 'completed');
+            INSERT INTO content_generation_segments (job_id, sub_part_index, sub_part_name, passe, status)
+            VALUES
+                (21, 0, 'A', 1, 'completed'),
+                (21, 1, 'B', 1, 'completed'),
+                (20, 0, 'A', 1, 'completed');
             """
         )
         conn.commit()
@@ -336,6 +367,45 @@ class PipelineRepositoryTest(unittest.TestCase):
 
         kbs.clear_kb(123)
         self.assertEqual(kbs.list_kb(123), [])
+
+    def test_content_generation_job_and_segments_use_repository_storage(self):
+        conn = sqlite3.connect(self.db_path)
+        conn.execute(
+            """
+            INSERT INTO cours_folders (id, platform_id, name, position, formation_job_id)
+            VALUES (50, 7, 'Jour 1 — Accueil', 0, NULL)
+            """
+        )
+        conn.commit()
+        conn.close()
+
+        repo.reset_and_upsert_content_generation_job(
+            folder_id=50,
+            platform_id=7,
+            program_text="Programme",
+            program_title="TP Test",
+            sub_parts_json='["Cours 1"]',
+            from_scratch=True,
+            module_contents_json='{"Cours 1": "Brief"}',
+        )
+        job = cgs.get_job_from_db(50)
+
+        self.assertEqual(job["folder_id"], 50)
+        self.assertEqual(job["platform_id"], 7)
+        self.assertEqual(job["sub_parts"], ["Cours 1"])
+        self.assertTrue(job["from_scratch"])
+        self.assertEqual(job["module_contents"], {"Cours 1": "Brief"})
+
+        cgs._save_segment_db(job["id"], 0, "Cours 1", 1, "Bonjour tout le monde")
+        self.assertEqual(cgs._get_completed_segments(job["id"]), {(0, 1)})
+        self.assertEqual(cgs._get_segment_text(job["id"], 0, 1), "Bonjour tout le monde")
+        self.assertEqual(cgs.get_segments_status(job["id"])[0]["word_count"], 4)
+
+        cgs.mark_segment_modified(job["id"], 0, 1)
+        snapshot = cgs._content_segments_artifact_snapshot(job["id"])
+        self.assertEqual(snapshot[0]["sub_part_name"], "Cours 1")
+        self.assertTrue(snapshot[0]["dirty"])
+        self.assertFalse(snapshot[0]["reviewed"])
 
 
 if __name__ == "__main__":
