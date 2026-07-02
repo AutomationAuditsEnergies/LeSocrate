@@ -1866,6 +1866,433 @@ def get_formation_module_for_pipeline_job(job_id: int) -> dict[str, Any] | None:
         conn.close()
 
 
+SCRIPT_ANNOTATION_COLUMNS = """
+    id, folder_id, job_id, source_type, sub_part_index, passe,
+    bloc_number, filename, selected_text, comment, status,
+    markdown_path, created_at, updated_at,
+    original_paragraph, proposed_text, correction_status,
+    correction_error, applied_at,
+    splice_status, splice_error, splice_blob_path
+"""
+
+
+def ensure_script_annotations_table() -> None:
+    """Ensure SQLite has script annotation storage. Postgres schema owns this."""
+    if _pipeline_primary_backend() == "postgres":
+        return
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS content_script_annotations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                folder_id INTEGER NOT NULL,
+                job_id INTEGER NOT NULL,
+                source_type TEXT NOT NULL DEFAULT 'course',
+                sub_part_index INTEGER,
+                passe INTEGER,
+                bloc_number INTEGER,
+                filename TEXT,
+                selected_text TEXT NOT NULL,
+                comment TEXT NOT NULL,
+                status TEXT DEFAULT 'open',
+                markdown_path TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (folder_id) REFERENCES cours_folders(id),
+                FOREIGN KEY (job_id) REFERENCES content_generation_jobs(id)
+            )
+            """
+        )
+        cursor.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_content_script_annotations_folder_job
+            ON content_script_annotations(folder_id, job_id, status)
+            """
+        )
+        for ddl in (
+            "ALTER TABLE content_script_annotations ADD COLUMN original_paragraph TEXT",
+            "ALTER TABLE content_script_annotations ADD COLUMN proposed_text TEXT",
+            "ALTER TABLE content_script_annotations ADD COLUMN correction_status TEXT DEFAULT 'pending'",
+            "ALTER TABLE content_script_annotations ADD COLUMN correction_error TEXT",
+            "ALTER TABLE content_script_annotations ADD COLUMN applied_at TIMESTAMP",
+            "ALTER TABLE content_script_annotations ADD COLUMN splice_status TEXT",
+            "ALTER TABLE content_script_annotations ADD COLUMN splice_error TEXT",
+            "ALTER TABLE content_script_annotations ADD COLUMN splice_blob_path TEXT",
+        ):
+            try:
+                cursor.execute(ddl)
+            except Exception:
+                pass
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_script_annotation_context(folder_id: int) -> dict[str, Any] | None:
+    ph = _placeholder()
+    query = f"""
+        SELECT j.id AS job_id, j.platform_id, j.program_title,
+               f.name AS folder_name, pc.name AS platform_name
+        FROM content_generation_jobs j
+        JOIN cours_folders f ON f.id = j.folder_id
+        LEFT JOIN platform_config pc ON pc.id = j.platform_id
+        WHERE j.folder_id = {ph}
+    """
+    if _pipeline_primary_backend() == "postgres":
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, (folder_id,))
+                row = cur.fetchone()
+                return dict(row) if row else None
+
+    conn = _as_sqlite_row_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(query, (folder_id,))
+        row = cursor.fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def list_script_annotation_rows(
+    *,
+    folder_id: int,
+    job_id: int,
+    include_deleted: bool = False,
+) -> list[dict[str, Any]]:
+    ph = _placeholder()
+    where_deleted = "" if include_deleted else "AND status != 'deleted'"
+    query = f"""
+        SELECT {SCRIPT_ANNOTATION_COLUMNS}
+        FROM content_script_annotations
+        WHERE folder_id = {ph} AND job_id = {ph} {where_deleted}
+        ORDER BY created_at ASC, id ASC
+    """
+    if _pipeline_primary_backend() == "postgres":
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, (folder_id, job_id))
+                return [dict(row) for row in cur.fetchall()]
+
+    conn = _as_sqlite_row_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(query, (folder_id, job_id))
+        return [dict(row) for row in cursor.fetchall()]
+    finally:
+        conn.close()
+
+
+def update_script_annotations_markdown_path(*, folder_id: int, job_id: int, markdown_path: str) -> None:
+    ph = _placeholder()
+    now_sql = "NOW()" if _pipeline_primary_backend() == "postgres" else "CURRENT_TIMESTAMP"
+    query = f"""
+        UPDATE content_script_annotations
+        SET markdown_path = {ph}, updated_at = {now_sql}
+        WHERE folder_id = {ph} AND job_id = {ph} AND status != 'deleted'
+    """
+    params = (markdown_path, folder_id, job_id)
+    if _pipeline_primary_backend() == "postgres":
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, params)
+        return
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(query, params)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def create_script_annotation_row(
+    *,
+    folder_id: int,
+    job_id: int,
+    source_type: str,
+    sub_part_index,
+    passe,
+    bloc_number,
+    filename: str,
+    selected_text: str,
+    comment: str,
+    original_paragraph: str,
+) -> int:
+    if _pipeline_primary_backend() == "postgres":
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO content_script_annotations
+                        (folder_id, job_id, source_type, sub_part_index, passe, bloc_number,
+                         filename, selected_text, comment, status, original_paragraph,
+                         correction_status, created_at, updated_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 'open', %s, 'pending', NOW(), NOW())
+                    RETURNING id
+                    """,
+                    (
+                        folder_id,
+                        job_id,
+                        source_type,
+                        sub_part_index,
+                        passe,
+                        bloc_number,
+                        filename,
+                        selected_text,
+                        comment,
+                        original_paragraph,
+                    ),
+                )
+                return int(cur.fetchone()["id"])
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            """
+            INSERT INTO content_script_annotations
+                (folder_id, job_id, source_type, sub_part_index, passe, bloc_number,
+                 filename, selected_text, comment, status, original_paragraph,
+                 correction_status, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, 'pending', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            """,
+            (
+                folder_id,
+                job_id,
+                source_type,
+                sub_part_index,
+                passe,
+                bloc_number,
+                filename,
+                selected_text,
+                comment,
+                original_paragraph,
+            ),
+        )
+        annotation_id = int(cursor.lastrowid)
+        conn.commit()
+        return annotation_id
+    finally:
+        conn.close()
+
+
+def mark_script_annotation_deleted(*, annotation_id: int, folder_id: int, job_id: int) -> int:
+    ph = _placeholder()
+    now_sql = "NOW()" if _pipeline_primary_backend() == "postgres" else "CURRENT_TIMESTAMP"
+    query = f"""
+        UPDATE content_script_annotations
+        SET status = 'deleted', updated_at = {now_sql}
+        WHERE id = {ph} AND folder_id = {ph} AND job_id = {ph}
+    """
+    params = (annotation_id, folder_id, job_id)
+    if _pipeline_primary_backend() == "postgres":
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, params)
+                return int(cur.rowcount or 0)
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(query, params)
+        changed = int(cursor.rowcount or 0)
+        conn.commit()
+        return changed
+    finally:
+        conn.close()
+
+
+def update_script_annotation_correction(
+    *,
+    annotation_id: int,
+    folder_id: int,
+    job_id: int,
+    original_paragraph: str,
+    proposed_text: str,
+    correction_status: str,
+    correction_error: str | None,
+) -> None:
+    ph = _placeholder()
+    now_sql = "NOW()" if _pipeline_primary_backend() == "postgres" else "CURRENT_TIMESTAMP"
+    query = f"""
+        UPDATE content_script_annotations
+        SET original_paragraph = {ph}, proposed_text = {ph}, correction_status = {ph},
+            correction_error = {ph}, updated_at = {now_sql}
+        WHERE id = {ph} AND folder_id = {ph} AND job_id = {ph}
+    """
+    params = (
+        original_paragraph,
+        proposed_text,
+        correction_status,
+        correction_error,
+        annotation_id,
+        folder_id,
+        job_id,
+    )
+    if _pipeline_primary_backend() == "postgres":
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, params)
+        return
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(query, params)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_script_annotation_for_apply(
+    *,
+    annotation_id: int,
+    folder_id: int,
+    job_id: int,
+) -> dict[str, Any] | None:
+    ph = _placeholder()
+    query = f"""
+        SELECT source_type, sub_part_index, passe, selected_text,
+               proposed_text, original_paragraph, correction_status,
+               bloc_number, filename
+        FROM content_script_annotations
+        WHERE id = {ph} AND folder_id = {ph} AND job_id = {ph} AND status != 'deleted'
+    """
+    params = (annotation_id, folder_id, job_id)
+    if _pipeline_primary_backend() == "postgres":
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, params)
+                row = cur.fetchone()
+                return dict(row) if row else None
+
+    conn = _as_sqlite_row_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(query, params)
+        row = cursor.fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def get_content_segment_row_for_key(
+    *,
+    job_id: int,
+    sub_part_index: int,
+    passe: int,
+) -> dict[str, Any] | None:
+    ph = _placeholder()
+    query = f"""
+        SELECT id, text_content
+        FROM content_generation_segments
+        WHERE job_id = {ph} AND sub_part_index = {ph} AND passe = {ph}
+    """
+    params = (job_id, sub_part_index, passe)
+    if _pipeline_primary_backend() == "postgres":
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, params)
+                row = cur.fetchone()
+                return dict(row) if row else None
+
+    conn = _as_sqlite_row_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(query, params)
+        row = cursor.fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def mark_script_annotation_applied(annotation_id: int) -> None:
+    ph = _placeholder()
+    now_sql = "NOW()" if _pipeline_primary_backend() == "postgres" else "CURRENT_TIMESTAMP"
+    query = f"""
+        UPDATE content_script_annotations
+        SET correction_status = 'applied', applied_at = {now_sql},
+            updated_at = {now_sql}
+        WHERE id = {ph}
+    """
+    if _pipeline_primary_backend() == "postgres":
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, (annotation_id,))
+        return
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(query, (annotation_id,))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def update_script_annotation_splice_result(
+    *,
+    annotation_id: int,
+    splice_status: str,
+    splice_error: str | None,
+    splice_blob_path: str | None,
+) -> None:
+    ph = _placeholder()
+    now_sql = "NOW()" if _pipeline_primary_backend() == "postgres" else "CURRENT_TIMESTAMP"
+    query = f"""
+        UPDATE content_script_annotations
+        SET splice_status = {ph}, splice_error = {ph}, splice_blob_path = {ph},
+            updated_at = {now_sql}
+        WHERE id = {ph}
+    """
+    params = (splice_status, splice_error, splice_blob_path, annotation_id)
+    if _pipeline_primary_backend() == "postgres":
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, params)
+        return
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(query, params)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def mark_script_annotation_rejected(*, annotation_id: int, folder_id: int, job_id: int) -> int:
+    ph = _placeholder()
+    now_sql = "NOW()" if _pipeline_primary_backend() == "postgres" else "CURRENT_TIMESTAMP"
+    query = f"""
+        UPDATE content_script_annotations
+        SET correction_status = 'rejected', updated_at = {now_sql}
+        WHERE id = {ph} AND folder_id = {ph} AND job_id = {ph} AND status != 'deleted'
+    """
+    params = (annotation_id, folder_id, job_id)
+    if _pipeline_primary_backend() == "postgres":
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, params)
+                return int(cur.rowcount or 0)
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(query, params)
+        changed = int(cursor.rowcount or 0)
+        conn.commit()
+        return changed
+    finally:
+        conn.close()
+
+
 def store_cross_day_carryover(
     *,
     source_folder_id: int,

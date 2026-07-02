@@ -827,6 +827,112 @@ class PipelineRepositoryTest(unittest.TestCase):
         self.assertEqual(module["version"], "v1")
         self.assertEqual(module["status"], "validated")
 
+    def test_script_annotation_helpers_use_repository_storage(self):
+        conn = sqlite3.connect(self.db_path)
+        conn.execute(
+            """
+            INSERT INTO cours_folders (id, platform_id, name, position, formation_job_id)
+            VALUES (120, 7, 'Jour 1 — Annotation', 0, NULL)
+            """
+        )
+        conn.commit()
+        conn.close()
+
+        repo.reset_and_upsert_content_generation_job(
+            folder_id=120,
+            platform_id=7,
+            program_text="Programme",
+            program_title="TP Annotation",
+            sub_parts_json='["Cours 1"]',
+            from_scratch=True,
+            module_contents_json='{}',
+        )
+        job = cgs.get_job_from_db(120)
+        cgs._save_segment_db(job["id"], 0, "Cours 1", 1, "Bonjour ancien texte")
+
+        repo.ensure_script_annotations_table()
+        context = repo.get_script_annotation_context(120)
+        self.assertEqual(context["job_id"], job["id"])
+        self.assertEqual(context["platform_name"], "Centre A - TP Test")
+
+        annotation_id = repo.create_script_annotation_row(
+            folder_id=120,
+            job_id=job["id"],
+            source_type="segment",
+            sub_part_index=0,
+            passe=1,
+            bloc_number=None,
+            filename="",
+            selected_text="ancien texte",
+            comment="rendre plus clair",
+            original_paragraph="ancien texte",
+        )
+        rows = repo.list_script_annotation_rows(folder_id=120, job_id=job["id"])
+        self.assertEqual([row["id"] for row in rows], [annotation_id])
+        self.assertEqual(rows[0]["correction_status"], "pending")
+
+        repo.update_script_annotation_correction(
+            annotation_id=annotation_id,
+            folder_id=120,
+            job_id=job["id"],
+            original_paragraph="ancien texte",
+            proposed_text="nouveau texte",
+            correction_status="proposed",
+            correction_error=None,
+        )
+        apply_row = repo.get_script_annotation_for_apply(
+            annotation_id=annotation_id,
+            folder_id=120,
+            job_id=job["id"],
+        )
+        self.assertEqual(apply_row["proposed_text"], "nouveau texte")
+
+        seg = repo.get_content_segment_row_for_key(
+            job_id=job["id"],
+            sub_part_index=0,
+            passe=1,
+        )
+        self.assertIn("ancien texte", seg["text_content"])
+
+        repo.update_content_segment_plan_repair(
+            segment_id=seg["id"],
+            text_content=seg["text_content"].replace("ancien texte", "nouveau texte"),
+            word_count=3,
+        )
+        repo.mark_script_annotation_applied(annotation_id)
+        repo.update_script_annotation_splice_result(
+            annotation_id=annotation_id,
+            splice_status="skipped",
+            splice_error="source_type != course",
+            splice_blob_path=None,
+        )
+
+        applied = repo.list_script_annotation_rows(folder_id=120, job_id=job["id"])[0]
+        self.assertEqual(applied["correction_status"], "applied")
+        self.assertEqual(applied["splice_status"], "skipped")
+        self.assertEqual(repo.get_content_segment_text(job["id"], 0, 1), "Bonjour nouveau texte")
+
+        changed = repo.mark_script_annotation_rejected(
+            annotation_id=annotation_id,
+            folder_id=120,
+            job_id=job["id"],
+        )
+        self.assertEqual(changed, 1)
+        rejected = repo.list_script_annotation_rows(folder_id=120, job_id=job["id"])[0]
+        self.assertEqual(rejected["correction_status"], "rejected")
+
+        changed = repo.mark_script_annotation_deleted(
+            annotation_id=annotation_id,
+            folder_id=120,
+            job_id=job["id"],
+        )
+        self.assertEqual(changed, 1)
+        self.assertEqual(repo.list_script_annotation_rows(folder_id=120, job_id=job["id"]), [])
+        self.assertEqual(
+            len(repo.list_script_annotation_rows(folder_id=120, job_id=job["id"], include_deleted=True)),
+            1,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
