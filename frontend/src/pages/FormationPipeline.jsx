@@ -4730,7 +4730,7 @@ function StepEventsList({ events }) {
             border: '1px solid rgba(148,163,184,0.10)', borderRadius: '7px',
             color: '#94a3b8', fontSize: '11px',
           }}>
-            <span>{event.created_at ? new Date(String(event.created_at).replace(' ', 'T')).toLocaleString('fr-FR') : '—'}</span>
+            <span>{formatEventTime(event.created_at) || '—'}</span>
             <span style={{ color: event.status === 'completed' ? '#34d399' : event.status === 'error' ? '#f87171' : '#fbbf24', fontWeight: 800 }}>
               {event.status || event.event_type}
             </span>

@@ -1160,24 +1160,18 @@ def get_content_artifact(job_id, folder_id, filename):
         CONTENT_ARTIFACT_BLOBS,
         load_content_artifact,
     )
-    from database.db import get_db_connection
+    from repositories.pipeline_repository import get_content_generation_job_by_folder
 
     filename = os.path.basename(str(filename or ""))
     if filename not in CONTENT_ARTIFACT_BLOBS:
         return jsonify({"error": "Artefact non autorisé"}), 400
 
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        "SELECT platform_id, name FROM cours_folders WHERE id = ? AND formation_job_id = ?",
-        (folder_id, job_id),
-    )
-    row = cursor.fetchone()
-    conn.close()
-    if not row:
+    folder_row = get_content_generation_job_by_folder(folder_id)
+    if not folder_row or int(folder_row.get("formation_job_id") or 0) != int(job_id):
         return jsonify({"error": "Folder introuvable ou hors pipeline"}), 404
 
-    platform_id, folder_name = row
+    platform_id = int(folder_row["platform_id"])
+    folder_name = folder_row.get("name") or ""
     artifact = load_content_artifact(platform_id, folder_id, filename)
     if not artifact:
         return jsonify({"error": "Artefact indisponible", "filename": filename}), 404
