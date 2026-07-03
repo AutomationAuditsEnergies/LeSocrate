@@ -7,33 +7,57 @@ export default function ProtectedAdminRoute({ children, loginPath = '/connexion-
   const [isLoading, setIsLoading] = useState(true)
 
   useEffect(() => {
+    let isMounted = true
+    const controller = new AbortController()
+    const timeoutId = window.setTimeout(() => {
+      controller.abort()
+    }, 12000)
+
     // Vérifier si l'utilisateur est authentifié comme admin
     const checkAuth = async () => {
       try {
         const response = await apiFetch('/api/admin/session', {
           method: 'GET',
+          signal: controller.signal,
         })
 
         if (response.ok) {
           const data = await response.json().catch(() => ({}))
           const accountType = data.account?.type
-          setIsAuthenticated(!allowedAccountTypes || allowedAccountTypes.includes(accountType))
+          if (isMounted) {
+            setIsAuthenticated(!allowedAccountTypes || allowedAccountTypes.includes(accountType))
+          }
         } else if (response.status === 403 || response.status === 401) {
           // Non authentifié
-          setIsAuthenticated(false)
+          if (isMounted) {
+            setIsAuthenticated(false)
+          }
         } else {
           // Autre erreur
-          setIsAuthenticated(false)
+          if (isMounted) {
+            setIsAuthenticated(false)
+          }
         }
       } catch (error) {
         console.error('Erreur vérification auth admin:', error)
-        setIsAuthenticated(false)
+        if (isMounted) {
+          setIsAuthenticated(false)
+        }
       } finally {
-        setIsLoading(false)
+        window.clearTimeout(timeoutId)
+        if (isMounted) {
+          setIsLoading(false)
+        }
       }
     }
 
     checkAuth()
+
+    return () => {
+      isMounted = false
+      window.clearTimeout(timeoutId)
+      controller.abort()
+    }
   }, [allowedAccountTypes])
 
   if (isLoading) {
