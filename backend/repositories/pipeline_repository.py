@@ -1840,6 +1840,100 @@ def count_dirty_completed_segments_for_folders(folder_ids: list[int]) -> int:
     return _count_completed_segments_for_folder_filter(folder_ids, "AND s.dirty = 1")
 
 
+def list_content_completion_rows_for_folders(folder_ids: list[int]) -> list[dict[str, Any]]:
+    placeholders, params = _in_clause([int(fid) for fid in folder_ids])
+    if not placeholders:
+        return []
+    query = f"""
+        SELECT
+            cf.id AS folder_id,
+            cgj.id AS content_job_id,
+            cgj.status,
+            COALESCE(cgj.total_words, 0) AS total_words,
+            COALESCE(SUM(CASE WHEN cgs.status = 'completed' THEN 1 ELSE 0 END), 0) AS completed_segments
+        FROM cours_folders cf
+        LEFT JOIN content_generation_jobs cgj ON cgj.folder_id = cf.id
+        LEFT JOIN content_generation_segments cgs ON cgs.job_id = cgj.id
+        WHERE cf.id IN ({placeholders})
+        GROUP BY cf.id, cgj.id, cgj.status, cgj.total_words
+    """
+    if _pipeline_primary_backend() == "postgres":
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, params)
+                return [dict(row) for row in cur.fetchall()]
+
+    conn = _as_sqlite_row_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(query, params)
+        return [dict(row) for row in cursor.fetchall()]
+    finally:
+        conn.close()
+
+
+def list_completed_content_jobs_for_folders(folder_ids: list[int]) -> list[dict[str, Any]]:
+    placeholders, params = _in_clause([int(fid) for fid in folder_ids])
+    if not placeholders:
+        return []
+    query = f"""
+        SELECT cf.id AS folder_id, cgj.id AS content_job_id
+        FROM cours_folders cf
+        JOIN content_generation_jobs cgj ON cgj.folder_id = cf.id
+        WHERE cf.id IN ({placeholders}) AND cgj.status = 'completed'
+        ORDER BY cf.position ASC
+    """
+    if _pipeline_primary_backend() == "postgres":
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, params)
+                return [dict(row) for row in cur.fetchall()]
+
+    conn = _as_sqlite_row_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(query, params)
+        return [dict(row) for row in cursor.fetchall()]
+    finally:
+        conn.close()
+
+
+def count_segments_pending_review_for_folders(folder_ids: list[int], review_signature: str) -> int:
+    placeholders, params = _in_clause([int(fid) for fid in folder_ids])
+    if not placeholders:
+        return 0
+    if _pipeline_primary_backend() == "postgres":
+        reviewed_false = "COALESCE(cgs.reviewed, FALSE) = FALSE"
+    else:
+        reviewed_false = "COALESCE(cgs.reviewed, 0) = 0"
+    query = f"""
+        SELECT COUNT(*) AS total
+        FROM content_generation_segments cgs
+        JOIN content_generation_jobs cgj ON cgj.id = cgs.job_id
+        JOIN cours_folders cf ON cf.id = cgj.folder_id
+        WHERE cf.id IN ({placeholders}) AND cgs.status = 'completed'
+          AND (
+                {reviewed_false}
+             OR cgs.review_signature IS NULL
+             OR cgs.review_signature != {_placeholder()}
+          )
+    """
+    params.append(review_signature)
+    if _pipeline_primary_backend() == "postgres":
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, params)
+                return int(cur.fetchone()["total"] or 0)
+
+    conn = _as_sqlite_row_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(query, params)
+        return int(cursor.fetchone()["total"] or 0)
+    finally:
+        conn.close()
+
+
 def get_content_job_docx_state(content_job_id: int) -> dict[str, Any] | None:
     ph = _placeholder()
     query = f"""

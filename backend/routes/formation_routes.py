@@ -4527,27 +4527,19 @@ def _determine_next_ap_step(job_id: int) -> str | None:
     expected_folder_count = int(j.get("nb_days") or 0)
     if len(folder_ids) < expected_folder_count:
         return "content"
-    placeholders = ",".join("?" * len(folder_ids))
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute(f"""
-        SELECT
-            cf.id,
-            cgj.status,
-            COALESCE(cgj.total_words, 0),
-            COALESCE(SUM(CASE WHEN cgs.status = 'completed' THEN 1 ELSE 0 END), 0)
-        FROM cours_folders cf
-        LEFT JOIN content_generation_jobs cgj ON cgj.folder_id = cf.id
-        LEFT JOIN content_generation_segments cgs ON cgs.job_id = cgj.id
-        WHERE cf.id IN ({placeholders})
-        GROUP BY cf.id, cgj.status, cgj.total_words
-    """, tuple(folder_ids))
-    content_rows = cursor.fetchall()
-    conn.close()
+    from repositories.pipeline_repository import (
+        count_dirty_completed_segments_for_folders,
+        count_segments_pending_review_for_folders,
+        get_latest_script_slide_deck_row,
+        list_completed_content_jobs_for_folders,
+        list_content_completion_rows_for_folders,
+    )
+    content_rows = list_content_completion_rows_for_folders(folder_ids)
     completed_folder_ids = {
-        row[0]
+        row["folder_id"]
         for row in content_rows
-        if row[1] == "completed" and (int(row[2] or 0) > 0 or int(row[3] or 0) > 0)
+        if row.get("status") == "completed"
+        and (int(row.get("total_words") or 0) > 0 or int(row.get("completed_segments") or 0) > 0)
     }
     if len(completed_folder_ids) < len(folder_ids):
         return "content"
@@ -4561,21 +4553,7 @@ def _determine_next_ap_step(job_id: int) -> str | None:
 
     # 6. Conformité locale par segment, après adhérence au plan, calibrage
     # budget et micro-review éthique intégrés à la génération structurée.
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute(f"""
-        SELECT COUNT(*) FROM content_generation_segments cgs
-        JOIN content_generation_jobs cgj ON cgj.id = cgs.job_id
-        JOIN cours_folders cf ON cf.id = cgj.folder_id
-        WHERE cf.id IN ({placeholders}) AND cgs.status = 'completed'
-          AND (
-                COALESCE(cgs.reviewed, 0) = 0
-             OR cgs.review_signature IS NULL
-             OR cgs.review_signature != ?
-          )
-    """, tuple(folder_ids) + (compliance_signature,))
-    not_reviewed = cursor.fetchone()[0]
-    conn.close()
+    not_reviewed = count_segments_pending_review_for_folders(folder_ids, compliance_signature)
     if not_reviewed > 0:
         return "review"
 
@@ -4586,43 +4564,22 @@ def _determine_next_ap_step(job_id: int) -> str | None:
 
     # 8. Slides anchor-first : elles sont générées explicitement avant la fin
     # texte, pour ne plus rester cachées dans l'étape TTS synchronisée.
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute(f"""
-        SELECT cf.id, cgj.id
-        FROM cours_folders cf
-        JOIN content_generation_jobs cgj ON cgj.folder_id = cf.id
-        WHERE cf.id IN ({placeholders}) AND cgj.status = 'completed'
-        ORDER BY cf.position ASC
-    """, tuple(folder_ids))
-    slide_rows = cursor.fetchall()
-    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='script_slide_decks'")
-    has_slide_table = bool(cursor.fetchone())
+    slide_rows = list_completed_content_jobs_for_folders(folder_ids)
     missing_slide_decks = []
-    if not has_slide_table:
-        missing_slide_decks = [fid for fid, _ in slide_rows]
-    else:
-        for fid, cg_job_id in slide_rows:
-            cursor.execute(
-                """
-                SELECT id, slides_json
-                FROM script_slide_decks
-                WHERE folder_id = ? AND content_job_id = ?
-                ORDER BY id DESC
-                LIMIT 1
-                """,
-                (fid, cg_job_id),
-            )
-            deck_row = cursor.fetchone()
-            deck_has_slides = False
-            if deck_row:
-                try:
-                    deck_has_slides = len(_json.loads(deck_row[1] or "[]")) > 0
-                except Exception:
-                    deck_has_slides = False
-            if not deck_has_slides:
-                missing_slide_decks.append(fid)
-    conn.close()
+    for row in slide_rows:
+        fid = int(row["folder_id"])
+        deck_row = get_latest_script_slide_deck_row(
+            folder_id=fid,
+            content_job_id=int(row["content_job_id"]),
+        )
+        deck_has_slides = False
+        if deck_row:
+            try:
+                deck_has_slides = len(_json.loads(deck_row.get("slides_json") or "[]")) > 0
+            except Exception:
+                deck_has_slides = False
+        if not deck_has_slides:
+            missing_slide_decks.append(fid)
     if missing_slide_decks:
         return "slides"
 
@@ -4639,16 +4596,7 @@ def _determine_next_ap_step(job_id: int) -> str | None:
 
     # Si l'audio auto est explicitement demandé, on vérifie via dirty=0 sur tous les segments (pas le status qui
     # est positionné au début du loop audio, donc non fiable en cas de restart)
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute(f"""
-        SELECT COUNT(*) FROM content_generation_segments cgs
-        JOIN content_generation_jobs cgj ON cgj.id = cgs.job_id
-        JOIN cours_folders cf ON cf.id = cgj.folder_id
-        WHERE cf.id IN ({placeholders}) AND COALESCE(cgs.dirty, 1) = 1
-    """, tuple(folder_ids))
-    dirty_count = cursor.fetchone()[0]
-    conn.close()
+    dirty_count = count_dirty_completed_segments_for_folders(folder_ids)
     if dirty_count > 0 or j.get("status") not in ("audio_completed", "audio_launched"):
         return "audio"
 
@@ -4790,6 +4738,7 @@ def _execute_ap_step(job_id: int, step: str, job: dict) -> None:
             import json as _json
             import eventlet as _eventlet
             from services.content_generation_service import run_content_generation, get_job_from_db
+            from repositories.pipeline_repository import reset_and_upsert_content_generation_job
             from services.formation_pipeline_service import (
                 _format_day_program_text,
                 expected_course_folder_name,
@@ -4848,23 +4797,15 @@ def _execute_ap_step(job_id: int, step: str, job: dict) -> None:
                     module_contents = {}
                     for sp in day_data.get("sub_parts", []):
                         module_contents[sp["name"]] = _format_slot_generation_source(sp)
-                    conn = get_db_connection()
-                    cursor = conn.cursor()
-                    cursor.execute("""
-                        INSERT INTO content_generation_jobs
-                            (folder_id, platform_id, program_text, program_title,
-                             sub_parts, from_scratch, module_contents,
-                             status, current_sub_part, current_passe, total_words, error_message)
-                        VALUES (?, ?, ?, ?, ?, 1, ?, 'idle', 0, 1, 0, NULL)
-                    """, (
-                        folder_id, platform_id,
-                        _format_day_program_text(day_data, job["tp_name"]),
-                        job["tp_name"],
-                        _json.dumps(sub_parts, ensure_ascii=False),
-                        _json.dumps(module_contents, ensure_ascii=False),
-                    ))
-                    conn.commit()
-                    conn.close()
+                    reset_and_upsert_content_generation_job(
+                        folder_id=folder_id,
+                        platform_id=platform_id,
+                        program_text=_format_day_program_text(day_data, job["tp_name"]),
+                        program_title=job["tp_name"],
+                        sub_parts_json=_json.dumps(sub_parts, ensure_ascii=False),
+                        from_scratch=True,
+                        module_contents_json=_json.dumps(module_contents, ensure_ascii=False),
+                    )
 
                 day_tasks.append({"day_num": day_num, "folder_id": folder_id})
 
@@ -4983,24 +4924,14 @@ def _execute_ap_step(job_id: int, step: str, job: dict) -> None:
             assert_course_day_word_budget,
         )
         from services.formation_pipeline_service import get_expected_course_folders
+        from repositories.pipeline_repository import list_completed_content_jobs_for_folders
         folder_ids = get_expected_course_folders(job_id).get("folder_ids") or []
         if not folder_ids:
             raise RuntimeError("Aucun texte complété à assembler après révision")
-        placeholders = ",".join("?" * len(folder_ids))
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute(
-            f"""
-            SELECT cf.id, cgj.id
-            FROM cours_folders cf
-            JOIN content_generation_jobs cgj ON cgj.folder_id = cf.id
-            WHERE cf.id IN ({placeholders}) AND cgj.status = 'completed'
-            ORDER BY cf.position ASC
-            """,
-            tuple(folder_ids),
-        )
-        rows = cursor.fetchall()
-        conn.close()
+        rows = [
+            (int(row["folder_id"]), int(row["content_job_id"]))
+            for row in list_completed_content_jobs_for_folders(folder_ids)
+        ]
         if not rows:
             raise RuntimeError("Aucun texte complété à assembler après révision")
 
@@ -5065,25 +4996,15 @@ def _execute_ap_step(job_id: int, step: str, job: dict) -> None:
             get_latest_script_slide_deck,
         )
         from services.formation_observability_service import log_pipeline_event
+        from repositories.pipeline_repository import list_completed_content_jobs_for_folders
 
         folder_ids = get_expected_course_folders(job_id).get("folder_ids") or []
         if not folder_ids:
             raise RuntimeError("Aucun cours_folder trouvé pour générer les slides")
-        placeholders = ",".join("?" * len(folder_ids))
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute(
-            f"""
-            SELECT cf.id, cgj.id
-            FROM cours_folders cf
-            JOIN content_generation_jobs cgj ON cgj.folder_id = cf.id
-            WHERE cf.id IN ({placeholders}) AND cgj.status = 'completed'
-            ORDER BY cf.position ASC
-            """,
-            tuple(folder_ids),
-        )
-        rows = cursor.fetchall()
-        conn.close()
+        rows = [
+            (int(row["folder_id"]), int(row["content_job_id"]))
+            for row in list_completed_content_jobs_for_folders(folder_ids)
+        ]
         if not rows:
             raise RuntimeError("Aucun texte complété disponible pour générer les slides")
 

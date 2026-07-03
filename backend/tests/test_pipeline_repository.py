@@ -878,6 +878,16 @@ class PipelineRepositoryTest(unittest.TestCase):
         self.assertEqual(repo.count_unhumanized_segments_without_error_for_folders([110, 111]), 1)
         self.assertEqual(repo.count_unreviewed_segments_without_error_for_folders([110, 111]), 1)
         self.assertEqual(repo.count_dirty_completed_segments_for_folders([110, 111]), 1)
+        completion_rows = repo.list_content_completion_rows_for_folders([110, 111])
+        completion_by_folder = {row["folder_id"]: row for row in completion_rows}
+        self.assertEqual(completion_by_folder[110]["status"], "completed")
+        self.assertEqual(completion_by_folder[110]["completed_segments"], 2)
+        self.assertEqual(completion_by_folder[111]["status"], "idle")
+        self.assertEqual(
+            repo.list_completed_content_jobs_for_folders([110, 111]),
+            [{"folder_id": 110, "content_job_id": 210}],
+        )
+        self.assertEqual(repo.count_segments_pending_review_for_folders([110, 111], "sig-review"), 2)
 
         docx_state = repo.get_content_job_docx_state(210)
         self.assertEqual(docx_state["completed_count"], 2)
