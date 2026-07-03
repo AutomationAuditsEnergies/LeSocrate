@@ -98,6 +98,51 @@ from services.content_pipeline.validators import (
 logger = get_logger(__name__)
 
 
+def _log_content_pipeline_event(
+    job: dict,
+    event_type: str,
+    *,
+    folder_id: int | None = None,
+    status: str = "info",
+    message: str | None = None,
+    model: str | None = None,
+    duration_ms: int | None = None,
+    data: dict | None = None,
+    error: str | None = None,
+) -> None:
+    """Best-effort durable event for content generation debugging."""
+    formation_job_id = job.get("formation_job_id")
+    if not formation_job_id:
+        return
+    try:
+        from services.formation_observability_service import log_pipeline_event
+
+        payload = {
+            "content_job_id": job.get("id"),
+            **(data or {}),
+        }
+        log_pipeline_event(
+            int(formation_job_id),
+            event_type,
+            step="content",
+            status=status,
+            folder_id=folder_id,
+            message=message,
+            model=model or CLAUDE_MODEL,
+            duration_ms=duration_ms,
+            data=payload,
+            error=error,
+        )
+    except Exception as exc:
+        logger.warning(
+            "PIPELINE_CONTENT_EVENT_LOG_FAILED formation_job_id=%s content_job_id=%s event_type=%s error=%s",
+            formation_job_id,
+            job.get("id"),
+            event_type,
+            str(exc)[:240],
+        )
+
+
 CLAUDE_MODEL = default_model()
 NUM_SUB_PARTS = 7
 _COURSE_START_SILENCE_SECONDS = 17
@@ -2503,14 +2548,17 @@ def _enrich_structured_course_plan_with_beats(*, plan: dict, course_plan: dict, 
 
 
 def _generate_structured_course_plan_two_stage(job: dict, playlist_items: list, sub_parts: list, module_contents: dict, model=None) -> dict:
+    started_at = time.time()
     logger.info(
-        "PIPELINE_STRUCTURED_PLAN_TWO_STAGE_SKELETON_START formation_job_id=%s content_job_id=%s folder=%s model=%s",
+        "PIPELINE_STRUCTURED_PLAN_TWO_STAGE_SKELETON_START formation_job_id=%s content_job_id=%s folder=%s model=%s playlist_items=%s sub_parts=%s module_chars=%s",
         job.get("formation_job_id"),
         job.get("id"),
         job.get("folder_id"),
         model or CLAUDE_MODEL,
+        len(playlist_items or []),
+        len(sub_parts or []),
+        sum(len(str(value or "")) for value in (module_contents or {}).values()),
     )
-    started_at = time.time()
     skeleton_prompt = _build_structured_course_plan_prompt(
         job,
         playlist_items,
@@ -2518,10 +2566,26 @@ def _generate_structured_course_plan_two_stage(job: dict, playlist_items: list, 
         module_contents,
         planning_mode="skeleton",
     )
+    logger.info(
+        "PIPELINE_STRUCTURED_PLAN_TWO_STAGE_SKELETON_PROMPT_READY formation_job_id=%s content_job_id=%s folder=%s prompt_chars=%s max_tokens=%s",
+        job.get("formation_job_id"),
+        job.get("id"),
+        job.get("folder_id"),
+        len(skeleton_prompt),
+        7000,
+    )
     raw = _anthropic_post(
         messages=[{"role": "user", "content": skeleton_prompt}],
         max_tokens=7000,
         model=model,
+    )
+    logger.info(
+        "PIPELINE_STRUCTURED_PLAN_TWO_STAGE_SKELETON_RESPONSE formation_job_id=%s content_job_id=%s folder=%s response_chars=%s duration_ms=%s",
+        job.get("formation_job_id"),
+        job.get("id"),
+        job.get("folder_id"),
+        len(raw or ""),
+        int((time.time() - started_at) * 1000),
     )
     skeleton_plan = _normalize_structured_course_plans(
         _parse_structured_course_plan(raw),
@@ -2537,6 +2601,7 @@ def _generate_structured_course_plan_two_stage(job: dict, playlist_items: list, 
         int((time.time() - started_at) * 1000),
     )
     workers = _structured_course_parallel_workers()
+    enrichment_started_at = time.time()
     logger.info(
         "PIPELINE_STRUCTURED_PLAN_TWO_STAGE_ENRICH_START formation_job_id=%s content_job_id=%s courses=%s workers=%s",
         job.get("formation_job_id"),
@@ -2572,11 +2637,13 @@ def _generate_structured_course_plan_two_stage(job: dict, playlist_items: list, 
         },
     }
     logger.info(
-        "PIPELINE_STRUCTURED_PLAN_TWO_STAGE_DONE formation_job_id=%s content_job_id=%s courses=%s beats=%s",
+        "PIPELINE_STRUCTURED_PLAN_TWO_STAGE_DONE formation_job_id=%s content_job_id=%s courses=%s beats=%s enrich_duration_ms=%s total_duration_ms=%s",
         job.get("formation_job_id"),
         job.get("id"),
         len(enriched_courses),
         total_beats,
+        int((time.time() - enrichment_started_at) * 1000),
+        int((time.time() - started_at) * 1000),
     )
     return plan
 
@@ -2598,20 +2665,42 @@ def _generate_structured_course_plan(job: dict, playlist_items: list, sub_parts:
                     raise
         raise ValueError("Plan structuré deux niveaux impossible")
 
-    prompt = _build_structured_course_plan_prompt(job, playlist_items, sub_parts, module_contents, planning_mode="full")
     for attempt in range(3):
         try:
+            attempt_started_at = time.time()
+            prompt = _build_structured_course_plan_prompt(job, playlist_items, sub_parts, module_contents, planning_mode="full")
+            logger.info(
+                "PIPELINE_STRUCTURED_PLAN_FULL_START formation_job_id=%s content_job_id=%s folder=%s attempt=%s model=%s prompt_chars=%s max_tokens=%s",
+                job.get("formation_job_id"),
+                job.get("id"),
+                job.get("folder_id"),
+                attempt + 1,
+                model or CLAUDE_MODEL,
+                len(prompt),
+                9000,
+            )
             raw = _anthropic_post(
                 messages=[{"role": "user", "content": prompt}],
                 max_tokens=9000,
                 model=model,
             )
-            return _normalize_structured_course_plans(
+            plan = _normalize_structured_course_plans(
                 _parse_structured_course_plan(raw),
                 job=job,
                 playlist_items=playlist_items,
                 sub_parts=sub_parts,
             )
+            logger.info(
+                "PIPELINE_STRUCTURED_PLAN_FULL_DONE formation_job_id=%s content_job_id=%s folder=%s attempt=%s response_chars=%s courses=%s duration_ms=%s",
+                job.get("formation_job_id"),
+                job.get("id"),
+                job.get("folder_id"),
+                attempt + 1,
+                len(raw or ""),
+                len(plan.get("courses") or []),
+                int((time.time() - attempt_started_at) * 1000),
+            )
+            return plan
         except Exception as e:
             logger.warning("⚠️ Plan structuré tentative %s/3 échouée : %s", attempt + 1, str(e)[:300])
             if attempt == 2:
@@ -10506,15 +10595,44 @@ def _generate_structured_course_body(
     )
     for section in _structured_body_sections_for_course(course_plan):
         label = _section_label(section)
-        section_generation = _generate_structured_section_record(
-            job=job,
-            course_plan=course_plan,
-            section=section,
-            previous_course_summary="",
-            generated_so_far="\n\n".join(section_texts),
-            module_content=module_content,
-            model=model,
+        section_started_at = time.time()
+        logger.info(
+            "PIPELINE_STRUCTURED_SECTION_START formation_job_id=%s content_job_id=%s course=%s section=%s kind=%s part=%s target_words=%s beats=%s generated_so_far_words=%s module_chars=%s model=%s",
+            job.get("formation_job_id"),
+            job.get("id"),
+            course_number,
+            label,
+            section.get("kind"),
+            section.get("part_number"),
+            int(section.get("target_words") or 0),
+            len(_section_teaching_beats(section)),
+            count_tts_spoken_words("\n\n".join(section_texts)),
+            len(module_content or ""),
+            model or CLAUDE_MODEL,
         )
+        try:
+            section_generation = _generate_structured_section_record(
+                job=job,
+                course_plan=course_plan,
+                section=section,
+                previous_course_summary="",
+                generated_so_far="\n\n".join(section_texts),
+                module_content=module_content,
+                model=model,
+            )
+        except Exception as exc:
+            logger.exception(
+                "PIPELINE_STRUCTURED_SECTION_ERROR formation_job_id=%s content_job_id=%s course=%s section=%s kind=%s part=%s duration_ms=%s error=%s",
+                job.get("formation_job_id"),
+                job.get("id"),
+                course_number,
+                label,
+                section.get("kind"),
+                section.get("part_number"),
+                int((time.time() - section_started_at) * 1000),
+                str(exc)[:300],
+            )
+            raise
         section_text = section_generation["text"]
         section_texts.append(section_text)
         section_records.append({
@@ -10531,6 +10649,19 @@ def _generate_structured_course_body(
             **_slide_display_generation_fields(section_generation),
             **_section_artifact_metadata(section),
         })
+        logger.info(
+            "PIPELINE_STRUCTURED_SECTION_DONE formation_job_id=%s content_job_id=%s course=%s section=%s kind=%s part=%s words=%s mode=%s beat_status=%s duration_ms=%s",
+            job.get("formation_job_id"),
+            job.get("id"),
+            course_number,
+            label,
+            section.get("kind"),
+            section.get("part_number"),
+            count_tts_spoken_words(section_text),
+            section_generation.get("generation_mode"),
+            section_generation.get("beat_alignment_status"),
+            int((time.time() - section_started_at) * 1000),
+        )
     body_text = "\n\n".join(s for s in section_texts if s.strip()).strip()
     logger.info(
         "PIPELINE_STRUCTURED_BODY_DONE formation_job_id=%s content_job_id=%s course=%s words=%s",
@@ -10666,6 +10797,85 @@ def _run_structured_content_generation(
 ) -> tuple[int, str, dict]:
     playlist_items = _playlist_items_for_platform(platform_id)
     job["_ethical_micro_review_records"] = []
+    structured_started_at = time.time()
+
+    def _phase_start(phase: str, message: str, data: dict | None = None) -> float:
+        phase_started_at = time.time()
+        logger.info(
+            "PIPELINE_STRUCTURED_PHASE_START formation_job_id=%s content_job_id=%s folder_id=%s phase=%s model=%s data=%s",
+            job.get("formation_job_id"),
+            job.get("id"),
+            folder_id,
+            phase,
+            model or CLAUDE_MODEL,
+            json.dumps(data or {}, ensure_ascii=False, default=str, sort_keys=True)[:1200],
+        )
+        _log_content_pipeline_event(
+            job,
+            "content_phase_started",
+            folder_id=folder_id,
+            status="running",
+            message=message,
+            model=model,
+            data={"phase": phase, **(data or {})},
+        )
+        return phase_started_at
+
+    def _phase_done(phase: str, phase_started_at: float, message: str, data: dict | None = None) -> None:
+        duration_ms = int((time.time() - phase_started_at) * 1000)
+        logger.info(
+            "PIPELINE_STRUCTURED_PHASE_DONE formation_job_id=%s content_job_id=%s folder_id=%s phase=%s duration_ms=%s data=%s",
+            job.get("formation_job_id"),
+            job.get("id"),
+            folder_id,
+            phase,
+            duration_ms,
+            json.dumps(data or {}, ensure_ascii=False, default=str, sort_keys=True)[:1200],
+        )
+        _log_content_pipeline_event(
+            job,
+            "content_phase_completed",
+            folder_id=folder_id,
+            status="completed",
+            message=message,
+            model=model,
+            duration_ms=duration_ms,
+            data={"phase": phase, **(data or {})},
+        )
+
+    logger.info(
+        "PIPELINE_STRUCTURED_RUN_START formation_job_id=%s content_job_id=%s folder_id=%s platform_id=%s model=%s playlist_items=%s sub_parts=%s module_parts=%s",
+        job.get("formation_job_id"),
+        job.get("id"),
+        folder_id,
+        platform_id,
+        model or CLAUDE_MODEL,
+        len(playlist_items or []),
+        len(sub_parts or []),
+        len(module_contents or {}),
+    )
+    _log_content_pipeline_event(
+        job,
+        "content_structured_started",
+        folder_id=folder_id,
+        status="running",
+        message="Génération structurée démarrée",
+        model=model,
+        data={
+            "playlist_items": len(playlist_items or []),
+            "sub_parts": len(sub_parts or []),
+            "module_parts": len(module_contents or {}),
+        },
+    )
+
+    plan_phase = _phase_start(
+        "plan_json",
+        "Plan JSON verrouillé — génération du plan structuré",
+        {
+            "playlist_items": len(playlist_items or []),
+            "sub_parts": len(sub_parts or []),
+        },
+    )
     plan = _generate_structured_course_plan(job, playlist_items, sub_parts, module_contents, model=model)
     plan_validation = _validate_structured_course_plan(plan)
     _save_content_artifact(
@@ -10689,7 +10899,30 @@ def _run_structured_content_generation(
             plan_validation.get("errors"),
             plan_validation.get("warnings"),
         )
+    _phase_done(
+        "plan_json",
+        plan_phase,
+        "Plan JSON verrouillé terminé",
+        {
+            "courses": len(plan.get("courses") or []),
+            "validation_ok": bool(plan_validation.get("ok")),
+            "validation_errors": len(plan_validation.get("errors") or []),
+            "validation_warnings": len(plan_validation.get("warnings") or []),
+        },
+    )
+    logger.info(
+        "PIPELINE_STRUCTURED_SEGMENTS_CLEAR_START formation_job_id=%s content_job_id=%s folder_id=%s",
+        job.get("formation_job_id"),
+        job.get("id"),
+        folder_id,
+    )
     _clear_content_segments_for_structured(job["id"])
+    logger.info(
+        "PIPELINE_STRUCTURED_SEGMENTS_CLEAR_DONE formation_job_id=%s content_job_id=%s folder_id=%s",
+        job.get("formation_job_id"),
+        job.get("id"),
+        folder_id,
+    )
 
     generated_blocks = []
     course_scripts = []
@@ -10717,6 +10950,11 @@ def _run_structured_content_generation(
 
     if on_progress:
         on_progress(0, NUM_SUB_PARTS, 1, total_words, f"Génération parallèle des contenus principaux ({workers} cours à la fois)")
+    body_phase = _phase_start(
+        "body_sections",
+        "Génération des sections principales",
+        {"workers": workers, "courses": total_courses},
+    )
     body_results = _run_structured_parallel(
         course_plans,
         lambda course_plan: _generate_structured_course_body(
@@ -10729,9 +10967,23 @@ def _run_structured_content_generation(
         workers=workers,
     )
     body_results = sorted(body_results, key=lambda item: int(item.get("course_number") or 0))
+    _phase_done(
+        "body_sections",
+        body_phase,
+        "Sections principales générées",
+        {
+            "courses": len(body_results),
+            "body_words": sum(count_tts_spoken_words(result.get("body_text") or "") for result in body_results),
+        },
+    )
 
     if on_progress:
         on_progress(0, NUM_SUB_PARTS, 1, total_words, "Résumés courts des cours pour les reprises tardives")
+    summary_phase = _phase_start(
+        "summaries",
+        "Résumés courts pour les transitions",
+        {"courses": len(body_results), "workers": workers},
+    )
     summary_pairs = _run_structured_parallel(
         body_results,
         lambda body_result: _summarize_structured_course_body(body_result, model=model),
@@ -10742,9 +10994,23 @@ def _run_structured_content_generation(
         f"Cours {course_number}: {course_summaries.get(course_number) or ''}"
         for course_number in sorted(course_summaries)
     )
+    _phase_done(
+        "summaries",
+        summary_phase,
+        "Résumés courts terminés",
+        {
+            "summaries": len(course_summaries),
+            "summary_chars": sum(len(summary or "") for summary in course_summaries.values()),
+        },
+    )
 
     if on_progress:
         on_progress(0, NUM_SUB_PARTS, 1, total_words, "Génération tardive des introductions et raccords")
+    openings_phase = _phase_start(
+        "late_openings",
+        "Génération tardive des introductions",
+        {"courses": len(body_results), "workers": workers},
+    )
     opening_results = _run_structured_parallel(
         body_results,
         lambda body_result: _generate_late_opening_for_structured_course(
@@ -10759,11 +11025,22 @@ def _run_structured_content_generation(
         int(opening.get("course_number") or 0): opening
         for opening in opening_results
     }
+    _phase_done(
+        "late_openings",
+        openings_phase,
+        "Introductions tardives terminées",
+        {"openings": len(openings_by_course)},
+    )
     day_conclusion_tasks = [
         body_result
         for body_result in body_results
         if _structured_day_conclusion_section_for_course(body_result["course_plan"])
     ]
+    conclusions_phase = _phase_start(
+        "day_conclusions",
+        "Génération des conclusions de journée",
+        {"courses": len(day_conclusion_tasks), "workers": max(1, min(workers, len(day_conclusion_tasks) or 1))},
+    )
     day_conclusion_results = _run_structured_parallel(
         day_conclusion_tasks,
         lambda body_result: _generate_late_day_conclusion_for_structured_course(
@@ -10779,7 +11056,18 @@ def _run_structured_content_generation(
         for result in day_conclusion_results
         if result
     }
+    _phase_done(
+        "day_conclusions",
+        conclusions_phase,
+        "Conclusions de journée terminées",
+        {"conclusions": len(day_conclusions_by_course)},
+    )
 
+    drafts_phase = _phase_start(
+        "draft_artifacts",
+        "Assemblage des brouillons structurés",
+        {"courses": len(body_results)},
+    )
     draft_courses = []
     for body_result in body_results:
         course_number = int(body_result.get("course_number") or 0)
@@ -10815,9 +11103,23 @@ def _run_structured_content_generation(
             },
         ),
     )
+    _phase_done(
+        "draft_artifacts",
+        drafts_phase,
+        "Brouillons structurés sauvegardés",
+        {
+            "courses": len(draft_courses),
+            "draft_words": sum(int(course.get("draft_word_count") or 0) for course in draft_courses),
+        },
+    )
 
     if on_progress:
         on_progress(0, NUM_SUB_PARTS, 1, total_words, "Adhérence au plan après génération par section")
+    adherence_phase = _phase_start(
+        "plan_adherence",
+        "Review adhérence au plan",
+        {"courses": len(body_results), "workers": workers},
+    )
     body_results = _run_plan_adherence_on_generated_drafts(
         job=job,
         platform_id=platform_id,
@@ -10829,6 +11131,12 @@ def _run_structured_content_generation(
         total_words=total_words,
         on_progress=on_progress,
         model=model,
+    )
+    _phase_done(
+        "plan_adherence",
+        adherence_phase,
+        "Review adhérence au plan terminée",
+        {"courses": len(body_results)},
     )
 
     if on_progress:
@@ -10971,12 +11279,26 @@ def _run_structured_content_generation(
             "module_content": module_content,
         }
 
+    calibration_phase = _phase_start(
+        "budget_calibration",
+        "Calibrage des budgets texte",
+        {"courses": len(body_results), "workers": workers},
+    )
     calibrated_results = _run_structured_parallel(
         body_results,
         _calibrate_draft,
         workers=workers,
     )
     calibrated_results = sorted(calibrated_results, key=lambda item: int(item.get("course_number") or 0))
+    _phase_done(
+        "budget_calibration",
+        calibration_phase,
+        "Calibrage budgets texte terminé",
+        {
+            "courses": len(calibrated_results),
+            "words": sum(int(result.get("calibrated_words") or result.get("words") or 0) for result in calibrated_results),
+        },
+    )
 
     budget_calibration_records = []
     for result in calibrated_results:
@@ -11178,12 +11500,27 @@ def _run_structured_content_generation(
             "post_micro_budget_repair": post_micro_budget_repair,
         }
 
+    micro_phase = _phase_start(
+        "ethical_micro_review",
+        "Micro-conformité éthique",
+        {"courses": len(calibrated_results), "workers": workers},
+    )
     final_course_results = _run_structured_parallel(
         calibrated_results,
         _micro_review_calibrated_course,
         workers=workers,
     )
     final_course_results = sorted(final_course_results, key=lambda item: int(item.get("course_number") or 0))
+    _phase_done(
+        "ethical_micro_review",
+        micro_phase,
+        "Micro-conformité éthique terminée",
+        {
+            "courses": len(final_course_results),
+            "words": sum(int(result.get("words") or 0) for result in final_course_results),
+            "changed": sum(1 for result in final_course_results if result.get("micro_changed")),
+        },
+    )
 
     micro_records = _sorted_ethical_micro_review_records(job)
     _save_content_artifact(
@@ -11207,13 +11544,38 @@ def _run_structured_content_generation(
         ),
     )
 
+    persist_phase = _phase_start(
+        "persist_courses",
+        "Sauvegarde des cours générés en Postgres",
+        {"courses": len(final_course_results)},
+    )
     for result in final_course_results:
         course_number = int(result.get("course_number") or 0)
         course_plan = result["course_plan"]
         course_text = result["course_text"]
         words = int(result.get("words") or 0)
         calibration = result.get("calibration") or {}
+        segment_started_at = time.time()
+        logger.info(
+            "PIPELINE_STRUCTURED_SEGMENT_SAVE_START formation_job_id=%s content_job_id=%s folder_id=%s course=%s/%s words=%s",
+            job.get("formation_job_id"),
+            job["id"],
+            folder_id,
+            course_number,
+            total_courses,
+            words,
+        )
         _save_structured_course_segment(job["id"], course_plan, course_text)
+        logger.info(
+            "PIPELINE_STRUCTURED_SEGMENT_SAVE_DONE formation_job_id=%s content_job_id=%s folder_id=%s course=%s/%s words=%s duration_ms=%s",
+            job.get("formation_job_id"),
+            job["id"],
+            folder_id,
+            course_number,
+            total_courses,
+            words,
+            int((time.time() - segment_started_at) * 1000),
+        )
         total_words += words
         generated_block = {
             "bloc_number": course_number,
@@ -11266,7 +11628,18 @@ def _run_structured_content_generation(
             words,
             course_plan.get("target_words"),
         )
+    _phase_done(
+        "persist_courses",
+        persist_phase,
+        "Cours générés sauvegardés en Postgres",
+        {"courses": len(final_course_results), "total_words": total_words},
+    )
 
+    course_scripts_phase = _phase_start(
+        "course_scripts_artifact",
+        "Sauvegarde de l'artefact scripts cours",
+        {"courses": len(course_scripts)},
+    )
     _save_content_artifact(
         platform_id,
         folder_id,
@@ -11283,7 +11656,18 @@ def _run_structured_content_generation(
             },
         ),
     )
+    _phase_done(
+        "course_scripts_artifact",
+        course_scripts_phase,
+        "Artefact scripts cours sauvegardé",
+        {"courses": len(course_scripts)},
+    )
 
+    final_phase = _phase_start(
+        "final_assembly",
+        "Assemblage et upload du texte final",
+        {"total_words_before_assembly": total_words},
+    )
     final_words, filename = _assemble_and_upload(folder_id, platform_id, job["id"])
     payload = {
         "generated_at": datetime.utcnow().isoformat() + "Z",
@@ -11295,6 +11679,31 @@ def _run_structured_content_generation(
         "course_blocs": [],
     }
     _save_course_script_plan(platform_id, folder_id, payload)
+    _phase_done(
+        "final_assembly",
+        final_phase,
+        "Assemblage final terminé",
+        {"final_words": final_words, "filename": filename},
+    )
+    logger.info(
+        "PIPELINE_STRUCTURED_RUN_DONE formation_job_id=%s content_job_id=%s folder_id=%s final_words=%s filename=%s duration_ms=%s",
+        job.get("formation_job_id"),
+        job.get("id"),
+        folder_id,
+        final_words,
+        filename,
+        int((time.time() - structured_started_at) * 1000),
+    )
+    _log_content_pipeline_event(
+        job,
+        "content_structured_completed",
+        folder_id=folder_id,
+        status="completed",
+        message="Génération structurée terminée",
+        model=model,
+        duration_ms=int((time.time() - structured_started_at) * 1000),
+        data={"final_words": final_words, "filename": filename},
+    )
     return final_words, filename, payload
 
 
@@ -11618,6 +12027,17 @@ def run_content_generation(folder_id, on_progress=None, mode="normal", model=Non
             folder_id,
             int((time.time() - started_at) * 1000),
             e,
+        )
+        _log_content_pipeline_event(
+            job,
+            "content_generation_error",
+            folder_id=folder_id,
+            status="error",
+            message="Génération contenu échouée",
+            model=model,
+            duration_ms=int((time.time() - started_at) * 1000),
+            data={"mode": mode},
+            error=str(e)[:1000],
         )
         _update_job_db(job_id, status="error", error_message=str(e))
         raise
