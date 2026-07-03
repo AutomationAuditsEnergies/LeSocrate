@@ -16,6 +16,7 @@ import os
 import shutil
 import subprocess
 import threading
+import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
 
@@ -239,6 +240,40 @@ def parse_retry_after(resp) -> float:
     return 60.0
 
 
+def _post_with_hard_timeout(*, config: dict, headers: dict, payload: dict, timeout: int):
+    """HTTP POST with an eventlet hard timeout around requests' own timeout."""
+    hard_timeout = max(1, _int_env("LLM_HTTP_HARD_TIMEOUT_SECONDS", int(timeout) + 30))
+    try:
+        import eventlet
+        from eventlet.timeout import Timeout as EventletTimeout
+    except Exception:
+        return _http.post(
+            config["url"],
+            headers=headers,
+            json=payload,
+            timeout=timeout,
+        )
+
+    timer = eventlet.Timeout(hard_timeout)
+    try:
+        return _http.post(
+            config["url"],
+            headers=headers,
+            json=payload,
+            timeout=timeout,
+        )
+    except EventletTimeout as exc:
+        if exc is timer:
+            raise AnthropicAPIError(
+                504,
+                "timeout",
+                f"{config['provider']} request timeout after {hard_timeout}s",
+            )
+        raise
+    finally:
+        timer.cancel()
+
+
 def _is_local_dev() -> bool:
     return os.getenv("LOCAL_DEV", "").lower() == "true"
 
@@ -299,6 +334,10 @@ def post_message(messages, max_tokens=8000, model=None, timeout=600, temperature
         raise ValueError("post_message: 'model' est requis")
 
     model = _normalize_model_alias(model)
+    timeout = _int_env(
+        "FORMATION_LLM_TIMEOUT_SECONDS",
+        _int_env("LLM_HTTP_TIMEOUT_SECONDS", int(timeout)),
+    )
 
     # LOCAL_DEV=true → forfait Claude Code (OAuth) — uniquement pour les modèles Claude
     if _is_local_dev() and shutil.which("claude") and not model.lower().startswith("deepseek"):
@@ -331,17 +370,33 @@ def post_message(messages, max_tokens=8000, model=None, timeout=600, temperature
         if thinking == "enabled" and effort in ("high", "max"):
             payload["output_config"] = {"effort": effort}
 
+    headers = {
+        "x-api-key": config["api_key"],
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
+    }
+    started_at = time.monotonic()
+    logger.info(
+        "LLM_REQUEST_START provider=%s model=%s max_tokens=%s timeout=%s",
+        config["provider"],
+        model,
+        max_tokens,
+        timeout,
+    )
     with _llm_concurrency_slot(config["provider"], model):
-        resp = _http.post(
-            config["url"],
-            headers={
-                "x-api-key": config["api_key"],
-                "anthropic-version": "2023-06-01",
-                "content-type": "application/json",
-            },
-            json=payload,
+        resp = _post_with_hard_timeout(
+            config=config,
+            headers=headers,
+            payload=payload,
             timeout=timeout,
         )
+    logger.info(
+        "LLM_REQUEST_DONE provider=%s model=%s status=%s duration_ms=%s",
+        config["provider"],
+        model,
+        resp.status_code,
+        int((time.monotonic() - started_at) * 1000),
+    )
 
     if resp.status_code == 429:
         wait = parse_retry_after(resp)
