@@ -471,7 +471,7 @@ def get_latest_review_report_row(
 ) -> dict[str, Any] | None:
     ensure_pipeline_observability_tables()
     ph = _placeholder()
-    source_filter = "source LIKE '%humanization%'" if kind == "humanization" else "source NOT LIKE '%humanization%'"
+    source_filter = "source LIKE '%%humanization%%'" if kind == "humanization" else "source NOT LIKE '%%humanization%%'"
     query = f"""
         SELECT id, source, generated_via, report_json, created_at
         FROM content_review_reports
@@ -1569,7 +1569,7 @@ def list_final_script_document_rows(folder_id: int) -> list[dict[str, Any]]:
         SELECT id, filename, audio_filename
         FROM cours_documents
         WHERE folder_id = {ph}
-          AND (doc_type = 'final_script' OR original_name LIKE 'cours_genere_%.txt')
+          AND (doc_type = 'final_script' OR original_name LIKE 'cours_genere_%%.txt')
     """
     if _pipeline_primary_backend() == "postgres":
         with get_postgres_connection() as conn:
@@ -1596,7 +1596,7 @@ def replace_final_script_document_record(
     delete_query = f"""
         DELETE FROM cours_documents
         WHERE folder_id = {ph}
-          AND (doc_type = 'final_script' OR original_name LIKE 'cours_genere_%.txt')
+          AND (doc_type = 'final_script' OR original_name LIKE 'cours_genere_%%.txt')
     """
     insert_query = f"""
         INSERT INTO cours_documents (folder_id, filename, original_name, doc_type, status)
