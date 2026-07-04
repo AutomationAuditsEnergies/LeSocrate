@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import WaveSurfer from 'wavesurfer.js'
 import RegionsPlugin from 'wavesurfer.js/dist/plugins/regions.js'
-import { apiFetch, apiUrl, getPlatformId } from '../api'
+import { apiFetch, apiRequestHeaders, apiUrl } from '../api'
 import { breakDurationLabel, buildAudioSlideTimings } from './slides/audioSlideSync'
 import { SlidePreviewFrame } from './slides/PipelineSlidePreview'
 
@@ -49,6 +49,47 @@ function waitForMediaReadyAfterSeek(media, targetSeconds, timeoutMs = 1200) {
     media.addEventListener('canplaythrough', finish, { once: true })
     timeoutId = window.setTimeout(finish, timeoutMs)
   })
+}
+
+async function assertAudioStreamReachable(url) {
+  let resp
+  try {
+    resp = await fetch(url, {
+      method: 'GET',
+      credentials: 'omit',
+      cache: 'no-store',
+      headers: {
+        Range: 'bytes=0-1',
+      },
+    })
+  } catch (e) {
+    throw new Error(e?.message === 'Failed to fetch'
+      ? 'requête audio bloquée ou stockage audio indisponible'
+      : (e?.message || 'requête audio échouée'))
+  }
+
+  if (resp.ok) {
+    await resp.arrayBuffer().catch(() => {})
+    return
+  }
+
+  let detail = ''
+  const contentType = resp.headers.get('content-type') || ''
+  if (contentType.includes('application/json')) {
+    const data = await resp.json().catch(() => ({}))
+    detail = data.error || data.message || ''
+  } else {
+    detail = await resp.text().catch(() => '')
+  }
+
+  const suffix = detail ? ` (${detail})` : ''
+  if (resp.status === 403) {
+    throw new Error(`accès admin refusé pour le stream audio${suffix}`)
+  }
+  if (resp.status === 404) {
+    throw new Error(`fichier audio introuvable sur le stockage${suffix}`)
+  }
+  throw new Error(`stream audio indisponible : HTTP ${resp.status}${suffix}`)
 }
 
 // Audios pause/Q&A : pas de synchro deck, on affiche le slide statique dédié
@@ -231,14 +272,7 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
   }, [])
 
   const audioFetchHeaders = useCallback(() => {
-    const adminToken = localStorage.getItem('admin_auth_token')
-    const userToken = localStorage.getItem('auth_token')
-    const token = adminToken || userToken
-    const platformId = getPlatformId()
-    return {
-      ...(token ? { 'X-Auth-Token': token } : {}),
-      'X-Platform-Id': platformId,
-    }
+    return apiRequestHeaders('/api/hr')
   }, [])
 
   const buildAudioStreamUrl = useCallback(async () => {
@@ -394,7 +428,12 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
     waveEl?.addEventListener('wheel', handleWheel, { passive: false })
 
     Promise.resolve(buildAudioStreamUrl())
-      .then(url => { if (!cancelled) return ws.load(url) })
+      .then(async (url) => {
+        if (cancelled) return undefined
+        await assertAudioStreamReachable(url)
+        if (cancelled) return undefined
+        return ws.load(url)
+      })
       .catch(e => {
         if (cancelled) return
         // ws.destroy() pendant un fetch en cours déclenche un AbortError que
