@@ -1,10 +1,12 @@
 import { useState, useEffect, useRef } from 'react'
 import { apiFetch, apiUrl } from '../api'
 import AudioEditor from './AudioEditor'
+import { breakDurationLabel, buildAudioSlideTimings } from './slides/audioSlideSync'
+import { SlidePreviewFrame } from './slides/PipelineSlidePreview'
 
 // ─── Material Icon Component ─────────────────────────────────────────────────
-const Icon = ({ name, className = '' }) => (
-  <span className={`material-icons ${className}`}>{name}</span>
+const Icon = ({ name, className = '', style }) => (
+  <span className={`material-icons ${className}`} style={style}>{name}</span>
 )
 
 const hasCrCdTitle = (title = '') => /\bCRCD\b/i.test(title)
@@ -56,6 +58,50 @@ const isCourseAudioFilename = (filename = '') => (
   || /^cours_.*\.mp3$/i.test(filename)
 )
 
+const audioTypeFromFilename = (filename = '') => {
+  const name = String(filename || '').toLowerCase()
+  if (name.startsWith('qa_')) return 'qa'
+  if (name.startsWith('pause_')) return 'pause'
+  return 'cours'
+}
+
+const playlistItemFromFilename = (filename = '') => (
+  AUDIO_PLAYLIST_ITEMS.find(item => item.filename === filename) || {
+    filename,
+    type: audioTypeFromFilename(filename),
+    label: String(filename || '').replace(/\.mp3$/i, ''),
+  }
+)
+
+const breakSlideTemplateForFilename = (filename = '') => {
+  const type = audioTypeFromFilename(filename)
+  if (type === 'qa') return 'qa'
+  if (type === 'pause') return 'pause'
+  return null
+}
+
+const breakDurationLabelForFilename = (filename = '') => {
+  const match = String(filename || '').match(/(\d{1,2})h(\d{2})_(\d{1,2})h(\d{2})/)
+  if (!match) return null
+  const start = parseInt(match[1], 10) * 60 + parseInt(match[2], 10)
+  const end = parseInt(match[3], 10) * 60 + parseInt(match[4], 10)
+  return end > start ? breakDurationLabel((end - start) * 60) : null
+}
+
+const formatPreviewTime = (seconds = 0) => {
+  const safeSeconds = Math.max(0, Math.floor(Number(seconds) || 0))
+  const minutes = Math.floor(safeSeconds / 60)
+  return `${minutes}:${String(safeSeconds % 60).padStart(2, '0')}`
+}
+
+const activeTimingForMs = (timings = [], currentTimeMs = 0) => {
+  if (!timings.length) return null
+  const seconds = Number(currentTimeMs || 0) / 1000
+  return timings.find(item => seconds >= item.start && seconds < item.end)
+    || [...timings].reverse().find(item => seconds >= item.start)
+    || timings[0]
+}
+
 const mergeCourseBlocsForScriptModal = (generated = [], planned = []) => {
   const byBloc = new Map()
   ;(planned || []).forEach(bloc => {
@@ -97,6 +143,14 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
   const [wordAnalysis, setWordAnalysis] = useState(null) // résultat analyse mots
   const [analysing, setAnalysing] = useState(false)
   const [generatedAudios, setGeneratedAudios] = useState([]) // MP3 générés du dossier
+  const [previewAudioFilename, setPreviewAudioFilename] = useState('')
+  const [previewAudioUrl, setPreviewAudioUrl] = useState('')
+  const [previewAudioLoading, setPreviewAudioLoading] = useState(false)
+  const [previewAudioError, setPreviewAudioError] = useState('')
+  const [previewAudioTimeMs, setPreviewAudioTimeMs] = useState(0)
+  const [previewSlideDeck, setPreviewSlideDeck] = useState({ slides: [], audioSync: {}, deckId: null })
+  const [previewSlidesLoading, setPreviewSlidesLoading] = useState(false)
+  const [previewSlidesError, setPreviewSlidesError] = useState('')
   const [deletingAudioFile, setDeletingAudioFile] = useState('')
   const [dragFolderIdx, setDragFolderIdx] = useState(null)
   const [dragOverFolderIdx, setDragOverFolderIdx] = useState(null)
@@ -143,6 +197,7 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
   const contentPollingRef = useRef(null)
   const fileInputRef = useRef(null)
   const mockAudioInputRef = useRef(null)
+  const previewAudioRef = useRef(null)
   const createFolderInputRef = useRef(null)
   const pollingRef = useRef(null)
 
@@ -265,6 +320,75 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
       }
     }
   }, [view, selectedFolder])
+
+  useEffect(() => {
+    if (!selectedFolder) return
+    const generatedNames = new Set(generatedAudios.map(audio => audio.filename))
+    if (previewAudioFilename && generatedNames.has(previewAudioFilename)) return
+
+    const nextAudio = AUDIO_PLAYLIST_ITEMS.find(item => generatedNames.has(item.filename))
+      || generatedAudios[0]
+    setPreviewAudioFilename(nextAudio?.filename || '')
+    setPreviewAudioTimeMs(0)
+  }, [generatedAudios, previewAudioFilename, selectedFolder])
+
+  useEffect(() => {
+    if (!selectedFolder || !previewAudioFilename) {
+      setPreviewAudioUrl('')
+      setPreviewAudioError('')
+      setPreviewAudioLoading(false)
+      return undefined
+    }
+
+    let cancelled = false
+    setPreviewAudioLoading(true)
+    setPreviewAudioError('')
+    setPreviewAudioUrl('')
+    setPreviewAudioTimeMs(0)
+
+    apiFetch(`/api/hr/cours-folders/${selectedFolder.id}/audio-url/${encodeURIComponent(previewAudioFilename)}`)
+      .then(async (resp) => {
+        const data = await resp.json().catch(() => ({}))
+        if (!resp.ok || !data.success || !data.url) {
+          throw new Error(data.error || 'Audio indisponible')
+        }
+        if (!cancelled) setPreviewAudioUrl(data.url)
+      })
+      .catch((e) => {
+        if (!cancelled) setPreviewAudioError(e.message || 'Impossible de charger cet audio')
+      })
+      .finally(() => {
+        if (!cancelled) setPreviewAudioLoading(false)
+      })
+
+    return () => { cancelled = true }
+  }, [selectedFolder, previewAudioFilename])
+
+  const fetchFolderSlideDeck = async (folderId) => {
+    setPreviewSlidesLoading(true)
+    setPreviewSlidesError('')
+    setPreviewSlideDeck({ slides: [], audioSync: {}, deckId: null })
+    try {
+      const resp = await apiFetch(`/api/slides/data?folder_id=${encodeURIComponent(folderId)}`)
+      const data = await resp.json().catch(() => ({}))
+      if (data.status === 'no_data') {
+        setPreviewSlideDeck({ slides: [], audioSync: {}, deckId: null })
+        return
+      }
+      if (!resp.ok || data.status !== 'success') {
+        throw new Error(data.message || data.error || 'Deck slides indisponible')
+      }
+      setPreviewSlideDeck({
+        slides: Array.isArray(data.slides) ? data.slides : [],
+        audioSync: data.audio_sync || data.pipeline_debug?.audio_sync || {},
+        deckId: data.deck_id || null,
+      })
+    } catch (e) {
+      setPreviewSlidesError(e.message || 'Impossible de charger les slides')
+    } finally {
+      setPreviewSlidesLoading(false)
+    }
+  }
 
   // ─── Actions ─────────────────────────────────────────────────────────
   const handleCreateFolder = () => {
@@ -1064,10 +1188,17 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
     setTtsStatus(null)
     setWordAnalysis(null)
     setGeneratedAudios([])
+    setPreviewAudioFilename('')
+    setPreviewAudioUrl('')
+    setPreviewAudioError('')
+    setPreviewAudioTimeMs(0)
+    setPreviewSlideDeck({ slides: [], audioSync: {}, deckId: null })
+    setPreviewSlidesError('')
     setContentJob(null)
     setProgramText('')
     stopContentPolling()
     fetchGeneratedAudios(folder.id)
+    fetchFolderSlideDeck(folder.id)
     fetchContentJob(folder.id)
     fetchDirtyBlocs(folder.id)
   }
@@ -1077,6 +1208,13 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
     setSelectedFolder(null)
     setDocuments([])
     setTtsStatus(null)
+    setGeneratedAudios([])
+    setPreviewAudioFilename('')
+    setPreviewAudioUrl('')
+    setPreviewAudioError('')
+    setPreviewAudioTimeMs(0)
+    setPreviewSlideDeck({ slides: [], audioSync: {}, deckId: null })
+    setPreviewSlidesError('')
     stopContentPolling()
     if (pollingRef.current) {
       clearInterval(pollingRef.current)
@@ -1380,6 +1518,7 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
       if (resp.ok && data.success) {
         setGeneratedAudios(prev => prev.filter(audio => audio.filename !== filename))
         if (audioEditorFile === filename) setAudioEditorFile(null)
+        if (previewAudioFilename === filename) setPreviewAudioFilename('')
       } else {
         alert(data.error || `Erreur lors de la suppression de ${filename}`)
       }
@@ -1742,6 +1881,20 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
     : canGeneratePlaylistAudio
       ? 'Générer les 7 cours du dossier'
       : 'Script texte requis'
+  const generatedAudioMap = Object.fromEntries(generatedAudios.map(audio => [audio.filename, audio]))
+  const previewPlaylistItem = previewAudioFilename ? playlistItemFromFilename(previewAudioFilename) : null
+  const previewAudioType = previewPlaylistItem?.type || audioTypeFromFilename(previewAudioFilename)
+  const previewAudioMeta = AUDIO_TYPE_META[previewAudioType] || AUDIO_TYPE_META.cours
+  const previewSlideTimings = previewAudioFilename
+    ? buildAudioSlideTimings(previewSlideDeck.slides, previewSlideDeck.audioSync, previewAudioFilename)
+    : []
+  const previewActiveTiming = activeTimingForMs(previewSlideTimings, previewAudioTimeMs)
+  const previewBreakTemplate = breakSlideTemplateForFilename(previewAudioFilename)
+  const previewFallbackSlide = previewSlideDeck.slides[0] || null
+  const previewDeckSlide = previewBreakTemplate
+    ? { template_type: previewBreakTemplate, data: { duration_label: breakDurationLabelForFilename(previewAudioFilename) } }
+    : previewActiveTiming?.slide || previewFallbackSlide
+  const modalMaxWidth = audioEditorFile ? '1120px' : view === 'documents' ? '1260px' : '960px'
 
   return (
     <div
@@ -1752,7 +1905,7 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
       <div
         className="w-full overflow-hidden rounded-xl"
         style={{
-          maxWidth: audioEditorFile ? '1120px' : '960px',
+          maxWidth: modalMaxWidth,
           maxHeight: '92vh',
           backgroundColor: colors.cardBg,
           border: `1px solid ${colors.border}`,
@@ -2004,12 +2157,15 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
                 </button>
               </div>
 
-	              <div className="mb-4">
+              <div className="mb-4 grid gap-4 xl:grid-cols-[minmax(360px,0.95fr)_minmax(480px,1.25fr)]">
                 {/* ── Panneau : Audios générés ── */}
                 <div className="overflow-hidden rounded-xl" style={{ border: `1px solid ${colors.border}`, backgroundColor: colors.cardBg }}>
                   <div className="flex items-center gap-2 border-b px-4 py-3" style={{ borderColor: colors.border, backgroundColor: darkMode ? '#111827' : '#f8fafc' }}>
                     <Icon name="music_note" style={{ color: colors.textMuted, fontSize: '17px' }} />
                     <span className="text-sm font-semibold" style={{ color: colors.text }}>Audios générés</span>
+                    <span className="rounded-full px-2 py-0.5 text-[11px] font-semibold" style={{ backgroundColor: colors.innerBg, color: colors.textMuted }}>
+                      {generatedAudios.length}/19
+                    </span>
                     <select
                       value={audioTypeFilter}
                       onChange={(e) => setAudioTypeFilter(e.target.value)}
@@ -2028,39 +2184,63 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
                     </select>
                   </div>
 
-                  <div className="max-h-72 overflow-y-auto p-2">
-                    {(() => {
-                      const generatedMap = Object.fromEntries(generatedAudios.map(a => [a.filename, a]))
-                      const visibleItems = AUDIO_PLAYLIST_ITEMS.filter(item => audioTypeFilter === 'all' || item.type === audioTypeFilter)
-                      return visibleItems.map((item) => {
-                        const audio = generatedMap[item.filename]
+                  <div className="max-h-[460px] overflow-y-auto p-2">
+                    {AUDIO_PLAYLIST_ITEMS
+                      .filter(item => audioTypeFilter === 'all' || item.type === audioTypeFilter)
+                      .map((item) => {
+                        const audio = generatedAudioMap[item.filename]
                         const meta = AUDIO_TYPE_META[item.type] || AUDIO_TYPE_META.cours
+                        const selected = previewAudioFilename === item.filename
                         return (
                           <div
                             key={item.filename}
-                            className="flex min-h-[46px] items-center gap-3 rounded-lg px-3 py-2"
+                            role={audio ? 'button' : undefined}
+                            tabIndex={audio ? 0 : -1}
+                            onClick={() => {
+                              if (audio) setPreviewAudioFilename(item.filename)
+                            }}
+                            onKeyDown={(e) => {
+                              if (audio && (e.key === 'Enter' || e.key === ' ')) {
+                                e.preventDefault()
+                                setPreviewAudioFilename(item.filename)
+                              }
+                            }}
+                            className="flex min-h-[50px] items-center gap-3 rounded-lg px-3 py-2 outline-none transition-colors"
                             style={{
-                              backgroundColor: audio ? (darkMode ? '#111827' : '#f8fafc') : 'transparent',
-                              border: `1px solid ${audio ? colors.border : 'transparent'}`,
+                              backgroundColor: selected
+                                ? (darkMode ? 'rgba(139, 92, 246, 0.16)' : 'rgba(139, 92, 246, 0.10)')
+                                : audio ? (darkMode ? '#111827' : '#f8fafc') : 'transparent',
+                              border: `1px solid ${selected ? '#8B5CF6' : audio ? colors.border : 'transparent'}`,
+                              cursor: audio ? 'pointer' : 'default',
+                              opacity: audio ? 1 : 0.56,
                             }}
                           >
                             <Icon
-                              name={audio ? 'check_circle' : 'radio_button_unchecked'}
-                              style={{ color: audio ? colors.textSecondary : colors.textMuted, fontSize: '18px', flexShrink: 0 }}
+                              name={audio ? (selected ? 'play_circle' : 'check_circle') : 'radio_button_unchecked'}
+                              style={{ color: selected ? '#8B5CF6' : audio ? colors.textSecondary : colors.textMuted, fontSize: '19px', flexShrink: 0 }}
                             />
                             <div className="flex-1 min-w-0">
                               <p className="flex items-center gap-2 text-xs font-medium" style={{ color: audio ? colors.textSecondary : colors.textMuted }}>
-                                <Icon name={meta.icon} style={{ color: colors.textMuted, fontSize: '16px' }} />
+                                <Icon name={meta.icon} style={{ color: selected ? '#8B5CF6' : colors.textMuted, fontSize: '16px' }} />
                                 <span>{item.label}</span>
                                 <span style={{ color: colors.textMuted, fontWeight: 600 }}>
                                   · {meta.label}
                                 </span>
                               </p>
+                              {audio && (
+                                <p className="mt-0.5 text-[11px]" style={{ color: colors.textMuted }}>
+                                  {audio.size_mb != null ? `${audio.size_mb} Mo` : 'Audio prêt'}
+                                  {audio.last_modified ? ` · ${audio.last_modified}` : ''}
+                                </p>
+                              )}
                             </div>
                             {audio && (
                               <div className="flex flex-shrink-0 items-center gap-1.5">
                                 <button
-                                  onClick={() => setAudioEditorFile(item.filename)}
+                                  onClick={(e) => {
+                                    e.stopPropagation()
+                                    setAudioEditorFile(item.filename)
+                                  }}
                                   title="Éditer cet audio (couper / remplacer)"
                                   className="inline-flex h-8 w-8 items-center justify-center rounded-lg transition-colors"
                                   style={{ backgroundColor: colors.innerBg, border: `1px solid ${colors.border}`, color: colors.textSecondary }}
@@ -2069,7 +2249,10 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
                                 </button>
                                 <button
                                   type="button"
-                                  onClick={() => handleDeleteGeneratedAudio(item.filename)}
+                                  onClick={(e) => {
+                                    e.stopPropagation()
+                                    handleDeleteGeneratedAudio(item.filename)
+                                  }}
                                   disabled={deletingAudioFile === item.filename}
                                   title="Supprimer cet audio"
                                   className="inline-flex h-8 w-8 items-center justify-center rounded-lg transition-colors disabled:cursor-not-allowed disabled:opacity-50"
@@ -2081,11 +2264,142 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
                             )}
                           </div>
                         )
-                      })
-                    })()}
+                      })}
                   </div>
                 </div>
-	              </div>
+
+                {/* ── Panneau : Prévisualisation audio + slides ── */}
+                <section className="overflow-hidden rounded-xl" style={{ border: `1px solid ${colors.border}`, backgroundColor: colors.cardBg }}>
+                  <div className="flex items-center justify-between gap-3 border-b px-4 py-3" style={{ borderColor: colors.border, backgroundColor: darkMode ? '#111827' : '#f8fafc' }}>
+                    <div className="flex min-w-0 items-center gap-2">
+                      <Icon name="slideshow" style={{ color: colors.textMuted, fontSize: '17px' }} />
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-semibold" style={{ color: colors.text }}>Prévisualisation du jour</p>
+                        <p className="truncate text-xs" style={{ color: colors.textMuted }}>
+                          {selectedFolder?.name || 'Aucun jour sélectionné'}
+                        </p>
+                      </div>
+                    </div>
+                    {previewPlaylistItem && (
+                      <span className="flex-shrink-0 rounded-full px-2.5 py-1 text-xs font-semibold" style={{ backgroundColor: colors.innerBg, color: colors.textSecondary, border: `1px solid ${colors.border}` }}>
+                        {previewPlaylistItem.label}
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="space-y-3 p-3">
+                    {!previewAudioFilename ? (
+                      <div className="flex min-h-[360px] flex-col items-center justify-center rounded-lg px-6 text-center" style={{ backgroundColor: colors.innerBg, color: colors.textMuted }}>
+                        <Icon name="music_off" style={{ fontSize: '34px' }} />
+                        <p className="mt-2 text-sm font-semibold">Aucun audio généré pour ce jour</p>
+                        <p className="mt-1 max-w-[48ch] text-xs leading-5">
+                          Dès qu’un fichier est généré, il apparaît ici avec sa slide de prévisualisation.
+                        </p>
+                      </div>
+                    ) : (
+                      <>
+                        <div className="rounded-lg p-3" style={{ backgroundColor: colors.innerBg, border: `1px solid ${colors.border}` }}>
+                          <div className="mb-2 flex items-center justify-between gap-3">
+                            <div className="flex min-w-0 items-center gap-2">
+                              <Icon name={previewAudioMeta.icon} style={{ color: '#8B5CF6', fontSize: '18px', flexShrink: 0 }} />
+                              <div className="min-w-0">
+                                <p className="truncate text-sm font-semibold" style={{ color: colors.text }}>
+                                  {previewPlaylistItem?.label || previewAudioFilename}
+                                </p>
+                                <p className="text-xs" style={{ color: colors.textMuted }}>
+                                  {previewAudioMeta.label} · {previewAudioFilename}
+                                </p>
+                              </div>
+                            </div>
+                            {previewSlideTimings.length > 0 && (
+                              <span className="flex-shrink-0 text-xs font-semibold" style={{ color: colors.textMuted }}>
+                                {previewSlideTimings.length} repères slides
+                              </span>
+                            )}
+                          </div>
+
+                          {previewAudioLoading ? (
+                            <div className="flex h-11 items-center gap-2 rounded-md px-3 text-xs" style={{ backgroundColor: colors.cardBg, color: colors.textMuted }}>
+                              <span className="h-4 w-4 animate-spin rounded-full border-2 border-slate-300" style={{ borderTopColor: colors.textSecondary }} />
+                              Chargement de l'audio...
+                            </div>
+                          ) : previewAudioError ? (
+                            <div className="rounded-md px-3 py-2 text-xs font-medium" style={{ backgroundColor: darkMode ? '#3f1d22' : '#fef2f2', color: '#dc2626', border: `1px solid ${darkMode ? '#7f1d1d' : '#fecaca'}` }}>
+                              {previewAudioError}
+                            </div>
+                          ) : (
+                            <audio
+                              key={previewAudioUrl}
+                              ref={previewAudioRef}
+                              src={previewAudioUrl}
+                              controls
+                              preload="metadata"
+                              className="w-full"
+                              onTimeUpdate={(e) => setPreviewAudioTimeMs(e.currentTarget.currentTime * 1000)}
+                              onLoadedMetadata={(e) => setPreviewAudioTimeMs(e.currentTarget.currentTime * 1000)}
+                              onSeeked={(e) => setPreviewAudioTimeMs(e.currentTarget.currentTime * 1000)}
+                            />
+                          )}
+                        </div>
+
+                        <div className="overflow-hidden rounded-lg" style={{ border: `1px solid ${colors.border}`, backgroundColor: darkMode ? '#0b1220' : '#f8fafc' }}>
+                          <div className="flex items-center justify-between gap-3 border-b px-3 py-2" style={{ borderColor: colors.border, backgroundColor: darkMode ? '#111827' : '#ffffff' }}>
+                            <div className="flex min-w-0 items-center gap-2">
+                              <Icon name="present_to_all" style={{ color: colors.textMuted, fontSize: '16px' }} />
+                              <p className="truncate text-xs font-semibold" style={{ color: colors.textSecondary }}>
+                                Slides associées
+                              </p>
+                            </div>
+                            <p className="flex-shrink-0 text-[11px] font-semibold" style={{ color: colors.textMuted }}>
+                              {previewBreakTemplate
+                                ? `Slide ${previewBreakTemplate === 'qa' ? 'Q&A' : 'pause'}`
+                                : previewActiveTiming
+                                  ? `Slide ${previewActiveTiming.slideIndex + 1}/${previewSlideDeck.slides.length} · ${formatPreviewTime(previewActiveTiming.start)} → ${formatPreviewTime(previewActiveTiming.end)}`
+                                  : previewSlideDeck.slides.length
+                                    ? `${previewSlideDeck.slides.length} slides`
+                                    : 'Deck indisponible'}
+                            </p>
+                          </div>
+
+                          <div className="p-2">
+                            {previewSlidesLoading ? (
+                              <div className="flex aspect-video w-full items-center justify-center rounded-md" style={{ backgroundColor: darkMode ? '#020617' : '#eef2f7', color: colors.textMuted }}>
+                                <div className="flex items-center gap-2 text-sm">
+                                  <span className="h-4 w-4 animate-spin rounded-full border-2 border-slate-300" style={{ borderTopColor: colors.textSecondary }} />
+                                  Chargement des slides...
+                                </div>
+                              </div>
+                            ) : previewSlidesError ? (
+                              <div className="flex aspect-video w-full items-center justify-center rounded-md px-6 text-center" style={{ backgroundColor: darkMode ? '#3f1d22' : '#fff1f2', color: '#dc2626' }}>
+                                <div className="max-w-[52ch] text-sm font-medium">{previewSlidesError}</div>
+                              </div>
+                            ) : previewDeckSlide ? (
+                              <div className="rounded-md border bg-white p-1" style={{ borderColor: colors.border, backgroundColor: darkMode ? '#020617' : '#ffffff' }}>
+                                <SlidePreviewFrame
+                                  slide={previewDeckSlide}
+                                  maxWidth={720}
+                                  padding={0}
+                                  style={{ width: '100%' }}
+                                />
+                              </div>
+                            ) : (
+                              <div className="flex aspect-video w-full items-center justify-center rounded-md px-6 text-center" style={{ backgroundColor: darkMode ? '#020617' : '#eef2f7', color: colors.textSecondary }}>
+                                <div className="max-w-[56ch] text-sm font-medium">Aucun deck slide disponible pour ce jour.</div>
+                              </div>
+                            )}
+                          </div>
+
+                          {!previewBreakTemplate && previewSlideDeck.slides.length > 0 && !previewSlideTimings.length && (
+                            <p className="border-t px-3 py-2 text-[11px]" style={{ borderColor: colors.border, color: colors.textMuted }}>
+                              Deck du jour chargé, mais aucun repère précis trouvé pour cet audio.
+                            </p>
+                          )}
+                        </div>
+                      </>
+                    )}
+                  </div>
+                </section>
+              </div>
               {/* ── Fin des deux panneaux ── */}
 
               {/* Progression pipeline */}
