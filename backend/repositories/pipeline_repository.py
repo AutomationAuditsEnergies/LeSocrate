@@ -1889,6 +1889,32 @@ def list_course_folder_ids_for_platform(platform_id: int) -> list[int]:
         conn.close()
 
 
+def get_course_folder_identity(folder_id: int) -> dict[str, Any] | None:
+    """Return the folder/platform identity from the active pipeline storage."""
+    ph = _placeholder()
+    query = f"""
+        SELECT id, platform_id, name, position, formation_job_id
+        FROM cours_folders
+        WHERE id = {ph}
+        LIMIT 1
+    """
+    if _pipeline_primary_backend() == "postgres":
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, (folder_id,))
+                row = cur.fetchone()
+                return dict(row) if row else None
+
+    conn = _as_sqlite_row_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(query, (folder_id,))
+        row = cursor.fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
 def _in_clause(values: list[Any] | tuple[Any, ...]) -> tuple[str, list[Any]]:
     items = list(values or [])
     if not items:

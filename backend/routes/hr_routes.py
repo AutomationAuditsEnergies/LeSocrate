@@ -17,6 +17,7 @@ from repositories.core_repository import (
     upsert_platform_config,
 )
 from repositories.pipeline_repository import list_course_folder_rows_for_platform
+from repositories.pipeline_repository import get_course_folder_identity
 from services.course_schedule_service import (
     create_missing_course_schedule,
     ensure_course_schedule_tables,
@@ -4635,16 +4636,11 @@ def create_hr_blueprint(socketio):
             return denied
 
         try:
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            cursor.execute("SELECT platform_id FROM cours_folders WHERE id = ?", (folder_id,))
-            row = cursor.fetchone()
-            conn.close()
-
-            if not row:
+            folder = get_course_folder_identity(folder_id)
+            if not folder:
                 return jsonify({"success": False, "error": "Dossier introuvable"}), 404
 
-            platform_id = row[0]
+            platform_id = int(folder["platform_id"])
             tts_conn = os.environ.get("AZURE_TTS_STORAGE_CONNECTION_STRING")
             if not tts_conn:
                 return jsonify({"success": True, "audios": []}), 200
@@ -4744,14 +4740,10 @@ def create_hr_blueprint(socketio):
         return f"platform-{platform_id}/folder-{folder_id}/playlist/{filename}"
 
     def _get_platform_id_for_folder(folder_id):
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute("SELECT platform_id FROM cours_folders WHERE id = ?", (folder_id,))
-        row = cursor.fetchone()
-        conn.close()
-        if not row:
+        folder = get_course_folder_identity(folder_id)
+        if not folder:
             raise ValueError(f"Dossier {folder_id} introuvable")
-        return row[0]
+        return int(folder["platform_id"])
 
     @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/audio-url/<path:filename>", methods=["GET"])
     def get_audio_sas_url(folder_id, filename):
