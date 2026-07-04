@@ -360,6 +360,101 @@ def attach_course_folder_to_job(job_id: int, folder_id: int) -> bool:
         conn.close()
 
 
+def list_course_folder_rows_for_platform(platform_id: int) -> dict[str, Any]:
+    """List course folders for a platform using the pipeline storage backend."""
+    ph = _placeholder()
+
+    def _row_to_folder(row: dict[str, Any]) -> dict[str, Any]:
+        created_at = row.get("created_at")
+        if hasattr(created_at, "isoformat"):
+            created_at = created_at.isoformat()
+        return {
+            "id": int(row["id"]),
+            "name": row["name"],
+            "created_at": created_at,
+            "document_count": int(row.get("document_count") or 0),
+            "position": int(row.get("position") or 0),
+        }
+
+    count_query = f"SELECT COUNT(*) AS count FROM cours_folders WHERE platform_id = {ph}"
+    source_query = f"""
+        SELECT pc.id
+        FROM platform_config pc
+        JOIN cours_folders cf ON cf.platform_id = pc.id
+        WHERE pc.source_formation_id = {ph}
+        GROUP BY pc.id
+        ORDER BY pc.id DESC
+        LIMIT 1
+    """
+    folders_query = f"""
+        SELECT
+            cf.id,
+            cf.name,
+            cf.created_at,
+            CASE
+                WHEN SUM(
+                    CASE
+                        WHEN cd.doc_type = 'final_script'
+                          OR cd.original_name LIKE 'cours_genere_%%.txt'
+                        THEN 1
+                        ELSE 0
+                    END
+                ) > 0
+                THEN 1
+                ELSE COUNT(cd.id)
+            END AS document_count,
+            cf.position
+        FROM cours_folders cf
+        LEFT JOIN cours_documents cd ON cf.id = cd.folder_id
+        WHERE cf.platform_id = {ph}
+        GROUP BY cf.id, cf.name, cf.created_at, cf.position
+        ORDER BY cf.position ASC, cf.created_at ASC
+    """
+
+    if _pipeline_primary_backend() == "postgres":
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                effective_platform_id = int(platform_id)
+                cur.execute(count_query, (platform_id,))
+                direct_count = int((cur.fetchone() or {}).get("count") or 0)
+                if direct_count == 0:
+                    cur.execute(source_query, (platform_id,))
+                    source_row = cur.fetchone()
+                    if source_row:
+                        effective_platform_id = int(source_row["id"])
+
+                cur.execute(folders_query, (effective_platform_id,))
+                rows = [dict(row) for row in cur.fetchall()]
+
+        return {
+            "folders": [_row_to_folder(row) for row in rows],
+            "platform_id": int(platform_id),
+            "source_platform_id": effective_platform_id if effective_platform_id != int(platform_id) else None,
+        }
+
+    conn = _as_sqlite_row_connection()
+    try:
+        cursor = conn.cursor()
+        effective_platform_id = int(platform_id)
+        cursor.execute(count_query, (platform_id,))
+        direct_count = int((cursor.fetchone() or {"count": 0})["count"] or 0)
+        if direct_count == 0:
+            cursor.execute(source_query, (platform_id,))
+            source_row = cursor.fetchone()
+            if source_row:
+                effective_platform_id = int(source_row["id"])
+
+        cursor.execute(folders_query, (effective_platform_id,))
+        rows = [dict(row) for row in cursor.fetchall()]
+        return {
+            "folders": [_row_to_folder(row) for row in rows],
+            "platform_id": int(platform_id),
+            "source_platform_id": effective_platform_id if effective_platform_id != int(platform_id) else None,
+        }
+    finally:
+        conn.close()
+
+
 def ensure_pipeline_observability_tables() -> None:
     """Create observability tables for SQLite deployments.
 

@@ -16,6 +16,7 @@ from repositories.core_repository import (
     upsert_cours_config,
     upsert_platform_config,
 )
+from repositories.pipeline_repository import list_course_folder_rows_for_platform
 from services.course_schedule_service import (
     ensure_course_schedule_tables,
     get_course_schedule_summary,
@@ -2811,55 +2812,12 @@ def create_hr_blueprint(socketio):
             return denied
 
         try:
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            effective_platform_id = platform_id
-            cursor.execute(
-                "SELECT COUNT(*) FROM cours_folders WHERE platform_id = ?",
-                (platform_id,),
-            )
-            direct_count = cursor.fetchone()[0]
-            if direct_count == 0:
-                cursor.execute(
-                    """
-                    SELECT pc.id
-                    FROM platform_config pc
-                    JOIN cours_folders cf ON cf.platform_id = pc.id
-                    WHERE pc.source_formation_id = ?
-                    GROUP BY pc.id
-                    ORDER BY pc.id DESC
-                    LIMIT 1
-                    """,
-                    (platform_id,),
-                )
-                source_row = cursor.fetchone()
-                if source_row:
-                    effective_platform_id = source_row[0]
-
-            cursor.execute(f"""
-                SELECT
-                    cf.id,
-                    cf.name,
-                    cf.created_at,
-                    CASE
-                        WHEN SUM(CASE WHEN {_FINAL_SCRIPT_DOC_WHERE} THEN 1 ELSE 0 END) > 0
-                        THEN 1
-                        ELSE COUNT(cd.id)
-                    END as document_count,
-                    cf.position
-                FROM cours_folders cf
-                LEFT JOIN cours_documents cd ON cf.id = cd.folder_id
-                WHERE cf.platform_id = ?
-                GROUP BY cf.id
-                ORDER BY cf.position ASC, cf.created_at ASC
-            """, (effective_platform_id,))
-            folders = [{"id": row[0], "name": row[1], "created_at": row[2], "document_count": row[3], "position": row[4]} for row in cursor.fetchall()]
-            conn.close()
+            result = list_course_folder_rows_for_platform(platform_id)
             return jsonify({
                 "success": True,
-                "folders": folders,
-                "platform_id": platform_id,
-                "source_platform_id": effective_platform_id if effective_platform_id != platform_id else None,
+                "folders": result["folders"],
+                "platform_id": result["platform_id"],
+                "source_platform_id": result["source_platform_id"],
             }), 200
         except Exception as e:
             logger.error(f"❌ Erreur get_cours_folders: {e}")
