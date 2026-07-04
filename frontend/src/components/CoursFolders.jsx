@@ -1242,7 +1242,7 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
   // ─── Playlist pipeline ──────────────────────────────────────────────
   const fetchPlaylistStatus = async (folderId) => {
     try {
-      const resp = await fetch(apiUrl(`/api/hr/cours-folders/${folderId}/playlist-status`), { credentials: 'include' })
+      const resp = await apiFetch(`/api/hr/cours-folders/${folderId}/playlist-status`)
       const data = await resp.json()
       if (data.success) {
         setPlaylistJob(data)
@@ -1277,7 +1277,7 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
       if (!confirmed) return
     }
     try {
-      const resp = await fetch(apiUrl(`/api/hr/cours-folders/${selectedFolder.id}/generate-playlist`), {
+      const resp = await apiFetch(`/api/hr/cours-folders/${selectedFolder.id}/generate-playlist`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -1316,7 +1316,7 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
       if (!confirmed) return
     }
     try {
-      const resp = await fetch(apiUrl(`/api/hr/cours-folders/${selectedFolder.id}/generate-playlist-item`), {
+      const resp = await apiFetch(`/api/hr/cours-folders/${selectedFolder.id}/generate-playlist-item`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -1351,7 +1351,7 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
 
   const fetchGeneratedAudios = async (folderId) => {
     try {
-      const resp = await fetch(apiUrl(`/api/hr/cours-folders/${folderId}/generated-audios`), { credentials: 'include' })
+      const resp = await apiFetch(`/api/hr/cours-folders/${folderId}/generated-audios`)
       const data = await resp.json()
       if (data.success) setGeneratedAudios(data.audios)
     } catch (e) {
@@ -1369,11 +1369,10 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
 
     setDeletingAudioFile(filename)
     try {
-      const resp = await fetch(
-        apiUrl(`/api/hr/cours-folders/${selectedFolder.id}/audio/${encodeURIComponent(filename)}`),
+      const resp = await apiFetch(
+        `/api/hr/cours-folders/${selectedFolder.id}/audio/${encodeURIComponent(filename)}`,
         {
           method: 'DELETE',
-          credentials: 'include',
         }
       )
       const data = await resp.json().catch(() => ({}))
@@ -1471,7 +1470,7 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
     if (!selectedFolder) return
     setLoadingScript(true)
     try {
-      const resp = await fetch(apiUrl(`/api/hr/cours-folders/${selectedFolder.id}/playlist-script`), { credentials: 'include' })
+      const resp = await apiFetch(`/api/hr/cours-folders/${selectedFolder.id}/playlist-script`)
       const data = await resp.json()
       if (data.success) {
         setScriptModal(data)

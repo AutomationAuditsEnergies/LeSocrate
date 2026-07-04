@@ -230,7 +230,9 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
   }, [])
 
   const audioFetchHeaders = useCallback(() => {
-    const token = localStorage.getItem('auth_token')
+    const adminToken = localStorage.getItem('admin_auth_token')
+    const userToken = localStorage.getItem('auth_token')
+    const token = adminToken || userToken
     const platformId = getPlatformId()
     return {
       ...(token ? { 'X-Auth-Token': token } : {}),
