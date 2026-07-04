@@ -18,6 +18,7 @@ from repositories.core_repository import (
 )
 from repositories.pipeline_repository import list_course_folder_rows_for_platform
 from services.course_schedule_service import (
+    create_missing_course_schedule,
     ensure_course_schedule_tables,
     get_course_schedule_summary,
     process_due_reminders,
@@ -2659,6 +2660,24 @@ def create_hr_blueprint(socketio):
                     return jsonify({
                         "success": True,
                         "message": "Planning des journées mis à jour",
+                        "schedule": schedule_update,
+                    }), 200
+                cursor.execute("SELECT COUNT(*) FROM cours_folders WHERE platform_id = ?", (platform_id,))
+                folder_count = int((cursor.fetchone() or [0])[0] or 0)
+                schedule_update = create_missing_course_schedule(
+                    cursor,
+                    platform_id,
+                    total_training_days=folder_count,
+                    start_time=heure_str,
+                    date_str=date_str or None,
+                    weekdays=weekdays,
+                )
+                if schedule_update:
+                    conn.commit()
+                    conn.close()
+                    return jsonify({
+                        "success": True,
+                        "message": "Planning des journées créé",
                         "schedule": schedule_update,
                     }), 200
                 conn.close()

@@ -13,6 +13,7 @@ if str(BACKEND_DIR) not in sys.path:
 from config import FRANCE_TZ
 from services import course_schedule_service as css
 from services.course_schedule_service import (
+    create_missing_course_schedule,
     ensure_course_schedule_tables,
     save_course_schedule,
     update_course_schedule,
@@ -106,6 +107,29 @@ def _seed_schedule(cursor, platform_id=12):
 
 
 class CourseScheduleServiceTest(unittest.TestCase):
+    def test_create_missing_course_schedule_from_existing_pipeline_days(self):
+        conn = _connect()
+        cursor = conn.cursor()
+        first_day = datetime.now(FRANCE_TZ) + timedelta(days=3)
+
+        result = create_missing_course_schedule(
+            cursor,
+            12,
+            total_training_days=2,
+            start_time="10:30",
+            date_str=first_day.strftime("%Y-%m-%d"),
+        )
+
+        self.assertEqual(result["total_sessions"], 2)
+        self.assertEqual(result["total_training_days"], 2)
+        self.assertEqual(result["weekly_course_count"], 1)
+        self.assertEqual(result["weekdays"], [first_day.weekday()])
+        cursor.execute("SELECT COUNT(*) FROM course_sessions WHERE platform_id = ?", (12,))
+        self.assertEqual(cursor.fetchone()[0], 2)
+        cursor.execute("SELECT heure_debut FROM cours_config WHERE platform_id = ?", (12,))
+        self.assertIsNotNone(cursor.fetchone())
+        conn.close()
+
     def test_save_course_schedule_generates_session_passwords(self):
         conn = _connect()
         cursor = conn.cursor()

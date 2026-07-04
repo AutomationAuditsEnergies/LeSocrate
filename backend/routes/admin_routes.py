@@ -29,7 +29,7 @@ from repositories.core_repository import (
 )
 from services.time_service import set_heure_debut_cours, get_heure_debut_cours
 from services.export_service import generate_excel_export
-from services.course_schedule_service import get_course_schedule_summary, update_course_schedule
+from services.course_schedule_service import create_missing_course_schedule, get_course_schedule_summary, update_course_schedule
 from utils.logger import get_logger
 from utils.slug import slugify, unique_slug
 
@@ -658,6 +658,31 @@ def create_admin_blueprint(socketio):
                         {
                             "success": True,
                             "message": "Planning des journées mis à jour",
+                            "schedule": schedule_update,
+                        }
+                    ),
+                    200,
+                )
+            cursor.execute("SELECT COUNT(*) FROM cours_folders WHERE platform_id = ?", (platform_id,))
+            folder_count = int((cursor.fetchone() or [0])[0] or 0)
+            schedule_update = create_missing_course_schedule(
+                cursor,
+                platform_id,
+                total_training_days=folder_count,
+                start_time=heure_str,
+                date_str=date_str or None,
+                weekdays=weekdays,
+            )
+            if schedule_update:
+                conn.commit()
+                conn.close()
+                conn = None
+                logger.info(f"⚙️ Planning cours P{platform_id} créé en interne")
+                return (
+                    jsonify(
+                        {
+                            "success": True,
+                            "message": "Planning des journées créé",
                             "schedule": schedule_update,
                         }
                     ),

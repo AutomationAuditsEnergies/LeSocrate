@@ -338,6 +338,65 @@ def save_course_schedule(cursor, platform_id, schedule):
     }
 
 
+def create_missing_course_schedule(
+    cursor,
+    platform_id,
+    *,
+    total_training_days,
+    start_time,
+    date_str=None,
+    weekdays=None,
+):
+    """Crée un planning persistant pour une plateforme pipeline qui en est dépourvue."""
+    ensure_course_schedule_tables(cursor)
+    if get_course_schedule_summary(cursor, platform_id):
+        return None
+
+    total = int(total_training_days or 0)
+    if total <= 0:
+        return None
+
+    if weekdays is not None:
+        requested_weekdays = _normalize_weekdays(weekdays)
+        start_date = date_str or None
+    elif date_str:
+        start_date = str(date_str)
+        requested_weekdays = [datetime.strptime(start_date, "%Y-%m-%d").date().weekday()]
+    else:
+        return None
+
+    requested_start_time = str(start_time or "09:00").strip()
+    requested_sessions = _generate_session_datetimes(
+        total_training_days=total,
+        weekdays=requested_weekdays,
+        start_time=requested_start_time,
+        start_date=start_date,
+    )
+    _assert_requested_sessions_are_not_due_soon(requested_sessions)
+
+    result = save_course_schedule(
+        cursor,
+        platform_id,
+        {
+            "total_training_days": total,
+            "weekly_course_count": len(requested_weekdays),
+            "weekdays": requested_weekdays,
+            "start_time": requested_start_time,
+            "start_date": start_date,
+        },
+    )
+    if result.get("first_session_at"):
+        _upsert_course_time(cursor, platform_id, result["first_session_at"])
+    return {
+        **result,
+        "total_training_days": total,
+        "weekly_course_count": len(requested_weekdays),
+        "weekdays": requested_weekdays,
+        "start_time": requested_start_time,
+        "timezone": "Europe/Paris",
+    }
+
+
 def get_course_schedule_summary(cursor, platform_id):
     ensure_course_schedule_tables(cursor)
     cursor.execute(
