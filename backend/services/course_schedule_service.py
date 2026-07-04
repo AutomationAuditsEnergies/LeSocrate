@@ -122,6 +122,75 @@ def _normalize_weekdays(weekdays, weekly_course_count=None):
     return ordered
 
 
+def _audio_schedule_window_hours():
+    horizon = float(os.environ.get("SCHEDULED_AUDIO_HORIZON_HOURS", "24"))
+    late_grace = float(os.environ.get("SCHEDULED_AUDIO_LATE_GRACE_HOURS", "2"))
+    return horizon, late_grace
+
+
+def _format_session_for_error(scheduled_at):
+    try:
+        dt = _parse_local_datetime(str(scheduled_at))
+        return dt.strftime("%d/%m/%Y à %H:%M")
+    except Exception:
+        return str(scheduled_at or "prochaine séance")
+
+
+def _find_schedule_update_lock(cursor, platform_id):
+    """Bloque une modification qui pourrait déplacer une génération audio proche."""
+    ensure_course_schedule_tables(cursor)
+    horizon, late_grace = _audio_schedule_window_hours()
+    now = datetime.now(FRANCE_TZ)
+    lower_bound = (now - timedelta(hours=late_grace)).strftime("%Y-%m-%d %H:%M:%S")
+    upper_bound = (now + timedelta(hours=horizon)).strftime("%Y-%m-%d %H:%M:%S")
+
+    cursor.execute(
+        """
+        SELECT scheduled_at, audio_generation_status, audio_generation_started_at, audio_generation_completed_at
+        FROM course_sessions
+        WHERE platform_id = ?
+          AND status IN ('planned', 'active')
+          AND (
+            scheduled_at BETWEEN ? AND ?
+            OR (
+              audio_generation_started_at IS NOT NULL
+              AND audio_generation_completed_at IS NULL
+            )
+            OR COALESCE(audio_generation_status, 'pending') IN ('queued', 'running', 'processing')
+          )
+        ORDER BY scheduled_at ASC
+        LIMIT 1
+        """,
+        (platform_id, lower_bound, upper_bound),
+    )
+    row = cursor.fetchone()
+    if not row:
+        return None
+
+    scheduled_at, audio_status, audio_started_at, audio_completed_at = row
+    return {
+        "scheduled_at": scheduled_at,
+        "audio_generation_status": audio_status,
+        "audio_generation_started_at": audio_started_at,
+        "audio_generation_completed_at": audio_completed_at,
+        "horizon_hours": horizon,
+        "late_grace_hours": late_grace,
+    }
+
+
+def _assert_schedule_can_be_changed(cursor, platform_id):
+    lock = _find_schedule_update_lock(cursor, platform_id)
+    if not lock:
+        return
+    session_label = _format_session_for_error(lock.get("scheduled_at"))
+    horizon = int(lock.get("horizon_hours") or 24)
+    raise ValueError(
+        f"Planning verrouillé: une journée est prévue le {session_label}. "
+        f"Le planning ne peut plus être modifié dans les {horizon}h avant une séance, "
+        "car l'audio peut être préparé automatiquement."
+    )
+
+
 def _generate_session_datetimes(total_training_days, weekdays, start_time, start_date=None):
     total = int(total_training_days)
     if total <= 0:
@@ -257,10 +326,34 @@ def get_course_schedule_summary(cursor, platform_id):
 
 
 def update_course_schedule_start_time(cursor, platform_id, start_time):
+    return update_course_schedule(cursor, platform_id, start_time=start_time)
+
+
+def update_course_schedule(cursor, platform_id, start_time=None, weekdays=None):
     ensure_course_schedule_tables(cursor)
     summary = get_course_schedule_summary(cursor, platform_id)
     if not summary:
         return None
+
+    requested_start_time = str(start_time or summary["start_time"] or "09:00").strip()
+    requested_weekdays = (
+        _normalize_weekdays(weekdays, summary["weekly_course_count"])
+        if weekdays is not None
+        else _normalize_weekdays(summary["weekdays"], summary["weekly_course_count"])
+    )
+    current_weekdays = _normalize_weekdays(summary["weekdays"], summary["weekly_course_count"])
+
+    if requested_start_time == summary.get("start_time") and requested_weekdays == current_weekdays:
+        return {
+            **summary,
+            "total_sessions": summary["total_training_days"],
+            "first_session_at": summary.get("next_session_at"),
+            "last_session_at": summary.get("last_session_at"),
+            "start_time": requested_start_time,
+            "weekdays": requested_weekdays,
+        }
+
+    _assert_schedule_can_be_changed(cursor, platform_id)
 
     result = save_course_schedule(
         cursor,
@@ -268,13 +361,13 @@ def update_course_schedule_start_time(cursor, platform_id, start_time):
         {
             "total_training_days": summary["total_training_days"],
             "weekly_course_count": summary["weekly_course_count"],
-            "weekdays": summary["weekdays"],
-            "start_time": start_time,
+            "weekdays": requested_weekdays,
+            "start_time": requested_start_time,
         },
     )
     if result.get("first_session_at"):
         _upsert_course_time(cursor, platform_id, result["first_session_at"])
-    return {**summary, **result, "start_time": start_time}
+    return {**summary, **result, "start_time": requested_start_time, "weekdays": requested_weekdays}
 
 
 def create_course_schedule(platform_id, schedule):

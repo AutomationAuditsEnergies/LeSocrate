@@ -23,7 +23,7 @@ from services.course_schedule_service import (
     process_due_reminders,
     run_scheduler_tick,
     save_course_schedule,
-    update_course_schedule_start_time,
+    update_course_schedule,
 )
 from services.export_service import generate_attendance_excel_export
 from services.scheduled_audio_service import process_due_audio_generations
@@ -2612,24 +2612,31 @@ def create_hr_blueprint(socketio):
         if denied:
             return denied
 
-        data = request.get_json()
+        data = request.get_json(silent=True) or {}
         date_str = (data or {}).get("date_cours", "").strip()
         heure_str = (data or {}).get("heure_cours", "").strip()
+        weekdays = data.get("weekdays") if "weekdays" in data else None
         if not heure_str:
             return jsonify({"success": False, "error": "heure_cours requis"}), 400
 
         if _is_local_platform(platform_id):
             # Appel direct au service local
+            conn = None
             try:
                 conn = get_db_connection()
                 cursor = conn.cursor()
-                schedule_update = update_course_schedule_start_time(cursor, platform_id, heure_str)
+                schedule_update = update_course_schedule(
+                    cursor,
+                    platform_id,
+                    start_time=heure_str,
+                    weekdays=weekdays,
+                )
                 if schedule_update:
                     conn.commit()
                     conn.close()
                     return jsonify({
                         "success": True,
-                        "message": f"Heure des journées mise à jour à {heure_str}",
+                        "message": "Planning des journées mis à jour",
                         "schedule": schedule_update,
                     }), 200
                 conn.close()
@@ -2648,7 +2655,13 @@ def create_hr_blueprint(socketio):
                     "success": True,
                     "message": f"Cours programmé pour le {date_str} à {heure_str}",
                 }), 200
+            except ValueError as e:
+                if conn:
+                    conn.close()
+                return jsonify({"success": False, "error": str(e)}), 400
             except Exception as e:
+                if conn:
+                    conn.close()
                 logger.error(f"❌ Erreur config-cours P{platform_id}: {e}")
                 return jsonify({"success": False, "error": str(e)}), 500
         else:

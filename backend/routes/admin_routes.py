@@ -29,6 +29,7 @@ from repositories.core_repository import (
 )
 from services.time_service import set_heure_debut_cours, get_heure_debut_cours
 from services.export_service import generate_excel_export
+from services.course_schedule_service import get_course_schedule_summary, update_course_schedule
 from utils.logger import get_logger
 from utils.slug import slugify, unique_slug
 
@@ -627,23 +628,52 @@ def create_admin_blueprint(socketio):
         api_key = os.environ.get("PLATFORM_API_KEY", "")
         if not api_key or request.headers.get("X-Platform-Key") != api_key:
             return jsonify({"success": False, "error": "Non autorisé"}), 401
+        conn = None
         try:
-            data = request.get_json()
+            data = request.get_json(silent=True) or {}
             date_str = data.get("date_cours", "").strip()
             heure_str = data.get("heure_cours", "").strip()
-            if not date_str or not heure_str:
+            weekdays = data.get("weekdays") if "weekdays" in data else None
+            if not heure_str:
                 return (
-                    jsonify({"success": False, "error": "Date et heure requises"}),
+                    jsonify({"success": False, "error": "heure_cours requis"}),
                     400,
                 )
+            platform_id = int(data.get("platform_id", session.get("platform_id", 1)))
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            schedule_update = update_course_schedule(
+                cursor,
+                platform_id,
+                start_time=heure_str,
+                weekdays=weekdays,
+            )
+            if schedule_update:
+                conn.commit()
+                conn.close()
+                conn = None
+                logger.info(f"⚙️ Planning cours P{platform_id} configuré en interne")
+                return (
+                    jsonify(
+                        {
+                            "success": True,
+                            "message": "Planning des journées mis à jour",
+                            "schedule": schedule_update,
+                        }
+                    ),
+                    200,
+                )
+            conn.close()
+            conn = None
+
+            if not date_str:
+                return jsonify({"success": False, "error": "date_cours requis pour une plateforme sans planning automatique"}), 400
             if heure_str.count(":") == 1:
                 datetime_str = f"{date_str} {heure_str}:00"
             else:
                 datetime_str = f"{date_str} {heure_str}"
             nouvelle_heure_naive = datetime.strptime(datetime_str, "%Y-%m-%d %H:%M:%S")
             nouvelle_heure_fr = FRANCE_TZ.localize(nouvelle_heure_naive)
-            # Récupérer platform_id depuis le body ou la session (défaut: 1)
-            platform_id = data.get("platform_id", session.get("platform_id", 1))
             set_heure_debut_cours(nouvelle_heure_fr, platform_id)
             logger.info(f"⚙️ Heure cours P{platform_id} configurée en interne: {nouvelle_heure_fr}")
             return (
@@ -655,7 +685,13 @@ def create_admin_blueprint(socketio):
                 ),
                 200,
             )
+        except ValueError as e:
+            if conn:
+                conn.close()
+            return jsonify({"success": False, "error": str(e)}), 400
         except Exception as e:
+            if conn:
+                conn.close()
             logger.error(f"❌ Erreur internal config-cours: {e}")
             return jsonify({"success": False, "error": str(e)}), 500
 
@@ -671,11 +707,22 @@ def create_admin_blueprint(socketio):
             except (TypeError, ValueError):
                 platform_id = 1
             heure = get_heure_debut_cours(platform_id)
-            return jsonify({
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            schedule_summary = get_course_schedule_summary(cursor, platform_id)
+            conn.close()
+            payload = {
                 "success": True,
                 "date_cours": heure.strftime("%Y-%m-%d"),
                 "heure_cours": heure.strftime("%H:%M"),
-            }), 200
+                "has_schedule": bool(schedule_summary),
+            }
+            if schedule_summary:
+                payload.update({
+                    "heure_cours": schedule_summary.get("start_time") or payload["heure_cours"],
+                    "schedule": schedule_summary,
+                })
+            return jsonify(payload), 200
         except Exception as e:
             logger.error(f"❌ Erreur internal course-time: {e}")
             return jsonify({"success": False, "error": str(e)}), 500

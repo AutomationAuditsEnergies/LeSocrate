@@ -501,12 +501,14 @@ export default function HRDashboard() {
     }
   }
 
-  const handleSetCourseTime = async (dateCours, heureCours) => {
+  const handleSetCourseTime = async (dateCours, heureCours, weekdays = null) => {
     try {
+      const payload = { date_cours: dateCours, heure_cours: heureCours }
+      if (Array.isArray(weekdays)) payload.weekdays = weekdays
       const resp = await apiFetch(`/api/hr/platforms/${courseTimePlatformId}/config-cours`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ date_cours: dateCours, heure_cours: heureCours }),
+        body: JSON.stringify(payload),
       })
       const data = await resp.json()
       return data
@@ -4003,16 +4005,33 @@ function CourseTimeModal({ onClose, onSubmit, initialDate, initialHeure, schedul
   const hasSchedule = !!schedule
   const [date, setDate] = useState(initialDate || today)
   const [heure, setHeure] = useState(schedule?.start_time || initialHeure || '')
+  const [selectedWeekdays, setSelectedWeekdays] = useState(
+    (schedule?.weekdays || [])
+      .map((day) => Number(day))
+      .filter((day) => Number.isInteger(day) && day >= 0 && day <= 6)
+      .sort((a, b) => a - b)
+  )
   const [loading, setLoading] = useState(false)
   const [result, setResult] = useState(null)
-  const weekdayLabels = (schedule?.weekdays || []).map((day) => COURSE_WEEKDAY_LABELS[Number(day)]).filter(Boolean)
+  const expectedWeekdayCount = Number(schedule?.weekly_course_count || selectedWeekdays.length || 0)
+  const weekdaySelectionError = hasSchedule && expectedWeekdayCount > 0 && selectedWeekdays.length !== expectedWeekdayCount
+    ? `Sélectionnez ${expectedWeekdayCount} jour${expectedWeekdayCount > 1 ? 's' : ''}.`
+    : ''
+
+  const toggleWeekday = (day) => {
+    setResult(null)
+    setSelectedWeekdays((current) => {
+      if (current.includes(day)) return current.filter((value) => value !== day)
+      return [...current, day].sort((a, b) => a - b)
+    })
+  }
 
   const handleSubmit = async (e) => {
     e.preventDefault()
-    if ((!hasSchedule && !date) || !heure) return
+    if ((!hasSchedule && !date) || !heure || weekdaySelectionError) return
     setLoading(true)
     setResult(null)
-    const data = await onSubmit(hasSchedule ? '' : date, heure)
+    const data = await onSubmit(hasSchedule ? '' : date, heure, hasSchedule ? selectedWeekdays : undefined)
     setResult(data)
     setLoading(false)
   }
@@ -4066,16 +4085,33 @@ function CourseTimeModal({ onClose, onSubmit, initialDate, initialHeure, schedul
                     Planning automatique
                   </p>
                   <div className="flex flex-wrap gap-2">
-                    {weekdayLabels.map((label) => (
-                      <span
-                        key={label}
-                        className="rounded-full px-2.5 py-1 text-xs font-semibold"
-                        style={{ backgroundColor: '#ede9fe', color: '#7c3aed' }}
-                      >
-                        {label}
-                      </span>
-                    ))}
+                    {COURSE_WEEKDAY_LABELS.map((label, day) => {
+                      const selected = selectedWeekdays.includes(day)
+                      return (
+                        <button
+                          type="button"
+                          key={label}
+                          onClick={() => toggleWeekday(day)}
+                          className="rounded-full px-2.5 py-1 text-xs font-semibold transition-colors"
+                          style={{
+                            backgroundColor: selected ? '#ede9fe' : '#ffffff',
+                            color: selected ? '#7c3aed' : '#64748b',
+                            border: `1px solid ${selected ? '#c4b5fd' : '#e2e8f0'}`,
+                          }}
+                        >
+                          {label}
+                        </button>
+                      )
+                    })}
                   </div>
+                  {weekdaySelectionError && (
+                    <p className="mt-2 text-xs" style={{ color: '#dc2626' }}>
+                      {weekdaySelectionError}
+                    </p>
+                  )}
+                  <p className="mt-3 text-xs" style={{ color: '#64748b' }}>
+                    Le planning est verrouillé dans les 24h avant une journée, car l'audio peut être préparé automatiquement.
+                  </p>
                   <div className="mt-3 space-y-1 text-xs" style={{ color: '#64748b' }}>
                     <p>{schedule.total_training_days} journée{schedule.total_training_days > 1 ? 's' : ''} au total</p>
                     <p>Prochaine journée : {formatScheduleDateTime(schedule.next_session_at)}</p>
@@ -4130,9 +4166,9 @@ function CourseTimeModal({ onClose, onSubmit, initialDate, initialHeure, schedul
                 </button>
                 <button
                   type="submit"
-                  disabled={loading || (!hasSchedule && !date) || !heure}
+                  disabled={loading || (!hasSchedule && !date) || !heure || !!weekdaySelectionError}
                   className="flex-1 flex items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm font-semibold text-white transition-opacity"
-                  style={{ backgroundColor: '#137fec', opacity: (loading || (!hasSchedule && !date) || !heure) ? 0.6 : 1 }}
+                  style={{ backgroundColor: '#137fec', opacity: (loading || (!hasSchedule && !date) || !heure || !!weekdaySelectionError) ? 0.6 : 1 }}
                 >
                   {loading ? (
                     <div className="h-4 w-4 animate-spin rounded-full border-2 border-white/30 border-t-white" />
