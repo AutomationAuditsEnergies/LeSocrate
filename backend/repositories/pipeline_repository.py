@@ -1137,6 +1137,7 @@ def list_completed_content_segment_rows(job_id: int) -> list[dict[str, Any]]:
     if _pipeline_primary_backend() == "postgres":
         query = f"""
             SELECT id, sub_part_index, sub_part_name, passe, text_content, word_count, dirty,
+                   text_content_pre_review,
                    COALESCE(humanized, FALSE) AS humanized,
                    COALESCE(reviewed, FALSE) AS reviewed,
                    humanization_error, review_error
@@ -1151,6 +1152,7 @@ def list_completed_content_segment_rows(job_id: int) -> list[dict[str, Any]]:
 
     query = f"""
         SELECT id, sub_part_index, sub_part_name, passe, text_content, word_count, dirty,
+               text_content_pre_review,
                COALESCE(humanized, 0) AS humanized, COALESCE(reviewed, 0) AS reviewed,
                humanization_error, review_error
         FROM content_generation_segments

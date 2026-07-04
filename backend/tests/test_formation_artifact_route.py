@@ -4,6 +4,7 @@ import json
 
 from flask import Flask
 
+from services.formation_docx_service import build_course_docx
 from routes.formation_routes import formation_bp
 
 
@@ -102,6 +103,76 @@ class FormationArtifactRouteTest(unittest.TestCase):
         self.assertEqual(folder["segments_completed"], 7)
         self.assertEqual(folder["slide_count"], 2)
         content_lookup.assert_called_once_with([9])
+
+    def test_docx_route_uses_migrated_docx_service(self):
+        with self.client.session_transaction() as sess:
+            sess["is_admin"] = True
+
+        with patch(
+            "routes.formation_routes.get_job",
+            return_value={"id": 8},
+        ), patch(
+            "services.formation_docx_service.build_course_docx",
+            return_value=(b"docx-bytes", "jour1.docx"),
+        ) as build_docx, patch(
+            "database.db.get_db_connection",
+            side_effect=AssertionError("legacy sqlite lookup should not be used"),
+        ):
+            resp = self.client.get("/api/formation/8/content/9/docx?version=current")
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data, b"docx-bytes")
+        self.assertIn("attachment; filename=jour1.docx", resp.headers.get("Content-Disposition", ""))
+        build_docx.assert_called_once_with(job_id=8, folder_id=9, version="current")
+
+    def test_docx_service_reads_migrated_pipeline_data(self):
+        job = {
+            "id": 8,
+            "tp_name": "TP Test",
+            "rncp_code": "12345",
+            "total_hours": 7,
+            "nb_days": 1,
+            "platform_id": 12,
+            "daily_programs": json.dumps([{
+                "day_number": 1,
+                "title": "Accueil",
+                "sub_parts": [{"name": "Intro", "module_content": "Plan module"}],
+            }]),
+        }
+        folder_row = {
+            "id": 9,
+            "platform_id": 12,
+            "formation_job_id": 8,
+            "position": 0,
+            "sub_parts": json.dumps(["Intro"]),
+        }
+        segment_rows = [{
+            "id": 1,
+            "sub_part_index": 0,
+            "sub_part_name": "Intro",
+            "passe": 1,
+            "text_content": "Texte final [pause]",
+            "text_content_pre_review": "Texte avant review",
+            "word_count": 3,
+        }]
+
+        with patch(
+            "services.formation_docx_service.get_formation_pipeline_job",
+            return_value=job,
+        ), patch(
+            "services.formation_docx_service.get_content_generation_job_by_folder",
+            return_value=folder_row,
+        ), patch(
+            "services.formation_docx_service.list_completed_content_segment_rows",
+            return_value=segment_rows,
+        ), patch(
+            "database.db.get_db_connection",
+            side_effect=AssertionError("legacy sqlite lookup should not be used"),
+        ):
+            docx_bytes, filename = build_course_docx(8, 9, version="pre_review")
+
+        self.assertGreater(len(docx_bytes), 1000)
+        self.assertEqual(filename, "programme-tp-test-jour1-pre-review.docx")
 
 
 if __name__ == "__main__":
