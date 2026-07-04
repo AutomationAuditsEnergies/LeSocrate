@@ -2681,6 +2681,7 @@ def start_folder_audio_generation(
     force_all = bool(data.get("force_all", True))
     sync_slides = bool(data.get("sync_slides", True))
     auto_generate_slides = bool(data.get("auto_generate_slides", True))
+    preserve_existing = bool(data.get("preserve_existing", False))
     max_slides = int(data.get("max_slides") or 60)
     pace = data.get("pace") or "normal"
     model = _resolve_pipeline_api_model(job, data.get("model"))
@@ -2767,6 +2768,7 @@ def start_folder_audio_generation(
                 data={
                     "voice_type": voice_type,
                     "force_all": force_all,
+                    "preserve_existing": preserve_existing,
                     "sync_slides": sync_slides,
                     "auto_generate_slides": auto_generate_slides,
                     "single_folder": True,
@@ -2788,6 +2790,7 @@ def start_folder_audio_generation(
                 slide_pace=pace,
                 slide_model=model,
                 llm_model=model,
+                preserve_existing=preserve_existing,
             )
             publish_result = None
             try:
@@ -2997,6 +3000,7 @@ def launch_audio(job_id):
     # régénérations partielles ultérieures (via édition segment) utilisent le
     # dirty flag naturellement.
     force_all = bool(data.get("force_all", True))
+    preserve_existing = bool(data.get("preserve_existing", True))
     # 3 modes de synthèse audio (priorité décroissante) :
     # - mock=True      → MP3 silence 1s, test gratuit
     # - basic_tts=True → Edge TTS (voix basique gratuite ; identifiant DB historique "gtts")
@@ -3054,6 +3058,7 @@ def launch_audio(job_id):
                 data={
                     "voice_type": voice_type,
                     "force_all": force_all,
+                    "preserve_existing": preserve_existing,
                     "sync_slides": sync_slides,
                     "auto_generate_slides": auto_generate_slides,
                 },
@@ -3074,6 +3079,7 @@ def launch_audio(job_id):
                 sync_slides=sync_slides,
                 auto_generate_slides=auto_generate_slides,
                 llm_model=_resolve_pipeline_api_model(job),
+                preserve_existing=preserve_existing,
             )
             duration_ms = int((time.time() - started_at) * 1000)
             try:
@@ -3206,6 +3212,7 @@ def launch_audio(job_id):
                 "folder_ids": folder_ids,
                 "voice_type": "mock" if mock else ("gtts" if basic_tts else "fish_audio"),
                 "force_all": force_all,
+                "preserve_existing": preserve_existing,
                 "sync_slides": sync_slides,
                 "auto_generate_slides": auto_generate_slides,
             },

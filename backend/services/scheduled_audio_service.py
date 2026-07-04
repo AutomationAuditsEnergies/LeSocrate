@@ -77,6 +77,7 @@ def process_due_audio_generations(platform_ids=None, dry_run=False, horizon_hour
 
             payload = {
                 "force_all": True,
+                "preserve_existing": True,
                 "sync_slides": True,
                 "auto_generate_slides": True,
                 **({"tts_mode": tts_mode} if tts_mode else {}),

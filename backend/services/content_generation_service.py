@@ -13126,6 +13126,54 @@ def generate_audio_from_script(
     skipped = []
     slide_audio_timings = []
     slide_sync_files = []
+    if sync_slides and slide_deck and preserve_existing:
+        existing_audio_sync = slide_deck.get("audio_sync") or {}
+        for existing_file in existing_audio_sync.get("generated_files") or []:
+            if existing_file and existing_file not in slide_sync_files:
+                slide_sync_files.append(existing_file)
+        for existing_timing in existing_audio_sync.get("timings") or []:
+            if isinstance(existing_timing, dict):
+                slide_audio_timings.append(dict(existing_timing))
+
+    def _replace_slide_sync_for_file(filename: str, timings: list[dict] | None) -> None:
+        if not filename:
+            return
+        slide_audio_timings[:] = [
+            timing for timing in slide_audio_timings
+            if timing.get("audio_filename") != filename
+        ]
+        slide_audio_timings.extend(timings or [])
+        slide_sync_files[:] = [item for item in slide_sync_files if item != filename]
+        slide_sync_files.append(filename)
+
+    def _persist_slide_audio_sync_snapshot(reason: str) -> None:
+        if not (sync_slides and slide_deck):
+            return
+        try:
+            from services.script_slide_generation_service import update_script_slide_deck_audio_sync
+            audio_mode = "mock" if mock else "gtts" if basic_tts else "fish_audio"
+            update_script_slide_deck_audio_sync(
+                slide_deck["deck_id"],
+                {
+                    "enabled": True,
+                    "mode": audio_mode,
+                    "folder_id": folder_id,
+                    "content_job_id": job_id,
+                    "generated_files": list(slide_sync_files),
+                    "timings": list(slide_audio_timings),
+                    "partial": True,
+                    "partial_reason": reason,
+                },
+            )
+        except Exception:
+            logger.warning(
+                "PIPELINE_AUDIO_SYNC_PARTIAL_SAVE_FAILED formation_job_id=%s content_job_id=%s folder_id=%s reason=%s",
+                formation_job_id,
+                job_id,
+                folder_id,
+                reason,
+                exc_info=True,
+            )
 
     # Tampon intra-jour : chunks structurés non consommés par un bloc cours
     # précédent (runtime_fit a stoppé avant la fin) → préfixés au bloc suivant.
@@ -13960,8 +14008,7 @@ def generate_audio_from_script(
                     len(intra_day_carryover_chunks), unconsumed_words,
                     fit_method,
                 )
-            slide_audio_timings.extend(bloc_timings)
-            slide_sync_files.append(filename)
+            _replace_slide_sync_for_file(filename, bloc_timings)
             logger.info(
                 f"   TTS sync voix : {voice_duration:.1f}s "
                 f"({fit_method}, chunks={len(attempts)}, cible : {target_sec}s)"
@@ -14177,6 +14224,7 @@ def generate_audio_from_script(
             actual_reading=actual_reading,
         )
         generated.append(filename)
+        _persist_slide_audio_sync_snapshot(f"generated:{filename}")
 
         # Marquer les segments contributeurs comme propres (dirty=0)
         seg_keys = [
