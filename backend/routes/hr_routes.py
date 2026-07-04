@@ -4191,16 +4191,11 @@ def create_hr_blueprint(socketio):
 
         try:
             # Vérifier que le dossier existe et récupérer le platform_id
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            cursor.execute("SELECT platform_id FROM cours_folders WHERE id = ?", (folder_id,))
-            row = cursor.fetchone()
-            conn.close()
-
-            if not row:
+            folder = get_course_folder_identity(folder_id)
+            if not folder:
                 return jsonify({"success": False, "error": "Dossier introuvable"}), 404
 
-            platform_id = row[0]
+            platform_id = int(folder["platform_id"])
 
             # Vérifier qu'il n'y a pas déjà une pipeline en cours
             if folder_id in _playlist_jobs and _playlist_jobs[folder_id].get("status") == "running":
@@ -4383,15 +4378,10 @@ def create_hr_blueprint(socketio):
             return denied
 
         try:
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            cursor.execute("SELECT platform_id FROM cours_folders WHERE id = ?", (folder_id,))
-            row = cursor.fetchone()
-            conn.close()
-
-            if not row:
+            folder = get_course_folder_identity(folder_id)
+            if not folder:
                 return jsonify({"success": False, "error": "Dossier introuvable"}), 404
-            platform_id = row[0]
+            platform_id = int(folder["platform_id"])
 
             if folder_id in _playlist_jobs and _playlist_jobs[folder_id].get("status") == "running":
                 return jsonify({
@@ -4531,13 +4521,7 @@ def create_hr_blueprint(socketio):
             return denied
 
         try:
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            cursor.execute("SELECT platform_id FROM cours_folders WHERE id = ?", (folder_id,))
-            row = cursor.fetchone()
-            conn.close()
-
-            if not row:
+            if not get_course_folder_identity(folder_id):
                 return jsonify({"success": False, "error": "Dossier introuvable"}), 404
 
             if folder_id in _playlist_jobs and _playlist_jobs[folder_id].get("status") == "running":
@@ -4589,16 +4573,11 @@ def create_hr_blueprint(socketio):
             return denied
 
         try:
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            cursor.execute("SELECT platform_id FROM cours_folders WHERE id = ?", (folder_id,))
-            row = cursor.fetchone()
-            conn.close()
-
-            if not row:
+            folder = get_course_folder_identity(folder_id)
+            if not folder:
                 return jsonify({"success": False, "error": "Dossier introuvable"}), 404
 
-            platform_id = row[0]
+            platform_id = int(folder["platform_id"])
 
             from services.azure_blob_service import download_blob, CONTAINER_AUDIOS
             import json as _json
@@ -5233,16 +5212,11 @@ def create_hr_blueprint(socketio):
             return denied
 
         try:
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            cursor.execute("SELECT platform_id FROM cours_folders WHERE id = ?", (folder_id,))
-            row = cursor.fetchone()
-            conn.close()
-
-            if not row:
+            folder = get_course_folder_identity(folder_id)
+            if not folder:
                 return jsonify({"success": False, "error": "Dossier introuvable"}), 404
 
-            platform_id = row[0]
+            platform_id = int(folder["platform_id"])
 
             from services.playlist_tts_service import count_words_in_folder
             result = count_words_in_folder(platform_id, folder_id)

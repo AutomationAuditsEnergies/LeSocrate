@@ -3975,6 +3975,227 @@ def _reproject_slides_to_audio_bloc(slides: list, bloc: dict) -> list:
     ]
 
 
+def _timeline_word_tokens(actual_reading: dict) -> list[str]:
+    tokens = []
+    for item in actual_reading.get("timeline") or []:
+        folded = _fold_display_token(item.get("text") or "")
+        if folded:
+            tokens.append(folded)
+    return tokens
+
+
+def _approx_timeline_index_for_bloc_word(
+    word_index: int,
+    bloc_word_count: int,
+    timeline_len: int,
+) -> int:
+    if timeline_len <= 0:
+        return 0
+    if bloc_word_count <= 1:
+        return 0
+    ratio = max(0.0, min(1.0, float(word_index) / float(bloc_word_count)))
+    return max(0, min(timeline_len - 1, int(round(ratio * (timeline_len - 1)))))
+
+
+def _locate_chunk_in_timeline(
+    chunk: dict,
+    timeline_tokens: list[str],
+    min_start: int,
+    fallback_word_index: int,
+    bloc_word_count: int,
+) -> tuple[int, str]:
+    candidates = []
+    chunk_tokens = _folded_token_values(chunk.get("text") or "")
+    for size in (48, 36, 24, 16, 12, 8):
+        if len(chunk_tokens) >= size:
+            candidates.append(chunk_tokens[:size])
+
+    for candidate in candidates:
+        match = _find_token_sequence(timeline_tokens, candidate, min_start)
+        if match is None:
+            match = _find_fuzzy_token_sequence(timeline_tokens, candidate, min_start)
+        if match is not None:
+            return match, "timeline_text_match"
+
+    return (
+        _approx_timeline_index_for_bloc_word(
+            fallback_word_index,
+            bloc_word_count,
+            len(timeline_tokens),
+        ),
+        "timeline_word_ratio_fallback",
+    )
+
+
+def _repair_bloc_timings_from_timeline(bloc: dict, slides: list, filename: str) -> tuple[list[dict], dict]:
+    actual_reading = bloc.get("actual_reading") if isinstance(bloc.get("actual_reading"), dict) else {}
+    timeline = actual_reading.get("timeline") if isinstance(actual_reading.get("timeline"), list) else []
+    if not timeline:
+        return [], {"filename": filename, "status": "missing_timeline", "timings": 0}
+
+    chunks = _build_slide_audio_chunks(bloc, slides)
+    chunks = [chunk for chunk in chunks if chunk.get("slide_id")]
+    if not chunks:
+        return [], {"filename": filename, "status": "no_slide_chunks", "timings": 0}
+
+    timeline_tokens = _timeline_word_tokens(actual_reading)
+    if not timeline_tokens:
+        return [], {"filename": filename, "status": "empty_timeline_tokens", "timings": 0}
+
+    bloc_start = int(bloc.get("start_w") or 0)
+    bloc_word_count = max(1, len((bloc.get("text") or "").split()))
+    located = []
+    cursor = 0
+    fallback_count = 0
+    for chunk in chunks:
+        fallback_word_index = max(0, int(chunk.get("word_start") or bloc_start) - bloc_start)
+        start_idx, method = _locate_chunk_in_timeline(
+            chunk,
+            timeline_tokens,
+            cursor,
+            fallback_word_index,
+            bloc_word_count,
+        )
+        if method.endswith("fallback"):
+            fallback_count += 1
+        located.append((chunk, start_idx, method))
+        cursor = max(cursor, start_idx + 1)
+
+    timings = []
+    for idx, (chunk, start_idx, method) in enumerate(located):
+        next_start_idx = located[idx + 1][1] if idx + 1 < len(located) else None
+        start_item = timeline[max(0, min(len(timeline) - 1, start_idx))]
+        if next_start_idx is not None:
+            end_item = timeline[max(0, min(len(timeline) - 1, next_start_idx))]
+            end_time = float(end_item.get("start") or end_item.get("end") or 0.0)
+        else:
+            end_item = timeline[-1]
+            end_time = float(
+                end_item.get("end")
+                or actual_reading.get("audio_duration_sec")
+                or end_item.get("start")
+                or 0.0
+            )
+        start_time = float(start_item.get("start") or 0.0)
+        if end_time <= start_time:
+            end_time = float(start_item.get("end") or start_time)
+        timings.append({
+            "slide_id": chunk.get("slide_id"),
+            "audio_filename": filename,
+            "start_time": round(start_time, 3),
+            "end_time": round(end_time, 3),
+            "duration": round(max(0.0, end_time - start_time), 3),
+            "word_start": chunk.get("word_start"),
+            "word_end": chunk.get("word_end"),
+            "repair_method": method,
+        })
+
+    merged_timings = _merge_adjacent_slide_timings(timings)
+    return merged_timings, {
+        "filename": filename,
+        "status": "repaired",
+        "timings": len(merged_timings),
+        "timeline_words": len(timeline_tokens),
+        "fallback_timings": fallback_count,
+    }
+
+
+def repair_audio_sync_from_existing_timelines(folder_id: int, *, dry_run: bool = False) -> dict:
+    """Répare audio_sync_json sans régénérer les MP3, à partir des timelines Fish stockées."""
+    job = get_job_from_db(folder_id)
+    if not job:
+        raise ValueError(f"Content job introuvable pour folder {folder_id}")
+    platform_id = int(job.get("platform_id") or 0)
+    if not platform_id:
+        raise ValueError("platform_id introuvable pour ce dossier")
+
+    from services.script_slide_generation_service import (
+        get_latest_script_slide_deck,
+        update_script_slide_deck_audio_sync,
+    )
+
+    deck = get_latest_script_slide_deck(folder_id, content_job_id=job.get("id"))
+    if not deck:
+        raise ValueError("Aucun deck slides trouvé pour ce dossier")
+
+    audio_plan = _load_content_artifact(platform_id, folder_id, _CONTENT_AUDIO_PLAN_BLOB) or {}
+    course_blocs = [
+        bloc for bloc in (audio_plan.get("course_blocs") or [])
+        if isinstance(bloc, dict) and str(bloc.get("filename") or "").endswith(".mp3")
+    ]
+    if not course_blocs:
+        raise ValueError("Aucun content-audio-plan exploitable pour ce dossier")
+
+    slides = deck.get("slides") or []
+    repaired_timings = []
+    repaired_files = []
+    skipped = []
+    details = []
+    cursor = 0
+    for bloc in course_blocs:
+        filename = bloc.get("filename") or f"cours_bloc_{int(bloc.get('bloc_number') or 0)}.mp3"
+        text = _strip_tts_tags_for_sync(bloc.get("text") or "")
+        word_count = len(text.split())
+        working_bloc = dict(bloc)
+        working_bloc["text"] = text
+        working_bloc["word_count"] = word_count
+        working_bloc["start_w"] = cursor
+        working_bloc["end_w"] = cursor + word_count
+        cursor += word_count
+
+        timings, detail = _repair_bloc_timings_from_timeline(working_bloc, slides, filename)
+        details.append(detail)
+        if timings:
+            repaired_timings.extend(timings)
+            repaired_files.append(filename)
+        else:
+            skipped.append({"filename": filename, "reason": detail.get("status") or "unknown"})
+
+    current_sync = deck.get("audio_sync") or {}
+    repaired_set = set(repaired_files)
+    preserved_timings = [
+        timing for timing in (current_sync.get("timings") or [])
+        if timing.get("audio_filename") not in repaired_set
+    ]
+    merged_files = []
+    for filename in list(current_sync.get("generated_files") or []) + repaired_files:
+        if filename and filename not in merged_files:
+            merged_files.append(filename)
+
+    repaired_sync = {
+        **current_sync,
+        "enabled": True,
+        "mode": current_sync.get("mode") or audio_plan.get("mode") or "fish_audio",
+        "folder_id": folder_id,
+        "content_job_id": job.get("id"),
+        "generated_files": merged_files,
+        "timings": preserved_timings + repaired_timings,
+        "repair": {
+            "source": "content-audio-plan.actual_reading.timeline",
+            "dry_run": bool(dry_run),
+            "repaired_files": repaired_files,
+            "skipped": skipped,
+            "details": details,
+            "timings_repaired": len(repaired_timings),
+        },
+    }
+
+    if not dry_run:
+        update_script_slide_deck_audio_sync(deck["deck_id"], repaired_sync)
+
+    return {
+        "success": True,
+        "dry_run": bool(dry_run),
+        "folder_id": folder_id,
+        "deck_id": deck.get("deck_id"),
+        "repaired_files": repaired_files,
+        "skipped": skipped,
+        "timings_repaired": len(repaired_timings),
+        "timings_preserved": len(preserved_timings),
+        "details": details,
+    }
+
+
 # ── Runtime fit Edge TTS : sub-chunking adaptatif + frontières naturelles ───
 # Plafonds de mots par chunk en fonction du temps restant dans le bloc.
 # Plus on s'approche de la cible, plus les chunks doivent être petits pour

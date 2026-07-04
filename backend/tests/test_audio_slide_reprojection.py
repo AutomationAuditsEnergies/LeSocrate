@@ -61,6 +61,53 @@ class AudioSlideReprojectionTest(unittest.TestCase):
         self.assertEqual(chunks[1]["word_start"], audio_course_start + len(recap_words))
         self.assertTrue(chunks[1]["text"].startswith("Si l'on souhaite guider"))
 
+    def test_existing_fish_timeline_can_repair_slide_audio_timings(self):
+        recap_words = [f"recap{i}" for i in range(113)]
+        opener_words = (
+            "Si l'on souhaite guider tout le monde avec cette même fluidité "
+            "il faut se poser une question simple mais fondamentale"
+        ).split()
+        body_words = [f"body{i}" for i in range(80)]
+        audio_words = recap_words + opener_words + body_words
+        timeline = [
+            {"text": word, "start": round(index * 0.5, 3), "end": round(index * 0.5 + 0.4, 3)}
+            for index, word in enumerate(audio_words)
+        ]
+
+        old_course_start = 1000
+        old_opener_start = old_course_start + len(recap_words)
+        audio_course_start = 1083
+        bloc = {
+            "bloc_number": 4,
+            "start_w": audio_course_start,
+            "end_w": audio_course_start + len(audio_words),
+            "text": " ".join(audio_words),
+            "actual_reading": {
+                "audio_duration_sec": timeline[-1]["end"],
+                "timeline": timeline,
+            },
+        }
+        slides = [
+            _slide("recap", old_course_start, old_opener_start, " ".join(recap_words)),
+            _slide(
+                "chapter-opener",
+                old_opener_start,
+                old_opener_start + len(opener_words),
+                " ".join(opener_words),
+            ),
+        ]
+
+        timings, detail = cgs._repair_bloc_timings_from_timeline(
+            bloc,
+            slides,
+            "cours_12h20_13h05.mp3",
+        )
+
+        self.assertEqual(detail["status"], "repaired")
+        self.assertEqual([item["slide_id"] for item in timings[:2]], ["recap", "chapter-opener"])
+        self.assertEqual(timings[1]["start_time"], round(len(recap_words) * 0.5, 3))
+        self.assertEqual(timings[1]["repair_method"], "timeline_text_match")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -198,6 +198,7 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
   const regionsRef = useRef(null)    // plugin Regions
   const activeRegionRef = useRef(null)
   const pendingSeekRef = useRef(null)
+  const syncRepairAttemptRef = useRef(new Set())
 
   const audioCtxRef = useRef(null)      // Web Audio API context pour écoute splicée
   const stitchedSourcesRef = useRef([]) // sources planifiées (pour pouvoir stopper)
@@ -274,22 +275,48 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
     setSlides([])
     setAudioSync({})
 
-    apiFetch(`/api/slides/data?folder_id=${encodeURIComponent(folderId)}`)
-      .then(async (resp) => {
-        const data = await resp.json().catch(() => ({}))
-        if (data.status === 'no_data') {
-          if (cancelled) return
-          setSlides([])
-          setAudioSync({})
-          return
-        }
-        if (!resp.ok || data.status !== 'success') {
-          throw new Error(data.message || data.error || 'Deck slides indisponible')
-        }
+    const loadSlides = async ({ allowRepair = true } = {}) => {
+      const resp = await apiFetch(`/api/slides/data?folder_id=${encodeURIComponent(folderId)}`)
+      const data = await resp.json().catch(() => ({}))
+      if (data.status === 'no_data') {
         if (cancelled) return
-        setSlides(Array.isArray(data.slides) ? data.slides : [])
-        setAudioSync(data.audio_sync || data.pipeline_debug?.audio_sync || {})
+        setSlides([])
+        setAudioSync({})
+        return
+      }
+      if (!resp.ok || data.status !== 'success') {
+        throw new Error(data.message || data.error || 'Deck slides indisponible')
+      }
+      if (cancelled) return
+
+      const nextSlides = Array.isArray(data.slides) ? data.slides : []
+      const nextSync = data.audio_sync || data.pipeline_debug?.audio_sync || {}
+      setSlides(nextSlides)
+      setAudioSync(nextSync)
+
+      const repairKey = `${folderId}:${filename}`
+      const isCourseAudio = String(filename || '').toLowerCase().startsWith('cours_')
+      const needsRepair = isCourseAudio
+        && nextSlides.length
+        && !buildAudioSlideTimings(nextSlides, nextSync, filename).length
+        && !syncRepairAttemptRef.current.has(repairKey)
+
+      if (!allowRepair || !needsRepair) return
+
+      syncRepairAttemptRef.current.add(repairKey)
+      const repairResp = await apiFetch(`/api/hr/cours-folders/${folderId}/repair-audio-sync`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ dry_run: false }),
       })
+      const repairData = await repairResp.json().catch(() => ({}))
+      if (!repairResp.ok || repairData.success === false) return
+      if (cancelled) return
+
+      await loadSlides({ allowRepair: false })
+    }
+
+    loadSlides()
       .catch((e) => {
         if (cancelled) return
         setSlidesError(e.message || 'Impossible de charger les slides')
