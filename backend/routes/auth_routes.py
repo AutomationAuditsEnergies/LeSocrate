@@ -1,7 +1,8 @@
 # auth_routes.py -- Routes d'authentification et connexion utilisateur (API JSON)
+import hmac
 import os
 from flask import Blueprint, request, session, jsonify
-from datetime import datetime
+from datetime import datetime, timedelta
 import uuid
 import requests
 from werkzeug.security import check_password_hash
@@ -74,11 +75,44 @@ def _get_supabase_user(access_token):
     return response.json()
 
 
-def _course_session_password_valid(password):
+def _course_session_password_valid(cursor, platform_id, password):
+    supplied = str(password or "").strip()
+    if not supplied:
+        return False
+
+    try:
+        from services.course_schedule_service import ensure_course_schedule_tables
+
+        ensure_course_schedule_tables(cursor)
+        now = datetime.now(FRANCE_TZ)
+        early_hours = float(os.environ.get("COURSE_SESSION_PASSWORD_EARLY_HOURS", "24"))
+        active_hours = float(os.environ.get("COURSE_SESSION_ACTIVE_HOURS", "12"))
+        lower_bound = (now - timedelta(hours=active_hours)).strftime("%Y-%m-%d %H:%M:%S")
+        upper_bound = (now + timedelta(hours=early_hours)).strftime("%Y-%m-%d %H:%M:%S")
+        cursor.execute(
+            """
+            SELECT session_password
+            FROM course_sessions
+            WHERE platform_id = ?
+              AND status IN ('planned', 'active')
+              AND scheduled_at >= ?
+              AND scheduled_at <= ?
+              AND session_password IS NOT NULL
+              AND session_password != ''
+            ORDER BY scheduled_at ASC
+            """,
+            (platform_id, lower_bound, upper_bound),
+        )
+        session_passwords = [str(row[0] or "") for row in cursor.fetchall() if row[0]]
+        if session_passwords:
+            return any(hmac.compare_digest(supplied, expected) for expected in session_passwords)
+    except Exception:
+        logger.warning("⚠️ Vérification mot de passe séance impossible", exc_info=True)
+
     expected = os.environ.get("COURSE_SESSION_PASSWORD", "").strip()
-    if not expected:
-        return STUDENT_AUTH_LEGACY_FALLBACK
-    return password == expected
+    if expected:
+        return hmac.compare_digest(supplied, expected)
+    return STUDENT_AUTH_LEGACY_FALLBACK
 
 
 def create_auth_blueprint(socketio):
@@ -165,7 +199,7 @@ def create_auth_blueprint(socketio):
                 if not nom or not prenom:
                     logger.warning("⚠️ Identifiants élève manquants")
                     return jsonify({"success": False, "error": "Identifiant et mot de passe requis"}), 400
-                if not _course_session_password_valid(password):
+                if not _course_session_password_valid(cursor, platform_id, password):
                     logger.warning("❌ Mot de passe session invalide: %s %s P%s", prenom, nom, platform_id)
                     return jsonify({"success": False, "error": "Mot de passe incorrect"}), 401
                 logger.warning(

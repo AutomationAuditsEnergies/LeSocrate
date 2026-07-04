@@ -1,5 +1,6 @@
 import json
 import os
+import secrets
 import smtplib
 import imaplib
 import time as time_module
@@ -25,6 +26,8 @@ WEEKDAY_IDS = {
     "samedi": 5,
     "dimanche": 6,
 }
+
+SESSION_PASSWORD_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 
 
 def ensure_course_schedule_tables(cursor):
@@ -54,6 +57,8 @@ def ensure_course_schedule_tables(cursor):
             completed_at TEXT,
             reminder_previous_evening_sent_at TEXT,
             reminder_5min_sent_at TEXT,
+            session_password TEXT,
+            session_password_generated_at TEXT,
             audio_generation_status TEXT DEFAULT 'pending',
             audio_generation_started_at TEXT,
             audio_generation_completed_at TEXT,
@@ -75,6 +80,8 @@ def ensure_course_schedule_tables(cursor):
     cursor.execute("PRAGMA table_info(course_sessions)")
     columns = [col[1] for col in cursor.fetchall()]
     for col, col_type in {
+        "session_password": "TEXT",
+        "session_password_generated_at": "TEXT",
         "audio_generation_status": "TEXT DEFAULT 'pending'",
         "audio_generation_started_at": "TEXT",
         "audio_generation_completed_at": "TEXT",
@@ -84,6 +91,36 @@ def ensure_course_schedule_tables(cursor):
     }.items():
         if col not in columns:
             cursor.execute(f"ALTER TABLE course_sessions ADD COLUMN {col} {col_type}")
+
+
+def _generate_session_password():
+    length = int(os.environ.get("COURSE_SESSION_PASSWORD_LENGTH", "6"))
+    length = max(4, min(length, 16))
+    return "".join(secrets.choice(SESSION_PASSWORD_ALPHABET) for _ in range(length))
+
+
+def _ensure_session_password(cursor, session_id, now_str=None):
+    cursor.execute(
+        "SELECT session_password FROM course_sessions WHERE id = ?",
+        (session_id,),
+    )
+    row = cursor.fetchone()
+    if row and row[0]:
+        return row[0]
+
+    generated_at = now_str or _now_str()
+    password = _generate_session_password()
+    cursor.execute(
+        """
+        UPDATE course_sessions
+        SET session_password = ?,
+            session_password_generated_at = ?,
+            updated_at = ?
+        WHERE id = ?
+        """,
+        (password, generated_at, generated_at, session_id),
+    )
+    return password
 
 
 def _now_str():
@@ -274,14 +311,25 @@ def save_course_schedule(cursor, platform_id, schedule):
     )
     cursor.execute("DELETE FROM course_sessions WHERE platform_id = ?", (platform_id,))
     for index, scheduled in enumerate(sessions, start=1):
+        session_password = _generate_session_password()
         cursor.execute(
             """
             INSERT INTO course_sessions (
-                platform_id, session_index, scheduled_at, status, created_at, updated_at
+                platform_id, session_index, scheduled_at, status,
+                session_password, session_password_generated_at,
+                created_at, updated_at
             )
-            VALUES (?, ?, ?, 'planned', ?, ?)
+            VALUES (?, ?, ?, 'planned', ?, ?, ?, ?)
             """,
-            (platform_id, index, scheduled.strftime("%Y-%m-%d %H:%M:%S"), now, now),
+            (
+                platform_id,
+                index,
+                scheduled.strftime("%Y-%m-%d %H:%M:%S"),
+                session_password,
+                now,
+                now,
+                now,
+            ),
         )
     return {
         "total_sessions": len(sessions),
@@ -614,7 +662,9 @@ def _reminder_html(payload):
     reminder_type = payload.get("type")
     class_url = payload.get("class_url") or "#"
     scheduled_at = payload.get("scheduled_at") or ""
-    session_password = os.environ.get("COURSE_SESSION_PASSWORD", "").strip()
+    session_password = str(
+        payload.get("session_password") or os.environ.get("COURSE_SESSION_PASSWORD", "")
+    ).strip()
     password_line = (
         f'<div class="meta">Mot de passe de session : <strong>{session_password}</strong></div>'
         if session_password
@@ -760,7 +810,8 @@ def process_due_reminders(base_url=None, dry_run=False):
         cursor.execute(
             """
             SELECT id, platform_id, session_index, scheduled_at,
-                   reminder_previous_evening_sent_at, reminder_5min_sent_at
+                   reminder_previous_evening_sent_at, reminder_5min_sent_at,
+                   session_password
             FROM course_sessions
             WHERE status IN ('planned', 'active')
               AND scheduled_at <= ?
@@ -770,7 +821,15 @@ def process_due_reminders(base_url=None, dry_run=False):
         )
 
         results = []
-        for session_id, platform_id, session_index, scheduled_at_str, previous_sent, five_sent in cursor.fetchall():
+        for (
+            session_id,
+            platform_id,
+            session_index,
+            scheduled_at_str,
+            previous_sent,
+            five_sent,
+            session_password,
+        ) in cursor.fetchall():
             scheduled_at = _parse_local_datetime(scheduled_at_str)
             due_types = []
             previous_evening_at = FRANCE_TZ.localize(
@@ -789,6 +848,9 @@ def process_due_reminders(base_url=None, dry_run=False):
             recipients = _student_recipients(cursor, platform_id)
             class_url = _platform_class_url(cursor, platform_id, base_url)
             for reminder_type, sent_column in due_types:
+                password_for_email = session_password
+                if not password_for_email and not dry_run:
+                    password_for_email = _ensure_session_password(cursor, session_id, now_str)
                 payload = {
                     "type": reminder_type,
                     "platform_id": platform_id,
@@ -796,6 +858,7 @@ def process_due_reminders(base_url=None, dry_run=False):
                     "session_index": session_index,
                     "scheduled_at": scheduled_at_str,
                     "class_url": class_url,
+                    "session_password": password_for_email,
                     "recipients": recipients,
                 }
                 if dry_run:

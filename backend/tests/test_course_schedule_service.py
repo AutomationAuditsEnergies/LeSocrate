@@ -11,6 +11,7 @@ if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
 from config import FRANCE_TZ
+from services import course_schedule_service as css
 from services.course_schedule_service import (
     ensure_course_schedule_tables,
     save_course_schedule,
@@ -30,6 +31,59 @@ def _connect():
         )
         """
     )
+    cursor.execute(
+        """
+        CREATE TABLE platform_config (
+            id INTEGER PRIMARY KEY,
+            slug TEXT,
+            center_account_id INTEGER
+        )
+        """
+    )
+    cursor.execute(
+        """
+        CREATE TABLE training_center_accounts (
+            id INTEGER PRIMARY KEY,
+            slug TEXT
+        )
+        """
+    )
+    cursor.execute(
+        """
+        CREATE TABLE student_profiles (
+            id INTEGER PRIMARY KEY,
+            platform_id INTEGER,
+            email TEXT,
+            nom TEXT,
+            prenom TEXT,
+            is_active INTEGER DEFAULT 1
+        )
+        """
+    )
+    cursor.execute(
+        """
+        CREATE TABLE student_accounts (
+            id INTEGER PRIMARY KEY,
+            platform_id INTEGER,
+            username TEXT,
+            nom TEXT,
+            prenom TEXT,
+            is_active INTEGER DEFAULT 1
+        )
+        """
+    )
+    cursor.execute(
+        """
+        CREATE TABLE course_reminder_recipients (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            platform_id INTEGER NOT NULL,
+            email TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            UNIQUE(platform_id, email)
+        )
+        """
+    )
+    cursor.execute("INSERT INTO platform_config (id, slug, center_account_id) VALUES (12, 'classe-test', NULL)")
     ensure_course_schedule_tables(cursor)
     return conn
 
@@ -52,6 +106,52 @@ def _seed_schedule(cursor, platform_id=12):
 
 
 class CourseScheduleServiceTest(unittest.TestCase):
+    def test_save_course_schedule_generates_session_passwords(self):
+        conn = _connect()
+        cursor = conn.cursor()
+        base = datetime.now(FRANCE_TZ) + timedelta(days=3)
+        save_course_schedule(
+            cursor,
+            12,
+            {
+                "total_training_days": 2,
+                "weekly_course_count": 1,
+                "weekdays": [base.weekday()],
+                "start_time": "10:00",
+                "start_date": base.strftime("%Y-%m-%d"),
+            },
+        )
+
+        cursor.execute("SELECT session_password FROM course_sessions WHERE platform_id = 12 ORDER BY session_index")
+        passwords = [row[0] for row in cursor.fetchall()]
+
+        self.assertEqual(len(passwords), 2)
+        self.assertTrue(all(password and len(password) == 6 for password in passwords))
+        self.assertEqual(len(set(passwords)), 2)
+        conn.close()
+
+    def test_due_reminder_payload_includes_session_password(self):
+        conn = _connect()
+        cursor = conn.cursor()
+        _seed_schedule(cursor)
+        scheduled_at = (datetime.now(FRANCE_TZ) + timedelta(minutes=10)).strftime("%Y-%m-%d %H:%M:%S")
+        cursor.execute(
+            "UPDATE course_sessions SET scheduled_at = ? WHERE platform_id = ?",
+            (scheduled_at, 12),
+        )
+        cursor.execute(
+            "INSERT INTO course_reminder_recipients (platform_id, email, created_at) VALUES (?, ?, ?)",
+            (12, "eleve@example.com", datetime.now(FRANCE_TZ).strftime("%Y-%m-%d %H:%M:%S")),
+        )
+
+        with patch.object(css, "get_db_connection", lambda: conn):
+            results = css.process_due_reminders(base_url="https://example.test", dry_run=True)
+
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["type"], "previous_evening")
+        self.assertTrue(results[0]["session_password"])
+        self.assertEqual(results[0]["recipients"][0]["email"], "eleve@example.com")
+
     def test_update_is_blocked_inside_audio_preparation_window(self):
         conn = _connect()
         cursor = conn.cursor()

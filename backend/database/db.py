@@ -127,6 +127,8 @@ def init_database(_recovered_from_corruption: bool = False):
                 completed_at TEXT,
                 reminder_previous_evening_sent_at TEXT,
                 reminder_5min_sent_at TEXT,
+                session_password TEXT,
+                session_password_generated_at TEXT,
                 audio_generation_status TEXT DEFAULT 'pending',
                 audio_generation_started_at TEXT,
                 audio_generation_completed_at TEXT,
@@ -148,6 +150,8 @@ def init_database(_recovered_from_corruption: bool = False):
         cursor.execute("PRAGMA table_info(course_sessions)")
         course_session_columns = [col[1] for col in cursor.fetchall()]
         _course_session_audio_cols = {
+            "session_password": "TEXT",
+            "session_password_generated_at": "TEXT",
             "audio_generation_status": "TEXT DEFAULT 'pending'",
             "audio_generation_started_at": "TEXT",
             "audio_generation_completed_at": "TEXT",
