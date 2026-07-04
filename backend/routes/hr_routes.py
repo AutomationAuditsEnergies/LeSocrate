@@ -6,7 +6,7 @@ import time
 import requests as http_requests
 from datetime import datetime, timedelta, timezone
 from flask import Blueprint, request, session, jsonify, Response, stream_with_context, send_file
-from azure.storage.blob import BlobServiceClient, ContentSettings, generate_blob_sas, BlobSasPermissions
+from azure.storage.blob import BlobServiceClient, generate_blob_sas, BlobSasPermissions
 from azure.core.exceptions import ResourceExistsError
 from config import FRANCE_TZ
 from database.db import get_db_connection
@@ -27,6 +27,7 @@ from services.course_schedule_service import (
 )
 from services.export_service import generate_attendance_excel_export
 from services.scheduled_audio_service import process_due_audio_generations
+from services.audio_publish_service import publish_playlist_audio_to_platform
 from utils.logger import get_logger
 from utils.slug import slugify, unique_slug
 import state
@@ -110,46 +111,7 @@ def _publish_playlist_audio_to_platform(platform_id, folder_id, filenames=None):
     La page /video lit les fichiers à la racine du container formationaudio-pX,
     alors que la génération TTS écrit dans audiostts/platform-X/folder-Y/playlist/.
     """
-    tts_conn = os.environ.get("AZURE_TTS_STORAGE_CONNECTION_STRING")
-    audio_conn = os.environ.get("AZURE_AUDIO_STORAGE_CONNECTION_STRING") or os.environ.get("AZURE_STORAGE_CONNECTION_STRING")
-    if not tts_conn or not audio_conn:
-        raise ValueError("Connexions Azure audio manquantes")
-
-    wanted = {os.path.basename(str(name).split("?", 1)[0]) for name in (filenames or []) if name}
-    pinfo = _get_platform_info(int(platform_id))
-    dest_container = pinfo["audio_container"]
-    prefix = f"platform-{platform_id}/folder-{folder_id}/playlist/"
-
-    tts_bsc = BlobServiceClient.from_connection_string(tts_conn)
-    audio_bsc = BlobServiceClient.from_connection_string(audio_conn)
-    source_cc = tts_bsc.get_container_client("audiostts")
-    dest_cc = audio_bsc.get_container_client(dest_container)
-
-    copied = []
-    errors = []
-    for blob in source_cc.list_blobs(name_starts_with=prefix):
-        filename = blob.name.split("/")[-1]
-        if not filename.endswith(".mp3"):
-            continue
-        if wanted and filename not in wanted:
-            continue
-        try:
-            audio_bytes = source_cc.get_blob_client(blob.name).download_blob().readall()
-            dest_cc.get_blob_client(filename).upload_blob(
-                audio_bytes,
-                overwrite=True,
-                content_settings=ContentSettings(
-                    content_type="audio/mpeg",
-                    content_disposition=f'inline; filename="{filename}"',
-                ),
-            )
-            copied.append(filename)
-            logger.info(f"📣 Audio publié vers {dest_container}/{filename}")
-        except Exception as e:
-            logger.error(f"❌ Publication audio {filename} échouée: {e}")
-            errors.append({"filename": filename, "error": str(e)})
-
-    return {"published": copied, "publish_errors": errors}
+    return publish_playlist_audio_to_platform(platform_id, folder_id, filenames)
 
 
 def _bool_arg(name, default=False):
