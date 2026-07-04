@@ -191,6 +191,23 @@ def _assert_schedule_can_be_changed(cursor, platform_id):
     )
 
 
+def _assert_requested_sessions_are_not_due_soon(sessions):
+    if not sessions:
+        return
+    horizon, late_grace = _audio_schedule_window_hours()
+    now = datetime.now(FRANCE_TZ)
+    lower_bound = now - timedelta(hours=late_grace)
+    upper_bound = now + timedelta(hours=horizon)
+    first_session = sessions[0]
+    if lower_bound <= first_session <= upper_bound:
+        session_label = first_session.strftime("%d/%m/%Y à %H:%M")
+        raise ValueError(
+            f"Planning refusé: la nouvelle prochaine journée tomberait le {session_label}. "
+            f"Choisissez un planning dont la prochaine journée est à plus de {int(horizon)}h, "
+            "pour laisser le temps à l'audio de se préparer."
+        )
+
+
 def _generate_session_datetimes(total_training_days, weekdays, start_time, start_date=None):
     total = int(total_training_days)
     if total <= 0:
@@ -354,6 +371,12 @@ def update_course_schedule(cursor, platform_id, start_time=None, weekdays=None):
         }
 
     _assert_schedule_can_be_changed(cursor, platform_id)
+    requested_sessions = _generate_session_datetimes(
+        total_training_days=summary["total_training_days"],
+        weekdays=requested_weekdays,
+        start_time=requested_start_time,
+    )
+    _assert_requested_sessions_are_not_due_soon(requested_sessions)
 
     result = save_course_schedule(
         cursor,

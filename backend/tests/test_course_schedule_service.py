@@ -90,6 +90,27 @@ class CourseScheduleServiceTest(unittest.TestCase):
         self.assertEqual(cursor.fetchone()[0], 1)
         conn.close()
 
+    def test_update_rejects_new_next_session_inside_audio_preparation_window(self):
+        conn = _connect()
+        cursor = conn.cursor()
+        _seed_schedule(cursor)
+        future_at = (datetime.now(FRANCE_TZ) + timedelta(days=4)).strftime("%Y-%m-%d %H:%M:%S")
+        cursor.execute(
+            "UPDATE course_sessions SET scheduled_at = ? WHERE platform_id = ?",
+            (future_at, 12),
+        )
+
+        due_soon = datetime.now(FRANCE_TZ) + timedelta(hours=12)
+        with patch.dict("os.environ", {"SCHEDULED_AUDIO_HORIZON_HOURS": "24"}):
+            with self.assertRaisesRegex(ValueError, "Planning refusé"):
+                update_course_schedule(
+                    cursor,
+                    12,
+                    start_time=due_soon.strftime("%H:%M"),
+                    weekdays=[due_soon.weekday()],
+                )
+        conn.close()
+
 
 if __name__ == "__main__":
     unittest.main()
