@@ -12,8 +12,8 @@ logger = get_logger(__name__)
 def process_due_audio_generations(platform_ids=None, dry_run=False, horizon_hours=None):
     """Lance l'audio des journées prévues dans la fenêtre de préparation.
 
-    Une séance ne peut être lancée qu'une fois : `audio_generation_started_at`
-    sert de verrou durable entre deux passages du timer.
+    Une séance terminée ne peut pas être relancée automatiquement. Une séance
+    passée en erreur avant finalisation reste retentable par le timer suivant.
     """
     horizon = float(horizon_hours or os.environ.get("SCHEDULED_AUDIO_HORIZON_HOURS", "24"))
     late_grace = float(os.environ.get("SCHEDULED_AUDIO_LATE_GRACE_HOURS", "2"))

@@ -1722,15 +1722,17 @@ def list_due_audio_generation_sessions(
     upper_bound,
     platform_ids: list[int] | None = None,
 ) -> list[dict[str, Any]]:
-    ph = _placeholder()
     params: list[Any] = [lower_bound, upper_bound]
     platform_filter = ""
     if platform_ids:
         ids = [int(pid) for pid in platform_ids]
-        placeholders = ", ".join([ph] * len(ids))
+        placeholders = ", ".join(["?"] * len(ids))
         platform_filter = f"AND cs.platform_id IN ({placeholders})"
         params.extend(ids)
 
+    # `course_sessions` is still part of the operational SQLite schedule store:
+    # the pipeline job can be in Postgres, but the 24h trigger must read the
+    # same schedule table as the dashboard and /api/internal/auto-schedule.
     query = f"""
         SELECT
             cs.id,
@@ -1751,18 +1753,18 @@ def list_due_audio_generation_sessions(
         FROM course_sessions cs
         JOIN platform_config pc ON pc.id = cs.platform_id
         WHERE cs.status IN ('planned', 'active')
-          AND cs.scheduled_at >= {ph}
-          AND cs.scheduled_at <= {ph}
-          AND cs.audio_generation_started_at IS NULL
+          AND cs.scheduled_at >= ?
+          AND cs.scheduled_at <= ?
+          AND (
+              cs.audio_generation_started_at IS NULL
+              OR (
+                  COALESCE(cs.audio_generation_status, 'pending') = 'error'
+                  AND cs.audio_generation_completed_at IS NULL
+              )
+          )
           {platform_filter}
         ORDER BY cs.scheduled_at ASC, cs.platform_id ASC
     """
-    if _pipeline_primary_backend() == "postgres":
-        with get_postgres_connection() as conn:
-            with conn.cursor() as cur:
-                cur.execute(query, params)
-                return [dict(row) for row in cur.fetchall()]
-
     conn = _as_sqlite_row_connection()
     try:
         from services.course_schedule_service import ensure_course_schedule_tables
@@ -1770,7 +1772,40 @@ def list_due_audio_generation_sessions(
         cursor = conn.cursor()
         ensure_course_schedule_tables(cursor)
         cursor.execute(query, params)
-        return [dict(row) for row in cursor.fetchall()]
+        rows = [dict(row) for row in cursor.fetchall()]
+    finally:
+        conn.close()
+
+    for row in rows:
+        if row.get("formation_job_id"):
+            continue
+        row["formation_job_id"] = find_latest_pipeline_job_id_for_platform(int(row["platform_id"]))
+
+    return rows
+
+
+def find_latest_pipeline_job_id_for_platform(platform_id: int) -> int | None:
+    ph = _placeholder()
+    query = f"""
+        SELECT id
+        FROM formation_pipeline_jobs
+        WHERE platform_id = {ph}
+        ORDER BY id DESC
+        LIMIT 1
+    """
+    if _pipeline_primary_backend() == "postgres":
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, (platform_id,))
+                row = cur.fetchone()
+                return int(row["id"]) if row else None
+
+    conn = _as_sqlite_row_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(query, (platform_id,))
+        row = cursor.fetchone()
+        return int(row["id"]) if row else None
     finally:
         conn.close()
 

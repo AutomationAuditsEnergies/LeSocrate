@@ -1211,6 +1211,51 @@ def create_hr_blueprint(socketio):
                     total_hours=th,
                     nb_days=nb_days,
                 )
+                link_updated_at = datetime.now(FRANCE_TZ).strftime("%Y-%m-%d %H:%M:%S")
+                link_conn = get_db_connection()
+                link_cursor = link_conn.cursor()
+                try:
+                    link_cursor.execute(
+                        """
+                        UPDATE platform_config
+                        SET source_formation_id = ?,
+                            updated_at = ?
+                        WHERE id = ?
+                          AND source_formation_id IS NULL
+                        """,
+                        (linked_job_id, link_updated_at, new_id),
+                    )
+                    link_conn.commit()
+                finally:
+                    link_conn.close()
+                if postgres_enabled():
+                    try:
+                        upsert_platform_config({
+                            "id": new_id,
+                            "center_account_id": center_account_id,
+                            "name": name,
+                            "slug": slug,
+                            "upload_locked": True,
+                            "public_access_enabled": True,
+                            "pdf_filename": None,
+                            "pdf_uploaded_at": None,
+                            "updated_at": link_updated_at,
+                            "playlist_mode": None,
+                            "audio_container": audio_container,
+                            "pdf_container": pdf_container,
+                            "archive_container": archive_container,
+                            "audio_base_url": None,
+                            "status": initial_status,
+                            "source_formation_id": linked_job_id,
+                            "source_module_id": module_id,
+                        })
+                    except Exception:
+                        logger.warning(
+                            "⚠️ Synchronisation Postgres du lien source_formation_id ignorée P%s job=%s",
+                            new_id,
+                            linked_job_id,
+                            exc_info=True,
+                        )
                 logger.info(f"🚀 Pipeline formation job {linked_job_id} initié pour plateforme {new_id} — l'admin doit continuer sur /formation-pipeline")
 
             logger.info(f"✅ Plateforme {new_id} '{name}' créée (status={initial_status}) avec containers: {containers_created}")

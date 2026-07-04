@@ -2735,19 +2735,26 @@ def start_folder_audio_generation(job_id, folder_id, payload=None, *, schedule_s
                 """
                 UPDATE course_sessions
                 SET audio_generation_status = 'running',
-                    audio_generation_started_at = COALESCE(audio_generation_started_at, ?),
+                    audio_generation_started_at = ?,
+                    audio_generation_completed_at = NULL,
                     audio_generation_error = NULL,
                     audio_job_id = ?,
                     audio_folder_id = ?,
                     updated_at = ?
                 WHERE id = ?
-                  AND audio_generation_started_at IS NULL
+                  AND (
+                      audio_generation_started_at IS NULL
+                      OR (
+                          COALESCE(audio_generation_status, 'pending') = 'error'
+                          AND audio_generation_completed_at IS NULL
+                      )
+                  )
                 """,
                 (now_str, job_id, folder_id, now_str, schedule_session_id),
             )
             if _cur.rowcount == 0:
                 _conn.close()
-                return {"error": "Audio déjà lancé pour cette séance"}, 409
+                return {"error": "Audio déjà lancé ou terminé pour cette séance"}, 409
             _conn.commit()
             _conn.close()
         except Exception as exc:
