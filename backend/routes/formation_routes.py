@@ -2641,7 +2641,15 @@ def _folder_text_reviews_ready(job_id: int, folder_id: int) -> tuple[bool, dict]
     return total > 0 and detail["reviewed_current"] >= total, detail
 
 
-def start_folder_audio_generation(job_id, folder_id, payload=None, *, schedule_session_id=None, trigger_source="manual"):
+def start_folder_audio_generation(
+    job_id,
+    folder_id,
+    payload=None,
+    *,
+    schedule_session_id=None,
+    trigger_source="manual",
+    stale_started_before=None,
+):
     """Lance l'audio d'une seule journée.
 
     Utilisé par le bouton manuel d'une journée et par le timer 24h avant cours.
@@ -2694,10 +2702,21 @@ def start_folder_audio_generation(job_id, folder_id, payload=None, *, schedule_s
         try:
             from database.db import get_db_connection as _get_conn
             now_str = datetime.now(FRANCE_TZ).strftime("%Y-%m-%d %H:%M:%S")
+            stale_retry_clause = ""
+            params = [now_str, job_id, folder_id, now_str, schedule_session_id]
+            if stale_started_before:
+                stale_retry_clause = """
+                      OR (
+                          COALESCE(audio_generation_status, 'pending') IN ('running', 'processing')
+                          AND audio_generation_completed_at IS NULL
+                          AND audio_generation_started_at <= ?
+                      )
+                """
+                params.append(stale_started_before)
             _conn = _get_conn()
             _cur = _conn.cursor()
             _cur.execute(
-                """
+                f"""
                 UPDATE course_sessions
                 SET audio_generation_status = 'running',
                     audio_generation_started_at = ?,
@@ -2713,9 +2732,10 @@ def start_folder_audio_generation(job_id, folder_id, payload=None, *, schedule_s
                           COALESCE(audio_generation_status, 'pending') = 'error'
                           AND audio_generation_completed_at IS NULL
                       )
+                      {stale_retry_clause}
                   )
                 """,
-                (now_str, job_id, folder_id, now_str, schedule_session_id),
+                params,
             )
             if _cur.rowcount == 0:
                 _conn.close()

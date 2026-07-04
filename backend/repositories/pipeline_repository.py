@@ -1721,8 +1721,26 @@ def list_due_audio_generation_sessions(
     lower_bound,
     upper_bound,
     platform_ids: list[int] | None = None,
+    stale_started_before=None,
 ) -> list[dict[str, Any]]:
     params: list[Any] = [lower_bound, upper_bound]
+    retry_conditions = """
+              cs.audio_generation_started_at IS NULL
+              OR (
+                  COALESCE(cs.audio_generation_status, 'pending') = 'error'
+                  AND cs.audio_generation_completed_at IS NULL
+              )
+    """
+    if stale_started_before:
+        retry_conditions += """
+              OR (
+                  COALESCE(cs.audio_generation_status, 'pending') IN ('running', 'processing')
+                  AND cs.audio_generation_completed_at IS NULL
+                  AND cs.audio_generation_started_at <= ?
+              )
+        """
+        params.append(stale_started_before)
+
     platform_filter = ""
     if platform_ids:
         ids = [int(pid) for pid in platform_ids]
@@ -1739,6 +1757,8 @@ def list_due_audio_generation_sessions(
             cs.platform_id,
             cs.session_index,
             cs.scheduled_at,
+            cs.audio_generation_status,
+            cs.audio_generation_started_at,
             pc.name,
             COALESCE(
                 pc.source_formation_id,
@@ -1756,11 +1776,7 @@ def list_due_audio_generation_sessions(
           AND cs.scheduled_at >= ?
           AND cs.scheduled_at <= ?
           AND (
-              cs.audio_generation_started_at IS NULL
-              OR (
-                  COALESCE(cs.audio_generation_status, 'pending') = 'error'
-                  AND cs.audio_generation_completed_at IS NULL
-              )
+              {retry_conditions}
           )
           {platform_filter}
         ORDER BY cs.scheduled_at ASC, cs.platform_id ASC

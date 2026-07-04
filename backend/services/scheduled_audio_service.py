@@ -17,6 +17,7 @@ def process_due_audio_generations(platform_ids=None, dry_run=False, horizon_hour
     """
     horizon = float(horizon_hours or os.environ.get("SCHEDULED_AUDIO_HORIZON_HOURS", "24"))
     late_grace = float(os.environ.get("SCHEDULED_AUDIO_LATE_GRACE_HOURS", "2"))
+    stale_retry_minutes = float(os.environ.get("SCHEDULED_AUDIO_STALE_RETRY_MINUTES", "10"))
     tts_mode = (os.environ.get("SCHEDULED_AUDIO_TTS_MODE") or "").strip().lower() or None
     if tts_mode and tts_mode not in {"fish_audio", "gtts", "mock"}:
         raise ValueError("SCHEDULED_AUDIO_TTS_MODE doit être fish_audio, gtts ou mock")
@@ -24,11 +25,13 @@ def process_due_audio_generations(platform_ids=None, dry_run=False, horizon_hour
     now = datetime.now(FRANCE_TZ)
     lower_bound = (now - timedelta(hours=late_grace)).strftime("%Y-%m-%d %H:%M:%S")
     upper_bound = (now + timedelta(hours=horizon)).strftime("%Y-%m-%d %H:%M:%S")
+    stale_started_before = (now - timedelta(minutes=stale_retry_minutes)).strftime("%Y-%m-%d %H:%M:%S")
 
     due_sessions = list_due_audio_generation_sessions(
         lower_bound=lower_bound,
         upper_bound=upper_bound,
         platform_ids=platform_ids,
+        stale_started_before=stale_started_before,
     )
 
     results = []
@@ -84,6 +87,7 @@ def process_due_audio_generations(platform_ids=None, dry_run=False, horizon_hour
                 payload,
                 schedule_session_id=int(session_id),
                 trigger_source="scheduled_24h",
+                stale_started_before=stale_started_before,
             )
             results.append({
                 **result,
