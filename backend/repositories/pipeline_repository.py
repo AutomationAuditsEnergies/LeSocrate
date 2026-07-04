@@ -1844,18 +1844,36 @@ def list_content_completion_rows_for_folders(folder_ids: list[int]) -> list[dict
     placeholders, params = _in_clause([int(fid) for fid in folder_ids])
     if not placeholders:
         return []
+    if _pipeline_primary_backend() == "postgres":
+        reviewed_true = "COALESCE(cgs.reviewed, FALSE) = TRUE"
+        reviewed_false = "COALESCE(cgs.reviewed, FALSE) = FALSE"
+        humanized_true = "COALESCE(cgs.humanized, FALSE) = TRUE"
+        dirty_true = "COALESCE(cgs.dirty, FALSE) = TRUE"
+    else:
+        reviewed_true = "COALESCE(cgs.reviewed, 0) = 1"
+        reviewed_false = "COALESCE(cgs.reviewed, 0) = 0"
+        humanized_true = "COALESCE(cgs.humanized, 0) = 1"
+        dirty_true = "COALESCE(cgs.dirty, 0) = 1"
     query = f"""
         SELECT
             cf.id AS folder_id,
             cgj.id AS content_job_id,
             cgj.status,
             COALESCE(cgj.total_words, 0) AS total_words,
-            COALESCE(SUM(CASE WHEN cgs.status = 'completed' THEN 1 ELSE 0 END), 0) AS completed_segments
+            cgj.current_sub_part,
+            cgj.current_passe,
+            cgj.error_message,
+            COALESCE(SUM(CASE WHEN cgs.status = 'completed' THEN 1 ELSE 0 END), 0) AS completed_segments,
+            COALESCE(SUM(CASE WHEN cgs.status = 'completed' AND {reviewed_true} THEN 1 ELSE 0 END), 0) AS reviewed_segments,
+            COALESCE(SUM(CASE WHEN cgs.status = 'completed' AND {humanized_true} THEN 1 ELSE 0 END), 0) AS humanized_segments,
+            COALESCE(SUM(CASE WHEN cgs.status = 'completed' AND {reviewed_false} AND cgs.review_error IS NOT NULL THEN 1 ELSE 0 END), 0) AS review_error_segments,
+            COALESCE(SUM(CASE WHEN cgs.status = 'completed' AND {dirty_true} THEN 1 ELSE 0 END), 0) AS dirty_segments
         FROM cours_folders cf
         LEFT JOIN content_generation_jobs cgj ON cgj.folder_id = cf.id
         LEFT JOIN content_generation_segments cgs ON cgs.job_id = cgj.id
         WHERE cf.id IN ({placeholders})
-        GROUP BY cf.id, cgj.id, cgj.status, cgj.total_words
+        GROUP BY cf.id, cgj.id, cgj.status, cgj.total_words,
+                 cgj.current_sub_part, cgj.current_passe, cgj.error_message
     """
     if _pipeline_primary_backend() == "postgres":
         with get_postgres_connection() as conn:

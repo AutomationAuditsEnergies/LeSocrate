@@ -973,9 +973,10 @@ def list_content(job_id):
     except Exception as e:
         logger.warning(f"⚠️ Réparation cours_folders job {job_id} ignorée : {e}")
 
-    from database.db import get_db_connection
     import json as _json
     from services.formation_pipeline_service import get_expected_course_folders
+    from repositories.pipeline_repository import list_content_completion_rows_for_folders
+    from services.script_slide_generation_service import get_latest_script_slide_deck
 
     folder_state = get_expected_course_folders(job_id)
     folders = [
@@ -988,96 +989,42 @@ def list_content(job_id):
         )
         for f in folder_state.get("folders", [])
     ]
-    conn = get_db_connection()
-    cursor = conn.cursor()
+    folder_ids = [int(folder[0]) for folder in folders]
+    content_rows = {
+        int(row["folder_id"]): row
+        for row in list_content_completion_rows_for_folders(folder_ids)
+    }
 
     daily_programs = _json.loads(job["daily_programs"] or "[]")
     result = []
     for idx, (fid, fname, fpos, f_platform_id, f_formation_job_id) in enumerate(folders):
         day_meta = daily_programs[idx] if idx < len(daily_programs) else {}
-
-        cursor.execute(
-            """SELECT id, status, total_words, current_sub_part, current_passe, error_message
-               FROM content_generation_jobs WHERE folder_id = ?""",
-            (fid,),
-        )
-        cg = cursor.fetchone()
-        if cg:
-            cg_id, cg_status, cg_words, cur_sub, cur_passe, cg_err = cg
-            cursor.execute(
-                "SELECT COUNT(*) FROM content_generation_segments WHERE job_id = ? AND status = 'completed'",
-                (cg_id,),
-            )
-            n_completed = cursor.fetchone()[0]
-            cursor.execute(
-                "SELECT COUNT(*) FROM content_generation_segments "
-                "WHERE job_id = ? AND status = 'completed' AND COALESCE(reviewed, 0) = 1",
-                (cg_id,),
-            )
-            n_reviewed = cursor.fetchone()[0]
-            cursor.execute(
-                "SELECT COUNT(*) FROM content_generation_segments "
-                "WHERE job_id = ? AND status = 'completed' AND COALESCE(humanized, 0) = 1",
-                (cg_id,),
-            )
-            n_humanized = cursor.fetchone()[0]
-            # Segments dont la tentative de review a échoué (reviewed=0 ET
-            # review_error défini). Comptent comme "traités" pour arrêter
-            # le polling frontend, sans mentir sur la conformité.
-            cursor.execute(
-                "SELECT COUNT(*) FROM content_generation_segments "
-                "WHERE job_id = ? AND status = 'completed' "
-                "AND COALESCE(reviewed, 0) = 0 AND review_error IS NOT NULL",
-                (cg_id,),
-            )
-            n_review_errors = cursor.fetchone()[0]
-            cursor.execute(
-                "SELECT COUNT(*) FROM content_generation_segments "
-                "WHERE job_id = ? AND status = 'completed' AND COALESCE(dirty, 0) = 1",
-                (cg_id,),
-            )
-            n_dirty = cursor.fetchone()[0]
-            slide_deck_id = None
-            slide_count = 0
-            slide_generation_mode = None
+        content_row = content_rows.get(int(fid)) or {}
+        cg_id = content_row.get("content_job_id")
+        cg_status = content_row.get("status")
+        cg_words = content_row.get("total_words") or 0
+        cur_sub = content_row.get("current_sub_part") or 0
+        cur_passe = content_row.get("current_passe") or 1
+        cg_err = content_row.get("error_message")
+        n_completed = content_row.get("completed_segments") or 0
+        n_reviewed = content_row.get("reviewed_segments") or 0
+        n_humanized = content_row.get("humanized_segments") or 0
+        n_review_errors = content_row.get("review_error_segments") or 0
+        n_dirty = content_row.get("dirty_segments") or 0
+        slide_deck_id = None
+        slide_count = 0
+        slide_generation_mode = None
+        if cg_id:
             try:
-                cursor.execute(
-                    "SELECT name FROM sqlite_master WHERE type='table' AND name='script_slide_decks'"
-                )
-                has_slide_table = bool(cursor.fetchone())
-                if has_slide_table:
-                    cursor.execute(
-                        """
-                        SELECT id, slides_json, stats_json
-                        FROM script_slide_decks
-                        WHERE folder_id = ? AND content_job_id = ?
-                        ORDER BY id DESC
-                        LIMIT 1
-                        """,
-                        (fid, cg_id),
-                    )
-                    deck_row = cursor.fetchone()
-                    if deck_row:
-                        slide_deck_id = deck_row[0]
-                        try:
-                            slide_count = len(_json.loads(deck_row[1] or "[]"))
-                        except Exception:
-                            slide_count = 0
-                        try:
-                            slide_generation_mode = (_json.loads(deck_row[2] or "{}") or {}).get("generation_mode")
-                        except Exception:
-                            slide_generation_mode = None
+                deck = get_latest_script_slide_deck(int(fid), content_job_id=int(cg_id))
+                if deck:
+                    slide_deck_id = deck.get("deck_id")
+                    slide_count = len(deck.get("slides") or [])
+                    slide_generation_mode = (deck.get("stats") or {}).get("generation_mode")
             except Exception:
                 slide_deck_id = None
                 slide_count = 0
                 slide_generation_mode = None
-        else:
-            cg_id = None
-            cg_status, cg_words, cur_sub, cur_passe, cg_err = None, 0, 0, 1, None
-            n_completed, n_reviewed, n_humanized, n_review_errors, n_dirty = 0, 0, 0, 0, 0
-            slide_deck_id = None
-            slide_count = 0
-            slide_generation_mode = None
 
         day_sub_parts = day_meta.get("sub_parts")
         segment_total = (len(day_sub_parts) if day_sub_parts else 6) * 3
@@ -1107,7 +1054,6 @@ def list_content(job_id):
             "error_message": cg_err,
         })
 
-    conn.close()
     return jsonify({
         "folders": result,
         "job_status": job["status"],
