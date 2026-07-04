@@ -2616,63 +2616,28 @@ def _finalize_text_ready_state(job_id: int) -> dict:
 
 
 def _count_dirty_segments_for_job(job_id: int) -> int:
-    from database.db import get_db_connection
+    from repositories.pipeline_repository import count_dirty_completed_segments_for_folders
     from services.formation_pipeline_service import get_expected_course_folders
 
     folder_ids = get_expected_course_folders(job_id).get("folder_ids") or []
     if not folder_ids:
         return 0
-    placeholders = ",".join("?" * len(folder_ids))
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        f"""
-        SELECT COUNT(*)
-        FROM content_generation_segments cgs
-        JOIN content_generation_jobs cgj ON cgj.id = cgs.job_id
-        WHERE cgj.folder_id IN ({placeholders})
-          AND cgs.status = 'completed'
-          AND COALESCE(cgs.dirty, 1) = 1
-        """,
-        tuple(folder_ids),
-    )
-    n_dirty = int(cursor.fetchone()[0] or 0)
-    conn.close()
-    return n_dirty
+    return count_dirty_completed_segments_for_folders(folder_ids)
 
 
 def _folder_text_reviews_ready(job_id: int, folder_id: int) -> tuple[bool, dict]:
-    from database.db import get_db_connection
+    from repositories.pipeline_repository import get_folder_text_review_readiness
     from services.content_generation_service import (
         _current_compliance_review_signature,
     )
 
     compliance_signature = _current_compliance_review_signature()
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        """
-        SELECT
-            COUNT(*),
-            SUM(CASE WHEN COALESCE(cgs.reviewed, 0) = 1
-                      AND cgs.review_signature = ? THEN 1 ELSE 0 END),
-            SUM(CASE WHEN cgs.review_error IS NOT NULL THEN 1 ELSE 0 END)
-        FROM content_generation_segments cgs
-        JOIN content_generation_jobs cgj ON cgj.id = cgs.job_id
-        JOIN cours_folders cf ON cf.id = cgj.folder_id
-        WHERE cf.id = ? AND cf.formation_job_id = ?
-          AND cgs.status = 'completed'
-        """,
-        (compliance_signature, folder_id, job_id),
+    detail = get_folder_text_review_readiness(
+        job_id=job_id,
+        folder_id=folder_id,
+        review_signature=compliance_signature,
     )
-    total, reviewed, review_errors = cursor.fetchone()
-    conn.close()
-    total = int(total or 0)
-    detail = {
-        "segments_completed": total,
-        "reviewed_current": int(reviewed or 0),
-        "review_errors": int(review_errors or 0),
-    }
+    total = int(detail.get("segments_completed") or 0)
     return total > 0 and detail["reviewed_current"] >= total, detail
 
 
@@ -3444,97 +3409,20 @@ def _reset_folder_downstream_to_generated_text(job_id: int, folder_id: int) -> d
 
 def _completed_text_folder_candidates(job_id: int) -> list[dict]:
     """Liste les dossiers rattachés au job qui ont vraiment un texte complet."""
-    from database.db import get_db_connection
+    from repositories.pipeline_repository import list_text_folder_states_for_folders
     from services.formation_pipeline_service import get_expected_course_folders
 
     folder_ids = get_expected_course_folders(job_id).get("folder_ids") or []
     if not folder_ids:
         return []
-    placeholders = ",".join("?" * len(folder_ids))
-
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        f"""
-        SELECT
-            cf.id,
-            cf.name,
-            cf.position,
-            cf.platform_id,
-            cgj.id,
-            cgj.status,
-            COALESCE(cgj.total_words, 0),
-            SUM(CASE WHEN cgs.status = 'completed' THEN 1 ELSE 0 END)
-        FROM cours_folders cf
-        JOIN content_generation_jobs cgj ON cgj.folder_id = cf.id
-        LEFT JOIN content_generation_segments cgs ON cgs.job_id = cgj.id
-        WHERE cf.id IN ({placeholders})
-        GROUP BY cf.id, cf.name, cf.position, cf.platform_id, cgj.id, cgj.status, cgj.total_words
-        HAVING cgj.status = 'completed'
-           AND SUM(CASE WHEN cgs.status = 'completed' THEN 1 ELSE 0 END) > 0
-        ORDER BY cf.position ASC, cf.id ASC
-        """,
-        tuple(folder_ids),
-    )
-    rows = cursor.fetchall()
-    conn.close()
-    return [
-        {
-            "folder_id": row[0],
-            "folder_name": row[1],
-            "position": row[2],
-            "platform_id": row[3],
-            "content_job_id": row[4],
-            "content_status": row[5],
-            "total_words": row[6] or 0,
-            "segments_completed": row[7] or 0,
-        }
-        for row in rows
-    ]
+    return list_text_folder_states_for_folders(folder_ids, completed_only=True)
 
 
 def _requested_text_folder_state(job_id: int, folder_id: int) -> dict | None:
     """Retourne l'état texte du folder demandé, même s'il n'est pas completed."""
-    from database.db import get_db_connection
+    from repositories.pipeline_repository import get_text_folder_state
 
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        """
-        SELECT
-            cf.id,
-            cf.name,
-            cf.position,
-            cf.platform_id,
-            cf.formation_job_id,
-            cgj.id,
-            cgj.status,
-            COALESCE(cgj.total_words, 0),
-            COALESCE(SUM(CASE WHEN cgs.status = 'completed' THEN 1 ELSE 0 END), 0)
-        FROM cours_folders cf
-        LEFT JOIN content_generation_jobs cgj ON cgj.folder_id = cf.id
-        LEFT JOIN content_generation_segments cgs ON cgs.job_id = cgj.id
-        WHERE cf.id = ?
-        GROUP BY cf.id, cf.name, cf.position, cf.platform_id, cf.formation_job_id,
-                 cgj.id, cgj.status, cgj.total_words
-        """,
-        (folder_id,),
-    )
-    row = cursor.fetchone()
-    conn.close()
-    if not row:
-        return None
-    return {
-        "folder_id": row[0],
-        "folder_name": row[1],
-        "position": row[2],
-        "platform_id": row[3],
-        "formation_job_id": row[4],
-        "content_job_id": row[5],
-        "content_status": row[6],
-        "total_words": row[7] or 0,
-        "segments_completed": row[8] or 0,
-    }
+    return get_text_folder_state(folder_id)
 
 
 def _claim_single_completed_orphan_folder(job_id: int, requested: dict | None) -> dict | None:
