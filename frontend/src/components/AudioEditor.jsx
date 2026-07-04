@@ -240,14 +240,26 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
     }
   }, [])
 
+  const getAudioAuthToken = useCallback(() => (
+    localStorage.getItem('admin_auth_token') || localStorage.getItem('auth_token') || ''
+  ), [])
+
   // Donner une URL backend directement à WaveSurfer évite le double chargement
-  // fetch -> Blob -> WaveSurfer. Le backend streame le MP3 et supporte Range.
+  // fetch -> Blob -> WaveSurfer. Le token est passé dans l'URL uniquement pour
+  // ce stream média, car les players audio ne conservent pas toujours nos
+  // headers custom quand ils font leurs requêtes Range.
   const buildAudioStreamUrl = useCallback(() => {
     clearAudioUrl()
-    const url = apiUrl(`/api/hr/cours-folders/${folderId}/audio-stream/${encodeURIComponent(filename)}?v=${Date.now()}`)
+    const params = new URLSearchParams({
+      v: String(Date.now()),
+      platform_id: String(getPlatformId()),
+    })
+    const token = getAudioAuthToken()
+    if (token) params.set('auth_token', token)
+    const url = apiUrl(`/api/hr/cours-folders/${folderId}/audio-stream/${encodeURIComponent(filename)}?${params.toString()}`)
     audioUrlRef.current = url
     return url
-  }, [clearAudioUrl, folderId, filename])
+  }, [clearAudioUrl, folderId, filename, getAudioAuthToken])
 
   useEffect(() => {
     let cancelled = false
@@ -330,7 +342,6 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
       blobMimeType: 'audio/mpeg',
       fetchParams: {
         credentials: 'include',
-        headers: audioFetchHeaders(),
       },
       plugins: [regions],
     })
@@ -461,7 +472,7 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
       stopStitchedPlayback()
       clearAudioUrl()
     }
-  }, [audioFetchHeaders, buildAudioStreamUrl, clearAudioUrl, darkMode])
+  }, [buildAudioStreamUrl, clearAudioUrl, darkMode])
 
   // Changer la couleur de la région selon le mode
   useEffect(() => {

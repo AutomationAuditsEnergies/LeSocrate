@@ -59,7 +59,8 @@ CORS(app, resources={
     r"/*": {
         "origins": _cors_origins,
         "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-        "allow_headers": ["Content-Type", "Authorization", "X-Auth-Token", "X-Platform-Id"],
+        "allow_headers": ["Content-Type", "Authorization", "X-Auth-Token", "X-Platform-Id", "Range"],
+        "expose_headers": ["Accept-Ranges", "Content-Length", "Content-Range", "Content-Disposition"],
         "supports_credentials": True
     }
 })
@@ -112,6 +113,13 @@ def populate_session_from_token():
         }), 503
 
     token = request.headers.get("X-Auth-Token")
+    if (
+        not token
+        and request.method == "GET"
+        and request.path.startswith("/api/hr/cours-folders/")
+        and "/audio-stream/" in request.path
+    ):
+        token = request.args.get("auth_token")
     if not session.get("is_admin") and token:
         admin_tokens = getattr(_state, "admin_tokens", {})
         admin_user = admin_tokens.get(token)
