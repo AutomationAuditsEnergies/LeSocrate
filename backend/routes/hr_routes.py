@@ -27,7 +27,7 @@ from services.course_schedule_service import (
 )
 from services.export_service import generate_attendance_excel_export
 from services.scheduled_audio_service import process_due_audio_generations
-from services.audio_publish_service import publish_playlist_audio_to_platform
+from services.audio_publish_service import archive_public_platform_audios, publish_playlist_audio_to_platform
 from utils.logger import get_logger
 from utils.slug import slugify, unique_slug
 import state
@@ -105,13 +105,28 @@ def _module_version_count(cursor, rncp_code, center_account_id):
     return cursor.fetchone()[0]
 
 
-def _publish_playlist_audio_to_platform(platform_id, folder_id, filenames=None):
+def _publish_playlist_audio_to_platform(
+    platform_id,
+    folder_id,
+    filenames=None,
+    *,
+    source_platform_id=None,
+    archive_existing=False,
+    archive_reason="auto-publish",
+):
     """Copie les MP3 générés du dossier vers le container audio public de la plateforme.
 
     La page /video lit les fichiers à la racine du container formationaudio-pX,
     alors que la génération TTS écrit dans audiostts/platform-X/folder-Y/playlist/.
     """
-    return publish_playlist_audio_to_platform(platform_id, folder_id, filenames)
+    return publish_playlist_audio_to_platform(
+        platform_id,
+        folder_id,
+        filenames,
+        source_platform_id=source_platform_id,
+        archive_existing=archive_existing,
+        archive_reason=archive_reason,
+    )
 
 
 def _bool_arg(name, default=False):
@@ -4259,7 +4274,13 @@ def create_hr_blueprint(socketio):
                         publish_filenames = None
                         if has_script and not playlist_mock and not include_breaks:
                             publish_filenames = result.get("files") or []
-                        result["publish"] = _publish_playlist_audio_to_platform(platform_id, folder_id, publish_filenames)
+                        result["publish"] = _publish_playlist_audio_to_platform(
+                            platform_id,
+                            folder_id,
+                            publish_filenames,
+                            archive_existing=True,
+                            archive_reason=f"folder-{folder_id}-playlist",
+                        )
                     except Exception as publish_error:
                         logger.error(f"❌ Publication playlist P{platform_id}/F{folder_id} échouée: {publish_error}")
                         result["publish"] = {"published": [], "publish_errors": [{"error": str(publish_error)}]}
@@ -5248,6 +5269,10 @@ def create_hr_blueprint(socketio):
             copied_files = []
             errors = []
             copied_names = set()
+            archive_result = archive_public_platform_audios(
+                platform_id,
+                reason=f"fill-from-folder-{folder_id}",
+            )
 
             # Copier les fichiers générés du dossier (cours + Q&A/pauses contextuels)
             for blob in playlist_blobs:
@@ -5292,6 +5317,7 @@ def create_hr_blueprint(socketio):
                 "files": copied_files,
                 "error_details": errors,
                 "folder_name": folder_row[0],
+                "archive": archive_result,
             }), 200
 
         except Exception as e:

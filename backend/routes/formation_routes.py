@@ -2800,7 +2800,12 @@ def start_folder_audio_generation(job_id, folder_id, payload=None, *, schedule_s
             publish_result = None
             try:
                 from services.audio_publish_service import publish_playlist_audio_to_platform
-                publish_result = publish_playlist_audio_to_platform(job["platform_id"], folder_id)
+                publish_result = publish_playlist_audio_to_platform(
+                    job["platform_id"],
+                    folder_id,
+                    archive_existing=True,
+                    archive_reason=f"{trigger_source}-folder-{folder_id}",
+                )
             except Exception as publish_error:
                 publish_result = {"published": [], "publish_errors": [{"error": str(publish_error)}]}
                 logger.error(
