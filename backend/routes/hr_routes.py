@@ -678,7 +678,11 @@ def create_hr_blueprint(socketio):
                     pc.center_account_id,
                     COALESCE(tca.slug, 'le-socrate') AS center_slug,
                     COALESCE(fm.rncp_code, fpj.rncp_code) AS source_rncp_code,
-                    COALESCE(fm.tp_name, fpj.tp_name) AS source_tp_name
+                    COALESCE(fm.tp_name, fpj.tp_name) AS source_tp_name,
+                    fpj.status AS pipeline_status,
+                    fpj.auto_pilot_step AS pipeline_auto_pilot_step,
+                    fpj.auto_pilot_error AS pipeline_auto_pilot_error,
+                    fpj.auto_pilot_enabled AS pipeline_auto_pilot_enabled
                 FROM platform_config pc
                 LEFT JOIN training_center_accounts tca ON tca.id = pc.center_account_id
                 LEFT JOIN formation_modules fm ON fm.id = pc.source_module_id
@@ -726,6 +730,10 @@ def create_hr_blueprint(socketio):
                     p_center_slug,
                     p_source_rncp_code,
                     p_source_tp_name,
+                    p_pipeline_status,
+                    p_pipeline_auto_pilot_step,
+                    p_pipeline_auto_pilot_error,
+                    p_pipeline_auto_pilot_enabled,
                 ) = row
                 pinfo = _get_platform_info(pid)
                 # En multi-tenant, toute plateforme en BDD est active
@@ -814,6 +822,10 @@ def create_hr_blueprint(socketio):
                     "source_module_id": p_source_module_id,
                     "source_rncp_code": p_source_rncp_code or "",
                     "source_tp_name": p_source_tp_name or "",
+                    "pipeline_status": p_pipeline_status or "",
+                    "pipeline_auto_pilot_step": p_pipeline_auto_pilot_step or "",
+                    "pipeline_auto_pilot_error": p_pipeline_auto_pilot_error or "",
+                    "pipeline_auto_pilot_enabled": bool(p_pipeline_auto_pilot_enabled),
                     "blob_stats_loaded": include_blob_stats,
                 })
 

@@ -40,6 +40,50 @@ const todayDateInput = () => {
   return new Date(now.getTime() - offset).toISOString().slice(0, 10)
 }
 
+const PIPELINE_PROGRESS_BY_STEP = {
+  reac: 12,
+  kb: 24,
+  global: 36,
+  daily: 48,
+  content: 64,
+  review: 78,
+  post_review_docs: 88,
+  slides: 96,
+  audio: 98,
+  done: 100,
+}
+
+const PIPELINE_PROGRESS_BY_STATUS = {
+  init: 8,
+  reac_ready: 18,
+  kb_building: 24,
+  global_generating: 34,
+  global_ready: 42,
+  global_validated: 46,
+  daily_splitting: 50,
+  daily_ready: 56,
+  daily_validated: 60,
+  tts_launched: 62,
+  text_ready: 100,
+  audio_running: 98,
+  audio_launched: 100,
+  audio_completed: 100,
+  completed: 100,
+}
+
+const getHiddenPipelineProgress = (platform = {}) => {
+  if (platform.pipeline_auto_pilot_error) return 100
+  const step = String(platform.pipeline_auto_pilot_step || '').trim()
+  if (step && Object.prototype.hasOwnProperty.call(PIPELINE_PROGRESS_BY_STEP, step)) {
+    return PIPELINE_PROGRESS_BY_STEP[step]
+  }
+  const status = String(platform.pipeline_status || platform.status || '').trim()
+  if (status && Object.prototype.hasOwnProperty.call(PIPELINE_PROGRESS_BY_STATUS, status)) {
+    return PIPELINE_PROGRESS_BY_STATUS[status]
+  }
+  return 8
+}
+
 // ─── Component ───────────────────────────────────────────────────────────────
 export default function HRDashboard() {
   const [platforms, setPlatforms] = useState([])
@@ -3265,6 +3309,7 @@ function PlatformCard({
   const [deleteHover, setDeleteHover] = useState(false)
   const [flipped, setFlipped] = useState(false)
   const theme = getRobotTheme(p.id)
+  const creationProgress = getHiddenPipelineProgress(p)
   const faceStyle = {
     backgroundColor: colors.cardBg,
     border: p.active ? '1px solid #E4E4E4' : `1px solid ${colors.border}`,
@@ -3341,12 +3386,20 @@ function PlatformCard({
                 </span>
                 <span className="inline-flex h-4 w-4 animate-spin rounded-full border-2" style={{ borderColor: '#ddd6fe', borderTopColor: '#8B5CF6' }} />
               </div>
-              <div className="h-1.5 overflow-hidden rounded-full" style={{ backgroundColor: darkMode ? '#334155' : '#ede9fe' }}>
-                <div className="h-full w-2/3 animate-pulse rounded-full" style={{ backgroundColor: '#8B5CF6' }} />
+              <div
+                className="h-1.5 overflow-hidden rounded-full"
+                role="progressbar"
+                aria-label="Création du professeur IA"
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={creationProgress}
+                style={{ backgroundColor: darkMode ? '#334155' : '#ede9fe' }}
+              >
+                <div
+                  className="h-full rounded-full transition-[width] duration-700 ease-out"
+                  style={{ width: `${creationProgress}%`, backgroundColor: '#8B5CF6' }}
+                />
               </div>
-              <p className="mt-2 text-[11px] leading-4" style={{ color: colors.textMuted }}>
-                DeepSeek prépare la formation. Fish Audio sera utilisé pour la voix.
-              </p>
             </div>
           )}
         </div>
