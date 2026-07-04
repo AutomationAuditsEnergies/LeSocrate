@@ -241,26 +241,17 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
     }
   }, [])
 
-  const getAudioAuthToken = useCallback(() => (
-    localStorage.getItem('admin_auth_token') || localStorage.getItem('auth_token') || ''
-  ), [])
-
-  // Donner une URL backend directement à WaveSurfer évite le double chargement
-  // fetch -> Blob -> WaveSurfer. Le token est passé dans l'URL uniquement pour
-  // ce stream média, car les players audio ne conservent pas toujours nos
-  // headers custom quand ils font leurs requêtes Range.
-  const buildAudioStreamUrl = useCallback(() => {
+  const buildAudioStreamUrl = useCallback(async () => {
     clearAudioUrl()
-    const params = new URLSearchParams({
-      v: String(Date.now()),
-      platform_id: String(getPlatformId()),
-    })
-    const token = getAudioAuthToken()
-    if (token) params.set('auth_token', token)
-    const url = apiUrl(`/api/hr/cours-folders/${folderId}/audio-stream/${encodeURIComponent(filename)}?${params.toString()}`)
+    const resp = await apiFetch(`/api/hr/cours-folders/${folderId}/audio-url/${encodeURIComponent(filename)}?v=${Date.now()}`)
+    const data = await resp.json().catch(() => ({}))
+    if (!resp.ok || !data.success || !data.url) {
+      throw new Error(data.error || 'URL audio indisponible')
+    }
+    const url = data.url
     audioUrlRef.current = url
     return url
-  }, [clearAudioUrl, folderId, filename, getAudioAuthToken])
+  }, [clearAudioUrl, folderId, filename])
 
   useEffect(() => {
     let cancelled = false
@@ -368,7 +359,7 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
       fillParent: true,
       blobMimeType: 'audio/mpeg',
       fetchParams: {
-        credentials: 'include',
+        credentials: 'omit',
       },
       plugins: [regions],
     })
@@ -668,7 +659,7 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
         // Recharger depuis une nouvelle SAS URL (le blob a changé)
         setTimeout(async () => {
           try {
-            const freshUrl = buildAudioStreamUrl()
+            const freshUrl = await buildAudioStreamUrl()
             setLoading(true)
             wsRef.current?.load(freshUrl)
           } catch {
@@ -753,7 +744,7 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
         setReplaceText('')
         setTimeout(async () => {
           try {
-            const freshUrl = buildAudioStreamUrl()
+            const freshUrl = await buildAudioStreamUrl()
             setLoading(true)
             wsRef.current?.load(freshUrl)
           } catch {

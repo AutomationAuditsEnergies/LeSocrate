@@ -108,6 +108,35 @@ class AudioSlideReprojectionTest(unittest.TestCase):
         self.assertEqual(timings[1]["start_time"], round(len(recap_words) * 0.5, 3))
         self.assertEqual(timings[1]["repair_method"], "timeline_text_match")
 
+    def test_missing_fish_timeline_repairs_with_word_ratio(self):
+        intro_words = [f"intro{i}" for i in range(100)]
+        body_words = [f"body{i}" for i in range(300)]
+        audio_words = intro_words + body_words
+        bloc = {
+            "bloc_number": 1,
+            "start_w": 0,
+            "end_w": len(audio_words),
+            "text": " ".join(audio_words),
+            "target_duration_sec": 1200,
+        }
+        slides = [
+            _slide("intro-slide", 0, len(intro_words), " ".join(intro_words)),
+            _slide("body-slide", len(intro_words), len(audio_words), " ".join(body_words)),
+        ]
+
+        timings, detail = cgs._repair_bloc_timings_from_timeline(
+            bloc,
+            slides,
+            "cours_9h00_9h45.mp3",
+        )
+
+        self.assertEqual(detail["status"], "repaired_by_word_ratio")
+        self.assertEqual([item["slide_id"] for item in timings], ["intro-slide", "body-slide"])
+        self.assertEqual(timings[0]["start_time"], 0)
+        self.assertEqual(timings[0]["end_time"], 300)
+        self.assertEqual(timings[1]["start_time"], 300)
+        self.assertEqual(timings[1]["repair_method"], "word_ratio_no_fish_timeline")
+
 
 if __name__ == "__main__":
     unittest.main()

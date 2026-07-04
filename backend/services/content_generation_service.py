@@ -4031,7 +4031,7 @@ def _repair_bloc_timings_from_timeline(bloc: dict, slides: list, filename: str) 
     actual_reading = bloc.get("actual_reading") if isinstance(bloc.get("actual_reading"), dict) else {}
     timeline = actual_reading.get("timeline") if isinstance(actual_reading.get("timeline"), list) else []
     if not timeline:
-        return [], {"filename": filename, "status": "missing_timeline", "timings": 0}
+        return _repair_bloc_timings_by_word_ratio(bloc, slides, filename, reason="missing_timeline")
 
     chunks = _build_slide_audio_chunks(bloc, slides)
     chunks = [chunk for chunk in chunks if chunk.get("slide_id")]
@@ -4040,7 +4040,7 @@ def _repair_bloc_timings_from_timeline(bloc: dict, slides: list, filename: str) 
 
     timeline_tokens = _timeline_word_tokens(actual_reading)
     if not timeline_tokens:
-        return [], {"filename": filename, "status": "empty_timeline_tokens", "timings": 0}
+        return _repair_bloc_timings_by_word_ratio(bloc, slides, filename, reason="empty_timeline_tokens")
 
     bloc_start = int(bloc.get("start_w") or 0)
     bloc_word_count = max(1, len((bloc.get("text") or "").split()))
@@ -4097,6 +4097,70 @@ def _repair_bloc_timings_from_timeline(bloc: dict, slides: list, filename: str) 
         "timings": len(merged_timings),
         "timeline_words": len(timeline_tokens),
         "fallback_timings": fallback_count,
+    }
+
+
+def _repair_bloc_timings_by_word_ratio(
+    bloc: dict,
+    slides: list,
+    filename: str,
+    *,
+    reason: str,
+) -> tuple[list[dict], dict]:
+    """Fallback when Fish did not persist word timestamps for an existing MP3."""
+    try:
+        duration_sec = float(
+            bloc.get("actual_reading", {}).get("audio_duration_sec")
+            if isinstance(bloc.get("actual_reading"), dict) else 0
+        )
+    except (TypeError, ValueError):
+        duration_sec = 0.0
+    if duration_sec <= 0:
+        for key in ("target_duration_sec", "duration_sec", "expected_duration_sec"):
+            try:
+                duration_sec = float(bloc.get(key) or 0.0)
+            except (TypeError, ValueError):
+                duration_sec = 0.0
+            if duration_sec > 0:
+                break
+
+    if duration_sec <= 0:
+        return [], {"filename": filename, "status": f"{reason}_no_duration", "timings": 0}
+
+    chunks = _build_slide_audio_chunks(bloc, slides)
+    chunks = [chunk for chunk in chunks if chunk.get("slide_id")]
+    if not chunks:
+        return [], {"filename": filename, "status": f"{reason}_no_slide_chunks", "timings": 0}
+
+    bloc_start = int(bloc.get("start_w") or 0)
+    bloc_word_count = max(1, len(_strip_tts_tags_for_sync(bloc.get("text") or "").split()))
+    timings = []
+    for chunk in chunks:
+        local_start = max(0, int(chunk.get("word_start") or bloc_start) - bloc_start)
+        local_end = max(local_start + 1, int(chunk.get("word_end") or bloc_start) - bloc_start)
+        start_time = duration_sec * min(1.0, local_start / bloc_word_count)
+        end_time = duration_sec * min(1.0, local_end / bloc_word_count)
+        if end_time <= start_time:
+            continue
+        timings.append({
+            "slide_id": chunk.get("slide_id"),
+            "audio_filename": filename,
+            "start_time": round(start_time, 3),
+            "end_time": round(end_time, 3),
+            "duration": round(end_time - start_time, 3),
+            "word_start": chunk.get("word_start"),
+            "word_end": chunk.get("word_end"),
+            "repair_method": "word_ratio_no_fish_timeline",
+        })
+
+    merged_timings = _merge_adjacent_slide_timings(timings)
+    return merged_timings, {
+        "filename": filename,
+        "status": "repaired_by_word_ratio",
+        "source_reason": reason,
+        "timings": len(merged_timings),
+        "duration_sec": round(duration_sec, 3),
+        "bloc_words": bloc_word_count,
     }
 
 
