@@ -426,14 +426,14 @@ class PipelineRepositoryTest(unittest.TestCase):
             INSERT INTO course_sessions
                 (id, platform_id, session_index, scheduled_at, status,
                  audio_generation_status, audio_generation_started_at,
-                 audio_generation_completed_at)
+                 audio_generation_completed_at, updated_at)
             VALUES
                 (130, 7, 1, '2026-01-01 10:00:00', 'planned',
-                 'running', '2026-01-01 08:30:00', NULL),
+                 'running', '2026-01-01 08:30:00', NULL, '2026-01-01 08:45:00'),
                 (131, 7, 2, '2026-01-01 11:00:00', 'planned',
-                 'running', '2026-01-01 09:55:00', NULL),
+                 'running', '2026-01-01 08:30:00', NULL, '2026-01-01 09:55:00'),
                 (132, 7, 3, '2026-01-01 12:00:00', 'planned',
-                 'running', '2026-01-01 08:00:00', '2026-01-01 09:00:00');
+                 'running', '2026-01-01 08:00:00', '2026-01-01 09:00:00', '2026-01-01 08:30:00');
             """
         )
         conn.commit()
@@ -443,7 +443,7 @@ class PipelineRepositoryTest(unittest.TestCase):
             lower_bound="2026-01-01 00:00:00",
             upper_bound="2026-01-02 00:00:00",
             platform_ids=[7],
-            stale_started_before="2026-01-01 09:00:00",
+            stale_updated_before="2026-01-01 09:00:00",
         )
 
         self.assertEqual([row["id"] for row in rows], [130])

@@ -2402,8 +2402,10 @@ def health_pipeline(job_id):
 
 # ─── Étape 7 : Lancement de la synthèse TTS Fish Audio ───────────────────────
 
-def _make_audio_progress_logger(job_id: int, folder_id: int, voice_type: str):
+def _make_audio_progress_logger(job_id: int, folder_id: int, voice_type: str, schedule_session_id: int | None = None):
     """Callback branché sur generate_audio_from_script pour sortir de la boîte noire."""
+    last_session_touch = {"at": 0.0}
+
     def _on_progress(step, total, message):
         try:
             from services.formation_observability_service import log_pipeline_event
@@ -2423,6 +2425,36 @@ def _make_audio_progress_logger(job_id: int, folder_id: int, voice_type: str):
             )
         except Exception:
             pass
+        if schedule_session_id:
+            now = time.time()
+            if now - last_session_touch["at"] >= 60:
+                last_session_touch["at"] = now
+                try:
+                    from datetime import datetime
+                    from config import FRANCE_TZ
+                    from database.db import get_db_connection as _get_conn
+
+                    now_str = datetime.now(FRANCE_TZ).strftime("%Y-%m-%d %H:%M:%S")
+                    _conn = _get_conn()
+                    _cur = _conn.cursor()
+                    _cur.execute(
+                        """
+                        UPDATE course_sessions
+                        SET audio_generation_status = 'running',
+                            updated_at = ?
+                        WHERE id = ?
+                          AND audio_generation_completed_at IS NULL
+                        """,
+                        (now_str, int(schedule_session_id)),
+                    )
+                    _conn.commit()
+                    _conn.close()
+                except Exception:
+                    logger.warning(
+                        "⚠️ Impossible de mettre à jour le heartbeat audio session=%s",
+                        schedule_session_id,
+                        exc_info=True,
+                    )
     return _on_progress
 
 
@@ -2710,7 +2742,7 @@ def start_folder_audio_generation(
                       OR (
                           COALESCE(audio_generation_status, 'pending') IN ('running', 'processing')
                           AND audio_generation_completed_at IS NULL
-                          AND audio_generation_started_at <= ?
+                          AND COALESCE(updated_at, audio_generation_started_at) <= ?
                       )
                 """
                 params.append(stale_started_before)
@@ -2778,7 +2810,12 @@ def start_folder_audio_generation(
             )
             result_audio = generate_audio_from_script(
                 folder_id,
-                on_progress=_make_audio_progress_logger(job_id, folder_id, voice_type),
+                on_progress=_make_audio_progress_logger(
+                    job_id,
+                    folder_id,
+                    voice_type,
+                    schedule_session_id=schedule_session_id,
+                ),
                 force_all=force_all,
                 mock=mock,
                 basic_tts=basic_tts,

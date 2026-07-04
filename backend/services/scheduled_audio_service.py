@@ -31,7 +31,7 @@ def process_due_audio_generations(platform_ids=None, dry_run=False, horizon_hour
         lower_bound=lower_bound,
         upper_bound=upper_bound,
         platform_ids=platform_ids,
-        stale_started_before=stale_started_before,
+        stale_updated_before=stale_started_before,
     )
 
     results = []

@@ -1722,8 +1722,10 @@ def list_due_audio_generation_sessions(
     upper_bound,
     platform_ids: list[int] | None = None,
     stale_started_before=None,
+    stale_updated_before=None,
 ) -> list[dict[str, Any]]:
     params: list[Any] = [lower_bound, upper_bound]
+    stale_heartbeat_before = stale_updated_before or stale_started_before
     retry_conditions = """
               cs.audio_generation_started_at IS NULL
               OR (
@@ -1731,15 +1733,15 @@ def list_due_audio_generation_sessions(
                   AND cs.audio_generation_completed_at IS NULL
               )
     """
-    if stale_started_before:
+    if stale_heartbeat_before:
         retry_conditions += """
               OR (
                   COALESCE(cs.audio_generation_status, 'pending') IN ('running', 'processing')
                   AND cs.audio_generation_completed_at IS NULL
-                  AND cs.audio_generation_started_at <= ?
+                  AND COALESCE(cs.updated_at, cs.audio_generation_started_at) <= ?
               )
         """
-        params.append(stale_started_before)
+        params.append(stale_heartbeat_before)
 
     platform_filter = ""
     if platform_ids:
@@ -1759,6 +1761,7 @@ def list_due_audio_generation_sessions(
             cs.scheduled_at,
             cs.audio_generation_status,
             cs.audio_generation_started_at,
+            cs.updated_at,
             pc.name,
             COALESCE(
                 pc.source_formation_id,
