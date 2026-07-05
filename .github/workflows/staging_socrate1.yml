@@ -72,7 +72,8 @@ jobs:
               ENABLE_ORYX_BUILD=true \
               PORT=8000 \
               WEBSITES_PORT=8000 \
-              FORMATION_CONTENT_DAY_WORKERS=52 \
+              FORMATION_CONTENT_DAY_WORKERS=1 \
+              FORMATION_STRUCTURED_COURSE_WORKERS=7 \
               FORMATION_TTS_WORDS_PER_MINUTE=165.7 \
               BASIC_TTS_SPEED=1.15 \
               PLATFORM_1_FRONTEND_URL=https://thankful-wave-043aa3b03.4.azurestaticapps.net

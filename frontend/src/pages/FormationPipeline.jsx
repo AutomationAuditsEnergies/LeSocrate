@@ -1066,6 +1066,28 @@ function hasCompletedPipelineEvent(events, predicate) {
   return (events || []).some(event => event?.status === 'completed' && predicate(event))
 }
 
+function latestContentPhaseKey(events) {
+  const phaseToStage = {
+    plan_json: 'plan_json',
+    body_sections: 'section_generation',
+    summaries: 'section_generation',
+    late_openings: 'section_generation',
+    day_conclusions: 'section_generation',
+    draft_artifacts: 'structured_artifacts',
+    plan_adherence: 'plan_adherence',
+    budget_calibration: 'budget_calibration',
+    ethical_micro_review: 'ethical_micro',
+    reviewed_scripts: 'structured_artifacts',
+  }
+  for (const event of [...(events || [])].reverse()) {
+    const phase = event?.data?.phase
+    if (event?.step === 'content' && event?.event_type === 'content_phase_started' && phaseToStage[phase]) {
+      return phaseToStage[phase]
+    }
+  }
+  return null
+}
+
 function PipelineStagePill({ stage, index, onClick }) {
   const tone = stage.done
     ? { color: '#34d399', bg: 'rgba(16,185,129,0.10)', border: 'rgba(16,185,129,0.24)', icon: 'check_circle' }
@@ -1167,8 +1189,9 @@ function PipelineVisualMap({ job, currentStep, autoPilotState, contentFolders, d
     autoPassed('slides')
 
   const contentActive = autoActive('content') || (job.status === 'tts_launched' && !allContentCompleted)
+  const activeContentPhaseKey = latestContentPhaseKey(events)
   const activeContentStageKey = contentActive && !allContentCompleted
-    ? (completedContentSegments > 0 ? 'section_generation' : 'plan_json')
+    ? (activeContentPhaseKey || (completedContentSegments > 0 ? 'section_generation' : 'plan_json'))
     : null
   const contentStageActive = key => activeContentStageKey === key
   const stages = [

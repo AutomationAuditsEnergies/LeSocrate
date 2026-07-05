@@ -127,13 +127,8 @@ export default function LoginCentre({ preloadDashboardRoute }) {
 
       if (response.ok && data.success) {
         if (data.token) localStorage.setItem('admin_auth_token', data.token)
-        if (data.account?.type === 'legacy_admin') {
-          await preloadDashboardRoute?.().catch(() => {})
-          navigate('/dashboard-centre')
-        } else {
-          await preloadDashboardRoute?.().catch(() => {})
-          navigate('/dashboard-centre')
-        }
+        preloadDashboardRoute?.().catch(() => {})
+        navigate('/dashboard-centre')
         return
       }
 
