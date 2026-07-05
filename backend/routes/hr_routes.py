@@ -42,6 +42,12 @@ HR_ENABLED = os.environ.get("HR_DASHBOARD_ENABLED", "false").lower() == "true"
 HR_DASHBOARD_BLOB_PAGE_SIZE = int(os.environ.get("HR_DASHBOARD_BLOB_PAGE_SIZE", "200"))
 HR_DASHBOARD_BLOB_MAX_ITEMS = int(os.environ.get("HR_DASHBOARD_BLOB_MAX_ITEMS", "1000"))
 HR_DASHBOARD_BLOB_TIMEOUT_SECONDS = float(os.environ.get("HR_DASHBOARD_BLOB_TIMEOUT_SECONDS", "4"))
+HR_DASHBOARD_REPAIR_ON_LOAD = os.environ.get("HR_DASHBOARD_REPAIR_ON_LOAD", "false").lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
 
 
 _ARCHIVE_DEFAULTS = {
@@ -568,73 +574,69 @@ def create_hr_blueprint(socketio):
 
         try:
             include_blob_stats = _bool_arg("include_blob_stats", default=False)
+            repair_on_load = _bool_arg("repair", default=HR_DASHBOARD_REPAIR_ON_LOAD)
             conn = get_db_connection()
             cursor = conn.cursor()
 
-            # Backfill : les plateformes créées par /api/formation/init avaient
-            # déjà un job pipeline lié par platform_id, mais pas toujours
-            # source_formation_id. Sans ce lien, le dashboard sait moins bien
-            # expliquer/diagnostiquer l'état de la carte.
-            cursor.execute("""
-                UPDATE platform_config
-                SET source_formation_id = (
-                    SELECT j.id
-                    FROM formation_pipeline_jobs j
-                    WHERE j.platform_id = platform_config.id
-                    ORDER BY j.id DESC
-                    LIMIT 1
-                )
-                WHERE source_formation_id IS NULL
-                  AND EXISTS (
-                    SELECT 1
-                    FROM formation_pipeline_jobs j
-                    WHERE j.platform_id = platform_config.id
-                  )
-            """)
+            if repair_on_load:
+                # Ces réparations écrivent dans SQLite. Elles sont utiles en
+                # maintenance, mais ne doivent pas bloquer le simple affichage du
+                # dashboard pendant qu'un pipeline écrit déjà en parallèle.
+                cursor.execute("""
+                    UPDATE platform_config
+                    SET source_formation_id = (
+                        SELECT j.id
+                        FROM formation_pipeline_jobs j
+                        WHERE j.platform_id = platform_config.id
+                        ORDER BY j.id DESC
+                        LIMIT 1
+                    )
+                    WHERE source_formation_id IS NULL
+                      AND EXISTS (
+                        SELECT 1
+                        FROM formation_pipeline_jobs j
+                        WHERE j.platform_id = platform_config.id
+                      )
+                """)
 
-            # Auto-repair lazy : plateformes coincées en 'pending' alors que leur
-            # job pipeline a atteint le texte prêt (ou une étape audio ultérieure)
-            # → les promouvoir automatiquement en 'ready'. Depuis le découplage
-            # texte/audio, `text_ready` signifie déjà que les dossiers de cours
-            # sont exploitables et que l'audio peut être lancé à la demande.
-            cursor.execute("""
-                UPDATE platform_config
-                SET status = 'ready'
-                WHERE status = 'pending'
-                  AND id IN (
-                    SELECT j.platform_id
-                    FROM formation_pipeline_jobs j
-                    WHERE j.status IN (
-                            'text_ready',
-                            'tts_launched',
-                            'audio_running',
-                            'audio_launched',
-                            'audio_completed',
-                            'completed'
-                        )
-                       OR (
-                            EXISTS (
-                                SELECT 1
-                                FROM cours_folders cf
-                                JOIN content_generation_jobs cgj ON cgj.folder_id = cf.id
-                                WHERE cf.formation_job_id = j.id
-                                  AND cgj.status = 'completed'
+                cursor.execute("""
+                    UPDATE platform_config
+                    SET status = 'ready'
+                    WHERE status = 'pending'
+                      AND id IN (
+                        SELECT j.platform_id
+                        FROM formation_pipeline_jobs j
+                        WHERE j.status IN (
+                                'text_ready',
+                                'tts_launched',
+                                'audio_running',
+                                'audio_launched',
+                                'audio_completed',
+                                'completed'
                             )
-                        AND NOT EXISTS (
-                                SELECT 1
-                                FROM cours_folders cf
-                                LEFT JOIN content_generation_jobs cgj ON cgj.folder_id = cf.id
-                                WHERE cf.formation_job_id = j.id
-                                  AND COALESCE(cgj.status, '') != 'completed'
-                            )
-                       )
-                  )
-            """)
-            if cursor.rowcount > 0:
-                logger.info(f"🔧 Auto-repair : {cursor.rowcount} plateforme(s) stuck pending → ready")
+                           OR (
+                                EXISTS (
+                                    SELECT 1
+                                    FROM cours_folders cf
+                                    JOIN content_generation_jobs cgj ON cgj.folder_id = cf.id
+                                    WHERE cf.formation_job_id = j.id
+                                      AND cgj.status = 'completed'
+                                )
+                            AND NOT EXISTS (
+                                    SELECT 1
+                                    FROM cours_folders cf
+                                    LEFT JOIN content_generation_jobs cgj ON cgj.folder_id = cf.id
+                                    WHERE cf.formation_job_id = j.id
+                                      AND COALESCE(cgj.status, '') != 'completed'
+                                )
+                           )
+                      )
+                """)
+                if cursor.rowcount > 0:
+                    logger.info(f"🔧 Auto-repair : {cursor.rowcount} plateforme(s) stuck pending → ready")
 
-            if conn.total_changes > 0:
-                conn.commit()
+                if conn.total_changes > 0:
+                    conn.commit()
 
             platform_where = ""
             platform_params = []

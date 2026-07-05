@@ -71,6 +71,8 @@ const PIPELINE_PROGRESS_BY_STATUS = {
   completed: 100,
 }
 
+const PLATFORM_LOAD_TIMEOUT_MS = 30000
+
 const getHiddenPipelineProgress = (platform = {}) => {
   if (platform.pipeline_auto_pilot_error) return 100
   const step = String(platform.pipeline_auto_pilot_step || '').trim()
@@ -89,6 +91,7 @@ export default function HRDashboard() {
   const [platforms, setPlatforms] = useState([])
   const [loading, setLoading] = useState(true)
   const [platformsError, setPlatformsError] = useState('')
+  const [platformsErrorTone, setPlatformsErrorTone] = useState('error')
   const [expandedPlatform, setExpandedPlatform] = useState(null)
   const [platformAudios, setPlatformAudios] = useState({})
   const [studentEmailsByPlatform, setStudentEmailsByPlatform] = useState({})
@@ -167,7 +170,7 @@ export default function HRDashboard() {
   // ─── Fetch data ──────────────────────────────────────────────────────
   const fetchPlatforms = async (refreshSelectedId = null) => {
     const controller = new AbortController()
-    const timeoutId = window.setTimeout(() => controller.abort(), 15000)
+    const timeoutId = window.setTimeout(() => controller.abort(), PLATFORM_LOAD_TIMEOUT_MS)
     try {
       setPlatformsError('')
       const resp = await apiFetch('/api/hr/platforms?include_blob_stats=0', {
@@ -190,13 +193,15 @@ export default function HRDashboard() {
           return fresh || prev
         })
       } else {
+        setPlatformsErrorTone('error')
         setPlatformsError(data.error || 'Impossible de charger les plateformes.')
       }
     } catch (e) {
       console.error('Erreur chargement plateformes:', e)
+      setPlatformsErrorTone(e.name === 'AbortError' ? 'warning' : 'error')
       setPlatformsError(
         e.name === 'AbortError'
-          ? 'Chargement des plateformes trop long. Réessayez dans quelques secondes.'
+          ? 'Actualisation des plateformes encore en cours. Vous pouvez relancer le chargement.'
           : 'Impossible de charger les plateformes.'
       )
     } finally {
@@ -891,6 +896,7 @@ export default function HRDashboard() {
     hoverBg: '#f1f5f9',
     gridOpacity: '0.5'
   }
+  const platformsAlertIsWarning = platformsErrorTone === 'warning'
 
   return (
     <div className={darkMode ? 'dark' : ''}>
@@ -960,15 +966,43 @@ export default function HRDashboard() {
         <div className="relative z-10 mx-auto max-w-7xl px-6 py-8">
           {platformsError && (
             <div
-              className="mb-6 flex items-center gap-3 rounded-lg border px-4 py-3 text-sm"
+              className="mb-6 flex flex-col gap-3 rounded-lg border px-4 py-3 text-sm sm:flex-row sm:items-center sm:justify-between"
               style={{
-                backgroundColor: darkMode ? 'rgba(127, 29, 29, 0.18)' : '#fef2f2',
-                borderColor: darkMode ? 'rgba(248, 113, 113, 0.28)' : '#fecaca',
-                color: darkMode ? '#fecaca' : '#991b1b',
+                backgroundColor: platformsAlertIsWarning
+                  ? (darkMode ? 'rgba(146, 64, 14, 0.18)' : '#fffbeb')
+                  : (darkMode ? 'rgba(127, 29, 29, 0.18)' : '#fef2f2'),
+                borderColor: platformsAlertIsWarning
+                  ? (darkMode ? 'rgba(251, 191, 36, 0.32)' : '#fde68a')
+                  : (darkMode ? 'rgba(248, 113, 113, 0.28)' : '#fecaca'),
+                color: platformsAlertIsWarning
+                  ? (darkMode ? '#fde68a' : '#92400e')
+                  : (darkMode ? '#fecaca' : '#991b1b'),
               }}
             >
-              <Icon name="warning" className="text-base" />
-              <span>{platformsError}</span>
+              <div className="flex min-w-0 items-center gap-3">
+                <Icon name="warning" className="text-base" />
+                <span>{platformsError}</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => fetchPlatforms()}
+                disabled={loading}
+                className="inline-flex shrink-0 items-center justify-center gap-1.5 rounded-md border px-3 py-1.5 text-xs font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-60"
+                style={{
+                  backgroundColor: platformsAlertIsWarning
+                    ? (darkMode ? 'rgba(146, 64, 14, 0.28)' : '#fff')
+                    : (darkMode ? 'rgba(127, 29, 29, 0.28)' : '#fff'),
+                  borderColor: platformsAlertIsWarning
+                    ? (darkMode ? 'rgba(251, 191, 36, 0.4)' : '#fde68a')
+                    : (darkMode ? 'rgba(248, 113, 113, 0.36)' : '#fecaca'),
+                  color: platformsAlertIsWarning
+                    ? (darkMode ? '#fde68a' : '#92400e')
+                    : (darkMode ? '#fecaca' : '#991b1b'),
+                }}
+              >
+                <Icon name="refresh" className="text-sm" />
+                {loading ? 'Chargement...' : 'Réessayer'}
+              </button>
             </div>
           )}
 
