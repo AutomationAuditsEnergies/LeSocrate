@@ -114,7 +114,7 @@ jobs:
               PORT=8000 \
               WEBSITES_PORT=8000 \
               DB_PATH=/home/database-saas-copy.db \
-              DATABASE_BACKEND=postgres \
+              DATABASE_BACKEND=hybrid \
               PIPELINE_DATABASE_BACKEND=postgres \
               PIPELINE_POSTGRES_MIRROR=0 \
               STUDENT_AUTH_LEGACY_FALLBACK=0 \

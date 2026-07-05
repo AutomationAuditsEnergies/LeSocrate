@@ -26,14 +26,19 @@ Les workflows suivants sont rattaches a cette branche, pas a `staging` :
 Le workflow backend configure `Formation3` comme copie SaaS :
 
 ```text
-DATABASE_BACKEND=postgres
+DATABASE_BACKEND=hybrid
 PIPELINE_DATABASE_BACKEND=postgres
 PIPELINE_POSTGRES_MIRROR=0
 DB_PATH=/home/database-saas-copy.db
 ```
 
+`DATABASE_BACKEND=hybrid` garde le comportement actuel de `socrate1` : le coeur
+SaaS utilise Postgres quand il est disponible, et la pipeline est forcee sur
+Postgres via `PIPELINE_DATABASE_BACKEND=postgres`.
+
 `DB_PATH` reste volontairement separe de l'ancienne base Formation3 pour eviter
-de reutiliser l'etat SQLite de la plateforme formation 3.
+de reutiliser l'etat SQLite de la plateforme formation 3 pour les derniers
+chemins historiques.
 
 Les valeurs sensibles doivent exister soit dans Azure App Settings de
 `Formation3`, soit dans les secrets GitHub :
