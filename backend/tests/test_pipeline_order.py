@@ -28,7 +28,10 @@ def _make_review_db(*, humanized: bool, reviewed: bool, segment_count: int = 18)
             id INTEGER PRIMARY KEY,
             folder_id INTEGER NOT NULL,
             status TEXT NOT NULL,
-            total_words INTEGER DEFAULT 0
+            total_words INTEGER DEFAULT 0,
+            current_sub_part INTEGER DEFAULT 0,
+            current_passe INTEGER DEFAULT 1,
+            error_message TEXT
         );
         CREATE TABLE content_generation_segments (
             id INTEGER PRIMARY KEY,
@@ -86,6 +89,18 @@ def _job(**overrides):
 
 
 class PipelineOrderTest(unittest.TestCase):
+    def test_content_day_workers_default_runs_full_training_in_parallel(self):
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(fr._formation_content_day_workers(), 52)
+
+    def test_content_day_workers_allows_lower_override(self):
+        with patch.dict(os.environ, {"FORMATION_CONTENT_DAY_WORKERS": "12"}):
+            self.assertEqual(fr._formation_content_day_workers(), 12)
+
+    def test_content_day_workers_caps_at_fifty_two(self):
+        with patch.dict(os.environ, {"FORMATION_CONTENT_DAY_WORKERS": "200"}):
+            self.assertEqual(fr._formation_content_day_workers(), 52)
+
     def _run_next_step(self, db_path, job):
         with patch.object(fr, "get_job", return_value=job), patch.object(
             fps,
@@ -95,7 +110,7 @@ class PipelineOrderTest(unittest.TestCase):
             cgs,
             "_current_compliance_review_signature",
             return_value="review-sig",
-        ):
+        ), patch("repositories.pipeline_repository.get_db_connection", side_effect=lambda: _connect(db_path)):
             return fr._determine_next_ap_step(99)
 
     def test_local_compliance_runs_after_content(self):
@@ -119,7 +134,7 @@ class PipelineOrderTest(unittest.TestCase):
                 cgs,
                 "_current_compliance_review_signature",
                 return_value="review-sig",
-            ):
+            ), patch("repositories.pipeline_repository.get_db_connection", side_effect=lambda: _connect(db_path)):
                 ok, detail = fr._folder_text_reviews_ready(99, 10)
 
             self.assertFalse(ok)

@@ -84,7 +84,7 @@ def _resolve_pipeline_slide_model(api_model: str | None) -> str | None:
     return "deepseek-v4-pro"
 
 
-def _formation_content_day_workers(default: int = 1) -> int:
+def _formation_content_day_workers(default: int = 52) -> int:
     """Nombre de journees de contenu generees en parallele par l'auto-pilot API."""
     try:
         workers = int(os.getenv("FORMATION_CONTENT_DAY_WORKERS", str(default)))
