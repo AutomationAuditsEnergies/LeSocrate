@@ -4737,6 +4737,30 @@ def create_hr_blueprint(socketio):
             if not cs:
                 return jsonify({"success": False, "error": "AZURE_TTS_STORAGE_CONNECTION_STRING manquant"}), 500
             blob_service_client = BlobServiceClient.from_connection_string(cs)
+            blob_client = blob_service_client.get_blob_client(container="audiostts", blob=blob_path)
+            try:
+                props = blob_client.get_blob_properties()
+            except Exception as prop_error:
+                if "BlobNotFound" in str(prop_error) or "The specified blob does not exist" in str(prop_error):
+                    return jsonify({
+                        "success": False,
+                        "error": f"Fichier audio introuvable: {filename}",
+                        "blob_path": blob_path,
+                    }), 404
+                raise
+
+            blob_size = int(props.size or 0)
+            if filename.lower().startswith("cours_") and blob_size < 100_000:
+                return jsonify({
+                    "success": False,
+                    "error": (
+                        f"Fichier audio trop court ou silencieux: {filename} "
+                        f"({blob_size} octets). Relance la génération audio du cours."
+                    ),
+                    "blob_path": blob_path,
+                    "size": blob_size,
+                }), 422
+
             account_name = blob_service_client.account_name
             account_key = blob_service_client.credential.account_key
             expiry = datetime.now(timezone.utc) + timedelta(hours=1)
@@ -4751,7 +4775,13 @@ def create_hr_blueprint(socketio):
                 content_disposition=f'inline; filename="{os.path.basename(filename)}"',
             )
             url = f"https://{account_name}.blob.core.windows.net/audiostts/{blob_path}?{sas_token}"
-            return jsonify({"success": True, "url": url})
+            return jsonify({
+                "success": True,
+                "url": url,
+                "size": blob_size,
+                "content_type": props.content_settings.content_type,
+                "content_disposition": props.content_settings.content_disposition,
+            })
         except Exception as e:
             logger.error(f"❌ get_audio_sas_url: {e}")
             return jsonify({"success": False, "error": str(e)}), 500
