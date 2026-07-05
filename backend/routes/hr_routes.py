@@ -663,6 +663,17 @@ def create_hr_blueprint(socketio):
                 if cursor.rowcount > 0:
                     logger.info(f"🔧 Auto-repair : {cursor.rowcount} plateforme(s) stuck pending → error")
 
+                cursor.execute("""
+                    UPDATE platform_config
+                    SET status = 'error'
+                    WHERE status = 'pending'
+                      AND source_formation_id IS NULL
+                      AND updated_at IS NOT NULL
+                      AND datetime(updated_at) < datetime('now', '-2 hours')
+                """)
+                if cursor.rowcount > 0:
+                    logger.info(f"🔧 Auto-repair : {cursor.rowcount} plateforme(s) orphan pending → error")
+
                 if conn.total_changes > 0:
                     conn.commit()
 
@@ -823,6 +834,15 @@ def create_hr_blueprint(socketio):
                         effective_status = "ready"
                     elif pipeline_failed or (p_source_formation_id and not p_pipeline_status and not p_pipeline_auto_pilot_step):
                         effective_status = "error"
+                    elif not p_source_formation_id and updated_at:
+                        try:
+                            updated_dt = datetime.fromisoformat(str(updated_at).replace("Z", "+00:00"))
+                            if updated_dt.tzinfo is None:
+                                updated_dt = updated_dt.replace(tzinfo=timezone.utc)
+                            if datetime.now(timezone.utc) - updated_dt > timedelta(hours=2):
+                                effective_status = "error"
+                        except Exception:
+                            pass
 
                 platforms.append({
                     "id": pid,
