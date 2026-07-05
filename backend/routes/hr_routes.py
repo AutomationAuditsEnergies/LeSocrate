@@ -614,6 +614,8 @@ def create_hr_blueprint(socketio):
                                 'audio_completed',
                                 'completed'
                             )
+                           OR j.auto_pilot_step = 'done'
+                           OR COALESCE(j.auto_pilot_post_review_docs_done, 0) = 1
                            OR (
                                 EXISTS (
                                     SELECT 1
@@ -634,6 +636,32 @@ def create_hr_blueprint(socketio):
                 """)
                 if cursor.rowcount > 0:
                     logger.info(f"🔧 Auto-repair : {cursor.rowcount} plateforme(s) stuck pending → ready")
+
+                cursor.execute("""
+                    UPDATE platform_config
+                    SET status = 'error'
+                    WHERE status = 'pending'
+                      AND source_formation_id IS NOT NULL
+                      AND (
+                        EXISTS (
+                            SELECT 1
+                            FROM formation_pipeline_jobs j
+                            WHERE j.id = platform_config.source_formation_id
+                              AND (
+                                j.auto_pilot_error IS NOT NULL
+                                OR j.status IN ('error', 'audio_error')
+                                OR j.auto_pilot_step = 'stopped'
+                              )
+                        )
+                        OR NOT EXISTS (
+                            SELECT 1
+                            FROM formation_pipeline_jobs j
+                            WHERE j.id = platform_config.source_formation_id
+                        )
+                      )
+                """)
+                if cursor.rowcount > 0:
+                    logger.info(f"🔧 Auto-repair : {cursor.rowcount} plateforme(s) stuck pending → error")
 
                 if conn.total_changes > 0:
                     conn.commit()
@@ -780,6 +808,22 @@ def create_hr_blueprint(socketio):
                 if pending > 0:
                     alerts.append(f"{pending} demande(s) de suppression")
 
+                effective_status = p_status or "ready"
+                if effective_status == "pending":
+                    pipeline_done = (
+                        p_pipeline_auto_pilot_step == "done"
+                        or p_pipeline_status in ("text_ready", "audio_completed", "audio_launched", "completed")
+                    )
+                    pipeline_failed = (
+                        bool(p_pipeline_auto_pilot_error)
+                        or p_pipeline_status in ("error", "audio_error")
+                        or p_pipeline_auto_pilot_step == "stopped"
+                    )
+                    if pipeline_done:
+                        effective_status = "ready"
+                    elif pipeline_failed or (p_source_formation_id and not p_pipeline_status and not p_pipeline_auto_pilot_step):
+                        effective_status = "error"
+
                 platforms.append({
                     "id": pid,
                     "name": name,
@@ -798,7 +842,7 @@ def create_hr_blueprint(socketio):
                     "frontend_url": pinfo.get("frontend_url"),
                     "public_path": _class_public_path(p_center_slug, slug),
                     "public_url": _class_public_url(pinfo.get("frontend_url"), p_center_slug, slug),
-                    "status": p_status or "ready",
+                    "status": effective_status,
                     "source_formation_id": p_source_formation_id,
                     "source_module_id": p_source_module_id,
                     "source_rncp_code": p_source_rncp_code or "",
