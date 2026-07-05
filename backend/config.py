@@ -35,6 +35,12 @@ PIPELINE_POSTGRES_MIRROR = os.getenv("PIPELINE_POSTGRES_MIRROR", "").strip().low
     "yes",
     "on",
 )
+SQLITE_SAFETY_STRICT = os.getenv("SQLITE_SAFETY_STRICT", "1").strip().lower() in (
+    "1",
+    "true",
+    "yes",
+    "on",
+)
 
 # Base de données - /home est persistant sur Azure App Service, /tmp ne l'est pas.
 # DB_PATH peut être surchargé par environnement Azure. Indispensable pour un

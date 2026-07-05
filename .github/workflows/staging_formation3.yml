@@ -113,7 +113,8 @@ jobs:
               ENABLE_ORYX_BUILD=true \
               PORT=8000 \
               WEBSITES_PORT=8000 \
-              DB_PATH=/home/database-saas-copy.db \
+              DB_PATH=/home/database.db \
+              SQLITE_SAFETY_STRICT=0 \
               DATABASE_BACKEND=hybrid \
               PIPELINE_DATABASE_BACKEND=postgres \
               PIPELINE_POSTGRES_MIRROR=0 \
