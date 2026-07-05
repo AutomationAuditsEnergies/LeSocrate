@@ -1,10 +1,14 @@
-name: Deploy Backend to Azure Web App - Formation3
+name: Deploy Backend - SaaS Postgres Copy
 
 on:
   push:
     branches:
-      - staging
+      - codex/current-saas-postgres-20260705
   workflow_dispatch:
+
+concurrency:
+  group: formation3-saas-postgres-copy
+  cancel-in-progress: true
 
 jobs:
   build:
@@ -27,13 +31,16 @@ jobs:
           source antenv/bin/activate
           pip install -r requirements.txt
 
+      - name: Package backend
+        run: |
+          cd backend
+          zip -r ../python-app.zip . -x "antenv/*" "__pycache__/*" "*.pyc"
+
       - name: Upload artifact for deployment jobs
         uses: actions/upload-artifact@v4
         with:
           name: python-app
-          path: |
-            ./backend
-            !./backend/antenv/
+          path: python-app.zip
 
   deploy:
     runs-on: ubuntu-latest
@@ -41,6 +48,14 @@ jobs:
     permissions:
       id-token: write
       contents: read
+    env:
+      APP_NAME: Formation3
+      STARTUP_COMMAND: python run.py
+      COPY_FRONTEND_URL: https://polite-bush-07d4fdd03.1.azurestaticapps.net
+      DATABASE_URL: ${{ secrets.SAAS_POSTGRES_DATABASE_URL || secrets.DATABASE_URL || secrets.SUPABASE_DB_URL }}
+      SUPABASE_URL: ${{ secrets.SAAS_SUPABASE_URL || secrets.SUPABASE_URL }}
+      SUPABASE_ANON_KEY: ${{ secrets.SAAS_SUPABASE_ANON_KEY || secrets.SUPABASE_ANON_KEY }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SAAS_SUPABASE_SERVICE_ROLE_KEY || secrets.SUPABASE_SERVICE_ROLE_KEY }}
 
     steps:
       - name: Download artifact from build job
@@ -55,9 +70,94 @@ jobs:
           tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_49A11822A72A4BAA8989303BCB6DFECD }}
           subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_F503B1C3D33E465EBB0C2A66B05DE8B9 }}
 
+      - name: Resolve Azure resource group
+        shell: bash
+        run: |
+          RESOURCE_GROUP="$(az webapp list --query "[?name=='${APP_NAME}'].resourceGroup | [0]" -o tsv)"
+          if [ -z "${RESOURCE_GROUP}" ] || [ "${RESOURCE_GROUP}" = "null" ]; then
+            echo "Unable to resolve resource group for ${APP_NAME}" >&2
+            exit 1
+          fi
+          echo "RESOURCE_GROUP=${RESOURCE_GROUP}" >> "${GITHUB_ENV}"
+
+      - name: Validate required SaaS settings
+        shell: bash
+        run: |
+          missing=()
+          for key in DATABASE_URL SUPABASE_URL SUPABASE_ANON_KEY SUPABASE_SERVICE_ROLE_KEY; do
+            value="${!key:-}"
+            existing="$(az webapp config appsettings list \
+              --resource-group "${RESOURCE_GROUP}" \
+              --name "${APP_NAME}" \
+              --query "[?name=='${key}'].value | [0]" \
+              -o tsv)"
+            if [ -z "${value}" ] && [ -z "${existing}" ]; then
+              missing+=("${key}")
+            fi
+          done
+
+          if [ "${#missing[@]}" -gt 0 ]; then
+            printf 'Missing required SaaS app setting(s) on %s: %s\n' "${APP_NAME}" "${missing[*]}" >&2
+            printf 'Add them either as Azure App Settings or GitHub Secrets prefixed with SAAS_ before deploying.\n' >&2
+            exit 1
+          fi
+
+      - name: Configure SaaS Postgres copy
+        shell: bash
+        run: |
+          az webapp config appsettings set \
+            --resource-group "${RESOURCE_GROUP}" \
+            --name "${APP_NAME}" \
+            --settings \
+              SCM_DO_BUILD_DURING_DEPLOYMENT=true \
+              ENABLE_ORYX_BUILD=true \
+              PORT=8000 \
+              WEBSITES_PORT=8000 \
+              DB_PATH=/home/database.db \
+              SQLITE_SAFETY_STRICT=0 \
+              DATABASE_BACKEND=hybrid \
+              PIPELINE_DATABASE_BACKEND=postgres \
+              PIPELINE_POSTGRES_MIRROR=0 \
+              STUDENT_AUTH_LEGACY_FALLBACK=0 \
+              HR_DASHBOARD_ENABLED=true \
+              HR_DASHBOARD_REPAIR_ON_LOAD=false \
+              FORMATION_CONTENT_DAY_WORKERS=1 \
+              FORMATION_STRUCTURED_COURSE_WORKERS=7 \
+              FORMATION_TTS_WORDS_PER_MINUTE=165.7 \
+              BASIC_TTS_SPEED=1.15 \
+              PLATFORM_1_FRONTEND_URL="${COPY_FRONTEND_URL}" \
+              PLATFORM_2_FRONTEND_URL="${COPY_FRONTEND_URL}" \
+              PLATFORM_3_FRONTEND_URL="${COPY_FRONTEND_URL}" \
+              PLATFORM_4_FRONTEND_URL="${COPY_FRONTEND_URL}" \
+              PLATFORM_5_FRONTEND_URL="${COPY_FRONTEND_URL}" \
+              PLATFORM_6_FRONTEND_URL="${COPY_FRONTEND_URL}" \
+              PLATFORM_7_FRONTEND_URL="${COPY_FRONTEND_URL}" \
+              PLATFORM_8_FRONTEND_URL="${COPY_FRONTEND_URL}" \
+              PLATFORM_9_FRONTEND_URL="${COPY_FRONTEND_URL}" \
+            >/dev/null
+
+          secret_settings=()
+          [ -n "${DATABASE_URL:-}" ] && secret_settings+=("DATABASE_URL=${DATABASE_URL}")
+          [ -n "${SUPABASE_URL:-}" ] && secret_settings+=("SUPABASE_URL=${SUPABASE_URL}")
+          [ -n "${SUPABASE_ANON_KEY:-}" ] && secret_settings+=("SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY}")
+          [ -n "${SUPABASE_SERVICE_ROLE_KEY:-}" ] && secret_settings+=("SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}")
+
+          if [ "${#secret_settings[@]}" -gt 0 ]; then
+            az webapp config appsettings set \
+              --resource-group "${RESOURCE_GROUP}" \
+              --name "${APP_NAME}" \
+              --settings "${secret_settings[@]}" \
+              >/dev/null
+          fi
+
+          az webapp config set \
+            --resource-group "${RESOURCE_GROUP}" \
+            --name "${APP_NAME}" \
+            --startup-file "${STARTUP_COMMAND}" \
+            >/dev/null
+
       - name: Deploy to Azure Web App
         uses: azure/webapps-deploy@v3
         with:
           app-name: 'Formation3'
-          slot-name: 'Production'
-          package: .
+          package: python-app.zip

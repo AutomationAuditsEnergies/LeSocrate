@@ -23,19 +23,6 @@ SUPABASE_URL = os.getenv("SUPABASE_URL", "").rstrip("/")
 SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY", "")
 SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
 
-# Postgres cible pour le SaaS multi-tenant.
-# En pratique, utiliser l'URL "Connection string" Supabase/Postgres en variable
-# d'environnement, jamais en dur dans le repo.
-DATABASE_URL = os.getenv("DATABASE_URL") or os.getenv("SUPABASE_DB_URL", "")
-DATABASE_BACKEND = os.getenv("DATABASE_BACKEND", "sqlite").strip().lower()
-PIPELINE_DATABASE_BACKEND = os.getenv("PIPELINE_DATABASE_BACKEND", "sqlite").strip().lower()
-PIPELINE_POSTGRES_MIRROR = os.getenv("PIPELINE_POSTGRES_MIRROR", "").strip().lower() in (
-    "1",
-    "true",
-    "yes",
-    "on",
-)
-
 # Base de données - /home est persistant sur Azure App Service, /tmp ne l'est pas.
 # DB_PATH peut être surchargé par environnement Azure. Indispensable pour un
 # slot staging : prod=/home/database.db, staging=/home/database-staging.db.

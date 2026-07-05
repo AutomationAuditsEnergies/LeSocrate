@@ -1,22 +1,11 @@
 # auth_routes.py -- Routes d'authentification et connexion utilisateur (API JSON)
-import hmac
-import os
 from flask import Blueprint, request, session, jsonify
-from datetime import datetime, timedelta
+from datetime import datetime
 import uuid
 import requests
 from werkzeug.security import check_password_hash
 from config import FRANCE_TZ, STUDENT_AUTH_LEGACY_FALLBACK, SUPABASE_ANON_KEY, SUPABASE_URL
 from database.db import get_db_connection
-from database.postgres import postgres_enabled
-from repositories.core_repository import (
-    count_student_accounts,
-    get_student_account,
-    get_student_profile,
-    update_log_depart,
-    upsert_log,
-    upsert_student_profile,
-)
 from utils.logger import get_logger
 import state
 
@@ -44,18 +33,6 @@ def _create_local_student_session(cursor, nom, prenom, platform_id):
         "log_id": log_id,
         "platform_id": platform_id,
     }
-    if postgres_enabled():
-        try:
-            upsert_log({
-                "id": log_id,
-                "platform_id": platform_id,
-                "nom": nom,
-                "prenom": prenom,
-                "arrivee": arrivee_time,
-                "depart": None,
-            })
-        except Exception:
-            logger.warning("⚠️ Miroir Postgres du log élève impossible", exc_info=True)
     return log_id, token
 
 
@@ -75,60 +52,9 @@ def _get_supabase_user(access_token):
     return response.json()
 
 
-def _course_session_password_valid(cursor, platform_id, password):
-    supplied = str(password or "").strip()
-    if not supplied:
-        return False
-
-    try:
-        from services.course_schedule_service import ensure_course_schedule_tables
-
-        ensure_course_schedule_tables(cursor)
-        now = datetime.now(FRANCE_TZ)
-        early_hours = float(os.environ.get("COURSE_SESSION_PASSWORD_EARLY_HOURS", "24"))
-        active_hours = float(os.environ.get("COURSE_SESSION_ACTIVE_HOURS", "12"))
-        lower_bound = (now - timedelta(hours=active_hours)).strftime("%Y-%m-%d %H:%M:%S")
-        upper_bound = (now + timedelta(hours=early_hours)).strftime("%Y-%m-%d %H:%M:%S")
-        cursor.execute(
-            """
-            SELECT session_password
-            FROM course_sessions
-            WHERE platform_id = ?
-              AND status IN ('planned', 'active')
-              AND scheduled_at >= ?
-              AND scheduled_at <= ?
-              AND session_password IS NOT NULL
-              AND session_password != ''
-            ORDER BY scheduled_at ASC
-            """,
-            (platform_id, lower_bound, upper_bound),
-        )
-        session_passwords = [str(row[0] or "") for row in cursor.fetchall() if row[0]]
-        if session_passwords:
-            return any(hmac.compare_digest(supplied, expected) for expected in session_passwords)
-    except Exception:
-        logger.warning("⚠️ Vérification mot de passe séance impossible", exc_info=True)
-
-    expected = os.environ.get("COURSE_SESSION_PASSWORD", "").strip()
-    if expected:
-        return hmac.compare_digest(supplied, expected)
-    return STUDENT_AUTH_LEGACY_FALLBACK
-
-
 def create_auth_blueprint(socketio):
     """Factory pour créer le blueprint auth avec accès à socketio"""
     auth_bp = Blueprint("auth", __name__)
-
-    @auth_bp.route("/api/auth/supabase-config", methods=["GET"])
-    def supabase_config():
-        """Expose la configuration publique Supabase nécessaire au frontend."""
-        if not SUPABASE_URL or not SUPABASE_ANON_KEY:
-            return jsonify({"success": False, "error": "Supabase Auth non configuré"}), 503
-        return jsonify({
-            "success": True,
-            "url": SUPABASE_URL,
-            "anon_key": SUPABASE_ANON_KEY,
-        }), 200
 
     @auth_bp.route("/api/auth/login", methods=["POST"])
     def login():
@@ -157,23 +83,8 @@ def create_auth_blueprint(socketio):
                 (platform_id, username),
             )
             account = cursor.fetchone() if username else None
-            pg_account = None
-            if postgres_enabled() and username:
-                try:
-                    pg_account = get_student_account(platform_id, username)
-                except Exception:
-                    logger.warning("⚠️ Lecture compte élève Postgres impossible", exc_info=True)
 
-            if pg_account:
-                if not pg_account["is_active"]:
-                    logger.warning("⚠️ Compte élève Postgres désactivé: %s P%s", username, platform_id)
-                    return jsonify({"success": False, "error": "Compte désactivé"}), 403
-                if not password or not check_password_hash(pg_account["password_hash"], password):
-                    logger.warning("❌ Échec connexion élève Postgres: %s P%s", username, platform_id)
-                    return jsonify({"success": False, "error": "Identifiants incorrects"}), 401
-                nom = pg_account["nom"]
-                prenom = pg_account["prenom"]
-            elif account:
+            if account:
                 if not account[5]:
                     logger.warning("⚠️ Compte élève désactivé: %s P%s", username, platform_id)
                     return jsonify({"success": False, "error": "Compte désactivé"}), 403
@@ -188,20 +99,12 @@ def create_auth_blueprint(socketio):
                     (platform_id,),
                 )
                 has_accounts = cursor.fetchone()[0] > 0
-                if postgres_enabled():
-                    try:
-                        has_accounts = has_accounts or count_student_accounts(platform_id) > 0
-                    except Exception:
-                        logger.warning("⚠️ Comptage comptes élèves Postgres impossible", exc_info=True)
                 if has_accounts or not STUDENT_AUTH_LEGACY_FALLBACK:
                     logger.warning("❌ Compte élève inconnu: %s P%s", username, platform_id)
                     return jsonify({"success": False, "error": "Identifiants incorrects"}), 401
                 if not nom or not prenom:
                     logger.warning("⚠️ Identifiants élève manquants")
                     return jsonify({"success": False, "error": "Identifiant et mot de passe requis"}), 400
-                if not _course_session_password_valid(cursor, platform_id, password):
-                    logger.warning("❌ Mot de passe session invalide: %s %s P%s", prenom, nom, platform_id)
-                    return jsonify({"success": False, "error": "Mot de passe incorrect"}), 401
                 logger.warning(
                     "⚠️ Connexion élève legacy nom/prénom acceptée sur P%s car aucun compte n'existe",
                     platform_id,
@@ -254,34 +157,17 @@ def create_auth_blueprint(socketio):
             auth_user_id = supabase_user.get("id")
             email = supabase_user.get("email") or ""
             metadata = supabase_user.get("user_metadata") or {}
-            pg_profile = None
-            if postgres_enabled():
-                try:
-                    pg_profile = get_student_profile(auth_user_id)
-                except Exception:
-                    logger.warning("⚠️ Lecture profil élève Postgres impossible", exc_info=True)
-
             conn = get_db_connection()
             cursor = conn.cursor()
-            if pg_profile:
-                profile = (
-                    pg_profile["nom"],
-                    pg_profile["prenom"],
-                    pg_profile["platform_id"],
-                    pg_profile["is_active"],
-                    pg_profile["role"],
-                )
-            else:
-                cursor.execute(
-                    """
-                    SELECT nom, prenom, platform_id, is_active, role
-                    FROM student_profiles
-                    WHERE auth_user_id = ?
-                    """,
-                    (auth_user_id,),
-                )
-                profile = cursor.fetchone()
-
+            cursor.execute(
+                """
+                SELECT nom, prenom, platform_id, is_active, role
+                FROM student_profiles
+                WHERE auth_user_id = ?
+                """,
+                (auth_user_id,),
+            )
+            profile = cursor.fetchone()
             if not profile:
                 nom = str(metadata.get("nom") or metadata.get("last_name") or "").strip()
                 prenom = str(metadata.get("prenom") or metadata.get("first_name") or "").strip()
@@ -297,43 +183,12 @@ def create_auth_blueprint(socketio):
                     """,
                     (auth_user_id, platform_id, email, nom, prenom, now, now),
                 )
-                if postgres_enabled():
-                    try:
-                        upsert_student_profile({
-                            "auth_user_id": auth_user_id,
-                            "platform_id": platform_id,
-                            "email": email,
-                            "nom": nom,
-                            "prenom": prenom,
-                            "role": "student",
-                            "is_active": True,
-                            "created_at": now,
-                            "updated_at": now,
-                        })
-                    except Exception:
-                        logger.warning("⚠️ Miroir Postgres profil élève impossible", exc_info=True)
             else:
                 nom, prenom, platform_id, is_active, role = profile
                 if not is_active:
                     return jsonify({"success": False, "error": "Compte désactivé"}), 403
                 if int(platform_id) != requested_platform_id:
                     return jsonify({"success": False, "error": "Compte non autorisé sur cette plateforme"}), 403
-                if postgres_enabled() and not pg_profile:
-                    try:
-                        now = datetime.now(FRANCE_TZ).strftime("%Y-%m-%d %H:%M:%S")
-                        upsert_student_profile({
-                            "auth_user_id": auth_user_id,
-                            "platform_id": int(platform_id),
-                            "email": email,
-                            "nom": nom,
-                            "prenom": prenom,
-                            "role": role or "student",
-                            "is_active": bool(is_active),
-                            "created_at": now,
-                            "updated_at": now,
-                        })
-                    except Exception:
-                        logger.warning("⚠️ Synchronisation profil élève Postgres impossible", exc_info=True)
 
             log_id, token = _create_local_student_session(cursor, nom, prenom, int(platform_id))
             conn.commit()
@@ -368,10 +223,6 @@ def create_auth_blueprint(socketio):
                 )
                 conn.commit()
                 conn.close()
-                try:
-                    update_log_depart(session["log_id"], depart)
-                except Exception:
-                    logger.warning("⚠️ Miroir Postgres du départ impossible", exc_info=True)
                 logger.info(f"✅ Départ enregistré: {depart}")
 
             token = request.headers.get("X-Auth-Token")
@@ -405,10 +256,6 @@ def create_auth_blueprint(socketio):
                 )
                 conn.commit()
                 conn.close()
-                try:
-                    update_log_depart(session["log_id"], depart)
-                except Exception:
-                    logger.warning("⚠️ Miroir Postgres du départ auto impossible", exc_info=True)
                 logger.info(f"✅ Déconnexion auto enregistrée: {depart}")
 
             return "", 204

@@ -3,9 +3,7 @@ from flask import Blueprint, request, session, jsonify, send_file
 from datetime import datetime, timedelta, timezone
 import os
 import re
-import secrets
 import sqlite3
-import string
 import tempfile
 import uuid
 import requests as http_requests
@@ -14,24 +12,12 @@ from azure.core.exceptions import ResourceExistsError
 from pydub import AudioSegment
 from werkzeug.security import check_password_hash, generate_password_hash
 import state
-from config import FRANCE_TZ, DB_PATH, SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY, SUPABASE_URL
+from config import FRANCE_TZ, DB_PATH, SUPABASE_SERVICE_ROLE_KEY, SUPABASE_URL
 from database.db import get_db_connection
 from database import db_safety
-from database.postgres import postgres_enabled
-from repositories.core_repository import (
-    DuplicateTrainingCenterUsername,
-    create_ai_teacher_order,
-    create_training_center,
-    get_training_center_by_username,
-    list_ai_teacher_orders,
-    update_training_center_password,
-    upsert_student_profile_with_id,
-)
 from services.time_service import set_heure_debut_cours, get_heure_debut_cours
 from services.export_service import generate_excel_export
-from services.course_schedule_service import create_missing_course_schedule, get_course_schedule_summary, update_course_schedule
 from utils.logger import get_logger
-from utils.slug import slugify, unique_slug
 
 logger = get_logger(__name__)
 
@@ -46,108 +32,6 @@ def _create_admin_token(account_type, account_id=None, center_name=None):
         "center_name": center_name,
     }
     return token
-
-
-def _generate_temporary_password(length=12):
-    alphabet = string.ascii_letters + string.digits
-    return "".join(secrets.choice(alphabet) for _ in range(length))
-
-
-def _supabase_admin_headers():
-    return {
-        "apikey": SUPABASE_SERVICE_ROLE_KEY,
-        "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
-        "Content-Type": "application/json",
-    }
-
-
-def _supabase_public_headers():
-    return {
-        "apikey": SUPABASE_ANON_KEY,
-        "Authorization": f"Bearer {SUPABASE_ANON_KEY}",
-        "Content-Type": "application/json",
-    }
-
-
-def _is_supabase_duplicate_user(response):
-    text = response.text.lower()
-    return response.status_code in (400, 409, 422) and (
-        "already" in text
-        or "registered" in text
-        or "exists" in text
-        or "duplicate" in text
-    )
-
-
-def _ensure_training_center_supabase_user(email, password=None, center_name=None):
-    if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
-        return False, "Supabase Admin non configuré"
-
-    auth_password = password if password and len(password) >= 6 else _generate_temporary_password()
-    try:
-        response = http_requests.post(
-            f"{SUPABASE_URL}/auth/v1/admin/users",
-            headers=_supabase_admin_headers(),
-            json={
-                "email": email,
-                "password": auth_password,
-                "email_confirm": True,
-                "user_metadata": {
-                    "role": "training_center",
-                    "center_name": center_name or "",
-                },
-            },
-            timeout=15,
-        )
-        if response.status_code in (200, 201):
-            return True, None
-        if _is_supabase_duplicate_user(response):
-            return True, None
-
-        logger.warning("❌ Provisioning Supabase centre refusé: %s", response.text[:500])
-        return False, "Création Supabase refusée"
-    except Exception as exc:
-        logger.warning("❌ Provisioning Supabase centre impossible", exc_info=True)
-        return False, str(exc)
-
-
-def _authenticate_training_center_with_supabase(email, password):
-    if not SUPABASE_URL or not SUPABASE_ANON_KEY or not email or "@" not in email or not password:
-        return False
-
-    try:
-        response = http_requests.post(
-            f"{SUPABASE_URL}/auth/v1/token?grant_type=password",
-            headers=_supabase_public_headers(),
-            json={"email": email, "password": password},
-            timeout=15,
-        )
-        if response.status_code != 200:
-            return False
-        data = response.json()
-        return bool(data.get("access_token") or data.get("session", {}).get("access_token"))
-    except Exception:
-        logger.warning("⚠️ Auth Supabase centre indisponible", exc_info=True)
-        return False
-
-
-def _update_training_center_password_sqlite(cursor, username, password_hash, password_debug_plaintext):
-    cursor.execute(
-        """
-        UPDATE training_center_accounts
-        SET password_hash = ?,
-            password_debug_plaintext = ?,
-            updated_at = ?
-        WHERE username = ?
-        """,
-        (
-            password_hash,
-            password_debug_plaintext,
-            datetime.now(FRANCE_TZ).strftime("%Y-%m-%d %H:%M:%S"),
-            username,
-        ),
-    )
-    return cursor.rowcount > 0
 
 
 def _get_platform_id():
@@ -178,73 +62,9 @@ def _get_platform_id():
     return 1
 
 
-def _mirror_training_center_to_sqlite(cursor, account, password_hash, now_str, password_debug_plaintext=None):
-    cursor.execute("SELECT id FROM training_center_accounts WHERE id = ?", (account["id"],))
-    existing = cursor.fetchone()
-    if existing:
-        cursor.execute(
-            """
-            UPDATE training_center_accounts
-            SET username = ?,
-                password_hash = ?,
-                password_debug_plaintext = ?,
-                center_name = ?,
-                slug = ?,
-                is_active = ?,
-                updated_at = ?
-            WHERE id = ?
-            """,
-            (
-                account["username"],
-                password_hash,
-                password_debug_plaintext,
-                account["center_name"],
-                account["slug"],
-                1 if account["is_active"] else 0,
-                now_str,
-                account["id"],
-            ),
-        )
-        return
-
-    cursor.execute(
-        """
-        INSERT INTO training_center_accounts
-            (id, username, password_hash, password_debug_plaintext, center_name, slug, is_active, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            account["id"],
-            account["username"],
-            password_hash,
-            password_debug_plaintext,
-            account["center_name"],
-            account["slug"],
-            1 if account["is_active"] else 0,
-            now_str,
-            now_str,
-        ),
-    )
-
-
 def create_admin_blueprint(socketio):
     """Factory pour créer le blueprint admin avec accès à socketio"""
     admin_bp = Blueprint("admin", __name__)
-
-    @admin_bp.route("/api/admin/session", methods=["GET"])
-    def get_admin_session():
-        """Retourne l'état de session admin sans lire de données métier."""
-        if not session.get("is_admin"):
-            return jsonify({"authenticated": False, "error": "Accès refusé"}), 403
-
-        return jsonify({
-            "authenticated": True,
-            "account": {
-                "type": session.get("admin_account_type", "legacy_admin"),
-                "id": session.get("admin_account_id"),
-                "center_name": session.get("center_name"),
-            },
-        }), 200
 
     @admin_bp.route("/api/admin/logs", methods=["GET"])
     def get_logs():
@@ -336,171 +156,6 @@ def create_admin_blueprint(socketio):
         except Exception as e:
             logger.error(f"❌ Erreur récupération logs admin: {e}")
             return jsonify({"success": False, "error": "Erreur serveur"}), 500
-
-    @admin_bp.route("/api/admin/internal-dashboard", methods=["GET"])
-    def internal_dashboard():
-        """Vue interne SaaS : centres, comptes élèves et derniers logs.
-
-        Réservé au legacy admin. Les mots de passe ne sont jamais exposés :
-        seulement un statut indiquant qu'un secret hashé existe.
-        """
-        if not session.get("is_admin") or session.get("admin_account_type") != "legacy_admin":
-            return jsonify({"success": False, "error": "Accès refusé"}), 403
-
-        conn = None
-        try:
-            conn = get_db_connection()
-            cursor = conn.cursor()
-
-            cursor.execute("""
-                SELECT
-                    pc.center_account_id,
-                    COUNT(*) AS platform_count,
-                    COALESCE(SUM((
-                        SELECT COUNT(*)
-                        FROM student_profiles sp
-                        WHERE sp.platform_id = pc.id
-                    )), 0) AS student_count,
-                    COALESCE(SUM((
-                        SELECT COUNT(*)
-                        FROM logs l
-                        WHERE l.platform_id = pc.id
-                    )), 0) AS log_count
-                FROM platform_config pc
-                GROUP BY pc.center_account_id
-            """)
-            center_stats = {
-                row[0]: {
-                    "platform_count": int(row[1] or 0),
-                    "student_count": int(row[2] or 0),
-                    "log_count": int(row[3] or 0),
-                }
-                for row in cursor.fetchall()
-            }
-
-            centers = [{
-                "id": None,
-                "center_name": "Sales Hacking / Le Socrate interne",
-                "slug": "le-socrate",
-                "username": "admin",
-                "email": "",
-                "is_active": True,
-                "created_at": "",
-                "updated_at": "",
-                "password_status": "secret123",
-                "internal": True,
-                **center_stats.get(None, {"platform_count": 0, "student_count": 0, "log_count": 0}),
-            }]
-
-            cursor.execute("""
-                SELECT id, username, center_name, slug, is_active, created_at, updated_at, password_hash, password_debug_plaintext
-                FROM training_center_accounts
-                ORDER BY created_at DESC, id DESC
-            """)
-            for row in cursor.fetchall():
-                username = row[1] or ""
-                stats = center_stats.get(row[0], {"platform_count": 0, "student_count": 0, "log_count": 0})
-                centers.append({
-                    "id": row[0],
-                    "username": username,
-                    "email": username if "@" in username else "",
-                    "center_name": row[2],
-                    "slug": row[3],
-                    "is_active": bool(row[4]),
-                    "created_at": row[5],
-                    "updated_at": row[6],
-                    "password_status": row[8] or ("Hashé, non récupérable" if row[7] else "Non défini"),
-                    "internal": False,
-                    **stats,
-                })
-
-            cursor.execute("""
-                SELECT
-                    sp.id,
-                    sp.email,
-                    sp.nom,
-                    sp.prenom,
-                    sp.role,
-                    sp.is_active,
-                    sp.created_at,
-                    sp.updated_at,
-                    sp.platform_id,
-                    pc.name AS platform_name,
-                    COALESCE(tca.center_name, 'Sales Hacking / Le Socrate interne') AS center_name
-                FROM student_profiles sp
-                LEFT JOIN platform_config pc ON pc.id = sp.platform_id
-                LEFT JOIN training_center_accounts tca ON tca.id = pc.center_account_id
-                ORDER BY sp.created_at DESC, sp.id DESC
-                LIMIT 100
-            """)
-            students = [{
-                "id": row[0],
-                "email": row[1],
-                "username": row[1],
-                "nom": row[2],
-                "prenom": row[3],
-                "role": row[4],
-                "is_active": bool(row[5]),
-                "created_at": row[6],
-                "updated_at": row[7],
-                "platform_id": row[8],
-                "platform_name": row[9],
-                "center_name": row[10],
-                "password_status": "Mot de passe géré par Supabase Auth",
-            } for row in cursor.fetchall()]
-
-            cursor.execute("""
-                SELECT
-                    l.id,
-                    l.nom,
-                    l.prenom,
-                    l.arrivee,
-                    l.depart,
-                    l.platform_id,
-                    pc.name AS platform_name,
-                    COALESCE(tca.center_name, 'Sales Hacking / Le Socrate interne') AS center_name
-                FROM logs l
-                LEFT JOIN platform_config pc ON pc.id = l.platform_id
-                LEFT JOIN training_center_accounts tca ON tca.id = pc.center_account_id
-                ORDER BY l.arrivee DESC, l.id DESC
-                LIMIT 120
-            """)
-            recent_logs = []
-            active_count = 0
-            for row in cursor.fetchall():
-                if not row[4]:
-                    active_count += 1
-                recent_logs.append({
-                    "id": row[0],
-                    "nom": row[1],
-                    "prenom": row[2],
-                    "arrivee": row[3],
-                    "depart": row[4],
-                    "platform_id": row[5],
-                    "platform_name": row[6],
-                    "center_name": row[7],
-                    "status": "En cours" if not row[4] else "Terminé",
-                })
-
-            return jsonify({
-                "success": True,
-                "summary": {
-                    "center_count": len(centers),
-                    "external_center_count": max(len(centers) - 1, 0),
-                    "student_count": len(students),
-                    "recent_log_count": len(recent_logs),
-                    "active_session_count": active_count,
-                },
-                "centers": centers,
-                "students": students,
-                "recent_logs": recent_logs,
-            }), 200
-        except Exception as e:
-            logger.exception("❌ Erreur dashboard interne")
-            return jsonify({"success": False, "error": "Erreur serveur"}), 500
-        finally:
-            if conn:
-                conn.close()
 
     @admin_bp.route("/api/admin/course-time", methods=["GET"])
     def get_course_time():
@@ -628,77 +283,23 @@ def create_admin_blueprint(socketio):
         api_key = os.environ.get("PLATFORM_API_KEY", "")
         if not api_key or request.headers.get("X-Platform-Key") != api_key:
             return jsonify({"success": False, "error": "Non autorisé"}), 401
-        conn = None
         try:
-            data = request.get_json(silent=True) or {}
+            data = request.get_json()
             date_str = data.get("date_cours", "").strip()
             heure_str = data.get("heure_cours", "").strip()
-            weekdays = data.get("weekdays") if "weekdays" in data else None
-            if not heure_str:
+            if not date_str or not heure_str:
                 return (
-                    jsonify({"success": False, "error": "heure_cours requis"}),
+                    jsonify({"success": False, "error": "Date et heure requises"}),
                     400,
                 )
-            platform_id = int(data.get("platform_id", session.get("platform_id", 1)))
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            schedule_update = update_course_schedule(
-                cursor,
-                platform_id,
-                start_time=heure_str,
-                weekdays=weekdays,
-            )
-            if schedule_update:
-                conn.commit()
-                conn.close()
-                conn = None
-                logger.info(f"⚙️ Planning cours P{platform_id} configuré en interne")
-                return (
-                    jsonify(
-                        {
-                            "success": True,
-                            "message": "Planning des journées mis à jour",
-                            "schedule": schedule_update,
-                        }
-                    ),
-                    200,
-                )
-            cursor.execute("SELECT COUNT(*) FROM cours_folders WHERE platform_id = ?", (platform_id,))
-            folder_count = int((cursor.fetchone() or [0])[0] or 0)
-            schedule_update = create_missing_course_schedule(
-                cursor,
-                platform_id,
-                total_training_days=folder_count,
-                start_time=heure_str,
-                date_str=date_str or None,
-                weekdays=weekdays,
-            )
-            if schedule_update:
-                conn.commit()
-                conn.close()
-                conn = None
-                logger.info(f"⚙️ Planning cours P{platform_id} créé en interne")
-                return (
-                    jsonify(
-                        {
-                            "success": True,
-                            "message": "Planning des journées créé",
-                            "schedule": schedule_update,
-                        }
-                    ),
-                    200,
-                )
-            conn.close()
-            conn = None
-
-            if not date_str:
-                return jsonify({"success": False, "error": "date_cours requis pour une plateforme sans planning automatique"}), 400
             if heure_str.count(":") == 1:
                 datetime_str = f"{date_str} {heure_str}:00"
             else:
                 datetime_str = f"{date_str} {heure_str}"
             nouvelle_heure_naive = datetime.strptime(datetime_str, "%Y-%m-%d %H:%M:%S")
             nouvelle_heure_fr = FRANCE_TZ.localize(nouvelle_heure_naive)
+            # Récupérer platform_id depuis le body ou la session (défaut: 1)
+            platform_id = data.get("platform_id", session.get("platform_id", 1))
             set_heure_debut_cours(nouvelle_heure_fr, platform_id)
             logger.info(f"⚙️ Heure cours P{platform_id} configurée en interne: {nouvelle_heure_fr}")
             return (
@@ -710,13 +311,7 @@ def create_admin_blueprint(socketio):
                 ),
                 200,
             )
-        except ValueError as e:
-            if conn:
-                conn.close()
-            return jsonify({"success": False, "error": str(e)}), 400
         except Exception as e:
-            if conn:
-                conn.close()
             logger.error(f"❌ Erreur internal config-cours: {e}")
             return jsonify({"success": False, "error": str(e)}), 500
 
@@ -732,22 +327,11 @@ def create_admin_blueprint(socketio):
             except (TypeError, ValueError):
                 platform_id = 1
             heure = get_heure_debut_cours(platform_id)
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            schedule_summary = get_course_schedule_summary(cursor, platform_id)
-            conn.close()
-            payload = {
+            return jsonify({
                 "success": True,
                 "date_cours": heure.strftime("%Y-%m-%d"),
                 "heure_cours": heure.strftime("%H:%M"),
-                "has_schedule": bool(schedule_summary),
-            }
-            if schedule_summary:
-                payload.update({
-                    "heure_cours": schedule_summary.get("start_time") or payload["heure_cours"],
-                    "schedule": schedule_summary,
-                })
-            return jsonify(payload), 200
+            }), 200
         except Exception as e:
             logger.error(f"❌ Erreur internal course-time: {e}")
             return jsonify({"success": False, "error": str(e)}), 500
@@ -800,11 +384,7 @@ def create_admin_blueprint(socketio):
         """Connexion administrateur"""
         conn = None
         try:
-            data = request.get_json(silent=True) or {}
-            username = data.get("username", "").strip().lower()
-            password = data.get("password", "").strip()
-
-            if session.get("is_admin") and not username and not password:
+            if session.get("is_admin"):
                 logger.info("👑 Admin déjà connecté")
                 token = request.headers.get("X-Auth-Token") or _create_admin_token(
                     session.get("admin_account_type", "legacy_admin"),
@@ -812,6 +392,10 @@ def create_admin_blueprint(socketio):
                     session.get("center_name"),
                 )
                 return jsonify({"success": True, "message": "Déjà connecté", "token": token}), 200
+
+            data = request.get_json(silent=True) or {}
+            username = data.get("username", "").strip().lower()
+            password = data.get("password", "").strip()
 
             logger.info(f"🔐 Tentative connexion admin: {username}")
 
@@ -821,72 +405,13 @@ def create_admin_blueprint(socketio):
                 session.permanent = True
                 token = _create_admin_token("legacy_admin")
                 logger.info("✅ Connexion admin réussie")
-                return jsonify({
-                    "success": True,
-                    "message": "Connexion réussie",
-                    "token": token,
-                    "account": {
-                        "type": "legacy_admin",
-                        "username": "admin",
-                        "center_name": "Sales Hacking / Le Socrate interne",
-                    },
-                }), 200
-
-            if postgres_enabled():
-                account = get_training_center_by_username(username)
-                if account:
-                    if not account["is_active"]:
-                        logger.warning("⚠️ Compte centre Postgres désactivé: %s", username)
-                        return jsonify({"success": False, "error": "Compte désactivé"}), 403
-
-                    password_ok = bool(password and check_password_hash(account["password_hash"], password))
-                    if not password_ok and _authenticate_training_center_with_supabase(username, password):
-                        password_ok = True
-                        new_hash = generate_password_hash(password)
-                        update_training_center_password(username, new_hash, password)
-                        try:
-                            mirror_conn = get_db_connection()
-                            mirror_cursor = mirror_conn.cursor()
-                            _update_training_center_password_sqlite(mirror_cursor, username, new_hash, password)
-                            mirror_conn.commit()
-                            mirror_conn.close()
-                        except Exception:
-                            logger.warning("⚠️ Miroir SQLite mot de passe centre impossible", exc_info=True)
-
-                    if not password_ok:
-                        logger.warning("❌ Échec connexion centre Postgres - identifiants incorrects")
-                        return jsonify({"success": False, "error": "Identifiants incorrects"}), 401
-
-                    session["is_admin"] = True
-                    session["admin_account_id"] = account["id"]
-                    session["admin_account_type"] = "training_center"
-                    session["center_name"] = account["center_name"]
-                    session.permanent = True
-                    token = _create_admin_token("training_center", account["id"], account["center_name"])
-                    logger.info("✅ Connexion centre Postgres réussie: %s", username)
-                    return (
-                        jsonify(
-                            {
-                                "success": True,
-                                "message": "Connexion réussie",
-                                "token": token,
-                                "account": {
-                                    "type": "training_center",
-                                    "id": account["id"],
-                                    "username": account["username"],
-                                    "center_name": account["center_name"],
-                                    "slug": account["slug"],
-                                },
-                            }
-                        ),
-                        200,
-                    )
+                return jsonify({"success": True, "message": "Connexion réussie", "token": token}), 200
 
             conn = get_db_connection()
             cursor = conn.cursor()
             cursor.execute(
                 """
-                SELECT id, username, password_hash, center_name, is_active, slug
+                SELECT id, username, password_hash, center_name, is_active
                 FROM training_center_accounts
                 WHERE username = ?
                 """,
@@ -894,7 +419,7 @@ def create_admin_blueprint(socketio):
             )
             account = cursor.fetchone() if username else None
 
-            if not account:
+            if not account or not password or not check_password_hash(account[2], password):
                 logger.warning("❌ Échec connexion admin - identifiants incorrects")
                 return (
                     jsonify({"success": False, "error": "Identifiants incorrects"}),
@@ -904,24 +429,6 @@ def create_admin_blueprint(socketio):
             if not account[4]:
                 logger.warning("⚠️ Compte centre désactivé: %s", username)
                 return jsonify({"success": False, "error": "Compte désactivé"}), 403
-
-            password_ok = bool(password and check_password_hash(account[2], password))
-            if not password_ok and _authenticate_training_center_with_supabase(username, password):
-                password_ok = True
-                _update_training_center_password_sqlite(
-                    cursor,
-                    username,
-                    generate_password_hash(password),
-                    password,
-                )
-                conn.commit()
-
-            if not password_ok:
-                logger.warning("❌ Échec connexion admin - identifiants incorrects")
-                return (
-                    jsonify({"success": False, "error": "Identifiants incorrects"}),
-                    401,
-                )
 
             session["is_admin"] = True
             session["admin_account_id"] = account[0]
@@ -937,11 +444,9 @@ def create_admin_blueprint(socketio):
                         "message": "Connexion réussie",
                         "token": token,
                         "account": {
-                            "type": "training_center",
                             "id": account[0],
                             "username": account[1],
                             "center_name": account[3],
-                            "slug": account[5],
                         },
                     }
                 ),
@@ -950,77 +455,6 @@ def create_admin_blueprint(socketio):
 
         except Exception as e:
             logger.error(f"❌ Erreur login admin: {e}")
-            return jsonify({"success": False, "error": "Erreur serveur"}), 500
-        finally:
-            if conn:
-                conn.close()
-
-    @admin_bp.route("/api/admin/forgot-password", methods=["POST"])
-    def forgot_training_center_password():
-        """Prépare le compte centre pour le reset Supabase côté frontend."""
-        conn = None
-        try:
-            data = request.get_json(silent=True) or {}
-            username = str(data.get("username") or data.get("email") or "").strip().lower()
-            if not username:
-                return jsonify({"success": False, "error": "Adresse email requise"}), 400
-            if username == "admin":
-                return jsonify({
-                    "success": False,
-                    "error": "Le compte admin interne n'utilise pas la réinitialisation par email.",
-                }), 400
-            if "@" not in username:
-                return jsonify({
-                    "success": False,
-                    "error": "Entrez l'adresse email utilisée comme identifiant.",
-                }), 400
-
-            account = get_training_center_by_username(username) if postgres_enabled() else None
-            if account:
-                ensured, ensure_error = _ensure_training_center_supabase_user(
-                    username,
-                    account.get("password_debug_plaintext"),
-                    account.get("center_name"),
-                )
-                if not ensured:
-                    return jsonify({"success": False, "error": ensure_error}), 503
-
-                logger.info("✅ Compte centre Postgres prêt pour reset Supabase: %s", username)
-                return jsonify({
-                    "success": True,
-                    "message": "Un email de réinitialisation va être envoyé.",
-                }), 200
-
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            cursor.execute(
-                """
-                SELECT id, password_hash, password_debug_plaintext
-                FROM training_center_accounts
-                WHERE username = ?
-                """,
-                (username,),
-            )
-            row = cursor.fetchone()
-            if not row:
-                return jsonify({
-                    "success": True,
-                    "message": "Si un compte existe pour cette adresse, un email va être envoyé.",
-                }), 200
-
-            ensured, ensure_error = _ensure_training_center_supabase_user(username, row[2])
-            if not ensured:
-                return jsonify({"success": False, "error": ensure_error}), 503
-
-            logger.info("✅ Compte centre SQLite prêt pour reset Supabase: %s", username)
-            return jsonify({
-                "success": True,
-                "message": "Un email de réinitialisation va être envoyé.",
-            }), 200
-        except Exception as e:
-            if conn:
-                conn.rollback()
-            logger.error("❌ Erreur reset mot de passe centre: %s", e)
             return jsonify({"success": False, "error": "Erreur serveur"}), 500
         finally:
             if conn:
@@ -1058,95 +492,24 @@ def create_admin_blueprint(socketio):
                 )
 
             now_str = datetime.now(FRANCE_TZ).strftime("%Y-%m-%d %H:%M:%S")
-            password_hash = generate_password_hash(password)
-
-            if postgres_enabled():
-                try:
-                    account = create_training_center(
-                        username=username,
-                        password_hash=password_hash,
-                        password_debug_plaintext=password,
-                        center_name=center_name,
-                        slug_base=center_name or username,
-                        now=now_str,
-                    )
-                except DuplicateTrainingCenterUsername:
-                    return jsonify({"success": False, "error": "Cet identifiant existe déjà"}), 409
-
-                conn = get_db_connection()
-                cursor = conn.cursor()
-                _mirror_training_center_to_sqlite(cursor, account, password_hash, now_str, password)
-                conn.commit()
-
-                if "@" in username:
-                    ensured, ensure_error = _ensure_training_center_supabase_user(
-                        username,
-                        password,
-                        center_name,
-                    )
-                    if not ensured:
-                        logger.warning("⚠️ Compte centre créé sans provisioning Supabase: %s", ensure_error)
-
-                session["is_admin"] = True
-                session["admin_account_id"] = account["id"]
-                session["admin_account_type"] = "training_center"
-                session["center_name"] = account["center_name"]
-                session.permanent = True
-                token = _create_admin_token("training_center", account["id"], account["center_name"])
-
-                logger.info("✅ Inscription centre Postgres réussie: %s", username)
-                return (
-                    jsonify(
-                        {
-                            "success": True,
-                            "message": "Compte créé",
-                            "token": token,
-                            "account": {
-                                "type": "training_center",
-                                "id": account["id"],
-                                "username": account["username"],
-                                "center_name": account["center_name"],
-                                "slug": account["slug"],
-                            },
-                        }
-                    ),
-                    201,
-                )
-
             conn = get_db_connection()
             cursor = conn.cursor()
-            center_slug = unique_slug(
-                cursor,
-                "training_center_accounts",
-                slugify(center_name or username, fallback="centre"),
-            )
             cursor.execute(
                 """
                 INSERT INTO training_center_accounts
-                    (username, password_hash, password_debug_plaintext, center_name, slug, is_active, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, 1, ?, ?)
+                    (username, password_hash, center_name, is_active, created_at, updated_at)
+                VALUES (?, ?, ?, 1, ?, ?)
                 """,
                 (
                     username,
-                    password_hash,
-                    password,
+                    generate_password_hash(password),
                     center_name,
-                    center_slug,
                     now_str,
                     now_str,
                 ),
             )
             account_id = cursor.lastrowid
             conn.commit()
-
-            if "@" in username:
-                ensured, ensure_error = _ensure_training_center_supabase_user(
-                    username,
-                    password,
-                    center_name,
-                )
-                if not ensured:
-                    logger.warning("⚠️ Compte centre créé sans provisioning Supabase: %s", ensure_error)
 
             session["is_admin"] = True
             session["admin_account_id"] = account_id
@@ -1163,11 +526,9 @@ def create_admin_blueprint(socketio):
                         "message": "Compte créé",
                         "token": token,
                         "account": {
-                            "type": "training_center",
                             "id": account_id,
                             "username": username,
                             "center_name": center_name,
-                            "slug": center_slug,
                         },
                     }
                 ),
@@ -1186,63 +547,6 @@ def create_admin_blueprint(socketio):
         finally:
             if conn:
                 conn.close()
-
-    @admin_bp.route("/api/admin/ai-teacher-orders", methods=["GET"])
-    def list_orders():
-        """Liste les commandes d'agents IA du centre connecté."""
-        if not session.get("is_admin") or session.get("admin_account_type") != "training_center":
-            return jsonify({"success": False, "error": "Accès refusé"}), 403
-        if not postgres_enabled():
-            return jsonify({"success": False, "error": "Postgres non activé"}), 503
-
-        try:
-            orders = list_ai_teacher_orders(session.get("admin_account_id"))
-            return jsonify({"success": True, "orders": orders}), 200
-        except Exception:
-            logger.exception("❌ Erreur lecture commandes IA")
-            return jsonify({"success": False, "error": "Erreur serveur"}), 500
-
-    @admin_bp.route("/api/admin/ai-teacher-orders", methods=["POST"])
-    def create_order():
-        """Crée une commande d'agent IA en brouillon côté SaaS core."""
-        if not session.get("is_admin") or session.get("admin_account_type") != "training_center":
-            return jsonify({"success": False, "error": "Accès refusé"}), 403
-        if not postgres_enabled():
-            return jsonify({"success": False, "error": "Postgres non activé"}), 503
-
-        data = request.get_json(silent=True) or {}
-        training_title = str(data.get("training_title") or "").strip()
-        rncp_code = str(data.get("rncp_code") or "").strip() or None
-        platform_id = data.get("platform_id")
-        quoted_amount_cents = data.get("quoted_amount_cents")
-        try:
-            total_hours = int(data.get("total_hours") or 0)
-        except (TypeError, ValueError):
-            total_hours = 0
-
-        if not training_title or total_hours <= 0:
-            return jsonify({
-                "success": False,
-                "error": "training_title et total_hours sont requis",
-            }), 400
-
-        try:
-            order = create_ai_teacher_order({
-                "center_account_id": session.get("admin_account_id"),
-                "platform_id": int(platform_id) if platform_id else None,
-                "status": "draft",
-                "training_title": training_title,
-                "rncp_code": rncp_code,
-                "total_hours": total_hours,
-                "quoted_amount_cents": int(quoted_amount_cents) if quoted_amount_cents else None,
-                "currency": "eur",
-                "stripe_checkout_session_id": None,
-                "stripe_payment_intent_id": None,
-            })
-            return jsonify({"success": True, "order": order}), 201
-        except Exception:
-            logger.exception("❌ Erreur création commande IA")
-            return jsonify({"success": False, "error": "Erreur serveur"}), 500
 
     @admin_bp.route("/api/admin/logout", methods=["POST"])
     def logout_admin():
@@ -1355,7 +659,6 @@ def create_admin_blueprint(socketio):
                 """,
                 (auth_user_id, platform_id, email, nom, prenom, now, now),
             )
-            profile_id = cursor.lastrowid
             conn.commit()
         except Exception as exc:
             conn.rollback()
@@ -1365,31 +668,7 @@ def create_admin_blueprint(socketio):
             return jsonify({"success": False, "error": "Erreur serveur"}), 500
         finally:
             conn.close()
-
-        postgres_synced = False
-        if postgres_enabled():
-            try:
-                upsert_student_profile_with_id({
-                    "id": profile_id,
-                    "auth_user_id": auth_user_id,
-                    "platform_id": platform_id,
-                    "email": email,
-                    "nom": nom,
-                    "prenom": prenom,
-                    "role": "student",
-                    "is_active": True,
-                    "created_at": now,
-                    "updated_at": now,
-                })
-                postgres_synced = True
-            except Exception:
-                logger.warning("⚠️ Miroir Postgres profil élève impossible", exc_info=True)
-
-        return jsonify({
-            "success": True,
-            "message": "Compte élève créé",
-            "postgres_synced": postgres_synced,
-        }), 201
+        return jsonify({"success": True, "message": "Compte élève créé"}), 201
 
     @admin_bp.route("/api/admin/student-accounts/<int:account_id>", methods=["PUT"])
     def update_student_account(account_id):
@@ -1454,45 +733,10 @@ def create_admin_blueprint(socketio):
         )
         conn.commit()
         changed = cursor.rowcount
-        profile_row = None
-        if changed:
-            cursor.execute(
-                """
-                SELECT id, auth_user_id, platform_id, email, nom, prenom, role, is_active, created_at, updated_at
-                FROM student_profiles
-                WHERE id = ? AND platform_id = ?
-                """,
-                (account_id, platform_id),
-            )
-            profile_row = cursor.fetchone()
         conn.close()
         if not changed:
             return jsonify({"success": False, "error": "Compte introuvable"}), 404
-
-        postgres_synced = False
-        if postgres_enabled() and profile_row:
-            try:
-                upsert_student_profile_with_id({
-                    "id": profile_row[0],
-                    "auth_user_id": profile_row[1],
-                    "platform_id": profile_row[2],
-                    "email": profile_row[3],
-                    "nom": profile_row[4],
-                    "prenom": profile_row[5],
-                    "role": profile_row[6],
-                    "is_active": bool(profile_row[7]),
-                    "created_at": profile_row[8],
-                    "updated_at": profile_row[9],
-                })
-                postgres_synced = True
-            except Exception:
-                logger.warning("⚠️ Synchronisation Postgres profil élève impossible", exc_info=True)
-
-        return jsonify({
-            "success": True,
-            "message": "Compte élève mis à jour",
-            "postgres_synced": postgres_synced,
-        }), 200
+        return jsonify({"success": True, "message": "Compte élève mis à jour"}), 200
 
     @admin_bp.route("/api/admin/db/status", methods=["GET"])
     def db_status():

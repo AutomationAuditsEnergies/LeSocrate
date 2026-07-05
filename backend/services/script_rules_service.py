@@ -13,17 +13,7 @@ import re
 from datetime import datetime
 
 from config import DB_PATH, FRANCE_TZ
-from repositories.pipeline_repository import (
-    ensure_script_rules_table,
-    get_content_segment_text_by_id,
-    get_script_rules_context,
-    get_script_rules_row,
-    list_completed_content_segment_rows,
-    list_script_rule_annotation_rows,
-    update_content_segment_plan_repair,
-    upsert_generated_script_rules,
-    upsert_manual_script_rules,
-)
+from database.db import get_db_connection
 from utils.anthropic_client import (
     DEEPSEEK_DEFAULT_MODEL,
     AnthropicAPIError,
@@ -40,7 +30,33 @@ MIN_ANNOTATIONS_FOR_EXTRACTION = 1
 
 
 def _ensure_rules_table() -> None:
-    ensure_script_rules_table()
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS content_script_rules (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            folder_id INTEGER NOT NULL,
+            job_id INTEGER NOT NULL,
+            rules_markdown TEXT NOT NULL DEFAULT '',
+            rules_count INTEGER DEFAULT 0,
+            source_annotations_count INTEGER DEFAULT 0,
+            model TEXT,
+            markdown_path TEXT,
+            generated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(folder_id, job_id)
+        )
+        """
+    )
+    cursor.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_content_script_rules_folder_job
+        ON content_script_rules(folder_id, job_id)
+        """
+    )
+    conn.commit()
+    conn.close()
 
 
 def _now_str() -> str:
@@ -59,32 +75,61 @@ def _rules_markdown_path(folder_id: int, job_id: int) -> str:
 
 
 def _fetch_context(folder_id: int) -> dict | None:
-    row = get_script_rules_context(folder_id)
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        SELECT j.id, j.platform_id, j.program_title, f.name
+        FROM content_generation_jobs j
+        JOIN cours_folders f ON f.id = j.folder_id
+        WHERE j.folder_id = ?
+        """,
+        (folder_id,),
+    )
+    row = cursor.fetchone()
+    conn.close()
     if not row:
         return None
     return {
-        "job_id": row["job_id"],
-        "platform_id": row["platform_id"],
-        "program_title": row.get("program_title") or "",
-        "folder_name": row.get("folder_name") or f"Dossier {folder_id}",
+        "job_id": row[0],
+        "platform_id": row[1],
+        "program_title": row[2] or "",
+        "folder_name": row[3] or f"Dossier {folder_id}",
     }
 
 
 def _fetch_applied_annotations(folder_id: int, job_id: int) -> list[dict]:
     """Annotations utilisables pour l'extraction : applied (corrections validées
     par l'humain) et rejected (signal de ce qu'il ne FAUT pas faire)."""
-    rows = list_script_rule_annotation_rows(folder_id=folder_id, job_id=job_id)
+    from services.script_annotation_service import _ensure_annotations_table
+    _ensure_annotations_table()
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        SELECT id, source_type, selected_text, comment, original_paragraph,
+               proposed_text, correction_status, bloc_number, filename
+        FROM content_script_annotations
+        WHERE folder_id = ? AND job_id = ?
+          AND status != 'deleted'
+          AND correction_status IN ('applied', 'rejected', 'proposed')
+        ORDER BY created_at ASC, id ASC
+        """,
+        (folder_id, job_id),
+    )
+    rows = cursor.fetchall()
+    conn.close()
     return [
         {
-            "id": r.get("id"),
-            "source_type": r.get("source_type"),
-            "selected_text": r.get("selected_text") or "",
-            "comment": r.get("comment") or "",
-            "original_paragraph": r.get("original_paragraph") or "",
-            "proposed_text": r.get("proposed_text") or "",
-            "correction_status": r.get("correction_status") or "",
-            "bloc_number": r.get("bloc_number"),
-            "filename": r.get("filename") or "",
+            "id": r[0],
+            "source_type": r[1],
+            "selected_text": r[2] or "",
+            "comment": r[3] or "",
+            "original_paragraph": r[4] or "",
+            "proposed_text": r[5] or "",
+            "correction_status": r[6] or "",
+            "bloc_number": r[7],
+            "filename": r[8] or "",
         }
         for r in rows
     ]
@@ -187,15 +232,35 @@ def extract_rules_from_annotations(folder_id: int) -> dict:
 
     rules_count = _count_rules_in_markdown(markdown)
     _ensure_rules_table()
-    upsert_generated_script_rules(
-        folder_id=folder_id,
-        job_id=context["job_id"],
-        rules_markdown=markdown,
-        rules_count=rules_count,
-        source_annotations_count=len(annotations),
-        model=RULES_MODEL,
-        markdown_path=path,
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        INSERT INTO content_script_rules
+            (folder_id, job_id, rules_markdown, rules_count, source_annotations_count,
+             model, markdown_path, generated_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        ON CONFLICT(folder_id, job_id) DO UPDATE SET
+            rules_markdown = excluded.rules_markdown,
+            rules_count = excluded.rules_count,
+            source_annotations_count = excluded.source_annotations_count,
+            model = excluded.model,
+            markdown_path = excluded.markdown_path,
+            generated_at = CURRENT_TIMESTAMP,
+            updated_at = CURRENT_TIMESTAMP
+        """,
+        (
+            folder_id,
+            context["job_id"],
+            markdown,
+            rules_count,
+            len(annotations),
+            RULES_MODEL,
+            path,
+        ),
     )
+    conn.commit()
+    conn.close()
 
     logger.info(
         f"📚 Extraction règles folder={folder_id} : {rules_count} règle(s) "
@@ -218,7 +283,19 @@ def get_rules(folder_id: int) -> dict:
             "updated_at": "",
         }
     _ensure_rules_table()
-    row = get_script_rules_row(folder_id=folder_id, job_id=context["job_id"])
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        SELECT rules_markdown, rules_count, source_annotations_count,
+               model, markdown_path, generated_at, updated_at
+        FROM content_script_rules
+        WHERE folder_id = ? AND job_id = ?
+        """,
+        (folder_id, context["job_id"]),
+    )
+    row = cursor.fetchone()
+    conn.close()
 
     if not row:
         return {
@@ -234,13 +311,13 @@ def get_rules(folder_id: int) -> dict:
 
     return {
         "context": context,
-        "rules_markdown": row.get("rules_markdown") or "",
-        "rules_count": int(row.get("rules_count") or 0),
-        "source_annotations_count": int(row.get("source_annotations_count") or 0),
-        "model": row.get("model") or "",
-        "markdown_path": row.get("markdown_path") or _rules_markdown_path(folder_id, context["job_id"]),
-        "generated_at": row.get("generated_at") or "",
-        "updated_at": row.get("updated_at") or "",
+        "rules_markdown": row[0] or "",
+        "rules_count": int(row[1] or 0),
+        "source_annotations_count": int(row[2] or 0),
+        "model": row[3] or "",
+        "markdown_path": row[4] or _rules_markdown_path(folder_id, context["job_id"]),
+        "generated_at": row[5] or "",
+        "updated_at": row[6] or "",
     }
 
 
@@ -693,20 +770,6 @@ def start_text_review_async(folder_id: int, *, dry_run: bool = False,
     return task_id
 
 
-def _list_completed_segment_tuples(job_id: int) -> list[tuple]:
-    return [
-        (
-            row.get("id"),
-            row.get("sub_part_index"),
-            row.get("sub_part_name"),
-            row.get("passe"),
-            row.get("text_content"),
-            row.get("word_count"),
-        )
-        for row in list_completed_content_segment_rows(job_id)
-    ]
-
-
 def _locate_patch_segment(find: str, segments_rows: list[tuple]) -> tuple[int, str] | None:
     """Cherche `find` parmi les text_content des segments. Renvoie (segment_id,
     text_content) si exactement 1 segment le contient une seule fois. Sinon
@@ -759,7 +822,19 @@ def review_blocs_with_rules(
         raise ValueError("Aucun bloc cours disponible — la pipeline a-t-elle généré le texte ?")
 
     # Charge les segments source une fois (pour le mapping patches → segments)
-    segments_rows = _list_completed_segment_tuples(context["job_id"])
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        SELECT id, sub_part_index, sub_part_name, passe, text_content, word_count
+        FROM content_generation_segments
+        WHERE job_id = ? AND status = 'completed'
+        ORDER BY sub_part_index ASC, passe ASC
+        """,
+        (context["job_id"],),
+    )
+    segments_rows = cursor.fetchall()
+    conn.close()
 
     import eventlet
     state_lock = eventlet.semaphore.Semaphore(1)
@@ -938,19 +1013,33 @@ def review_blocs_with_rules(
         words_before_bloc = bloc_word_count
         if not dry_run:
             with db_lock:
+                conn2 = get_db_connection()
+                cursor2 = conn2.cursor()
                 for seg_id, replacements in seg_updates.items():
                     # Re-lecture du segment (peut avoir été modifié par un autre bloc en parallèle)
-                    seg_text = get_content_segment_text_by_id(seg_id)
-                    if not seg_text:
+                    cursor2.execute(
+                        "SELECT text_content FROM content_generation_segments WHERE id = ?",
+                        (seg_id,),
+                    )
+                    row = cursor2.fetchone()
+                    if not row:
                         continue
+                    seg_text = row[0] or ""
                     for find, replace in replacements:
                         if seg_text.count(find) == 1:
                             seg_text = seg_text.replace(find, replace, 1)
-                    update_content_segment_plan_repair(
-                        segment_id=seg_id,
-                        text_content=seg_text,
-                        word_count=len(seg_text.split()),
+                    cursor2.execute(
+                        """
+                        UPDATE content_generation_segments
+                        SET text_content = ?, word_count = ?, dirty = 1,
+                            humanized = 0, humanization_error = NULL, humanization_signature = NULL,
+                            reviewed = 0, review_error = NULL, review_signature = NULL
+                        WHERE id = ?
+                        """,
+                        (seg_text, len(seg_text.split()), seg_id),
                     )
+                conn2.commit()
+                conn2.close()
 
         # Calcule un corrected_text du bloc pour affichage (somme des deltas)
         bloc_corrected = bloc_text
@@ -1032,7 +1121,19 @@ def review_segments_with_rules(
     if not rules_markdown:
         raise ValueError("Aucune règle apprise — lance d'abord l'extraction")
 
-    segments = _list_completed_segment_tuples(context["job_id"])
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        SELECT id, sub_part_index, sub_part_name, passe, text_content, word_count
+        FROM content_generation_segments
+        WHERE job_id = ? AND status = 'completed'
+        ORDER BY sub_part_index ASC, passe ASC
+        """,
+        (context["job_id"],),
+    )
+    segments = cursor.fetchall()
+    conn.close()
 
     if sub_part_indices:
         wanted = {int(i) for i in sub_part_indices}
@@ -1253,11 +1354,20 @@ def review_segments_with_rules(
 
             if not dry_run:
                 with db_lock:  # sérialise les UPDATE SQLite
-                    update_content_segment_plan_repair(
-                        segment_id=seg_id,
-                        text_content=corrected,
-                        word_count=len(corrected.split()),
+                    conn2 = get_db_connection()
+                    cursor2 = conn2.cursor()
+                    cursor2.execute(
+                        """
+                        UPDATE content_generation_segments
+                        SET text_content = ?, word_count = ?, dirty = 1, reviewed = 0,
+                            review_error = NULL, review_signature = NULL,
+                            humanized = 0, humanization_error = NULL, humanization_signature = NULL
+                        WHERE id = ?
+                        """,
+                        (corrected, len(corrected.split()), seg_id),
                     )
+                    conn2.commit()
+                    conn2.close()
 
             with state_lock:
                 summary["segments_modified"] += 1
@@ -1308,11 +1418,22 @@ def update_rules_markdown(folder_id: int, markdown: str) -> dict:
         f.write(markdown.rstrip() + "\n")
 
     _ensure_rules_table()
-    upsert_manual_script_rules(
-        folder_id=folder_id,
-        job_id=context["job_id"],
-        rules_markdown=markdown,
-        rules_count=rules_count,
-        markdown_path=path,
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        INSERT INTO content_script_rules
+            (folder_id, job_id, rules_markdown, rules_count, source_annotations_count,
+             model, markdown_path, generated_at, updated_at)
+        VALUES (?, ?, ?, ?, 0, 'manual', ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        ON CONFLICT(folder_id, job_id) DO UPDATE SET
+            rules_markdown = excluded.rules_markdown,
+            rules_count = excluded.rules_count,
+            markdown_path = excluded.markdown_path,
+            updated_at = CURRENT_TIMESTAMP
+        """,
+        (folder_id, context["job_id"], markdown, rules_count, path),
     )
+    conn.commit()
+    conn.close()
     return get_rules(folder_id)

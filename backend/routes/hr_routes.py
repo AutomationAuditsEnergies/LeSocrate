@@ -1,37 +1,14 @@
 # hr_routes.py - Routes du Dashboard RH (centre de contrôle multi-plateformes)
-import json
 import os
-import re
 import time
 import requests as http_requests
 from datetime import datetime, timedelta, timezone
-from flask import Blueprint, request, session, jsonify, Response, stream_with_context, send_file
-from azure.storage.blob import BlobServiceClient, generate_blob_sas, BlobSasPermissions
+from flask import Blueprint, request, session, jsonify, Response, stream_with_context
+from azure.storage.blob import BlobServiceClient, ContentSettings, generate_blob_sas, BlobSasPermissions
 from azure.core.exceptions import ResourceExistsError
 from config import FRANCE_TZ
 from database.db import get_db_connection
-from database.postgres import postgres_enabled
-from repositories.core_repository import (
-    get_training_center_by_id,
-    upsert_cours_config,
-    upsert_platform_config,
-)
-from repositories.pipeline_repository import list_course_folder_rows_for_platform
-from repositories.pipeline_repository import get_course_folder_identity
-from services.course_schedule_service import (
-    create_missing_course_schedule,
-    ensure_course_schedule_tables,
-    get_course_schedule_summary,
-    process_due_reminders,
-    run_scheduler_tick,
-    save_course_schedule,
-    update_course_schedule,
-)
-from services.export_service import generate_attendance_excel_export
-from services.scheduled_audio_service import process_due_audio_generations
-from services.audio_publish_service import archive_public_platform_audios, publish_playlist_audio_to_platform
 from utils.logger import get_logger
-from utils.slug import slugify, unique_slug
 import state
 
 logger = get_logger(__name__)
@@ -42,12 +19,6 @@ HR_ENABLED = os.environ.get("HR_DASHBOARD_ENABLED", "false").lower() == "true"
 HR_DASHBOARD_BLOB_PAGE_SIZE = int(os.environ.get("HR_DASHBOARD_BLOB_PAGE_SIZE", "200"))
 HR_DASHBOARD_BLOB_MAX_ITEMS = int(os.environ.get("HR_DASHBOARD_BLOB_MAX_ITEMS", "1000"))
 HR_DASHBOARD_BLOB_TIMEOUT_SECONDS = float(os.environ.get("HR_DASHBOARD_BLOB_TIMEOUT_SECONDS", "4"))
-HR_DASHBOARD_REPAIR_ON_LOAD = os.environ.get("HR_DASHBOARD_REPAIR_ON_LOAD", "false").lower() in {
-    "1",
-    "true",
-    "yes",
-    "on",
-}
 
 
 _ARCHIVE_DEFAULTS = {
@@ -83,58 +54,52 @@ def _is_local_platform(pid):
     return not info.get("backend_url")
 
 
-def _class_public_path(center_slug, platform_slug):
-    return f"/classe/{center_slug or 'le-socrate'}/{platform_slug}"
-
-
-def _class_public_url(frontend_url, center_slug, platform_slug):
-    base_url = (frontend_url or request.headers.get("Origin") or "").rstrip("/")
-    path = _class_public_path(center_slug, platform_slug)
-    return f"{base_url}{path}" if base_url else path
-
-
-def _module_scope_clause(alias="m"):
-    if session.get("admin_account_type") == "training_center":
-        return f"{alias}.center_account_id = ?", [session.get("admin_account_id")]
-    return "1 = 1", []
-
-
-def _module_version_count(cursor, rncp_code, center_account_id):
-    if center_account_id is None:
-        cursor.execute(
-            "SELECT COUNT(*) FROM formation_modules WHERE rncp_code = ? AND center_account_id IS NULL",
-            (rncp_code or "",),
-        )
-    else:
-        cursor.execute(
-            "SELECT COUNT(*) FROM formation_modules WHERE rncp_code = ? AND center_account_id = ?",
-            (rncp_code or "", center_account_id),
-        )
-    return cursor.fetchone()[0]
-
-
-def _publish_playlist_audio_to_platform(
-    platform_id,
-    folder_id,
-    filenames=None,
-    *,
-    source_platform_id=None,
-    archive_existing=False,
-    archive_reason="auto-publish",
-):
+def _publish_playlist_audio_to_platform(platform_id, folder_id, filenames=None):
     """Copie les MP3 générés du dossier vers le container audio public de la plateforme.
 
     La page /video lit les fichiers à la racine du container formationaudio-pX,
     alors que la génération TTS écrit dans audiostts/platform-X/folder-Y/playlist/.
     """
-    return publish_playlist_audio_to_platform(
-        platform_id,
-        folder_id,
-        filenames,
-        source_platform_id=source_platform_id,
-        archive_existing=archive_existing,
-        archive_reason=archive_reason,
-    )
+    tts_conn = os.environ.get("AZURE_TTS_STORAGE_CONNECTION_STRING")
+    audio_conn = os.environ.get("AZURE_AUDIO_STORAGE_CONNECTION_STRING") or os.environ.get("AZURE_STORAGE_CONNECTION_STRING")
+    if not tts_conn or not audio_conn:
+        raise ValueError("Connexions Azure audio manquantes")
+
+    wanted = {os.path.basename(str(name).split("?", 1)[0]) for name in (filenames or []) if name}
+    pinfo = _get_platform_info(int(platform_id))
+    dest_container = pinfo["audio_container"]
+    prefix = f"platform-{platform_id}/folder-{folder_id}/playlist/"
+
+    tts_bsc = BlobServiceClient.from_connection_string(tts_conn)
+    audio_bsc = BlobServiceClient.from_connection_string(audio_conn)
+    source_cc = tts_bsc.get_container_client("audiostts")
+    dest_cc = audio_bsc.get_container_client(dest_container)
+
+    copied = []
+    errors = []
+    for blob in source_cc.list_blobs(name_starts_with=prefix):
+        filename = blob.name.split("/")[-1]
+        if not filename.endswith(".mp3"):
+            continue
+        if wanted and filename not in wanted:
+            continue
+        try:
+            audio_bytes = source_cc.get_blob_client(blob.name).download_blob().readall()
+            dest_cc.get_blob_client(filename).upload_blob(
+                audio_bytes,
+                overwrite=True,
+                content_settings=ContentSettings(
+                    content_type="audio/mpeg",
+                    content_disposition=f'inline; filename="{filename}"',
+                ),
+            )
+            copied.append(filename)
+            logger.info(f"📣 Audio publié vers {dest_container}/{filename}")
+        except Exception as e:
+            logger.error(f"❌ Publication audio {filename} échouée: {e}")
+            errors.append({"filename": filename, "error": str(e)})
+
+    return {"published": copied, "publish_errors": errors}
 
 
 def _bool_arg(name, default=False):
@@ -218,104 +183,6 @@ def create_hr_blueprint(socketio):
     def _now_str():
         return datetime.now(FRANCE_TZ).strftime("%Y-%m-%d %H:%M:%S")
 
-    def _platform_access_clause(alias="pc"):
-        if session.get("admin_account_type") == "training_center":
-            return f"{alias}.center_account_id = ?", [session.get("admin_account_id")]
-        return "1 = 1", []
-
-    def _get_accessible_platform(cursor, platform_id):
-        scope_sql, scope_params = _platform_access_clause("pc")
-        cursor.execute(
-            f"SELECT pc.id, pc.name FROM platform_config pc WHERE pc.id = ? AND {scope_sql}",
-            [platform_id] + scope_params,
-        )
-        return cursor.fetchone()
-
-    def _ensure_student_attendance_records(cursor):
-        cursor.execute(
-            """
-            CREATE TABLE IF NOT EXISTS student_attendance_records (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                platform_id INTEGER NOT NULL,
-                student_profile_id INTEGER NOT NULL,
-                course_date TEXT NOT NULL,
-                slots_json TEXT NOT NULL DEFAULT '[]',
-                total_minutes INTEGER NOT NULL DEFAULT 0,
-                status TEXT NOT NULL DEFAULT 'absent',
-                notes TEXT,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL,
-                UNIQUE(platform_id, student_profile_id, course_date)
-            )
-            """
-        )
-        cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_student_attendance_platform_date ON student_attendance_records(platform_id, course_date)"
-        )
-        cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_student_attendance_student ON student_attendance_records(student_profile_id)"
-        )
-
-    def _parse_course_date(value):
-        raw = str(value or "").strip()
-        if not raw:
-            return datetime.now(FRANCE_TZ).strftime("%Y-%m-%d")
-        try:
-            return datetime.strptime(raw, "%Y-%m-%d").strftime("%Y-%m-%d")
-        except ValueError:
-            raise ValueError("Date du cours invalide")
-
-    def _attendance_week_bounds(value):
-        date_value = datetime.strptime(_parse_course_date(value), "%Y-%m-%d")
-        week_start = date_value - timedelta(days=date_value.weekday())
-        week_end = week_start + timedelta(days=6)
-        return week_start.strftime("%Y-%m-%d"), week_end.strftime("%Y-%m-%d")
-
-    def _time_to_minutes(value):
-        raw = str(value or "").strip()
-        if not re.match(r"^\d{2}:\d{2}$", raw):
-            raise ValueError("Les heures doivent être au format HH:MM")
-        hours, minutes = [int(part) for part in raw.split(":")]
-        if hours > 23 or minutes > 59:
-            raise ValueError("Heure invalide")
-        return hours * 60 + minutes
-
-    def _normalize_attendance_slots(raw_slots):
-        slots = []
-        total_minutes = 0
-        for raw_slot in raw_slots or []:
-            start = str((raw_slot or {}).get("start") or "").strip()
-            end = str((raw_slot or {}).get("end") or "").strip()
-            if not start and not end:
-                continue
-            start_minutes = _time_to_minutes(start)
-            end_minutes = _time_to_minutes(end)
-            if end_minutes <= start_minutes:
-                raise ValueError("L'heure de départ doit être après l'heure d'arrivée")
-            slots.append({"start": start, "end": end})
-            total_minutes += end_minutes - start_minutes
-        return slots, total_minutes
-
-    def _serialize_attendance_row(row, slots_index=4):
-        slots = []
-        try:
-            slots = json.loads(row[slots_index] or "[]")
-        except Exception:
-            slots = []
-        return {
-            "id": row[0],
-            "platform_id": row[1],
-            "student_profile_id": row[2],
-            "course_date": row[3],
-            "slots": slots,
-            "total_minutes": int(row[slots_index + 1] or 0),
-            "status": row[slots_index + 2] or "absent",
-            "notes": row[slots_index + 3] or "",
-            "created_at": row[slots_index + 4],
-            "updated_at": row[slots_index + 5],
-            "source": "saved",
-        }
-
     def _get_azure_audio_clients():
         """Retourne (blob_service_client, container_client) pour le conteneur audio P1"""
         connection_string = os.environ.get("AZURE_AUDIO_STORAGE_CONNECTION_STRING")
@@ -395,7 +262,6 @@ def create_hr_blueprint(socketio):
         try:
             conn = get_db_connection()
             cursor = conn.cursor()
-            module_scope_sql, module_scope_params = _module_scope_clause("m")
             cursor.execute("""
                 SELECT m.id, m.rncp_code, m.tp_name, m.version, m.status,
                        m.source_pipeline_job_id, m.source_platform_id, m.created_at,
@@ -405,35 +271,9 @@ def create_hr_blueprint(socketio):
                 FROM formation_modules m
                 LEFT JOIN platform_config pc ON pc.id = m.source_platform_id
                 WHERE m.status != 'archived'
-                  AND """ + module_scope_sql + """
                 ORDER BY m.created_at DESC
-            """, module_scope_params)
+            """)
             rows = cursor.fetchall()
-            ensure_course_schedule_tables(cursor)
-            source_ids = sorted({r[6] for r in rows if r[6]})
-            schedules_by_platform = {}
-            if source_ids:
-                placeholders = ",".join("?" for _ in source_ids)
-                cursor.execute(
-                    f"""
-                    SELECT platform_id, total_training_days, weekly_course_count,
-                           weekdays_json, start_time
-                    FROM course_schedule_config
-                    WHERE platform_id IN ({placeholders})
-                    """,
-                    source_ids,
-                )
-                for platform_id, total_days, weekly_count, weekdays_json, start_time in cursor.fetchall():
-                    try:
-                        weekdays = json.loads(weekdays_json or "[]")
-                    except Exception:
-                        weekdays = []
-                    schedules_by_platform[platform_id] = {
-                        "total_training_days": total_days,
-                        "weekly_course_count": weekly_count,
-                        "weekdays": weekdays,
-                        "start_time": start_time,
-                    }
             conn.close()
             modules = [{
                 "id": r[0],
@@ -448,7 +288,6 @@ def create_hr_blueprint(socketio):
                 "source_platform_name": r[9],
                 "voice_type": r[10],
                 "voice_updated_at": r[11],
-                "schedule": schedules_by_platform.get(r[6]),
                 "reusable": r[4] == "validated" and r[8] > 0 and r[10] != "mock",
             } for r in rows]
             return jsonify({"success": True, "modules": modules}), 200
@@ -472,11 +311,10 @@ def create_hr_blueprint(socketio):
         try:
             conn = get_db_connection()
             cursor = conn.cursor()
-            module_scope_sql, module_scope_params = _module_scope_clause("formation_modules")
 
             cursor.execute(
-                f"SELECT id, tp_name, version FROM formation_modules WHERE id = ? AND {module_scope_sql}",
-                [module_id] + module_scope_params,
+                "SELECT id, tp_name, version FROM formation_modules WHERE id = ?",
+                (module_id,),
             )
             row = cursor.fetchone()
             if not row:
@@ -529,11 +367,6 @@ def create_hr_blueprint(socketio):
         try:
             conn = get_db_connection()
             cursor = conn.cursor()
-            platform_where = ""
-            platform_params = []
-            if session.get("admin_account_type") == "training_center":
-                platform_where = "WHERE pc.center_account_id = ?"
-                platform_params.append(session.get("admin_account_id"))
             cursor.execute("""
                 SELECT j.id, j.tp_name, j.rncp_code, j.total_hours, j.nb_days,
                        j.status, j.platform_id, pc.name,
@@ -541,9 +374,8 @@ def create_hr_blueprint(socketio):
                        j.created_at
                 FROM formation_pipeline_jobs j
                 LEFT JOIN platform_config pc ON pc.id = j.platform_id
-                """ + platform_where + """
                 ORDER BY j.created_at DESC
-            """, platform_params)
+            """)
             rows = cursor.fetchall()
             conn.close()
             formations = [{
@@ -574,120 +406,78 @@ def create_hr_blueprint(socketio):
 
         try:
             include_blob_stats = _bool_arg("include_blob_stats", default=False)
-            repair_on_load = _bool_arg("repair", default=HR_DASHBOARD_REPAIR_ON_LOAD)
             conn = get_db_connection()
             cursor = conn.cursor()
 
-            if repair_on_load:
-                # Ces réparations écrivent dans SQLite. Elles sont utiles en
-                # maintenance, mais ne doivent pas bloquer le simple affichage du
-                # dashboard pendant qu'un pipeline écrit déjà en parallèle.
-                cursor.execute("""
-                    UPDATE platform_config
-                    SET source_formation_id = (
-                        SELECT j.id
-                        FROM formation_pipeline_jobs j
-                        WHERE j.platform_id = platform_config.id
-                        ORDER BY j.id DESC
-                        LIMIT 1
-                    )
-                    WHERE source_formation_id IS NULL
-                      AND EXISTS (
-                        SELECT 1
-                        FROM formation_pipeline_jobs j
-                        WHERE j.platform_id = platform_config.id
-                      )
-                """)
+            # Backfill : les plateformes créées par /api/formation/init avaient
+            # déjà un job pipeline lié par platform_id, mais pas toujours
+            # source_formation_id. Sans ce lien, le dashboard sait moins bien
+            # expliquer/diagnostiquer l'état de la carte.
+            cursor.execute("""
+                UPDATE platform_config
+                SET source_formation_id = (
+                    SELECT j.id
+                    FROM formation_pipeline_jobs j
+                    WHERE j.platform_id = platform_config.id
+                    ORDER BY j.id DESC
+                    LIMIT 1
+                )
+                WHERE source_formation_id IS NULL
+                  AND EXISTS (
+                    SELECT 1
+                    FROM formation_pipeline_jobs j
+                    WHERE j.platform_id = platform_config.id
+                  )
+            """)
 
-                cursor.execute("""
-                    UPDATE platform_config
-                    SET status = 'ready'
-                    WHERE status = 'pending'
-                      AND id IN (
-                        SELECT j.platform_id
-                        FROM formation_pipeline_jobs j
-                        WHERE j.status IN (
-                                'text_ready',
-                                'tts_launched',
-                                'audio_running',
-                                'audio_launched',
-                                'audio_completed',
-                                'completed'
+            # Auto-repair lazy : plateformes coincées en 'pending' alors que leur
+            # job pipeline a atteint le texte prêt (ou une étape audio ultérieure)
+            # → les promouvoir automatiquement en 'ready'. Depuis le découplage
+            # texte/audio, `text_ready` signifie déjà que les dossiers de cours
+            # sont exploitables et que l'audio peut être lancé à la demande.
+            cursor.execute("""
+                UPDATE platform_config
+                SET status = 'ready'
+                WHERE status = 'pending'
+                  AND id IN (
+                    SELECT j.platform_id
+                    FROM formation_pipeline_jobs j
+                    WHERE j.status IN (
+                            'text_ready',
+                            'tts_launched',
+                            'audio_running',
+                            'audio_launched',
+                            'audio_completed',
+                            'completed'
+                        )
+                       OR (
+                            EXISTS (
+                                SELECT 1
+                                FROM cours_folders cf
+                                JOIN content_generation_jobs cgj ON cgj.folder_id = cf.id
+                                WHERE cf.formation_job_id = j.id
+                                  AND cgj.status = 'completed'
                             )
-                           OR j.auto_pilot_step = 'done'
-                           OR COALESCE(j.auto_pilot_post_review_docs_done, 0) = 1
-                           OR (
-                                EXISTS (
-                                    SELECT 1
-                                    FROM cours_folders cf
-                                    JOIN content_generation_jobs cgj ON cgj.folder_id = cf.id
-                                    WHERE cf.formation_job_id = j.id
-                                      AND cgj.status = 'completed'
-                                )
-                            AND NOT EXISTS (
-                                    SELECT 1
-                                    FROM cours_folders cf
-                                    LEFT JOIN content_generation_jobs cgj ON cgj.folder_id = cf.id
-                                    WHERE cf.formation_job_id = j.id
-                                      AND COALESCE(cgj.status, '') != 'completed'
-                                )
-                           )
-                      )
-                """)
-                if cursor.rowcount > 0:
-                    logger.info(f"🔧 Auto-repair : {cursor.rowcount} plateforme(s) stuck pending → ready")
+                        AND NOT EXISTS (
+                                SELECT 1
+                                FROM cours_folders cf
+                                LEFT JOIN content_generation_jobs cgj ON cgj.folder_id = cf.id
+                                WHERE cf.formation_job_id = j.id
+                                  AND COALESCE(cgj.status, '') != 'completed'
+                            )
+                       )
+                  )
+            """)
+            if cursor.rowcount > 0:
+                logger.info(f"🔧 Auto-repair : {cursor.rowcount} plateforme(s) stuck pending → ready")
 
-                cursor.execute("""
-                    UPDATE platform_config
-                    SET status = 'error'
-                    WHERE status = 'pending'
-                      AND source_formation_id IS NOT NULL
-                      AND (
-                        EXISTS (
-                            SELECT 1
-                            FROM formation_pipeline_jobs j
-                            WHERE j.id = platform_config.source_formation_id
-                              AND (
-                                j.auto_pilot_error IS NOT NULL
-                                OR j.status IN ('error', 'audio_error')
-                                OR j.auto_pilot_step = 'stopped'
-                              )
-                        )
-                        OR NOT EXISTS (
-                            SELECT 1
-                            FROM formation_pipeline_jobs j
-                            WHERE j.id = platform_config.source_formation_id
-                        )
-                      )
-                """)
-                if cursor.rowcount > 0:
-                    logger.info(f"🔧 Auto-repair : {cursor.rowcount} plateforme(s) stuck pending → error")
+            if conn.total_changes > 0:
+                conn.commit()
 
-                cursor.execute("""
-                    UPDATE platform_config
-                    SET status = 'error'
-                    WHERE status = 'pending'
-                      AND source_formation_id IS NULL
-                      AND updated_at IS NOT NULL
-                      AND datetime(updated_at) < datetime('now', '-2 hours')
-                """)
-                if cursor.rowcount > 0:
-                    logger.info(f"🔧 Auto-repair : {cursor.rowcount} plateforme(s) orphan pending → error")
-
-                if conn.total_changes > 0:
-                    conn.commit()
-
-            platform_where = ""
-            platform_params = []
-            if session.get("admin_account_type") == "training_center":
-                platform_where = "WHERE pc.center_account_id = ?"
-                platform_params.append(session.get("admin_account_id"))
-
-            cursor.execute(f"""
+            cursor.execute("""
                 SELECT
                     pc.id,
                     pc.name,
-                    pc.slug,
                     pc.upload_locked,
                     pc.pdf_filename,
                     pc.pdf_uploaded_at,
@@ -695,21 +485,13 @@ def create_hr_blueprint(socketio):
                     pc.status,
                     pc.source_formation_id,
                     pc.source_module_id,
-                    pc.center_account_id,
-                    COALESCE(tca.slug, 'le-socrate') AS center_slug,
                     COALESCE(fm.rncp_code, fpj.rncp_code) AS source_rncp_code,
-                    COALESCE(fm.tp_name, fpj.tp_name) AS source_tp_name,
-                    fpj.status AS pipeline_status,
-                    fpj.auto_pilot_step AS pipeline_auto_pilot_step,
-                    fpj.auto_pilot_error AS pipeline_auto_pilot_error,
-                    fpj.auto_pilot_enabled AS pipeline_auto_pilot_enabled
+                    COALESCE(fm.tp_name, fpj.tp_name) AS source_tp_name
                 FROM platform_config pc
-                LEFT JOIN training_center_accounts tca ON tca.id = pc.center_account_id
                 LEFT JOIN formation_modules fm ON fm.id = pc.source_module_id
                 LEFT JOIN formation_pipeline_jobs fpj ON fpj.id = pc.source_formation_id
-                {platform_where}
                 ORDER BY pc.id
-            """, platform_params)
+            """)
             rows = cursor.fetchall()
 
             # Compter demandes en attente par plateforme
@@ -738,7 +520,6 @@ def create_hr_blueprint(socketio):
                 (
                     pid,
                     name,
-                    slug,
                     upload_locked,
                     pdf_filename,
                     pdf_uploaded_at,
@@ -746,14 +527,8 @@ def create_hr_blueprint(socketio):
                     p_status,
                     p_source_formation_id,
                     p_source_module_id,
-                    p_center_account_id,
-                    p_center_slug,
                     p_source_rncp_code,
                     p_source_tp_name,
-                    p_pipeline_status,
-                    p_pipeline_auto_pilot_step,
-                    p_pipeline_auto_pilot_error,
-                    p_pipeline_auto_pilot_enabled,
                 ) = row
                 pinfo = _get_platform_info(pid)
                 # En multi-tenant, toute plateforme en BDD est active
@@ -819,37 +594,9 @@ def create_hr_blueprint(socketio):
                 if pending > 0:
                     alerts.append(f"{pending} demande(s) de suppression")
 
-                effective_status = p_status or "ready"
-                if effective_status == "pending":
-                    pipeline_done = (
-                        p_pipeline_auto_pilot_step == "done"
-                        or p_pipeline_status in ("text_ready", "audio_completed", "audio_launched", "completed")
-                    )
-                    pipeline_failed = (
-                        bool(p_pipeline_auto_pilot_error)
-                        or p_pipeline_status in ("error", "audio_error")
-                        or p_pipeline_auto_pilot_step == "stopped"
-                    )
-                    if pipeline_done:
-                        effective_status = "ready"
-                    elif pipeline_failed or (p_source_formation_id and not p_pipeline_status and not p_pipeline_auto_pilot_step):
-                        effective_status = "error"
-                    elif not p_source_formation_id and updated_at:
-                        try:
-                            updated_dt = datetime.fromisoformat(str(updated_at).replace("Z", "+00:00"))
-                            if updated_dt.tzinfo is None:
-                                updated_dt = updated_dt.replace(tzinfo=timezone.utc)
-                            if datetime.now(timezone.utc) - updated_dt > timedelta(hours=2):
-                                effective_status = "error"
-                        except Exception:
-                            pass
-
                 platforms.append({
                     "id": pid,
                     "name": name,
-                    "slug": slug,
-                    "center_account_id": p_center_account_id,
-                    "center_slug": p_center_slug,
                     "active": active,
                     "upload_locked": bool(upload_locked),
                     "audio_count": audio_count,
@@ -860,17 +607,11 @@ def create_hr_blueprint(socketio):
                     "alerts": alerts,
                     "updated_at": updated_at,
                     "frontend_url": pinfo.get("frontend_url"),
-                    "public_path": _class_public_path(p_center_slug, slug),
-                    "public_url": _class_public_url(pinfo.get("frontend_url"), p_center_slug, slug),
-                    "status": effective_status,
+                    "status": p_status or "ready",
                     "source_formation_id": p_source_formation_id,
                     "source_module_id": p_source_module_id,
                     "source_rncp_code": p_source_rncp_code or "",
                     "source_tp_name": p_source_tp_name or "",
-                    "pipeline_status": p_pipeline_status or "",
-                    "pipeline_auto_pilot_step": p_pipeline_auto_pilot_step or "",
-                    "pipeline_auto_pilot_error": p_pipeline_auto_pilot_error or "",
-                    "pipeline_auto_pilot_enabled": bool(p_pipeline_auto_pilot_enabled),
                     "blob_stats_loaded": include_blob_stats,
                 })
 
@@ -984,7 +725,7 @@ def create_hr_blueprint(socketio):
         if denied:
             return denied
 
-        data = request.get_json(silent=True) or {}
+        data = request.get_json() or {}
         name = data.get("name", "").strip()
         module_id = data.get("module_id")         # NOUVEAU — mode module maître
         formation_id = data.get("formation_id")   # legacy
@@ -1001,38 +742,23 @@ def create_hr_blueprint(socketio):
             conn = get_db_connection()
             cursor = conn.cursor()
 
-            center_account_id = None
-            center_slug = "le-socrate"
-            if session.get("admin_account_type") == "training_center":
-                center_account_id = session.get("admin_account_id")
-                cursor.execute(
-                    "SELECT slug FROM training_center_accounts WHERE id = ?",
-                    (center_account_id,),
-                )
-                row = cursor.fetchone()
-                center_slug = row[0] if row and row[0] else center_slug
-                if center_slug == "le-socrate" and postgres_enabled():
-                    pg_center = get_training_center_by_id(center_account_id)
-                    if pg_center and pg_center["slug"]:
-                        center_slug = pg_center["slug"]
+            # Générer le slug depuis le nom
+            import re
+            slug = re.sub(r'[^a-z0-9]+', '-', name.lower()).strip('-')
 
-            slug = unique_slug(
-                cursor,
-                "platform_config",
-                slugify(name, fallback="formation"),
-                scope_column="center_account_id",
-                scope_value=center_account_id,
-            )
+            # Vérifier unicité du slug
+            cursor.execute("SELECT COUNT(*) FROM platform_config WHERE slug = ?", (slug,))
+            if cursor.fetchone()[0] > 0:
+                conn.close()
+                return jsonify({"success": False, "error": "Ce nom de plateforme existe déjà"}), 409
 
             source_platform_id = None
 
             # Mode module_id (nouveau — priorité sur formation_id si les deux présents)
             if module_id:
-                module_scope_sql, module_scope_params = _module_scope_clause("formation_modules")
                 cursor.execute(
-                    "SELECT source_platform_id, status, source_pipeline_job_id, voice_type "
-                    f"FROM formation_modules WHERE id = ? AND {module_scope_sql}",
-                    [module_id] + module_scope_params,
+                    "SELECT source_platform_id, status, source_pipeline_job_id, voice_type FROM formation_modules WHERE id = ?",
+                    (module_id,),
                 )
                 row = cursor.fetchone()
                 if not row:
@@ -1079,7 +805,6 @@ def create_hr_blueprint(socketio):
                     return jsonify({"success": False, "error": "La formation n'a pas encore de cours générés"}), 400
 
             # Valider le mode new_formation
-            schedule_config_result = None
             if new_formation:
                 tp_name = (new_formation.get("tp_name") or "").strip()
                 rncp_code = (new_formation.get("rncp_code") or "").strip()
@@ -1087,26 +812,6 @@ def create_hr_blueprint(socketio):
                 if not tp_name or not rncp_code or not total_hours:
                     conn.close()
                     return jsonify({"success": False, "error": "tp_name, rncp_code et total_hours requis pour une nouvelle formation"}), 400
-                try:
-                    total_hours = int(total_hours)
-                except (TypeError, ValueError):
-                    conn.close()
-                    return jsonify({"success": False, "error": "total_hours doit être un entier"}), 400
-                from services.formation_pipeline_service import HOURS_PER_DAY
-                if total_hours <= 0 or total_hours % HOURS_PER_DAY != 0:
-                    conn.close()
-                    return jsonify({
-                        "success": False,
-                        "error": f"La durée doit être un multiple de {HOURS_PER_DAY}h : 1 journée = {HOURS_PER_DAY}h.",
-                    }), 400
-                schedule_config = new_formation.get("schedule") or {}
-                if schedule_config:
-                    try:
-                        int(schedule_config.get("total_training_days") or 0)
-                        int(schedule_config.get("weekly_course_count") or 0)
-                    except (TypeError, ValueError):
-                        conn.close()
-                        return jsonify({"success": False, "error": "Planning professeur IA invalide"}), 400
 
             now_str = datetime.now(FRANCE_TZ).strftime("%Y-%m-%d %H:%M:%S")
 
@@ -1117,10 +822,9 @@ def create_hr_blueprint(socketio):
 
             # Insérer la plateforme
             cursor.execute(
-                """INSERT INTO platform_config
-                   (name, upload_locked, updated_at, slug, status, source_formation_id, source_module_id, center_account_id, public_access_enabled)
-                   VALUES (?, 1, ?, ?, ?, ?, ?, ?, 1)""",
-                (name, now_str, slug, initial_status, formation_id, module_id, center_account_id),
+                """INSERT INTO platform_config (name, upload_locked, updated_at, slug, status, source_formation_id, source_module_id)
+                   VALUES (?, 1, ?, ?, ?, ?, ?)""",
+                (name, now_str, slug, initial_status, formation_id, module_id),
             )
             new_id = cursor.lastrowid
 
@@ -1143,19 +847,6 @@ def create_hr_blueprint(socketio):
                 (new_id, default_heure, new_id),
             )
 
-            if new_formation and (new_formation.get("schedule") or None):
-                schedule_config_result = save_course_schedule(
-                    cursor,
-                    new_id,
-                    new_formation.get("schedule"),
-                )
-                if schedule_config_result.get("first_session_at"):
-                    default_heure = schedule_config_result["first_session_at"]
-                    cursor.execute(
-                        "UPDATE cours_config SET heure_debut = ? WHERE platform_id = ?",
-                        (default_heure, new_id),
-                    )
-
             # ─── Plateforme "fait main" — module catalogue auto ──────────────
             # Quand l'admin crée une plateforme VIDE (sans pipeline ni clone),
             # il va y uploader manuellement audios + cours. Ces plateformes
@@ -1164,61 +855,18 @@ def create_hr_blueprint(socketio):
             # et soient supprimables via le bouton catalogue. Pas de
             # source_pipeline_job_id (NULL — distinguable des modules pipeline).
             if not has_content:
-                if center_account_id is None:
-                    cursor.execute(
-                        "SELECT COUNT(*) FROM formation_modules WHERE source_pipeline_job_id IS NULL AND center_account_id IS NULL"
-                    )
-                else:
-                    cursor.execute(
-                        "SELECT COUNT(*) FROM formation_modules WHERE source_pipeline_job_id IS NULL AND center_account_id = ?",
-                        (center_account_id,),
-                    )
+                cursor.execute(
+                    "SELECT COUNT(*) FROM formation_modules WHERE source_pipeline_job_id IS NULL"
+                )
                 n_manual = cursor.fetchone()[0] + 1
                 manual_version = f"manuel-v{n_manual}"
                 cursor.execute(
                     """INSERT INTO formation_modules
-                       (rncp_code, tp_name, version, status, source_pipeline_job_id,
-                        source_platform_id, center_account_id, validated_at)
-                       VALUES (?, ?, ?, 'validated', NULL, ?, ?, ?)""",
-                    (None, name, manual_version, new_id, center_account_id, now_str),
+                       (rncp_code, tp_name, version, status, source_pipeline_job_id, source_platform_id, validated_at)
+                       VALUES (?, ?, ?, 'validated', NULL, ?, ?)""",
+                    (None, name, manual_version, new_id, now_str),
                 )
                 logger.info(f"✏️  Module 'fait main' inscrit au catalogue : {name} ({manual_version}) → P{new_id}")
-
-            postgres_synced = False
-            if postgres_enabled():
-                try:
-                    upsert_platform_config({
-                        "id": new_id,
-                        "center_account_id": center_account_id,
-                        "name": name,
-                        "slug": slug,
-                        "upload_locked": True,
-                        "public_access_enabled": True,
-                        "pdf_filename": None,
-                        "pdf_uploaded_at": None,
-                        "updated_at": now_str,
-                        "playlist_mode": None,
-                        "audio_container": audio_container,
-                        "pdf_container": pdf_container,
-                        "archive_container": archive_container,
-                        "audio_base_url": None,
-                        "status": initial_status,
-                        "source_formation_id": formation_id,
-                        "source_module_id": module_id,
-                    })
-                    upsert_cours_config({
-                        "id": new_id,
-                        "platform_id": new_id,
-                        "heure_debut": default_heure,
-                    })
-                    postgres_synced = True
-                except Exception:
-                    conn.rollback()
-                    logger.exception("❌ Synchronisation Postgres plateforme échouée")
-                    return jsonify({
-                        "success": False,
-                        "error": "Plateforme non créée: synchronisation Postgres impossible",
-                    }), 500
 
             conn.commit()
             conn.close()
@@ -1269,9 +917,10 @@ def create_hr_blueprint(socketio):
 
             # Mode nouvelle formation : créer le job pipeline (l'admin finit les étapes sur /formation-pipeline)
             elif new_formation:
+                import math
                 from services.formation_pipeline_service import create_job, HOURS_PER_DAY
                 th = int(total_hours)
-                nb_days = th // HOURS_PER_DAY
+                nb_days = math.ceil(th / HOURS_PER_DAY)
                 linked_job_id = create_job(
                     platform_id=new_id,
                     tp_name=tp_name,
@@ -1279,51 +928,6 @@ def create_hr_blueprint(socketio):
                     total_hours=th,
                     nb_days=nb_days,
                 )
-                link_updated_at = datetime.now(FRANCE_TZ).strftime("%Y-%m-%d %H:%M:%S")
-                link_conn = get_db_connection()
-                link_cursor = link_conn.cursor()
-                try:
-                    link_cursor.execute(
-                        """
-                        UPDATE platform_config
-                        SET source_formation_id = ?,
-                            updated_at = ?
-                        WHERE id = ?
-                          AND source_formation_id IS NULL
-                        """,
-                        (linked_job_id, link_updated_at, new_id),
-                    )
-                    link_conn.commit()
-                finally:
-                    link_conn.close()
-                if postgres_enabled():
-                    try:
-                        upsert_platform_config({
-                            "id": new_id,
-                            "center_account_id": center_account_id,
-                            "name": name,
-                            "slug": slug,
-                            "upload_locked": True,
-                            "public_access_enabled": True,
-                            "pdf_filename": None,
-                            "pdf_uploaded_at": None,
-                            "updated_at": link_updated_at,
-                            "playlist_mode": None,
-                            "audio_container": audio_container,
-                            "pdf_container": pdf_container,
-                            "archive_container": archive_container,
-                            "audio_base_url": None,
-                            "status": initial_status,
-                            "source_formation_id": linked_job_id,
-                            "source_module_id": module_id,
-                        })
-                    except Exception:
-                        logger.warning(
-                            "⚠️ Synchronisation Postgres du lien source_formation_id ignorée P%s job=%s",
-                            new_id,
-                            linked_job_id,
-                            exc_info=True,
-                        )
                 logger.info(f"🚀 Pipeline formation job {linked_job_id} initié pour plateforme {new_id} — l'admin doit continuer sur /formation-pipeline")
 
             logger.info(f"✅ Plateforme {new_id} '{name}' créée (status={initial_status}) avec containers: {containers_created}")
@@ -1334,19 +938,14 @@ def create_hr_blueprint(socketio):
                     "id": new_id,
                     "name": name,
                     "slug": slug,
-                    "center_slug": center_slug,
-                    "public_path": _class_public_path(center_slug, slug),
-                    "public_url": _class_public_url(_get_platform_info(new_id).get("frontend_url"), center_slug, slug),
                     "status": initial_status,
                     "source_formation_id": formation_id,
                     "source_module_id": module_id,
                     "pipeline_job_id": linked_job_id,
-                    "schedule": schedule_config_result,
                     "audio_container": audio_container,
                     "pdf_container": pdf_container,
                     "archive_container": archive_container,
                     "containers_created": containers_created,
-                    "postgres_synced": postgres_synced,
                 },
             }), 201
 
@@ -1459,12 +1058,6 @@ def create_hr_blueprint(socketio):
             )
             cursor.execute("DELETE FROM cours_folders WHERE platform_id = ?", (platform_id,))
             cursor.execute("DELETE FROM cours_config WHERE platform_id = ?", (platform_id,))
-            cursor.execute("DELETE FROM course_sessions WHERE platform_id = ?", (platform_id,))
-            cursor.execute("DELETE FROM course_schedule_config WHERE platform_id = ?", (platform_id,))
-            _ensure_student_attendance_records(cursor)
-            cursor.execute("DELETE FROM student_attendance_records WHERE platform_id = ?", (platform_id,))
-            _ensure_course_reminder_recipients(cursor)
-            cursor.execute("DELETE FROM course_reminder_recipients WHERE platform_id = ?", (platform_id,))
 
             # 4a. Modules "fait main" liés (la plateforme EST le module) → DELETE
             cursor.execute(
@@ -2202,24 +1795,13 @@ def create_hr_blueprint(socketio):
 
         if _is_local_platform(platform_id):
             try:
-                conn = get_db_connection()
-                cursor = conn.cursor()
-                schedule_summary = get_course_schedule_summary(cursor, platform_id)
-                conn.close()
                 from services.time_service import get_heure_debut_cours
                 heure = get_heure_debut_cours(platform_id)
-                payload = {
+                return jsonify({
                     "success": True,
                     "date_cours": heure.strftime("%Y-%m-%d"),
                     "heure_cours": heure.strftime("%H:%M"),
-                    "has_schedule": bool(schedule_summary),
-                }
-                if schedule_summary:
-                    payload.update({
-                        "heure_cours": schedule_summary.get("start_time") or payload["heure_cours"],
-                        "schedule": schedule_summary,
-                    })
-                return jsonify(payload), 200
+                }), 200
             except Exception as e:
                 return jsonify({"success": False, "error": str(e)}), 500
         else:
@@ -2230,470 +1812,6 @@ def create_hr_blueprint(socketio):
                 return jsonify({"success": False, "error": "Plateforme non configurée"}), 400
             return jsonify(result), 200
 
-    def _ensure_course_reminder_recipients(cursor):
-        cursor.execute(
-            """
-            CREATE TABLE IF NOT EXISTS course_reminder_recipients (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                platform_id INTEGER NOT NULL,
-                email TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                UNIQUE(platform_id, email)
-            )
-            """
-        )
-        cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_course_reminder_recipients_platform ON course_reminder_recipients(platform_id)"
-        )
-
-    def _attendance_record_from_logs(log_rows):
-        slots = []
-        total = 0
-        for arrivee, depart in log_rows:
-            if not arrivee or not depart:
-                continue
-            try:
-                start = str(arrivee)[11:16]
-                end = str(depart)[11:16]
-                start_minutes = _time_to_minutes(start)
-                end_minutes = _time_to_minutes(end)
-                if end_minutes <= start_minutes:
-                    continue
-            except Exception:
-                continue
-            slots.append({"start": start, "end": end})
-            total += end_minutes - start_minutes
-        return {
-            "id": None,
-            "slots": slots,
-            "total_minutes": total,
-            "status": "present" if total > 0 else "absent",
-            "notes": "",
-            "source": "logs" if slots else "empty",
-        }
-
-    @hr_bp.route("/api/hr/platforms/<int:platform_id>/attendance", methods=["GET"])
-    def get_platform_attendance(platform_id):
-        denied = _require_admin()
-        if denied:
-            return denied
-        try:
-            course_date = _parse_course_date(request.args.get("course_date"))
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            _ensure_student_attendance_records(cursor)
-
-            platform = _get_accessible_platform(cursor, platform_id)
-            if not platform:
-                conn.close()
-                return jsonify({"success": False, "error": "Plateforme introuvable"}), 404
-
-            cursor.execute(
-                """
-                SELECT id, email, nom, prenom, is_active
-                FROM student_profiles
-                WHERE platform_id = ?
-                ORDER BY prenom COLLATE NOCASE, nom COLLATE NOCASE, email COLLATE NOCASE
-                """,
-                (platform_id,),
-            )
-            student_rows = cursor.fetchall()
-            student_ids = [row[0] for row in student_rows]
-
-            saved_by_student = {}
-            if student_ids:
-                placeholders = ",".join("?" for _ in student_ids)
-                cursor.execute(
-                    f"""
-                    SELECT id, platform_id, student_profile_id, course_date, slots_json,
-                           total_minutes, status, notes, created_at, updated_at
-                    FROM student_attendance_records
-                    WHERE platform_id = ?
-                      AND course_date = ?
-                      AND student_profile_id IN ({placeholders})
-                    """,
-                    [platform_id, course_date] + student_ids,
-                )
-                saved_by_student = {
-                    row[2]: _serialize_attendance_row(row)
-                    for row in cursor.fetchall()
-                }
-
-            cursor.execute(
-                """
-                SELECT nom, prenom, arrivee, depart
-                FROM logs
-                WHERE platform_id = ?
-                  AND substr(arrivee, 1, 10) = ?
-                ORDER BY arrivee ASC
-                """,
-                (platform_id, course_date),
-            )
-            logs_by_name = {}
-            for nom, prenom, arrivee, depart in cursor.fetchall():
-                key = (str(nom or "").strip().lower(), str(prenom or "").strip().lower())
-                logs_by_name.setdefault(key, []).append((arrivee, depart))
-
-            cursor.execute(
-                """
-                SELECT student_profile_id, SUM(total_minutes), COUNT(DISTINCT course_date), MAX(course_date)
-                FROM student_attendance_records
-                WHERE platform_id = ?
-                GROUP BY student_profile_id
-                """,
-                (platform_id,),
-            )
-            totals_by_student = {
-                row[0]: {
-                    "total_minutes": int(row[1] or 0),
-                    "recorded_days": int(row[2] or 0),
-                    "last_course_date": row[3],
-                }
-                for row in cursor.fetchall()
-            }
-
-            cursor.execute(
-                """
-                SELECT course_date, COUNT(*), SUM(total_minutes)
-                FROM student_attendance_records
-                WHERE platform_id = ?
-                GROUP BY course_date
-                ORDER BY course_date DESC
-                LIMIT 20
-                """,
-                (platform_id,),
-            )
-            recent_dates = [
-                {
-                    "course_date": row[0],
-                    "student_count": int(row[1] or 0),
-                    "total_minutes": int(row[2] or 0),
-                }
-                for row in cursor.fetchall()
-            ]
-
-            cursor.execute(
-                """
-                SELECT course_date, COUNT(*), SUM(total_minutes)
-                FROM student_attendance_records
-                WHERE platform_id = ?
-                GROUP BY course_date
-                ORDER BY course_date DESC
-                LIMIT 120
-                """,
-                (platform_id,),
-            )
-            weeks_by_start = {}
-            for course_date_row, student_count, total_minutes in cursor.fetchall():
-                week_start, week_end = _attendance_week_bounds(course_date_row)
-                week = weeks_by_start.setdefault(week_start, {
-                    "week_start": week_start,
-                    "week_end": week_end,
-                    "date_count": 0,
-                    "student_count": 0,
-                    "total_minutes": 0,
-                })
-                week["date_count"] += 1
-                week["student_count"] += int(student_count or 0)
-                week["total_minutes"] += int(total_minutes or 0)
-            recent_weeks = sorted(
-                weeks_by_start.values(),
-                key=lambda item: item["week_start"],
-                reverse=True,
-            )[:12]
-            conn.close()
-
-            students = []
-            for row in student_rows:
-                student_id, email, nom, prenom, is_active = row
-                attendance = saved_by_student.get(student_id)
-                if not attendance:
-                    key = (str(nom or "").strip().lower(), str(prenom or "").strip().lower())
-                    attendance = {
-                        "platform_id": platform_id,
-                        "student_profile_id": student_id,
-                        "course_date": course_date,
-                        **_attendance_record_from_logs(logs_by_name.get(key, [])),
-                    }
-                students.append({
-                    "id": student_id,
-                    "email": email,
-                    "nom": nom,
-                    "prenom": prenom,
-                    "is_active": bool(is_active),
-                    "attendance": attendance,
-                    "totals": totals_by_student.get(student_id, {
-                        "total_minutes": 0,
-                        "recorded_days": 0,
-                        "last_course_date": None,
-                    }),
-                })
-
-            return jsonify({
-                "success": True,
-                "platform": {"id": platform[0], "name": platform[1]},
-                "course_date": course_date,
-                "students": students,
-                "recent_dates": recent_dates,
-                "recent_weeks": recent_weeks,
-            }), 200
-        except ValueError as exc:
-            return jsonify({"success": False, "error": str(exc)}), 400
-        except Exception as e:
-            logger.error(f"❌ Erreur get attendance P{platform_id}: {e}")
-            return jsonify({"success": False, "error": str(e)}), 500
-
-    @hr_bp.route("/api/hr/platforms/<int:platform_id>/attendance/<int:student_id>", methods=["POST"])
-    def save_student_attendance(platform_id, student_id):
-        denied = _require_admin()
-        if denied:
-            return denied
-        try:
-            data = request.get_json(silent=True) or {}
-            course_date = _parse_course_date(data.get("course_date"))
-            slots, total_minutes = _normalize_attendance_slots(data.get("slots") or [])
-            requested_status = str(data.get("status") or "").strip().lower()
-            allowed_statuses = {"present", "partial", "absent", "excused"}
-            if requested_status not in allowed_statuses:
-                requested_status = "present" if total_minutes > 0 else "absent"
-            if total_minutes == 0 and requested_status == "present":
-                requested_status = "absent"
-            notes = str(data.get("notes") or "").strip()[:1000]
-            now = _now_str()
-
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            _ensure_student_attendance_records(cursor)
-            platform = _get_accessible_platform(cursor, platform_id)
-            if not platform:
-                conn.close()
-                return jsonify({"success": False, "error": "Plateforme introuvable"}), 404
-            cursor.execute(
-                "SELECT id FROM student_profiles WHERE id = ? AND platform_id = ?",
-                (student_id, platform_id),
-            )
-            if not cursor.fetchone():
-                conn.close()
-                return jsonify({"success": False, "error": "Élève introuvable"}), 404
-
-            cursor.execute(
-                """
-                INSERT INTO student_attendance_records
-                    (platform_id, student_profile_id, course_date, slots_json, total_minutes, status, notes, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(platform_id, student_profile_id, course_date)
-                DO UPDATE SET
-                    slots_json = excluded.slots_json,
-                    total_minutes = excluded.total_minutes,
-                    status = excluded.status,
-                    notes = excluded.notes,
-                    updated_at = excluded.updated_at
-                """,
-                (
-                    platform_id,
-                    student_id,
-                    course_date,
-                    json.dumps(slots, ensure_ascii=False),
-                    total_minutes,
-                    requested_status,
-                    notes,
-                    now,
-                    now,
-                ),
-            )
-            conn.commit()
-            cursor.execute(
-                """
-                SELECT id, platform_id, student_profile_id, course_date, slots_json,
-                       total_minutes, status, notes, created_at, updated_at
-                FROM student_attendance_records
-                WHERE platform_id = ? AND student_profile_id = ? AND course_date = ?
-                """,
-                (platform_id, student_id, course_date),
-            )
-            record = _serialize_attendance_row(cursor.fetchone())
-            conn.close()
-            return jsonify({"success": True, "record": record}), 200
-        except ValueError as exc:
-            return jsonify({"success": False, "error": str(exc)}), 400
-        except Exception as e:
-            logger.error(f"❌ Erreur save attendance P{platform_id} S{student_id}: {e}")
-            return jsonify({"success": False, "error": str(e)}), 500
-
-    @hr_bp.route("/api/hr/platforms/<int:platform_id>/attendance/export", methods=["GET"])
-    def export_platform_attendance(platform_id):
-        denied = _require_admin()
-        if denied:
-            return denied
-        try:
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            _ensure_student_attendance_records(cursor)
-            platform = _get_accessible_platform(cursor, platform_id)
-            if not platform:
-                conn.close()
-                return jsonify({"success": False, "error": "Plateforme introuvable"}), 404
-            week_start = request.args.get("week_start")
-            week_end = request.args.get("week_end")
-            where_sql = "ar.platform_id = ?"
-            query_params = [platform_id]
-            export_label = ""
-            if week_start or week_end:
-                start_date = _parse_course_date(week_start)
-                end_date = _parse_course_date(week_end or week_start)
-                if end_date < start_date:
-                    start_date, end_date = end_date, start_date
-                where_sql += " AND ar.course_date BETWEEN ? AND ?"
-                query_params.extend([start_date, end_date])
-                export_label = f"-semaine-{start_date}"
-            cursor.execute(
-                f"""
-                SELECT ar.course_date, sp.nom, sp.prenom, sp.email, ar.status,
-                       ar.slots_json, ar.total_minutes, ar.notes
-                FROM student_attendance_records ar
-                JOIN student_profiles sp ON sp.id = ar.student_profile_id
-                WHERE {where_sql}
-                ORDER BY ar.course_date ASC, sp.nom COLLATE NOCASE, sp.prenom COLLATE NOCASE
-                """,
-                query_params,
-            )
-            records = []
-            for course_date, nom, prenom, email, status, slots_json, total_minutes, notes in cursor.fetchall():
-                try:
-                    slots = json.loads(slots_json or "[]")
-                except Exception:
-                    slots = []
-                records.append({
-                    "course_date": course_date,
-                    "nom": nom,
-                    "prenom": prenom,
-                    "email": email,
-                    "status": status,
-                    "slots": slots,
-                    "total_minutes": int(total_minutes or 0),
-                    "notes": notes or "",
-                })
-            conn.close()
-            tmp_file = generate_attendance_excel_export(records, platform_name=platform[1])
-            filename = f"presences-{slugify(platform[1], fallback=f'plateforme-{platform_id}')}{export_label}.xlsx"
-            return send_file(
-                tmp_file,
-                as_attachment=True,
-                download_name=filename,
-                mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            )
-        except Exception as e:
-            logger.error(f"❌ Erreur export attendance P{platform_id}: {e}")
-            return jsonify({"success": False, "error": str(e)}), 500
-
-    @hr_bp.route("/api/hr/platforms/<int:platform_id>/student-emails", methods=["GET"])
-    def get_platform_student_emails(platform_id):
-        denied = _require_admin()
-        if denied:
-            return denied
-        try:
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            _ensure_course_reminder_recipients(cursor)
-            cursor.execute(
-                """
-                SELECT id, email, created_at
-                FROM course_reminder_recipients
-                WHERE platform_id = ?
-                ORDER BY email COLLATE NOCASE
-                """,
-                (platform_id,),
-            )
-            recipients = [
-                {"id": row[0], "email": row[1], "created_at": row[2]}
-                for row in cursor.fetchall()
-            ]
-            conn.close()
-            return jsonify({"success": True, "recipients": recipients}), 200
-        except Exception as e:
-            logger.error(f"❌ Erreur get student emails P{platform_id}: {e}")
-            return jsonify({"success": False, "error": str(e)}), 500
-
-    @hr_bp.route("/api/hr/platforms/<int:platform_id>/student-emails", methods=["POST"])
-    def add_platform_student_emails(platform_id):
-        denied = _require_admin()
-        if denied:
-            return denied
-        data = request.get_json(silent=True) or {}
-        raw_emails = data.get("emails")
-        if raw_emails is None:
-            raw_emails = data.get("email", "")
-        if isinstance(raw_emails, str):
-            candidates = raw_emails.replace(";", ",").replace("\n", ",").split(",")
-        else:
-            candidates = raw_emails or []
-        emails = []
-        for item in candidates:
-            email = str(item or "").strip().lower()
-            if not email:
-                continue
-            if "@" not in email or "." not in email.rsplit("@", 1)[-1]:
-                return jsonify({"success": False, "error": f"Email invalide: {email}"}), 400
-            if email not in emails:
-                emails.append(email)
-        if not emails:
-            return jsonify({"success": False, "error": "Ajoute au moins un email"}), 400
-        try:
-            now = datetime.now(FRANCE_TZ).strftime("%Y-%m-%d %H:%M:%S")
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            _ensure_course_reminder_recipients(cursor)
-            for email in emails:
-                cursor.execute(
-                    """
-                    INSERT OR IGNORE INTO course_reminder_recipients (platform_id, email, created_at)
-                    VALUES (?, ?, ?)
-                    """,
-                    (platform_id, email, now),
-                )
-            conn.commit()
-            cursor.execute(
-                """
-                SELECT id, email, created_at
-                FROM course_reminder_recipients
-                WHERE platform_id = ?
-                ORDER BY email COLLATE NOCASE
-                """,
-                (platform_id,),
-            )
-            recipients = [
-                {"id": row[0], "email": row[1], "created_at": row[2]}
-                for row in cursor.fetchall()
-            ]
-            conn.close()
-            return jsonify({"success": True, "recipients": recipients}), 201
-        except Exception as e:
-            logger.error(f"❌ Erreur add student emails P{platform_id}: {e}")
-            return jsonify({"success": False, "error": str(e)}), 500
-
-    @hr_bp.route("/api/hr/platforms/<int:platform_id>/student-emails/<int:recipient_id>", methods=["DELETE"])
-    def delete_platform_student_email(platform_id, recipient_id):
-        denied = _require_admin()
-        if denied:
-            return denied
-        try:
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            _ensure_course_reminder_recipients(cursor)
-            cursor.execute(
-                "DELETE FROM course_reminder_recipients WHERE id = ? AND platform_id = ?",
-                (recipient_id, platform_id),
-            )
-            changed = cursor.rowcount
-            conn.commit()
-            conn.close()
-            if not changed:
-                return jsonify({"success": False, "error": "Email introuvable"}), 404
-            return jsonify({"success": True}), 200
-        except Exception as e:
-            logger.error(f"❌ Erreur delete student email P{platform_id}: {e}")
-            return jsonify({"success": False, "error": str(e)}), 500
-
     # ─── POST /api/hr/platforms/<id>/config-cours ─────────────────────────
     @hr_bp.route("/api/hr/platforms/<int:platform_id>/config-cours", methods=["POST"])
     def proxy_config_cours(platform_id):
@@ -2702,55 +1820,15 @@ def create_hr_blueprint(socketio):
         if denied:
             return denied
 
-        data = request.get_json(silent=True) or {}
+        data = request.get_json()
         date_str = (data or {}).get("date_cours", "").strip()
         heure_str = (data or {}).get("heure_cours", "").strip()
-        weekdays = data.get("weekdays") if "weekdays" in data else None
-        if not heure_str:
-            return jsonify({"success": False, "error": "heure_cours requis"}), 400
+        if not date_str or not heure_str:
+            return jsonify({"success": False, "error": "date_cours et heure_cours requis"}), 400
 
         if _is_local_platform(platform_id):
             # Appel direct au service local
-            conn = None
             try:
-                conn = get_db_connection()
-                cursor = conn.cursor()
-                schedule_update = update_course_schedule(
-                    cursor,
-                    platform_id,
-                    start_time=heure_str,
-                    weekdays=weekdays,
-                )
-                if schedule_update:
-                    conn.commit()
-                    conn.close()
-                    return jsonify({
-                        "success": True,
-                        "message": "Planning des journées mis à jour",
-                        "schedule": schedule_update,
-                    }), 200
-                cursor.execute("SELECT COUNT(*) FROM cours_folders WHERE platform_id = ?", (platform_id,))
-                folder_count = int((cursor.fetchone() or [0])[0] or 0)
-                schedule_update = create_missing_course_schedule(
-                    cursor,
-                    platform_id,
-                    total_training_days=folder_count,
-                    start_time=heure_str,
-                    date_str=date_str or None,
-                    weekdays=weekdays,
-                )
-                if schedule_update:
-                    conn.commit()
-                    conn.close()
-                    return jsonify({
-                        "success": True,
-                        "message": "Planning des journées créé",
-                        "schedule": schedule_update,
-                    }), 200
-                conn.close()
-
-                if not date_str:
-                    return jsonify({"success": False, "error": "date_cours requis pour une plateforme sans planning automatique"}), 400
                 from services.time_service import set_heure_debut_cours
                 if heure_str.count(':') == 1:
                     datetime_str = f"{date_str} {heure_str}:00"
@@ -2763,13 +1841,7 @@ def create_hr_blueprint(socketio):
                     "success": True,
                     "message": f"Cours programmé pour le {date_str} à {heure_str}",
                 }), 200
-            except ValueError as e:
-                if conn:
-                    conn.close()
-                return jsonify({"success": False, "error": str(e)}), 400
             except Exception as e:
-                if conn:
-                    conn.close()
                 logger.error(f"❌ Erreur config-cours P{platform_id}: {e}")
                 return jsonify({"success": False, "error": str(e)}), 500
         else:
@@ -2796,10 +1868,6 @@ def create_hr_blueprint(socketio):
         Corps JSON optionnel pour surcharger :
           { "schedule": [{"platform_id": 1, "weekday": 4, "hour": 9}] }
           weekday : 0=lundi, 1=mardi, 2=mercredi, 3=jeudi, 4=vendredi, 5=samedi, 6=dimanche
-
-        Sans corps `schedule`, utilise le planning persistant créé par le flow
-        "Nouveau professeur IA", pousse la prochaine séance dans cours_config,
-        puis lance l'audio uniquement pour les séances dues dans la fenêtre 24h.
         """
         api_key = request.headers.get("X-Platform-Key", "")
         expected_key = os.environ.get("PLATFORM_API_KEY", "")
@@ -2813,25 +1881,7 @@ def create_hr_blueprint(socketio):
             {"platform_id": 4, "weekday": 3, "hour": 9},  # jeudi
         ]
 
-        data = request.get_json(silent=True) or {}
-        if "schedule" not in data:
-            try:
-                results = run_scheduler_tick(data.get("platform_ids"))
-                audio_results = process_due_audio_generations(
-                    data.get("platform_ids"),
-                    dry_run=bool(data.get("dry_run_audio", False)),
-                    horizon_hours=data.get("audio_horizon_hours"),
-                )
-                return jsonify({
-                    "success": True,
-                    "mode": "course_sessions",
-                    "results": results,
-                    "audio_results": audio_results,
-                }), 200
-            except Exception as e:
-                logger.error(f"❌ Auto-schedule course_sessions : {e}")
-                return jsonify({"success": False, "error": str(e)}), 500
-
+        data = request.get_json() or {}
         schedule = data.get("schedule", DEFAULT_SCHEDULE)
 
         today = datetime.now(FRANCE_TZ)
@@ -2881,41 +1931,6 @@ def create_hr_blueprint(socketio):
         all_ok = all(r["success"] for r in results)
         return jsonify({"success": all_ok, "results": results}), 200
 
-    @hr_bp.route("/api/internal/reminders/tick", methods=["POST"])
-    def reminders_tick():
-        """Traite les rappels élèves dus.
-
-        Le backend calcule les rappels depuis course_sessions :
-        - veille au soir (18h par défaut)
-        - 5 minutes avant le cours
-
-        Si REMINDER_WEBHOOK_URL est configuré, il poste les rappels dessus et
-        marque les séances comme envoyées. Sinon, `dry_run=true` permet de
-        récupérer les rappels dus sans mutation pour brancher l'automatisation
-        existante.
-        """
-        api_key = request.headers.get("X-Platform-Key", "")
-        expected_key = os.environ.get("PLATFORM_API_KEY", "")
-        if not expected_key or api_key != expected_key:
-            return jsonify({"success": False, "error": "Clé invalide"}), 403
-
-        data = request.get_json(silent=True) or {}
-        origin = (
-            data.get("frontend_url")
-            or os.environ.get("FRONTEND_PUBLIC_URL")
-            or os.environ.get("PLATFORM_1_FRONTEND_URL")
-            or request.headers.get("Origin")
-        )
-        dry_run = bool(data.get("dry_run", False))
-
-        try:
-            results = process_due_reminders(base_url=origin, dry_run=dry_run)
-            all_ok = all(item.get("success") for item in results)
-            return jsonify({"success": all_ok, "results": results}), 200
-        except Exception as e:
-            logger.error(f"❌ Reminders tick : {e}")
-            return jsonify({"success": False, "error": str(e)}), 500
-
     # ─── GET /api/hr/platforms/<id>/backup-status ─────────────────────────
     @hr_bp.route("/api/hr/platforms/<int:platform_id>/backup-status", methods=["GET"])
     def backup_status(platform_id):
@@ -2945,12 +1960,55 @@ def create_hr_blueprint(socketio):
             return denied
 
         try:
-            result = list_course_folder_rows_for_platform(platform_id)
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            effective_platform_id = platform_id
+            cursor.execute(
+                "SELECT COUNT(*) FROM cours_folders WHERE platform_id = ?",
+                (platform_id,),
+            )
+            direct_count = cursor.fetchone()[0]
+            if direct_count == 0:
+                cursor.execute(
+                    """
+                    SELECT pc.id
+                    FROM platform_config pc
+                    JOIN cours_folders cf ON cf.platform_id = pc.id
+                    WHERE pc.source_formation_id = ?
+                    GROUP BY pc.id
+                    ORDER BY pc.id DESC
+                    LIMIT 1
+                    """,
+                    (platform_id,),
+                )
+                source_row = cursor.fetchone()
+                if source_row:
+                    effective_platform_id = source_row[0]
+
+            cursor.execute(f"""
+                SELECT
+                    cf.id,
+                    cf.name,
+                    cf.created_at,
+                    CASE
+                        WHEN SUM(CASE WHEN {_FINAL_SCRIPT_DOC_WHERE} THEN 1 ELSE 0 END) > 0
+                        THEN 1
+                        ELSE COUNT(cd.id)
+                    END as document_count,
+                    cf.position
+                FROM cours_folders cf
+                LEFT JOIN cours_documents cd ON cf.id = cd.folder_id
+                WHERE cf.platform_id = ?
+                GROUP BY cf.id
+                ORDER BY cf.position ASC, cf.created_at ASC
+            """, (effective_platform_id,))
+            folders = [{"id": row[0], "name": row[1], "created_at": row[2], "document_count": row[3], "position": row[4]} for row in cursor.fetchall()]
+            conn.close()
             return jsonify({
                 "success": True,
-                "folders": result["folders"],
-                "platform_id": result["platform_id"],
-                "source_platform_id": result["source_platform_id"],
+                "folders": folders,
+                "platform_id": platform_id,
+                "source_platform_id": effective_platform_id if effective_platform_id != platform_id else None,
             }), 200
         except Exception as e:
             logger.error(f"❌ Erreur get_cours_folders: {e}")
@@ -3630,24 +2688,27 @@ def create_hr_blueprint(socketio):
             get_course_script_plan_for_ui,
             get_job_from_db,
         )
-        from repositories.pipeline_repository import list_completed_content_segment_rows
         job = get_job_from_db(folder_id)
         if not job:
             return jsonify({"success": False, "error": "Aucun job pour ce dossier"}), 404
 
-        rows = list_completed_content_segment_rows(job["id"])
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT sub_part_index, sub_part_name, passe, text_content, word_count
+            FROM content_generation_segments
+            WHERE job_id = ? AND status = 'completed'
+            ORDER BY sub_part_index ASC, passe ASC
+        """, (job["id"],))
+        rows = cursor.fetchall()
+        conn.close()
 
         if not rows:
             return jsonify({"success": False, "error": "Aucun segment généré"}), 404
 
         # Grouper par sous-partie
         sub_parts_data = {}
-        for row in rows:
-            sub_idx = row["sub_part_index"]
-            sub_name = row["sub_part_name"]
-            passe = row["passe"]
-            text = row["text_content"]
-            word_count = row["word_count"] or 0
+        for sub_idx, sub_name, passe, text, word_count in rows:
             if sub_idx not in sub_parts_data:
                 sub_parts_data[sub_idx] = {"name": sub_name, "passes": {}, "total_words": 0}
             sub_parts_data[sub_idx]["passes"][passe] = {"text": text, "word_count": word_count}
@@ -4190,9 +3251,6 @@ def create_hr_blueprint(socketio):
         conn = get_db_connection()
         cursor = conn.cursor()
         try:
-            cursor.execute("SELECT center_account_id FROM platform_config WHERE id = ?", (platform_id,))
-            center_row = cursor.fetchone()
-            center_account_id = center_row[0] if center_row else None
             cursor.execute(
                 "UPDATE platform_config SET status = 'ready' WHERE id = ? AND status = 'pending'",
                 (platform_id,),
@@ -4208,27 +3266,27 @@ def create_hr_blueprint(socketio):
                     """
                     UPDATE formation_modules
                     SET source_platform_id = COALESCE(source_platform_id, ?),
-                        center_account_id = COALESCE(center_account_id, ?),
                         voice_type = ?,
                         voice_updated_at = CURRENT_TIMESTAMP,
                         status = 'validated',
                         validated_at = COALESCE(validated_at, CURRENT_TIMESTAMP)
                     WHERE id = ?
                     """,
-                    (platform_id, center_account_id, voice_type, module_id),
+                    (platform_id, voice_type, module_id),
                 )
                 module_created = False
             else:
-                n = _module_version_count(cursor, rncp or "", center_account_id) + 1
+                cursor.execute("SELECT COUNT(*) FROM formation_modules WHERE rncp_code = ?", (rncp or "",))
+                n = cursor.fetchone()[0] + 1
                 version = f"{datetime.now(FRANCE_TZ).year}-v{n}"
                 cursor.execute(
                     """
                     INSERT INTO formation_modules
                     (rncp_code, tp_name, version, status, source_pipeline_job_id,
-                     source_platform_id, center_account_id, voice_type, voice_updated_at, validated_at)
-                    VALUES (?, ?, ?, 'validated', ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                     source_platform_id, voice_type, voice_updated_at, validated_at)
+                    VALUES (?, ?, ?, 'validated', ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
                     """,
-                    (rncp or "", tp_name or f"Job {formation_job_id}", version, formation_job_id, platform_id, center_account_id, voice_type),
+                    (rncp or "", tp_name or f"Job {formation_job_id}", version, formation_job_id, platform_id, voice_type),
                 )
                 module_id = cursor.lastrowid
                 module_created = True
@@ -4257,11 +3315,16 @@ def create_hr_blueprint(socketio):
 
         try:
             # Vérifier que le dossier existe et récupérer le platform_id
-            folder = get_course_folder_identity(folder_id)
-            if not folder:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute("SELECT platform_id FROM cours_folders WHERE id = ?", (folder_id,))
+            row = cursor.fetchone()
+            conn.close()
+
+            if not row:
                 return jsonify({"success": False, "error": "Dossier introuvable"}), 404
 
-            platform_id = int(folder["platform_id"])
+            platform_id = row[0]
 
             # Vérifier qu'il n'y a pas déjà une pipeline en cours
             if folder_id in _playlist_jobs and _playlist_jobs[folder_id].get("status") == "running":
@@ -4400,13 +3463,7 @@ def create_hr_blueprint(socketio):
                         publish_filenames = None
                         if has_script and not playlist_mock and not include_breaks:
                             publish_filenames = result.get("files") or []
-                        result["publish"] = _publish_playlist_audio_to_platform(
-                            platform_id,
-                            folder_id,
-                            publish_filenames,
-                            archive_existing=True,
-                            archive_reason=f"folder-{folder_id}-playlist",
-                        )
+                        result["publish"] = _publish_playlist_audio_to_platform(platform_id, folder_id, publish_filenames)
                     except Exception as publish_error:
                         logger.error(f"❌ Publication playlist P{platform_id}/F{folder_id} échouée: {publish_error}")
                         result["publish"] = {"published": [], "publish_errors": [{"error": str(publish_error)}]}
@@ -4444,10 +3501,15 @@ def create_hr_blueprint(socketio):
             return denied
 
         try:
-            folder = get_course_folder_identity(folder_id)
-            if not folder:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute("SELECT platform_id FROM cours_folders WHERE id = ?", (folder_id,))
+            row = cursor.fetchone()
+            conn.close()
+
+            if not row:
                 return jsonify({"success": False, "error": "Dossier introuvable"}), 404
-            platform_id = int(folder["platform_id"])
+            platform_id = row[0]
 
             if folder_id in _playlist_jobs and _playlist_jobs[folder_id].get("status") == "running":
                 return jsonify({
@@ -4579,58 +3641,6 @@ def create_hr_blueprint(socketio):
             logger.error(f"❌ Erreur generate_playlist_item: {e}")
             return jsonify({"success": False, "error": str(e)}), 500
 
-    @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/repair-audio-sync", methods=["POST"])
-    def repair_audio_sync(folder_id):
-        """Répare la synchro slides/audio depuis les timelines Fish déjà générées."""
-        denied = _require_admin()
-        if denied:
-            return denied
-
-        try:
-            if not get_course_folder_identity(folder_id):
-                return jsonify({"success": False, "error": "Dossier introuvable"}), 404
-
-            if folder_id in _playlist_jobs and _playlist_jobs[folder_id].get("status") == "running":
-                return jsonify({
-                    "success": False,
-                    "error": "Une génération est déjà en cours pour ce dossier"
-                }), 409
-
-            req_body = request.get_json(silent=True) or {}
-            dry_run = bool(req_body.get("dry_run", False))
-            _playlist_jobs[folder_id] = {
-                "status": "running",
-                "step": 0,
-                "total_steps": 1,
-                "message": "Réparation synchro slides/audio...",
-                "result": None,
-                "repair_audio_sync": True,
-                "dry_run": dry_run,
-            }
-
-            from services.content_generation_service import repair_audio_sync_from_existing_timelines
-            result = repair_audio_sync_from_existing_timelines(folder_id, dry_run=dry_run)
-            repaired_count = len(result.get("repaired_files") or [])
-            _playlist_jobs[folder_id].update({
-                "status": "completed",
-                "step": 1,
-                "result": result,
-                "message": f"✅ Synchro réparée : {repaired_count} fichier(s)",
-            })
-            return jsonify(result), 200
-
-        except Exception as e:
-            logger.error(f"❌ Erreur repair_audio_sync: {e}")
-            _playlist_jobs[folder_id] = {
-                "status": "error",
-                "step": 0,
-                "total_steps": 1,
-                "message": str(e),
-                "result": None,
-                "repair_audio_sync": True,
-            }
-            return jsonify({"success": False, "error": str(e)}), 500
-
     @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/playlist-script", methods=["GET"])
     def get_playlist_script(folder_id):
         """Retourne le script reformulé par Claude pour un dossier."""
@@ -4639,11 +3649,16 @@ def create_hr_blueprint(socketio):
             return denied
 
         try:
-            folder = get_course_folder_identity(folder_id)
-            if not folder:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute("SELECT platform_id FROM cours_folders WHERE id = ?", (folder_id,))
+            row = cursor.fetchone()
+            conn.close()
+
+            if not row:
                 return jsonify({"success": False, "error": "Dossier introuvable"}), 404
 
-            platform_id = int(folder["platform_id"])
+            platform_id = row[0]
 
             from services.azure_blob_service import download_blob, CONTAINER_AUDIOS
             import json as _json
@@ -4681,11 +3696,16 @@ def create_hr_blueprint(socketio):
             return denied
 
         try:
-            folder = get_course_folder_identity(folder_id)
-            if not folder:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute("SELECT platform_id FROM cours_folders WHERE id = ?", (folder_id,))
+            row = cursor.fetchone()
+            conn.close()
+
+            if not row:
                 return jsonify({"success": False, "error": "Dossier introuvable"}), 404
 
-            platform_id = int(folder["platform_id"])
+            platform_id = row[0]
             tts_conn = os.environ.get("AZURE_TTS_STORAGE_CONNECTION_STRING")
             if not tts_conn:
                 return jsonify({"success": True, "audios": []}), 200
@@ -4785,10 +3805,14 @@ def create_hr_blueprint(socketio):
         return f"platform-{platform_id}/folder-{folder_id}/playlist/{filename}"
 
     def _get_platform_id_for_folder(folder_id):
-        folder = get_course_folder_identity(folder_id)
-        if not folder:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT platform_id FROM cours_folders WHERE id = ?", (folder_id,))
+        row = cursor.fetchone()
+        conn.close()
+        if not row:
             raise ValueError(f"Dossier {folder_id} introuvable")
-        return int(folder["platform_id"])
+        return row[0]
 
     @hr_bp.route("/api/hr/cours-folders/<int:folder_id>/audio-url/<path:filename>", methods=["GET"])
     def get_audio_sas_url(folder_id, filename):
@@ -4803,30 +3827,6 @@ def create_hr_blueprint(socketio):
             if not cs:
                 return jsonify({"success": False, "error": "AZURE_TTS_STORAGE_CONNECTION_STRING manquant"}), 500
             blob_service_client = BlobServiceClient.from_connection_string(cs)
-            blob_client = blob_service_client.get_blob_client(container="audiostts", blob=blob_path)
-            try:
-                props = blob_client.get_blob_properties()
-            except Exception as prop_error:
-                if "BlobNotFound" in str(prop_error) or "The specified blob does not exist" in str(prop_error):
-                    return jsonify({
-                        "success": False,
-                        "error": f"Fichier audio introuvable: {filename}",
-                        "blob_path": blob_path,
-                    }), 404
-                raise
-
-            blob_size = int(props.size or 0)
-            if filename.lower().startswith("cours_") and blob_size < 100_000:
-                return jsonify({
-                    "success": False,
-                    "error": (
-                        f"Fichier audio trop court ou silencieux: {filename} "
-                        f"({blob_size} octets). Relance la génération audio du cours."
-                    ),
-                    "blob_path": blob_path,
-                    "size": blob_size,
-                }), 422
-
             account_name = blob_service_client.account_name
             account_key = blob_service_client.credential.account_key
             expiry = datetime.now(timezone.utc) + timedelta(hours=1)
@@ -4841,13 +3841,7 @@ def create_hr_blueprint(socketio):
                 content_disposition=f'inline; filename="{os.path.basename(filename)}"',
             )
             url = f"https://{account_name}.blob.core.windows.net/audiostts/{blob_path}?{sas_token}"
-            return jsonify({
-                "success": True,
-                "url": url,
-                "size": blob_size,
-                "content_type": props.content_settings.content_type,
-                "content_disposition": props.content_settings.content_disposition,
-            })
+            return jsonify({"success": True, "url": url})
         except Exception as e:
             logger.error(f"❌ get_audio_sas_url: {e}")
             return jsonify({"success": False, "error": str(e)}), 500
@@ -5308,11 +4302,16 @@ def create_hr_blueprint(socketio):
             return denied
 
         try:
-            folder = get_course_folder_identity(folder_id)
-            if not folder:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute("SELECT platform_id FROM cours_folders WHERE id = ?", (folder_id,))
+            row = cursor.fetchone()
+            conn.close()
+
+            if not row:
                 return jsonify({"success": False, "error": "Dossier introuvable"}), 404
 
-            platform_id = int(folder["platform_id"])
+            platform_id = row[0]
 
             from services.playlist_tts_service import count_words_in_folder
             result = count_words_in_folder(platform_id, folder_id)
@@ -5395,10 +4394,6 @@ def create_hr_blueprint(socketio):
             copied_files = []
             errors = []
             copied_names = set()
-            archive_result = archive_public_platform_audios(
-                platform_id,
-                reason=f"fill-from-folder-{folder_id}",
-            )
 
             # Copier les fichiers générés du dossier (cours + Q&A/pauses contextuels)
             for blob in playlist_blobs:
@@ -5443,7 +4438,6 @@ def create_hr_blueprint(socketio):
                 "files": copied_files,
                 "error_details": errors,
                 "folder_name": folder_row[0],
-                "archive": archive_result,
             }), 200
 
         except Exception as e:

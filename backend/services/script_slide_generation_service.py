@@ -18,18 +18,7 @@ import unicodedata
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Iterable
 
-from repositories.pipeline_repository import (
-    ensure_script_slide_decks_table,
-    get_formation_pipeline_job_identity,
-    get_latest_script_slide_deck_row,
-    get_platform_slide_source_refs,
-    get_script_slide_deck_row,
-    get_script_slide_source_row,
-    insert_script_slide_deck,
-    list_completed_content_segment_rows,
-    list_script_slide_deck_rows_for_audio_lookup,
-    update_script_slide_deck_audio_sync_row,
-)
+from database.db import get_db_connection
 from services.content_pipeline.artifacts import (
     CONTENT_COURSE_SCRIPTS_BLOB,
     CONTENT_DRAFT_SECTIONS_BLOB,
@@ -512,7 +501,38 @@ def _ensure_slide_deck_tables() -> None:
     if _SLIDE_DECK_TABLES_READY:
         return
 
-    ensure_script_slide_decks_table()
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS script_slide_decks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            folder_id INTEGER NOT NULL,
+            content_job_id INTEGER NOT NULL,
+            formation_job_id INTEGER,
+            platform_id INTEGER,
+            generation_mode TEXT DEFAULT 'script',
+            pace TEXT,
+            max_slides INTEGER,
+            model TEXT,
+            slides_json TEXT NOT NULL,
+            timeline_json TEXT,
+            stats_json TEXT,
+            pipeline_debug_json TEXT,
+            audio_sync_json TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+    cursor.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_script_slide_decks_folder
+        ON script_slide_decks(folder_id, content_job_id, created_at)
+        """
+    )
+    conn.commit()
+    conn.close()
     _SLIDE_DECK_TABLES_READY = True
 
 
@@ -525,45 +545,57 @@ def _persist_script_slide_deck(
     model: str,
 ) -> int:
     _ensure_slide_deck_tables()
-    return insert_script_slide_deck(
-        folder_id=source["folder_id"],
-        content_job_id=source["content_job_id"],
-        formation_job_id=source.get("formation_job_id"),
-        platform_id=source.get("platform_id"),
-        generation_mode=(result.get("stats") or {}).get("generation_mode") or "script",
-        pace=pace,
-        max_slides=max_slides,
-        model=model,
-        slides_json=_json_dumps(result.get("slides", [])),
-        timeline_json=_json_dumps(result.get("timeline", [])),
-        stats_json=_json_dumps(result.get("stats", {})),
-        pipeline_debug_json=_json_dumps(result.get("pipeline_debug", {})),
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        INSERT INTO script_slide_decks
+        (folder_id, content_job_id, formation_job_id, platform_id, generation_mode,
+         pace, max_slides, model, slides_json, timeline_json, stats_json,
+         pipeline_debug_json)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            source["folder_id"],
+            source["content_job_id"],
+            source.get("formation_job_id"),
+            source.get("platform_id"),
+            (result.get("stats") or {}).get("generation_mode") or "script",
+            pace,
+            max_slides,
+            model,
+            _json_dumps(result.get("slides", [])),
+            _json_dumps(result.get("timeline", [])),
+            _json_dumps(result.get("stats", {})),
+            _json_dumps(result.get("pipeline_debug", {})),
+        ),
     )
+    deck_id = cursor.lastrowid
+    conn.commit()
+    conn.close()
+    return deck_id
 
 
 def _decode_deck_row(row) -> dict | None:
     if not row:
         return None
-
-    def value(key: str, index: int):
-        return row.get(key) if isinstance(row, dict) else row[index]
-
-    deck_id = value("id", 0)
-    folder_id = value("folder_id", 1)
-    content_job_id = value("content_job_id", 2)
-    formation_job_id = value("formation_job_id", 3)
-    platform_id = value("platform_id", 4)
-    pace = value("pace", 5)
-    max_slides = value("max_slides", 6)
-    model = value("model", 7)
-    slides_json = value("slides_json", 8)
-    timeline_json = value("timeline_json", 9)
-    stats_json = value("stats_json", 10)
-    pipeline_debug_json = value("pipeline_debug_json", 11)
-    audio_sync_json = value("audio_sync_json", 12)
-    created_at = value("created_at", 13)
-    updated_at = value("updated_at", 14)
-
+    (
+        deck_id,
+        folder_id,
+        content_job_id,
+        formation_job_id,
+        platform_id,
+        pace,
+        max_slides,
+        model,
+        slides_json,
+        timeline_json,
+        stats_json,
+        pipeline_debug_json,
+        audio_sync_json,
+        created_at,
+        updated_at,
+    ) = row
     stats = json.loads(stats_json or "{}")
     stats["deck_id"] = deck_id
     return {
@@ -587,10 +619,27 @@ def _decode_deck_row(row) -> dict | None:
 
 def get_latest_script_slide_deck(folder_id: int, content_job_id: int | None = None) -> dict | None:
     _ensure_slide_deck_tables()
-    row = get_latest_script_slide_deck_row(
-        folder_id=folder_id,
-        content_job_id=content_job_id,
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    params = [folder_id]
+    where = "folder_id = ?"
+    if content_job_id is not None:
+        where += " AND content_job_id = ?"
+        params.append(content_job_id)
+    cursor.execute(
+        f"""
+        SELECT id, folder_id, content_job_id, formation_job_id, platform_id, pace,
+               max_slides, model, slides_json, timeline_json, stats_json,
+               pipeline_debug_json, audio_sync_json, created_at, updated_at
+        FROM script_slide_decks
+        WHERE {where}
+        ORDER BY id DESC
+        LIMIT 1
+        """,
+        tuple(params),
     )
+    row = cursor.fetchone()
+    conn.close()
     return _decode_deck_row(row)
 
 
@@ -648,23 +697,62 @@ def get_latest_script_slide_deck_for_audio(
     if not target_audio:
         return None
 
+    conn = get_db_connection()
+    cursor = conn.cursor()
     platform_ids = _unique_ints([platform_id])
     job_ids: list[int] = []
 
     if platform_id:
-        row = get_platform_slide_source_refs(platform_id)
+        cursor.execute(
+            """
+            SELECT pc.source_formation_id,
+                   pc.source_module_id,
+                   fm.source_pipeline_job_id,
+                   fm.source_platform_id
+            FROM platform_config pc
+            LEFT JOIN formation_modules fm ON fm.id = pc.source_module_id
+            WHERE pc.id = ?
+            """,
+            (platform_id,),
+        )
+        row = cursor.fetchone()
         if row:
-            source_formation_id = row.get("source_formation_id")
-            module_pipeline_job_id = row.get("source_pipeline_job_id")
-            module_source_platform_id = row.get("source_platform_id")
+            (
+                source_formation_id,
+                _source_module_id,
+                module_pipeline_job_id,
+                module_source_platform_id,
+            ) = row
             platform_ids = _unique_ints([*platform_ids, module_source_platform_id])
             job_ids = _unique_ints([source_formation_id, module_pipeline_job_id])
 
-    rows = list_script_slide_deck_rows_for_audio_lookup(
-        platform_ids=platform_ids,
-        job_ids=job_ids,
-        limit=200,
+    where_parts = []
+    params: list[int] = []
+    if platform_ids:
+        placeholders = ", ".join("?" for _ in platform_ids)
+        where_parts.append(f"platform_id IN ({placeholders})")
+        params.extend(platform_ids)
+    if job_ids:
+        placeholders = ", ".join("?" for _ in job_ids)
+        where_parts.append(f"(formation_job_id IN ({placeholders}) OR content_job_id IN ({placeholders}))")
+        params.extend(job_ids)
+        params.extend(job_ids)
+
+    where_sql = f"WHERE {' OR '.join(where_parts)}" if where_parts else ""
+    cursor.execute(
+        f"""
+        SELECT id, folder_id, content_job_id, formation_job_id, platform_id, pace,
+               max_slides, model, slides_json, timeline_json, stats_json,
+               pipeline_debug_json, audio_sync_json, created_at, updated_at
+        FROM script_slide_decks
+        {where_sql}
+        ORDER BY id DESC
+        LIMIT 200
+        """,
+        tuple(params),
     )
+    rows = cursor.fetchall()
+    conn.close()
 
     for row in rows:
         deck = _decode_deck_row(row)
@@ -676,8 +764,21 @@ def get_latest_script_slide_deck_for_audio(
 
 def update_script_slide_deck_audio_sync(deck_id: int, audio_sync: dict) -> dict | None:
     _ensure_slide_deck_tables()
-    deck = _decode_deck_row(get_script_slide_deck_row(deck_id))
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        SELECT id, folder_id, content_job_id, formation_job_id, platform_id, pace,
+               max_slides, model, slides_json, timeline_json, stats_json,
+               pipeline_debug_json, audio_sync_json, created_at, updated_at
+        FROM script_slide_decks
+        WHERE id = ?
+        """,
+        (deck_id,),
+    )
+    deck = _decode_deck_row(cursor.fetchone())
     if not deck:
+        conn.close()
         return None
 
     timings = audio_sync.get("timings", []) or []
@@ -722,14 +823,25 @@ def update_script_slide_deck_audio_sync(deck_id: int, audio_sync: dict) -> dict 
     pipeline_debug = deck["pipeline_debug"]
     pipeline_debug["audio_sync"] = audio_sync
 
-    update_script_slide_deck_audio_sync_row(
-        deck_id=deck_id,
-        slides_json=_json_dumps(slides),
-        timeline_json=_json_dumps(timeline),
-        stats_json=_json_dumps(stats),
-        pipeline_debug_json=_json_dumps(pipeline_debug),
-        audio_sync_json=_json_dumps(audio_sync),
+    cursor.execute(
+        """
+        UPDATE script_slide_decks
+        SET slides_json = ?, timeline_json = ?, stats_json = ?,
+            pipeline_debug_json = ?, audio_sync_json = ?,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+        """,
+        (
+            _json_dumps(slides),
+            _json_dumps(timeline),
+            _json_dumps(stats),
+            _json_dumps(pipeline_debug),
+            _json_dumps(audio_sync),
+            deck_id,
+        ),
     )
+    conn.commit()
+    conn.close()
 
     deck["slides"] = slides
     deck["timeline"] = timeline
@@ -759,31 +871,60 @@ def _parse_json_object(raw: str) -> dict:
 
 
 def _load_script_source(folder_id: int, job_id: int | None = None, platform_id: int | None = None) -> dict:
-    row = get_script_slide_source_row(folder_id)
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    cursor.execute(
+        """
+        SELECT cf.id, cf.name, cf.platform_id, cg.id, cg.program_title,
+               cg.sub_parts, cg.status, cg.total_words
+        FROM cours_folders cf
+        JOIN content_generation_jobs cg ON cg.folder_id = cf.id
+        WHERE cf.id = ?
+        """,
+        (folder_id,),
+    )
+    row = cursor.fetchone()
     if not row:
+        conn.close()
         raise ValueError(f"Aucun texte généré trouvé pour le dossier {folder_id}")
 
-    folder_id = row["folder_id"]
-    folder_name = row["folder_name"]
-    folder_platform_id = row["folder_platform_id"]
-    cg_job_id = row["content_job_id"]
-    program_title = row.get("program_title") or ""
-    sub_parts_json = row.get("sub_parts") or "[]"
-    cg_status = row.get("content_status")
-    total_words = row.get("total_words") or 0
+    folder_id, folder_name, folder_platform_id, cg_job_id, program_title, sub_parts_json, cg_status, total_words = row
 
     if platform_id is not None and int(folder_platform_id) != int(platform_id):
+        conn.close()
         raise ValueError("Ce dossier n'appartient pas à la plateforme active")
 
     formation_job = None
     if job_id:
-        formation_job = get_formation_pipeline_job_identity(job_id)
+        cursor.execute(
+            """
+            SELECT id, tp_name, platform_id
+            FROM formation_pipeline_jobs
+            WHERE id = ?
+            """,
+            (job_id,),
+        )
+        formation_job = cursor.fetchone()
         if not formation_job:
+            conn.close()
             raise ValueError(f"Job formation {job_id} introuvable")
-        if int(formation_job["platform_id"]) != int(folder_platform_id):
+        if int(formation_job[2]) != int(folder_platform_id):
+            conn.close()
             raise ValueError("Le dossier ne correspond pas au job formation demandé")
 
-    rows = list_completed_content_segment_rows(cg_job_id)
+    cursor.execute(
+        """
+        SELECT sub_part_index, sub_part_name, passe, text_content, word_count,
+               COALESCE(reviewed, 0), COALESCE(dirty, 0)
+        FROM content_generation_segments
+        WHERE job_id = ? AND status = 'completed'
+        ORDER BY sub_part_index ASC, passe ASC
+        """,
+        (cg_job_id,),
+    )
+    rows = cursor.fetchall()
+    conn.close()
 
     if not rows:
         raise ValueError(f"Aucun segment complété pour le dossier {folder_id}")
@@ -795,13 +936,7 @@ def _load_script_source(folder_id: int, job_id: int | None = None, platform_id: 
 
     segments = []
     for idx, row in enumerate(rows):
-        sub_idx = row.get("sub_part_index")
-        sub_name = row.get("sub_part_name")
-        passe = row.get("passe")
-        text = row.get("text_content")
-        words = row.get("word_count")
-        reviewed = row.get("reviewed")
-        dirty = row.get("dirty")
+        sub_idx, sub_name, passe, text, words, reviewed, dirty = row
         clean_text = _strip_tts_tags(text or "")
         if not clean_text:
             continue
@@ -821,7 +956,7 @@ def _load_script_source(folder_id: int, job_id: int | None = None, platform_id: 
     if not segments:
         raise ValueError(f"Les segments du dossier {folder_id} sont vides")
 
-    title = program_title or (formation_job.get("tp_name") if formation_job else "") or folder_name
+    title = program_title or (formation_job[1] if formation_job else "") or folder_name
 
     return {
         "folder_id": folder_id,
