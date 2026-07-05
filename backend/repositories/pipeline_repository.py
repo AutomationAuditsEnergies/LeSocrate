@@ -104,6 +104,17 @@ CONTENT_REVIEW_STATE_COLUMNS = {
     "humanization_signature",
 }
 
+POSTGRES_TRANSIENT_ERROR_MARKERS = (
+    "connection timeout",
+    "timeout expired",
+    "could not connect",
+    "connection refused",
+    "connection reset",
+    "server closed the connection",
+    "terminating connection",
+    "the connection is closed",
+)
+
 
 def _pipeline_primary_backend() -> str:
     if PIPELINE_DATABASE_BACKEND in {"postgres", "postgresql", "supabase"}:
@@ -157,6 +168,30 @@ def _as_sqlite_row_connection():
     conn = get_db_connection()
     conn.row_factory = sqlite3.Row
     return conn
+
+
+def _is_transient_postgres_error(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return any(marker in message for marker in POSTGRES_TRANSIENT_ERROR_MARKERS)
+
+
+def _run_postgres_with_retry(label: str, operation, *, attempts: int = 3):
+    for attempt in range(1, attempts + 1):
+        try:
+            return operation()
+        except Exception as exc:
+            if attempt >= attempts or not _is_transient_postgres_error(exc):
+                raise
+            wait_seconds = min(10.0, 1.5 * attempt)
+            logger.warning(
+                "PIPELINE_POSTGRES_RETRY label=%s attempt=%s/%s wait=%.1fs error=%s",
+                label,
+                attempt,
+                attempts,
+                wait_seconds,
+                str(exc)[:300],
+            )
+            time.sleep(wait_seconds)
 
 
 def _fetch_sqlite_job_payload(job_id: int) -> dict[str, Any] | None:
@@ -936,64 +971,93 @@ def reset_and_upsert_content_generation_job(
     module_contents_json: str,
 ) -> None:
     """Reset segments for a folder and create/update its content generation job."""
+    reset_and_upsert_content_generation_jobs([{
+        "folder_id": folder_id,
+        "platform_id": platform_id,
+        "program_text": program_text,
+        "program_title": program_title,
+        "sub_parts_json": sub_parts_json,
+        "from_scratch": from_scratch,
+        "module_contents_json": module_contents_json,
+    }])
+
+
+def reset_and_upsert_content_generation_jobs(jobs: list[dict[str, Any]]) -> None:
+    """Reset segments and create/update several content generation jobs in one DB round-trip."""
+    if not jobs:
+        return
+
+    rows = [
+        (
+            int(job["folder_id"]),
+            int(job["platform_id"]),
+            str(job.get("program_text") or ""),
+            str(job.get("program_title") or ""),
+            str(job.get("sub_parts_json") or "[]"),
+            bool(job.get("from_scratch")),
+            str(job.get("module_contents_json") or "{}"),
+        )
+        for job in jobs
+    ]
+    folder_ids = [row[0] for row in rows]
+
     if _pipeline_primary_backend() == "postgres":
-        with get_postgres_connection() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    DELETE FROM content_generation_segments
-                    WHERE job_id IN (
-                        SELECT id FROM content_generation_jobs WHERE folder_id = %s
+        def _postgres_operation():
+            placeholders = ", ".join(["%s"] * len(folder_ids))
+            with get_postgres_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        f"""
+                        DELETE FROM content_generation_segments
+                        WHERE job_id IN (
+                            SELECT id FROM content_generation_jobs
+                            WHERE folder_id IN ({placeholders})
+                        )
+                        """,
+                        folder_ids,
                     )
-                    """,
-                    (folder_id,),
-                )
-                cur.execute(
-                    """
-                    INSERT INTO content_generation_jobs
-                        (folder_id, platform_id, program_text, program_title, sub_parts,
-                         from_scratch, module_contents,
-                         status, current_sub_part, current_passe, total_words, error_message,
-                         updated_at)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, 'idle', 0, 1, 0, NULL, NOW())
-                    ON CONFLICT (folder_id) DO UPDATE SET
-                        platform_id = EXCLUDED.platform_id,
-                        program_text = EXCLUDED.program_text,
-                        program_title = EXCLUDED.program_title,
-                        sub_parts = EXCLUDED.sub_parts,
-                        from_scratch = EXCLUDED.from_scratch,
-                        module_contents = EXCLUDED.module_contents,
-                        status = 'idle',
-                        current_sub_part = 0,
-                        current_passe = 1,
-                        total_words = 0,
-                        error_message = NULL,
-                        updated_at = NOW()
-                    """,
-                    (
-                        folder_id,
-                        platform_id,
-                        program_text,
-                        program_title,
-                        sub_parts_json,
-                        bool(from_scratch),
-                        module_contents_json,
-                    ),
-                )
+                    cur.executemany(
+                        """
+                        INSERT INTO content_generation_jobs
+                            (folder_id, platform_id, program_text, program_title, sub_parts,
+                             from_scratch, module_contents,
+                             status, current_sub_part, current_passe, total_words, error_message,
+                             updated_at)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, 'idle', 0, 1, 0, NULL, NOW())
+                        ON CONFLICT (folder_id) DO UPDATE SET
+                            platform_id = EXCLUDED.platform_id,
+                            program_text = EXCLUDED.program_text,
+                            program_title = EXCLUDED.program_title,
+                            sub_parts = EXCLUDED.sub_parts,
+                            from_scratch = EXCLUDED.from_scratch,
+                            module_contents = EXCLUDED.module_contents,
+                            status = 'idle',
+                            current_sub_part = 0,
+                            current_passe = 1,
+                            total_words = 0,
+                            error_message = NULL,
+                            updated_at = NOW()
+                        """,
+                        rows,
+                    )
+            return None
+
+        _run_postgres_with_retry("reset_and_upsert_content_generation_jobs", _postgres_operation)
         return
 
     conn = get_db_connection()
     cursor = conn.cursor()
     try:
+        placeholders = ", ".join(["?"] * len(folder_ids))
         cursor.execute(
-            """
+            f"""
             DELETE FROM content_generation_segments WHERE job_id IN (
-                SELECT id FROM content_generation_jobs WHERE folder_id = ?
+                SELECT id FROM content_generation_jobs WHERE folder_id IN ({placeholders})
             )
             """,
-            (folder_id,),
+            folder_ids,
         )
-        cursor.execute(
+        cursor.executemany(
             """
             INSERT OR REPLACE INTO content_generation_jobs
                 (folder_id, platform_id, program_text, program_title, sub_parts,
@@ -1001,15 +1065,26 @@ def reset_and_upsert_content_generation_job(
                  status, current_sub_part, current_passe, total_words, error_message)
             VALUES (?, ?, ?, ?, ?, ?, ?, 'idle', 0, 1, 0, NULL)
             """,
-            (
-                folder_id,
-                platform_id,
-                program_text,
-                program_title,
-                sub_parts_json,
-                1 if from_scratch else 0,
-                module_contents_json,
-            ),
+            [
+                (
+                    folder_id,
+                    platform_id,
+                    program_text,
+                    program_title,
+                    sub_parts_json,
+                    1 if from_scratch else 0,
+                    module_contents_json,
+                )
+                for (
+                    folder_id,
+                    platform_id,
+                    program_text,
+                    program_title,
+                    sub_parts_json,
+                    from_scratch,
+                    module_contents_json,
+                ) in rows
+            ],
         )
         conn.commit()
     finally:
@@ -1935,10 +2010,13 @@ def list_health_course_folder_rows(folder_ids: list[int]) -> list[dict[str, Any]
         ORDER BY cf.position ASC
     """
     if _pipeline_primary_backend() == "postgres":
-        with get_postgres_connection() as conn:
-            with conn.cursor() as cur:
-                cur.execute(query, params)
-                return [dict(row) for row in cur.fetchall()]
+        def _postgres_operation():
+            with get_postgres_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(query, params)
+                    return [dict(row) for row in cur.fetchall()]
+
+        return _run_postgres_with_retry("list_health_course_folder_rows", _postgres_operation)
 
     conn = _as_sqlite_row_connection()
     try:
@@ -2053,10 +2131,13 @@ def list_content_completion_rows_for_folders(folder_ids: list[int]) -> list[dict
                  cgj.current_sub_part, cgj.current_passe, cgj.error_message
     """
     if _pipeline_primary_backend() == "postgres":
-        with get_postgres_connection() as conn:
-            with conn.cursor() as cur:
-                cur.execute(query, params)
-                return [dict(row) for row in cur.fetchall()]
+        def _postgres_operation():
+            with get_postgres_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(query, params)
+                    return [dict(row) for row in cur.fetchall()]
+
+        return _run_postgres_with_retry("list_content_completion_rows_for_folders", _postgres_operation)
 
     conn = _as_sqlite_row_connection()
     try:

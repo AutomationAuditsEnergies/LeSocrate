@@ -5,6 +5,7 @@ the multi-tenant SaaS tables that are being moved to Supabase/Postgres first.
 """
 from contextlib import contextmanager
 from functools import lru_cache
+import os
 import socket
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
@@ -61,7 +62,7 @@ def _connection_url() -> str:
 
     query["hostaddr"] = infos[0][4][0]
     if "connect_timeout" not in query:
-        query["connect_timeout"] = "10"
+        query["connect_timeout"] = os.getenv("POSTGRES_CONNECT_TIMEOUT_SECONDS", "20")
     return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment))
 
 

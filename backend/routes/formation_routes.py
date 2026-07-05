@@ -4658,8 +4658,11 @@ def _execute_ap_step(job_id: int, step: str, job: dict) -> None:
             #   - aucun thread mort possible (pas de thread du tout)
             import json as _json
             import eventlet as _eventlet
-            from services.content_generation_service import run_content_generation, get_job_from_db
-            from repositories.pipeline_repository import reset_and_upsert_content_generation_job
+            from services.content_generation_service import run_content_generation
+            from repositories.pipeline_repository import (
+                list_content_completion_rows_for_folders,
+                reset_and_upsert_content_generation_jobs,
+            )
             from services.formation_pipeline_service import (
                 _format_day_program_text,
                 expected_course_folder_name,
@@ -4697,7 +4700,7 @@ def _execute_ap_step(job_id: int, step: str, job: dict) -> None:
                     ],
                 )
 
-            day_tasks = []
+            planned_days = []
             for idx, day_data in enumerate(daily_programs):
                 day_data = _normalize_day_audio_slots(day_data)
                 folder_name = expected_course_folder_name(day_data, idx + 1)
@@ -4707,28 +4710,54 @@ def _execute_ap_step(job_id: int, step: str, job: dict) -> None:
                 folder_id = folder_info["folder_id"]
                 day_num = day_data.get("day_number", idx + 1)
 
-                # 2. Créer le content_generation_job s'il n'existe pas (sans thread)
-                cg_job = get_job_from_db(folder_id)
-                if cg_job and cg_job.get("status") == "completed":
+                planned_days.append({
+                    "day_num": day_num,
+                    "folder_id": folder_id,
+                    "day_data": day_data,
+                })
+
+            folder_ids = [day["folder_id"] for day in planned_days]
+            content_rows = {
+                int(row["folder_id"]): row
+                for row in list_content_completion_rows_for_folders(folder_ids)
+            }
+            day_tasks = []
+            jobs_to_create = []
+            for planned_day in planned_days:
+                day_num = planned_day["day_num"]
+                folder_id = planned_day["folder_id"]
+                content_row = content_rows.get(folder_id) or {}
+                if content_row.get("content_job_id") and content_row.get("status") == "completed":
                     logger.info(f"🤖   ⏭ Jour {day_num} déjà complété (folder {folder_id}), skip")
                     continue
 
-                if not cg_job:
+                if not content_row.get("content_job_id"):
+                    day_data = planned_day["day_data"]
                     sub_parts = [sp["name"] for sp in day_data.get("sub_parts", [])]
                     module_contents = {}
                     for sp in day_data.get("sub_parts", []):
                         module_contents[sp["name"]] = _format_slot_generation_source(sp)
-                    reset_and_upsert_content_generation_job(
-                        folder_id=folder_id,
-                        platform_id=platform_id,
-                        program_text=_format_day_program_text(day_data, job["tp_name"]),
-                        program_title=job["tp_name"],
-                        sub_parts_json=_json.dumps(sub_parts, ensure_ascii=False),
-                        from_scratch=True,
-                        module_contents_json=_json.dumps(module_contents, ensure_ascii=False),
-                    )
+                    jobs_to_create.append({
+                        "folder_id": folder_id,
+                        "platform_id": platform_id,
+                        "program_text": _format_day_program_text(day_data, job["tp_name"]),
+                        "program_title": job["tp_name"],
+                        "sub_parts_json": _json.dumps(sub_parts, ensure_ascii=False),
+                        "from_scratch": True,
+                        "module_contents_json": _json.dumps(module_contents, ensure_ascii=False),
+                    })
 
                 day_tasks.append({"day_num": day_num, "folder_id": folder_id})
+
+            if jobs_to_create:
+                reset_and_upsert_content_generation_jobs(jobs_to_create)
+            logger.info(
+                "PIPELINE_CONTENT_DAY_JOB_PREP job=%s folders=%s created=%s runnable=%s",
+                job_id,
+                len(planned_days),
+                len(jobs_to_create),
+                len(day_tasks),
+            )
 
             day_workers = min(_formation_content_day_workers(), max(1, len(day_tasks) or 1))
             logger.info(
