@@ -240,14 +240,37 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
     }
   }, [])
 
-  // Donner une URL backend directement à WaveSurfer évite le double chargement
-  // fetch -> Blob -> WaveSurfer. Le backend streame le MP3 et supporte Range.
-  const buildAudioStreamUrl = useCallback(() => {
+  const loadWaveformAudio = useCallback(async (ws, { signal } = {}) => {
     clearAudioUrl()
     const url = apiUrl(`/api/hr/cours-folders/${folderId}/audio-stream/${encodeURIComponent(filename)}?v=${Date.now()}`)
     audioUrlRef.current = url
-    return url
-  }, [clearAudioUrl, folderId, filename])
+
+    const resp = await fetch(url, {
+      credentials: 'include',
+      headers: audioFetchHeaders(),
+      signal,
+    })
+
+    if (!resp.ok) {
+      const contentType = resp.headers.get('content-type') || ''
+      let detail = ''
+      if (contentType.includes('application/json')) {
+        const data = await resp.json().catch(() => ({}))
+        detail = data.error || data.message || ''
+      } else {
+        detail = (await resp.text().catch(() => '')).slice(0, 200)
+      }
+      throw new Error(detail ? `HTTP ${resp.status} - ${detail}` : `HTTP ${resp.status}`)
+    }
+
+    const rawBlob = await resp.blob()
+    if (!rawBlob.size) throw new Error('réponse audio vide')
+    const audioBlob = rawBlob.type === 'audio/mpeg'
+      ? rawBlob
+      : new Blob([rawBlob], { type: 'audio/mpeg' })
+    if (signal?.aborted) throw new DOMException('Chargement annulé', 'AbortError')
+    return ws.loadBlob(audioBlob)
+  }, [audioFetchHeaders, clearAudioUrl, folderId, filename])
 
   useEffect(() => {
     let cancelled = false
@@ -307,6 +330,7 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
     if (!waveRef.current) return
 
     let cancelled = false
+    const loadController = new AbortController()
     setError(null)
     setLoading(true)
 
@@ -364,8 +388,7 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
     const waveEl = waveRef.current
     waveEl?.addEventListener('wheel', handleWheel, { passive: false })
 
-    Promise.resolve(buildAudioStreamUrl())
-      .then(url => { if (!cancelled) return ws.load(url) })
+    Promise.resolve(loadWaveformAudio(ws, { signal: loadController.signal }))
       .catch(e => {
         if (cancelled) return
         // ws.destroy() pendant un fetch en cours déclenche un AbortError que
@@ -456,12 +479,13 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
 
     return () => {
       cancelled = true
+      loadController.abort()
       waveEl?.removeEventListener('wheel', handleWheel)
       ws.destroy()
       stopStitchedPlayback()
       clearAudioUrl()
     }
-  }, [audioFetchHeaders, buildAudioStreamUrl, clearAudioUrl, darkMode])
+  }, [audioFetchHeaders, clearAudioUrl, darkMode, loadWaveformAudio])
 
   // Changer la couleur de la région selon le mode
   useEffect(() => {
@@ -630,11 +654,11 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
         // Recharger depuis une nouvelle SAS URL (le blob a changé)
         setTimeout(async () => {
           try {
-            const freshUrl = buildAudioStreamUrl()
             setLoading(true)
-            wsRef.current?.load(freshUrl)
-          } catch {
-            // Le message d'état restera visible si le reload échoue.
+            if (wsRef.current) await loadWaveformAudio(wsRef.current)
+          } catch (e) {
+            setLoading(false)
+            setError(`Impossible de recharger l'audio : ${e.message || 'requête échouée'}`)
           }
           setStatus(null)
         }, 1500)
@@ -715,11 +739,11 @@ export default function AudioEditor({ folderId, filename, darkMode, colors, onCl
         setReplaceText('')
         setTimeout(async () => {
           try {
-            const freshUrl = buildAudioStreamUrl()
             setLoading(true)
-            wsRef.current?.load(freshUrl)
-          } catch {
-            // Le message d'état restera visible si le reload échoue.
+            if (wsRef.current) await loadWaveformAudio(wsRef.current)
+          } catch (e) {
+            setLoading(false)
+            setError(`Impossible de recharger l'audio : ${e.message || 'requête échouée'}`)
           }
           setStatus(null)
         }, 1500)
