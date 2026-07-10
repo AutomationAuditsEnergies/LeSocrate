@@ -39,6 +39,29 @@ from utils.logger import get_logger
 logger = get_logger(__name__)
 
 
+def _expected_structured_segment_count(job: dict, daily_programs: list) -> int:
+    """Return the segment count produced by the current structured pipeline.
+
+    The legacy pipeline generated three passes per sub-part. The structured
+    generator persists one final segment per sub-part, so multiplying by three
+    makes successful PostgreSQL pipelines look incomplete.
+    """
+    expected = 0
+    for day_data in daily_programs:
+        if not isinstance(day_data, dict):
+            continue
+        sub_parts = day_data.get("sub_parts")
+        expected += max(1, len(sub_parts) if sub_parts else 6)
+    if expected:
+        return expected
+    return int(job.get("nb_days") or 0) * 7
+
+
+def _humanization_is_embedded(job: dict) -> bool:
+    """The auto-pilot structured prompt embeds oral style in initial content."""
+    return bool(job.get("auto_pilot_enabled"))
+
+
 # ─── Pre-flight ──────────────────────────────────────────────────────────────
 
 def compute_preflight(
@@ -259,15 +282,7 @@ def compute_health(job_id: int) -> dict:
     except Exception:
         COURSE_AUDIO_SLOTS = [None] * 7
         daily_programs = []
-    expected_total_segments = 0
-    for day_data in daily_programs:
-        if isinstance(day_data, dict):
-            sub_parts = day_data.get("sub_parts")
-            expected_sub_parts = len(sub_parts) if sub_parts else 6
-            expected_total_segments += max(1, expected_sub_parts) * 3
-    if expected_total_segments == 0:
-        expected_total_segments = nb_days * len(COURSE_AUDIO_SLOTS) * 3
-    expected_segments_per_day = len(COURSE_AUDIO_SLOTS) * 3
+    expected_total_segments = _expected_structured_segment_count(job, daily_programs)
 
     # Inventaire des cours_folders + cg_jobs + segments. On audite uniquement
     # le folder canonique de chaque journée attendue : des doublons peuvent
@@ -377,15 +392,20 @@ def compute_health(job_id: int) -> dict:
     n_unhumanized_no_error = 0
     if folders:
         n_unhumanized_no_error = count_unhumanized_segments_without_error_for_folders(folder_ids)
-    humanization_ok = n_unhumanized_no_error == 0
+    humanization_embedded = _humanization_is_embedded(job)
+    humanization_ok = humanization_embedded or n_unhumanized_no_error == 0
     checks["humanization_consistent"] = {
         "ok": humanization_ok,
         "detail": (
+            "oralité intégrée à la génération structurée initiale"
+            if humanization_embedded
+            else
             f"{n_unhumanized_no_error} segment(s) non passés en humanisation"
             if not humanization_ok
             else "tous les segments ont été tentés en humanisation"
         ),
         "unhumanized_segments": n_unhumanized_no_error,
+        "applicable": not humanization_embedded,
     }
     if not humanization_ok:
         blocking.append("humanization_consistent")
