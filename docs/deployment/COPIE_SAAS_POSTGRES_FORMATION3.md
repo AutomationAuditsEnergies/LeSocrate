@@ -56,6 +56,14 @@ La file DB durable est traitée par un worker embarqué ; sous forte
 charge, passer ce worker dans un App Service ou WebJob séparé et activer Azure
 Service Bus.
 
+Les générations audio lancées depuis le dashboard HR utilisent cette même
+file. Leur progression et leur résultat sont stockés dans
+`pipeline_work_items`, avec un lease renouvelé par le worker et une exclusion
+atomique par dossier (`resource_key=folder:<id>`). Un redémarrage Azure remet
+donc le travail en file après expiration du lease au lieu de perdre un
+dictionnaire en mémoire, et deux instances ne peuvent pas accepter deux
+générations concurrentes pour le même dossier.
+
 Les valeurs sensibles doivent exister soit dans Azure App Settings de
 `Formation3`, soit dans les secrets GitHub :
 

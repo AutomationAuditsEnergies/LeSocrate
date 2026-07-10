@@ -10,7 +10,7 @@ from __future__ import annotations
 import sqlite3
 import time
 from datetime import datetime
-from typing import Any
+from typing import Any, Mapping
 
 from config import DATABASE_BACKEND, PIPELINE_DATABASE_BACKEND, PIPELINE_POSTGRES_MIRROR
 from database.db import get_db_connection
@@ -2655,6 +2655,54 @@ def get_course_folder_identity(folder_id: int) -> dict[str, Any] | None:
         cursor.execute(query, (folder_id,))
         row = cursor.fetchone()
         return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def list_effective_course_documents(folder_id: int) -> list[tuple[int, str, str]]:
+    """Return the final script when present, otherwise every source document."""
+    ph = _placeholder()
+    final_query = f"""
+        SELECT id, filename, original_name
+        FROM cours_documents
+        WHERE folder_id = {ph}
+          AND (doc_type = 'final_script' OR original_name LIKE 'cours_genere_%%.txt')
+        ORDER BY created_at DESC, id DESC
+        LIMIT 1
+    """
+    source_query = f"""
+        SELECT id, filename, original_name
+        FROM cours_documents
+        WHERE folder_id = {ph}
+        ORDER BY id
+    """
+
+    def _read(cursor):
+        cursor.execute(final_query, (int(folder_id),))
+        final_row = cursor.fetchone()
+        rows = [final_row] if final_row else None
+        if rows is None:
+            cursor.execute(source_query, (int(folder_id),))
+            rows = cursor.fetchall()
+        return [
+            (
+                int(row["id"]),
+                str(row["filename"]),
+                str(row["original_name"]),
+            )
+            if isinstance(row, Mapping)
+            else (int(row[0]), str(row[1]), str(row[2]))
+            for row in rows
+        ]
+
+    if _pipeline_primary_backend() == "postgres":
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cursor:
+                return _read(cursor)
+
+    conn = _as_sqlite_row_connection()
+    try:
+        return _read(conn.cursor())
     finally:
         conn.close()
 

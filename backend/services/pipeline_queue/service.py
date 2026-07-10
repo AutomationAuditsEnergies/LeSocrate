@@ -15,7 +15,9 @@ def new_repository(*, storage_backend: str | None = None) -> WorkItemRepository:
 
 def enqueue_work_item(
     *,
-    pipeline_job_id: int,
+    pipeline_job_id: int | None = None,
+    folder_id: int | None = None,
+    resource_key: str | None = None,
     task_type: str = "auto_pilot_tick",
     payload: Mapping[str, Any] | None = None,
     scope_key: str = "pipeline",
@@ -35,7 +37,9 @@ def enqueue_work_item(
     repository = repository or new_repository()
     return repository.enqueue(
         WorkItemSpec(
-            pipeline_job_id=int(pipeline_job_id),
+            pipeline_job_id=int(pipeline_job_id) if pipeline_job_id is not None else None,
+            folder_id=int(folder_id) if folder_id is not None else None,
+            resource_key=resource_key,
             task_type=task_type,
             payload=payload or {},
             scope_key=scope_key,
@@ -62,6 +66,18 @@ def get_latest_work_item(
     repository: WorkItemRepository | None = None,
 ) -> WorkItem | None:
     return (repository or new_repository()).latest_for_job(int(pipeline_job_id))
+
+
+def get_latest_folder_work_item(
+    folder_id: int,
+    *,
+    scope_key: str | None = None,
+    repository: WorkItemRepository | None = None,
+) -> WorkItem | None:
+    return (repository or new_repository()).latest_for_folder(
+        int(folder_id),
+        scope_key=scope_key,
+    )
 
 
 def cancel_latest_work_item(

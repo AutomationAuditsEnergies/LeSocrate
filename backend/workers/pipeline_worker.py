@@ -18,7 +18,7 @@ from dotenv import load_dotenv
 
 load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
 
-from services.pipeline_queue.handlers import mark_auto_pilot_dead_letter
+from services.pipeline_queue.handlers import mark_pipeline_dead_letter
 from services.pipeline_queue.repository import WorkItemRepository
 from services.pipeline_queue.settings import QueueSettings
 from services.pipeline_queue.worker import PipelineWorker
@@ -47,14 +47,14 @@ def main(argv=None) -> int:
     settings = QueueSettings.from_env()
     handler_path = os.getenv(
         "PIPELINE_WORKER_HANDLER",
-        "services.pipeline_queue.handlers:handle_auto_pilot_work_item",
+        "services.pipeline_queue.handlers:handle_pipeline_work_item",
     )
     repository = WorkItemRepository()
     worker = PipelineWorker(
         repository,
         _load_handler(handler_path),
         settings=settings,
-        on_dead_letter=mark_auto_pilot_dead_letter,
+        on_dead_letter=mark_pipeline_dead_letter,
     )
     repository.ensure_schema()
     logger.info(

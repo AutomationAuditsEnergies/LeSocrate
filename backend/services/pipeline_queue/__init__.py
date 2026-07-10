@@ -12,6 +12,7 @@ from .contracts import (
 from .service import (
     cancel_latest_work_item,
     enqueue_work_item,
+    get_latest_folder_work_item,
     get_latest_work_item,
     get_work_item,
     new_repository,
@@ -27,6 +28,7 @@ __all__ = [
     "WorkStatus",
     "cancel_latest_work_item",
     "enqueue_work_item",
+    "get_latest_folder_work_item",
     "get_latest_work_item",
     "get_work_item",
     "new_repository",

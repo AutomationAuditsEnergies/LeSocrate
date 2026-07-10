@@ -100,6 +100,8 @@ jobs:
           tests.test_course_schedule_repository
           tests.test_database_runtime_mode
           tests.test_hr_postgres_read_routes
+          tests.test_hr_playlist_queue_handler
+          tests.test_hr_playlist_queue_routes
           tests.test_hr_platform_id_allocator
           tests.test_hr_read_repository
           tests.test_hr_tenant_isolation

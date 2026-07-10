@@ -523,7 +523,9 @@ ALTER TABLE script_slide_decks ENABLE ROW LEVEL SECURITY;
 -- only carries small notifications that reference these fenced work-items.
 CREATE TABLE IF NOT EXISTS pipeline_work_items (
     id UUID PRIMARY KEY,
-    pipeline_job_id BIGINT NOT NULL REFERENCES formation_pipeline_jobs(id) ON DELETE CASCADE,
+    pipeline_job_id BIGINT REFERENCES formation_pipeline_jobs(id) ON DELETE CASCADE,
+    folder_id BIGINT REFERENCES cours_folders(id) ON DELETE CASCADE,
+    resource_key TEXT NOT NULL,
     run_id TEXT NOT NULL,
     task_type TEXT NOT NULL,
     scope_key TEXT NOT NULL DEFAULT 'pipeline',
@@ -548,10 +550,27 @@ CREATE TABLE IF NOT EXISTS pipeline_work_items (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- Folder-level HR audio jobs use the same durable queue even when a manually
+-- created folder is not attached to a formation pipeline job. Existing queue
+-- rows remain addressed by their pipeline resource key.
+ALTER TABLE pipeline_work_items
+    ALTER COLUMN pipeline_job_id DROP NOT NULL;
+ALTER TABLE pipeline_work_items
+    ADD COLUMN IF NOT EXISTS folder_id BIGINT REFERENCES cours_folders(id) ON DELETE CASCADE;
+ALTER TABLE pipeline_work_items
+    ADD COLUMN IF NOT EXISTS resource_key TEXT;
+UPDATE pipeline_work_items
+SET resource_key = 'pipeline:' || pipeline_job_id::text
+WHERE resource_key IS NULL;
+ALTER TABLE pipeline_work_items
+    ALTER COLUMN resource_key SET NOT NULL;
+
 CREATE INDEX IF NOT EXISTS idx_pipeline_work_items_due
     ON pipeline_work_items(status, available_at, priority DESC, created_at);
 CREATE INDEX IF NOT EXISTS idx_pipeline_work_items_job
     ON pipeline_work_items(pipeline_job_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_pipeline_work_items_folder
+    ON pipeline_work_items(folder_id, created_at);
 
 -- Older deployments could enqueue two runs for the same pipeline scope. Keep
 -- the item already doing useful work (then a retry, then the oldest queued
@@ -588,6 +607,9 @@ WHERE item.id = ranked_active.id
 
 CREATE UNIQUE INDEX IF NOT EXISTS uq_pipeline_work_items_active_scope
     ON pipeline_work_items(pipeline_job_id, scope_key)
+    WHERE status IN ('queued', 'retry_scheduled', 'running');
+CREATE UNIQUE INDEX IF NOT EXISTS uq_pipeline_work_items_active_resource_scope
+    ON pipeline_work_items(resource_key, scope_key)
     WHERE status IN ('queued', 'retry_scheduled', 'running');
 
 CREATE TABLE IF NOT EXISTS pipeline_work_outbox (

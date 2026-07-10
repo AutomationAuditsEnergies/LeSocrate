@@ -123,6 +123,16 @@ class LeaseGuard:
             self._lost.set()
             raise LeaseLostError(f"Lease/fencing invalide pour le work-item {self.item.id}")
 
+    def report_progress(self, progress: Mapping) -> None:
+        """Persist handler progress under the current fencing token."""
+        if self.lost:
+            raise LeaseLostError(f"Lease perdu pendant le work-item {self.item.id}")
+        self.repository.update_progress(
+            self.item.id,
+            self.lease_token,
+            dict(progress),
+        )
+
     def stop(self) -> None:
         self._stop.set()
         if self._thread is not None:

@@ -61,6 +61,18 @@ class PostgresSchemaContractTest(unittest.TestCase):
         self.assertIn("ON pipeline_work_items(pipeline_job_id, scope_key)", schema)
         self.assertIn("WHERE status IN ('queued', 'retry_scheduled', 'running')", schema)
 
+    def test_schema_enforces_one_active_queue_item_per_resource_scope(self):
+        schema = (BACKEND_DIR / "database" / "postgres_schema.sql").read_text(encoding="utf-8")
+        self.assertIn(
+            "uq_pipeline_work_items_active_resource_scope",
+            PIPELINE_REQUIRED_INDEXES,
+        )
+        self.assertIn(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_pipeline_work_items_active_resource_scope",
+            schema,
+        )
+        self.assertIn("ON pipeline_work_items(resource_key, scope_key)", schema)
+
     def test_schema_enforces_one_named_folder_per_pipeline_job(self):
         schema = (BACKEND_DIR / "database" / "postgres_schema.sql").read_text(encoding="utf-8")
         self.assertIn("uq_cours_folders_job_name", PIPELINE_REQUIRED_INDEXES)

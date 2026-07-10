@@ -1068,6 +1068,9 @@ class PipelineRepositoryTest(unittest.TestCase):
 
         old_docs = repo.list_final_script_document_rows(80)
         self.assertEqual({row["filename"] for row in old_docs}, {"old-final.txt", "legacy.txt"})
+        effective_before = repo.list_effective_course_documents(80)
+        self.assertEqual(len(effective_before), 1)
+        self.assertEqual(effective_before[0][1:], ("legacy.txt", "cours_genere_123.txt"))
 
         repo.replace_final_script_document_record(
             folder_id=80,
@@ -1077,6 +1080,7 @@ class PipelineRepositoryTest(unittest.TestCase):
 
         final_docs = repo.list_final_script_document_rows(80)
         self.assertEqual([row["filename"] for row in final_docs], ["new-final.txt"])
+        self.assertEqual(repo.list_effective_course_documents(80)[0][1], "new-final.txt")
 
         conn = sqlite3.connect(self.db_path)
         remaining_sources = conn.execute(

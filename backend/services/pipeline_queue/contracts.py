@@ -35,10 +35,12 @@ TERMINAL_STATUSES = {
 
 @dataclass(frozen=True)
 class WorkItemSpec:
-    pipeline_job_id: int
+    pipeline_job_id: int | None = None
     task_type: str = "auto_pilot_tick"
     payload: Mapping[str, Any] = field(default_factory=dict)
     scope_key: str = "pipeline"
+    folder_id: int | None = None
+    resource_key: str | None = None
     run_id: str | None = None
     dedupe_key: str | None = None
     priority: int = 0
@@ -49,7 +51,9 @@ class WorkItemSpec:
 @dataclass(frozen=True)
 class WorkItem:
     id: str
-    pipeline_job_id: int
+    pipeline_job_id: int | None
+    folder_id: int | None
+    resource_key: str
     run_id: str
     task_type: str
     scope_key: str

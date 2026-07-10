@@ -337,8 +337,8 @@ def _embedded_pipeline_worker_loop():
     a separate App Service only changes deployment, not orchestration semantics.
     """
     from services.pipeline_queue.handlers import (
-        handle_auto_pilot_work_item,
-        mark_auto_pilot_dead_letter,
+        handle_pipeline_work_item,
+        mark_pipeline_dead_letter,
     )
     from services.pipeline_queue.repository import WorkItemRepository
     from services.pipeline_queue.settings import QueueSettings
@@ -350,9 +350,9 @@ def _embedded_pipeline_worker_loop():
             repository.ensure_schema()
             worker = PipelineWorker(
                 repository,
-                handle_auto_pilot_work_item,
+                handle_pipeline_work_item,
                 settings=QueueSettings.from_env(),
-                on_dead_letter=mark_auto_pilot_dead_letter,
+                on_dead_letter=mark_pipeline_dead_letter,
             )
             logger.info("PIPELINE_EMBEDDED_WORKER_STARTED owner=%s", worker.owner)
             worker.run_forever()
