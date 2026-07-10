@@ -19,11 +19,24 @@ jobs:
     if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.action != 'closed')
     runs-on: ubuntu-latest
     name: Build and Deploy Job
+    permissions:
+      id-token: write
+      contents: read
     steps:
       - uses: actions/checkout@v3
         with:
           submodules: true
           lfs: false
+      - name: Install OIDC Client from Core Package
+        run: npm install @actions/core@1.6.0 @actions/http-client
+      - name: Get Id Token
+        uses: actions/github-script@v6
+        id: idtoken
+        with:
+          script: |
+            const coredemo = require('@actions/core')
+            return await coredemo.getIDToken()
+          result-encoding: string
       - name: Build And Deploy
         id: builddeploy
         uses: Azure/static-web-apps-deploy@v1
@@ -34,7 +47,7 @@ jobs:
           app_location: "./frontend"
           api_location: ""
           output_location: "dist"
-          production_branch: "codex/fix-postgres-pipeline-20260710"
+          github_id_token: ${{ steps.idtoken.outputs.result }}
         env:
           VITE_API_URL: https://plateforme4-gmd9bvb3bubwg7cf.francecentral-01.azurewebsites.net
           VITE_FORMATION_NAME: "Le Socrate - Test PostgreSQL"
