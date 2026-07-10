@@ -14,8 +14,8 @@ from pathlib import Path
 import psycopg
 
 
-ROOT = Path(__file__).resolve().parents[3]
-DEFAULT_SCHEMA = ROOT / "backend" / "database" / "postgres_schema.sql"
+BACKEND_ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_SCHEMA = BACKEND_ROOT / "database" / "postgres_schema.sql"
 
 
 def main() -> int:
