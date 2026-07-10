@@ -23,6 +23,8 @@ def _content_settings_for_blob(blob_path):
         return ContentSettings(content_type="application/json; charset=utf-8")
     if lower.endswith(".txt"):
         return ContentSettings(content_type="text/plain; charset=utf-8")
+    if lower.endswith(".md"):
+        return ContentSettings(content_type="text/markdown; charset=utf-8")
     if lower.endswith(".pdf"):
         return ContentSettings(content_type="application/pdf")
     return None

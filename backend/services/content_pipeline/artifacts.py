@@ -33,6 +33,8 @@ CONTENT_ARTIFACT_BLOBS = [
     COURSE_SCRIPT_PLAN_BLOB,
 ]
 
+SCRIPT_REVIEW_ARTIFACT_PREFIX = "script-reviews"
+
 CONTENT_ARTIFACT_DESCRIPTIONS = {
     CONTENT_PLAN_BLOB: "Plan JSON verrouillé et validation serveur.",
     CONTENT_DRAFT_SECTIONS_BLOB: "Sections brutes générées avant assemblage/calibrage.",
@@ -49,6 +51,115 @@ CONTENT_ARTIFACT_DESCRIPTIONS = {
 
 def content_artifact_blob_path(platform_id: int, folder_id: int, filename: str) -> str:
     return f"platform-{platform_id}/folder-{folder_id}/playlist/{filename}"
+
+
+def script_review_artifact_blob_path(platform_id: int, folder_id: int, filename: str) -> str:
+    safe_filename = os.path.basename(str(filename or "").strip())
+    if not safe_filename:
+        raise ValueError("Nom d'artefact de revue manquant")
+    return (
+        f"platform-{int(platform_id)}/folder-{int(folder_id)}/"
+        f"{SCRIPT_REVIEW_ARTIFACT_PREFIX}/{safe_filename}"
+    )
+
+
+def _azure_artifact_storage_configured() -> bool:
+    return bool(
+        os.getenv("AZURE_TTS_STORAGE_CONNECTION_STRING")
+        or os.getenv("AZURE_STORAGE_CONNECTION_STRING")
+    )
+
+
+def _local_script_review_path(platform_id: int, folder_id: int, filename: str) -> str:
+    root = os.path.abspath(
+        os.getenv(
+            "PIPELINE_LOCAL_ARTIFACT_DIR",
+            os.path.join(os.getcwd(), ".pipeline-artifacts"),
+        )
+    )
+    path = os.path.join(
+        root,
+        f"platform-{int(platform_id)}",
+        f"folder-{int(folder_id)}",
+        SCRIPT_REVIEW_ARTIFACT_PREFIX,
+        os.path.basename(filename),
+    )
+    return path
+
+
+def script_review_markdown_locator(platform_id: int, folder_id: int, filename: str) -> str:
+    blob_path = script_review_artifact_blob_path(platform_id, folder_id, filename)
+    if _azure_artifact_storage_configured():
+        from services.azure_blob_service import CONTAINER_ARTIFACTS
+
+        return f"azureblob://{CONTAINER_ARTIFACTS}/{blob_path}"
+    return _local_script_review_path(platform_id, folder_id, filename)
+
+
+def save_script_review_markdown(
+    platform_id: int,
+    folder_id: int,
+    filename: str,
+    markdown: str,
+) -> str:
+    """Persist review Markdown in Blob, with a local-development fallback."""
+    blob_path = script_review_artifact_blob_path(platform_id, folder_id, filename)
+    raw = (markdown or "").encode("utf-8")
+    if _azure_artifact_storage_configured():
+        try:
+            from services.azure_blob_service import (
+                CONTAINER_ARTIFACTS,
+                ensure_private_container,
+                upload_blob,
+            )
+
+            logger.info(
+                "SCRIPT_REVIEW_ARTIFACT_STORAGE_SELECTED storage=azure_blob "
+                "platform_id=%s folder_id=%s blob_path=%s",
+                platform_id,
+                folder_id,
+                blob_path,
+            )
+
+            def _upload():
+                ensure_private_container(CONTAINER_ARTIFACTS)
+                return upload_blob(CONTAINER_ARTIFACTS, blob_path, raw)
+
+            _with_blob_retry(filename, _upload)
+            locator = f"azureblob://{CONTAINER_ARTIFACTS}/{blob_path}"
+            logger.info("SCRIPT_REVIEW_ARTIFACT_SAVED storage=azure_blob locator=%s", locator)
+            return locator
+        except Exception as exc:
+            logger.error(
+                "SCRIPT_REVIEW_ARTIFACT_SAVE_FAILED storage=azure_blob platform_id=%s "
+                "folder_id=%s filename=%s required=%s error=%s",
+                platform_id,
+                folder_id,
+                filename,
+                _artifacts_required(),
+                exc,
+            )
+            if _artifacts_required():
+                raise RuntimeError(
+                    f"Markdown de revue Azure Blob obligatoire non sauvegardé: {filename}"
+                ) from exc
+
+    if _artifacts_required():
+        raise RuntimeError(
+            "Stockage Azure Blob obligatoire mais aucune chaîne de connexion n'est configurée"
+        )
+
+    path = _local_script_review_path(platform_id, folder_id, filename)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as handle:
+        handle.write(markdown or "")
+    logger.info(
+        "SCRIPT_REVIEW_ARTIFACT_SAVED storage=local_dev path=%s platform_id=%s folder_id=%s",
+        path,
+        platform_id,
+        folder_id,
+    )
+    return path
 
 
 def _artifacts_required() -> bool:

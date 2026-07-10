@@ -12,7 +12,7 @@ import os
 import re
 from datetime import datetime
 
-from config import DB_PATH, FRANCE_TZ
+from config import FRANCE_TZ
 from repositories.pipeline_repository import (
     ensure_script_rules_table,
     get_content_segment_text_by_id,
@@ -21,8 +21,13 @@ from repositories.pipeline_repository import (
     list_completed_content_segment_rows,
     list_script_rule_annotation_rows,
     update_content_segment_plan_repair,
+    update_script_rules_markdown_path,
     upsert_generated_script_rules,
     upsert_manual_script_rules,
+)
+from services.content_pipeline.artifacts import (
+    save_script_review_markdown,
+    script_review_markdown_locator,
 )
 from utils.anthropic_client import (
     DEEPSEEK_DEFAULT_MODEL,
@@ -47,15 +52,16 @@ def _now_str() -> str:
     return datetime.now(FRANCE_TZ).strftime("%Y-%m-%d %H:%M:%S")
 
 
-def _notes_dir() -> str:
-    base_dir = os.path.dirname(DB_PATH) or os.getcwd()
-    path = os.path.join(base_dir, "tts_script_reviews")
-    os.makedirs(path, exist_ok=True)
-    return path
+def _rules_markdown_filename(folder_id: int, job_id: int) -> str:
+    return f"regles-folder-{folder_id}-job-{job_id}.md"
 
 
-def _rules_markdown_path(folder_id: int, job_id: int) -> str:
-    return os.path.join(_notes_dir(), f"regles-folder-{folder_id}-job-{job_id}.md")
+def _rules_markdown_path(platform_id: int, folder_id: int, job_id: int) -> str:
+    return script_review_markdown_locator(
+        platform_id,
+        folder_id,
+        _rules_markdown_filename(folder_id, job_id),
+    )
 
 
 def _fetch_context(folder_id: int) -> dict | None:
@@ -181,9 +187,12 @@ def extract_rules_from_annotations(folder_id: int) -> dict:
     if not markdown:
         raise ValueError("DeepSeek a renvoyé une réponse vide")
 
-    path = _rules_markdown_path(folder_id, context["job_id"])
-    with open(path, "w", encoding="utf-8") as f:
-        f.write(markdown.rstrip() + "\n")
+    path = save_script_review_markdown(
+        context["platform_id"],
+        folder_id,
+        _rules_markdown_filename(folder_id, context["job_id"]),
+        markdown.rstrip() + "\n",
+    )
 
     rules_count = _count_rules_in_markdown(markdown)
     _ensure_rules_table()
@@ -226,19 +235,50 @@ def get_rules(folder_id: int) -> dict:
             "rules_markdown": "",
             "rules_count": 0,
             "source_annotations_count": 0,
-            "markdown_path": _rules_markdown_path(folder_id, context["job_id"]),
+            "markdown_path": _rules_markdown_path(
+                context["platform_id"], folder_id, context["job_id"]
+            ),
             "model": "",
             "generated_at": "",
             "updated_at": "",
         }
 
+    rules_markdown = row.get("rules_markdown") or ""
+    expected_path = _rules_markdown_path(
+        context["platform_id"], folder_id, context["job_id"]
+    )
+    markdown_path = row.get("markdown_path") or expected_path
+    if (
+        rules_markdown
+        and expected_path.startswith("azureblob://")
+        and not markdown_path.startswith("azureblob://")
+    ):
+        markdown_path = save_script_review_markdown(
+            context["platform_id"],
+            folder_id,
+            _rules_markdown_filename(folder_id, context["job_id"]),
+            rules_markdown.rstrip() + "\n",
+        )
+        update_script_rules_markdown_path(
+            folder_id=folder_id,
+            job_id=context["job_id"],
+            markdown_path=markdown_path,
+        )
+        logger.info(
+            "SCRIPT_RULES_ARTIFACT_MIGRATED platform_id=%s folder_id=%s job_id=%s locator=%s",
+            context["platform_id"],
+            folder_id,
+            context["job_id"],
+            markdown_path,
+        )
+
     return {
         "context": context,
-        "rules_markdown": row.get("rules_markdown") or "",
+        "rules_markdown": rules_markdown,
         "rules_count": int(row.get("rules_count") or 0),
         "source_annotations_count": int(row.get("source_annotations_count") or 0),
         "model": row.get("model") or "",
-        "markdown_path": row.get("markdown_path") or _rules_markdown_path(folder_id, context["job_id"]),
+        "markdown_path": markdown_path,
         "generated_at": row.get("generated_at") or "",
         "updated_at": row.get("updated_at") or "",
     }
@@ -1303,9 +1343,12 @@ def update_rules_markdown(folder_id: int, markdown: str) -> dict:
 
     markdown = (markdown or "").strip()
     rules_count = _count_rules_in_markdown(markdown)
-    path = _rules_markdown_path(folder_id, context["job_id"])
-    with open(path, "w", encoding="utf-8") as f:
-        f.write(markdown.rstrip() + "\n")
+    path = save_script_review_markdown(
+        context["platform_id"],
+        folder_id,
+        _rules_markdown_filename(folder_id, context["job_id"]),
+        markdown.rstrip() + "\n",
+    )
 
     _ensure_rules_table()
     upsert_manual_script_rules(
