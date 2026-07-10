@@ -26,11 +26,9 @@ Les workflows suivants sont rattaches a cette branche, pas a `staging` :
 Le workflow backend configure `Formation3` comme copie SaaS :
 
 ```text
-DATABASE_BACKEND=hybrid
+DATABASE_BACKEND=postgres
 PIPELINE_DATABASE_BACKEND=postgres
 PIPELINE_POSTGRES_MIRROR=0
-DB_PATH=/home/database.db
-SQLITE_SAFETY_STRICT=0
 POSTGRES_POOL_MIN_SIZE=1
 POSTGRES_POOL_MAX_SIZE=12
 POSTGRES_POOL_TIMEOUT_SECONDS=30
@@ -40,26 +38,21 @@ PIPELINE_EMBEDDED_WORKER=1
 PIPELINE_ARTIFACTS_REQUIRED=1
 ```
 
-`DATABASE_BACKEND=hybrid` garde le comportement actuel de `socrate1` : le coeur
-SaaS utilise Postgres quand il est disponible, et la pipeline est forcee sur
-Postgres via `PIPELINE_DATABASE_BACKEND=postgres`.
+`DATABASE_BACKEND=postgres` et `PIPELINE_DATABASE_BACKEND=postgres` rendent
+PostgreSQL autoritaire pour le coeur SaaS, la pipeline, le planning et les
+rappels. Formation3 ne crée, n'initialise et ne sauvegarde plus de SQLite.
 
 Avant chaque deploiement, le workflow applique
 `backend/database/postgres_schema.sql`. Au boot, le backend verifie ensuite les
 tables et colonnes indispensables a la pipeline ; un schema incomplet bloque le
 demarrage avec la liste exacte des elements manquants.
 
-Le garde-fou SQLite historique bloque l'application si la base pointee par
-`DB_PATH` est neuve ou trop petite. Pour eviter une maintenance artificielle
-sur cette copie Postgres, `SQLITE_SAFETY_STRICT=0` autorise le demarrage meme
-si la SQLite fallback est petite. La source cible reste Postgres/Supabase via
-`DATABASE_BACKEND=hybrid` et `PIPELINE_DATABASE_BACKEND=postgres`.
+Le workflow supprime explicitement les anciens App Settings `DB_PATH` et
+`SQLITE_SAFETY_STRICT`. Le runtime refuse ensuite toute ouverture SQLite avec
+le log `SQLITE_ACCESS_BLOCKED`, afin qu'une route historique ne puisse pas
+recréer silencieusement `/home/database.db`.
 
-`hybrid` reste un mode de transition pour les dernières routes historiques,
-mais la pipeline et les GET RH principaux utilisent maintenant PostgreSQL. Le
-planning et les rappels basculent eux aussi sur PostgreSQL lorsque
-`DATABASE_BACKEND=postgres`; ils restent volontairement SQLite pendant le mode
-`hybrid`. La file DB durable est traitée par un worker embarqué ; sous forte
+La file DB durable est traitée par un worker embarqué ; sous forte
 charge, passer ce worker dans un App Service ou WebJob séparé et activer Azure
 Service Bus.
 

@@ -3,11 +3,28 @@ import os
 import shutil
 import sqlite3
 from datetime import datetime
-from config import DB_PATH, FRANCE_TZ
+from config import DB_PATH, FRANCE_TZ, sqlite_runtime_enabled
 from utils.logger import get_logger
 from utils.slug import slugify, unique_slug
 
 logger = get_logger(__name__)
+
+
+class SQLiteRuntimeDisabledError(RuntimeError):
+    """Raised when legacy code tries to open SQLite in pure Postgres mode."""
+
+
+def _require_sqlite_runtime(operation: str) -> None:
+    if sqlite_runtime_enabled():
+        return
+    logger.error(
+        "SQLITE_ACCESS_BLOCKED operation=%s backend=postgres path=%s",
+        operation,
+        DB_PATH,
+    )
+    raise SQLiteRuntimeDisabledError(
+        "Accès SQLite interdit : ce déploiement utilise PostgreSQL comme source unique"
+    )
 
 
 def get_db_connection():
@@ -19,6 +36,7 @@ def get_db_connection():
     par db_safety.startup_check, persistant) permet lecteurs + 1 écrivain
     simultanés et réduit fortement le risque de corruption.
     """
+    _require_sqlite_runtime("get_db_connection")
     conn = sqlite3.connect(DB_PATH, timeout=30)
     # NORMAL n'est sûr qu'avec WAL (jamais activé sur Azure : /home est un
     # partage réseau, cf. db_safety.enable_wal). En mode rollback journal on
@@ -57,6 +75,7 @@ def _quarantine_corrupt_database(db_path: str) -> str:
 
 def init_database(_recovered_from_corruption: bool = False):
     """Initialise la base de données avec les tables nécessaires"""
+    _require_sqlite_runtime("init_database")
     logger.info("🗄️ Initialisation de la base de données...")
     conn = None
     try:
