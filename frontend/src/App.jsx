@@ -235,7 +235,15 @@ export default function App() {
           <Route path="/landing" element={<Landing />} />
           <Route path="/video" element={<Video />} />
           <Route path="/login-admin" element={<LoginAdmin preloadAdminRoute={loadAdminPage} />} />
-          <Route path="/connexion-centre" element={<LoginCentre preloadDashboardRoute={loadHRDashboardPage} />} />
+          <Route
+            path="/connexion-centre"
+            element={(
+              <LoginCentre
+                preloadAdminRoute={loadAdminPage}
+                preloadDashboardRoute={loadHRDashboardPage}
+              />
+            )}
+          />
           <Route path="/login-centre" element={<LoginCentre preloadDashboardRoute={loadHRDashboardPage} />} />
 
           {/* Routes protégées admin */}

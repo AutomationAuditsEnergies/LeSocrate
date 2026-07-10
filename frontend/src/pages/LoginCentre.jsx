@@ -2,11 +2,11 @@ import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { apiFetch } from '../api'
 
-export default function LoginCentre({ preloadDashboardRoute }) {
+export default function LoginCentre({ preloadAdminRoute, preloadDashboardRoute }) {
   const [authMode, setAuthMode] = useState('login')
   const [centerName, setCenterName] = useState('')
-  const [username, setUsername] = useState('admin')
-  const [password, setPassword] = useState('secret123')
+  const [username, setUsername] = useState('')
+  const [password, setPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
@@ -47,8 +47,13 @@ export default function LoginCentre({ preloadDashboardRoute }) {
 
       if (response.ok && data.success) {
         if (data.token) localStorage.setItem('admin_auth_token', data.token)
-        await preloadDashboardRoute?.().catch(() => {})
-        navigate('/hr-dashboard')
+        if (data.account?.type === 'legacy_admin') {
+          await preloadAdminRoute?.().catch(() => {})
+          navigate('/admin')
+        } else {
+          await preloadDashboardRoute?.().catch(() => {})
+          navigate('/hr-dashboard')
+        }
         return
       }
 
