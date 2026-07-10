@@ -1,6 +1,6 @@
 # audio_service.py - Logique de gestion de la playlist et des audios
 import copy
-from config import COURS_PLAYLIST, DATABASE_BACKEND, FRANCE_TZ
+from config import COURS_PLAYLIST, DATABASE_BACKEND, FRANCE_TZ, PIPELINE_DATABASE_BACKEND
 from services.time_service import get_heure_debut_cours, get_current_simulated_time
 from utils.logger import get_logger
 
@@ -89,14 +89,24 @@ def get_playlist(platform_id=None):
     if platform_id is None:
         return playlist
 
-    postgres_only = DATABASE_BACKEND in {"postgres", "postgresql", "supabase"}
+    postgres_authoritative = (
+        DATABASE_BACKEND in {"postgres", "postgresql", "supabase"}
+        or PIPELINE_DATABASE_BACKEND in {"postgres", "postgresql", "supabase"}
+    )
     try:
-        if postgres_only:
+        if postgres_authoritative:
             from repositories.core_repository import get_platform_audio_config
 
             row = get_platform_audio_config(int(platform_id))
             if not row:
                 raise LookupError(f"Plateforme {platform_id} introuvable dans PostgreSQL")
+            logger.debug(
+                "PLAYLIST_CONFIG_POSTGRES_READ platform_id=%s database_backend=%s "
+                "pipeline_backend=%s",
+                platform_id,
+                DATABASE_BACKEND,
+                PIPELINE_DATABASE_BACKEND,
+            )
             mode = row["playlist_mode"]
             audio_base_url = row["audio_base_url"]
             audio_container = row["audio_container"]
@@ -115,9 +125,18 @@ def get_playlist(platform_id=None):
                 conn.close()
             mode, audio_base_url, audio_container = row if row else (None, None, None)
     except Exception as e:
-        logger.warning(f"⚠️ Impossible de lire platform_config pour la playlist: {e}")
-        if postgres_only:
+        if postgres_authoritative:
+            logger.error(
+                "PLAYLIST_CONFIG_POSTGRES_READ_FAILED platform_id=%s "
+                "database_backend=%s pipeline_backend=%s error=%s",
+                platform_id,
+                DATABASE_BACKEND,
+                PIPELINE_DATABASE_BACKEND,
+                str(e)[:500],
+                exc_info=True,
+            )
             raise
+        logger.warning(f"⚠️ Impossible de lire platform_config SQLite pour la playlist: {e}")
         return playlist
 
     if mode == "ete":

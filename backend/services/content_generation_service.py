@@ -23,6 +23,8 @@ import uuid as uuid_mod
 from difflib import SequenceMatcher
 from datetime import datetime
 
+from config import PIPELINE_DATABASE_BACKEND
+
 from repositories.pipeline_repository import (
     clear_cross_day_carryover,
     completed_content_segment_keys,
@@ -12337,6 +12339,17 @@ def _playlist_items_for_platform(platform_id: int) -> list:
         from services.audio_service import get_playlist
         playlist = get_playlist(platform_id)
     except Exception as e:
+        if PIPELINE_DATABASE_BACKEND in {"postgres", "postgresql", "supabase"}:
+            logger.error(
+                "PIPELINE_PLAYLIST_CONFIG_REQUIRED platform_id=%s backend=%s error=%s",
+                platform_id,
+                PIPELINE_DATABASE_BACKEND,
+                str(e)[:500],
+                exc_info=True,
+            )
+            raise RuntimeError(
+                f"Configuration playlist PostgreSQL indisponible pour la plateforme {platform_id}"
+            ) from e
         logger.warning(f"⚠️ Playlist plateforme indisponible, fallback PLAYLIST_SPEC : {e}")
         return list(PLAYLIST_SPEC)
 
