@@ -16,6 +16,12 @@ from repositories.core_repository import (
     upsert_cours_config,
     upsert_platform_config,
 )
+from repositories.course_schedule_repository import (
+    add_explicit_course_reminder_recipients,
+    delete_explicit_course_reminder_recipient,
+    list_explicit_course_reminder_recipients,
+    schedule_store_is_postgres,
+)
 from repositories.hr_read_repository import (
     list_formation_modules as list_hr_formation_modules,
     list_formations as list_hr_formations,
@@ -2593,10 +2599,11 @@ def create_hr_blueprint(socketio):
 
         if _is_local_platform(platform_id):
             try:
-                conn = get_db_connection()
-                cursor = conn.cursor()
+                conn = None if schedule_store_is_postgres() else get_db_connection()
+                cursor = conn.cursor() if conn is not None else None
                 schedule_summary = get_course_schedule_summary(cursor, platform_id)
-                conn.close()
+                if conn is not None:
+                    conn.close()
                 from services.time_service import get_heure_debut_cours
                 heure = get_heure_debut_cours(platform_id)
                 payload = {
@@ -2983,23 +2990,7 @@ def create_hr_blueprint(socketio):
         if denied:
             return denied
         try:
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            _ensure_course_reminder_recipients(cursor)
-            cursor.execute(
-                """
-                SELECT id, email, created_at
-                FROM course_reminder_recipients
-                WHERE platform_id = ?
-                ORDER BY email COLLATE NOCASE
-                """,
-                (platform_id,),
-            )
-            recipients = [
-                {"id": row[0], "email": row[1], "created_at": row[2]}
-                for row in cursor.fetchall()
-            ]
-            conn.close()
+            recipients = list_explicit_course_reminder_recipients(platform_id)
             return jsonify({"success": True, "recipients": recipients}), 200
         except Exception as e:
             logger.error(f"❌ Erreur get student emails P{platform_id}: {e}")
@@ -3030,33 +3021,11 @@ def create_hr_blueprint(socketio):
         if not emails:
             return jsonify({"success": False, "error": "Ajoute au moins un email"}), 400
         try:
-            now = datetime.now(FRANCE_TZ).strftime("%Y-%m-%d %H:%M:%S")
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            _ensure_course_reminder_recipients(cursor)
-            for email in emails:
-                cursor.execute(
-                    """
-                    INSERT OR IGNORE INTO course_reminder_recipients (platform_id, email, created_at)
-                    VALUES (?, ?, ?)
-                    """,
-                    (platform_id, email, now),
-                )
-            conn.commit()
-            cursor.execute(
-                """
-                SELECT id, email, created_at
-                FROM course_reminder_recipients
-                WHERE platform_id = ?
-                ORDER BY email COLLATE NOCASE
-                """,
-                (platform_id,),
+            recipients = add_explicit_course_reminder_recipients(
+                platform_id,
+                emails,
+                created_at=datetime.now(FRANCE_TZ),
             )
-            recipients = [
-                {"id": row[0], "email": row[1], "created_at": row[2]}
-                for row in cursor.fetchall()
-            ]
-            conn.close()
             return jsonify({"success": True, "recipients": recipients}), 201
         except Exception as e:
             logger.error(f"❌ Erreur add student emails P{platform_id}: {e}")
@@ -3068,16 +3037,10 @@ def create_hr_blueprint(socketio):
         if denied:
             return denied
         try:
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            _ensure_course_reminder_recipients(cursor)
-            cursor.execute(
-                "DELETE FROM course_reminder_recipients WHERE id = ? AND platform_id = ?",
-                (recipient_id, platform_id),
+            changed = delete_explicit_course_reminder_recipient(
+                platform_id,
+                recipient_id,
             )
-            changed = cursor.rowcount
-            conn.commit()
-            conn.close()
             if not changed:
                 return jsonify({"success": False, "error": "Email introuvable"}), 404
             return jsonify({"success": True}), 200
@@ -3104,8 +3067,9 @@ def create_hr_blueprint(socketio):
             # Appel direct au service local
             conn = None
             try:
-                conn = get_db_connection()
-                cursor = conn.cursor()
+                postgres_schedule = schedule_store_is_postgres()
+                conn = None if postgres_schedule else get_db_connection()
+                cursor = conn.cursor() if conn is not None else None
                 schedule_update = update_course_schedule(
                     cursor,
                     platform_id,
@@ -3113,15 +3077,25 @@ def create_hr_blueprint(socketio):
                     weekdays=weekdays,
                 )
                 if schedule_update:
-                    conn.commit()
-                    conn.close()
+                    if conn is not None:
+                        conn.commit()
+                        conn.close()
+                        conn = None
                     return jsonify({
                         "success": True,
                         "message": "Planning des journées mis à jour",
                         "schedule": schedule_update,
                     }), 200
-                cursor.execute("SELECT COUNT(*) FROM cours_folders WHERE platform_id = ?", (platform_id,))
-                folder_count = int((cursor.fetchone() or [0])[0] or 0)
+                if postgres_schedule:
+                    folder_count = len(
+                        list_course_folder_rows_for_platform(platform_id)["folders"]
+                    )
+                else:
+                    cursor.execute(
+                        "SELECT COUNT(*) FROM cours_folders WHERE platform_id = ?",
+                        (platform_id,),
+                    )
+                    folder_count = int((cursor.fetchone() or [0])[0] or 0)
                 schedule_update = create_missing_course_schedule(
                     cursor,
                     platform_id,
@@ -3131,14 +3105,18 @@ def create_hr_blueprint(socketio):
                     weekdays=weekdays,
                 )
                 if schedule_update:
-                    conn.commit()
-                    conn.close()
+                    if conn is not None:
+                        conn.commit()
+                        conn.close()
+                        conn = None
                     return jsonify({
                         "success": True,
                         "message": "Planning des journées créé",
                         "schedule": schedule_update,
                     }), 200
-                conn.close()
+                if conn is not None:
+                    conn.close()
+                    conn = None
 
                 if not date_str:
                     return jsonify({"success": False, "error": "date_cours requis pour une plateforme sans planning automatique"}), 400

@@ -788,6 +788,135 @@ def list_course_reminder_recipients(platform_id: int) -> list[dict[str, str]]:
         conn.close()
 
 
+def _ensure_sqlite_reminder_recipient_table(cursor) -> None:
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS course_reminder_recipients (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            platform_id INTEGER NOT NULL,
+            email TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            UNIQUE(platform_id, email)
+        )
+        """
+    )
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_course_reminder_recipients_platform "
+        "ON course_reminder_recipients(platform_id)"
+    )
+
+
+def list_explicit_course_reminder_recipients(platform_id: int) -> list[dict[str, Any]]:
+    if schedule_store_is_postgres():
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT id, email, created_at
+                    FROM course_reminder_recipients
+                    WHERE platform_id = %s
+                    ORDER BY LOWER(email)
+                    """,
+                    (int(platform_id),),
+                )
+                return [
+                    {
+                        "id": int(row["id"]),
+                        "email": row["email"],
+                        "created_at": format_schedule_datetime(row["created_at"]),
+                    }
+                    for row in cur.fetchall()
+                ]
+
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        _ensure_sqlite_reminder_recipient_table(cursor)
+        cursor.execute(
+            """
+            SELECT id, email, created_at
+            FROM course_reminder_recipients
+            WHERE platform_id = ?
+            ORDER BY email COLLATE NOCASE
+            """,
+            (int(platform_id),),
+        )
+        return [
+            {"id": int(row[0]), "email": row[1], "created_at": row[2]}
+            for row in cursor.fetchall()
+        ]
+    finally:
+        conn.close()
+
+
+def add_explicit_course_reminder_recipients(
+    platform_id: int,
+    emails: list[str],
+    *,
+    created_at,
+) -> list[dict[str, Any]]:
+    normalized = sorted({str(email or "").strip().lower() for email in emails if email})
+    if schedule_store_is_postgres():
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                cur.executemany(
+                    """
+                    INSERT INTO course_reminder_recipients (platform_id, email, created_at)
+                    VALUES (%s, %s, %s)
+                    ON CONFLICT (platform_id, email) DO NOTHING
+                    """,
+                    [(int(platform_id), email, created_at) for email in normalized],
+                )
+        return list_explicit_course_reminder_recipients(platform_id)
+
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        _ensure_sqlite_reminder_recipient_table(cursor)
+        cursor.executemany(
+            """
+            INSERT OR IGNORE INTO course_reminder_recipients (platform_id, email, created_at)
+            VALUES (?, ?, ?)
+            """,
+            [
+                (int(platform_id), email, _sqlite_datetime(created_at))
+                for email in normalized
+            ],
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return list_explicit_course_reminder_recipients(platform_id)
+
+
+def delete_explicit_course_reminder_recipient(platform_id: int, recipient_id: int) -> bool:
+    if schedule_store_is_postgres():
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    DELETE FROM course_reminder_recipients
+                    WHERE id = %s AND platform_id = %s
+                    """,
+                    (int(recipient_id), int(platform_id)),
+                )
+                return cur.rowcount == 1
+
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        _ensure_sqlite_reminder_recipient_table(cursor)
+        cursor.execute(
+            "DELETE FROM course_reminder_recipients WHERE id = ? AND platform_id = ?",
+            (int(recipient_id), int(platform_id)),
+        )
+        changed = cursor.rowcount == 1
+        conn.commit()
+        return changed
+    finally:
+        conn.close()
+
+
 def get_platform_class_identity(platform_id: int) -> dict[str, str] | None:
     if schedule_store_is_postgres():
         with get_postgres_connection() as conn:

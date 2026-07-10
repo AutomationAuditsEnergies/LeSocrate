@@ -27,7 +27,11 @@ from repositories.core_repository import (
     update_training_center_password,
     upsert_student_profile_with_id,
 )
-from repositories.pipeline_repository import hr_resource_belongs_to_center
+from repositories.pipeline_repository import (
+    hr_resource_belongs_to_center,
+    list_course_folder_rows_for_platform,
+)
+from repositories.course_schedule_repository import schedule_store_is_postgres
 from services.time_service import set_heure_debut_cours, get_heure_debut_cours
 from services.export_service import generate_excel_export
 from services.course_schedule_service import create_missing_course_schedule, get_course_schedule_summary, update_course_schedule
@@ -782,8 +786,9 @@ def create_admin_blueprint(socketio):
                     400,
                 )
             platform_id = int(data.get("platform_id", session.get("platform_id", 1)))
-            conn = get_db_connection()
-            cursor = conn.cursor()
+            postgres_schedule = schedule_store_is_postgres()
+            conn = None if postgres_schedule else get_db_connection()
+            cursor = conn.cursor() if conn is not None else None
             schedule_update = update_course_schedule(
                 cursor,
                 platform_id,
@@ -791,9 +796,10 @@ def create_admin_blueprint(socketio):
                 weekdays=weekdays,
             )
             if schedule_update:
-                conn.commit()
-                conn.close()
-                conn = None
+                if conn is not None:
+                    conn.commit()
+                    conn.close()
+                    conn = None
                 logger.info(f"⚙️ Planning cours P{platform_id} configuré en interne")
                 return (
                     jsonify(
@@ -805,8 +811,16 @@ def create_admin_blueprint(socketio):
                     ),
                     200,
                 )
-            cursor.execute("SELECT COUNT(*) FROM cours_folders WHERE platform_id = ?", (platform_id,))
-            folder_count = int((cursor.fetchone() or [0])[0] or 0)
+            if postgres_schedule:
+                folder_count = len(
+                    list_course_folder_rows_for_platform(platform_id)["folders"]
+                )
+            else:
+                cursor.execute(
+                    "SELECT COUNT(*) FROM cours_folders WHERE platform_id = ?",
+                    (platform_id,),
+                )
+                folder_count = int((cursor.fetchone() or [0])[0] or 0)
             schedule_update = create_missing_course_schedule(
                 cursor,
                 platform_id,
@@ -816,9 +830,10 @@ def create_admin_blueprint(socketio):
                 weekdays=weekdays,
             )
             if schedule_update:
-                conn.commit()
-                conn.close()
-                conn = None
+                if conn is not None:
+                    conn.commit()
+                    conn.close()
+                    conn = None
                 logger.info(f"⚙️ Planning cours P{platform_id} créé en interne")
                 return (
                     jsonify(
@@ -830,8 +845,9 @@ def create_admin_blueprint(socketio):
                     ),
                     200,
                 )
-            conn.close()
-            conn = None
+            if conn is not None:
+                conn.close()
+                conn = None
 
             if not date_str:
                 return jsonify({"success": False, "error": "date_cours requis pour une plateforme sans planning automatique"}), 400
@@ -874,10 +890,11 @@ def create_admin_blueprint(socketio):
             except (TypeError, ValueError):
                 platform_id = 1
             heure = get_heure_debut_cours(platform_id)
-            conn = get_db_connection()
-            cursor = conn.cursor()
+            conn = None if schedule_store_is_postgres() else get_db_connection()
+            cursor = conn.cursor() if conn is not None else None
             schedule_summary = get_course_schedule_summary(cursor, platform_id)
-            conn.close()
+            if conn is not None:
+                conn.close()
             payload = {
                 "success": True,
                 "date_cours": heure.strftime("%Y-%m-%d"),
