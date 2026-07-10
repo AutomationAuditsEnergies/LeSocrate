@@ -86,24 +86,13 @@ jobs:
             --name socrate1 \
             --startup-file "${STARTUP_COMMAND}"
 
-          plan_id="$(az webapp show \
-            --resource-group "${RESOURCE_GROUP}" \
-            --name socrate1 \
-            --query serverFarmId \
-            --output tsv)"
-          plan_tier="$(az appservice plan show \
-            --ids "${plan_id}" \
-            --query sku.tier \
-            --output tsv)"
-
-          if [ "${plan_tier}" != "Free" ] && [ "${plan_tier}" != "Shared" ]; then
-            az webapp config set \
+          if az webapp config set \
               --resource-group "${RESOURCE_GROUP}" \
               --name socrate1 \
-              --always-on true \
-              --generic-configurations '{"healthCheckPath":"/api/hr/enabled"}'
+              --always-on true; then
+            echo "Always On activé pour Socrate1."
           else
-            echo "Always On indisponible sur le plan Azure ${plan_tier}; configuration ignorée."
+            echo "Always On indisponible sur ce plan Azure; le déploiement continue avec le contrôle de disponibilité." >&2
           fi
 
       - name: Deploy to Azure Web App production
