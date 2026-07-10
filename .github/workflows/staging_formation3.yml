@@ -64,66 +64,18 @@ jobs:
       INTERNAL_ADMIN_PASSWORD_HASH: ${{ secrets.SAAS_INTERNAL_ADMIN_PASSWORD_HASH || secrets.INTERNAL_ADMIN_PASSWORD_HASH }}
       SECRET_KEY: ${{ secrets.SAAS_SECRET_KEY || secrets.SECRET_KEY }}
       AUTO_LOGOUT_WEBHOOK_SECRET: ${{ secrets.SAAS_AUTO_LOGOUT_WEBHOOK_SECRET || secrets.AUTO_LOGOUT_WEBHOOK_SECRET }}
+      ANTHROPIC_API_KEY: ${{ secrets.SAAS_ANTHROPIC_API_KEY || secrets.ANTHROPIC_API_KEY }}
+      DEEPSEEK_API_KEY: ${{ secrets.SAAS_DEEPSEEK_API_KEY || secrets.DEEPSEEK_API_KEY }}
+      FISH_AUDIO_API_KEY: ${{ secrets.SAAS_FISH_AUDIO_API_KEY || secrets.FISH_AUDIO_API_KEY }}
+      FISH_AUDIO_VOICE_ID: ${{ secrets.SAAS_FISH_AUDIO_VOICE_ID || secrets.FISH_AUDIO_VOICE_ID }}
+      AZURE_AUDIO_STORAGE_CONNECTION_STRING: ${{ secrets.SAAS_AZURE_AUDIO_STORAGE_CONNECTION_STRING || secrets.AZURE_AUDIO_STORAGE_CONNECTION_STRING }}
+      AZURE_STORAGE_CONNECTION_STRING: ${{ secrets.SAAS_AZURE_STORAGE_CONNECTION_STRING || secrets.AZURE_STORAGE_CONNECTION_STRING }}
 
     steps:
       - name: Download artifact from build job
         uses: actions/download-artifact@v4
         with:
           name: python-app
-
-      - name: Login to Azure source platform
-        uses: azure/login@v2
-        with:
-          client-id: ${{ secrets.AZUREAPPSERVICE_CLIENTID_4A8A266416524733B4971777A0995D2C }}
-          tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_41081722FD194A6DBBEE83B7861AA33F }}
-          subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_DD044DCD13764A6CBF8D1889CF9E5B07 }}
-
-      - name: Load pipeline runtime dependencies from Socrate1
-        shell: bash
-        run: |
-          source_app="socrate1"
-          source_group="socrate1_group"
-          required_keys=(
-            ANTHROPIC_API_KEY
-            AZURE_TTS_STORAGE_CONNECTION_STRING
-            FISH_AUDIO_API_KEY
-          )
-          optional_keys=(
-            DEEPSEEK_API_KEY
-            AZURE_AUDIO_STORAGE_CONNECTION_STRING
-            AZURE_STORAGE_CONNECTION_STRING
-            FISH_AUDIO_VOICE_ID
-          )
-
-          load_setting() {
-            local key="$1"
-            local value
-            value="$(az webapp config appsettings list \
-              --resource-group "${source_group}" \
-              --name "${source_app}" \
-              --query "[?name=='${key}'].value | [0]" \
-              -o tsv)"
-            if [ -n "${value}" ]; then
-              echo "::add-mask::${value}"
-              printf '%s=%s\n' "${key}" "${value}" >> "${GITHUB_ENV}"
-              printf 'PIPELINE_DEPENDENCY_LOADED key=%s source=%s\n' "${key}" "${source_app}"
-              return 0
-            fi
-            return 1
-          }
-
-          missing=()
-          for key in "${required_keys[@]}"; do
-            load_setting "${key}" || missing+=("${key}")
-          done
-          for key in "${optional_keys[@]}"; do
-            load_setting "${key}" || true
-          done
-          if [ "${#missing[@]}" -gt 0 ]; then
-            printf 'PIPELINE_DEPENDENCY_MISSING source=%s keys=%s\n' \
-              "${source_app}" "${missing[*]}" >&2
-            exit 1
-          fi
 
       - name: Login to Azure Formation3
         uses: azure/login@v2
@@ -157,6 +109,15 @@ jobs:
               missing+=("${key}")
             elif [ -z "${value}" ]; then
               printf '%s=%s\n' "${key}" "${existing}" >> "${GITHUB_ENV}"
+            fi
+          done
+
+          for key in ANTHROPIC_API_KEY FISH_AUDIO_API_KEY AZURE_AUDIO_STORAGE_CONNECTION_STRING; do
+            if [ -z "${!key:-}" ]; then
+              missing+=("${key}")
+              printf 'PIPELINE_DEPENDENCY_MISSING target=%s key=%s\n' "${APP_NAME}" "${key}" >&2
+            else
+              printf 'PIPELINE_DEPENDENCY_READY target=%s key=%s\n' "${APP_NAME}" "${key}"
             fi
           done
 
