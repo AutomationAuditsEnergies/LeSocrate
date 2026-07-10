@@ -13,6 +13,7 @@ import requests as http_requests
 
 from config import FRANCE_TZ
 from database.db import get_db_connection
+from repositories import course_schedule_repository as schedule_repo
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -31,6 +32,10 @@ SESSION_PASSWORD_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 
 
 def ensure_course_schedule_tables(cursor):
+    # Postgres schema changes are applied during deployment. Runtime DDL and
+    # SQLite PRAGMAs must never run against the production store.
+    if schedule_repo.schedule_store_is_postgres():
+        return
     cursor.execute(
         """
         CREATE TABLE IF NOT EXISTS course_schedule_config (
@@ -57,6 +62,8 @@ def ensure_course_schedule_tables(cursor):
             completed_at TEXT,
             reminder_previous_evening_sent_at TEXT,
             reminder_5min_sent_at TEXT,
+            reminder_previous_evening_claimed_at TEXT,
+            reminder_5min_claimed_at TEXT,
             session_password TEXT,
             session_password_generated_at TEXT,
             audio_generation_status TEXT DEFAULT 'pending',
@@ -82,6 +89,8 @@ def ensure_course_schedule_tables(cursor):
     for col, col_type in {
         "session_password": "TEXT",
         "session_password_generated_at": "TEXT",
+        "reminder_previous_evening_claimed_at": "TEXT",
+        "reminder_5min_claimed_at": "TEXT",
         "audio_generation_status": "TEXT DEFAULT 'pending'",
         "audio_generation_started_at": "TEXT",
         "audio_generation_completed_at": "TEXT",
@@ -100,6 +109,13 @@ def _generate_session_password():
 
 
 def _ensure_session_password(cursor, session_id, now_str=None):
+    if schedule_repo.schedule_store_is_postgres():
+        generated_at = now_str or _now_str()
+        return schedule_repo.ensure_session_password(
+            int(session_id),
+            password=_generate_session_password(),
+            generated_at=generated_at,
+        )
     cursor.execute(
         "SELECT session_password FROM course_sessions WHERE id = ?",
         (session_id,),
@@ -175,11 +191,28 @@ def _format_session_for_error(scheduled_at):
 
 def _find_schedule_update_lock(cursor, platform_id):
     """Bloque une modification qui pourrait déplacer une génération audio proche."""
-    ensure_course_schedule_tables(cursor)
     horizon, late_grace = _audio_schedule_window_hours()
     now = datetime.now(FRANCE_TZ)
-    lower_bound = (now - timedelta(hours=late_grace)).strftime("%Y-%m-%d %H:%M:%S")
-    upper_bound = (now + timedelta(hours=horizon)).strftime("%Y-%m-%d %H:%M:%S")
+    lower_dt = now - timedelta(hours=late_grace)
+    upper_dt = now + timedelta(hours=horizon)
+    if schedule_repo.schedule_store_is_postgres():
+        row = schedule_repo.find_schedule_update_lock(
+            int(platform_id),
+            lower_bound=lower_dt,
+            upper_bound=upper_dt,
+        )
+        if not row:
+            return None
+        return {
+            **row,
+            "scheduled_at": schedule_repo.format_schedule_datetime(row.get("scheduled_at")),
+            "horizon_hours": horizon,
+            "late_grace_hours": late_grace,
+        }
+
+    ensure_course_schedule_tables(cursor)
+    lower_bound = lower_dt.strftime("%Y-%m-%d %H:%M:%S")
+    upper_bound = upper_dt.strftime("%Y-%m-%d %H:%M:%S")
 
     cursor.execute(
         """
@@ -274,8 +307,6 @@ def _generate_session_datetimes(total_training_days, weekdays, start_time, start
 
 
 def save_course_schedule(cursor, platform_id, schedule):
-    ensure_course_schedule_tables(cursor)
-
     schedule = schedule or {}
     total_training_days = int(schedule.get("total_training_days") or 0)
     weekly_course_count = int(schedule.get("weekly_course_count") or 0)
@@ -289,8 +320,39 @@ def save_course_schedule(cursor, platform_id, schedule):
         start_time=start_time,
         start_date=start_date,
     )
-    now = _now_str()
+    now_dt = datetime.now(FRANCE_TZ)
+    now = now_dt.strftime("%Y-%m-%d %H:%M:%S")
     weekdays_json = json.dumps(weekdays)
+
+    if schedule_repo.schedule_store_is_postgres():
+        horizon, late_grace = _audio_schedule_window_hours()
+        session_rows = [
+            {
+                "session_index": index,
+                "scheduled_at": scheduled,
+                "session_password": _generate_session_password(),
+            }
+            for index, scheduled in enumerate(sessions, start=1)
+        ]
+        schedule_repo.replace_course_schedule(
+            platform_id=int(platform_id),
+            total_training_days=total_training_days,
+            weekly_course_count=weekly_course_count,
+            weekdays_json=weekdays_json,
+            start_time=start_time,
+            timezone_name="Europe/Paris",
+            sessions=session_rows,
+            now=now_dt,
+            guard_lower_bound=now_dt - timedelta(hours=late_grace),
+            guard_upper_bound=now_dt + timedelta(hours=horizon),
+        )
+        return {
+            "total_sessions": len(sessions),
+            "first_session_at": sessions[0].strftime("%Y-%m-%d %H:%M:%S") if sessions else None,
+            "last_session_at": sessions[-1].strftime("%Y-%m-%d %H:%M:%S") if sessions else None,
+        }
+
+    ensure_course_schedule_tables(cursor)
 
     cursor.execute(
         """
@@ -309,8 +371,24 @@ def save_course_schedule(cursor, platform_id, schedule):
         """,
         (platform_id, total_training_days, weekly_course_count, weekdays_json, start_time, now, now),
     )
-    cursor.execute("DELETE FROM course_sessions WHERE platform_id = ?", (platform_id,))
-    for index, scheduled in enumerate(sessions, start=1):
+    # A planning update must not erase attendance/reminder/audio history. Only
+    # replace sessions that are still mutable and scheduled in the future.
+    cursor.execute(
+        """
+        DELETE FROM course_sessions
+        WHERE platform_id = ?
+          AND status IN ('planned', 'active')
+          AND scheduled_at >= ?
+        """,
+        (platform_id, now),
+    )
+    cursor.execute(
+        "SELECT COALESCE(MAX(session_index), 0) FROM course_sessions WHERE platform_id = ?",
+        (platform_id,),
+    )
+    retained_max_index = int(cursor.fetchone()[0] or 0)
+    for offset, scheduled in enumerate(sessions, start=1):
+        index = retained_max_index + offset
         session_password = _generate_session_password()
         cursor.execute(
             """
@@ -398,6 +476,24 @@ def create_missing_course_schedule(
 
 
 def get_course_schedule_summary(cursor, platform_id):
+    if schedule_repo.schedule_store_is_postgres():
+        row = schedule_repo.get_course_schedule_summary(int(platform_id))
+        if not row:
+            return None
+        try:
+            weekdays = json.loads(row.get("weekdays_json") or "[]")
+        except Exception:
+            weekdays = []
+        return {
+            "total_training_days": row.get("total_training_days"),
+            "weekly_course_count": row.get("weekly_course_count"),
+            "weekdays": weekdays,
+            "start_time": row.get("start_time"),
+            "timezone": row.get("timezone"),
+            "next_session_at": row.get("next_session_at"),
+            "last_session_at": row.get("last_session_at"),
+        }
+
     ensure_course_schedule_tables(cursor)
     cursor.execute(
         """
@@ -501,6 +597,8 @@ def update_course_schedule(cursor, platform_id, start_time=None, weekdays=None):
 
 
 def create_course_schedule(platform_id, schedule):
+    if schedule_repo.schedule_store_is_postgres():
+        return save_course_schedule(None, platform_id, schedule)
     conn = get_db_connection()
     try:
         cursor = conn.cursor()
@@ -512,11 +610,24 @@ def create_course_schedule(platform_id, schedule):
 
 
 def _parse_local_datetime(value):
-    dt = datetime.strptime(value, "%Y-%m-%d %H:%M:%S")
-    return FRANCE_TZ.localize(dt)
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            return FRANCE_TZ.localize(value)
+        return value.astimezone(FRANCE_TZ)
+    raw = str(value or "").strip()
+    try:
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        parsed = datetime.strptime(raw, "%Y-%m-%d %H:%M:%S")
+    if parsed.tzinfo is None:
+        return FRANCE_TZ.localize(parsed)
+    return parsed.astimezone(FRANCE_TZ)
 
 
 def _upsert_course_time(cursor, platform_id, scheduled_at):
+    if schedule_repo.schedule_store_is_postgres():
+        schedule_repo.upsert_course_start(int(platform_id), scheduled_at)
+        return
     cursor.execute(
         "UPDATE cours_config SET heure_debut = ? WHERE platform_id = ?",
         (scheduled_at, platform_id),
@@ -529,8 +640,17 @@ def _upsert_course_time(cursor, platform_id, scheduled_at):
 
 
 def advance_platform_schedule(cursor, platform_id, now=None):
-    ensure_course_schedule_tables(cursor)
     now = now or datetime.now(FRANCE_TZ)
+    if schedule_repo.schedule_store_is_postgres():
+        active_hours = float(os.environ.get("COURSE_SESSION_ACTIVE_HOURS", "12"))
+        stale_before = now - timedelta(hours=active_hours)
+        return schedule_repo.advance_platform_schedule(
+            int(platform_id),
+            now=now,
+            stale_before=stale_before,
+        )
+
+    ensure_course_schedule_tables(cursor)
     now_str = now.strftime("%Y-%m-%d %H:%M:%S")
     active_hours = float(os.environ.get("COURSE_SESSION_ACTIVE_HOURS", "12"))
     stale_before = (now - timedelta(hours=active_hours)).strftime("%Y-%m-%d %H:%M:%S")
@@ -597,6 +717,14 @@ def advance_platform_schedule(cursor, platform_id, now=None):
 
 
 def run_scheduler_tick(platform_ids=None):
+    if schedule_repo.schedule_store_is_postgres():
+        ids = (
+            [int(pid) for pid in platform_ids]
+            if platform_ids
+            else schedule_repo.list_schedule_platform_ids()
+        )
+        return [advance_platform_schedule(None, pid) for pid in ids]
+
     conn = get_db_connection()
     try:
         cursor = conn.cursor()
@@ -615,6 +743,13 @@ def run_scheduler_tick(platform_ids=None):
 
 
 def _platform_class_url(cursor, platform_id, base_url=None):
+    if schedule_repo.schedule_store_is_postgres():
+        row = schedule_repo.get_platform_class_identity(int(platform_id))
+        if not row:
+            return ""
+        path = f"/classe/{row.get('center_slug') or 'le-socrate'}/{row.get('platform_slug')}"
+        return f"{str(base_url).rstrip('/')}{path}" if base_url else path
+
     cursor.execute(
         """
         SELECT pc.slug, COALESCE(tca.slug, 'le-socrate')
@@ -633,6 +768,9 @@ def _platform_class_url(cursor, platform_id, base_url=None):
 
 
 def _student_recipients(cursor, platform_id):
+    if schedule_repo.schedule_store_is_postgres():
+        return schedule_repo.list_course_reminder_recipients(int(platform_id))
+
     recipients = {}
     try:
         ensure_course_schedule_tables(cursor)
@@ -856,40 +994,61 @@ def _dispatch_reminder(payload):
 
 
 def process_due_reminders(base_url=None, dry_run=False):
-    conn = get_db_connection()
+    postgres_store = schedule_repo.schedule_store_is_postgres()
+    conn = None if postgres_store else get_db_connection()
     try:
-        cursor = conn.cursor()
-        ensure_course_schedule_tables(cursor)
+        cursor = None if postgres_store else conn.cursor()
+        if cursor is not None:
+            ensure_course_schedule_tables(cursor)
         now = datetime.now(FRANCE_TZ)
         now_str = now.strftime("%Y-%m-%d %H:%M:%S")
         evening_hour = int(os.environ.get("REMINDER_PREVIOUS_EVENING_HOUR", "18"))
         active_hours = float(os.environ.get("COURSE_SESSION_ACTIVE_HOURS", "12"))
         active_until = now + timedelta(hours=active_hours)
 
-        cursor.execute(
-            """
-            SELECT id, platform_id, session_index, scheduled_at,
-                   reminder_previous_evening_sent_at, reminder_5min_sent_at,
-                   session_password
-            FROM course_sessions
-            WHERE status IN ('planned', 'active')
-              AND scheduled_at <= ?
-            ORDER BY scheduled_at ASC
-            """,
-            (active_until.strftime("%Y-%m-%d %H:%M:%S"),),
-        )
+        if postgres_store:
+            session_rows = schedule_repo.list_due_reminder_sessions(active_until=active_until)
+        else:
+            cursor.execute(
+                """
+                SELECT id, platform_id, session_index, scheduled_at,
+                       reminder_previous_evening_sent_at, reminder_5min_sent_at,
+                       session_password
+                FROM course_sessions
+                WHERE status IN ('planned', 'active')
+                  AND scheduled_at <= ?
+                ORDER BY scheduled_at ASC
+                """,
+                (active_until.strftime("%Y-%m-%d %H:%M:%S"),),
+            )
+            session_rows = [
+                {
+                    "id": row[0],
+                    "platform_id": row[1],
+                    "session_index": row[2],
+                    "scheduled_at": row[3],
+                    "reminder_previous_evening_sent_at": row[4],
+                    "reminder_5min_sent_at": row[5],
+                    "session_password": row[6],
+                }
+                for row in cursor.fetchall()
+            ]
 
         results = []
-        for (
-            session_id,
-            platform_id,
-            session_index,
-            scheduled_at_str,
-            previous_sent,
-            five_sent,
-            session_password,
-        ) in cursor.fetchall():
-            scheduled_at = _parse_local_datetime(scheduled_at_str)
+        for session_row in session_rows:
+            session_id = int(session_row["id"])
+            platform_id = int(session_row["platform_id"])
+            session_index = session_row["session_index"]
+            scheduled_at_value = session_row["scheduled_at"]
+            scheduled_at_str = (
+                schedule_repo.format_schedule_datetime(scheduled_at_value)
+                if postgres_store
+                else scheduled_at_value
+            )
+            previous_sent = session_row.get("reminder_previous_evening_sent_at")
+            five_sent = session_row.get("reminder_5min_sent_at")
+            session_password = session_row.get("session_password")
+            scheduled_at = _parse_local_datetime(scheduled_at_value)
             due_types = []
             previous_evening_at = FRANCE_TZ.localize(
                 datetime.combine((scheduled_at - timedelta(days=1)).date(), time(evening_hour, 0))
@@ -924,15 +1083,41 @@ def process_due_reminders(base_url=None, dry_run=False):
                     results.append({**payload, "success": True, "dry_run": True})
                     continue
 
+                claimed_at = now if postgres_store else None
+                if postgres_store and not schedule_repo.claim_course_reminder(
+                    session_id,
+                    reminder_type,
+                    claimed_at=claimed_at,
+                ):
+                    # A second worker already owns or sent this reminder.
+                    continue
                 ok, error = _dispatch_reminder(payload)
-                if ok:
+                if ok and postgres_store:
+                    if not schedule_repo.complete_course_reminder(
+                        session_id,
+                        reminder_type,
+                        claimed_at=claimed_at,
+                        sent_at=now,
+                    ):
+                        ok = False
+                        error = "Le lease du rappel a expiré avant confirmation"
+                elif ok:
                     cursor.execute(
                         f"UPDATE course_sessions SET {sent_column} = ?, updated_at = ? WHERE id = ?",
                         (now_str, now_str, session_id),
                     )
+                elif not ok and postgres_store:
+                    # Failed delivery remains retryable by the next timer tick.
+                    schedule_repo.release_course_reminder_claim(
+                        session_id,
+                        reminder_type,
+                        claimed_at=claimed_at,
+                    )
                 results.append({**payload, "success": ok, "error": error})
 
-        conn.commit()
+        if conn is not None:
+            conn.commit()
         return results
     finally:
-        conn.close()
+        if conn is not None:
+            conn.close()

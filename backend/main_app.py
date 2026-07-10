@@ -6,7 +6,11 @@ from flask_socketio import SocketIO
 from flask_cors import CORS
 
 # Configuration et logging
-from config import SECRET_KEY
+from config import (
+    PIPELINE_DATABASE_BACKEND,
+    SECRET_KEY,
+    sqlite_runtime_enabled,
+)
 from utils.logger import configure_logging, get_logger
 
 # Database
@@ -36,6 +40,8 @@ app.config["SECRET_KEY"] = SECRET_KEY
 
 # Configuration des cookies de session pour le cross-origin (Azure)
 is_azure = os.environ.get("WEBSITE_SITE_NAME") is not None
+if is_azure and SECRET_KEY == "fallback_secret_key_for_dev":
+    raise RuntimeError("SECRET_KEY de production non configurée")
 if is_azure:
     app.config["SESSION_COOKIE_SAMESITE"] = "None"
     app.config["SESSION_COOKIE_SECURE"] = True
@@ -59,7 +65,7 @@ CORS(app, resources={
     r"/*": {
         "origins": _cors_origins,
         "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-        "allow_headers": ["Content-Type", "Authorization", "X-Auth-Token", "X-Platform-Id", "Range"],
+        "allow_headers": ["Content-Type", "Authorization", "X-Auth-Token", "X-Platform-Id", "X-Internal-Secret", "Range"],
         "expose_headers": ["Accept-Ranges", "Content-Length", "Content-Range", "Content-Disposition"],
         "supports_credentials": True
     }
@@ -93,10 +99,50 @@ app.register_blueprint(formation_bp)
 
 logger.info("✅ Tous les blueprints enregistrés")
 
+
+@app.get("/healthz")
+def liveness_probe():
+    """Process-only probe for Azure; never depends on an external service."""
+    return _jsonify({"status": "ok"}), 200
+
+
+@app.get("/readyz")
+def readiness_probe():
+    """Fail deployment traffic when the authoritative database is unavailable."""
+    try:
+        from database.postgres import get_postgres_connection, postgres_enabled
+
+        if postgres_enabled():
+            with get_postgres_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT 1 AS ready")
+                    cur.fetchone()
+        else:
+            from database.db import get_db_connection
+
+            conn = get_db_connection()
+            try:
+                conn.execute("SELECT 1").fetchone()
+            finally:
+                conn.close()
+
+        if os.getenv("PIPELINE_ARTIFACTS_REQUIRED", "0").strip().lower() in {
+            "1", "true", "yes", "on",
+        } and not (
+            os.getenv("AZURE_TTS_STORAGE_CONNECTION_STRING")
+            or os.getenv("AZURE_STORAGE_CONNECTION_STRING")
+        ):
+            raise RuntimeError("Stockage d'artefacts obligatoire non configuré")
+        return _jsonify({"status": "ready"}), 200
+    except Exception as exc:
+        logger.warning("READINESS_FAILED error=%s", str(exc)[:300])
+        return _jsonify({"status": "not_ready"}), 503
+
 # Reconstituer la session Flask depuis le header X-Auth-Token
 # (pour navigation privée et navigateurs bloquant les cookies tiers)
 # + injecter platform_id depuis le header X-Platform-Id
 import state as _state
+from utils.auth_tokens import verify_auth_token
 from flask import jsonify as _jsonify
 @app.before_request
 def populate_session_from_token():
@@ -122,7 +168,7 @@ def populate_session_from_token():
         token = request.args.get("auth_token")
     if not session.get("is_admin") and token:
         admin_tokens = getattr(_state, "admin_tokens", {})
-        admin_user = admin_tokens.get(token)
+        admin_user = admin_tokens.get(token) or verify_auth_token("admin", token)
         if admin_user:
             session["is_admin"] = True
             session["admin_account_type"] = admin_user.get("account_type", "training_center")
@@ -133,8 +179,10 @@ def populate_session_from_token():
             session.permanent = True
 
     if "nom" not in session:
-        if token and token in _state.user_tokens:
-            user = _state.user_tokens[token]
+        user = None
+        if token:
+            user = _state.user_tokens.get(token) or verify_auth_token("student", token)
+        if user:
             session["nom"] = user["nom"]
             session["prenom"] = user["prenom"]
             session["log_id"] = user["log_id"]
@@ -161,6 +209,8 @@ def platform_info():
         row = get_platform_info(pid)
         if row:
             return _jsonify({"id": row["id"], "name": row["name"], "slug": row["slug"]})
+        if not sqlite_runtime_enabled():
+            return _jsonify({"error": "Platform not found"}), 404
 
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -200,6 +250,8 @@ def class_access(center_slug, platform_slug):
                 "name": row["center_name"],
             },
         })
+    if postgres_enabled() and not sqlite_runtime_enabled():
+        return _jsonify({"success": False, "error": "Classe introuvable"}), 404
 
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -249,20 +301,74 @@ def class_access(center_slug, platform_slug):
 register_socketio_handlers(socketio)
 logger.info("✅ Gestionnaires SocketIO enregistrés")
 
-# Sécurité DB avant tout : integrity_check + backup au boot, restauration
-# automatique du dernier backup sain en cas de corruption (cf. db_safety.py)
-db_safety.startup_check()
+# SQLite is a supported local/migration backend, never a hidden production
+# dependency. Pure Postgres deployments must be able to run without DB_PATH.
+if sqlite_runtime_enabled():
+    # Sécurité DB avant tout : integrity_check + backup au boot, restauration
+    # automatique du dernier backup sain en cas de corruption (cf. db_safety.py)
+    db_safety.startup_check()
 
-# Initialisation de la base de données (migrations incluses — doit précéder boot recovery)
-init_database()
-logger.info("✅ Base de données initialisée")
+    # Initialisation SQLite (migrations incluses — doit précéder boot recovery)
+    init_database()
+    logger.info("✅ Base SQLite initialisée")
+else:
+    logger.info("✅ Mode Postgres pur : initialisation/backup SQLite désactivés")
 
-# Backup périodique toutes les 6h (green thread eventlet via socketio)
-socketio.start_background_task(db_safety.periodic_backup_loop, socketio.sleep)
-logger.info("✅ Backup DB périodique programmé (toutes les 6h)")
+if PIPELINE_DATABASE_BACKEND in {"postgres", "postgresql", "supabase"}:
+    from database.postgres import validate_pipeline_postgres_schema
+
+    validate_pipeline_postgres_schema()
+    logger.info("✅ Schéma Postgres pipeline validé")
+
+# Backup périodique SQLite seulement. PostgreSQL/Blob rely on their managed
+# backup/retention policies and are verified by deployment health checks.
+if sqlite_runtime_enabled():
+    socketio.start_background_task(db_safety.periodic_backup_loop, socketio.sleep)
+    logger.info("✅ Backup DB SQLite périodique programmé (toutes les 6h)")
 
 # Watchdog après init DB : reprend les auto-pilots interrompus ou locks zombies
 start_auto_pilot_watchdog()
+
+
+def _embedded_pipeline_worker_loop():
+    """Compatibility worker until a dedicated Azure worker is provisioned.
+
+    Work remains durable in the DB; moving this loop to a Continuous WebJob or
+    a separate App Service only changes deployment, not orchestration semantics.
+    """
+    from services.pipeline_queue.handlers import (
+        handle_auto_pilot_work_item,
+        mark_auto_pilot_dead_letter,
+    )
+    from services.pipeline_queue.repository import WorkItemRepository
+    from services.pipeline_queue.settings import QueueSettings
+    from services.pipeline_queue.worker import PipelineWorker
+
+    while True:
+        try:
+            repository = WorkItemRepository()
+            repository.ensure_schema()
+            worker = PipelineWorker(
+                repository,
+                handle_auto_pilot_work_item,
+                settings=QueueSettings.from_env(),
+                on_dead_letter=mark_auto_pilot_dead_letter,
+            )
+            logger.info("PIPELINE_EMBEDDED_WORKER_STARTED owner=%s", worker.owner)
+            worker.run_forever()
+        except Exception:
+            logger.exception("PIPELINE_EMBEDDED_WORKER_CRASHED restart_in_seconds=10")
+            socketio.sleep(10)
+
+
+if (
+    os.getenv("PIPELINE_EXECUTION_MODE", "inline").strip().lower()
+    in {"queue", "queued", "durable"}
+    and os.getenv("PIPELINE_EMBEDDED_WORKER", "0").strip().lower()
+    in {"1", "true", "yes", "on"}
+):
+    socketio.start_background_task(_embedded_pipeline_worker_loop)
+    logger.info("✅ Worker pipeline durable embarqué programmé")
 
 
 if __name__ == "__main__":

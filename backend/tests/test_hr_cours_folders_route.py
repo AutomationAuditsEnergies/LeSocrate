@@ -17,6 +17,7 @@ class HrCoursFoldersRouteTest(unittest.TestCase):
     def test_cours_folders_route_uses_migrated_pipeline_repository(self):
         with self.client.session_transaction() as sess:
             sess["is_admin"] = True
+            sess["admin_account_type"] = "legacy_admin"
 
         repository_result = {
             "folders": [{
@@ -89,7 +90,8 @@ class HrCoursFoldersRouteTest(unittest.TestCase):
                 status TEXT,
                 auto_pilot_step TEXT,
                 auto_pilot_error TEXT,
-                auto_pilot_enabled INTEGER
+                auto_pilot_enabled INTEGER,
+                auto_pilot_post_review_docs_done INTEGER DEFAULT 0
             );
             CREATE TABLE deletion_requests (
                 platform_id INTEGER,
@@ -130,6 +132,7 @@ class HrCoursFoldersRouteTest(unittest.TestCase):
     def test_platforms_listing_does_not_repair_by_default(self):
         with self.client.session_transaction() as sess:
             sess["is_admin"] = True
+            sess["admin_account_type"] = "legacy_admin"
 
         conn = self._make_platforms_connection()
         try:
@@ -153,6 +156,7 @@ class HrCoursFoldersRouteTest(unittest.TestCase):
     def test_platforms_listing_can_repair_when_requested(self):
         with self.client.session_transaction() as sess:
             sess["is_admin"] = True
+            sess["admin_account_type"] = "legacy_admin"
 
         conn = self._make_platforms_connection()
         try:

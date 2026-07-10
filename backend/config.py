@@ -7,7 +7,15 @@ FRANCE_TZ = pytz.timezone("Europe/Paris")
 
 # Configuration Flask
 SECRET_KEY = os.getenv("SECRET_KEY", "fallback_secret_key_for_dev")
-STUDENT_AUTH_LEGACY_FALLBACK = os.getenv("STUDENT_AUTH_LEGACY_FALLBACK", "1").lower() in (
+_student_auth_default = (
+    "0"
+    if os.getenv("DATABASE_BACKEND", "sqlite").strip().lower()
+    in {"postgres", "postgresql", "supabase"}
+    else "1"
+)
+STUDENT_AUTH_LEGACY_FALLBACK = os.getenv(
+    "STUDENT_AUTH_LEGACY_FALLBACK", _student_auth_default
+).lower() in (
     "1",
     "true",
     "yes",
@@ -35,6 +43,19 @@ PIPELINE_POSTGRES_MIRROR = os.getenv("PIPELINE_POSTGRES_MIRROR", "").strip().low
     "yes",
     "on",
 )
+
+
+def sqlite_runtime_enabled() -> bool:
+    """Whether any authoritative runtime domain still requires SQLite.
+
+    ``hybrid`` and ``postgres_core`` are explicit migration modes. A deployment
+    configured with both business and pipeline data on Postgres must not create,
+    validate, back up, or silently read a local SQLite database.
+    """
+    return (
+        DATABASE_BACKEND in {"sqlite", "hybrid", "postgres_core"}
+        or PIPELINE_DATABASE_BACKEND not in {"postgres", "postgresql", "supabase"}
+    )
 SQLITE_SAFETY_STRICT = os.getenv("SQLITE_SAFETY_STRICT", "1").strip().lower() in (
     "1",
     "true",

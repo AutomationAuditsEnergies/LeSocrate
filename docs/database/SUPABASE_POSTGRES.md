@@ -5,15 +5,17 @@
 Le Socrate doit passer progressivement de SQLite vers PostgreSQL pour le SaaS multi-tenant :
 
 - `SQLite` reste utilisable en local et pendant la transition.
-- `Supabase Postgres` devient la cible staging / production SaaS.
+- un `PostgreSQL managé` (Supabase ou Azure Database for PostgreSQL) devient la cible staging / production SaaS.
 - Azure Blob Storage reste la source des fichiers lourds : audio, PDF, DOCX, archives.
 - Postgres garde les donnees metier : centres, plateformes, eleves, logs, commandes IA, paiements.
 
-## Why Supabase First
+## Choix du fournisseur
 
-Supabase est le bon choix maintenant parce que le projet utilise deja Supabase Auth cote eleves, et parce que Postgres reste standard. Si besoin, une migration ulterieure vers Azure Database for PostgreSQL restera possible.
-
-Azure PostgreSQL pourra devenir pertinent plus tard si toute l'infra doit etre consolidee dans Azure avec plus de controle reseau/ops.
+Supabase Auth peut rester côté élèves indépendamment du fournisseur de la base
+métier. Lorsque le backend et Blob sont déjà sur Azure, Azure Database for
+PostgreSQL est une cible naturelle pour le réseau privé, la haute disponibilité
+et l'exploitation. Le code n'utilise aucune extension propriétaire et accepte
+les deux via `DATABASE_URL`.
 
 ## Required Access
 
@@ -23,7 +25,12 @@ Pour executer la migration reelle, il faut une URL Postgres, jamais committee :
 export DATABASE_URL='postgresql://postgres.<project-ref>:<password>@<pooler-host>:6543/postgres?sslmode=require'
 ```
 
-Dans Supabase, prendre de preference le connection string du pooler transaction pour une app web hebergee. Garder le mot de passe dans Azure App Settings ou dans `backend/.env` local.
+Pour Azure App Service (processus backend persistant), prendre de preference le
+pooler Supavisor en mode **Session** (`:5432`), ou la connexion directe si le
+reseau IPv6 est disponible. Le mode Transaction (`:6543`) est surtout adapte
+aux fonctions serverless/ephemeres ; il reste supporte ici avec les prepared
+statements psycopg desactives. Garder le mot de passe dans Azure App Settings
+ou dans `backend/.env` local.
 
 ## Files
 
@@ -80,29 +87,48 @@ Le script migre volontairement le coeur SaaS :
 - `video_visits`
 - `student_accounts`
 - `student_profiles`
+- `course_schedule_config`
+- `course_sessions`
+- `course_reminder_recipients`
+- `student_attendance_records`
+- `ai_teacher_orders`
+- `deletion_requests`
 
-Les tables lourdes de pipeline pedagogique restent a migrer dans une seconde passe. Elles contiennent beaucoup de JSON/artefacts intermediaires et demandent une decision produit : tout garder dans Postgres, archiver une partie en Blob, ou repartir uniquement des modules valides.
+Les tables de pipeline sont migrées dans une seconde passe. PostgreSQL conserve
+les métadonnées/checkpoints ; Azure Blob conserve les binaires et artefacts
+lourds.
 
 ## Pipeline Migration
 
-La premiere passe Postgres de la pipeline garde le comportement historique par
-defaut :
+La pipeline dispose d'un repository commun SQLite/Postgres :
 
 - `PIPELINE_DATABASE_BACKEND=sqlite` : la pipeline lit/ecrit SQLite.
 - `PIPELINE_POSTGRES_MIRROR=1` : la pipeline garde SQLite comme source de verite
   mais miroir-ecrit `formation_pipeline_jobs` vers Postgres quand
   `DATABASE_BACKEND` et `DATABASE_URL` activent Postgres.
-- `PIPELINE_DATABASE_BACKEND=postgres` : les fonctions centralisees de job
-  pipeline (`create_job`, `update_job`, `get_job`, `list_jobs`, reprise
-  auto-pilot) utilisent Postgres. A activer seulement apres migration des tables
-  pipeline et validation des routes qui ont encore du SQL direct.
+- `PIPELINE_DATABASE_BACKEND=postgres` : jobs, plateformes creees par la
+  pipeline, dossiers, segments, reviews, evenements, slides et modules utilisent
+  Postgres comme source de verite. Le demarrage valide le contrat de schema et
+  echoue explicitement si une table/colonne requise manque.
+
+Le workflow Formation3 applique maintenant le schema idempotent avant le
+deploiement. Il ne faut plus compter sur `CREATE TABLE IF NOT EXISTS` seul pour
+faire evoluer une table deja provisionnee : les ajouts de colonnes sont exprimes
+avec `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`.
 
 Le rollback le plus simple est de remettre `PIPELINE_DATABASE_BACKEND=sqlite`
 et de desactiver `PIPELINE_POSTGRES_MIRROR`.
 
 ## Runtime Switch
 
-Ne pas basculer tout le runtime en Postgres tout de suite. Le code contient encore beaucoup de SQL SQLite specifique dans la pipeline :
+Le planning opérationnel (`course_schedule_*`, `course_sessions`, rappels et
+audio planifié) utilise désormais PostgreSQL dès que
+`PIPELINE_DATABASE_BACKEND=postgres`. Les GET principaux du dashboard RH lisent
+également PostgreSQL. `DATABASE_BACKEND=hybrid` reste nécessaire tant que les
+dernières routes RH mutatives et quelques fonctions historiques ne sont pas
+portées ; il ne faut basculer en mode pur qu'après leurs tests de cutover.
+
+Les motifs SQLite a ne plus introduire dans un chemin Postgres sont :
 
 - placeholders `?`
 - `PRAGMA table_info`
@@ -113,8 +139,36 @@ Ne pas basculer tout le runtime en Postgres tout de suite. Le code contient enco
 Modes supportes :
 
 - `DATABASE_BACKEND=sqlite` : mode historique/local, Postgres ignore.
-- `DATABASE_BACKEND=hybrid` : phase 1 actuelle. Le coeur SaaS utilise Postgres quand disponible, tout en gardant SQLite pour la pipeline.
-- `DATABASE_BACKEND=postgres` : cible future, a reserver au moment ou la pipeline aura aussi son adapter Postgres.
+- `DATABASE_BACKEND=hybrid` : phase de transition actuelle. Postgres est la
+  source de verite de la fabrication ; SQLite garde temporairement les routes
+  HR/planning non migrees.
+- `DATABASE_BACKEND=postgres` : cible finale, sans initialisation, backup ni
+  fallback SQLite silencieux.
+
+## Connection Pool
+
+Chaque worker Azure reutilise un pool psycopg borne au lieu d'ouvrir une
+connexion par checkpoint :
+
+```text
+POSTGRES_POOL_MIN_SIZE=1
+POSTGRES_POOL_MAX_SIZE=12
+POSTGRES_POOL_TIMEOUT_SECONDS=30
+```
+
+Dimensionner `POSTGRES_POOL_MAX_SIZE × nombre_de_workers` sous la limite de
+connexions du projet Supabase.
+
+## Architecture cible
+
+- Postgres/Supabase : etat transactionnel, relations multi-tenant, checkpoints,
+  index de recherche et metadonnees interrogeables.
+- Azure Blob Storage : MP3, PDF, DOCX, archives et gros artefacts immuables.
+- Une seule source de verite par agregat : aucune lecture SQLite de secours
+  silencieuse lorsqu'un job est Postgres.
+- Conserver temporairement les JSON historiques en `TEXT` maintient le contrat
+  Python (`json.loads`). Migrer ensuite vers `JSONB` uniquement pour les champs
+  effectivement filtres/requetes, avec une migration et des index GIN cibles.
 
 En mode `hybrid`, les chemins suivants passent par `repositories/core_repository.py` :
 
@@ -124,26 +178,25 @@ En mode `hybrid`, les chemins suivants passent par `repositories/core_repository
 4. Profils eleves Supabase et logs de presence : miroir Postgres progressif.
 5. Commandes IA : creation/listing en Postgres, paiement Stripe a brancher ensuite.
 
+Le fallback PostgREST est désactivé par défaut. Il ne doit jamais rediriger une
+panne d'Azure PostgreSQL vers le projet Supabase utilisé uniquement pour Auth.
+La file durable et le runbook complet sont documentés dans
+`docs/architecture/PIPELINE_PRODUCTION_POSTGRES_AZURE.md`.
+
 ## Security: RLS
 
-Supabase signale actuellement que RLS est desactive sur les tables publiques du coeur SaaS. Ne pas activer RLS sans politiques : cela bloquerait les acces applicatifs.
+Le schema active RLS sur toutes les tables exposees dans `public`, sans policy
+`anon` ni `authenticated`. C'est volontaire : le navigateur utilise Supabase
+Auth, mais toutes les donnees metier passent par Flask. Le role proprietaire de
+la connexion Postgres et la `service_role` utilisee par le fallback serveur
+conservent leur acces privilegie ; un client muni de la cle publique ne peut pas
+lire les tables via PostgREST.
 
-La remediation brute indiquee par Supabase est :
+Les anciens mots de passe en clair de debug sont effacés lors de l'application
+du schéma et ne sont plus migrés ni écrits. `SECRET_KEY` et le hash du
+super-admin sont des secrets obligatoires de déploiement.
 
-```sql
-ALTER TABLE public.training_center_accounts ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.platform_config ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.cours_config ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.logs ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.video_visits ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.student_accounts ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.student_profiles ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.ai_teacher_orders ENABLE ROW LEVEL SECURITY;
-```
-
-Avant de l'executer, definir les policies par role :
-
-- acces serveur via service role pour les routes Flask ;
-- lecture publique tres limitee pour la resolution des classes publiees, ou mieux aucun acces direct client et tout via Flask ;
-- isolation stricte par `center_account_id` pour les centres ;
-- isolation par `platform_id` pour les eleves.
+Si une lecture directe depuis le frontend est introduite plus tard, ajouter une
+policy minimale et testee pour cette table uniquement, avec isolation stricte
+par `center_account_id` ou `platform_id`. Ne jamais ajouter une policy globale
+permissive pour contourner une erreur d'autorisation.

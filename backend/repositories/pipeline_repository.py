@@ -1,21 +1,23 @@
-"""Storage adapter for formation pipeline jobs.
+"""Backend-neutral storage for formation pipeline state and artifacts.
 
-The historical pipeline still has many SQLite-specific queries around folders,
-segments and generated artifacts. This repository moves the centralized job
-state behind a small adapter first, so Postgres can be enabled progressively
-without changing the pipeline contract.
+SQLite remains supported for local/stable deployments. When the pipeline
+backend is Postgres, every formation aggregate handled here stays in Postgres;
+the temporary hybrid mirror only exists for legacy HR/schedule routes.
 """
 
 from __future__ import annotations
 
 import sqlite3
 import time
+from datetime import datetime
 from typing import Any
 
-from config import PIPELINE_DATABASE_BACKEND, PIPELINE_POSTGRES_MIRROR
+from config import DATABASE_BACKEND, PIPELINE_DATABASE_BACKEND, PIPELINE_POSTGRES_MIRROR
 from database.db import get_db_connection
 from database.postgres import get_postgres_connection, postgres_enabled
+from repositories.course_schedule_repository import schedule_store_is_postgres
 from utils.logger import get_logger
+from utils.slug import slugify
 
 
 logger = get_logger(__name__)
@@ -113,7 +115,15 @@ POSTGRES_TRANSIENT_ERROR_MARKERS = (
     "server closed the connection",
     "terminating connection",
     "the connection is closed",
+    "couldn't get a connection",
+    "pool timeout",
+    "remaining connection slots are reserved",
+    "too many connections",
 )
+
+
+class PlatformIdentityConflictError(RuntimeError):
+    """An ID already belongs to another tenant/slug platform identity."""
 
 
 def _pipeline_primary_backend() -> str:
@@ -194,6 +204,463 @@ def _run_postgres_with_retry(label: str, operation, *, attempts: int = 3):
             time.sleep(wait_seconds)
 
 
+def _sqlite_pipeline_mirror_required() -> bool:
+    """Keep the temporary hybrid UI/scheduler mirror out of pure Postgres mode."""
+    return _pipeline_primary_backend() == "postgres" and DATABASE_BACKEND == "hybrid"
+
+
+def platform_ids_use_postgres_allocator() -> bool:
+    """Whether hybrid writers must reserve platform IDs in PostgreSQL first.
+
+    This deliberately follows the configured authority rather than connection
+    availability. A broken PostgreSQL configuration must fail closed instead
+    of allocating a potentially colliding SQLite ID.
+    """
+    return _sqlite_pipeline_mirror_required()
+
+
+def _upsert_pipeline_platform_sqlite(platform: dict[str, Any]) -> None:
+    """Compatibility mirror for routes that have not left SQLite yet.
+
+    Postgres remains authoritative when the pipeline backend is Postgres. This
+    mirror is deliberately one-way and only enabled in the temporary hybrid
+    deployment mode.
+    """
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT center_account_id, slug FROM platform_config WHERE id = ?",
+            (platform["id"],),
+        )
+        existing = cursor.fetchone()
+        incoming_identity = (platform.get("center_account_id"), platform.get("slug"))
+        if existing is not None and tuple(existing) != incoming_identity:
+            raise PlatformIdentityConflictError(
+                "Refus d'écraser le miroir SQLite: "
+                f"platform_config.id={platform['id']} appartient déjà à "
+                f"l'identité {tuple(existing)!r}, reçue={incoming_identity!r}"
+            )
+        cursor.execute(
+            """
+            INSERT INTO platform_config (
+                id, center_account_id, name, slug, upload_locked,
+                public_access_enabled, updated_at, playlist_mode,
+                audio_container, pdf_container, archive_container,
+                audio_base_url, status, source_formation_id, source_module_id
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                center_account_id = excluded.center_account_id,
+                name = excluded.name,
+                slug = excluded.slug,
+                upload_locked = excluded.upload_locked,
+                public_access_enabled = excluded.public_access_enabled,
+                updated_at = excluded.updated_at,
+                playlist_mode = excluded.playlist_mode,
+                audio_container = excluded.audio_container,
+                pdf_container = excluded.pdf_container,
+                archive_container = excluded.archive_container,
+                audio_base_url = excluded.audio_base_url,
+                status = excluded.status,
+                source_formation_id = excluded.source_formation_id,
+                source_module_id = excluded.source_module_id
+            WHERE platform_config.center_account_id IS excluded.center_account_id
+              AND platform_config.slug IS excluded.slug
+            """,
+            (
+                platform["id"],
+                platform.get("center_account_id"),
+                platform["name"],
+                platform["slug"],
+                1 if platform.get("upload_locked", True) else 0,
+                1 if platform.get("public_access_enabled", True) else 0,
+                platform["updated_at"],
+                platform.get("playlist_mode"),
+                platform.get("audio_container"),
+                platform.get("pdf_container"),
+                platform.get("archive_container"),
+                platform.get("audio_base_url") or "",
+                platform.get("status") or "pending",
+                platform.get("source_formation_id"),
+                platform.get("source_module_id"),
+            ),
+        )
+        if cursor.rowcount != 1:
+            raise PlatformIdentityConflictError(
+                "Refus d'écraser le miroir SQLite: collision concurrente sur "
+                f"platform_config.id={platform['id']}"
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _sqlite_platform_max_id() -> int:
+    """Read the committed SQLite high-water mark used during hybrid cutover."""
+    conn = get_db_connection()
+    try:
+        row = conn.execute("SELECT COALESCE(MAX(id), 0) FROM platform_config").fetchone()
+        return int(row[0] if row else 0)
+    finally:
+        conn.close()
+
+
+def _row_scalar(row: Any, key: str) -> Any:
+    if isinstance(row, dict):
+        return row[key]
+    try:
+        return row[key]
+    except (TypeError, IndexError):
+        return row[0]
+
+
+def _allocate_platform_id_postgres(cur, *, sqlite_max_id: int = 0) -> int:
+    """Reserve the next collision-free platform ID from PostgreSQL.
+
+    ``nextval`` is monotonic and non-transactional. The advisory lock makes the
+    one-time SQLite high-water reconciliation atomic across every creator that
+    uses this allocator. We never move the sequence backwards: an already
+    reserved sequence value wins over both table maxima.
+    """
+    cur.execute(
+        "SELECT pg_advisory_xact_lock(hashtext(%s))",
+        ("platform-config-id-allocator:v1",),
+    )
+    cur.execute(
+        "SELECT pg_get_serial_sequence(%s, %s) AS sequence_name",
+        ("platform_config", "id"),
+    )
+    sequence_row = cur.fetchone()
+    sequence_name = _row_scalar(sequence_row, "sequence_name") if sequence_row else None
+    if not sequence_name:
+        raise RuntimeError("Séquence PostgreSQL de platform_config.id introuvable")
+
+    cur.execute("SELECT COALESCE(MAX(id), 0) AS max_id FROM platform_config")
+    pg_max_row = cur.fetchone()
+    pg_max_id = int(_row_scalar(pg_max_row, "max_id") if pg_max_row else 0)
+    required_floor = max(0, int(sqlite_max_id or 0), pg_max_id)
+
+    cur.execute("SELECT nextval(%s::regclass) AS id", (sequence_name,))
+    candidate = int(_row_scalar(cur.fetchone(), "id"))
+    if candidate <= required_floor:
+        cur.execute(
+            "SELECT setval(%s::regclass, %s, TRUE)",
+            (sequence_name, required_floor),
+        )
+        cur.execute("SELECT nextval(%s::regclass) AS id", (sequence_name,))
+        candidate = int(_row_scalar(cur.fetchone(), "id"))
+    return candidate
+
+
+def allocate_platform_id_from_postgres(*, sqlite_max_id: int | None = None) -> int:
+    """Public allocator used by the legacy HR writer during hybrid cutover."""
+    if _pipeline_primary_backend() != "postgres":
+        raise RuntimeError("L'allocateur PostgreSQL exige PIPELINE_DATABASE_BACKEND=postgres")
+    if sqlite_max_id is None:
+        sqlite_max_id = _sqlite_platform_max_id() if _sqlite_pipeline_mirror_required() else 0
+    with get_postgres_connection() as conn:
+        with conn.cursor() as cur:
+            return _allocate_platform_id_postgres(cur, sqlite_max_id=int(sqlite_max_id))
+
+
+def _insert_pipeline_platform_postgres(
+    cur,
+    *,
+    platform_name: str,
+    center_account_id: int | None,
+) -> dict[str, Any]:
+    """Insert a platform using the caller's transaction."""
+    sqlite_max_id = _sqlite_platform_max_id() if _sqlite_pipeline_mirror_required() else 0
+    allocated_id = _allocate_platform_id_postgres(cur, sqlite_max_id=sqlite_max_id)
+    base_slug = slugify(platform_name, fallback="formation")[:48]
+    lock_key = f"pipeline-platform:{center_account_id or 0}:{base_slug}"
+    cur.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", (lock_key,))
+    candidate = base_slug
+    suffix = 2
+    while True:
+        cur.execute(
+            """
+            SELECT 1
+            FROM platform_config
+            WHERE slug = %s
+              AND center_account_id IS NOT DISTINCT FROM %s
+            LIMIT 1
+            """,
+            (candidate, center_account_id),
+        )
+        if cur.fetchone() is None:
+            break
+        suffix_text = f"-{suffix}"
+        candidate = f"{base_slug[:48 - len(suffix_text)]}{suffix_text}"
+        suffix += 1
+
+    cur.execute(
+        """
+        INSERT INTO platform_config (
+            id, center_account_id, name, slug, upload_locked,
+            public_access_enabled, updated_at, status, audio_base_url
+        )
+        VALUES (%s, %s, %s, %s, TRUE, TRUE, NOW(), 'pending', '')
+        RETURNING id, center_account_id, name, slug, upload_locked,
+                  public_access_enabled, updated_at, playlist_mode,
+                  status, source_formation_id, source_module_id
+        """,
+        (allocated_id, center_account_id, platform_name, candidate),
+    )
+    platform = dict(cur.fetchone())
+    platform_id = int(platform["id"])
+    platform.update(
+        {
+            "audio_container": f"formationaudio-p{platform_id}",
+            "pdf_container": f"formationpdf-p{platform_id}",
+            "archive_container": f"formationaudio-p{platform_id}-archives",
+            "audio_base_url": "",
+        }
+    )
+    cur.execute(
+        """
+        UPDATE platform_config
+        SET audio_container = %s,
+            pdf_container = %s,
+            archive_container = %s
+        WHERE id = %s
+        """,
+        (
+            platform["audio_container"],
+            platform["pdf_container"],
+            platform["archive_container"],
+            platform_id,
+        ),
+    )
+    return platform
+
+
+def create_pipeline_platform(
+    *,
+    name: str,
+    center_account_id: int | None = None,
+) -> dict[str, Any]:
+    """Create the platform in the same authoritative store as its pipeline.
+
+    The previous implementation inserted the platform in SQLite and then the
+    job in Postgres. The Postgres foreign key therefore rejected every fresh
+    pipeline whose platform had not been migrated beforehand.
+    """
+    platform_name = str(name or "").strip()
+    if not platform_name:
+        raise ValueError("Le nom de plateforme est requis")
+    base_slug = slugify(platform_name, fallback="formation")[:48]
+
+    if _pipeline_primary_backend() == "postgres":
+        def _postgres_operation():
+            with get_postgres_connection() as conn:
+                with conn.cursor() as cur:
+                    return _insert_pipeline_platform_postgres(
+                        cur,
+                        platform_name=platform_name,
+                        center_account_id=center_account_id,
+                    )
+
+        platform = _run_postgres_with_retry("create_pipeline_platform", _postgres_operation)
+        if _sqlite_pipeline_mirror_required():
+            try:
+                _upsert_pipeline_platform_sqlite(platform)
+            except Exception:
+                logger.warning(
+                    "PIPELINE_PLATFORM_SQLITE_MIRROR_FAILED platform_id=%s",
+                    platform.get("id"),
+                    exc_info=True,
+                )
+        return platform
+
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        candidate = base_slug
+        suffix = 2
+        while cursor.execute(
+            "SELECT 1 FROM platform_config WHERE slug = ? AND center_account_id IS ? LIMIT 1",
+            (candidate, center_account_id),
+        ).fetchone():
+            suffix_text = f"-{suffix}"
+            candidate = f"{base_slug[:48 - len(suffix_text)]}{suffix_text}"
+            suffix += 1
+        cursor.execute(
+            """
+            INSERT INTO platform_config (
+                center_account_id, name, slug, upload_locked,
+                public_access_enabled, updated_at, status, audio_base_url
+            )
+            VALUES (?, ?, ?, 1, 1, ?, 'pending', '')
+            """,
+            (center_account_id, platform_name, candidate, now),
+        )
+        platform_id = int(cursor.lastrowid)
+        platform = {
+            "id": platform_id,
+            "center_account_id": center_account_id,
+            "name": platform_name,
+            "slug": candidate,
+            "upload_locked": True,
+            "public_access_enabled": True,
+            "updated_at": now,
+            "playlist_mode": None,
+            "audio_container": f"formationaudio-p{platform_id}",
+            "pdf_container": f"formationpdf-p{platform_id}",
+            "archive_container": f"formationaudio-p{platform_id}-archives",
+            "audio_base_url": "",
+            "status": "pending",
+            "source_formation_id": None,
+            "source_module_id": None,
+        }
+        cursor.execute(
+            """
+            UPDATE platform_config
+            SET audio_container = ?, pdf_container = ?, archive_container = ?
+            WHERE id = ?
+            """,
+            (
+                platform["audio_container"],
+                platform["pdf_container"],
+                platform["archive_container"],
+                platform_id,
+            ),
+        )
+        conn.commit()
+        return platform
+    finally:
+        conn.close()
+
+
+def create_postgres_pipeline_aggregate(
+    *,
+    platform_name: str,
+    center_account_id: int | None,
+    tp_name: str,
+    rncp_code: str,
+    total_hours: int,
+    nb_days: int,
+    model: str | None = None,
+) -> dict[str, Any]:
+    """Atomically create the Postgres platform, pipeline job, and their link.
+
+    This closes the orphan window left by three separate HTTP-layer writes. The
+    optional SQLite compatibility mirror is updated only *after* the Postgres
+    transaction commits and is never authoritative.
+    """
+    if _pipeline_primary_backend() != "postgres":
+        raise RuntimeError("create_postgres_pipeline_aggregate requiert PostgreSQL")
+    platform_name = str(platform_name or "").strip()
+    tp_name = str(tp_name or "").strip()
+    rncp_code = str(rncp_code or "").strip()
+    if not platform_name or not tp_name or not rncp_code:
+        raise ValueError("platform_name, tp_name et rncp_code sont requis")
+    if int(total_hours) <= 0 or int(nb_days) <= 0:
+        raise ValueError("total_hours et nb_days doivent être positifs")
+
+    def _operation():
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                platform = _insert_pipeline_platform_postgres(
+                    cur,
+                    platform_name=platform_name,
+                    center_account_id=center_account_id,
+                )
+                cur.execute(
+                    """
+                    INSERT INTO formation_pipeline_jobs
+                        (platform_id, tp_name, rncp_code, total_hours, nb_days,
+                         status, auto_pilot_model)
+                    VALUES (%s, %s, %s, %s, %s, 'init', %s)
+                    RETURNING id
+                    """,
+                    (
+                        int(platform["id"]),
+                        tp_name,
+                        rncp_code,
+                        int(total_hours),
+                        int(nb_days),
+                        model,
+                    ),
+                )
+                job_id = int(cur.fetchone()["id"])
+                cur.execute(
+                    """
+                    UPDATE platform_config
+                    SET source_formation_id = %s, updated_at = NOW()
+                    WHERE id = %s
+                    """,
+                    (job_id, int(platform["id"])),
+                )
+                platform["source_formation_id"] = job_id
+                return {"platform": platform, "job_id": job_id}
+
+    # INSERT+commit is deliberately not transport-retried: after an ambiguous
+    # commit a blind retry could create a second platform. The transaction is
+    # atomic; callers may safely query/retry with an explicit API idempotency key
+    # when that contract is introduced.
+    result = _operation()
+    if _sqlite_pipeline_mirror_required():
+        try:
+            _upsert_pipeline_platform_sqlite(result["platform"])
+        except Exception:
+            logger.warning(
+                "PIPELINE_AGGREGATE_SQLITE_MIRROR_FAILED platform_id=%s job_id=%s",
+                result["platform"].get("id"),
+                result["job_id"],
+                exc_info=True,
+            )
+    return result
+
+
+def link_pipeline_platform_to_job(platform_id: int, job_id: int) -> None:
+    """Persist the platform/job relationship in the authoritative backend."""
+    if _pipeline_primary_backend() == "postgres":
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE platform_config
+                    SET source_formation_id = COALESCE(source_formation_id, %s),
+                        updated_at = NOW()
+                    WHERE id = %s
+                    """,
+                    (job_id, platform_id),
+                )
+                if cur.rowcount != 1:
+                    raise ValueError(f"Plateforme Postgres introuvable: {platform_id}")
+        if _sqlite_pipeline_mirror_required():
+            conn = get_db_connection()
+            try:
+                conn.execute(
+                    "UPDATE platform_config SET source_formation_id = ? WHERE id = ?",
+                    (job_id, platform_id),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+        return
+
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            UPDATE platform_config
+            SET source_formation_id = COALESCE(source_formation_id, ?)
+            WHERE id = ?
+            """,
+            (job_id, platform_id),
+        )
+        if cursor.rowcount != 1:
+            raise ValueError(f"Plateforme SQLite introuvable: {platform_id}")
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def _fetch_sqlite_job_payload(job_id: int) -> dict[str, Any] | None:
     conn = _as_sqlite_row_connection()
     try:
@@ -264,11 +731,52 @@ def create_course_folder_for_job(
     folder_name: str,
     formation_job_id: int,
 ) -> dict[str, Any]:
-    """Create a course folder at the next platform position."""
+    """Create a course folder at the next platform position.
+
+    PostgreSQL creation is idempotent for ``(formation_job_id, name)``.  The
+    platform advisory lock serializes both the identity re-check and position
+    allocation, while the partial unique index in ``postgres_schema.sql`` is
+    the final guard for writers which do not use this repository.
+
+    SQLite deliberately keeps its historical behaviour: old databases may
+    contain duplicate day folders and the read path still ranks those rows to
+    select a canonical folder.
+    """
     ph = _placeholder()
     if _pipeline_primary_backend() == "postgres":
         with get_postgres_connection() as conn:
             with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT pg_advisory_xact_lock(%s)",
+                    (int(platform_id),),
+                )
+                cur.execute(
+                    """
+                    SELECT
+                        cf.id,
+                        cf.name,
+                        cf.position,
+                        cf.platform_id,
+                        cf.formation_job_id,
+                        cgj.id AS content_job_id,
+                        cgj.status AS content_status,
+                        COALESCE(cgj.total_words, 0) AS total_words,
+                        COALESCE((
+                            SELECT COUNT(*)
+                            FROM content_generation_segments cgs
+                            WHERE cgs.job_id = cgj.id AND cgs.status = 'completed'
+                        ), 0) AS segments_completed
+                    FROM cours_folders cf
+                    LEFT JOIN content_generation_jobs cgj ON cgj.folder_id = cf.id
+                    WHERE cf.formation_job_id = %s AND cf.name = %s
+                    ORDER BY cf.id ASC
+                    LIMIT 1
+                    """,
+                    (formation_job_id, folder_name),
+                )
+                existing = cur.fetchone()
+                if existing:
+                    return dict(existing)
                 cur.execute(
                     f"SELECT COALESCE(MAX(position), -1) + 1 AS position FROM cours_folders WHERE platform_id = {ph}",
                     (platform_id,),
@@ -723,6 +1231,37 @@ def list_pipeline_event_rows(job_id: int, *, limit: int = 200) -> list[dict[str,
         conn.close()
 
 
+def get_latest_pipeline_event_created_at(
+    *,
+    job_id: int,
+    folder_id: int,
+    event_type: str,
+) -> Any | None:
+    ensure_pipeline_observability_tables()
+    ph = _placeholder()
+    query = f"""
+        SELECT created_at
+        FROM formation_pipeline_events
+        WHERE job_id = {ph} AND folder_id = {ph} AND event_type = {ph}
+        ORDER BY created_at DESC, id DESC
+        LIMIT 1
+    """
+    params = (job_id, folder_id, event_type)
+    if _pipeline_primary_backend() == "postgres":
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, params)
+                row = cur.fetchone()
+                return row["created_at"] if row else None
+
+    conn = _as_sqlite_row_connection()
+    try:
+        row = conn.execute(query, params).fetchone()
+        return row["created_at"] if row else None
+    finally:
+        conn.close()
+
+
 def delete_pipeline_events(
     *,
     job_id: int,
@@ -1150,6 +1689,19 @@ def list_content_segment_status_rows(job_id: int) -> list[dict[str, Any]]:
 def update_content_generation_job(job_id: int, **kwargs) -> None:
     if not kwargs:
         return
+    allowed_columns = {
+        "status",
+        "current_sub_part",
+        "current_passe",
+        "total_words",
+        "error_message",
+    }
+    unknown_columns = sorted(set(kwargs) - allowed_columns)
+    if unknown_columns:
+        raise ValueError(
+            "Colonnes content_generation_jobs non modifiables: "
+            + ", ".join(unknown_columns)
+        )
     ph = _placeholder()
     now_sql = "NOW()" if _pipeline_primary_backend() == "postgres" else "CURRENT_TIMESTAMP"
     set_clause = ", ".join(f"{key} = {ph}" for key in kwargs)
@@ -1252,6 +1804,73 @@ def save_completed_content_segment(
         conn.close()
 
 
+def save_completed_content_segments(segments: list[dict[str, Any]]) -> None:
+    """Persist a batch of completed segments in one transaction.
+
+    This is used by the test/bootstrap pipeline and avoids opening one remote
+    Postgres connection per segment (21 connections per training day before
+    this helper existed).
+    """
+    if not segments:
+        return
+    rows = [
+        (
+            int(segment["job_id"]),
+            int(segment["sub_part_index"]),
+            str(segment["sub_part_name"]),
+            int(segment["passe"]),
+            str(segment.get("text_content") or ""),
+            int(segment.get("word_count") or 0),
+        )
+        for segment in segments
+    ]
+    if _pipeline_primary_backend() == "postgres":
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                cur.executemany(
+                    """
+                    INSERT INTO content_generation_segments
+                        (job_id, sub_part_index, sub_part_name, passe, status,
+                         text_content, word_count, dirty,
+                         humanized, humanization_error, humanization_signature,
+                         reviewed, review_error, review_signature)
+                    VALUES (%s, %s, %s, %s, 'completed', %s, %s,
+                            TRUE, FALSE, NULL, NULL, FALSE, NULL, NULL)
+                    ON CONFLICT (job_id, sub_part_index, passe) DO UPDATE SET
+                        sub_part_name = EXCLUDED.sub_part_name,
+                        status = 'completed',
+                        text_content = EXCLUDED.text_content,
+                        word_count = EXCLUDED.word_count,
+                        dirty = TRUE,
+                        humanized = FALSE,
+                        humanization_error = NULL,
+                        humanization_signature = NULL,
+                        reviewed = FALSE,
+                        review_error = NULL,
+                        review_signature = NULL
+                    """,
+                    rows,
+                )
+        return
+
+    conn = get_db_connection()
+    try:
+        conn.executemany(
+            """
+            INSERT OR REPLACE INTO content_generation_segments
+                (job_id, sub_part_index, sub_part_name, passe, status,
+                 text_content, word_count, dirty,
+                 humanized, humanization_error, humanization_signature,
+                 reviewed, review_error, review_signature)
+            VALUES (?, ?, ?, ?, 'completed', ?, ?, 1, 0, NULL, NULL, 0, NULL, NULL)
+            """,
+            rows,
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def mark_content_segment_modified(job_id: int, sub_part_index: int, passe: int) -> None:
     ph = _placeholder()
     query = f"""
@@ -1334,6 +1953,47 @@ def list_completed_content_segment_rows(job_id: int) -> list[dict[str, Any]]:
         cursor = conn.cursor()
         cursor.execute(query, (job_id,))
         return [dict(row) for row in cursor.fetchall()]
+    finally:
+        conn.close()
+
+
+def list_completed_segment_review_rows_for_folder(
+    *,
+    formation_job_id: int,
+    folder_id: int,
+) -> list[dict[str, Any]]:
+    """Read the persisted review state without leaking a SQLite connection."""
+    ph = _placeholder()
+    query = f"""
+        SELECT
+            cf.name AS folder_name,
+            cf.position,
+            s.id AS segment_id,
+            s.sub_part_index,
+            s.passe,
+            s.reviewed,
+            s.review_error,
+            COALESCE(s.text_content, '') AS text_content,
+            COALESCE(s.text_content_pre_review, '') AS text_content_pre_review,
+            COALESCE(s.word_count, 0) AS word_count
+        FROM cours_folders cf
+        JOIN content_generation_jobs cj ON cj.folder_id = cf.id
+        JOIN content_generation_segments s ON s.job_id = cj.id
+        WHERE cf.id = {ph}
+          AND cf.formation_job_id = {ph}
+          AND s.status = 'completed'
+        ORDER BY s.sub_part_index ASC, s.passe ASC
+    """
+    params = (folder_id, formation_job_id)
+    if _pipeline_primary_backend() == "postgres":
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, params)
+                return [dict(row) for row in cur.fetchall()]
+
+    conn = _as_sqlite_row_connection()
+    try:
+        return [dict(row) for row in conn.execute(query, params).fetchall()]
     finally:
         conn.close()
 
@@ -1799,6 +2459,8 @@ def list_due_audio_generation_sessions(
     stale_started_before=None,
     stale_updated_before=None,
 ) -> list[dict[str, Any]]:
+    postgres_schedule = schedule_store_is_postgres()
+    ph = "%s" if postgres_schedule else "?"
     params: list[Any] = [lower_bound, upper_bound]
     stale_heartbeat_before = stale_updated_before or stale_started_before
     retry_conditions = """
@@ -1809,11 +2471,11 @@ def list_due_audio_generation_sessions(
               )
     """
     if stale_heartbeat_before:
-        retry_conditions += """
+        retry_conditions += f"""
               OR (
                   COALESCE(cs.audio_generation_status, 'pending') IN ('running', 'processing')
                   AND cs.audio_generation_completed_at IS NULL
-                  AND COALESCE(cs.updated_at, cs.audio_generation_started_at) <= ?
+                  AND COALESCE(cs.updated_at, cs.audio_generation_started_at) <= {ph}
               )
         """
         params.append(stale_heartbeat_before)
@@ -1821,13 +2483,14 @@ def list_due_audio_generation_sessions(
     platform_filter = ""
     if platform_ids:
         ids = [int(pid) for pid in platform_ids]
-        placeholders = ", ".join(["?"] * len(ids))
-        platform_filter = f"AND cs.platform_id IN ({placeholders})"
-        params.extend(ids)
+        if postgres_schedule:
+            platform_filter = "AND cs.platform_id = ANY(%s)"
+            params.append(ids)
+        else:
+            placeholders = ", ".join(["?"] * len(ids))
+            platform_filter = f"AND cs.platform_id IN ({placeholders})"
+            params.extend(ids)
 
-    # `course_sessions` is still part of the operational SQLite schedule store:
-    # the pipeline job can be in Postgres, but the 24h trigger must read the
-    # same schedule table as the dashboard and /api/internal/auto-schedule.
     query = f"""
         SELECT
             cs.id,
@@ -1851,24 +2514,30 @@ def list_due_audio_generation_sessions(
         FROM course_sessions cs
         JOIN platform_config pc ON pc.id = cs.platform_id
         WHERE cs.status IN ('planned', 'active')
-          AND cs.scheduled_at >= ?
-          AND cs.scheduled_at <= ?
+          AND cs.scheduled_at >= {ph}
+          AND cs.scheduled_at <= {ph}
           AND (
               {retry_conditions}
           )
           {platform_filter}
         ORDER BY cs.scheduled_at ASC, cs.platform_id ASC
     """
-    conn = _as_sqlite_row_connection()
-    try:
-        from services.course_schedule_service import ensure_course_schedule_tables
+    if postgres_schedule:
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, params)
+                rows = [dict(row) for row in cur.fetchall()]
+    else:
+        conn = _as_sqlite_row_connection()
+        try:
+            from services.course_schedule_service import ensure_course_schedule_tables
 
-        cursor = conn.cursor()
-        ensure_course_schedule_tables(cursor)
-        cursor.execute(query, params)
-        rows = [dict(row) for row in cursor.fetchall()]
-    finally:
-        conn.close()
+            cursor = conn.cursor()
+            ensure_course_schedule_tables(cursor)
+            cursor.execute(query, params)
+            rows = [dict(row) for row in cursor.fetchall()]
+        finally:
+            conn.close()
 
     for row in rows:
         if row.get("formation_job_id"):
@@ -1986,6 +2655,35 @@ def get_course_folder_identity(folder_id: int) -> dict[str, Any] | None:
         cursor.execute(query, (folder_id,))
         row = cursor.fetchone()
         return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def course_folder_belongs_to_job(folder_id: int, job_id: int) -> bool:
+    """Return whether ``folder_id`` is durably attached to ``job_id``.
+
+    This narrow predicate is used by the HTTP boundary before any route can
+    read text, reports, DOCX data or Blob artifacts for a caller-controlled
+    folder identifier.
+    """
+    ph = _placeholder()
+    query = f"""
+        SELECT 1
+        FROM cours_folders
+        WHERE id = {ph} AND formation_job_id = {ph}
+        LIMIT 1
+    """
+    if _pipeline_primary_backend() == "postgres":
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, (folder_id, job_id))
+                return cur.fetchone() is not None
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(query, (folder_id, job_id))
+        return cursor.fetchone() is not None
     finally:
         conn.close()
 
@@ -2118,6 +2816,7 @@ def list_content_completion_rows_for_folders(folder_ids: list[int]) -> list[dict
             cgj.current_sub_part,
             cgj.current_passe,
             cgj.error_message,
+            COUNT(cgs.id) AS segments_total,
             COALESCE(SUM(CASE WHEN cgs.status = 'completed' THEN 1 ELSE 0 END), 0) AS completed_segments,
             COALESCE(SUM(CASE WHEN cgs.status = 'completed' AND {reviewed_true} THEN 1 ELSE 0 END), 0) AS reviewed_segments,
             COALESCE(SUM(CASE WHEN cgs.status = 'completed' AND {humanized_true} THEN 1 ELSE 0 END), 0) AS humanized_segments,
@@ -2200,6 +2899,219 @@ def list_text_folder_states_for_folders(
 def get_text_folder_state(folder_id: int) -> dict[str, Any] | None:
     rows = list_text_folder_states_for_folders([int(folder_id)])
     return rows[0] if rows else None
+
+
+def claim_single_completed_orphan_folder(
+    *,
+    formation_job_id: int,
+    platform_id: int,
+    day_number: int | None = None,
+) -> dict[str, Any] | None:
+    """Atomically attach the only viable orphan folder to a pipeline job."""
+    ph = _placeholder()
+    day_filter = f"AND cf.name LIKE {ph}" if day_number is not None else ""
+    params: list[Any] = [platform_id]
+    if day_number is not None:
+        params.append(f"Jour {int(day_number)}%")
+    query = f"""
+        SELECT
+            cf.id AS folder_id,
+            cf.name AS folder_name,
+            cf.position,
+            cf.platform_id,
+            cgj.id AS content_job_id,
+            cgj.status AS content_status,
+            COALESCE(cgj.total_words, 0) AS total_words,
+            COALESCE(SUM(CASE WHEN cgs.status = 'completed' THEN 1 ELSE 0 END), 0)
+                AS segments_completed
+        FROM cours_folders cf
+        JOIN content_generation_jobs cgj ON cgj.folder_id = cf.id
+        LEFT JOIN content_generation_segments cgs ON cgs.job_id = cgj.id
+        WHERE cf.platform_id = {ph}
+          AND cf.formation_job_id IS NULL
+          {day_filter}
+        GROUP BY cf.id, cf.name, cf.position, cf.platform_id,
+                 cgj.id, cgj.status, cgj.total_words
+        HAVING cgj.status = 'completed'
+           AND COALESCE(SUM(CASE WHEN cgs.status = 'completed' THEN 1 ELSE 0 END), 0) > 0
+        ORDER BY cf.created_at DESC, cf.id DESC
+    """
+
+    if _pipeline_primary_backend() == "postgres":
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, params)
+                rows = [dict(row) for row in cur.fetchall()]
+                if len(rows) != 1:
+                    return None
+                row = rows[0]
+                cur.execute(
+                    """
+                    UPDATE cours_folders
+                    SET formation_job_id = %s
+                    WHERE id = %s AND formation_job_id IS NULL
+                    """,
+                    (formation_job_id, row["folder_id"]),
+                )
+                return row if cur.rowcount == 1 else None
+
+    conn = _as_sqlite_row_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(query, params)
+        rows = [dict(row) for row in cursor.fetchall()]
+        if len(rows) != 1:
+            return None
+        row = rows[0]
+        cursor.execute(
+            """
+            UPDATE cours_folders
+            SET formation_job_id = ?
+            WHERE id = ? AND formation_job_id IS NULL
+            """,
+            (formation_job_id, row["folder_id"]),
+        )
+        conn.commit()
+        return row if cursor.rowcount == 1 else None
+    finally:
+        conn.close()
+
+
+def delete_script_slide_decks_for_content_job(folder_id: int, content_job_id: int) -> int:
+    ph = _placeholder()
+    query = f"DELETE FROM script_slide_decks WHERE folder_id = {ph} AND content_job_id = {ph}"
+    if _pipeline_primary_backend() == "postgres":
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, (folder_id, content_job_id))
+                return int(cur.rowcount or 0)
+
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        try:
+            cursor.execute(query, (folder_id, content_job_id))
+        except sqlite3.OperationalError as exc:
+            if "no such table" in str(exc).lower():
+                return 0
+            raise
+        deleted = int(cursor.rowcount or 0)
+        conn.commit()
+        return deleted
+    finally:
+        conn.close()
+
+
+def reset_folder_downstream_state(
+    *,
+    formation_job_id: int,
+    folder_id: int,
+) -> dict[str, Any]:
+    """Restore pre-review text and clear every downstream persisted artifact."""
+    ph = _placeholder()
+    identity_query = f"""
+        SELECT cf.id AS folder_id, cf.name AS folder_name, cf.position,
+               cj.id AS content_job_id, cj.platform_id
+        FROM cours_folders cf
+        JOIN content_generation_jobs cj ON cj.folder_id = cf.id
+        WHERE cf.id = {ph} AND cf.formation_job_id = {ph} AND cj.status = 'completed'
+    """
+    segments_query = f"""
+        SELECT id, COALESCE(text_content, '') AS text_content, text_content_pre_review
+        FROM content_generation_segments
+        WHERE job_id = {ph} AND status = 'completed'
+        ORDER BY sub_part_index ASC, passe ASC
+    """
+
+    def _run(cursor, *, postgres: bool) -> dict[str, Any]:
+        cursor.execute(identity_query, (folder_id, formation_job_id))
+        raw_identity = cursor.fetchone()
+        if not raw_identity:
+            raise ValueError("Journée introuvable ou texte non généré")
+        identity = dict(raw_identity)
+        cursor.execute(segments_query, (identity["content_job_id"],))
+        segments = [dict(row) for row in cursor.fetchall()]
+        if not segments:
+            raise ValueError("Aucun segment texte complété pour cette journée")
+
+        update_segment_query = (
+            """
+            UPDATE content_generation_segments
+            SET text_content = %s, word_count = %s, dirty = TRUE,
+                humanized = FALSE, humanization_error = NULL, humanization_signature = NULL,
+                reviewed = FALSE, review_error = NULL, review_signature = NULL
+            WHERE id = %s
+            """
+            if postgres
+            else
+            """
+            UPDATE content_generation_segments
+            SET text_content = ?, word_count = ?, dirty = 1,
+                humanized = 0, humanization_error = NULL, humanization_signature = NULL,
+                reviewed = 0, review_error = NULL, review_signature = NULL
+            WHERE id = ?
+            """
+        )
+        restored = 0
+        total_words = 0
+        for segment in segments:
+            current_text = segment.get("text_content") or ""
+            original_text = segment.get("text_content_pre_review")
+            base_text = original_text if original_text is not None else current_text
+            word_count = len((base_text or "").split())
+            total_words += word_count
+            if original_text is not None and original_text != current_text:
+                restored += 1
+            cursor.execute(update_segment_query, (base_text or "", word_count, segment["id"]))
+
+        now_sql = "NOW()" if postgres else "CURRENT_TIMESTAMP"
+        cursor.execute(
+            f"""
+            UPDATE content_generation_jobs
+            SET total_words = {ph}, status = 'completed', error_message = NULL,
+                updated_at = {now_sql}
+            WHERE id = {ph}
+            """,
+            (total_words, identity["content_job_id"]),
+        )
+        cursor.execute(
+            f"DELETE FROM content_review_reports WHERE job_id = {ph} AND folder_id = {ph}",
+            (formation_job_id, folder_id),
+        )
+        deleted_reports = int(cursor.rowcount or 0)
+        cursor.execute(
+            f"DELETE FROM script_slide_decks WHERE folder_id = {ph} AND content_job_id = {ph}",
+            (folder_id, identity["content_job_id"]),
+        )
+        deleted_decks = int(cursor.rowcount or 0)
+        return {
+            **identity,
+            "segments": len(segments),
+            "segments_restored": restored,
+            "total_words": total_words,
+            "deleted_review_reports": deleted_reports,
+            "deleted_slide_decks": deleted_decks,
+        }
+
+    if _pipeline_primary_backend() == "postgres":
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                return _run(cur, postgres=True)
+
+    conn = _as_sqlite_row_connection()
+    try:
+        try:
+            result = _run(conn.cursor(), postgres=False)
+        except sqlite3.OperationalError as exc:
+            if "no such table" not in str(exc).lower():
+                raise
+            ensure_pipeline_observability_tables()
+            ensure_script_slide_decks_table()
+            result = _run(conn.cursor(), postgres=False)
+        conn.commit()
+        return result
+    finally:
+        conn.close()
 
 
 def get_folder_text_review_readiness(
@@ -2354,6 +3266,266 @@ def get_formation_module_for_pipeline_job(job_id: int) -> dict[str, Any] | None:
         cursor.execute(query, (job_id,))
         row = cursor.fetchone()
         return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def finalize_pipeline_module(
+    *,
+    formation_job_id: int,
+    platform_id: int,
+    rncp_code: str,
+    tp_name: str,
+    audio_ready: bool,
+    voice_type: str | None = None,
+) -> dict[str, Any]:
+    """Finalize platform/module state in the pipeline's authoritative DB."""
+    year = datetime.now().year
+
+    if _pipeline_primary_backend() == "postgres":
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT center_account_id FROM platform_config WHERE id = %s FOR UPDATE",
+                    (platform_id,),
+                )
+                platform_row = cur.fetchone()
+                if not platform_row:
+                    raise ValueError(f"Plateforme Postgres introuvable: {platform_id}")
+                center_account_id = platform_row["center_account_id"]
+                cur.execute(
+                    "UPDATE platform_config SET status = 'ready', updated_at = NOW() WHERE id = %s",
+                    (platform_id,),
+                )
+                platform_ready_updated = int(cur.rowcount or 0)
+                cur.execute(
+                    """
+                    SELECT id, version, status
+                    FROM formation_modules
+                    WHERE source_pipeline_job_id = %s
+                    FOR UPDATE
+                    """,
+                    (formation_job_id,),
+                )
+                existing = cur.fetchone()
+
+                desired_status = "validated" if audio_ready else "draft"
+                if existing:
+                    module_id = int(existing["id"])
+                    version = existing["version"]
+                    module_status = (
+                        "validated"
+                        if audio_ready or existing["status"] == "validated"
+                        else "draft"
+                    )
+                    cur.execute(
+                        """
+                        UPDATE formation_modules
+                        SET source_platform_id = COALESCE(source_platform_id, %s),
+                            center_account_id = COALESCE(center_account_id, %s),
+                            status = %s,
+                            voice_type = CASE WHEN %s THEN %s ELSE voice_type END,
+                            voice_updated_at = CASE WHEN %s THEN NOW() ELSE voice_updated_at END,
+                            validated_at = CASE
+                                WHEN %s THEN COALESCE(validated_at, NOW())
+                                ELSE validated_at
+                            END
+                        WHERE id = %s
+                        """,
+                        (
+                            platform_id,
+                            center_account_id,
+                            module_status,
+                            audio_ready,
+                            voice_type,
+                            audio_ready,
+                            audio_ready,
+                            module_id,
+                        ),
+                    )
+                    module_created = False
+                else:
+                    lock_key = f"pipeline-module:{center_account_id or 0}:{rncp_code or tp_name}"
+                    cur.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", (lock_key,))
+                    cur.execute(
+                        """
+                        SELECT COUNT(*) AS count
+                        FROM formation_modules
+                        WHERE rncp_code = %s
+                          AND center_account_id IS NOT DISTINCT FROM %s
+                        """,
+                        (rncp_code, center_account_id),
+                    )
+                    version = f"{year}-v{int(cur.fetchone()['count']) + 1}"
+                    cur.execute(
+                        """
+                        INSERT INTO formation_modules (
+                            rncp_code, tp_name, version, status,
+                            source_pipeline_job_id, source_platform_id,
+                            center_account_id, voice_type, voice_updated_at, validated_at
+                        )
+                        VALUES (
+                            %s, %s, %s, %s, %s, %s, %s,
+                            CASE WHEN %s THEN %s ELSE NULL END,
+                            CASE WHEN %s THEN NOW() ELSE NULL END,
+                            CASE WHEN %s THEN NOW() ELSE NULL END
+                        )
+                        ON CONFLICT (source_pipeline_job_id) DO UPDATE SET
+                            source_platform_id = COALESCE(formation_modules.source_platform_id, EXCLUDED.source_platform_id),
+                            center_account_id = COALESCE(formation_modules.center_account_id, EXCLUDED.center_account_id),
+                            status = CASE
+                                WHEN EXCLUDED.status = 'validated' THEN 'validated'
+                                ELSE formation_modules.status
+                            END,
+                            voice_type = COALESCE(EXCLUDED.voice_type, formation_modules.voice_type),
+                            voice_updated_at = COALESCE(EXCLUDED.voice_updated_at, formation_modules.voice_updated_at),
+                            validated_at = COALESCE(EXCLUDED.validated_at, formation_modules.validated_at)
+                        RETURNING id, version, status, (xmax = 0) AS created
+                        """,
+                        (
+                            rncp_code,
+                            tp_name,
+                            version,
+                            desired_status,
+                            formation_job_id,
+                            platform_id,
+                            center_account_id,
+                            audio_ready,
+                            voice_type,
+                            audio_ready,
+                            audio_ready,
+                        ),
+                    )
+                    inserted = cur.fetchone()
+                    module_id = int(inserted["id"])
+                    version = inserted["version"]
+                    module_status = inserted["status"]
+                    module_created = bool(inserted["created"])
+
+                result = {
+                    "platform_id": platform_id,
+                    "platform_ready_updated": platform_ready_updated,
+                    "module_id": module_id,
+                    "module_created": module_created,
+                    "module_version": version,
+                    "module_status": module_status,
+                    "voice_type": voice_type if audio_ready else None,
+                }
+
+        if _sqlite_pipeline_mirror_required():
+            mirror_conn = None
+            try:
+                mirror_conn = get_db_connection()
+                mirror_conn.execute(
+                    "UPDATE platform_config SET status = 'ready' WHERE id = ?",
+                    (platform_id,),
+                )
+                mirror_conn.commit()
+            except Exception:
+                logger.warning(
+                    "PIPELINE_FINALIZE_SQLITE_MIRROR_FAILED platform_id=%s",
+                    platform_id,
+                    exc_info=True,
+                )
+            finally:
+                if mirror_conn is not None:
+                    mirror_conn.close()
+        return result
+
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT center_account_id FROM platform_config WHERE id = ?", (platform_id,))
+        platform_row = cursor.fetchone()
+        if not platform_row:
+            raise ValueError(f"Plateforme SQLite introuvable: {platform_id}")
+        center_account_id = platform_row[0]
+        cursor.execute("UPDATE platform_config SET status = 'ready' WHERE id = ?", (platform_id,))
+        platform_ready_updated = int(cursor.rowcount or 0)
+        cursor.execute(
+            "SELECT id, version, status FROM formation_modules WHERE source_pipeline_job_id = ?",
+            (formation_job_id,),
+        )
+        existing = cursor.fetchone()
+        desired_status = "validated" if audio_ready else "draft"
+        if existing:
+            module_id, version, existing_status = existing
+            module_status = "validated" if audio_ready or existing_status == "validated" else "draft"
+            cursor.execute(
+                """
+                UPDATE formation_modules
+                SET source_platform_id = COALESCE(source_platform_id, ?),
+                    center_account_id = COALESCE(center_account_id, ?),
+                    status = ?,
+                    voice_type = CASE WHEN ? THEN ? ELSE voice_type END,
+                    voice_updated_at = CASE WHEN ? THEN CURRENT_TIMESTAMP ELSE voice_updated_at END,
+                    validated_at = CASE
+                        WHEN ? THEN COALESCE(validated_at, CURRENT_TIMESTAMP)
+                        ELSE validated_at
+                    END
+                WHERE id = ?
+                """,
+                (
+                    platform_id,
+                    center_account_id,
+                    module_status,
+                    1 if audio_ready else 0,
+                    voice_type,
+                    1 if audio_ready else 0,
+                    1 if audio_ready else 0,
+                    module_id,
+                ),
+            )
+            module_created = False
+        else:
+            if center_account_id is None:
+                cursor.execute(
+                    "SELECT COUNT(*) FROM formation_modules WHERE rncp_code = ? AND center_account_id IS NULL",
+                    (rncp_code,),
+                )
+            else:
+                cursor.execute(
+                    "SELECT COUNT(*) FROM formation_modules WHERE rncp_code = ? AND center_account_id = ?",
+                    (rncp_code, center_account_id),
+                )
+            version = f"{year}-v{int(cursor.fetchone()[0]) + 1}"
+            cursor.execute(
+                """
+                INSERT INTO formation_modules (
+                    rncp_code, tp_name, version, status, source_pipeline_job_id,
+                    source_platform_id, center_account_id, voice_type,
+                    voice_updated_at, validated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?,
+                        CASE WHEN ? THEN CURRENT_TIMESTAMP ELSE NULL END,
+                        CASE WHEN ? THEN CURRENT_TIMESTAMP ELSE NULL END)
+                """,
+                (
+                    rncp_code,
+                    tp_name,
+                    version,
+                    desired_status,
+                    formation_job_id,
+                    platform_id,
+                    center_account_id,
+                    voice_type if audio_ready else None,
+                    1 if audio_ready else 0,
+                    1 if audio_ready else 0,
+                ),
+            )
+            module_id = int(cursor.lastrowid)
+            module_status = desired_status
+            module_created = True
+        conn.commit()
+        return {
+            "platform_id": platform_id,
+            "platform_ready_updated": platform_ready_updated,
+            "module_id": int(module_id),
+            "module_created": module_created,
+            "module_version": version,
+            "module_status": module_status,
+            "voice_type": voice_type if audio_ready else None,
+        }
     finally:
         conn.close()
 
@@ -3539,15 +4711,6 @@ def _upsert_postgres_job(payload: dict[str, Any]) -> None:
                 """,
                 payload,
             )
-            cur.execute(
-                """
-                SELECT setval(
-                    pg_get_serial_sequence('formation_pipeline_jobs', 'id')::regclass,
-                    COALESCE((SELECT MAX(id) FROM formation_pipeline_jobs), 1),
-                    TRUE
-                )
-                """
-            )
 
 
 def _mirror_sqlite_job_to_postgres(job_id: int) -> None:
@@ -3736,38 +4899,49 @@ def acquire_auto_pilot_lock(job_id: int, *, owner: str, ttl_seconds: int) -> boo
         conn.close()
 
 
-def release_auto_pilot_lock(job_id: int) -> None:
+def release_auto_pilot_lock(job_id: int, *, owner: str | None = None) -> bool:
+    """Release a runner lock without letting a stale worker unlock its successor.
+
+    ``owner`` is optional only for backwards-compatible maintenance calls. The
+    production runner always supplies its unique fencing token.
+    """
     if _pipeline_primary_backend() == "postgres":
         with get_postgres_connection() as conn:
             with conn.cursor() as cur:
+                owner_clause = " AND auto_pilot_lock_owner = %s" if owner is not None else ""
+                params = (job_id, owner) if owner is not None else (job_id,)
                 cur.execute(
-                    """
+                    f"""
                     UPDATE formation_pipeline_jobs
                     SET auto_pilot_locked_at = NULL,
                         auto_pilot_lock_owner = NULL
-                    WHERE id = %s
+                    WHERE id = %s{owner_clause}
                     """,
-                    (job_id,),
+                    params,
                 )
-        return
+                return cur.rowcount == 1
 
     conn = get_db_connection()
     cursor = conn.cursor()
     try:
+        owner_clause = " AND auto_pilot_lock_owner = ?" if owner is not None else ""
+        params = (job_id, owner) if owner is not None else (job_id,)
         cursor.execute(
-            """
+            f"""
             UPDATE formation_pipeline_jobs
             SET auto_pilot_locked_at = NULL, auto_pilot_lock_owner = NULL
-            WHERE id = ?
+            WHERE id = ?{owner_clause}
             """,
-            (job_id,),
+            params,
         )
+        released = cursor.rowcount == 1
         conn.commit()
+        return released
     finally:
         conn.close()
 
 
-def refresh_auto_pilot_lock(job_id: int, *, owner: str) -> None:
+def refresh_auto_pilot_lock(job_id: int, *, owner: str) -> bool:
     if _pipeline_primary_backend() == "postgres":
         with get_postgres_connection() as conn:
             with conn.cursor() as cur:
@@ -3779,7 +4953,7 @@ def refresh_auto_pilot_lock(job_id: int, *, owner: str) -> None:
                     """,
                     (job_id, owner),
                 )
-        return
+                return cur.rowcount == 1
 
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -3792,7 +4966,9 @@ def refresh_auto_pilot_lock(job_id: int, *, owner: str) -> None:
             """,
             (job_id, owner),
         )
+        refreshed = cursor.rowcount == 1
         conn.commit()
+        return refreshed
     finally:
         conn.close()
 
@@ -3830,12 +5006,153 @@ def get_pipeline_job(job_id: int) -> dict[str, Any] | None:
         conn.close()
 
 
-def list_pipeline_jobs(platform_id: int | None = None) -> list[dict[str, Any]]:
-    where_sql = ""
-    params: tuple[Any, ...] = ()
+def pipeline_job_belongs_to_center(job_id: int, center_account_id: int) -> bool:
+    """Vérifie l'appartenance tenant d'un job via sa plateforme.
+
+    L'INNER JOIN est intentionnel : un job orphelin, une plateforme sans centre
+    ou une erreur de correspondance sont tous refusés. Ce helper est réservé à
+    la frontière HTTP ; les workers internes conservent leurs helpers non
+    scopés afin de pouvoir reprendre les jobs de tous les tenants.
+    """
+    ph = _placeholder()
+    query = f"""
+        SELECT 1
+        FROM formation_pipeline_jobs j
+        JOIN platform_config p ON p.id = j.platform_id
+        WHERE j.id = {ph}
+          AND p.center_account_id = {ph}
+        LIMIT 1
+    """
+    params = (job_id, center_account_id)
+    if _pipeline_primary_backend() == "postgres":
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, params)
+                return cur.fetchone() is not None
+
+    conn = _as_sqlite_row_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(query, params)
+        return cursor.fetchone() is not None
+    finally:
+        conn.close()
+
+
+def hr_resource_belongs_to_center(
+    resource_type: str,
+    resource_id: int,
+    center_account_id: int,
+) -> bool:
+    """Resolve an HR resource through its authoritative tenant ownership.
+
+    HTTP routes often receive an indirect identifier (folder, document or
+    deletion request) rather than a platform id.  Authorising only the path's
+    direct ids makes it possible for one training centre to operate on another
+    centre's resource.  These static JOINs always resolve the resource back to
+    ``platform_config.center_account_id`` in the active pipeline store.
+
+    Catalogue modules can exist without a source platform, so their own
+    non-null ``center_account_id`` is authoritative; when a source platform is
+    present its tenant must also match. Unknown resource types and malformed
+    ids fail closed.
+    """
+    if isinstance(resource_id, bool) or isinstance(center_account_id, bool):
+        return False
+    try:
+        resource_id = int(resource_id)
+        center_account_id = int(center_account_id)
+    except (TypeError, ValueError):
+        return False
+    if resource_id <= 0 or center_account_id <= 0:
+        return False
+
+    ph = _placeholder()
+    queries = {
+        "platform": f"""
+            SELECT 1
+            FROM platform_config p
+            WHERE p.id = {ph}
+              AND p.center_account_id = {ph}
+            LIMIT 1
+        """,
+        "folder": f"""
+            SELECT 1
+            FROM cours_folders r
+            JOIN platform_config p ON p.id = r.platform_id
+            WHERE r.id = {ph}
+              AND p.center_account_id = {ph}
+            LIMIT 1
+        """,
+        "document": f"""
+            SELECT 1
+            FROM cours_documents r
+            JOIN cours_folders f ON f.id = r.folder_id
+            JOIN platform_config p ON p.id = f.platform_id
+            WHERE r.id = {ph}
+              AND p.center_account_id = {ph}
+            LIMIT 1
+        """,
+        "deletion_request": f"""
+            SELECT 1
+            FROM deletion_requests r
+            JOIN platform_config p ON p.id = r.platform_id
+            WHERE r.id = {ph}
+              AND p.center_account_id = {ph}
+            LIMIT 1
+        """,
+        "module": f"""
+            SELECT 1
+            FROM formation_modules r
+            LEFT JOIN platform_config p ON p.id = r.source_platform_id
+            WHERE r.id = {ph}
+              AND r.center_account_id = {ph}
+              AND (
+                    r.source_platform_id IS NULL
+                    OR p.center_account_id = r.center_account_id
+                  )
+            LIMIT 1
+        """,
+    }
+    query = queries.get(str(resource_type or "").strip().lower())
+    if not query:
+        return False
+    params = (resource_id, center_account_id)
+
+    if _pipeline_primary_backend() == "postgres":
+        def _postgres_operation():
+            with get_postgres_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(query, params)
+                    return cur.fetchone() is not None
+
+        return bool(_run_postgres_with_retry("hr_resource_belongs_to_center", _postgres_operation))
+
+    conn = _as_sqlite_row_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(query, params)
+        return cursor.fetchone() is not None
+    finally:
+        conn.close()
+
+
+def list_pipeline_jobs(
+    platform_id: int | None = None,
+    *,
+    center_account_id: int | None = None,
+) -> list[dict[str, Any]]:
+    conditions: list[str] = []
+    params_list: list[Any] = []
+    ph = _placeholder()
     if platform_id is not None:
-        where_sql = "WHERE j.platform_id = %s" if _pipeline_primary_backend() == "postgres" else "WHERE j.platform_id = ?"
-        params = (platform_id,)
+        conditions.append(f"j.platform_id = {ph}")
+        params_list.append(platform_id)
+    if center_account_id is not None:
+        conditions.append(f"p.center_account_id = {ph}")
+        params_list.append(center_account_id)
+    where_sql = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+    params = tuple(params_list)
     columns = ", ".join(
         f"j.{column}"
         for column in (

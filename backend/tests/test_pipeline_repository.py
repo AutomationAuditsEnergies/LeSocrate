@@ -29,7 +29,19 @@ def _make_pipeline_db():
         CREATE TABLE platform_config (
             id INTEGER PRIMARY KEY,
             name TEXT NOT NULL,
-            source_formation_id INTEGER
+            center_account_id INTEGER,
+            slug TEXT,
+            upload_locked INTEGER DEFAULT 1,
+            public_access_enabled INTEGER DEFAULT 1,
+            updated_at TEXT,
+            playlist_mode TEXT,
+            audio_container TEXT,
+            pdf_container TEXT,
+            archive_container TEXT,
+            audio_base_url TEXT,
+            status TEXT DEFAULT 'ready',
+            source_formation_id INTEGER,
+            source_module_id INTEGER
         );
         INSERT INTO platform_config (id, name) VALUES (7, 'Centre A - TP Test');
 
@@ -241,6 +253,142 @@ class PipelineRepositoryTest(unittest.TestCase):
         self.assertEqual([item["id"] for item in jobs], [job_id])
         self.assertEqual(jobs[0]["platform_label"], "P7")
 
+    def test_pipeline_platform_and_job_link_share_authoritative_store(self):
+        platform = repo.create_pipeline_platform(
+            name="Centre A - Nouvelle formation",
+            center_account_id=None,
+        )
+        platform_id = int(platform["id"])
+        self.assertGreater(platform_id, 7)
+        self.assertEqual(platform["status"], "pending")
+        self.assertEqual(platform["slug"], "centre-a-nouvelle-formation")
+
+        job_id = repo.create_pipeline_job(
+            platform_id=platform_id,
+            tp_name="TP Test",
+            rncp_code="RNCP123",
+            total_hours=7,
+            nb_days=1,
+        )
+        repo.link_pipeline_platform_to_job(platform_id, job_id)
+
+        conn = sqlite3.connect(self.db_path)
+        row = conn.execute(
+            "SELECT source_formation_id, audio_container, status FROM platform_config WHERE id = ?",
+            (platform_id,),
+        ).fetchone()
+        conn.close()
+        self.assertEqual(row[0], job_id)
+        self.assertEqual(row[1], f"formationaudio-p{platform_id}")
+        self.assertEqual(row[2], "pending")
+
+    def test_hybrid_sqlite_mirror_refuses_an_id_bound_to_another_identity(self):
+        platform = {
+            "id": 7,
+            "center_account_id": None,
+            "name": "Une autre plateforme",
+            "slug": "une-autre-plateforme",
+            "updated_at": "2026-07-10 12:00:00",
+        }
+
+        with self.assertRaises(repo.PlatformIdentityConflictError):
+            repo._upsert_pipeline_platform_sqlite(platform)
+
+        conn = sqlite3.connect(self.db_path)
+        row = conn.execute(
+            "SELECT name, center_account_id, slug FROM platform_config WHERE id = 7"
+        ).fetchone()
+        conn.close()
+        self.assertEqual(row, ("Centre A - TP Test", None, None))
+
+    def test_postgres_allocator_catches_up_to_sqlite_high_water_mark(self):
+        class FakeCursor:
+            def __init__(self):
+                self.executions = []
+                self.results = iter([
+                    {"sequence_name": "public.platform_config_id_seq"},
+                    {"max_id": 17},
+                    {"id": 8},
+                    {"id": 51},
+                ])
+
+            def execute(self, query, params=None):
+                self.executions.append((" ".join(query.split()), params))
+
+            def fetchone(self):
+                return next(self.results)
+
+        cursor = FakeCursor()
+        platform_id = repo._allocate_platform_id_postgres(cursor, sqlite_max_id=50)
+
+        self.assertEqual(platform_id, 51)
+        setval_calls = [call for call in cursor.executions if "setval" in call[0]]
+        self.assertEqual(len(setval_calls), 1)
+        self.assertEqual(
+            setval_calls[0][1],
+            ("public.platform_config_id_seq", 50),
+        )
+
+    def test_postgres_allocator_never_moves_an_advanced_sequence_backwards(self):
+        class FakeCursor:
+            def __init__(self):
+                self.executions = []
+                self.results = iter([
+                    {"sequence_name": "public.platform_config_id_seq"},
+                    {"max_id": 17},
+                    {"id": 75},
+                ])
+
+            def execute(self, query, params=None):
+                self.executions.append((" ".join(query.split()), params))
+
+            def fetchone(self):
+                return next(self.results)
+
+        cursor = FakeCursor()
+        platform_id = repo._allocate_platform_id_postgres(cursor, sqlite_max_id=50)
+
+        self.assertEqual(platform_id, 75)
+        self.assertFalse(any("setval" in query for query, _ in cursor.executions))
+
+    def test_completed_segments_batch_uses_one_repository_transaction(self):
+        folder = repo.create_course_folder_for_job(
+            platform_id=7,
+            folder_name="Jour batch",
+            formation_job_id=1,
+        )
+        repo.reset_and_upsert_content_generation_job(
+            folder_id=folder["id"],
+            platform_id=7,
+            program_text="Programme",
+            program_title="Titre",
+            sub_parts_json='["A"]',
+            from_scratch=True,
+            module_contents_json='{"A":"Contenu"}',
+        )
+        content_job = repo.get_content_generation_job_by_folder(folder["id"])
+        repo.save_completed_content_segments([
+            {
+                "job_id": content_job["id"],
+                "sub_part_index": 0,
+                "sub_part_name": "A",
+                "passe": 1,
+                "text_content": "Premier segment",
+                "word_count": 2,
+            },
+            {
+                "job_id": content_job["id"],
+                "sub_part_index": 0,
+                "sub_part_name": "A",
+                "passe": 2,
+                "text_content": "Deuxième segment complet",
+                "word_count": 3,
+            },
+        ])
+        rows = repo.list_completed_content_segment_rows(content_job["id"])
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(sum(int(row["word_count"]) for row in rows), 5)
+
     def test_auto_pilot_resume_query_keeps_sqlite_lock_semantics(self):
         job_id = repo.create_pipeline_job(
             platform_id=7,
@@ -321,10 +469,42 @@ class PipelineRepositoryTest(unittest.TestCase):
         self.assertTrue(repo.acquire_auto_pilot_lock(job_id, owner="worker-a", ttl_seconds=300))
         self.assertFalse(repo.acquire_auto_pilot_lock(job_id, owner="worker-b", ttl_seconds=300))
 
-        repo.refresh_auto_pilot_lock(job_id, owner="worker-a")
-        repo.release_auto_pilot_lock(job_id)
+        self.assertTrue(repo.refresh_auto_pilot_lock(job_id, owner="worker-a"))
+        self.assertFalse(repo.refresh_auto_pilot_lock(job_id, owner="worker-b"))
+        self.assertFalse(repo.release_auto_pilot_lock(job_id, owner="worker-b"))
+        self.assertFalse(repo.acquire_auto_pilot_lock(job_id, owner="worker-b", ttl_seconds=300))
+        self.assertTrue(repo.release_auto_pilot_lock(job_id, owner="worker-a"))
 
         self.assertTrue(repo.acquire_auto_pilot_lock(job_id, owner="worker-b", ttl_seconds=300))
+
+    def test_postgres_lock_refresh_reports_lost_owner_from_rowcount(self):
+        class FakeCursor:
+            rowcount = 0
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def execute(self, _query, _params=None):
+                return None
+
+        class FakeConnection:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def cursor(self):
+                return FakeCursor()
+
+        with (
+            patch.object(repo, "_pipeline_primary_backend", lambda: "postgres"),
+            patch.object(repo, "get_postgres_connection", lambda: FakeConnection()),
+        ):
+            self.assertFalse(repo.refresh_auto_pilot_lock(42, owner="stale-worker"))
 
     def test_due_audio_generation_sessions_use_repository_storage(self):
         old_job_id = repo.create_pipeline_job(
@@ -449,26 +629,52 @@ class PipelineRepositoryTest(unittest.TestCase):
         self.assertEqual([row["id"] for row in rows], [130])
         self.assertEqual(rows[0]["formation_job_id"], job_id)
 
-    def test_due_audio_generation_sessions_read_sqlite_schedule_with_postgres_pipeline(self):
-        conn = sqlite3.connect(self.db_path)
-        conn.executescript(
-            """
-            UPDATE platform_config SET source_formation_id = 42 WHERE id = 7;
-            INSERT INTO course_sessions
-                (id, platform_id, session_index, scheduled_at, status, audio_generation_started_at)
-            VALUES
-                (120, 7, 1, '2026-01-01 10:00:00', 'planned', NULL);
-            """
-        )
-        conn.commit()
-        conn.close()
+    def test_due_audio_generation_sessions_read_postgres_in_pure_postgres_mode(self):
+        executed = {}
 
-        def fail_postgres():
-            raise AssertionError("course_sessions must not be read from Postgres")
+        class FakeCursor:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def execute(self, query, params):
+                executed["query"] = query
+                executed["params"] = params
+
+            def fetchall(self):
+                return [{
+                    "id": 120,
+                    "platform_id": 7,
+                    "session_index": 1,
+                    "scheduled_at": "2026-01-01 10:00:00",
+                    "audio_generation_status": "pending",
+                    "audio_generation_started_at": None,
+                    "updated_at": "2026-01-01 08:00:00",
+                    "name": "Centre A - TP Test",
+                    "formation_job_id": 42,
+                }]
+
+        class FakeConnection:
+            def cursor(self):
+                return FakeCursor()
+
+        class FakePostgresContext:
+            def __enter__(self):
+                return FakeConnection()
+
+            def __exit__(self, *_args):
+                return False
 
         with (
-            patch.object(repo, "_pipeline_primary_backend", lambda: "postgres"),
-            patch.object(repo, "get_postgres_connection", fail_postgres),
+            patch.object(repo, "schedule_store_is_postgres", lambda: True),
+            patch.object(repo, "get_postgres_connection", lambda: FakePostgresContext()),
+            patch.object(
+                repo,
+                "_as_sqlite_row_connection",
+                side_effect=AssertionError("SQLite must not be read in pure Postgres mode"),
+            ),
         ):
             rows = repo.list_due_audio_generation_sessions(
                 lower_bound="2026-01-01 00:00:00",
@@ -478,6 +684,8 @@ class PipelineRepositoryTest(unittest.TestCase):
 
         self.assertEqual([row["id"] for row in rows], [120])
         self.assertEqual(rows[0]["formation_job_id"], 42)
+        self.assertIn("cs.platform_id = ANY(%s)", executed["query"])
+        self.assertEqual(executed["params"][-1], [7])
 
     def test_expected_course_folder_queries_rank_best_candidate(self):
         job_id = repo.create_pipeline_job(
@@ -549,6 +757,63 @@ class PipelineRepositoryTest(unittest.TestCase):
         self.assertEqual(repo.find_orphan_course_folder(7, "Jour 2 — Vente"), orphan_id)
         self.assertTrue(repo.attach_course_folder_to_job(job_id, orphan_id))
         self.assertTrue(repo.course_folder_exists_for_job(job_id, "Jour 2 — Vente"))
+
+    def test_postgres_course_folder_creation_rechecks_identity_under_lock(self):
+        calls = []
+        existing = {
+            "id": 81,
+            "name": "Jour 1 — Accueil",
+            "position": 2,
+            "platform_id": 7,
+            "formation_job_id": 44,
+            "content_job_id": 91,
+            "content_status": "running",
+            "total_words": 1200,
+            "segments_completed": 3,
+        }
+
+        class FakeCursor:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def execute(self, query, params=None):
+                calls.append((" ".join(query.split()), params))
+
+            def fetchone(self):
+                return existing
+
+        class FakeConnection:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def cursor(self):
+                return FakeCursor()
+
+        with (
+            patch.object(repo, "_pipeline_primary_backend", lambda: "postgres"),
+            patch.object(repo, "get_postgres_connection", lambda: FakeConnection()),
+        ):
+            result = repo.create_course_folder_for_job(
+                platform_id=7,
+                folder_name="Jour 1 — Accueil",
+                formation_job_id=44,
+            )
+
+        self.assertEqual(result, existing)
+        self.assertIn("pg_advisory_xact_lock", calls[0][0])
+        self.assertIn("cf.formation_job_id = %s AND cf.name = %s", calls[1][0])
+        self.assertEqual(calls[1][1], (44, "Jour 1 — Accueil"))
+        self.assertFalse(any("INSERT INTO cours_folders" in query for query, _ in calls))
+
+    def test_content_job_update_rejects_non_whitelisted_columns(self):
+        with self.assertRaisesRegex(ValueError, "created_at"):
+            repo.update_content_generation_job(99, created_at="2099-01-01")
 
     def test_observability_service_uses_pipeline_repository_storage(self):
         report_id = obs.persist_review_report(
@@ -1239,8 +1504,6 @@ class PipelineRepositoryTest(unittest.TestCase):
         conn = sqlite3.connect(self.db_path)
         conn.executescript(
             """
-            ALTER TABLE platform_config ADD COLUMN source_module_id INTEGER;
-
             INSERT INTO formation_pipeline_jobs
                 (id, platform_id, tp_name, total_hours, nb_days, status)
             VALUES

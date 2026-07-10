@@ -18,10 +18,14 @@ class FormationArtifactRouteTest(unittest.TestCase):
     def test_artifact_route_uses_pipeline_repository_folder_lookup(self):
         with self.client.session_transaction() as sess:
             sess["is_admin"] = True
+            sess["admin_account_type"] = "legacy_admin"
 
         with patch(
             "routes.formation_routes.get_job",
             return_value={"id": 8},
+        ), patch(
+            "repositories.pipeline_repository.course_folder_belongs_to_job",
+            return_value=True,
         ), patch(
             "repositories.pipeline_repository.get_content_generation_job_by_folder",
             return_value={
@@ -47,6 +51,7 @@ class FormationArtifactRouteTest(unittest.TestCase):
     def test_content_list_uses_pipeline_repository_counts(self):
         with self.client.session_transaction() as sess:
             sess["is_admin"] = True
+            sess["admin_account_type"] = "legacy_admin"
 
         job = {
             "id": 8,
@@ -107,10 +112,14 @@ class FormationArtifactRouteTest(unittest.TestCase):
     def test_docx_route_uses_migrated_docx_service(self):
         with self.client.session_transaction() as sess:
             sess["is_admin"] = True
+            sess["admin_account_type"] = "legacy_admin"
 
         with patch(
             "routes.formation_routes.get_job",
             return_value={"id": 8},
+        ), patch(
+            "repositories.pipeline_repository.course_folder_belongs_to_job",
+            return_value=True,
         ), patch(
             "services.formation_docx_service.build_course_docx",
             return_value=(b"docx-bytes", "jour1.docx"),

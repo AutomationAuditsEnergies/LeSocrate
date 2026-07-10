@@ -1,13 +1,13 @@
 # admin_routes.py --- Routes d'administration (API JSON uniquement)
-from flask import Blueprint, request, session, jsonify, send_file
+from flask import Blueprint, g, request, session, jsonify, send_file
 from datetime import datetime, timedelta, timezone
+import hmac
 import os
 import re
 import secrets
 import sqlite3
 import string
 import tempfile
-import uuid
 import requests as http_requests
 from azure.storage.blob import BlobServiceClient, generate_blob_sas, BlobSasPermissions
 from azure.core.exceptions import ResourceExistsError
@@ -27,25 +27,48 @@ from repositories.core_repository import (
     update_training_center_password,
     upsert_student_profile_with_id,
 )
+from repositories.pipeline_repository import hr_resource_belongs_to_center
 from services.time_service import set_heure_debut_cours, get_heure_debut_cours
 from services.export_service import generate_excel_export
 from services.course_schedule_service import create_missing_course_schedule, get_course_schedule_summary, update_course_schedule
 from utils.logger import get_logger
+from utils.auth_tokens import issue_auth_token
 from utils.slug import slugify, unique_slug
 
 logger = get_logger(__name__)
 
 
+_ADMIN_SUPERADMIN_ACCOUNT_TYPES = {"legacy_admin", "superadmin"}
+
+
+class AdminPlatformNotFound(LookupError):
+    """Raised when an admin session cannot access a requested platform.
+
+    The public response deliberately does not distinguish an unknown platform
+    from a platform owned by another training centre.
+    """
+
+
+def _internal_admin_password_valid(password: str) -> bool:
+    """Validate the legacy super-admin only against deployment secrets."""
+    password_hash = os.getenv("INTERNAL_ADMIN_PASSWORD_HASH", "").strip()
+    if password_hash:
+        try:
+            return bool(password and check_password_hash(password_hash, password))
+        except (TypeError, ValueError):
+            logger.error("INTERNAL_ADMIN_PASSWORD_HASH invalide")
+            return False
+    password_secret = os.getenv("INTERNAL_ADMIN_PASSWORD", "")
+    return bool(password_secret and password and hmac.compare_digest(password_secret, password))
+
+
 def _create_admin_token(account_type, account_id=None, center_name=None):
-    if not hasattr(state, "admin_tokens"):
-        state.admin_tokens = {}
-    token = str(uuid.uuid4())
-    state.admin_tokens[token] = {
+    payload = {
         "account_type": account_type,
         "account_id": account_id,
         "center_name": center_name,
     }
-    return token
+    return issue_auth_token("admin", payload)
 
 
 def _generate_temporary_password(length=12):
@@ -142,7 +165,7 @@ def _update_training_center_password_sqlite(cursor, username, password_hash, pas
         """,
         (
             password_hash,
-            password_debug_plaintext,
+            None,
             datetime.now(FRANCE_TZ).strftime("%Y-%m-%d %H:%M:%S"),
             username,
         ),
@@ -150,32 +173,104 @@ def _update_training_center_password_sqlite(cursor, username, password_hash, pas
     return cursor.rowcount > 0
 
 
-def _get_platform_id():
-    """Extrait platform_id pour la requête courante avec priorité explicite.
+def _parse_platform_id(raw):
+    """Parse a positive platform ID without accepting booleans or fallbacks."""
+    if raw is None or isinstance(raw, bool):
+        raise AdminPlatformNotFound()
+    try:
+        platform_id = int(raw)
+    except (TypeError, ValueError):
+        raise AdminPlatformNotFound() from None
+    if platform_id <= 0 or str(raw).strip() != str(platform_id):
+        raise AdminPlatformNotFound()
+    return platform_id
 
-    Ordre : X-Platform-Id header → query ?platform_id ou ?p → session → fallback 1.
-    Le fallback log un warning pour repérer les oublis d'injection côté appelant.
-    """
+
+def _training_center_account_id():
+    raw = session.get("admin_account_id")
+    if raw is None or isinstance(raw, bool):
+        return None
+    try:
+        account_id = int(raw)
+    except (TypeError, ValueError):
+        return None
+    return account_id if account_id > 0 else None
+
+
+def _authorize_platform_id(raw):
+    """Return a platform ID only when the explicit admin role may access it."""
+    platform_id = _parse_platform_id(raw)
+    if not session.get("is_admin"):
+        raise AdminPlatformNotFound()
+
+    account_type = str(session.get("admin_account_type") or "").strip().lower()
+    if account_type in _ADMIN_SUPERADMIN_ACCOUNT_TYPES:
+        return platform_id
+    if account_type != "training_center":
+        raise AdminPlatformNotFound()
+
+    center_account_id = _training_center_account_id()
+    if center_account_id is None:
+        raise AdminPlatformNotFound()
+
+    # A route may resolve the same platform in before_request and in its body.
+    # Cache only successful checks for the lifetime of this HTTP request.
+    cache = getattr(g, "admin_platform_access", None)
+    if cache is None:
+        cache = set()
+        g.admin_platform_access = cache
+    cache_key = (platform_id, center_account_id)
+    if cache_key in cache:
+        return platform_id
+
+    try:
+        allowed = hr_resource_belongs_to_center(
+            "platform",
+            platform_id,
+            center_account_id,
+        )
+    except Exception:
+        logger.warning(
+            "ADMIN_TENANT_SCOPE_LOOKUP_FAILED platform_id=%s center_account_id=%s",
+            platform_id,
+            center_account_id,
+            exc_info=True,
+        )
+        allowed = False
+
+    if not allowed:
+        logger.warning(
+            "ADMIN_TENANT_SCOPE_DENIED platform_id=%s center_account_id=%s",
+            platform_id,
+            center_account_id,
+        )
+        raise AdminPlatformNotFound()
+
+    cache.add(cache_key)
+    return platform_id
+
+
+def _get_platform_id():
+    """Resolve and authorize the request platform with no implicit fallback."""
     raw = request.headers.get("X-Platform-Id")
-    if raw and raw.isdigit():
-        return int(raw)
+    if raw is not None:
+        return _authorize_platform_id(raw)
+
     for key in ("platform_id", "p"):
-        arg = request.args.get(key)
-        if arg and str(arg).isdigit():
-            return int(arg)
+        if key in request.args:
+            return _authorize_platform_id(request.args.get(key))
+
     if request.is_json:
         body = request.get_json(silent=True) or {}
-        raw_body = body.get("platform_id") or body.get("p")
-        if raw_body and str(raw_body).isdigit():
-            return int(raw_body)
-    pid = session.get("platform_id")
-    if pid:
-        try:
-            return int(pid)
-        except (TypeError, ValueError):
-            pass
-    logger.warning("⚠️ platform_id introuvable (header/query/session absents) — fallback sur 1 pour %s", request.path)
-    return 1
+        for key in ("platform_id", "p"):
+            if key in body:
+                return _authorize_platform_id(body.get(key))
+
+    if "platform_id" in session:
+        return _authorize_platform_id(session.get("platform_id"))
+
+    logger.warning("ADMIN_PLATFORM_ID_MISSING path=%s", request.path)
+    raise AdminPlatformNotFound()
 
 
 def _mirror_training_center_to_sqlite(cursor, account, password_hash, now_str, password_debug_plaintext=None):
@@ -197,7 +292,7 @@ def _mirror_training_center_to_sqlite(cursor, account, password_hash, now_str, p
             (
                 account["username"],
                 password_hash,
-                password_debug_plaintext,
+                None,
                 account["center_name"],
                 account["slug"],
                 1 if account["is_active"] else 0,
@@ -217,7 +312,7 @@ def _mirror_training_center_to_sqlite(cursor, account, password_hash, now_str, p
             account["id"],
             account["username"],
             password_hash,
-            password_debug_plaintext,
+            None,
             account["center_name"],
             account["slug"],
             1 if account["is_active"] else 0,
@@ -230,6 +325,48 @@ def _mirror_training_center_to_sqlite(cursor, account, password_hash, now_str, p
 def create_admin_blueprint(socketio):
     """Factory pour créer le blueprint admin avec accès à socketio"""
     admin_bp = Blueprint("admin", __name__)
+
+    # Only browser-facing routes whose resource is selected through a
+    # platform_id participate in this guard. Service-to-service `/api/internal`
+    # routes authenticate with X-Platform-Key and intentionally remain a
+    # separate trust boundary.
+    platform_scoped_endpoints = {
+        "get_logs",
+        "get_course_time",
+        "config_cours",
+        "export_excel",
+        "list_student_accounts",
+        "create_student_account",
+        "update_student_account",
+        "simulate_current_time",
+        "reset_simulation",
+        "force_logout_finished_users",
+    }
+
+    def _platform_not_found_response():
+        return jsonify({"success": False, "error": "Ressource introuvable"}), 404
+
+    @admin_bp.errorhandler(AdminPlatformNotFound)
+    def handle_admin_platform_not_found(_error):
+        return _platform_not_found_response()
+
+    @admin_bp.before_request
+    def enforce_admin_platform_scope():
+        # Preserve the existing authentication response for anonymous callers.
+        if not session.get("is_admin"):
+            return None
+
+        endpoint = (request.endpoint or "").rsplit(".", 1)[-1]
+        try:
+            if endpoint in platform_scoped_endpoints:
+                _get_platform_id()
+            elif endpoint == "create_order":
+                data = request.get_json(silent=True) or {}
+                if "platform_id" in data and data.get("platform_id") is not None:
+                    _authorize_platform_id(data.get("platform_id"))
+        except AdminPlatformNotFound:
+            return _platform_not_found_response()
+        return None
 
     @admin_bp.route("/api/admin/session", methods=["GET"])
     def get_admin_session():
@@ -387,7 +524,11 @@ def create_admin_blueprint(socketio):
                 "is_active": True,
                 "created_at": "",
                 "updated_at": "",
-                "password_status": "secret123",
+                "password_status": (
+                    "Configuré par secret de déploiement"
+                    if os.getenv("INTERNAL_ADMIN_PASSWORD_HASH") or os.getenv("INTERNAL_ADMIN_PASSWORD")
+                    else "Non configuré"
+                ),
                 "internal": True,
                 **center_stats.get(None, {"platform_count": 0, "student_count": 0, "log_count": 0}),
             }]
@@ -409,7 +550,7 @@ def create_admin_blueprint(socketio):
                     "is_active": bool(row[4]),
                     "created_at": row[5],
                     "updated_at": row[6],
-                    "password_status": row[8] or ("Hashé, non récupérable" if row[7] else "Non défini"),
+                    "password_status": "Hashé, non récupérable" if row[7] else "Non défini",
                     "internal": False,
                     **stats,
                 })
@@ -815,7 +956,7 @@ def create_admin_blueprint(socketio):
 
             logger.info(f"🔐 Tentative connexion admin: {username}")
 
-            if username == "admin" and password.replace(" ", "") == "secret123":
+            if username == "admin" and _internal_admin_password_valid(password):
                 session["is_admin"] = True
                 session["admin_account_type"] = "legacy_admin"
                 session.permanent = True
@@ -979,7 +1120,7 @@ def create_admin_blueprint(socketio):
             if account:
                 ensured, ensure_error = _ensure_training_center_supabase_user(
                     username,
-                    account.get("password_debug_plaintext"),
+                    None,
                     account.get("center_name"),
                 )
                 if not ensured:
@@ -1008,7 +1149,7 @@ def create_admin_blueprint(socketio):
                     "message": "Si un compte existe pour cette adresse, un email va être envoyé.",
                 }), 200
 
-            ensured, ensure_error = _ensure_training_center_supabase_user(username, row[2])
+            ensured, ensure_error = _ensure_training_center_supabase_user(username, None)
             if not ensured:
                 return jsonify({"success": False, "error": ensure_error}), 503
 
@@ -1065,7 +1206,7 @@ def create_admin_blueprint(socketio):
                     account = create_training_center(
                         username=username,
                         password_hash=password_hash,
-                        password_debug_plaintext=password,
+                        password_debug_plaintext=None,
                         center_name=center_name,
                         slug_base=center_name or username,
                         now=now_str,
@@ -1075,7 +1216,7 @@ def create_admin_blueprint(socketio):
 
                 conn = get_db_connection()
                 cursor = conn.cursor()
-                _mirror_training_center_to_sqlite(cursor, account, password_hash, now_str, password)
+                _mirror_training_center_to_sqlite(cursor, account, password_hash, now_str, None)
                 conn.commit()
 
                 if "@" in username:
@@ -1129,7 +1270,7 @@ def create_admin_blueprint(socketio):
                 (
                     username,
                     password_hash,
-                    password,
+                    None,
                     center_name,
                     center_slug,
                     now_str,
@@ -1213,7 +1354,12 @@ def create_admin_blueprint(socketio):
         data = request.get_json(silent=True) or {}
         training_title = str(data.get("training_title") or "").strip()
         rncp_code = str(data.get("rncp_code") or "").strip() or None
-        platform_id = data.get("platform_id")
+        raw_platform_id = data.get("platform_id")
+        platform_id = (
+            _authorize_platform_id(raw_platform_id)
+            if raw_platform_id is not None
+            else None
+        )
         quoted_amount_cents = data.get("quoted_amount_cents")
         try:
             total_hours = int(data.get("total_hours") or 0)
@@ -1229,7 +1375,7 @@ def create_admin_blueprint(socketio):
         try:
             order = create_ai_teacher_order({
                 "center_account_id": session.get("admin_account_id"),
-                "platform_id": int(platform_id) if platform_id else None,
+                "platform_id": platform_id,
                 "status": "draft",
                 "training_title": training_title,
                 "rncp_code": rncp_code,

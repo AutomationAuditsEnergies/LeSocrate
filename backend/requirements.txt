@@ -1,4 +1,6 @@
 azure-storage-blob==12.25.1
+azure-identity==1.25.3
+azure-servicebus==7.14.3
 dnspython<2.3.0
 eventlet>=0.40.3
 Flask==3.1.1
@@ -11,6 +13,7 @@ pytz==2023.3.post1
 Requests==2.32.4
 pydub==0.25.1
 psycopg[binary]>=3.2.0
+psycopg_pool>=3.2.0,<4
 PyPDF2==3.0.1
 anthropic>=0.30.0
 librosa>=0.10.0

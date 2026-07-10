@@ -91,17 +91,89 @@ def _job(**overrides):
 
 
 class PipelineOrderTest(unittest.TestCase):
-    def test_content_day_workers_default_runs_full_training_in_parallel(self):
+    def test_scheduled_audio_progress_fails_closed_when_claim_is_lost(self):
+        state = {"error": None}
+        callback = fr._make_audio_progress_logger(
+            99,
+            10,
+            "gtts",
+            schedule_session_id=7,
+            schedule_claim_started_at="claim-token",
+            ownership_state=state,
+        )
+        with patch(
+            "services.formation_observability_service.log_pipeline_event",
+        ), patch(
+            "repositories.course_schedule_repository.touch_audio_generation_session",
+            return_value=False,
+        ):
+            with self.assertRaisesRegex(fr._ScheduledAudioLeaseLost, "Lock audio perdu"):
+                callback(1, 21, "progress")
+
+        self.assertIn("séance 7", state["error"])
+
+    def test_auto_pilot_heartbeat_interrupts_runner_after_lock_loss(self):
+        import eventlet
+
+        captured = {}
+
+        class FakeHeartbeat:
+            def __init__(self):
+                self.killed = False
+
+            def kill(self):
+                self.killed = True
+
+        heartbeat = FakeHeartbeat()
+
+        def fake_spawn(callback):
+            captured["heartbeat"] = callback
+            return heartbeat
+
+        def execute_step(*_args):
+            captured["heartbeat"]()
+            self.fail("le runner aurait dû être interrompu par la perte du lock")
+
+        def inject_failure(_runner, exc):
+            raise exc
+
+        with (
+            patch.object(eventlet, "spawn", side_effect=fake_spawn),
+            patch.object(eventlet, "sleep", return_value=None),
+            patch.object(eventlet, "getcurrent", return_value=object()),
+            patch.object(eventlet.greenthread, "kill", side_effect=inject_failure),
+            patch.object(fr, "_new_ap_lock_owner", return_value="worker-a"),
+            patch.object(fr, "_acquire_ap_lock", return_value=True),
+            patch.object(fr, "_refresh_ap_lock", return_value=False),
+            patch.object(fr, "_release_ap_lock") as release,
+            patch.object(fr, "get_job", return_value=_job(auto_pilot_enabled=1)),
+            patch.object(fr, "_determine_next_ap_step", return_value="content"),
+            patch.object(fr, "_execute_ap_step", side_effect=execute_step),
+            patch.object(fr, "update_job") as update,
+            patch.object(fr, "_dispatch_auto_pilot_tick") as dispatch,
+            patch("services.formation_observability_service.log_pipeline_event"),
+        ):
+            fr._tick_auto_pilot(99)
+
+        self.assertTrue(heartbeat.killed)
+        release.assert_called_once_with(99, "worker-a")
+        dispatch.assert_not_called()
+        self.assertFalse(any(
+            call.kwargs.get("auto_pilot_error")
+            for call in update.call_args_list
+        ))
+
+    def test_content_day_workers_default_is_bounded(self):
         with patch.dict(os.environ, {}, clear=True):
-            self.assertEqual(fr._formation_content_day_workers(), 52)
+            self.assertEqual(fr._formation_content_day_workers(), 3)
 
     def test_content_day_workers_allows_lower_override(self):
-        with patch.dict(os.environ, {"FORMATION_CONTENT_DAY_WORKERS": "12"}):
-            self.assertEqual(fr._formation_content_day_workers(), 12)
+        with patch.dict(os.environ, {"FORMATION_CONTENT_DAY_WORKERS": "6"}):
+            self.assertEqual(fr._formation_content_day_workers(), 6)
 
-    def test_content_day_workers_caps_at_fifty_two(self):
+    def test_content_day_workers_caps_at_configured_safety_limit(self):
         with patch.dict(os.environ, {"FORMATION_CONTENT_DAY_WORKERS": "200"}):
-            self.assertEqual(fr._formation_content_day_workers(), 52)
+            self.assertEqual(fr._formation_content_day_workers(), 8)
 
     def _run_next_step(self, db_path, job):
         with patch.object(fr, "get_job", return_value=job), patch.object(

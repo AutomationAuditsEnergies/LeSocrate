@@ -1,13 +1,10 @@
-"""Repository for the SaaS core stored in Postgres.
-
-This module intentionally covers only centres, public platforms, students, logs
-and commercial orders. Pipeline orchestration/content remains on SQLite for now.
-"""
+"""Repository for SaaS core data stored in the authoritative Postgres database."""
+import os
 from datetime import datetime
 
 import requests
 
-from config import SUPABASE_SERVICE_ROLE_KEY, SUPABASE_URL
+from config import DATABASE_BACKEND, SUPABASE_SERVICE_ROLE_KEY, SUPABASE_URL
 from database.postgres import get_postgres_connection, postgres_enabled
 from utils.logger import get_logger
 from utils.slug import slugify
@@ -19,8 +16,23 @@ class DuplicateTrainingCenterUsername(Exception):
     pass
 
 
+class PlatformIdentityConflictError(RuntimeError):
+    """A mirrored platform ID is already bound to another tenant/slug."""
+
+
 def _supabase_rest_enabled():
-    return bool(SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY)
+    """Never fail over an Azure business DB into the Supabase Auth project.
+
+    REST fallback is opt-in because Supabase may be used for authentication
+    while ``DATABASE_URL`` points to Azure Database for PostgreSQL. Treating
+    those as interchangeable creates an especially dangerous split brain.
+    """
+    explicit = os.getenv("SUPABASE_DATABASE_REST_FALLBACK", "0").strip().lower()
+    return (
+        DATABASE_BACKEND == "supabase"
+        and explicit in {"1", "true", "yes", "on"}
+        and bool(SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY)
+    )
 
 
 def _rest_headers(prefer=None):
@@ -83,20 +95,6 @@ def _log_pg_fallback(operation, exc):
     )
 
 
-def _bump_named_sequence(conn, table_name, column_name="id"):
-    with conn.cursor() as cur:
-        cur.execute(
-            f"""
-            SELECT setval(
-                pg_get_serial_sequence(%s, %s),
-                COALESCE((SELECT MAX({column_name}) FROM {table_name}), 1),
-                TRUE
-            )
-            """,
-            (table_name, column_name),
-        )
-
-
 def _unique_center_slug(conn, base_slug):
     candidate_base = slugify(base_slug, fallback="centre")
     candidate = candidate_base
@@ -136,7 +134,8 @@ def get_training_center_by_username(username):
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    SELECT id, username, password_hash, center_name, slug, is_active, password_debug_plaintext
+                    SELECT id, username, password_hash, center_name, slug, is_active,
+                           NULL::text AS password_debug_plaintext
                     FROM training_center_accounts
                     WHERE username = %s
                     """,
@@ -150,7 +149,7 @@ def get_training_center_by_username(username):
         return _rest_get_first(
             "training_center_accounts",
             {
-                "select": "id,username,password_hash,center_name,slug,is_active,password_debug_plaintext",
+                "select": "id,username,password_hash,center_name,slug,is_active",
                 "username": f"eq.{username}",
             },
         )
@@ -185,6 +184,7 @@ def get_training_center_by_id(center_id):
 
 
 def create_training_center(username, password_hash, center_name, slug_base, now=None, password_debug_plaintext=None):
+    """Create a center without persisting the compatibility plaintext arg."""
     now = now or datetime.utcnow()
     try:
         with get_postgres_connection() as conn:
@@ -198,7 +198,7 @@ def create_training_center(username, password_hash, center_name, slug_base, now=
                     ON CONFLICT (username) DO NOTHING
                     RETURNING id, username, password_hash, center_name, slug, is_active, password_debug_plaintext
                     """,
-                    (username, password_hash, password_debug_plaintext, center_name, slug, now, now),
+                    (username, password_hash, None, center_name, slug, now, now),
                 )
                 row = cur.fetchone()
                 if row is None:
@@ -216,7 +216,6 @@ def create_training_center(username, password_hash, center_name, slug_base, now=
             {
                 "username": username,
                 "password_hash": password_hash,
-                "password_debug_plaintext": password_debug_plaintext,
                 "center_name": center_name,
                 "slug": slug,
                 "is_active": True,
@@ -241,7 +240,7 @@ def update_training_center_password(username, password_hash, password_debug_plai
                         updated_at = NOW()
                     WHERE username = %s
                     """,
-                    (password_hash, password_debug_plaintext, username),
+                    (password_hash, None, username),
                 )
                 return cur.rowcount > 0
     except Exception as exc:
@@ -254,7 +253,7 @@ def update_training_center_password(username, password_hash, password_debug_plai
             params={"username": f"eq.{username}"},
             json={
                 "password_hash": password_hash,
-                "password_debug_plaintext": password_debug_plaintext,
+                "password_debug_plaintext": None,
                 "updated_at": datetime.utcnow().isoformat(),
             },
             timeout=12,
@@ -349,8 +348,42 @@ def get_platform_info(platform_id):
         )
 
 
+def get_platform_audio_config(platform_id):
+    """Return tenant-specific playback configuration from authoritative PG."""
+    if not postgres_enabled():
+        return None
+    try:
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT id, playlist_mode, audio_base_url, audio_container
+                    FROM platform_config
+                    WHERE id = %s
+                    """,
+                    (platform_id,),
+                )
+                return cur.fetchone()
+    except Exception as exc:
+        if not _supabase_rest_enabled():
+            raise
+        _log_pg_fallback("get_platform_audio_config", exc)
+        return _rest_get_first(
+            "platform_config",
+            {
+                "select": "id,playlist_mode,audio_base_url,audio_container",
+                "id": f"eq.{platform_id}",
+            },
+        )
+
+
 def upsert_platform_config(platform):
-    """Mirror a SQLite platform row into Postgres with the same platform id."""
+    """Mirror a SQLite platform row without replacing another identity.
+
+    The platform's stable identity is its tenant plus slug. An ID collision is
+    therefore an error, not an upsert: silently changing those fields could
+    attach jobs, students, and Blob containers to the wrong customer.
+    """
     try:
         with get_postgres_connection() as conn:
             with conn.cursor() as cur:
@@ -385,10 +418,19 @@ def upsert_platform_config(platform):
                         status = EXCLUDED.status,
                         source_formation_id = EXCLUDED.source_formation_id,
                         source_module_id = EXCLUDED.source_module_id
+                    WHERE platform_config.center_account_id IS NOT DISTINCT FROM EXCLUDED.center_account_id
+                      AND platform_config.slug IS NOT DISTINCT FROM EXCLUDED.slug
+                    RETURNING id
                     """,
                     platform,
                 )
-            _bump_named_sequence(conn, "platform_config")
+                if cur.fetchone() is None:
+                    raise PlatformIdentityConflictError(
+                        "Refus d'écraser PostgreSQL: "
+                        f"platform_config.id={platform.get('id')} appartient à une autre identité"
+                    )
+    except PlatformIdentityConflictError:
+        raise
     except Exception as exc:
         if not _supabase_rest_enabled():
             raise
@@ -506,7 +548,6 @@ def upsert_student_profile_with_id(profile):
                 """,
                 profile,
             )
-        _bump_named_sequence(conn, "student_profiles")
 
 
 def upsert_log(log_row):
@@ -525,15 +566,49 @@ def upsert_log(log_row):
                 """,
                 log_row,
             )
-        _bump_named_sequence(conn, "logs")
+
+
+def create_log(log_row):
+    """Create a student connection log in authoritative Postgres.
+
+    Unlike ``upsert_log`` (kept for the hybrid SQLite mirror), this lets
+    Postgres allocate the identifier.  That avoids coupling a production log
+    id to a process-local SQLite sequence.
+    """
+    with get_postgres_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO logs (platform_id, nom, prenom, arrivee, depart)
+                VALUES (%(platform_id)s, %(nom)s, %(prenom)s, %(arrivee)s, %(depart)s)
+                RETURNING id
+                """,
+                log_row,
+            )
+            row = cur.fetchone()
+            if not row:
+                raise RuntimeError("Postgres n'a pas retourné l'identifiant du log élève.")
+            return int(row["id"])
 
 
 def update_log_depart(log_id, depart):
-    if not postgres_enabled() or not log_id:
-        return
+    if not log_id:
+        return False
     with get_postgres_connection() as conn:
         with conn.cursor() as cur:
             cur.execute("UPDATE logs SET depart = %s WHERE id = %s", (depart, log_id))
+            return cur.rowcount > 0
+
+
+def close_open_logs(depart):
+    """Close every currently open student log and return the affected count."""
+    with get_postgres_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE logs SET depart = %s WHERE depart IS NULL",
+                (depart,),
+            )
+            return int(cur.rowcount)
 
 
 def create_ai_teacher_order(order):

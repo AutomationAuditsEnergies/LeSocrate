@@ -1,6 +1,6 @@
 # audio_service.py - Logique de gestion de la playlist et des audios
 import copy
-from config import COURS_PLAYLIST, FRANCE_TZ
+from config import COURS_PLAYLIST, DATABASE_BACKEND, FRANCE_TZ
 from services.time_service import get_heure_debut_cours, get_current_simulated_time
 from utils.logger import get_logger
 
@@ -89,20 +89,35 @@ def get_playlist(platform_id=None):
     if platform_id is None:
         return playlist
 
+    postgres_only = DATABASE_BACKEND in {"postgres", "postgresql", "supabase"}
     try:
-        from database.db import get_db_connection
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT playlist_mode, audio_base_url, audio_container FROM platform_config WHERE id = ?",
-            (platform_id,),
-        )
-        row = cursor.fetchone()
-        conn.close()
+        if postgres_only:
+            from repositories.core_repository import get_platform_audio_config
 
-        mode, audio_base_url, audio_container = row if row else (None, None, None)
+            row = get_platform_audio_config(int(platform_id))
+            if not row:
+                raise LookupError(f"Plateforme {platform_id} introuvable dans PostgreSQL")
+            mode = row["playlist_mode"]
+            audio_base_url = row["audio_base_url"]
+            audio_container = row["audio_container"]
+        else:
+            from database.db import get_db_connection
+
+            conn = get_db_connection()
+            try:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT playlist_mode, audio_base_url, audio_container FROM platform_config WHERE id = ?",
+                    (platform_id,),
+                )
+                row = cursor.fetchone()
+            finally:
+                conn.close()
+            mode, audio_base_url, audio_container = row if row else (None, None, None)
     except Exception as e:
         logger.warning(f"⚠️ Impossible de lire platform_config pour la playlist: {e}")
+        if postgres_only:
+            raise
         return playlist
 
     if mode == "ete":

@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 from flask import Blueprint, request, session, jsonify, Response, stream_with_context, send_file
 from azure.storage.blob import BlobServiceClient, generate_blob_sas, BlobSasPermissions
 from azure.core.exceptions import ResourceExistsError
-from config import FRANCE_TZ
+from config import FRANCE_TZ, PIPELINE_DATABASE_BACKEND
 from database.db import get_db_connection
 from database.postgres import postgres_enabled
 from repositories.core_repository import (
@@ -16,8 +16,28 @@ from repositories.core_repository import (
     upsert_cours_config,
     upsert_platform_config,
 )
-from repositories.pipeline_repository import list_course_folder_rows_for_platform
-from repositories.pipeline_repository import get_course_folder_identity
+from repositories.hr_read_repository import (
+    list_formation_modules as list_hr_formation_modules,
+    list_formations as list_hr_formations,
+    list_platforms as list_hr_platforms,
+)
+from repositories.hr_write_repository import (
+    CloneSourceInvalid,
+    CloneSourceNotFound,
+    clone_postgres_course_structure,
+    create_postgres_manual_formation_module,
+    resolve_postgres_formation_clone_source,
+    resolve_postgres_module_clone_source,
+    set_postgres_platform_status,
+)
+from repositories.pipeline_repository import (
+    allocate_platform_id_from_postgres,
+    get_course_folder_identity,
+    hr_resource_belongs_to_center,
+    list_course_folder_rows_for_platform,
+    pipeline_job_belongs_to_center,
+    platform_ids_use_postgres_allocator,
+)
 from services.course_schedule_service import (
     create_missing_course_schedule,
     ensure_course_schedule_tables,
@@ -48,6 +68,13 @@ HR_DASHBOARD_REPAIR_ON_LOAD = os.environ.get("HR_DASHBOARD_REPAIR_ON_LOAD", "fal
     "yes",
     "on",
 }
+
+_POSTGRES_PIPELINE_BACKENDS = {"postgres", "postgresql", "supabase"}
+_HR_SUPERADMIN_ACCOUNT_TYPES = {"legacy_admin", "superadmin"}
+
+
+def _hr_pipeline_reads_use_postgres():
+    return PIPELINE_DATABASE_BACKEND in _POSTGRES_PIPELINE_BACKENDS
 
 
 _ARCHIVE_DEFAULTS = {
@@ -213,6 +240,98 @@ def create_hr_blueprint(socketio):
     def _require_admin():
         if not session.get("is_admin"):
             return jsonify({"success": False, "error": "Accès refusé"}), 403
+        return None
+
+    def _admin_account_type():
+        # Seuls les types explicitement émis par l'authentification sont
+        # reconnus. Une session ancienne/incomplète doit se reconnecter.
+        return str(session.get("admin_account_type") or "").strip().lower()
+
+    def _training_center_account_id():
+        value = session.get("admin_account_id")
+        if value is None or isinstance(value, bool):
+            return None
+        try:
+            account_id = int(value)
+        except (TypeError, ValueError):
+            return None
+        return account_id if account_id > 0 else None
+
+    def _tenant_resource_not_found():
+        # Même réponse pour une ressource absente et une ressource d'un autre
+        # centre afin de ne pas révéler son existence.
+        return jsonify({"success": False, "error": "Ressource introuvable"}), 404
+
+    def _require_hr_resource_access(resource_type, resource_id):
+        """Fail-closed tenant check, reusable for URL and request-body ids."""
+        account_type = _admin_account_type()
+        if account_type in _HR_SUPERADMIN_ACCOUNT_TYPES:
+            return None
+        if account_type != "training_center":
+            return _tenant_resource_not_found()
+
+        center_account_id = _training_center_account_id()
+        if center_account_id is None:
+            return _tenant_resource_not_found()
+
+        try:
+            allowed = hr_resource_belongs_to_center(
+                resource_type,
+                resource_id,
+                center_account_id,
+            )
+        except Exception:
+            logger.warning(
+                "HR_TENANT_SCOPE_LOOKUP_FAILED resource_type=%s resource_id=%s center_account_id=%s",
+                resource_type,
+                resource_id,
+                center_account_id,
+                exc_info=True,
+            )
+            return _tenant_resource_not_found()
+        if not allowed:
+            logger.warning(
+                "HR_TENANT_SCOPE_DENIED resource_type=%s resource_id=%s center_account_id=%s",
+                resource_type,
+                resource_id,
+                center_account_id,
+            )
+            return _tenant_resource_not_found()
+        return None
+
+    @hr_bp.before_request
+    def enforce_hr_tenant_scope():
+        """Resolve every URL resource before its route can cause side effects."""
+        if not session.get("is_admin"):
+            return None
+
+        account_type = _admin_account_type()
+        if account_type in _HR_SUPERADMIN_ACCOUNT_TYPES:
+            return None
+        if account_type != "training_center" or _training_center_account_id() is None:
+            return _tenant_resource_not_found()
+
+        view_args = request.view_args or {}
+        resource_keys = (
+            ("platform_id", "platform"),
+            ("folder_id", "folder"),
+            ("document_id", "document"),
+            ("request_id", "deletion_request"),
+            ("module_id", "module"),
+        )
+        for argument_name, resource_type in resource_keys:
+            if argument_name in view_args:
+                denied = _require_hr_resource_access(resource_type, view_args[argument_name])
+                if denied:
+                    return denied
+        return None
+
+    def _require_global_hr_admin():
+        denied = _require_admin()
+        if denied:
+            return denied
+        if _admin_account_type() not in _HR_SUPERADMIN_ACCOUNT_TYPES:
+            return jsonify({"success": False, "error": "Accès superadmin requis"}), 403
         return None
 
     def _now_str():
@@ -393,6 +512,34 @@ def create_hr_blueprint(socketio):
         if denied:
             return denied
         try:
+            if _hr_pipeline_reads_use_postgres():
+                scope_to_center = session.get("admin_account_type") == "training_center"
+                rows = list_hr_formation_modules(
+                    session.get("admin_account_id"),
+                    scope_to_center=scope_to_center,
+                )
+                modules = [{
+                    "id": row["id"],
+                    "rncp_code": row.get("rncp_code") or "",
+                    "tp_name": row.get("tp_name"),
+                    "version": row.get("version"),
+                    "status": row.get("status"),
+                    "source_pipeline_job_id": row.get("source_pipeline_job_id"),
+                    "source_platform_id": row.get("source_platform_id"),
+                    "created_at": row.get("created_at"),
+                    "nb_folders": row.get("nb_folders", 0),
+                    "source_platform_name": row.get("source_platform_name"),
+                    "voice_type": row.get("voice_type"),
+                    "voice_updated_at": row.get("voice_updated_at"),
+                    "schedule": row.get("schedule"),
+                    "reusable": (
+                        row.get("status") == "validated"
+                        and row.get("nb_folders", 0) > 0
+                        and row.get("voice_type") != "mock"
+                    ),
+                } for row in rows]
+                return jsonify({"success": True, "modules": modules}), 200
+
             conn = get_db_connection()
             cursor = conn.cursor()
             module_scope_sql, module_scope_params = _module_scope_clause("m")
@@ -527,6 +674,27 @@ def create_hr_blueprint(socketio):
         if denied:
             return denied
         try:
+            if _hr_pipeline_reads_use_postgres():
+                scope_to_center = session.get("admin_account_type") == "training_center"
+                rows = list_hr_formations(
+                    session.get("admin_account_id"),
+                    scope_to_center=scope_to_center,
+                )
+                formations = [{
+                    "id": row["id"],
+                    "tp_name": row.get("tp_name"),
+                    "rncp_code": row.get("rncp_code") or "",
+                    "total_hours": row.get("total_hours"),
+                    "nb_days": row.get("nb_days"),
+                    "status": row.get("status"),
+                    "platform_id": row.get("platform_id"),
+                    "platform_name": row.get("platform_name") or f"Plateforme {row.get('platform_id')}",
+                    "nb_folders": row.get("nb_folders", 0),
+                    "created_at": row.get("created_at"),
+                    "reusable": row.get("status") == "completed" and row.get("nb_folders", 0) > 0,
+                } for row in rows]
+                return jsonify({"success": True, "formations": formations}), 200
+
             conn = get_db_connection()
             cursor = conn.cursor()
             platform_where = ""
@@ -575,8 +743,26 @@ def create_hr_blueprint(socketio):
         try:
             include_blob_stats = _bool_arg("include_blob_stats", default=False)
             repair_on_load = _bool_arg("repair", default=HR_DASHBOARD_REPAIR_ON_LOAD)
-            conn = get_db_connection()
-            cursor = conn.cursor()
+            if _admin_account_type() == "training_center":
+                # Les réparations sont des UPDATE de maintenance globaux ; un
+                # centre ne peut jamais les déclencher pour les autres tenants.
+                repair_on_load = False
+            postgres_dashboard_rows = None
+            if _hr_pipeline_reads_use_postgres():
+                # GET reads are side-effect free in the authoritative store.
+                # Legacy repair remains available only on the explicit SQLite
+                # path and must be handled by a migration/admin operation in PG.
+                repair_on_load = False
+                scope_to_center = session.get("admin_account_type") == "training_center"
+                postgres_dashboard_rows = list_hr_platforms(
+                    session.get("admin_account_id"),
+                    scope_to_center=scope_to_center,
+                )
+                conn = None
+                cursor = None
+            else:
+                conn = get_db_connection()
+                cursor = conn.cursor()
 
             if repair_on_load:
                 # Ces réparations écrivent dans SQLite. Elles sont utiles en
@@ -677,45 +863,71 @@ def create_hr_blueprint(socketio):
                 if conn.total_changes > 0:
                     conn.commit()
 
-            platform_where = ""
-            platform_params = []
-            if session.get("admin_account_type") == "training_center":
-                platform_where = "WHERE pc.center_account_id = ?"
-                platform_params.append(session.get("admin_account_id"))
+            if postgres_dashboard_rows is None:
+                platform_where = ""
+                platform_params = []
+                if session.get("admin_account_type") == "training_center":
+                    platform_where = "WHERE pc.center_account_id = ?"
+                    platform_params.append(session.get("admin_account_id"))
 
-            cursor.execute(f"""
-                SELECT
-                    pc.id,
-                    pc.name,
-                    pc.slug,
-                    pc.upload_locked,
-                    pc.pdf_filename,
-                    pc.pdf_uploaded_at,
-                    pc.updated_at,
-                    pc.status,
-                    pc.source_formation_id,
-                    pc.source_module_id,
-                    pc.center_account_id,
-                    COALESCE(tca.slug, 'le-socrate') AS center_slug,
-                    COALESCE(fm.rncp_code, fpj.rncp_code) AS source_rncp_code,
-                    COALESCE(fm.tp_name, fpj.tp_name) AS source_tp_name,
-                    fpj.status AS pipeline_status,
-                    fpj.auto_pilot_step AS pipeline_auto_pilot_step,
-                    fpj.auto_pilot_error AS pipeline_auto_pilot_error,
-                    fpj.auto_pilot_enabled AS pipeline_auto_pilot_enabled
-                FROM platform_config pc
-                LEFT JOIN training_center_accounts tca ON tca.id = pc.center_account_id
-                LEFT JOIN formation_modules fm ON fm.id = pc.source_module_id
-                LEFT JOIN formation_pipeline_jobs fpj ON fpj.id = pc.source_formation_id
-                {platform_where}
-                ORDER BY pc.id
-            """, platform_params)
-            rows = cursor.fetchall()
+                cursor.execute(f"""
+                    SELECT
+                        pc.id,
+                        pc.name,
+                        pc.slug,
+                        pc.upload_locked,
+                        pc.pdf_filename,
+                        pc.pdf_uploaded_at,
+                        pc.updated_at,
+                        pc.status,
+                        pc.source_formation_id,
+                        pc.source_module_id,
+                        pc.center_account_id,
+                        COALESCE(tca.slug, 'le-socrate') AS center_slug,
+                        COALESCE(fm.rncp_code, fpj.rncp_code) AS source_rncp_code,
+                        COALESCE(fm.tp_name, fpj.tp_name) AS source_tp_name,
+                        fpj.status AS pipeline_status,
+                        fpj.auto_pilot_step AS pipeline_auto_pilot_step,
+                        fpj.auto_pilot_error AS pipeline_auto_pilot_error,
+                        fpj.auto_pilot_enabled AS pipeline_auto_pilot_enabled
+                    FROM platform_config pc
+                    LEFT JOIN training_center_accounts tca ON tca.id = pc.center_account_id
+                    LEFT JOIN formation_modules fm ON fm.id = pc.source_module_id
+                    LEFT JOIN formation_pipeline_jobs fpj ON fpj.id = pc.source_formation_id
+                    {platform_where}
+                    ORDER BY pc.id
+                """, platform_params)
+                rows = cursor.fetchall()
 
-            # Compter demandes en attente par plateforme
-            cursor.execute("SELECT platform_id, COUNT(*) FROM deletion_requests WHERE status='pending' GROUP BY platform_id")
-            pending_counts = dict(cursor.fetchall())
-            conn.close()
+                # Compter demandes en attente par plateforme
+                cursor.execute("SELECT platform_id, COUNT(*) FROM deletion_requests WHERE status='pending' GROUP BY platform_id")
+                pending_counts = dict(cursor.fetchall())
+                conn.close()
+            else:
+                rows = [(
+                    row["id"],
+                    row.get("name"),
+                    row.get("slug"),
+                    row.get("upload_locked"),
+                    row.get("pdf_filename"),
+                    row.get("pdf_uploaded_at"),
+                    row.get("updated_at"),
+                    row.get("status"),
+                    row.get("source_formation_id"),
+                    row.get("source_module_id"),
+                    row.get("center_account_id"),
+                    row.get("center_slug") or "le-socrate",
+                    row.get("source_rncp_code"),
+                    row.get("source_tp_name"),
+                    row.get("pipeline_status"),
+                    row.get("pipeline_auto_pilot_step"),
+                    row.get("pipeline_auto_pilot_error"),
+                    row.get("pipeline_auto_pilot_enabled"),
+                ) for row in postgres_dashboard_rows]
+                pending_counts = {
+                    row["id"]: row.get("pending_deletion_count", 0)
+                    for row in postgres_dashboard_rows
+                }
 
             # Stats Azure : optionnelles, car scanner les containers peut bloquer
             # le chargement initial du dashboard si Azure Storage répond lentement.
@@ -834,7 +1046,7 @@ def create_hr_blueprint(socketio):
                         effective_status = "ready"
                     elif pipeline_failed or (p_source_formation_id and not p_pipeline_status and not p_pipeline_auto_pilot_step):
                         effective_status = "error"
-                    elif not p_source_formation_id and updated_at:
+                    elif repair_on_load and not p_source_formation_id and updated_at:
                         try:
                             updated_dt = datetime.fromisoformat(str(updated_at).replace("Z", "+00:00"))
                             if updated_dt.tzinfo is None:
@@ -880,7 +1092,41 @@ def create_hr_blueprint(socketio):
             logger.error(f"❌ Erreur get platforms: {e}")
             return jsonify({"success": False, "error": str(e)}), 500
 
-    def _clone_formation_async(source_platform_id, target_platform_id, source_formation_id):
+    def _mirror_clone_status_sqlite(target_platform_id, status):
+        """Best-effort compatibility mirror; PostgreSQL stays authoritative."""
+        conn = None
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                "UPDATE platform_config SET status = ?, updated_at = ? WHERE id = ?",
+                (status, _now_str(), target_platform_id),
+            )
+            conn.commit()
+        except Exception:
+            logger.warning(
+                "HR_CLONE_SQLITE_STATUS_MIRROR_FAILED platform_id=%s status=%s",
+                target_platform_id,
+                status,
+                exc_info=True,
+            )
+        finally:
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+
+    def _clone_formation_async(
+        source_platform_id,
+        target_platform_id,
+        source_formation_id,
+        *,
+        source_module_id=None,
+        postgres_clone=False,
+        center_account_id=None,
+        scope_to_center=False,
+    ):
         """Clone les cours_folders + cours_documents + blobs Azure d'une plateforme
         source vers une cible. Lancé en thread de fond : la plateforme cible reste
         en status 'pending' jusqu'à la fin, puis passe à 'ready'.
@@ -891,40 +1137,52 @@ def create_hr_blueprint(socketio):
             copy_blobs_by_prefix, CONTAINER_DOCUMENTS, CONTAINER_AUDIOS,
         )
         try:
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            # 1. Cloner chaque cours_folder en préservant l'ordre
-            cursor.execute(
-                """SELECT id, name, position, created_at FROM cours_folders
-                   WHERE platform_id = ? ORDER BY position ASC, id ASC""",
-                (source_platform_id,),
-            )
-            source_folders = cursor.fetchall()
-            folder_id_map = {}  # source_folder_id -> new_folder_id
-
-            for src_fid, fname, position, created_at in source_folders:
-                cursor.execute(
-                    "INSERT INTO cours_folders (platform_id, name, position) VALUES (?, ?, ?)",
-                    (target_platform_id, fname, position),
+            if postgres_clone:
+                clone_result = clone_postgres_course_structure(
+                    target_platform_id=target_platform_id,
+                    module_id=source_module_id,
+                    formation_id=None if source_module_id is not None else source_formation_id,
+                    center_account_id=center_account_id,
+                    scope_to_center=scope_to_center,
                 )
-                new_fid = cursor.lastrowid
-                folder_id_map[src_fid] = new_fid
-
-                # 2. Cloner les documents liés
+                source_platform_id = clone_result["source_platform_id"]
+                folder_id_map = clone_result["folder_id_map"]
+            else:
+                conn = get_db_connection()
+                cursor = conn.cursor()
+                # 1. Cloner chaque cours_folder en préservant l'ordre
                 cursor.execute(
-                    """SELECT filename, original_name, status, audio_filename, COALESCE(doc_type, 'source')
-                       FROM cours_documents WHERE folder_id = ?""",
-                    (src_fid,),
+                    """SELECT id, name, position, created_at FROM cours_folders
+                       WHERE platform_id = ? ORDER BY position ASC, id ASC""",
+                    (source_platform_id,),
                 )
-                for filename, original_name, status, audio_filename, doc_type in cursor.fetchall():
+                source_folders = cursor.fetchall()
+                folder_id_map = {}  # source_folder_id -> new_folder_id
+
+                for src_fid, fname, position, created_at in source_folders:
                     cursor.execute(
-                        """INSERT INTO cours_documents
-                           (folder_id, filename, original_name, status, audio_filename, doc_type)
-                           VALUES (?, ?, ?, ?, ?, ?)""",
-                        (new_fid, filename, original_name, status, audio_filename, doc_type),
+                        "INSERT INTO cours_folders (platform_id, name, position) VALUES (?, ?, ?)",
+                        (target_platform_id, fname, position),
                     )
-            conn.commit()
-            conn.close()
+                    new_fid = cursor.lastrowid
+                    folder_id_map[src_fid] = new_fid
+
+                    # 2. Cloner les documents liés. Les content jobs et leurs
+                    # segments ne faisaient pas partie du clone historique.
+                    cursor.execute(
+                        """SELECT filename, original_name, status, audio_filename, COALESCE(doc_type, 'source')
+                           FROM cours_documents WHERE folder_id = ?""",
+                        (src_fid,),
+                    )
+                    for filename, original_name, status, audio_filename, doc_type in cursor.fetchall():
+                        cursor.execute(
+                            """INSERT INTO cours_documents
+                               (folder_id, filename, original_name, status, audio_filename, doc_type)
+                               VALUES (?, ?, ?, ?, ?, ?)""",
+                            (new_fid, filename, original_name, status, audio_filename, doc_type),
+                        )
+                conn.commit()
+                conn.close()
 
             # 3. Copier les blobs Azure (server-side) pour chaque folder source → cible
             total_copied = 0
@@ -935,34 +1193,54 @@ def create_hr_blueprint(socketio):
                     total_copied += copy_blobs_by_prefix(CONTAINER_DOCUMENTS, src_prefix_docs, dst_prefix_docs)
                     total_copied += copy_blobs_by_prefix(CONTAINER_AUDIOS, src_prefix_docs, dst_prefix_docs)
                 except Exception as e:
+                    if postgres_clone:
+                        # Ne jamais publier "ready" dans la source de vérité si
+                        # les artefacts associés n'ont pas pu être copiés.
+                        raise RuntimeError(
+                            f"Copie Blob incomplète pour le dossier {src_fid}→{new_fid}: {e}"
+                        ) from e
                     logger.warning(f"⚠️ Copie blobs folder {src_fid}→{new_fid} : {e}")
 
-            # 4. Marquer la plateforme comme ready
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            cursor.execute(
-                "UPDATE platform_config SET status = 'ready', updated_at = ? WHERE id = ?",
-                (_now_str(), target_platform_id),
-            )
-            conn.commit()
-            conn.close()
+            # 4. Marquer la source de vérité puis seulement son miroir local.
+            if postgres_clone:
+                set_postgres_platform_status(
+                    target_platform_id,
+                    "ready",
+                    center_account_id,
+                    scope_to_center=scope_to_center,
+                )
+                _mirror_clone_status_sqlite(target_platform_id, "ready")
+            else:
+                conn = get_db_connection()
+                cursor = conn.cursor()
+                cursor.execute(
+                    "UPDATE platform_config SET status = 'ready', updated_at = ? WHERE id = ?",
+                    (_now_str(), target_platform_id),
+                )
+                conn.commit()
+                conn.close()
             logger.info(
                 f"✅ Clone formation {source_formation_id} : P{source_platform_id}→P{target_platform_id} "
                 f"— {len(folder_id_map)} folders, {total_copied} blobs copiés"
             )
         except Exception as e:
             logger.error(f"❌ Clone formation {source_formation_id} P{source_platform_id}→P{target_platform_id} : {e}")
-            try:
-                conn = get_db_connection()
-                cursor = conn.cursor()
-                cursor.execute(
-                    "UPDATE platform_config SET status = 'error', updated_at = ? WHERE id = ?",
-                    (_now_str(), target_platform_id),
-                )
-                conn.commit()
-                conn.close()
-            except Exception:
-                pass
+            if postgres_clone:
+                try:
+                    set_postgres_platform_status(
+                        target_platform_id,
+                        "error",
+                        center_account_id,
+                        scope_to_center=scope_to_center,
+                    )
+                except Exception:
+                    logger.exception(
+                        "HR_CLONE_POSTGRES_ERROR_STATUS_FAILED platform_id=%s",
+                        target_platform_id,
+                    )
+                _mirror_clone_status_sqlite(target_platform_id, "error")
+            else:
+                _mirror_clone_status_sqlite(target_platform_id, "error")
 
     # ─── POST /api/hr/platforms (Créer une nouvelle plateforme) ──────────
     @hr_bp.route("/api/hr/platforms", methods=["POST"])
@@ -997,6 +1275,83 @@ def create_hr_blueprint(socketio):
         if content_modes > 1:
             return jsonify({"success": False, "error": "Choisir UN seul mode : module existant, formation existante, ou nouvelle formation"}), 400
 
+        # Les sources sont des IDs indirects fournis dans le corps : les
+        # résoudre avant d'ouvrir la transaction qui créera la plateforme.
+        if module_id:
+            if isinstance(module_id, bool):
+                return jsonify({"success": False, "error": "module_id invalide"}), 400
+            try:
+                module_id = int(module_id)
+            except (TypeError, ValueError):
+                return jsonify({"success": False, "error": "module_id invalide"}), 400
+            source_denied = _require_hr_resource_access("module", module_id)
+            if source_denied:
+                return source_denied
+        elif formation_id:
+            if isinstance(formation_id, bool):
+                return jsonify({"success": False, "error": "formation_id invalide"}), 400
+            try:
+                formation_id = int(formation_id)
+            except (TypeError, ValueError):
+                return jsonify({"success": False, "error": "formation_id invalide"}), 400
+            if _admin_account_type() == "training_center":
+                center_account_id = _training_center_account_id()
+                try:
+                    source_allowed = pipeline_job_belongs_to_center(
+                        formation_id,
+                        center_account_id,
+                    )
+                except Exception:
+                    logger.warning(
+                        "HR_TENANT_SCOPE_LOOKUP_FAILED resource_type=pipeline_job resource_id=%s center_account_id=%s",
+                        formation_id,
+                        center_account_id,
+                        exc_info=True,
+                    )
+                    source_allowed = False
+                if not source_allowed:
+                    return _tenant_resource_not_found()
+
+        # When the pipeline catalogue is authoritative in PostgreSQL, resolve
+        # clone sources there as well.  Falling back to the SQLite mirror here
+        # made PG-visible modules impossible to clone and reintroduced a split
+        # brain between the catalogue and the writer.
+        postgres_clone = _hr_pipeline_reads_use_postgres() and bool(module_id or formation_id)
+        source_platform_id = None
+        scope_to_center = _admin_account_type() == "training_center"
+        request_center_account_id = (
+            _training_center_account_id() if scope_to_center else None
+        )
+        if postgres_clone:
+            try:
+                if module_id:
+                    source = resolve_postgres_module_clone_source(
+                        module_id,
+                        request_center_account_id,
+                        scope_to_center=scope_to_center,
+                    )
+                    source_platform_id = int(source["source_platform_id"])
+                    # Preserve the legacy link to the originating pipeline job
+                    # when the reusable module has one.
+                    formation_id = source.get("source_pipeline_job_id")
+                else:
+                    source = resolve_postgres_formation_clone_source(
+                        formation_id,
+                        request_center_account_id,
+                        scope_to_center=scope_to_center,
+                    )
+                    source_platform_id = int(source["source_platform_id"])
+            except CloneSourceNotFound as exc:
+                return jsonify({"success": False, "error": str(exc)}), 404
+            except CloneSourceInvalid as exc:
+                return jsonify({"success": False, "error": str(exc)}), 400
+            except Exception:
+                logger.exception("HR_POSTGRES_CLONE_SOURCE_LOOKUP_FAILED")
+                return jsonify({
+                    "success": False,
+                    "error": "Source de clonage PostgreSQL indisponible",
+                }), 503
+
         try:
             conn = get_db_connection()
             cursor = conn.cursor()
@@ -1024,10 +1379,11 @@ def create_hr_blueprint(socketio):
                 scope_value=center_account_id,
             )
 
-            source_platform_id = None
+            if not postgres_clone:
+                source_platform_id = None
 
             # Mode module_id (nouveau — priorité sur formation_id si les deux présents)
-            if module_id:
+            if module_id and not postgres_clone:
                 module_scope_sql, module_scope_params = _module_scope_clause("formation_modules")
                 cursor.execute(
                     "SELECT source_platform_id, status, source_pipeline_job_id, voice_type "
@@ -1060,7 +1416,7 @@ def create_hr_blueprint(socketio):
                 formation_id = m_job_id
 
             # Mode formation_id (legacy) : vérifier que la formation existe et a des cours
-            elif formation_id:
+            elif formation_id and not postgres_clone:
                 cursor.execute(
                     "SELECT platform_id, status FROM formation_pipeline_jobs WHERE id = ?",
                     (formation_id,),
@@ -1115,14 +1471,39 @@ def create_hr_blueprint(socketio):
             has_content = bool(module_id or formation_id or new_formation)
             initial_status = "pending" if has_content else "ready"
 
-            # Insérer la plateforme
-            cursor.execute(
-                """INSERT INTO platform_config
-                   (name, upload_locked, updated_at, slug, status, source_formation_id, source_module_id, center_account_id, public_access_enabled)
-                   VALUES (?, 1, ?, ?, ?, ?, ?, ?, 1)""",
-                (name, now_str, slug, initial_status, formation_id, module_id, center_account_id),
-            )
-            new_id = cursor.lastrowid
+            # En mode hybride, PostgreSQL est l'unique allocateur d'identités.
+            # On relève sa séquence au-dessus du max SQLite puis on réutilise
+            # explicitement l'ID réservé dans le miroir local. SQLite pur garde
+            # son AUTOINCREMENT historique.
+            if platform_ids_use_postgres_allocator():
+                cursor.execute("SELECT COALESCE(MAX(id), 0) FROM platform_config")
+                sqlite_max_id = int(cursor.fetchone()[0])
+                new_id = allocate_platform_id_from_postgres(sqlite_max_id=sqlite_max_id)
+                cursor.execute(
+                    """INSERT INTO platform_config
+                       (id, name, upload_locked, updated_at, slug, status,
+                        source_formation_id, source_module_id, center_account_id,
+                        public_access_enabled)
+                       VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, 1)""",
+                    (
+                        new_id,
+                        name,
+                        now_str,
+                        slug,
+                        initial_status,
+                        formation_id,
+                        module_id,
+                        center_account_id,
+                    ),
+                )
+            else:
+                cursor.execute(
+                    """INSERT INTO platform_config
+                       (name, upload_locked, updated_at, slug, status, source_formation_id, source_module_id, center_account_id, public_access_enabled)
+                       VALUES (?, 1, ?, ?, ?, ?, ?, ?, 1)""",
+                    (name, now_str, slug, initial_status, formation_id, module_id, center_account_id),
+                )
+                new_id = cursor.lastrowid
 
             # Noms des containers
             audio_container = f"formationaudio-p{new_id}"
@@ -1211,6 +1592,12 @@ def create_hr_blueprint(socketio):
                         "platform_id": new_id,
                         "heure_debut": default_heure,
                     })
+                    if not has_content:
+                        create_postgres_manual_formation_module(
+                            platform_id=new_id,
+                            tp_name=name,
+                            center_account_id=center_account_id,
+                        )
                     postgres_synced = True
                 except Exception:
                     conn.rollback()
@@ -1257,11 +1644,17 @@ def create_hr_blueprint(socketio):
 
             # Mode réutilisation : lancer le clone en background
             linked_job_id = None
-            if formation_id and source_platform_id:
+            if (module_id or formation_id) and source_platform_id:
                 import threading
                 t = threading.Thread(
                     target=_clone_formation_async,
                     args=(source_platform_id, new_id, formation_id),
+                    kwargs={
+                        "source_module_id": module_id,
+                        "postgres_clone": postgres_clone,
+                        "center_account_id": center_account_id,
+                        "scope_to_center": scope_to_center,
+                    },
                     daemon=True,
                 )
                 t.start()
@@ -1801,13 +2194,25 @@ def create_hr_blueprint(socketio):
             status_filter = request.args.get("status", "pending")
             conn = get_db_connection()
             cursor = conn.cursor()
+            scope_sql, scope_params = _platform_access_clause("pc")
+
+            select_sql = """
+                SELECT dr.id, dr.platform_id, dr.filename, dr.requester_name,
+                       dr.reason, dr.status, dr.created_at, dr.resolved_at
+                FROM deletion_requests dr
+                JOIN platform_config pc ON pc.id = dr.platform_id
+            """
 
             if status_filter == "all":
-                cursor.execute("SELECT id, platform_id, filename, requester_name, reason, status, created_at, resolved_at FROM deletion_requests ORDER BY created_at DESC")
+                cursor.execute(
+                    select_sql + f" WHERE {scope_sql} ORDER BY dr.created_at DESC",
+                    scope_params,
+                )
             else:
                 cursor.execute(
-                    "SELECT id, platform_id, filename, requester_name, reason, status, created_at, resolved_at FROM deletion_requests WHERE status = ? ORDER BY created_at DESC",
-                    (status_filter,),
+                    select_sql
+                    + f" WHERE {scope_sql} AND dr.status = ? ORDER BY dr.created_at DESC",
+                    [*scope_params, status_filter],
                 )
 
             rows = cursor.fetchall()
@@ -5340,6 +5745,19 @@ def create_hr_blueprint(socketio):
             folder_id = data.get("folder_id")
             if not folder_id:
                 return jsonify({"success": False, "error": "folder_id requis"}), 400
+            if isinstance(folder_id, bool):
+                return jsonify({"success": False, "error": "folder_id invalide"}), 400
+            try:
+                folder_id = int(folder_id)
+            except (TypeError, ValueError):
+                return jsonify({"success": False, "error": "folder_id invalide"}), 400
+
+            # ``folder_id`` vient du corps et n'est donc pas couvert par le
+            # garde URL. Résoudre son centre avant le moindre lookup Blob/DB
+            # métier empêche de copier le contenu d'un autre tenant.
+            folder_denied = _require_hr_resource_access("folder", folder_id)
+            if folder_denied:
+                return folder_denied
 
             # Vérifier que le dossier appartient à cette plateforme, ou à la
             # plateforme générée qui sert de source à cette plateforme historique.
@@ -5572,7 +5990,16 @@ def create_hr_blueprint(socketio):
         try:
             conn = get_db_connection()
             cursor = conn.cursor()
-            cursor.execute("SELECT id, name, playlist_mode FROM platform_config ORDER BY id")
+            scope_sql, scope_params = _platform_access_clause("pc")
+            cursor.execute(
+                f"""
+                SELECT pc.id, pc.name, pc.playlist_mode
+                FROM platform_config pc
+                WHERE {scope_sql}
+                ORDER BY pc.id
+                """,
+                scope_params,
+            )
             platforms = []
             for row in cursor.fetchall():
                 platforms.append({
@@ -5595,24 +6022,59 @@ def create_hr_blueprint(socketio):
 
         data = request.get_json()
         mode = data.get("mode")  # 'ete' ou 'hiver'
-        platform_ids = data.get("platform_ids", [])  # IDs des plateformes concernées
+        raw_platform_ids = data.get("platform_ids", [])  # IDs des plateformes concernées
 
         if mode not in ("ete", "hiver"):
             return jsonify({"success": False, "error": "Mode invalide (ete ou hiver)"}), 400
+
+        if not isinstance(raw_platform_ids, list):
+            return jsonify({"success": False, "error": "platform_ids doit être une liste"}), 400
+        if any(isinstance(pid, bool) for pid in raw_platform_ids):
+            return jsonify({"success": False, "error": "platform_ids invalide"}), 400
+        try:
+            platform_ids = list(dict.fromkeys(int(pid) for pid in raw_platform_ids))
+        except (TypeError, ValueError):
+            return jsonify({"success": False, "error": "platform_ids invalide"}), 400
+        if any(pid <= 0 for pid in platform_ids):
+            return jsonify({"success": False, "error": "platform_ids invalide"}), 400
+
+        # Valider toute la sélection avant le reset. Sans ce préflight, une
+        # liste mixte A+B pouvait déjà modifier A avant de découvrir B.
+        for platform_id in platform_ids:
+            platform_denied = _require_hr_resource_access("platform", platform_id)
+            if platform_denied:
+                return platform_denied
 
         try:
             conn = get_db_connection()
             cursor = conn.cursor()
 
-            # Remettre toutes les plateformes à NULL (non concernées)
-            cursor.execute("UPDATE platform_config SET playlist_mode = NULL")
+            if _admin_account_type() == "training_center":
+                center_account_id = _training_center_account_id()
+                cursor.execute(
+                    "UPDATE platform_config SET playlist_mode = NULL WHERE center_account_id = ?",
+                    (center_account_id,),
+                )
+            else:
+                # Le reset global reste une action superadmin explicite.
+                cursor.execute("UPDATE platform_config SET playlist_mode = NULL")
 
             # Appliquer le mode aux plateformes sélectionnées
             for pid in platform_ids:
-                cursor.execute(
-                    "UPDATE platform_config SET playlist_mode = ? WHERE id = ?",
-                    (mode, pid)
-                )
+                if _admin_account_type() == "training_center":
+                    cursor.execute(
+                        """
+                        UPDATE platform_config
+                        SET playlist_mode = ?
+                        WHERE id = ? AND center_account_id = ?
+                        """,
+                        (mode, pid, _training_center_account_id()),
+                    )
+                else:
+                    cursor.execute(
+                        "UPDATE platform_config SET playlist_mode = ? WHERE id = ?",
+                        (mode, pid),
+                    )
 
             conn.commit()
             conn.close()
@@ -5631,7 +6093,9 @@ def create_hr_blueprint(socketio):
     @hr_bp.route("/api/hr/tts-prompt", methods=["GET"])
     def get_tts_prompt():
         """Retourne le contenu du fichier de prompts généraux."""
-        denied = _require_admin()
+        # Ce fichier est partagé par tous les tenants du processus : tant
+        # qu'il n'existe pas de prompt par centre, il reste superadmin-only.
+        denied = _require_global_hr_admin()
         if denied:
             return denied
         try:
@@ -5647,7 +6111,7 @@ def create_hr_blueprint(socketio):
     @hr_bp.route("/api/hr/tts-prompt", methods=["POST"])
     def set_tts_prompt():
         """Écrase le contenu du fichier de prompts généraux."""
-        denied = _require_admin()
+        denied = _require_global_hr_admin()
         if denied:
             return denied
         data = request.get_json() or {}

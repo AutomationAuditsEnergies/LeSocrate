@@ -127,6 +127,8 @@ def init_database(_recovered_from_corruption: bool = False):
                 completed_at TEXT,
                 reminder_previous_evening_sent_at TEXT,
                 reminder_5min_sent_at TEXT,
+                reminder_previous_evening_claimed_at TEXT,
+                reminder_5min_claimed_at TEXT,
                 session_password TEXT,
                 session_password_generated_at TEXT,
                 audio_generation_status TEXT DEFAULT 'pending',
@@ -152,6 +154,8 @@ def init_database(_recovered_from_corruption: bool = False):
         _course_session_audio_cols = {
             "session_password": "TEXT",
             "session_password_generated_at": "TEXT",
+            "reminder_previous_evening_claimed_at": "TEXT",
+            "reminder_5min_claimed_at": "TEXT",
             "audio_generation_status": "TEXT DEFAULT 'pending'",
             "audio_generation_started_at": "TEXT",
             "audio_generation_completed_at": "TEXT",
@@ -317,6 +321,12 @@ def init_database(_recovered_from_corruption: bool = False):
         if "password_debug_plaintext" not in center_columns:
             cursor.execute("ALTER TABLE training_center_accounts ADD COLUMN password_debug_plaintext TEXT")
             logger.info("✅ Colonne password_debug_plaintext ajoutée à training_center_accounts")
+        # Never retain reversible credentials. The compatibility column stays
+        # temporarily so old binaries/migrations don't fail, but is always NULL.
+        cursor.execute(
+            "UPDATE training_center_accounts SET password_debug_plaintext = NULL "
+            "WHERE password_debug_plaintext IS NOT NULL"
+        )
         cursor.execute("SELECT id, center_name, username, slug FROM training_center_accounts")
         for center_id, center_name, username, existing_slug in cursor.fetchall():
             if existing_slug:
