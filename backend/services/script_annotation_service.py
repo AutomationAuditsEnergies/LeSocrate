@@ -4,7 +4,7 @@ import logging
 import os
 from datetime import datetime
 
-from config import DB_PATH, FRANCE_TZ
+from config import FRANCE_TZ
 from repositories.pipeline_repository import (
     create_script_annotation_row,
     ensure_script_annotations_table,
@@ -19,6 +19,10 @@ from repositories.pipeline_repository import (
     update_script_annotation_correction,
     update_script_annotation_splice_result,
     update_script_annotations_markdown_path,
+)
+from services.content_pipeline.artifacts import (
+    save_script_review_markdown,
+    script_review_markdown_locator,
 )
 from utils.anthropic_client import (
     DEEPSEEK_DEFAULT_MODEL,
@@ -46,19 +50,16 @@ def _now_str() -> str:
     return datetime.now(FRANCE_TZ).strftime("%Y-%m-%d %H:%M:%S")
 
 
-def _notes_dir() -> str:
-    base_dir = os.path.dirname(DB_PATH) or os.getcwd()
-    path = os.path.join(base_dir, "tts_script_reviews")
-    os.makedirs(path, exist_ok=True)
-    return path
-
-
 def _markdown_filename(folder_id: int, job_id: int) -> str:
     return f"tts-script-review-folder-{folder_id}-job-{job_id}.md"
 
 
-def _markdown_path(folder_id: int, job_id: int) -> str:
-    return os.path.join(_notes_dir(), _markdown_filename(folder_id, job_id))
+def _markdown_path(platform_id: int, folder_id: int, job_id: int) -> str:
+    return script_review_markdown_locator(
+        platform_id,
+        folder_id,
+        _markdown_filename(folder_id, job_id),
+    )
 
 
 def _fetch_context(folder_id: int) -> dict | None:
@@ -143,7 +144,11 @@ def list_script_annotations(folder_id: int, *, include_deleted: bool = False) ->
     return {
         "context": context,
         "annotations": annotations,
-        "markdown_path": _markdown_path(folder_id, context["job_id"]),
+        "markdown_path": _markdown_path(
+            context["platform_id"],
+            folder_id,
+            context["job_id"],
+        ),
     }
 
 
@@ -223,20 +228,24 @@ def build_script_annotations_markdown(folder_id: int) -> tuple[str, str]:
 
 
 def write_script_annotations_markdown(folder_id: int) -> str:
-    markdown, path = build_script_annotations_markdown(folder_id)
-    with open(path, "w", encoding="utf-8") as f:
-        f.write(markdown)
-
+    markdown, _ = build_script_annotations_markdown(folder_id)
     data = list_script_annotations(folder_id)
     context = data["context"]
     if context:
+        path = save_script_review_markdown(
+            context["platform_id"],
+            folder_id,
+            _markdown_filename(folder_id, context["job_id"]),
+            markdown,
+        )
         _ensure_annotations_table()
         update_script_annotations_markdown_path(
             folder_id=folder_id,
             job_id=context["job_id"],
             markdown_path=path,
         )
-    return path
+        return path
+    raise ValueError("Aucun job de contenu pour ce dossier")
 
 
 def create_script_annotation(folder_id: int, payload: dict) -> dict:

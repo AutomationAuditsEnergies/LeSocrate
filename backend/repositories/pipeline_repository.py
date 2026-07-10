@@ -4277,6 +4277,30 @@ def get_script_rules_row(*, folder_id: int, job_id: int) -> dict[str, Any] | Non
         conn.close()
 
 
+def update_script_rules_markdown_path(*, folder_id: int, job_id: int, markdown_path: str) -> None:
+    ensure_script_rules_table()
+    ph = _placeholder()
+    query = f"""
+        UPDATE content_script_rules
+        SET markdown_path = {ph}, updated_at = CURRENT_TIMESTAMP
+        WHERE folder_id = {ph} AND job_id = {ph}
+    """
+    params = (markdown_path, folder_id, job_id)
+    if _pipeline_primary_backend() == "postgres":
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, params)
+        return
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(query, params)
+        conn.commit()
+    finally:
+        conn.close()
+
+
 SCRIPT_SLIDE_DECK_COLUMNS = """
     id, folder_id, content_job_id, formation_job_id, platform_id, pace,
     max_slides, model, slides_json, timeline_json, stats_json,

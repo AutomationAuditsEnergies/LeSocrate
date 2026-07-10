@@ -102,6 +102,13 @@ un artefact obligatoire non sauvegardé fait échouer l'étape au lieu de produi
 un succès trompeur. Les gros binaires ne doivent pas être placés dans
 PostgreSQL.
 
+Les exports Markdown des annotations TTS et des règles apprises sont stockés
+dans le même conteneur privé sous
+`platform-<id>/folder-<id>/script-reviews/`. La colonne PostgreSQL
+`markdown_path` contient un localisateur durable `azureblob://...`, jamais un
+chemin d'instance Azure `/home/...`. Le repli local est réservé au développement
+et utilise `PIPELINE_LOCAL_ARTIFACT_DIR`, indépendamment de `DB_PATH`.
+
 ## Concurrence
 
 La concurrence interne d'un job est bornée à trois journées par défaut et huit
