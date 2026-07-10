@@ -1,9 +1,9 @@
 """Persistence for course schedules, reminders, and scheduled audio state.
 
 The historical implementation kept this aggregate in SQLite even when the
-formation pipeline itself was in Postgres.  This repository is the cut-over
-boundary: ``hybrid`` deliberately keeps the legacy SQLite store, while the
-final ``postgres``/``supabase`` modes never touch ``DB_PATH``.
+formation pipeline itself was in Postgres. This repository is the cut-over
+boundary: scheduling follows either authoritative PostgreSQL domain, so a
+``hybrid`` business backend with a PostgreSQL pipeline never touches SQLite.
 """
 
 from __future__ import annotations
@@ -12,12 +12,15 @@ from datetime import datetime, timedelta
 import os
 from typing import Any
 
-from config import DATABASE_BACKEND, FRANCE_TZ
+from config import DATABASE_BACKEND, FRANCE_TZ, PIPELINE_DATABASE_BACKEND
 from database.db import get_db_connection
 from database.postgres import get_postgres_connection
+from utils.logger import get_logger
 
 
 POSTGRES_SCHEDULE_BACKENDS = {"postgres", "postgresql", "supabase"}
+logger = get_logger(__name__)
+_LAST_LOGGED_SCHEDULE_BACKEND = None
 REMINDER_SENT_COLUMNS = {
     "previous_evening": "reminder_previous_evening_sent_at",
     "five_minutes_before": "reminder_5min_sent_at",
@@ -30,7 +33,24 @@ REMINDER_CLAIM_COLUMNS = {
 
 def schedule_store_is_postgres() -> bool:
     """Return whether operational scheduling is authoritative in Postgres."""
-    return DATABASE_BACKEND in POSTGRES_SCHEDULE_BACKENDS
+    global _LAST_LOGGED_SCHEDULE_BACKEND
+    use_postgres = (
+        DATABASE_BACKEND in POSTGRES_SCHEDULE_BACKENDS
+        or PIPELINE_DATABASE_BACKEND in POSTGRES_SCHEDULE_BACKENDS
+    )
+    selection = (
+        "postgres" if use_postgres else "sqlite",
+        DATABASE_BACKEND,
+        PIPELINE_DATABASE_BACKEND,
+    )
+    if selection != _LAST_LOGGED_SCHEDULE_BACKEND:
+        logger.info(
+            "COURSE_SCHEDULE_BACKEND_SELECTED storage=%s database_backend=%s "
+            "pipeline_database_backend=%s",
+            *selection,
+        )
+        _LAST_LOGGED_SCHEDULE_BACKEND = selection
+    return use_postgres
 
 
 def _sqlite_datetime(value):
