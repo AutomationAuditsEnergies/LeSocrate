@@ -262,6 +262,23 @@ jobs:
             --generic-configurations '{"healthCheckPath":"/readyz"}' \
             >/dev/null
 
+          configured_backend="$(az webapp config appsettings list \
+            --resource-group "${RESOURCE_GROUP}" \
+            --name "${APP_NAME}" \
+            --query "[?name=='DATABASE_BACKEND'].value | [0]" \
+            -o tsv)"
+          stale_sqlite_settings="$(az webapp config appsettings list \
+            --resource-group "${RESOURCE_GROUP}" \
+            --name "${APP_NAME}" \
+            --query "[?name=='DB_PATH' || name=='SQLITE_SAFETY_STRICT'].name" \
+            -o tsv)"
+          if [ "${configured_backend}" != "postgres" ] || [ -n "${stale_sqlite_settings}" ]; then
+            printf 'PURE_POSTGRES_CONFIGURATION_FAILED backend=%s stale_sqlite_settings=%s\n' \
+              "${configured_backend:-missing}" "${stale_sqlite_settings:-none}" >&2
+            exit 1
+          fi
+          printf 'PURE_POSTGRES_CONFIGURATION_OK backend=postgres sqlite_settings=absent\n'
+
       - name: Deploy to Azure Web App
         uses: azure/webapps-deploy@v3
         with:

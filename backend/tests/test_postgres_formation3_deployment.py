@@ -22,6 +22,10 @@ class Formation3PurePostgresDeploymentTest(unittest.TestCase):
         self.assertNotIn("DB_PATH=/home/database.db", self.workflow)
         self.assertNotIn("SQLITE_SAFETY_STRICT=0", self.workflow)
 
+    def test_deployment_verifies_pure_postgres_settings(self):
+        self.assertIn("PURE_POSTGRES_CONFIGURATION_FAILED", self.workflow)
+        self.assertIn("PURE_POSTGRES_CONFIGURATION_OK", self.workflow)
+
 
 if __name__ == "__main__":
     unittest.main()
