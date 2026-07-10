@@ -1,7 +1,8 @@
 import os
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
+from flask import Flask
 from werkzeug.security import generate_password_hash
 
 from routes import admin_routes
@@ -23,6 +24,28 @@ class AdminSecretSafetyTest(unittest.TestCase):
                 admin_routes._internal_admin_password_valid("a-long-deployment-secret")
             )
             self.assertFalse(admin_routes._internal_admin_password_valid("wrong"))
+
+    def test_unknown_center_never_falls_back_to_sqlite_in_pure_postgres(self):
+        app = Flask(__name__)
+        app.secret_key = "test-secret"
+        app.register_blueprint(admin_routes.create_admin_blueprint(Mock()))
+
+        with app.test_client() as client, patch.object(
+            admin_routes, "DATABASE_BACKEND", "postgres"
+        ), patch.object(admin_routes, "postgres_enabled", return_value=True), patch.object(
+            admin_routes, "get_training_center_by_username", return_value=None
+        ), patch.object(
+            admin_routes,
+            "get_db_connection",
+            side_effect=AssertionError("SQLite must not be opened"),
+        ):
+            response = client.post(
+                "/api/admin/login",
+                json={"username": "unknown-center", "password": "wrong"},
+            )
+
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(response.get_json()["error"], "Identifiants incorrects")
 
 
 if __name__ == "__main__":

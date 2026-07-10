@@ -175,6 +175,12 @@ jobs:
       - name: Configure SaaS Postgres copy
         shell: bash
         run: |
+          az webapp config appsettings delete \
+            --resource-group "${RESOURCE_GROUP}" \
+            --name "${APP_NAME}" \
+            --setting-names DB_PATH SQLITE_SAFETY_STRICT \
+            >/dev/null
+
           az webapp config appsettings set \
             --resource-group "${RESOURCE_GROUP}" \
             --name "${APP_NAME}" \
@@ -183,9 +189,7 @@ jobs:
               ENABLE_ORYX_BUILD=true \
               PORT=8000 \
               WEBSITES_PORT=8000 \
-              DB_PATH=/home/database.db \
-              SQLITE_SAFETY_STRICT=0 \
-              DATABASE_BACKEND=hybrid \
+              DATABASE_BACKEND=postgres \
               PIPELINE_DATABASE_BACKEND=postgres \
               PIPELINE_POSTGRES_MIRROR=0 \
               PIPELINE_EXECUTION_MODE=queue \

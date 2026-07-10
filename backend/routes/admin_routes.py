@@ -14,7 +14,7 @@ from azure.core.exceptions import ResourceExistsError
 from pydub import AudioSegment
 from werkzeug.security import check_password_hash, generate_password_hash
 import state
-from config import FRANCE_TZ, DB_PATH, SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY, SUPABASE_URL
+from config import DATABASE_BACKEND, FRANCE_TZ, DB_PATH, SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY, SUPABASE_URL
 from database.db import get_db_connection
 from database import db_safety
 from database.postgres import postgres_enabled
@@ -39,6 +39,7 @@ logger = get_logger(__name__)
 
 
 _ADMIN_SUPERADMIN_ACCOUNT_TYPES = {"legacy_admin", "superadmin"}
+_POSTGRES_ONLY_BACKENDS = {"postgres", "postgresql", "supabase"}
 
 
 class AdminPlatformNotFound(LookupError):
@@ -1022,6 +1023,10 @@ def create_admin_blueprint(socketio):
                         ),
                         200,
                     )
+
+                if DATABASE_BACKEND in _POSTGRES_ONLY_BACKENDS:
+                    logger.warning("❌ Compte centre Postgres inconnu: %s", username)
+                    return jsonify({"success": False, "error": "Identifiants incorrects"}), 401
 
             conn = get_db_connection()
             cursor = conn.cursor()

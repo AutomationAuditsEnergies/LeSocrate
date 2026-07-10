@@ -2,6 +2,7 @@ import unittest
 from unittest.mock import patch
 
 import config
+from database import db
 
 
 class DatabaseRuntimeModeTest(unittest.TestCase):
@@ -22,6 +23,22 @@ class DatabaseRuntimeModeTest(unittest.TestCase):
             config, "PIPELINE_DATABASE_BACKEND", "sqlite"
         ):
             self.assertTrue(config.sqlite_runtime_enabled())
+
+    def test_sqlite_connection_fails_closed_in_pure_postgres_mode(self):
+        with patch.object(db, "sqlite_runtime_enabled", return_value=False), patch.object(
+            db.sqlite3, "connect"
+        ) as connect:
+            with self.assertRaises(db.SQLiteRuntimeDisabledError):
+                db.get_db_connection()
+            connect.assert_not_called()
+
+    def test_sqlite_initialization_fails_closed_in_pure_postgres_mode(self):
+        with patch.object(db, "sqlite_runtime_enabled", return_value=False), patch.object(
+            db.sqlite3, "connect"
+        ) as connect:
+            with self.assertRaises(db.SQLiteRuntimeDisabledError):
+                db.init_database()
+            connect.assert_not_called()
 
 
 if __name__ == "__main__":
