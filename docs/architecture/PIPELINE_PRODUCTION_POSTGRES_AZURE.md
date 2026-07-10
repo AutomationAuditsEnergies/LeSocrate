@@ -51,6 +51,9 @@ PIPELINE_QUEUE_BACKEND=database
 Le worker est embarqué dans l'App Service, mais les jobs sont déjà durables. Ce
 mode est une transition contrôlée : la pipeline est PostgreSQL, tandis que les
 dernières mutations RH historiques restent SQLite jusqu'à leur portage.
+Le planning opérationnel, les séances, les mots de passe de séance et les
+rappels suivent toutefois `PIPELINE_DATABASE_BACKEND` : ils sont donc déjà
+autoritaires dans PostgreSQL dans ce mode et ne retombent jamais sur SQLite.
 
 ```dotenv
 DATABASE_BACKEND=hybrid

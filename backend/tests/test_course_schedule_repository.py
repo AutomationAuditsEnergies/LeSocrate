@@ -161,12 +161,89 @@ class CourseScheduleRepositoryTest(unittest.TestCase):
         finally:
             os.unlink(db_path)
 
-    def test_schedule_backend_is_explicit_and_hybrid_keeps_sqlite(self):
-        with patch.object(repo, "DATABASE_BACKEND", "hybrid"):
+    def test_schedule_backend_follows_pipeline_postgres_in_hybrid_mode(self):
+        with patch.object(repo, "DATABASE_BACKEND", "hybrid"), patch.object(
+            repo, "PIPELINE_DATABASE_BACKEND", "sqlite"
+        ):
             self.assertFalse(repo.schedule_store_is_postgres())
+        with patch.object(repo, "DATABASE_BACKEND", "hybrid"), patch.object(
+            repo, "PIPELINE_DATABASE_BACKEND", "postgres"
+        ):
+            self.assertTrue(repo.schedule_store_is_postgres())
+        with patch.object(repo, "DATABASE_BACKEND", "sqlite"), patch.object(
+            repo, "PIPELINE_DATABASE_BACKEND", "supabase"
+        ):
+            self.assertTrue(repo.schedule_store_is_postgres())
         for backend in ("postgres", "postgresql", "supabase"):
-            with self.subTest(backend=backend), patch.object(repo, "DATABASE_BACKEND", backend):
+            with self.subTest(backend=backend), patch.object(
+                repo, "DATABASE_BACKEND", backend
+            ), patch.object(repo, "PIPELINE_DATABASE_BACKEND", "sqlite"):
                 self.assertTrue(repo.schedule_store_is_postgres())
+
+    def test_hybrid_pipeline_postgres_schedule_summary_never_opens_sqlite(self):
+        expected = {"total_training_days": 3, "next_session_at": "2026-07-11 09:00:00"}
+        with patch.object(repo, "DATABASE_BACKEND", "hybrid"), patch.object(
+            repo, "PIPELINE_DATABASE_BACKEND", "postgres"
+        ), patch.object(
+            repo, "get_postgres_course_schedule_summary", return_value=expected
+        ) as postgres_read, patch.object(
+            repo,
+            "get_db_connection",
+            side_effect=AssertionError("SQLite must not be opened"),
+        ):
+            self.assertEqual(repo.get_course_schedule_summary(12), expected)
+
+        postgres_read.assert_called_once_with(12)
+
+    def test_hybrid_pipeline_postgres_reminders_never_open_sqlite(self):
+        scheduled_at = datetime.now(FRANCE_TZ) + timedelta(minutes=3)
+
+        class FakeCursor:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def execute(self, query, params):
+                self.query = query
+                self.params = params
+
+            def fetchall(self):
+                return [{
+                    "id": 9,
+                    "platform_id": 12,
+                    "session_index": 1,
+                    "scheduled_at": scheduled_at,
+                    "reminder_previous_evening_sent_at": None,
+                    "reminder_5min_sent_at": None,
+                    "session_password": "ABC123",
+                }]
+
+        class FakeConnection:
+            def cursor(self):
+                return FakeCursor()
+
+        class FakeContext:
+            def __enter__(self):
+                return FakeConnection()
+
+            def __exit__(self, *_args):
+                return False
+
+        with patch.object(repo, "DATABASE_BACKEND", "hybrid"), patch.object(
+            repo, "PIPELINE_DATABASE_BACKEND", "postgres"
+        ), patch.object(
+            repo, "get_postgres_connection", return_value=FakeContext()
+        ), patch.object(
+            repo,
+            "get_db_connection",
+            side_effect=AssertionError("SQLite must not be opened"),
+        ):
+            rows = repo.list_due_reminder_sessions(active_until=scheduled_at)
+
+        self.assertEqual(rows[0]["id"], 9)
+        self.assertEqual(rows[0]["session_password"], "ABC123")
 
     def test_sqlite_audio_claim_is_atomic_and_completed_session_cannot_fail(self):
         db_path = _make_schedule_db()
