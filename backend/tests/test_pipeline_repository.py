@@ -457,6 +457,62 @@ class PipelineRepositoryTest(unittest.TestCase):
 
         self.assertEqual(cursor.calls[0][1], [True, False, True, 42])
 
+    def test_postgres_volume_audit_rows_never_open_sqlite(self):
+        expected = [{
+            "folder_id": 101,
+            "folder_name": "Jour 1",
+            "position": 0,
+            "segment_id": index,
+            "sub_part_index": index - 1,
+            "sub_part_name": f"Segment {index}",
+            "passe": 1,
+            "text_content": "contenu pédagogique",
+            "word_count": 2,
+        } for index in range(1, 8)]
+
+        class FakeCursor:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def execute(self, query, params=None):
+                self.query = " ".join(query.split())
+                self.params = params
+
+            def fetchall(self):
+                return expected
+
+        class FakeConnection:
+            def __init__(self):
+                self.cursor_instance = FakeCursor()
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def cursor(self):
+                return self.cursor_instance
+
+        connection = FakeConnection()
+        with (
+            patch.object(repo, "_pipeline_primary_backend", lambda: "postgres"),
+            patch.object(repo, "get_postgres_connection", lambda: connection),
+            patch.object(
+                repo,
+                "get_db_connection",
+                side_effect=AssertionError("SQLite must not be opened"),
+            ),
+        ):
+            rows = repo.list_volume_audit_rows_for_folders([101])
+
+        self.assertEqual(rows, expected)
+        self.assertIn("cf.id IN (%s)", connection.cursor_instance.query)
+        self.assertEqual(connection.cursor_instance.params, [101])
+
     def test_auto_pilot_lock_helpers_keep_sqlite_lock_semantics(self):
         job_id = repo.create_pipeline_job(
             platform_id=7,

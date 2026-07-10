@@ -2944,6 +2944,57 @@ def list_text_folder_states_for_folders(
         conn.close()
 
 
+def list_volume_audit_rows_for_folders(folder_ids: list[int]) -> list[dict[str, Any]]:
+    """Return completed segment text from the authoritative pipeline store."""
+    placeholders, params = _in_clause([int(folder_id) for folder_id in folder_ids])
+    if not placeholders:
+        return []
+    backend = _pipeline_primary_backend()
+    logger.info(
+        "VOLUME_AUDIT_STORAGE_SELECTED storage=%s folder_count=%s",
+        backend,
+        len(params),
+    )
+    query = f"""
+        SELECT
+            cf.id AS folder_id,
+            cf.name AS folder_name,
+            cf.position,
+            cgs.id AS segment_id,
+            cgs.sub_part_index,
+            cgs.sub_part_name,
+            cgs.passe,
+            COALESCE(cgs.text_content, '') AS text_content,
+            COALESCE(cgs.word_count, 0) AS word_count
+        FROM cours_folders cf
+        JOIN content_generation_jobs cgj ON cgj.folder_id = cf.id
+        JOIN content_generation_segments cgs ON cgs.job_id = cgj.id
+        WHERE cf.id IN ({placeholders})
+          AND cgs.status = 'completed'
+        ORDER BY cf.position ASC, cf.id ASC,
+                 cgs.sub_part_index ASC, cgs.passe ASC
+    """
+    if backend == "postgres":
+        def _postgres_operation():
+            with get_postgres_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(query, params)
+                    return [dict(row) for row in cur.fetchall()]
+
+        return _run_postgres_with_retry(
+            "list_volume_audit_rows_for_folders",
+            _postgres_operation,
+        )
+
+    conn = _as_sqlite_row_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(query, params)
+        return [dict(row) for row in cursor.fetchall()]
+    finally:
+        conn.close()
+
+
 def get_text_folder_state(folder_id: int) -> dict[str, Any] | None:
     rows = list_text_folder_states_for_folders([int(folder_id)])
     return rows[0] if rows else None
