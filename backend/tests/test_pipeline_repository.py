@@ -216,6 +216,7 @@ class PipelineRepositoryTest(unittest.TestCase):
             patch.object(repo, "get_db_connection", lambda: _connect(self.db_path)),
             patch.object(repo, "_pipeline_primary_backend", lambda: "sqlite"),
             patch.object(repo, "_pipeline_mirror_enabled", lambda: False),
+            patch.object(repo, "schedule_store_is_postgres", lambda: False),
         ]
         for p in self.patches:
             p.start()
