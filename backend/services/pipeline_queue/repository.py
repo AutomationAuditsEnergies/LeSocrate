@@ -341,8 +341,30 @@ class WorkItemRepository:
             with self._connection() as conn:
                 if self.is_postgres:
                     with conn.cursor() as cur:
-                        for statement in _POSTGRES_SCHEMA_STATEMENTS:
-                            cur.execute(statement)
+                        # PostgreSQL DDL is applied by the deployment/migration
+                        # step. Running CREATE INDEX/repair DDL independently
+                        # in every API or worker process can deadlock during a
+                        # simultaneous cold start. Runtime initialization is
+                        # therefore read-only and fails fast on an incomplete
+                        # deployment.
+                        cur.execute(
+                            """
+                            SELECT to_regclass('pipeline_work_items') AS work_items,
+                                   to_regclass('pipeline_work_outbox') AS work_outbox,
+                                   to_regclass('uq_pipeline_work_items_active_scope') AS active_scope_index
+                            """
+                        )
+                        row = _row_dict(cur.fetchone(), cur) or {}
+                        missing = [
+                            name
+                            for name, value in row.items()
+                            if value is None
+                        ]
+                        if missing:
+                            raise RuntimeError(
+                                "Schéma PostgreSQL de queue incomplet: "
+                                + ", ".join(sorted(missing))
+                            )
                 else:
                     conn.executescript(_SQLITE_SCHEMA)
             self._schema_ready = True

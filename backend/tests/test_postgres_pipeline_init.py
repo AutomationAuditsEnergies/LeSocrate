@@ -33,6 +33,9 @@ class PostgresPipelineInitRouteTest(unittest.TestCase):
             call_order.append(("link", {"platform_id": platform_id, "job_id": job_id}))
 
         with patch(
+            "routes.formation_routes.PIPELINE_DATABASE_BACKEND",
+            "sqlite",
+        ), patch(
             "repositories.pipeline_repository.create_pipeline_platform",
             side_effect=create_platform,
         ), patch(
