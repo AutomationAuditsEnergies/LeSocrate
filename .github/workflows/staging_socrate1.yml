@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - staging
+    paths:
+      - 'backend/**'
+      - '.github/workflows/staging_socrate1.yml'
   workflow_dispatch:
 
 jobs:
@@ -81,8 +84,57 @@ jobs:
             --name socrate1 \
             --startup-file "${STARTUP_COMMAND}"
 
+          plan_id="$(az webapp show \
+            --resource-group "${RESOURCE_GROUP}" \
+            --name socrate1 \
+            --query serverFarmId \
+            --output tsv)"
+          plan_tier="$(az appservice plan show \
+            --ids "${plan_id}" \
+            --query sku.tier \
+            --output tsv)"
+
+          if [ "${plan_tier}" != "Free" ] && [ "${plan_tier}" != "Shared" ]; then
+            az webapp config set \
+              --resource-group "${RESOURCE_GROUP}" \
+              --name socrate1 \
+              --always-on true \
+              --generic-configurations '{"healthCheckPath":"/api/hr/enabled"}'
+          else
+            echo "Always On indisponible sur le plan Azure ${plan_tier}; configuration ignorée."
+          fi
+
       - name: Deploy to Azure Web App production
         uses: azure/webapps-deploy@v3
         with:
           app-name: 'socrate1'
           package: python-app.zip
+
+      - name: Wait for Socrate1 readiness
+        shell: bash
+        run: |
+          app_url="https://socrate1-fyhgbqh7ejeyb2f3.francecentral-01.azurewebsites.net"
+          response_file="${RUNNER_TEMP}/socrate1-readiness.json"
+
+          for attempt in $(seq 1 40); do
+            http_code="$(curl \
+              --silent \
+              --show-error \
+              --max-time 20 \
+              --output "${response_file}" \
+              --write-out '%{http_code}' \
+              "${app_url}/api/hr/enabled" || true)"
+
+            if [ "${http_code}" = "200" ] && grep -Eq '"enabled"[[:space:]]*:[[:space:]]*true' "${response_file}"; then
+              echo "Socrate1 prêt après ${attempt} tentative(s)."
+              exit 0
+            fi
+
+            echo "Socrate1 non prêt (tentative ${attempt}/40, HTTP ${http_code:-000})."
+            [ -f "${response_file}" ] && head -c 500 "${response_file}" || true
+            echo
+            sleep 15
+          done
+
+          echo "Socrate1 n'est pas devenu opérationnel dans le délai imparti." >&2
+          exit 1
