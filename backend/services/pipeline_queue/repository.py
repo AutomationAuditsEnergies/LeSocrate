@@ -37,7 +37,9 @@ logger = get_logger(__name__)
 _SQLITE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS pipeline_work_items (
     id TEXT PRIMARY KEY,
-    pipeline_job_id INTEGER NOT NULL,
+    pipeline_job_id INTEGER,
+    folder_id INTEGER,
+    resource_key TEXT NOT NULL,
     run_id TEXT NOT NULL,
     task_type TEXT NOT NULL,
     scope_key TEXT NOT NULL DEFAULT 'pipeline',
@@ -65,6 +67,8 @@ CREATE INDEX IF NOT EXISTS idx_pipeline_work_items_due
     ON pipeline_work_items(status, available_at, priority, created_at);
 CREATE INDEX IF NOT EXISTS idx_pipeline_work_items_job
     ON pipeline_work_items(pipeline_job_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_pipeline_work_items_folder
+    ON pipeline_work_items(folder_id, created_at);
 
 -- Reconcile rows created before the active-scope invariant existed.  Prefer
 -- work already running, then a scheduled retry, then the oldest queued item.
@@ -101,6 +105,9 @@ WHERE id IN (
 CREATE UNIQUE INDEX IF NOT EXISTS uq_pipeline_work_items_active_scope
     ON pipeline_work_items(pipeline_job_id, scope_key)
     WHERE status IN ('queued', 'retry_scheduled', 'running');
+CREATE UNIQUE INDEX IF NOT EXISTS uq_pipeline_work_items_active_resource_scope
+    ON pipeline_work_items(resource_key, scope_key)
+    WHERE status IN ('queued', 'retry_scheduled', 'running');
 
 CREATE TABLE IF NOT EXISTS pipeline_work_outbox (
     id TEXT PRIMARY KEY,
@@ -128,7 +135,9 @@ _POSTGRES_SCHEMA_STATEMENTS = (
     """
     CREATE TABLE IF NOT EXISTS pipeline_work_items (
         id UUID PRIMARY KEY,
-        pipeline_job_id BIGINT NOT NULL REFERENCES formation_pipeline_jobs(id) ON DELETE CASCADE,
+        pipeline_job_id BIGINT REFERENCES formation_pipeline_jobs(id) ON DELETE CASCADE,
+        folder_id BIGINT REFERENCES cours_folders(id) ON DELETE CASCADE,
+        resource_key TEXT NOT NULL,
         run_id TEXT NOT NULL,
         task_type TEXT NOT NULL,
         scope_key TEXT NOT NULL DEFAULT 'pipeline',
@@ -160,6 +169,10 @@ _POSTGRES_SCHEMA_STATEMENTS = (
     """
     CREATE INDEX IF NOT EXISTS idx_pipeline_work_items_job
     ON pipeline_work_items(pipeline_job_id, created_at)
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_pipeline_work_items_folder
+    ON pipeline_work_items(folder_id, created_at)
     """,
     """
     WITH ranked_active AS (
@@ -195,6 +208,11 @@ _POSTGRES_SCHEMA_STATEMENTS = (
     """
     CREATE UNIQUE INDEX IF NOT EXISTS uq_pipeline_work_items_active_scope
     ON pipeline_work_items(pipeline_job_id, scope_key)
+    WHERE status IN ('queued', 'retry_scheduled', 'running')
+    """,
+    """
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_pipeline_work_items_active_resource_scope
+    ON pipeline_work_items(resource_key, scope_key)
     WHERE status IN ('queued', 'retry_scheduled', 'running')
     """,
     """
@@ -270,7 +288,13 @@ def _row_dict(row: Any, cursor=None) -> dict[str, Any] | None:
 def _to_work_item(row: Mapping[str, Any]) -> WorkItem:
     return WorkItem(
         id=str(row["id"]),
-        pipeline_job_id=int(row["pipeline_job_id"]),
+        pipeline_job_id=(
+            int(row["pipeline_job_id"])
+            if row.get("pipeline_job_id") is not None
+            else None
+        ),
+        folder_id=int(row["folder_id"]) if row.get("folder_id") is not None else None,
+        resource_key=str(row.get("resource_key") or ""),
         run_id=str(row["run_id"]),
         task_type=str(row["task_type"]),
         scope_key=str(row.get("scope_key") or "pipeline"),
@@ -351,7 +375,8 @@ class WorkItemRepository:
                             """
                             SELECT to_regclass('pipeline_work_items') AS work_items,
                                    to_regclass('pipeline_work_outbox') AS work_outbox,
-                                   to_regclass('uq_pipeline_work_items_active_scope') AS active_scope_index
+                                   to_regclass('uq_pipeline_work_items_active_scope') AS active_scope_index,
+                                   to_regclass('uq_pipeline_work_items_active_resource_scope') AS active_resource_scope_index
                             """
                         )
                         row = _row_dict(cur.fetchone(), cur) or {}
@@ -385,10 +410,22 @@ class WorkItemRepository:
         task_type = str(spec.task_type or "").strip()
         if not task_type:
             raise ValueError("task_type est requis")
+        pipeline_job_id = int(spec.pipeline_job_id) if spec.pipeline_job_id is not None else None
+        folder_id = int(spec.folder_id) if spec.folder_id is not None else None
+        resource_key = str(spec.resource_key or "").strip()
+        if not resource_key:
+            if folder_id is not None:
+                resource_key = f"folder:{folder_id}"
+            elif pipeline_job_id is not None:
+                resource_key = f"pipeline:{pipeline_job_id}"
+        if not resource_key:
+            raise ValueError("pipeline_job_id, folder_id ou resource_key est requis")
 
         values = (
             work_id,
-            int(spec.pipeline_job_id),
+            pipeline_job_id,
+            folder_id,
+            resource_key,
             run_id,
             task_type,
             str(spec.scope_key or "pipeline"),
@@ -413,10 +450,11 @@ class WorkItemRepository:
                     cur.execute(
                         """
                         INSERT INTO pipeline_work_items
-                            (id, pipeline_job_id, run_id, task_type, scope_key,
+                            (id, pipeline_job_id, folder_id, resource_key,
+                             run_id, task_type, scope_key,
                              dedupe_key, payload_json, status, priority, max_attempts,
                              available_at, created_at, updated_at)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s, %s)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s, %s)
                         ON CONFLICT DO NOTHING
                         RETURNING *
                         """,
@@ -429,13 +467,13 @@ class WorkItemRepository:
                     cur.execute(
                         """
                         SELECT * FROM pipeline_work_items
-                        WHERE pipeline_job_id = %s
+                        WHERE resource_key = %s
                           AND scope_key = %s
                           AND status IN ('queued', 'retry_scheduled', 'running')
                         ORDER BY created_at, id
                         LIMIT 1
                         """,
-                        (int(spec.pipeline_job_id), str(spec.scope_key or "pipeline")),
+                        (resource_key, str(spec.scope_key or "pipeline")),
                     )
                     row = _row_dict(cur.fetchone(), cur)
                     if row is not None:
@@ -458,10 +496,11 @@ class WorkItemRepository:
         cur.execute(
             """
             INSERT OR IGNORE INTO pipeline_work_items
-                (id, pipeline_job_id, run_id, task_type, scope_key,
+                (id, pipeline_job_id, folder_id, resource_key,
+                 run_id, task_type, scope_key,
                  dedupe_key, payload_json, status, priority, max_attempts,
                  available_at, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             values,
         )
@@ -474,13 +513,13 @@ class WorkItemRepository:
             cur.execute(
                 """
                 SELECT * FROM pipeline_work_items
-                WHERE pipeline_job_id = ?
+                WHERE resource_key = ?
                   AND scope_key = ?
                   AND status IN ('queued', 'retry_scheduled', 'running')
                 ORDER BY created_at, id
                 LIMIT 1
                 """,
-                (int(spec.pipeline_job_id), str(spec.scope_key or "pipeline")),
+                (resource_key, str(spec.scope_key or "pipeline")),
             )
             row = _row_dict(cur.fetchone(), cur)
             if row is None:
@@ -560,6 +599,29 @@ class WorkItemRepository:
                 ORDER BY created_at DESC LIMIT 1
                 """,
                 (pipeline_job_id,),
+            )
+            row = _row_dict(cur.fetchone(), cur)
+            return _to_work_item(row) if row else None
+
+    def latest_for_folder(
+        self,
+        folder_id: int,
+        *,
+        scope_key: str | None = None,
+    ) -> WorkItem | None:
+        self.ensure_schema()
+        ph = "%s" if self.is_postgres else "?"
+        scope_clause = f" AND scope_key = {ph}" if scope_key is not None else ""
+        params = (int(folder_id), scope_key) if scope_key is not None else (int(folder_id),)
+        with self._connection() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                f"""
+                SELECT * FROM pipeline_work_items
+                WHERE folder_id = {ph}{scope_clause}
+                ORDER BY created_at DESC LIMIT 1
+                """,
+                params,
             )
             row = _row_dict(cur.fetchone(), cur)
             return _to_work_item(row) if row else None
@@ -700,6 +762,48 @@ class WorkItemRepository:
                 (_sqlite_time(expires), _sqlite_time(now), work_item_id, lease_token),
             )
             return cur.rowcount == 1
+
+    def update_progress(
+        self,
+        work_item_id: str,
+        lease_token: str,
+        progress: Mapping[str, Any],
+    ) -> None:
+        """Persist progress while fencing stale or replaced workers."""
+        self.ensure_schema()
+        now = utcnow()
+        if self.is_postgres:
+            with self._connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        UPDATE pipeline_work_items
+                        SET result_json = %s::jsonb, updated_at = %s
+                        WHERE id = %s AND status = 'running' AND lease_token = %s
+                        """,
+                        (_json(progress), now, work_item_id, lease_token),
+                    )
+                    if cur.rowcount != 1:
+                        raise LeaseLostError(
+                            f"Lease perdu pendant la progression du work-item {work_item_id}"
+                        )
+            return
+
+        now_s = _sqlite_time(now)
+        with self._connection(immediate=True) as conn:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                UPDATE pipeline_work_items
+                SET result_json = ?, updated_at = ?
+                WHERE id = ? AND status = 'running' AND lease_token = ?
+                """,
+                (_json(progress), now_s, work_item_id, lease_token),
+            )
+            if cur.rowcount != 1:
+                raise LeaseLostError(
+                    f"Lease perdu pendant la progression du work-item {work_item_id}"
+                )
 
     def complete(
         self,

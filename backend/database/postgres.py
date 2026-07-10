@@ -78,6 +78,8 @@ PIPELINE_REQUIRED_SCHEMA = {
     "pipeline_work_items": {
         "id",
         "pipeline_job_id",
+        "folder_id",
+        "resource_key",
         "run_id",
         "task_type",
         "scope_key",
@@ -93,6 +95,7 @@ PIPELINE_REQUIRED_SCHEMA = {
 PIPELINE_REQUIRED_INDEXES = {
     "uq_cours_folders_job_name",
     "uq_pipeline_work_items_active_scope",
+    "uq_pipeline_work_items_active_resource_scope",
 }
 
 
@@ -259,6 +262,23 @@ def validate_pipeline_postgres_schema() -> None:
         )
     ):
         missing.append("index uq_pipeline_work_items_active_scope (définition invalide)")
+    active_resource_scope_index = actual_indexes.get(
+        "uq_pipeline_work_items_active_resource_scope", ""
+    )
+    normalized_resource_index = active_resource_scope_index.replace('"', "")
+    if active_resource_scope_index and not all(
+        fragment in normalized_resource_index
+        for fragment in (
+            "CREATE UNIQUE INDEX",
+            "(resource_key, scope_key)",
+            "queued",
+            "retry_scheduled",
+            "running",
+        )
+    ):
+        missing.append(
+            "index uq_pipeline_work_items_active_resource_scope (définition invalide)"
+        )
     folder_identity_index = actual_indexes.get("uq_cours_folders_job_name", "")
     normalized_folder_index = folder_identity_index.replace('"', "")
     if folder_identity_index and not all(

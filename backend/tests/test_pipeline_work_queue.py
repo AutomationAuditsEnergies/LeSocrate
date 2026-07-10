@@ -113,6 +113,52 @@ class PipelineWorkQueueTest(unittest.TestCase):
         self.assertNotEqual(audio_item.id, pipeline_item.id)
         self.assertEqual(audio_item.scope_key, "audio:session-1")
 
+    def test_folder_resource_without_pipeline_job_is_durable_and_deduplicated(self):
+        first = self.repo.enqueue(
+            WorkItemSpec(
+                folder_id=118,
+                task_type="hr_playlist_generate",
+                scope_key="hr_audio",
+                run_id="folder-run-1",
+                dedupe_key="folder:118:audio:run-1",
+            )
+        )
+        second = self.repo.enqueue(
+            WorkItemSpec(
+                folder_id=118,
+                task_type="hr_playlist_item",
+                scope_key="hr_audio",
+                run_id="folder-run-2",
+                dedupe_key="folder:118:audio:run-2",
+            )
+        )
+
+        self.assertEqual(first.id, second.id)
+        self.assertIsNone(first.pipeline_job_id)
+        self.assertEqual(first.folder_id, 118)
+        self.assertEqual(first.resource_key, "folder:118")
+        self.assertEqual(
+            self.repo.latest_for_folder(118, scope_key="hr_audio").id,
+            first.id,
+        )
+
+    def test_progress_is_persisted_and_fenced(self):
+        item = self._enqueue()
+        claimed = self.repo.claim(item.id, owner="worker", lease_seconds=60)
+        self.repo.update_progress(
+            item.id,
+            claimed.lease_token,
+            {"status": "running", "step": 7, "message": "TTS"},
+        )
+        self.assertEqual(self.repo.get(item.id).result["step"], 7)
+
+        with self.assertRaises(LeaseLostError):
+            self.repo.update_progress(
+                item.id,
+                "stale-token",
+                {"status": "running", "step": 8},
+            )
+
     def test_stale_owner_cannot_complete_new_fenced_lease(self):
         item = self._enqueue()
         first = self.repo.claim(item.id, owner="worker-a", lease_seconds=60)

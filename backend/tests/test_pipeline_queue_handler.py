@@ -11,6 +11,8 @@ def _item():
     return WorkItem(
         id="11111111-1111-1111-1111-111111111111",
         pipeline_job_id=42,
+        folder_id=None,
+        resource_key="pipeline:42",
         run_id="run-42",
         task_type="auto_pilot_tick",
         scope_key="pipeline",

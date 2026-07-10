@@ -12,6 +12,17 @@ import time
 from .contracts import PermanentWorkError, WorkItem, WorkItemSpec, WorkResult
 
 
+def handle_pipeline_work_item(item: WorkItem, lease) -> WorkResult:
+    """Dispatch every durable task type handled by the shared worker."""
+    if item.task_type == "auto_pilot_tick":
+        return handle_auto_pilot_work_item(item, lease)
+    if item.task_type in {"hr_playlist_generate", "hr_playlist_item"}:
+        from services.hr_playlist_pipeline_service import handle_hr_playlist_work_item
+
+        return handle_hr_playlist_work_item(item, lease)
+    raise PermanentWorkError(f"task_type inconnu: {item.task_type}")
+
+
 def _log_event(item: WorkItem, event_type: str, **kwargs) -> None:
     try:
         from services.formation_observability_service import log_pipeline_event
@@ -207,3 +218,19 @@ def mark_auto_pilot_dead_letter(item: WorkItem, error: str) -> None:
     from services.formation_pipeline_service import update_job
 
     update_job(item.pipeline_job_id, auto_pilot_error=error[:500])
+
+
+def mark_pipeline_dead_letter(item: WorkItem, error: str) -> None:
+    if item.task_type == "auto_pilot_tick":
+        mark_auto_pilot_dead_letter(item, error)
+        return
+    if item.task_type in {"hr_playlist_generate", "hr_playlist_item"}:
+        _log_event(
+            item,
+            "hr_playlist_dead_lettered",
+            step="audio",
+            status="error",
+            message="Pipeline audio HR abandonnée après épuisement des tentatives",
+            error=error[:500],
+            data={"folder_id": item.folder_id, "task_type": item.task_type},
+        )

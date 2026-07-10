@@ -1,0 +1,408 @@
+"""Durable handlers for HR dashboard playlist generation.
+
+The HTTP process only validates and enqueues. All expensive audio work runs
+under the PostgreSQL queue lease so progress, retries and duplicate exclusion
+survive Azure restarts and multiple instances.
+"""
+
+from __future__ import annotations
+
+from contextlib import contextmanager
+from datetime import datetime
+import os
+from typing import Any
+
+from azure.storage.blob import BlobServiceClient
+
+from config import FRANCE_TZ, PIPELINE_DATABASE_BACKEND
+from database.db import get_db_connection
+from database.postgres import get_postgres_connection
+from repositories.pipeline_repository import get_course_folder_identity
+from services.audio_publish_service import publish_playlist_audio_to_platform
+from services.pipeline_queue.contracts import (
+    PermanentWorkError,
+    RetryableWorkError,
+    WorkItem,
+    WorkResult,
+)
+from utils.logger import get_logger
+
+
+logger = get_logger(__name__)
+_POSTGRES_BACKENDS = {"postgres", "postgresql", "supabase"}
+
+
+@contextmanager
+def _pipeline_connection():
+    if PIPELINE_DATABASE_BACKEND in _POSTGRES_BACKENDS:
+        with get_postgres_connection() as conn:
+            yield conn, "%s", True
+        return
+    conn = get_db_connection()
+    try:
+        yield conn, "?", False
+    finally:
+        conn.close()
+
+
+def _finalize_module_if_ready(folder_id: int, voice_type: str) -> dict | None:
+    if voice_type in (None, "", "mock"):
+        return None
+
+    with _pipeline_connection() as (conn, ph, is_postgres):
+        cursor = conn.cursor()
+        cursor.execute(
+            f"""
+            SELECT cf.platform_id, cf.formation_job_id, j.tp_name, j.rncp_code
+            FROM cours_folders cf
+            LEFT JOIN formation_pipeline_jobs j ON j.id = cf.formation_job_id
+            WHERE cf.id = {ph}
+            """,
+            (folder_id,),
+        )
+        row = cursor.fetchone()
+        if not row:
+            return None
+        if is_postgres:
+            platform_id = row["platform_id"]
+            formation_job_id = row["formation_job_id"]
+            tp_name = row["tp_name"]
+            rncp = row["rncp_code"]
+        else:
+            platform_id, formation_job_id, tp_name, rncp = row
+        if not formation_job_id:
+            return None
+        cursor.execute(
+            f"""
+            SELECT id FROM cours_folders
+            WHERE formation_job_id = {ph}
+            ORDER BY position ASC, id ASC
+            """,
+            (formation_job_id,),
+        )
+        folder_ids = [int(r["id"] if is_postgres else r[0]) for r in cursor.fetchall()]
+
+    if not folder_ids:
+        return None
+    tts_connection = os.environ.get("AZURE_TTS_STORAGE_CONNECTION_STRING")
+    if not tts_connection:
+        return {"ready": False, "reason": "AZURE_TTS_STORAGE_CONNECTION_STRING manquant"}
+
+    container = BlobServiceClient.from_connection_string(tts_connection).get_container_client(
+        "audiostts"
+    )
+    missing = []
+    for candidate_folder_id in folder_ids:
+        prefix = f"platform-{platform_id}/folder-{candidate_folder_id}/playlist/"
+        course_count = sum(
+            1
+            for blob in container.list_blobs(name_starts_with=prefix)
+            if os.path.basename(blob.name).startswith("cours_")
+            and blob.name.endswith(".mp3")
+        )
+        if course_count < 7:
+            missing.append({"folder_id": candidate_folder_id, "course_mp3": course_count})
+    if missing:
+        return {"ready": False, "missing": missing}
+
+    with _pipeline_connection() as (conn, ph, is_postgres):
+        cursor = conn.cursor()
+        cursor.execute(
+            f"SELECT center_account_id FROM platform_config WHERE id = {ph}",
+            (platform_id,),
+        )
+        center_row = cursor.fetchone()
+        center_account_id = (
+            center_row["center_account_id"] if is_postgres and center_row else center_row[0] if center_row else None
+        )
+        cursor.execute(
+            f"UPDATE platform_config SET status = 'ready' WHERE id = {ph} AND status = 'pending'",
+            (platform_id,),
+        )
+        cursor.execute(
+            f"SELECT id, version FROM formation_modules WHERE source_pipeline_job_id = {ph}",
+            (formation_job_id,),
+        )
+        existing = cursor.fetchone()
+        if existing:
+            module_id = existing["id"] if is_postgres else existing[0]
+            version = existing["version"] if is_postgres else existing[1]
+            cursor.execute(
+                f"""
+                UPDATE formation_modules
+                SET source_platform_id = COALESCE(source_platform_id, {ph}),
+                    center_account_id = COALESCE(center_account_id, {ph}),
+                    voice_type = {ph}, voice_updated_at = CURRENT_TIMESTAMP,
+                    status = 'validated',
+                    validated_at = COALESCE(validated_at, CURRENT_TIMESTAMP)
+                WHERE id = {ph}
+                """,
+                (platform_id, center_account_id, voice_type, module_id),
+            )
+            module_created = False
+        else:
+            if center_account_id is None:
+                cursor.execute(
+                    f"SELECT COUNT(*) AS n FROM formation_modules WHERE rncp_code = {ph} AND center_account_id IS NULL",
+                    (rncp or "",),
+                )
+            else:
+                cursor.execute(
+                    f"SELECT COUNT(*) AS n FROM formation_modules WHERE rncp_code = {ph} AND center_account_id = {ph}",
+                    (rncp or "", center_account_id),
+                )
+            count_row = cursor.fetchone()
+            count = int(count_row["n"] if is_postgres else count_row[0])
+            version = f"{datetime.now(FRANCE_TZ).year}-v{count + 1}"
+            insert_sql = f"""
+                INSERT INTO formation_modules
+                    (rncp_code, tp_name, version, status, source_pipeline_job_id,
+                     source_platform_id, center_account_id, voice_type,
+                     voice_updated_at, validated_at)
+                VALUES ({ph}, {ph}, {ph}, 'validated', {ph}, {ph}, {ph}, {ph},
+                        CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            """
+            params = (
+                rncp or "",
+                tp_name or f"Job {formation_job_id}",
+                version,
+                formation_job_id,
+                platform_id,
+                center_account_id,
+                voice_type,
+            )
+            if is_postgres:
+                cursor.execute(insert_sql + " RETURNING id", params)
+                module_id = int(cursor.fetchone()["id"])
+            else:
+                cursor.execute(insert_sql, params)
+                module_id = int(cursor.lastrowid)
+            module_created = True
+        conn.commit()
+
+    logger.info(
+        "HR_PLAYLIST_MODULE_FINALIZED work_item_folder=%s pipeline_job_id=%s "
+        "platform_id=%s module_id=%s created=%s voice_type=%s",
+        folder_id,
+        formation_job_id,
+        platform_id,
+        module_id,
+        module_created,
+        voice_type,
+    )
+    return {
+        "ready": True,
+        "formation_job_id": formation_job_id,
+        "module_id": module_id,
+        "module_created": module_created,
+        "module_version": version,
+        "voice_type": voice_type,
+    }
+
+
+def _base_progress(item: WorkItem, payload: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "status": "running",
+        "step": 0,
+        "total_steps": int(payload.get("total_steps") or 24),
+        "message": payload.get("initial_message") or "Démarrage audio...",
+        "result": None,
+        "voice_type": payload.get("voice_type"),
+        "filename": payload.get("filename"),
+        "sync_slides": bool(payload.get("sync_slides")),
+        "work_item_id": item.id,
+        "attempt": item.attempt_count,
+    }
+
+
+def _validate_item_identity(item: WorkItem, payload: dict[str, Any]) -> tuple[int, int]:
+    folder_id = int(item.folder_id or payload.get("folder_id") or 0)
+    if folder_id <= 0:
+        raise PermanentWorkError("folder_id manquant dans le job audio HR")
+    folder = get_course_folder_identity(folder_id)
+    if not folder:
+        raise PermanentWorkError(f"Dossier {folder_id} introuvable")
+    platform_id = int(folder["platform_id"])
+    expected_platform_id = int(payload.get("platform_id") or platform_id)
+    if platform_id != expected_platform_id:
+        raise PermanentWorkError(
+            f"Plateforme du dossier modifiée: attendue P{expected_platform_id}, actuelle P{platform_id}"
+        )
+    if item.pipeline_job_id is not None and folder.get("formation_job_id") != item.pipeline_job_id:
+        raise PermanentWorkError(
+            f"Le dossier {folder_id} n'appartient plus au pipeline {item.pipeline_job_id}"
+        )
+    return folder_id, platform_id
+
+
+def _publish(platform_id: int, folder_id: int, filenames=None, *, archive=False) -> dict:
+    try:
+        result = publish_playlist_audio_to_platform(
+            platform_id,
+            folder_id,
+            filenames,
+            archive_existing=archive,
+            archive_reason=f"folder-{folder_id}-playlist",
+        )
+        errors = result.get("publish_errors") or []
+        if errors:
+            raise RetryableWorkError(
+                f"Publication audio incomplète P{platform_id}/F{folder_id}: {errors[:3]}"
+            )
+        return result
+    except RetryableWorkError:
+        logger.exception(
+            "HR_PLAYLIST_PUBLISH_INCOMPLETE platform_id=%s folder_id=%s filenames=%s",
+            platform_id,
+            folder_id,
+            filenames,
+        )
+        raise
+    except Exception as exc:
+        logger.exception(
+            "HR_PLAYLIST_PUBLISH_FAILED platform_id=%s folder_id=%s filenames=%s",
+            platform_id,
+            folder_id,
+            filenames,
+        )
+        raise RetryableWorkError(
+            f"Publication audio impossible P{platform_id}/F{folder_id}: {exc}"
+        ) from exc
+
+
+def handle_hr_playlist_work_item(item: WorkItem, lease) -> WorkResult:
+    if item.task_type not in {"hr_playlist_generate", "hr_playlist_item"}:
+        raise PermanentWorkError(f"task_type audio HR inconnu: {item.task_type}")
+
+    payload = dict(item.payload or {})
+    folder_id, platform_id = _validate_item_identity(item, payload)
+    progress_state = _base_progress(item, payload)
+
+    def on_progress(step, total, message):
+        progress_state.update(
+            {
+                "status": "running",
+                "step": int(step),
+                "total_steps": int(total),
+                "message": str(message),
+                "attempt": item.attempt_count,
+            }
+        )
+        lease.report_progress(progress_state)
+
+    lease.report_progress(progress_state)
+    if item.attempt_count > 1:
+        logger.warning(
+            "HR_PLAYLIST_JOB_RESUMED work_item_id=%s folder_id=%s attempt=%s fence=%s",
+            item.id,
+            folder_id,
+            item.attempt_count,
+            item.lease_version,
+        )
+
+    voice_type = str(payload.get("voice_type") or "fish_audio")
+    voice_label = str(payload.get("voice_label") or voice_type)
+    use_basic_tts = voice_type == "gtts"
+
+    if item.task_type == "hr_playlist_item":
+        filename = os.path.basename(str(payload.get("filename") or "").split("?", 1)[0])
+        if not filename:
+            raise PermanentWorkError("filename manquant dans le job audio HR")
+        from services.content_generation_service import generate_audio_from_script
+
+        generated = generate_audio_from_script(
+            folder_id,
+            on_progress=on_progress,
+            force_all=True,
+            basic_tts=use_basic_tts,
+            target_filename=filename,
+            sync_slides=bool(payload.get("sync_slides")),
+            auto_generate_slides=bool(payload.get("auto_generate_slides")),
+            slide_max_slides=int(payload.get("slide_max_slides") or 60),
+            slide_pace=str(payload.get("slide_pace") or "normal"),
+            preserve_existing=item.attempt_count > 1,
+        )
+        result = {
+            "status": "completed",
+            "generated": generated["generated"],
+            "skipped": generated["skipped"],
+            "source": "script",
+            "voice_type": voice_type,
+            "filename": filename,
+            "sync_slides": bool(payload.get("sync_slides")),
+            "publish": _publish(platform_id, folder_id, [filename]),
+        }
+        message = f"✅ {filename} généré en {voice_label}"
+        total_steps = 1
+    elif bool(payload.get("has_script")) and not bool(payload.get("playlist_mock")):
+        from services.content_generation_service import generate_audio_from_script
+
+        include_breaks = bool(payload.get("include_breaks", True))
+        preserve_existing = bool(payload.get("preserve_existing")) or item.attempt_count > 1
+        generated = generate_audio_from_script(
+            folder_id,
+            on_progress=on_progress,
+            force_all=bool(payload.get("force_all")),
+            mock=bool(payload.get("script_mock")),
+            basic_tts=use_basic_tts,
+            sync_slides=bool(payload.get("sync_slides")),
+            auto_generate_slides=bool(payload.get("auto_generate_slides")),
+            slide_max_slides=int(payload.get("slide_max_slides") or 60),
+            slide_pace=str(payload.get("slide_pace") or "normal"),
+            include_breaks=include_breaks,
+            parallel_breaks=bool(payload.get("parallel_breaks")),
+            preserve_existing=preserve_existing,
+        )
+        result = {
+            "status": "completed",
+            "generated": generated["generated"],
+            "skipped": generated["skipped"],
+            "files": generated.get("files", []),
+            "source": "script",
+            "voice_type": voice_type,
+            "include_breaks": include_breaks,
+            "parallel_breaks": bool(payload.get("parallel_breaks")),
+            "preserve_existing": preserve_existing,
+        }
+        publish_filenames = None if include_breaks else result["files"]
+        result["publish"] = _publish(
+            platform_id,
+            folder_id,
+            publish_filenames,
+            archive=True,
+        )
+        module_finalize = _finalize_module_if_ready(folder_id, voice_type)
+        if module_finalize:
+            result["module_finalize"] = module_finalize
+        scope_label = "19 audios" if include_breaks else "7 cours"
+        message = (
+            f"✅ Terminé ({voice_label}, {scope_label}) : {result['generated']} généré(s), "
+            f"{result.get('skipped', 0)} conservé(s)"
+        )
+        total_steps = int(progress_state.get("total_steps") or 24)
+    else:
+        from services.playlist_tts_service import generate_playlist_for_folder
+
+        result = generate_playlist_for_folder(
+            platform_id,
+            folder_id,
+            progress_callback=on_progress,
+            mock=bool(payload.get("playlist_mock")),
+        )
+        result["voice_type"] = voice_type
+        result["publish"] = _publish(platform_id, folder_id, archive=True)
+        message = f"✅ Terminé ({voice_label}) : {result.get('generated', '?')} fichiers générés"
+        total_steps = int(progress_state.get("total_steps") or 24)
+
+    lease.checkpoint()
+    return WorkResult(
+        result={
+            **progress_state,
+            "status": "completed",
+            "step": total_steps,
+            "total_steps": total_steps,
+            "message": message,
+            "result": result,
+            "attempt": item.attempt_count,
+        }
+    )

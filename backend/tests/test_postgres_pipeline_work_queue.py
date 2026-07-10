@@ -23,6 +23,8 @@ class PipelineQueueSchemaContractTest(unittest.TestCase):
             self.assertIn(f"CREATE TABLE IF NOT EXISTS {table}", schema)
             self.assertIn(f"ALTER TABLE {table} ENABLE ROW LEVEL SECURITY", schema)
         for column in (
+            "folder_id",
+            "resource_key",
             "dedupe_key",
             "attempt_count",
             "lease_token",
@@ -33,6 +35,8 @@ class PipelineQueueSchemaContractTest(unittest.TestCase):
             self.assertRegex(schema, rf"(?m)^\s*{column}\s+")
         self.assertIn("idx_pipeline_work_items_due", schema)
         self.assertIn("uq_pipeline_work_items_active_scope", schema)
+        self.assertIn("uq_pipeline_work_items_active_resource_scope", schema)
+        self.assertIn("ON pipeline_work_items(resource_key, scope_key)", schema)
         self.assertIn("WHERE status IN ('queued', 'retry_scheduled', 'running')", schema)
         self.assertIn("idx_pipeline_work_outbox_due", schema)
 
@@ -65,6 +69,13 @@ class PostgresPipelineWorkQueueTest(unittest.TestCase):
                     INSERT INTO formation_pipeline_jobs
                         (id, platform_id, tp_name, total_hours, nb_days)
                     VALUES (42, 7, 'TP Queue', 7, 1)
+                    """
+                )
+                cur.execute(
+                    """
+                    INSERT INTO cours_folders
+                        (id, platform_id, name, position, formation_job_id)
+                    VALUES (118, 7, 'Jour manuel', 0, NULL)
                     """
                 )
         self.repo = WorkItemRepository(storage_backend="postgres")
@@ -136,6 +147,37 @@ class PostgresPipelineWorkQueueTest(unittest.TestCase):
             self.repo.complete(first.id, first.lease_token)
         self.repo.complete(second.id, second.lease_token, result={"ok": True})
         self.assertEqual(self.repo.get(item.id).status, WorkStatus.COMPLETED.value)
+
+    def test_folder_scoped_audio_enqueue_is_atomic_without_pipeline_parent(self):
+        def enqueue(index):
+            return self.repo.enqueue(
+                WorkItemSpec(
+                    pipeline_job_id=None,
+                    folder_id=118,
+                    task_type="hr_playlist_generate",
+                    scope_key="hr_audio:118",
+                    run_id=f"folder-run-{index}",
+                    dedupe_key=f"folder:118:audio:{index}",
+                )
+            )
+
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            results = list(pool.map(enqueue, range(16)))
+
+        self.assertEqual(len({item.id for item in results}), 1)
+        self.assertEqual(results[0].resource_key, "folder:118")
+        with psycopg.connect(self.database_url) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT COUNT(*)
+                    FROM pipeline_work_items
+                    WHERE resource_key = 'folder:118'
+                      AND scope_key = 'hr_audio:118'
+                      AND status IN ('queued', 'retry_scheduled', 'running')
+                    """
+                )
+                self.assertEqual(cur.fetchone()[0], 1)
 
     def test_transactional_outbox_references_persisted_item(self):
         item = self.repo.enqueue(
