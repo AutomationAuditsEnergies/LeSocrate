@@ -1,7 +1,16 @@
 import unittest
+import sys
+import types
+from datetime import datetime
 from unittest.mock import patch
 
 from flask import Flask
+from config import FRANCE_TZ
+
+_export_service = types.ModuleType("services.export_service")
+_export_service.generate_attendance_excel_export = lambda *_args, **_kwargs: None
+_export_service.generate_excel_export = lambda *_args, **_kwargs: None
+sys.modules.setdefault("services.export_service", _export_service)
 
 from routes.hr_routes import create_hr_blueprint
 
@@ -134,6 +143,74 @@ class HrPostgresReadRoutesTest(unittest.TestCase):
         self.assertIn("2 demande(s) de suppression", platform["alerts"])
         self.assertFalse(platform["blob_stats_loaded"])
         list_platforms.assert_called_once_with(42, scope_to_center=True)
+
+    def test_course_time_reads_postgres_without_opening_sqlite_first(self):
+        course_start = FRANCE_TZ.localize(datetime(2026, 7, 11, 9, 0))
+        summary = {
+            "total_training_days": 2,
+            "weekly_course_count": 1,
+            "weekdays": [4],
+            "start_time": "09:00",
+        }
+        with patch("routes.hr_routes.HR_ENABLED", True), patch(
+            "routes.hr_routes.hr_resource_belongs_to_center", return_value=True
+        ), patch(
+            "routes.hr_routes._is_local_platform", return_value=True
+        ), patch(
+            "routes.hr_routes.schedule_store_is_postgres", return_value=True
+        ), patch(
+            "routes.hr_routes.get_course_schedule_summary", return_value=summary
+        ) as get_summary, patch(
+            "services.time_service.get_heure_debut_cours", return_value=course_start
+        ), patch(
+            "routes.hr_routes.get_db_connection",
+            side_effect=AssertionError("SQLite must not be opened"),
+        ):
+            response = self.client.get("/api/hr/platforms/12/course-time")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()["schedule"], summary)
+        get_summary.assert_called_once_with(None, 12)
+
+    def test_course_schedule_update_uses_postgres_without_sqlite(self):
+        updated = {"start_time": "10:00", "weekdays": [4], "total_sessions": 2}
+        with patch("routes.hr_routes.HR_ENABLED", True), patch(
+            "routes.hr_routes.hr_resource_belongs_to_center", return_value=True
+        ), patch(
+            "routes.hr_routes._is_local_platform", return_value=True
+        ), patch(
+            "routes.hr_routes.schedule_store_is_postgres", return_value=True
+        ), patch(
+            "routes.hr_routes.update_course_schedule", return_value=updated
+        ) as update, patch(
+            "routes.hr_routes.get_db_connection",
+            side_effect=AssertionError("SQLite must not be opened"),
+        ):
+            response = self.client.post(
+                "/api/hr/platforms/12/config-cours",
+                json={"heure_cours": "10:00", "weekdays": [4]},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()["schedule"], updated)
+        update.assert_called_once_with(None, 12, start_time="10:00", weekdays=[4])
+
+    def test_explicit_reminder_recipients_use_repository_without_sqlite(self):
+        recipients = [{"id": 4, "email": "eleve@example.com", "created_at": "2026-07-10 10:00:00"}]
+        with patch("routes.hr_routes.HR_ENABLED", True), patch(
+            "routes.hr_routes.hr_resource_belongs_to_center", return_value=True
+        ), patch(
+            "routes.hr_routes.list_explicit_course_reminder_recipients",
+            return_value=recipients,
+        ) as list_recipients, patch(
+            "routes.hr_routes.get_db_connection",
+            side_effect=AssertionError("SQLite must not be opened"),
+        ):
+            response = self.client.get("/api/hr/platforms/12/student-emails")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()["recipients"], recipients)
+        list_recipients.assert_called_once_with(12)
 
 
 if __name__ == "__main__":

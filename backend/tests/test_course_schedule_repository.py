@@ -245,6 +245,55 @@ class CourseScheduleRepositoryTest(unittest.TestCase):
         self.assertEqual(rows[0]["id"], 9)
         self.assertEqual(rows[0]["session_password"], "ABC123")
 
+    def test_hybrid_explicit_reminder_recipients_use_postgres(self):
+        created_at = datetime.now(FRANCE_TZ)
+
+        class FakeCursor:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def execute(self, query, params):
+                self.query = query
+                self.params = params
+
+            def fetchall(self):
+                return [{
+                    "id": 4,
+                    "email": "eleve@example.com",
+                    "created_at": created_at,
+                }]
+
+        class FakeConnection:
+            def cursor(self):
+                return FakeCursor()
+
+        class FakeContext:
+            def __enter__(self):
+                return FakeConnection()
+
+            def __exit__(self, *_args):
+                return False
+
+        with patch.object(repo, "DATABASE_BACKEND", "hybrid"), patch.object(
+            repo, "PIPELINE_DATABASE_BACKEND", "postgres"
+        ), patch.object(
+            repo, "get_postgres_connection", return_value=FakeContext()
+        ), patch.object(
+            repo,
+            "get_db_connection",
+            side_effect=AssertionError("SQLite must not be opened"),
+        ):
+            rows = repo.list_explicit_course_reminder_recipients(12)
+
+        self.assertEqual(rows, [{
+            "id": 4,
+            "email": "eleve@example.com",
+            "created_at": created_at.strftime("%Y-%m-%d %H:%M:%S"),
+        }])
+
     def test_sqlite_audio_claim_is_atomic_and_completed_session_cannot_fail(self):
         db_path = _make_schedule_db()
         try:
