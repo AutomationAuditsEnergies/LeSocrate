@@ -235,6 +235,24 @@ class CourseScheduleServiceTest(unittest.TestCase):
                 )
         conn.close()
 
+    def test_admin_override_accepts_next_session_inside_audio_preparation_window(self):
+        conn = _connect()
+        cursor = conn.cursor()
+        _seed_schedule(cursor)
+        due_soon = datetime.now(FRANCE_TZ) + timedelta(hours=12)
+
+        result = update_course_schedule(
+            cursor,
+            12,
+            start_time=due_soon.strftime("%H:%M"),
+            weekdays=[due_soon.weekday()],
+            allow_imminent=True,
+        )
+
+        self.assertEqual(result["weekdays"], [due_soon.weekday()])
+        self.assertEqual(result["start_time"], due_soon.strftime("%H:%M"))
+        conn.close()
+
 
 if __name__ == "__main__":
     unittest.main()

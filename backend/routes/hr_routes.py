@@ -3060,6 +3060,7 @@ def create_hr_blueprint(socketio):
         date_str = (data or {}).get("date_cours", "").strip()
         heure_str = (data or {}).get("heure_cours", "").strip()
         weekdays = data.get("weekdays") if "weekdays" in data else None
+        allow_imminent = bool(data.get("force_schedule"))
         if not heure_str:
             return jsonify({"success": False, "error": "heure_cours requis"}), 400
 
@@ -3075,6 +3076,7 @@ def create_hr_blueprint(socketio):
                     platform_id,
                     start_time=heure_str,
                     weekdays=weekdays,
+                    allow_imminent=allow_imminent,
                 )
                 if schedule_update:
                     if conn is not None:
@@ -3103,6 +3105,7 @@ def create_hr_blueprint(socketio):
                     start_time=heure_str,
                     date_str=date_str or None,
                     weekdays=weekdays,
+                    allow_imminent=allow_imminent,
                 )
                 if schedule_update:
                     if conn is not None:

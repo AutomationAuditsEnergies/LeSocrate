@@ -193,7 +193,45 @@ class HrPostgresReadRoutesTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.get_json()["schedule"], updated)
-        update.assert_called_once_with(None, 12, start_time="10:00", weekdays=[4])
+        update.assert_called_once_with(
+            None,
+            12,
+            start_time="10:00",
+            weekdays=[4],
+            allow_imminent=False,
+        )
+
+    def test_admin_can_force_an_imminent_course_schedule(self):
+        updated = {"start_time": "09:00", "weekdays": [0], "total_sessions": 1}
+        with patch("routes.hr_routes.HR_ENABLED", True), patch(
+            "routes.hr_routes.hr_resource_belongs_to_center", return_value=True
+        ), patch(
+            "routes.hr_routes._is_local_platform", return_value=True
+        ), patch(
+            "routes.hr_routes.schedule_store_is_postgres", return_value=True
+        ), patch(
+            "routes.hr_routes.update_course_schedule", return_value=updated
+        ) as update, patch(
+            "routes.hr_routes.get_db_connection",
+            side_effect=AssertionError("SQLite must not be opened"),
+        ):
+            response = self.client.post(
+                "/api/hr/platforms/12/config-cours",
+                json={
+                    "heure_cours": "09:00",
+                    "weekdays": [0],
+                    "force_schedule": True,
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        update.assert_called_once_with(
+            None,
+            12,
+            start_time="09:00",
+            weekdays=[0],
+            allow_imminent=True,
+        )
 
     def test_explicit_reminder_recipients_use_repository_without_sqlite(self):
         recipients = [{"id": 4, "email": "eleve@example.com", "created_at": "2026-07-10 10:00:00"}]

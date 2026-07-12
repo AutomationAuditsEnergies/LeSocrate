@@ -424,6 +424,7 @@ def create_missing_course_schedule(
     start_time,
     date_str=None,
     weekdays=None,
+    allow_imminent=False,
 ):
     """Crée un planning persistant pour une plateforme pipeline qui en est dépourvue."""
     ensure_course_schedule_tables(cursor)
@@ -450,7 +451,14 @@ def create_missing_course_schedule(
         start_time=requested_start_time,
         start_date=start_date,
     )
-    _assert_requested_sessions_are_not_due_soon(requested_sessions)
+    if allow_imminent:
+        logger.warning(
+            "COURSE_SCHEDULE_IMMINENT_OVERRIDE platform_id=%s operation=create first_session=%s",
+            platform_id,
+            requested_sessions[0].isoformat() if requested_sessions else None,
+        )
+    else:
+        _assert_requested_sessions_are_not_due_soon(requested_sessions)
 
     result = save_course_schedule(
         cursor,
@@ -549,7 +557,13 @@ def update_course_schedule_start_time(cursor, platform_id, start_time):
     return update_course_schedule(cursor, platform_id, start_time=start_time)
 
 
-def update_course_schedule(cursor, platform_id, start_time=None, weekdays=None):
+def update_course_schedule(
+    cursor,
+    platform_id,
+    start_time=None,
+    weekdays=None,
+    allow_imminent=False,
+):
     ensure_course_schedule_tables(cursor)
     summary = get_course_schedule_summary(cursor, platform_id)
     if not summary:
@@ -573,13 +587,21 @@ def update_course_schedule(cursor, platform_id, start_time=None, weekdays=None):
             "weekdays": requested_weekdays,
         }
 
-    _assert_schedule_can_be_changed(cursor, platform_id)
+    if not allow_imminent:
+        _assert_schedule_can_be_changed(cursor, platform_id)
     requested_sessions = _generate_session_datetimes(
         total_training_days=summary["total_training_days"],
         weekdays=requested_weekdays,
         start_time=requested_start_time,
     )
-    _assert_requested_sessions_are_not_due_soon(requested_sessions)
+    if allow_imminent:
+        logger.warning(
+            "COURSE_SCHEDULE_IMMINENT_OVERRIDE platform_id=%s operation=update first_session=%s",
+            platform_id,
+            requested_sessions[0].isoformat() if requested_sessions else None,
+        )
+    else:
+        _assert_requested_sessions_are_not_due_soon(requested_sessions)
 
     result = save_course_schedule(
         cursor,
