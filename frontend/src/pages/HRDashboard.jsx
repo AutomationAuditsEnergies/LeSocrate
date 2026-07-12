@@ -4185,7 +4185,7 @@ function CourseTimeModal({ onClose, onSubmit, initialDate, initialHeure, schedul
 
               {result && !result.success && (
                 <p className="text-xs rounded-lg px-3 py-2" style={{ color: '#dc2626', backgroundColor: '#fee2e2' }}>
-                  {result.error || 'Une erreur est survenue'}
+                  {result.message || result.error || 'Une erreur est survenue'}
                 </p>
               )}
 

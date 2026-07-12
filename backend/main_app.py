@@ -148,7 +148,7 @@ from flask import jsonify as _jsonify
 def populate_session_from_token():
     # Mode maintenance DB : tout est bloqué en 503 sauf les endpoints admin
     # nécessaires au diagnostic et à la restauration.
-    if db_safety.is_maintenance() and not (
+    if db_safety.maintenance_blocks_requests() and not (
         request.path.startswith("/api/admin/db")
         or request.path.startswith("/api/admin/login")
     ):
