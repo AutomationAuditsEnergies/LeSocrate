@@ -508,7 +508,7 @@ export default function HRDashboard() {
 
   const handleSetCourseTime = async (dateCours, heureCours, weekdays = null) => {
     try {
-      const payload = { date_cours: dateCours, heure_cours: heureCours }
+      const payload = { date_cours: dateCours, heure_cours: heureCours, force_schedule: true }
       if (Array.isArray(weekdays)) payload.weekdays = weekdays
       const resp = await apiFetch(`/api/hr/platforms/${courseTimePlatformId}/config-cours`, {
         method: 'POST',
