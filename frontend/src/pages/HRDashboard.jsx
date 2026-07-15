@@ -4,8 +4,8 @@ import CoursFoldersModal from '../components/CoursFolders'
 import SlideToConfirm, { BackupPipeline } from '../components/SlideToConfirm'
 
 // ─── Material Icon Component ─────────────────────────────────────────────────
-const Icon = ({ name, className = '' }) => (
-  <span className={`material-icons ${className}`}>{name}</span>
+const Icon = ({ name, className = '', ...props }) => (
+  <span className={`material-icons ${className}`} {...props}>{name}</span>
 )
 
 const hasCrCdTitle = (title = '') => /\bCRCD\b/i.test(title)
@@ -867,7 +867,7 @@ export default function HRDashboard() {
   // ─── Render ──────────────────────────────────────────────────────────
   if (loading) {
     return (
-      <div className="flex min-h-screen items-center justify-center" style={{ backgroundColor: darkMode ? '#0f172a' : '#F8F7F5', fontFamily: 'Inter, sans-serif' }}>
+      <div className="flex min-h-screen items-center justify-center" style={{ backgroundColor: darkMode ? '#0f172a' : '#f8fafc', fontFamily: 'Inter, sans-serif' }}>
         <div className="h-10 w-10 animate-spin rounded-full border-3 border-gray-700 border-t-purple-500" />
       </div>
     )
@@ -885,7 +885,7 @@ export default function HRDashboard() {
     hoverBg: '#1e293b',
     gridOpacity: '0.03'
   } : {
-    bg: '#F8F7F5',
+    bg: '#f8fafc',
     cardBg: '#ffffff',
     innerBg: '#f1f5f9',
     text: '#0f172a',
@@ -910,39 +910,53 @@ export default function HRDashboard() {
             backdropFilter: 'blur(8px)'
           }}
         >
-          <div className="mx-auto max-w-7xl px-6 pt-4">
-            <div className="flex items-center justify-end gap-4">
-              <div className="flex items-center gap-2">
-                {/* Back to admin — tertiary navigation, muted text */}
-                <a
-                  href="/admin"
-                  className="flex items-center gap-2 rounded-lg px-3.5 py-2 text-sm font-medium transition-colors hover:bg-black/5 dark:hover:bg-white/5"
-                  style={{ color: colors.textMuted, border: `1px solid ${colors.border}` }}
-                  title="Revenir à l'administration P1"
-                >
-                  <Icon name="arrow_back" className="text-base" />
-                  <span>Retour Admin</span>
-                </a>
+          <div className="mx-auto max-w-7xl px-4 pt-4 sm:px-6">
+            <div className="flex items-center justify-between gap-4">
+              <div className="flex min-w-0 items-center gap-3">
+                <span className="text-sm font-bold tracking-[-0.01em]" style={{ color: colors.text }}>
+                  LE SOCRATE
+                </span>
+                <span className="hidden h-5 w-px sm:block" style={{ backgroundColor: colors.border }} aria-hidden="true" />
+                <span className="hidden truncate text-sm sm:block" style={{ color: colors.textMuted }}>
+                  Espace centre
+                </span>
               </div>
+
+              {/* Back to admin — tertiary navigation, muted text */}
+              <a
+                href="/admin"
+                className="flex flex-shrink-0 items-center gap-2 rounded-lg px-3.5 py-2 text-sm font-medium transition-colors hover:bg-black/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40 dark:hover:bg-white/5"
+                style={{ color: colors.textMuted, border: `1px solid ${colors.border}` }}
+                title="Revenir à l'administration P1"
+              >
+                <Icon name="arrow_back" className="text-base" />
+                <span>Retour Admin</span>
+              </a>
             </div>
 
-            <nav className="mt-5 flex items-end gap-10" aria-label="Navigation dashboard formations">
+            <nav className="mt-4 grid grid-cols-3 items-end gap-1 sm:flex" aria-label="Navigation dashboard formations">
               <SkoolTab
                 active={!showModulesModal && !showCreateModal}
                 onClick={showDashboardView}
+                icon="school"
                 label="Mes professeurs IA"
+                shortLabel="Professeurs"
                 colors={colors}
               />
               <SkoolTab
                 active={showModulesModal}
                 onClick={showModulesView}
-                label="Réutiliser un ancien professeur IA"
+                icon="history"
+                label="Réutiliser un professeur"
+                shortLabel="Réutiliser"
                 colors={colors}
               />
               <SkoolTab
                 active={showCreateModal}
                 onClick={openCreateModal}
+                icon="add_circle_outline"
                 label="Nouveau professeur IA"
+                shortLabel="Nouveau"
                 colors={colors}
               />
             </nav>
@@ -963,7 +977,7 @@ export default function HRDashboard() {
           />
         )}
 
-        <div className="relative z-10 mx-auto max-w-7xl px-6 py-8">
+        <div className="relative z-10 mx-auto max-w-7xl px-4 py-8 sm:px-6">
           {platformsError && (
             <div
               className="mb-6 flex flex-col gap-3 rounded-lg border px-4 py-3 text-sm sm:flex-row sm:items-center sm:justify-between"
@@ -1010,6 +1024,7 @@ export default function HRDashboard() {
             <ModulesCatalogueView
               colors={colors}
               modules={filteredModules}
+              totalModules={modules.length}
               moduleSearchQuery={moduleSearchQuery}
               onModuleSearchChange={setModuleSearchQuery}
               onBack={closeModulesModal}
@@ -1571,19 +1586,22 @@ export default function HRDashboard() {
   )
 }
 
-function SkoolTab({ active, onClick, label, colors }) {
+function SkoolTab({ active, onClick, icon, label, shortLabel, colors }) {
   return (
     <button
       type="button"
       onClick={onClick}
-      className="relative pb-4 text-base font-semibold transition-colors"
-      style={{ color: active ? colors.text : '#8A8A8A' }}
+      className="relative flex min-w-0 items-center justify-center gap-1.5 px-1 pb-4 pt-2 text-xs font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-violet-500/40 sm:flex-shrink-0 sm:justify-start sm:gap-2 sm:px-4 sm:text-sm"
+      style={{ color: active ? colors.text : colors.textMuted }}
+      aria-current={active ? 'page' : undefined}
     >
-      {label}
+      <Icon name={icon} className="text-[18px]" aria-hidden="true" />
+      <span className="truncate sm:hidden">{shortLabel || label}</span>
+      <span className="hidden sm:inline">{label}</span>
       {active && (
         <span
-          className="absolute bottom-[-1px] left-0 h-[3px] w-full"
-          style={{ backgroundColor: colors.text }}
+          className="absolute bottom-[-1px] left-3 right-3 h-[3px] rounded-t-full sm:left-4 sm:right-4"
+          style={{ backgroundColor: '#8B5CF6' }}
         />
       )}
     </button>
@@ -2372,6 +2390,7 @@ function formatModuleCadence(module = {}) {
 function ModulesCatalogueView({
   colors,
   modules,
+  totalModules,
   moduleSearchQuery,
   onModuleSearchChange,
   onBack,
@@ -2379,109 +2398,212 @@ function ModulesCatalogueView({
   onUseModule,
   onDeleteModule,
 }) {
+  const hasSearch = moduleSearchQuery.trim().length > 0
+  const resultLabel = `${modules.length} résultat${modules.length === 1 ? '' : 's'}`
+
   return (
-    <section className="mx-auto w-full max-w-5xl">
-      <header
-        className="mb-7 flex items-end justify-between gap-4"
-        style={{ borderBottom: `1px solid ${colors.border}` }}
-      >
-        <div className="flex flex-col pb-5 leading-tight">
-          <span
-            className="text-[10px] font-semibold uppercase"
-            style={{ color: colors.textMuted, letterSpacing: '0.22em' }}
-          >
-            Bibliothèque
-          </span>
-          <h2 className="mt-1 text-xl font-semibold tracking-tight" style={{ color: colors.text }}>
-            Anciens professeurs IA
-          </h2>
-          <p className="mt-1 text-xs" style={{ color: colors.textMuted }}>
-            Professeurs terminés ou réutilisables pour lancer une nouvelle période de formation.
+    <section className="mx-auto w-full max-w-6xl">
+      <header className="mb-8 flex flex-col gap-5 sm:flex-row sm:items-end sm:justify-between">
+        <div className="max-w-2xl">
+          <div className="mb-3 flex items-center gap-2 text-sm font-semibold" style={{ color: '#7c3aed' }}>
+            <Icon name="history" className="text-[18px]" aria-hidden="true" />
+            <span>Bibliothèque des professeurs</span>
+          </div>
+          <h1 className="text-2xl font-bold tracking-[-0.02em] sm:text-[28px]" style={{ color: colors.text }}>
+            Réutiliser un professeur IA
+          </h1>
+          <p className="mt-2 max-w-[65ch] text-sm leading-6" style={{ color: colors.textSecondary }}>
+            Relancez une formation avec un professeur dont l’identité pédagogique a déjà été préparée et validée.
           </p>
         </div>
         <button
-          onClick={onBack}
-          className="mb-4 flex flex-shrink-0 items-center gap-2 rounded-lg px-3.5 py-2 text-sm font-medium transition-colors hover:bg-black/5 dark:hover:bg-white/5"
-          style={{ color: colors.textMuted, border: `1px solid ${colors.border}` }}
+          type="button"
+          onClick={onCreateModule}
+          className="flex flex-shrink-0 items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-violet-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40 focus-visible:ring-offset-2"
+          style={{ backgroundColor: '#8B5CF6' }}
         >
-          <Icon name="school" className="text-base" />
-          <span>Mes professeurs IA</span>
+          <Icon name="add" className="text-[18px]" aria-hidden="true" />
+          <span>Créer un professeur IA</span>
         </button>
       </header>
 
       <div
-        className="mb-5 flex items-center gap-3"
+        className="mb-6 flex items-start gap-3 rounded-xl px-4 py-3.5 sm:items-center"
+        style={{
+          backgroundColor: 'rgba(139, 92, 246, 0.07)',
+          border: '1px solid rgba(139, 92, 246, 0.18)',
+        }}
       >
-        <div className="relative flex-1">
+        <div
+          className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg"
+          style={{ backgroundColor: 'rgba(139, 92, 246, 0.12)', color: '#7c3aed' }}
+        >
+          <Icon name="replay" className="text-xl" aria-hidden="true" />
+        </div>
+        <div className="min-w-0">
+          <p className="text-sm font-semibold" style={{ color: colors.text }}>
+            Une nouvelle formation, sans recréer l’identité du professeur
+          </p>
+          <p className="mt-0.5 text-xs leading-5" style={{ color: colors.textSecondary }}>
+            Le contenu, le planning et les apprenants seront configurés pour la nouvelle session.
+          </p>
+        </div>
+      </div>
+
+      <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center">
+        <label className="relative min-w-0 flex-1">
+          <span className="sr-only">Rechercher un ancien professeur IA</span>
           <Icon
             name="search"
-            className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-base"
+            className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-xl"
             style={{ color: colors.textMuted }}
+            aria-hidden="true"
           />
           <input
-            type="text"
+            type="search"
             value={moduleSearchQuery}
             onChange={(e) => onModuleSearchChange(e.target.value)}
             placeholder="Rechercher par professeur, formation ou code RNCP..."
-            className="w-full rounded-lg py-2 pl-10 pr-3 text-sm outline-none transition-colors"
+            autoComplete="off"
+            className="w-full rounded-lg py-3 pl-11 pr-4 text-sm outline-none transition-colors placeholder:text-slate-500 focus:ring-2 focus:ring-violet-500/30"
             style={{
-              backgroundColor: colors.innerBg,
+              backgroundColor: colors.cardBg,
               color: colors.text,
               border: `1px solid ${colors.border}`,
             }}
           />
-        </div>
-        <button
-          onClick={onCreateModule}
-          className="flex flex-shrink-0 items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium text-white transition-colors"
-          style={{ backgroundColor: '#8B5CF6' }}
-          onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = '#7c3aed' }}
-          onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = '#8B5CF6' }}
-          title="Créer un nouveau professeur IA"
+        </label>
+        <div
+          className="flex flex-shrink-0 items-center gap-2 rounded-lg px-3.5 py-3 text-xs font-semibold"
+          style={{ backgroundColor: colors.innerBg, color: colors.textSecondary }}
+          aria-live="polite"
         >
-          <Icon name="add" className="text-base" />
-          <span>Nouveau professeur IA</span>
-        </button>
+          <Icon name="inventory_2" className="text-[17px]" style={{ color: colors.textMuted }} aria-hidden="true" />
+          <span>{hasSearch ? resultLabel : `${totalModules} professeur${totalModules === 1 ? '' : 's'} archivé${totalModules === 1 ? '' : 's'}`}</span>
+        </div>
       </div>
 
       <div>
         {modules.length === 0 ? (
-          <div
-            className="py-16 text-center"
-            style={{ backgroundColor: colors.cardBg, border: `1px solid ${colors.border}`, borderRadius: 14 }}
-          >
-            <p className="text-sm font-medium" style={{ color: colors.text }}>
-              {moduleSearchQuery
-                ? 'Aucun professeur IA ne correspond à ce filtre.'
-                : 'Aucun ancien professeur IA disponible pour l’instant.'}
-            </p>
-            <p className="mt-2 text-xs" style={{ color: colors.textMuted }}>
-              {moduleSearchQuery
-                ? 'Essaie un prénom, un titre de formation ou un code RNCP.'
-                : 'Les professeurs terminés apparaîtront ici pour être réutilisés.'}
-            </p>
-          </div>
+          hasSearch ? (
+            <div
+              className="flex min-h-[280px] flex-col items-center justify-center rounded-xl px-6 text-center"
+              style={{ backgroundColor: colors.cardBg, border: `1px solid ${colors.border}` }}
+            >
+              <div
+                className="flex h-11 w-11 items-center justify-center rounded-full"
+                style={{ backgroundColor: colors.innerBg, color: colors.textMuted }}
+              >
+                <Icon name="search_off" className="text-xl" aria-hidden="true" />
+              </div>
+              <h2 className="mt-4 text-base font-semibold" style={{ color: colors.text }}>
+                Aucun professeur ne correspond à cette recherche
+              </h2>
+              <p className="mt-1 text-sm" style={{ color: colors.textMuted }}>
+                Essayez un prénom, un titre de formation ou un code RNCP.
+              </p>
+              <button
+                type="button"
+                onClick={() => onModuleSearchChange('')}
+                className="mt-5 rounded-lg px-3.5 py-2 text-sm font-semibold transition-colors hover:bg-black/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40 dark:hover:bg-white/5"
+                style={{ color: colors.textSecondary, border: `1px solid ${colors.border}` }}
+              >
+                Effacer la recherche
+              </button>
+            </div>
+          ) : (
+            <div
+              className="overflow-hidden rounded-xl"
+              style={{ backgroundColor: colors.cardBg, border: `1px solid ${colors.border}` }}
+            >
+              <div className="flex min-h-[390px] flex-col md:flex-row">
+                <div
+                  className="relative flex min-h-[230px] items-center justify-center overflow-hidden border-b px-8 md:w-[42%] md:border-b-0 md:border-r"
+                  style={{ backgroundColor: colors.innerBg, borderColor: colors.border }}
+                >
+                  <div
+                    className="absolute h-56 w-56 rounded-full"
+                    style={{ border: '1px solid rgba(139, 92, 246, 0.16)' }}
+                    aria-hidden="true"
+                  />
+                  <div
+                    className="absolute h-40 w-40 rounded-full"
+                    style={{ backgroundColor: 'rgba(139, 92, 246, 0.08)' }}
+                    aria-hidden="true"
+                  />
+                  <img
+                    src="/robot-violet.png"
+                    alt="Professeur IA Le Socrate"
+                    className="relative h-52 w-52 object-contain md:h-60 md:w-60"
+                    draggable={false}
+                  />
+                </div>
+
+                <div className="flex flex-1 flex-col justify-center px-6 py-8 sm:px-10 md:py-10">
+                  <h2 className="text-xl font-bold tracking-[-0.01em]" style={{ color: colors.text }}>
+                    Votre bibliothèque se constituera au fil des formations
+                  </h2>
+                  <p className="mt-2 max-w-[58ch] text-sm leading-6" style={{ color: colors.textSecondary }}>
+                    Lorsqu’un professeur termine sa formation, il est conservé ici. Vous pourrez ensuite le choisir pour préparer une nouvelle session.
+                  </p>
+
+                  <ol className="mt-6 space-y-3" aria-label="Cycle de réutilisation d’un professeur IA">
+                    {[
+                      ['Formation terminée', 'Le professeur quitte la liste des formations en cours.'],
+                      ['Archivage automatique', 'Son identité pédagogique reste disponible dans cette bibliothèque.'],
+                      ['Nouvelle session', 'Vous définissez un nouveau contenu, un planning et de nouveaux apprenants.'],
+                    ].map(([title, description], index) => (
+                      <li key={title} className="flex items-start gap-3">
+                        <span
+                          className="mt-0.5 flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full text-[11px] font-bold"
+                          style={{ backgroundColor: 'rgba(139, 92, 246, 0.11)', color: '#7c3aed' }}
+                        >
+                          {index + 1}
+                        </span>
+                        <span className="min-w-0">
+                          <span className="block text-sm font-semibold" style={{ color: colors.text }}>{title}</span>
+                          <span className="mt-0.5 block text-xs leading-5" style={{ color: colors.textMuted }}>{description}</span>
+                        </span>
+                      </li>
+                    ))}
+                  </ol>
+
+                  <button
+                    type="button"
+                    onClick={onBack}
+                    className="mt-7 flex w-fit items-center gap-2 rounded-lg px-3.5 py-2 text-sm font-semibold transition-colors hover:bg-black/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40 dark:hover:bg-white/5"
+                    style={{ color: colors.textSecondary, border: `1px solid ${colors.border}` }}
+                  >
+                    <Icon name="school" className="text-[18px]" aria-hidden="true" />
+                    Voir mes professeurs IA
+                  </button>
+                </div>
+              </div>
+            </div>
+          )
         ) : (
           <ul className="space-y-3">
-            {modules.map((m, idx) => (
+            {modules.map((m) => (
               <li
                 key={m.id}
-                className="flex items-center gap-4 rounded-2xl px-4 py-3"
+                className="flex flex-col gap-4 rounded-xl p-4 transition-colors sm:flex-row sm:items-center"
                 style={{
                   backgroundColor: colors.cardBg,
                   border: `1px solid ${colors.border}`,
-                  opacity: m.reusable ? 1 : 0.55,
                 }}
               >
-                <div className="relative flex h-20 w-20 flex-shrink-0 items-center justify-center">
+                <div
+                  className="relative flex h-24 w-full flex-shrink-0 items-center justify-center overflow-hidden rounded-xl sm:h-24 sm:w-24"
+                  style={{ backgroundColor: colors.innerBg }}
+                >
                   <div
-                    className="absolute inset-2 rounded-full blur-xl"
-                    style={{ backgroundColor: getRobotTheme(m.source_platform_id || m.id).glow, opacity: 0.22 }}
+                    className="absolute h-16 w-16 rounded-full"
+                    style={{ backgroundColor: getRobotTheme(m.source_platform_id || m.id).glow, opacity: 0.09 }}
                   />
                   <img
                     src={getRobotTheme(m.source_platform_id || m.id).src}
                     alt=""
-                    className="relative h-20 w-20 object-contain"
+                    className="relative h-24 w-24 object-contain"
                     draggable={false}
                   />
                 </div>
@@ -2533,17 +2655,17 @@ function ModulesCatalogueView({
                   </p>
                 </div>
 
-                <div className="flex flex-shrink-0 items-center gap-2">
+                <div className="flex flex-shrink-0 items-center gap-2 sm:ml-auto">
                   {m.reusable ? (
                     <button
                       onClick={() => onUseModule(m.id)}
-                      className="flex items-center gap-1.5 rounded-lg px-3.5 py-2 text-xs font-semibold text-white transition-colors"
+                      className="flex flex-1 items-center justify-center gap-1.5 rounded-lg px-3.5 py-2.5 text-xs font-semibold text-white transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40 sm:flex-none"
                       style={{ backgroundColor: '#8B5CF6' }}
                       onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = '#7c3aed' }}
                       onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = '#8B5CF6' }}
-                      title="Restaurer ce professeur IA dans Mes professeurs IA"
+                      title="Préparer une nouvelle formation avec ce professeur IA"
                     >
-                      <span>Réutiliser</span>
+                      <span>Réutiliser ce professeur</span>
                       <Icon name="arrow_forward" className="text-sm" />
                     </button>
                   ) : (
