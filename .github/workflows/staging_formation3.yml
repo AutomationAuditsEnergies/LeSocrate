@@ -286,6 +286,12 @@ jobs:
           fi
           printf 'PURE_POSTGRES_CONFIGURATION_OK backend=postgres sqlite_settings=absent\n'
 
+      - name: Wait for Azure SCM restart
+        run: |
+          # App settings restart both the application and its SCM container.
+          # Starting OneDeploy immediately can interrupt the Oryx build mid-run.
+          sleep 45
+
       - name: Deploy to Azure Web App
         uses: azure/webapps-deploy@v3
         with:

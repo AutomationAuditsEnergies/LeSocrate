@@ -36,6 +36,14 @@ class Formation3PurePostgresDeploymentTest(unittest.TestCase):
         ):
             self.assertIn(setting, self.workflow)
 
+    def test_deployment_waits_for_scm_after_configuration_restart(self):
+        configure_index = self.workflow.index("- name: Configure SaaS Postgres copy")
+        wait_index = self.workflow.index("- name: Wait for Azure SCM restart")
+        deploy_index = self.workflow.index("- name: Deploy to Azure Web App")
+        self.assertLess(configure_index, wait_index)
+        self.assertLess(wait_index, deploy_index)
+        self.assertIn("sleep 45", self.workflow[wait_index:deploy_index])
+
 
 if __name__ == "__main__":
     unittest.main()
