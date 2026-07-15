@@ -92,6 +92,7 @@ export default function HRDashboard() {
   const [loading, setLoading] = useState(true)
   const [platformsError, setPlatformsError] = useState('')
   const [platformsErrorTone, setPlatformsErrorTone] = useState('error')
+  const [loggingOut, setLoggingOut] = useState(false)
   const [expandedPlatform, setExpandedPlatform] = useState(null)
   const [platformAudios, setPlatformAudios] = useState({})
   const [studentEmailsByPlatform, setStudentEmailsByPlatform] = useState({})
@@ -670,6 +671,19 @@ export default function HRDashboard() {
     setAutoPilotMode('api_deepseek')
   }
 
+  const handleLogout = async () => {
+    if (loggingOut) return
+    setLoggingOut(true)
+    try {
+      await apiFetch('/api/admin/logout', { method: 'POST' })
+    } catch (error) {
+      console.error('Erreur déconnexion centre:', error)
+    } finally {
+      localStorage.removeItem('admin_auth_token')
+      window.location.assign('/connexion-centre')
+    }
+  }
+
   // Ouvre la modale en pré-sélectionnant le mode "Nouvelle formation".
   // Utilisé par le bouton "+ Créer un nouveau module" dans la modale Modules.
   const openCreateModuleFlow = () => {
@@ -911,27 +925,17 @@ export default function HRDashboard() {
           }}
         >
           <div className="mx-auto max-w-7xl px-4 pt-4 sm:px-6">
-            <div className="flex items-center justify-between gap-4">
-              <div className="flex min-w-0 items-center gap-3">
-                <span className="text-sm font-bold tracking-[-0.01em]" style={{ color: colors.text }}>
-                  LE SOCRATE
-                </span>
-                <span className="hidden h-5 w-px sm:block" style={{ backgroundColor: colors.border }} aria-hidden="true" />
-                <span className="hidden truncate text-sm sm:block" style={{ color: colors.textMuted }}>
-                  Espace centre
-                </span>
-              </div>
-
-              {/* Back to admin — tertiary navigation, muted text */}
-              <a
-                href="/admin"
-                className="flex flex-shrink-0 items-center gap-2 rounded-lg px-3.5 py-2 text-sm font-medium transition-colors hover:bg-black/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40 dark:hover:bg-white/5"
-                style={{ color: colors.textMuted, border: `1px solid ${colors.border}` }}
-                title="Revenir à l'administration P1"
+            <div className="flex items-center justify-end">
+              <button
+                type="button"
+                onClick={handleLogout}
+                disabled={loggingOut}
+                className="flex flex-shrink-0 items-center gap-2 rounded-lg px-3.5 py-2 text-sm font-semibold transition-colors hover:bg-red-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500/30 disabled:cursor-wait disabled:opacity-60 dark:hover:bg-red-950/30"
+                style={{ color: darkMode ? '#fca5a5' : '#b91c1c', border: `1px solid ${colors.border}` }}
               >
-                <Icon name="arrow_back" className="text-base" />
-                <span>Retour Admin</span>
-              </a>
+                <Icon name={loggingOut ? 'hourglass_top' : 'logout'} className="text-[18px]" aria-hidden="true" />
+                <span>{loggingOut ? 'Déconnexion...' : 'Se déconnecter'}</span>
+              </button>
             </div>
 
             <nav className="mt-4 grid grid-cols-3 items-end gap-1 sm:flex" aria-label="Navigation dashboard formations">
