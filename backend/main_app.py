@@ -113,7 +113,11 @@ def readiness_probe():
         from services.runtime_readiness_service import run_readiness_checks
 
         checks = run_readiness_checks()
-        return _jsonify({"status": "ready", "checks": checks}), 200
+        return _jsonify({
+            "status": "ready",
+            "deployment_commit": os.getenv("DEPLOYMENT_COMMIT", "unknown"),
+            "checks": checks,
+        }), 200
     except Exception as exc:
         failed_check = getattr(exc, "check", "unknown")
         logger.warning(

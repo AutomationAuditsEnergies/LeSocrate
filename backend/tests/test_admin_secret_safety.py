@@ -1,5 +1,6 @@
 import os
 import unittest
+from pathlib import Path
 from unittest.mock import Mock, patch
 
 from flask import Flask
@@ -9,6 +10,15 @@ from routes import admin_routes
 
 
 class AdminSecretSafetyTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.socrate1_workflow = (
+            Path(__file__).resolve().parents[2]
+            / ".github"
+            / "workflows"
+            / "staging_socrate1.yml"
+        ).read_text(encoding="utf-8")
+
     def test_historical_hardcoded_password_is_not_a_fallback(self):
         with patch.dict(os.environ, {}, clear=True):
             self.assertFalse(admin_routes._internal_admin_password_valid("secret123"))
@@ -24,6 +34,26 @@ class AdminSecretSafetyTest(unittest.TestCase):
                 admin_routes._internal_admin_password_valid("a-long-deployment-secret")
             )
             self.assertFalse(admin_routes._internal_admin_password_valid("wrong"))
+
+    def test_socrate1_deployment_requires_secrets_and_exact_revision_readiness(self):
+        workflow = self.socrate1_workflow
+        self.assertIn("SECRET_KEY: ${{ secrets.SOCRATE1_SECRET_KEY }}", workflow)
+        self.assertIn(
+            "INTERNAL_ADMIN_PASSWORD_HASH: ${{ secrets.SOCRATE1_INTERNAL_ADMIN_PASSWORD_HASH }}",
+            workflow,
+        )
+        self.assertIn('SECRET_KEY="${SECRET_KEY}"', workflow)
+        self.assertIn(
+            'INTERNAL_ADMIN_PASSWORD_HASH="${INTERNAL_ADMIN_PASSWORD_HASH}"',
+            workflow,
+        )
+        self.assertIn('DEPLOYMENT_COMMIT="${GITHUB_SHA}"', workflow)
+        self.assertIn(
+            "--generic-configurations '{\"healthCheckPath\":\"/readyz\"}'",
+            workflow,
+        )
+        self.assertIn('"${app_url}/readyz"', workflow)
+        self.assertIn('"deployment_commit\\\":\\\"${GITHUB_SHA}', workflow)
 
     def test_unknown_center_never_falls_back_to_sqlite_in_pure_postgres(self):
         app = Flask(__name__)

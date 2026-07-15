@@ -50,6 +50,8 @@ jobs:
     env:
       RESOURCE_GROUP: socrate1_group
       STARTUP_COMMAND: python run.py
+      SECRET_KEY: ${{ secrets.SOCRATE1_SECRET_KEY }}
+      INTERNAL_ADMIN_PASSWORD_HASH: ${{ secrets.SOCRATE1_INTERNAL_ADMIN_PASSWORD_HASH }}
 
     steps:
       - name: Download artifact from build job
@@ -64,6 +66,17 @@ jobs:
           tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_41081722FD194A6DBBEE83B7861AA33F }}
           subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_DD044DCD13764A6CBF8D1889CF9E5B07 }}
 
+      - name: Validate production runtime secrets
+        shell: bash
+        run: |
+          missing=()
+          [ -z "${SECRET_KEY:-}" ] && missing+=("SOCRATE1_SECRET_KEY")
+          [ -z "${INTERNAL_ADMIN_PASSWORD_HASH:-}" ] && missing+=("SOCRATE1_INTERNAL_ADMIN_PASSWORD_HASH")
+          if [ "${#missing[@]}" -gt 0 ]; then
+            printf 'Missing required GitHub secret(s): %s\n' "${missing[*]}" >&2
+            exit 1
+          fi
+
       - name: Configure Azure App Service production
         shell: bash
         run: |
@@ -73,6 +86,9 @@ jobs:
             --settings \
               SCM_DO_BUILD_DURING_DEPLOYMENT=true \
               ENABLE_ORYX_BUILD=true \
+              SECRET_KEY="${SECRET_KEY}" \
+              INTERNAL_ADMIN_PASSWORD_HASH="${INTERNAL_ADMIN_PASSWORD_HASH}" \
+              DEPLOYMENT_COMMIT="${GITHUB_SHA}" \
               PORT=8000 \
               WEBSITES_PORT=8000 \
               FORMATION_CONTENT_DAY_WORKERS=1 \
@@ -84,7 +100,8 @@ jobs:
           az webapp config set \
             --resource-group "${RESOURCE_GROUP}" \
             --name socrate1 \
-            --startup-file "${STARTUP_COMMAND}"
+            --startup-file "${STARTUP_COMMAND}" \
+            --generic-configurations '{"healthCheckPath":"/readyz"}'
 
           if az webapp config set \
               --resource-group "${RESOURCE_GROUP}" \
@@ -114,9 +131,11 @@ jobs:
               --max-time 20 \
               --output "${response_file}" \
               --write-out '%{http_code}' \
-              "${app_url}/api/hr/enabled" || true)"
+              "${app_url}/readyz" || true)"
 
-            if [ "${http_code}" = "200" ] && grep -Eq '"enabled"[[:space:]]*:[[:space:]]*true' "${response_file}"; then
+            if [ "${http_code}" = "200" ] \
+                && grep -Eq '"status"[[:space:]]*:[[:space:]]*"ready"' "${response_file}" \
+                && grep -Fq "\"deployment_commit\":\"${GITHUB_SHA}\"" "${response_file}"; then
               echo "Socrate1 prêt après ${attempt} tentative(s)."
               exit 0
             fi
