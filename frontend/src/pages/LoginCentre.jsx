@@ -291,17 +291,17 @@ export default function LoginCentre({ preloadAdminRoute, preloadDashboardRoute }
               {!passwordRecoveryMode && (
               <div>
                 <label htmlFor="centre-username" className="mb-1.5 block text-sm font-medium text-slate-800">
-                  {authMode === 'signup' ? 'Email ou identifiant' : 'Identifiant'}
+                  Adresse email
                 </label>
                 <input
                   id="centre-username"
                   name="username"
-                  type="text"
-                  autoComplete={authMode === 'signup' ? 'email' : 'username'}
+                  type={authMode === 'signup' ? 'email' : 'text'}
+                  autoComplete="email"
                   value={username}
                   onChange={(event) => setUsername(event.target.value)}
                   required
-                  placeholder={authMode === 'signup' ? 'contact@centre.fr' : 'Votre identifiant'}
+                  placeholder="contact@centre.fr"
                   className="h-12 w-full rounded-lg border border-slate-300 bg-white px-4 text-sm text-slate-950 outline-none transition placeholder:text-slate-500 focus:border-violet-500 focus:ring-2 focus:ring-violet-500/25"
                 />
               </div>

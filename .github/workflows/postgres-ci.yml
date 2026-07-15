@@ -93,6 +93,7 @@ jobs:
         run: >-
           python -m unittest -v
           tests.test_audio_postgres_runtime
+          tests.test_auth_training_center
           tests.test_claude_code_humanization
           tests.test_course_schedule_repository.CourseScheduleRepositoryTest.test_schedule_backend_follows_pipeline_postgres_in_hybrid_mode
           tests.test_course_schedule_repository.CourseScheduleRepositoryTest.test_hybrid_pipeline_postgres_schedule_summary_never_opens_sqlite

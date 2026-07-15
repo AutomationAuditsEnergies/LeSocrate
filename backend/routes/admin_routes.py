@@ -14,7 +14,15 @@ from azure.core.exceptions import ResourceExistsError
 from pydub import AudioSegment
 from werkzeug.security import check_password_hash, generate_password_hash
 import state
-from config import DATABASE_BACKEND, FRANCE_TZ, DB_PATH, SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY, SUPABASE_URL
+from config import (
+    DATABASE_BACKEND,
+    DB_PATH,
+    FRANCE_TZ,
+    SUPABASE_ANON_KEY,
+    SUPABASE_SERVICE_ROLE_KEY,
+    SUPABASE_URL,
+    sqlite_runtime_enabled,
+)
 from database.db import get_db_connection
 from database import db_safety
 from database.postgres import postgres_enabled
@@ -44,6 +52,7 @@ logger = get_logger(__name__)
 
 _ADMIN_SUPERADMIN_ACCOUNT_TYPES = {"legacy_admin", "superadmin"}
 _POSTGRES_ONLY_BACKENDS = {"postgres", "postgresql", "supabase"}
+_CENTER_EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 
 class AdminPlatformNotFound(LookupError):
@@ -52,6 +61,13 @@ class AdminPlatformNotFound(LookupError):
     The public response deliberately does not distinguish an unknown platform
     from a platform owned by another training centre.
     """
+
+
+def _normalize_training_center_email(value):
+    email = str(value or "").strip().lower()
+    if len(email) > 254 or not _CENTER_EMAIL_PATTERN.fullmatch(email):
+        return None
+    return email
 
 
 def _internal_admin_password_valid(password: str) -> bool:
@@ -1198,16 +1214,26 @@ def create_admin_blueprint(socketio):
         conn = None
         try:
             data = request.get_json(silent=True) or {}
-            username = data.get("username", "").strip().lower()
+            username = _normalize_training_center_email(data.get("username"))
             password = data.get("password", "").strip()
             center_name = data.get("center_name", "").strip()
 
-            if not username or not password or not center_name:
+            if not username:
                 return (
                     jsonify(
                         {
                             "success": False,
-                            "error": "Nom du centre, identifiant et mot de passe requis",
+                            "error": "Une adresse email valide est requise",
+                        }
+                    ),
+                    400,
+                )
+            if not password or not center_name:
+                return (
+                    jsonify(
+                        {
+                            "success": False,
+                            "error": "Nom du centre, email et mot de passe requis",
                         }
                     ),
                     400,
@@ -1239,19 +1265,25 @@ def create_admin_blueprint(socketio):
                 except DuplicateTrainingCenterUsername:
                     return jsonify({"success": False, "error": "Cet identifiant existe déjà"}), 409
 
-                conn = get_db_connection()
-                cursor = conn.cursor()
-                _mirror_training_center_to_sqlite(cursor, account, password_hash, now_str, None)
-                conn.commit()
-
-                if "@" in username:
-                    ensured, ensure_error = _ensure_training_center_supabase_user(
-                        username,
-                        password,
-                        center_name,
+                if sqlite_runtime_enabled():
+                    conn = get_db_connection()
+                    cursor = conn.cursor()
+                    _mirror_training_center_to_sqlite(
+                        cursor,
+                        account,
+                        password_hash,
+                        now_str,
+                        None,
                     )
-                    if not ensured:
-                        logger.warning("⚠️ Compte centre créé sans provisioning Supabase: %s", ensure_error)
+                    conn.commit()
+
+                ensured, ensure_error = _ensure_training_center_supabase_user(
+                    username,
+                    password,
+                    center_name,
+                )
+                if not ensured:
+                    logger.warning("⚠️ Compte centre créé sans provisioning Supabase: %s", ensure_error)
 
                 session["is_admin"] = True
                 session["admin_account_id"] = account["id"]
@@ -1305,14 +1337,13 @@ def create_admin_blueprint(socketio):
             account_id = cursor.lastrowid
             conn.commit()
 
-            if "@" in username:
-                ensured, ensure_error = _ensure_training_center_supabase_user(
-                    username,
-                    password,
-                    center_name,
-                )
-                if not ensured:
-                    logger.warning("⚠️ Compte centre créé sans provisioning Supabase: %s", ensure_error)
+            ensured, ensure_error = _ensure_training_center_supabase_user(
+                username,
+                password,
+                center_name,
+            )
+            if not ensured:
+                logger.warning("⚠️ Compte centre créé sans provisioning Supabase: %s", ensure_error)
 
             session["is_admin"] = True
             session["admin_account_id"] = account_id

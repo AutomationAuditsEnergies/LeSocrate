@@ -4,6 +4,9 @@ import tempfile
 import unittest
 from datetime import datetime
 from pathlib import Path
+from unittest.mock import Mock, patch
+
+from flask import Flask
 
 try:
     import psycopg
@@ -13,6 +16,7 @@ except ImportError:  # pragma: no cover - exercised in PostgreSQL CI.
 from tools.database import migrate_sqlite_core_to_postgres as core_migration
 from tools.database import migrate_sqlite_pipeline_to_postgres as pipeline_migration
 from tools.database.migration_utils import timezone_from_name
+from routes import admin_routes
 
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
@@ -54,6 +58,64 @@ class RealPostgresIntegrationTest(unittest.TestCase):
         conn.executescript(ddl_and_rows)
         conn.commit()
         return tmp.name, conn
+
+    def test_training_center_can_register_then_reconnect_in_pure_postgres(self):
+        app = Flask(__name__)
+        app.config.update(TESTING=True, SECRET_KEY="postgres-center-auth-test")
+        app.register_blueprint(admin_routes.create_admin_blueprint(Mock()))
+
+        with patch.object(
+            admin_routes, "sqlite_runtime_enabled", return_value=False
+        ), patch.object(
+            admin_routes,
+            "get_db_connection",
+            side_effect=AssertionError("SQLite must not be opened"),
+        ), patch.object(
+            admin_routes,
+            "_ensure_training_center_supabase_user",
+            return_value=(True, None),
+        ):
+            with app.test_client() as registration_client:
+                registration = registration_client.post(
+                    "/api/admin/register",
+                    json={
+                        "center_name": "Centre PostgreSQL",
+                        "username": "direction@centre.test",
+                        "password": "correct-password",
+                    },
+                )
+
+            self.assertEqual(registration.status_code, 201, registration.get_json())
+            self.assertEqual(
+                registration.get_json()["account"]["type"],
+                "training_center",
+            )
+
+            with app.test_client() as login_client:
+                login = login_client.post(
+                    "/api/admin/login",
+                    json={
+                        "username": "direction@centre.test",
+                        "password": "correct-password",
+                    },
+                )
+
+            self.assertEqual(login.status_code, 200, login.get_json())
+            self.assertEqual(login.get_json()["account"]["type"], "training_center")
+
+        with psycopg.connect(self.database_url) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT password_hash, password_debug_plaintext
+                    FROM training_center_accounts
+                    WHERE username = %s
+                    """,
+                    ("direction@centre.test",),
+                )
+                password_hash, plaintext = cur.fetchone()
+        self.assertTrue(password_hash)
+        self.assertIsNone(plaintext)
 
     def test_catalog_contains_runtime_types_indexes_and_rls(self):
         with psycopg.connect(self.database_url) as conn:
