@@ -384,6 +384,12 @@ def upsert_platform_config(platform):
     therefore an error, not an upsert: silently changing those fields could
     attach jobs, students, and Blob containers to the wrong customer.
     """
+    payload = {
+        **platform,
+        "teacher_name": platform.get("teacher_name"),
+        "teacher_color": platform.get("teacher_color"),
+        "creation_request_id": platform.get("creation_request_id"),
+    }
     try:
         with get_postgres_connection() as conn:
             with conn.cursor() as cur:
@@ -393,13 +399,15 @@ def upsert_platform_config(platform):
                         id, center_account_id, name, slug, upload_locked,
                         public_access_enabled, pdf_filename, pdf_uploaded_at, updated_at,
                         playlist_mode, audio_container, pdf_container, archive_container,
-                        audio_base_url, status, source_formation_id, source_module_id
+                        audio_base_url, status, source_formation_id, source_module_id,
+                        teacher_name, teacher_color, creation_request_id
                     )
                     VALUES (
                         %(id)s, %(center_account_id)s, %(name)s, %(slug)s, %(upload_locked)s,
                         %(public_access_enabled)s, %(pdf_filename)s, %(pdf_uploaded_at)s, %(updated_at)s,
                         %(playlist_mode)s, %(audio_container)s, %(pdf_container)s, %(archive_container)s,
-                        %(audio_base_url)s, %(status)s, %(source_formation_id)s, %(source_module_id)s
+                        %(audio_base_url)s, %(status)s, %(source_formation_id)s, %(source_module_id)s,
+                        %(teacher_name)s, %(teacher_color)s, %(creation_request_id)s
                     )
                     ON CONFLICT (id) DO UPDATE SET
                         center_account_id = EXCLUDED.center_account_id,
@@ -417,12 +425,15 @@ def upsert_platform_config(platform):
                         audio_base_url = EXCLUDED.audio_base_url,
                         status = EXCLUDED.status,
                         source_formation_id = EXCLUDED.source_formation_id,
-                        source_module_id = EXCLUDED.source_module_id
+                        source_module_id = EXCLUDED.source_module_id,
+                        teacher_name = COALESCE(EXCLUDED.teacher_name, platform_config.teacher_name),
+                        teacher_color = COALESCE(EXCLUDED.teacher_color, platform_config.teacher_color),
+                        creation_request_id = COALESCE(EXCLUDED.creation_request_id, platform_config.creation_request_id)
                     WHERE platform_config.center_account_id IS NOT DISTINCT FROM EXCLUDED.center_account_id
                       AND platform_config.slug IS NOT DISTINCT FROM EXCLUDED.slug
                     RETURNING id
                     """,
-                    platform,
+                    payload,
                 )
                 if cur.fetchone() is None:
                     raise PlatformIdentityConflictError(
@@ -435,7 +446,26 @@ def upsert_platform_config(platform):
         if not _supabase_rest_enabled():
             raise
         _log_pg_fallback("upsert_platform_config", exc)
-        _rest_upsert("platform_config", platform, on_conflict="id")
+        _rest_upsert("platform_config", payload, on_conflict="id")
+
+
+def get_platform_by_creation_request_id(creation_request_id, center_account_id):
+    """Return a centre-owned platform previously created for the same request."""
+    if not postgres_enabled() or not creation_request_id or not center_account_id:
+        return None
+    with get_postgres_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, name, slug, status, source_formation_id, source_module_id,
+                       teacher_name, teacher_color, creation_request_id
+                FROM platform_config
+                WHERE creation_request_id = %s
+                  AND center_account_id = %s
+                """,
+                (creation_request_id, center_account_id),
+            )
+            return cur.fetchone()
 
 
 def upsert_cours_config(cours_config):

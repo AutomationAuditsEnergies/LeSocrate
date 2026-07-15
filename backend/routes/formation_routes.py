@@ -4831,11 +4831,15 @@ def _execute_ap_step(job_id: int, step: str, job: dict) -> None:
                 f"🤖   ✓ Document post-révision folder {fid} : "
                 f"{final_words} mots, {filename}, decks slides supprimés={deleted_decks}"
             )
-        next_status = "tts_launched" if job.get("auto_pilot_generate_audio") else "text_ready"
-        if next_status == "text_ready":
-            _finalize_text_ready_state(job_id)
-        update_job(job_id, status=next_status, auto_pilot_post_review_docs_done=1)
-        logger.info(f"🤖 ✓ Documents post-révision générés job {job_id} (status={next_status})")
+        # Les slides sont encore à produire. Garder un statut intermédiaire
+        # empêche le dashboard de déclarer le professeur prêt trop tôt.
+        # `_determine_next_ap_step` finalisera `text_ready` uniquement après
+        # avoir vérifié qu'un deck non vide existe pour chaque journée.
+        update_job(job_id, status="tts_launched", auto_pilot_post_review_docs_done=1)
+        logger.info(
+            f"🤖 ✓ Documents post-révision générés job {job_id} "
+            "(status=tts_launched, slides requises)"
+        )
 
     elif step == "slides":
         from services.formation_pipeline_service import get_expected_course_folders

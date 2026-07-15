@@ -201,6 +201,90 @@ class PipelineOrderTest(unittest.TestCase):
         finally:
             os.unlink(db_path)
 
+    def test_post_review_documents_do_not_mark_teacher_ready_before_slides(self):
+        job = _job(platform_id=1, auto_pilot_generate_audio=0)
+        with patch.object(
+            fps,
+            "get_expected_course_folders",
+            return_value={"folder_ids": [10]},
+        ), patch(
+            "repositories.pipeline_repository.list_completed_content_jobs_for_folders",
+            return_value=[{"folder_id": 10, "content_job_id": 20}],
+        ), patch.object(
+            cgs,
+            "assert_course_day_word_budget",
+            return_value={"budget": {}},
+        ), patch.object(
+            cgs,
+            "_assemble_and_upload",
+            return_value=(5000, "jour-1.docx"),
+        ), patch.object(
+            cgs,
+            "_update_job_db",
+        ), patch.object(
+            fr,
+            "_delete_slide_deck_for_resume",
+            return_value=0,
+        ), patch.object(
+            fr,
+            "_finalize_text_ready_state",
+        ) as finalize, patch.object(
+            fr,
+            "update_job",
+        ) as update:
+            fr._execute_ap_step(99, "post_review_docs", job)
+
+        finalize.assert_not_called()
+        update.assert_called_once_with(
+            99,
+            status="tts_launched",
+            auto_pilot_post_review_docs_done=1,
+        )
+
+    def test_teacher_is_finalized_after_every_slide_deck_exists(self):
+        job = _job(
+            platform_id=1,
+            status="tts_launched",
+            auto_pilot_post_review_docs_done=1,
+        )
+        with patch.object(fr, "get_job", return_value=job), patch.object(
+            fps,
+            "get_expected_course_folders",
+            return_value={"folder_ids": [10]},
+        ), patch(
+            "repositories.pipeline_repository.list_content_completion_rows_for_folders",
+            return_value=[{
+                "folder_id": 10,
+                "status": "completed",
+                "total_words": 5000,
+                "completed_segments": 7,
+            }],
+        ), patch(
+            "repositories.pipeline_repository.count_segments_pending_review_for_folders",
+            return_value=0,
+        ), patch(
+            "repositories.pipeline_repository.list_completed_content_jobs_for_folders",
+            return_value=[{"folder_id": 10, "content_job_id": 20}],
+        ), patch(
+            "repositories.pipeline_repository.get_latest_script_slide_deck_row",
+            return_value={"slides_json": '[{"title": "Introduction"}]'},
+        ), patch.object(
+            cgs,
+            "_current_compliance_review_signature",
+            return_value="review-sig",
+        ), patch.object(
+            fr,
+            "_finalize_text_ready_state",
+        ) as finalize, patch.object(
+            fr,
+            "update_job",
+        ) as update:
+            next_step = fr._determine_next_ap_step(99)
+
+        self.assertIsNone(next_step)
+        finalize.assert_called_once_with(99)
+        update.assert_called_once_with(99, status="text_ready", error_message=None)
+
     def test_audio_gate_requires_local_compliance(self):
         db_path = _make_review_db(humanized=True, reviewed=False)
         try:

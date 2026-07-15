@@ -104,6 +104,9 @@ class HrPostgresReadRoutesTest(unittest.TestCase):
         repository_rows = [{
             "id": 12,
             "name": "Promo juillet",
+            "teacher_name": "Camille",
+            "teacher_color": "violet",
+            "creation_request_id": "request_1234567890",
             "slug": "promo-juillet",
             "upload_locked": False,
             "pdf_filename": None,
@@ -140,6 +143,9 @@ class HrPostgresReadRoutesTest(unittest.TestCase):
         self.assertTrue(payload["success"])
         platform = payload["platforms"][0]
         self.assertEqual(platform["status"], "pending")
+        self.assertEqual(platform["teacher_name"], "Camille")
+        self.assertEqual(platform["teacher_color"], "violet")
+        self.assertEqual(platform["teacher_preparation"]["status"], "preparing")
         self.assertIn("2 demande(s) de suppression", platform["alerts"])
         self.assertFalse(platform["blob_stats_loaded"])
         list_platforms.assert_called_once_with(42, scope_to_center=True)

@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useMemo } from 'react'
 import { apiFetch } from '../api'
 import CoursFoldersModal from '../components/CoursFolders'
 import SlideToConfirm, { BackupPipeline } from '../components/SlideToConfirm'
+import { getHiddenPipelineProgress, getTeacherPreparation } from '../teacherPreparation'
 
 // ─── Material Icon Component ─────────────────────────────────────────────────
 const Icon = ({ name, className = '' }) => (
@@ -33,58 +34,19 @@ const ROBOT_THEMES = [
   { src: '/robot-green.png', glow: '#10b981' },  // vert
   { src: '/robot-amber.png', glow: '#f59e0b' },  // ambre
 ]
-const getRobotTheme = (id = 0) => ROBOT_THEMES[((Number(id) || 1) - 1) % ROBOT_THEMES.length]
+const ROBOT_THEME_BY_COLOR = Object.fromEntries(
+  ROBOT_THEMES.map((theme) => [theme.src.match(/robot-([a-z]+)\.png/)?.[1], theme]),
+)
+const getRobotTheme = (id = 0, color = '') => (
+  ROBOT_THEME_BY_COLOR[color] || ROBOT_THEMES[((Number(id) || 1) - 1) % ROBOT_THEMES.length]
+)
 const todayDateInput = () => {
   const now = new Date()
   const offset = now.getTimezoneOffset() * 60000
   return new Date(now.getTime() - offset).toISOString().slice(0, 10)
 }
 
-const PIPELINE_PROGRESS_BY_STEP = {
-  reac: 12,
-  kb: 24,
-  global: 36,
-  daily: 48,
-  content: 64,
-  review: 78,
-  post_review_docs: 88,
-  slides: 96,
-  audio: 98,
-  done: 100,
-}
-
-const PIPELINE_PROGRESS_BY_STATUS = {
-  init: 8,
-  reac_ready: 18,
-  kb_building: 24,
-  global_generating: 34,
-  global_ready: 42,
-  global_validated: 46,
-  daily_splitting: 50,
-  daily_ready: 56,
-  daily_validated: 60,
-  tts_launched: 62,
-  text_ready: 100,
-  audio_running: 98,
-  audio_launched: 100,
-  audio_completed: 100,
-  completed: 100,
-}
-
 const PLATFORM_LOAD_TIMEOUT_MS = 30000
-
-const getHiddenPipelineProgress = (platform = {}) => {
-  if (platform.pipeline_auto_pilot_error) return 100
-  const step = String(platform.pipeline_auto_pilot_step || '').trim()
-  if (step && Object.prototype.hasOwnProperty.call(PIPELINE_PROGRESS_BY_STEP, step)) {
-    return PIPELINE_PROGRESS_BY_STEP[step]
-  }
-  const status = String(platform.pipeline_status || platform.status || '').trim()
-  if (status && Object.prototype.hasOwnProperty.call(PIPELINE_PROGRESS_BY_STATUS, status)) {
-    return PIPELINE_PROGRESS_BY_STATUS[status]
-  }
-  return 8
-}
 
 // ─── Component ───────────────────────────────────────────────────────────────
 export default function HRDashboard() {
@@ -121,6 +83,8 @@ export default function HRDashboard() {
   const [expandedAttendancePlatform, setExpandedAttendancePlatform] = useState(null)
   const [newPlatformName, setNewPlatformName] = useState('')
   const [creating, setCreating] = useState(false)
+  const [newlyCreatedPlatformId, setNewlyCreatedPlatformId] = useState(null)
+  const [retryingPlatformId, setRetryingPlatformId] = useState(null)
   // Modules formation disponibles (produits persistants des pipelines terminées).
   // Principe "1 RNCP = 1 module durable" : le select liste les modules, pas les
   // pipelines ni les plateformes sources.
@@ -155,6 +119,8 @@ export default function HRDashboard() {
   const [autoPilotMode, setAutoPilotMode] = useState('api')  // 'api' | 'api_deepseek' | 'claude_code' | 'test'
   const [testDocs, setTestDocs] = useState([])  // File[] uploadés pour le mode test
   const backupPollingRef = useRef({})
+  const creatingRef = useRef(false)
+  const creationRequestRef = useRef({ fingerprint: '', id: '' })
   const audioRef = useRef(null)
   const [showCoursFoldersModal, setShowCoursFoldersModal] = useState(false)
   const [selectedCoursPlatform, setSelectedCoursPlatform] = useState(null)
@@ -668,6 +634,7 @@ export default function HRDashboard() {
     setNewFormHours('')
     setAutoPilot(true)
     setAutoPilotMode('api_deepseek')
+    creationRequestRef.current = { fingerprint: '', id: '' }
   }
 
   // Ouvre la modale en pré-sélectionnant le mode "Nouvelle formation".
@@ -705,7 +672,14 @@ export default function HRDashboard() {
     }
   }, [expandedAttendancePlatform, attendanceDate])
 
+  useEffect(() => {
+    if (!newlyCreatedPlatformId) return undefined
+    const timeoutId = window.setTimeout(() => setNewlyCreatedPlatformId(null), 8000)
+    return () => window.clearTimeout(timeoutId)
+  }, [newlyCreatedPlatformId])
+
   const handleCreatePlatform = async () => {
+    if (creatingRef.current) return
     const teacherName = teacherFirstName.trim()
     const trainingTitle = newFormTpName.trim()
     const platformName = newPlatformName.trim() || (teacherName && trainingTitle ? `${teacherName} · ${trainingTitle}` : '')
@@ -804,7 +778,18 @@ export default function HRDashboard() {
     // formationMode === 'none' → body reste {name} (plateforme vide, comportement historique)
 
     setCreating(true)
+    creatingRef.current = true
     try {
+      body.teacher_name = teacherName || null
+      body.teacher_color = teacherColor || 'violet'
+      const requestFingerprint = JSON.stringify(body)
+      if (creationRequestRef.current.fingerprint !== requestFingerprint) {
+        creationRequestRef.current = {
+          fingerprint: requestFingerprint,
+          id: window.crypto?.randomUUID?.() || `${Date.now()}_${Math.random().toString(36).slice(2)}`,
+        }
+      }
+      body.creation_request_id = creationRequestRef.current.id
       const resp = await apiFetch('/api/hr/platforms', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -831,7 +816,7 @@ export default function HRDashboard() {
               },
             )
             const autoData = await autoResp.json()
-            if (autoResp.status !== 202 && autoData.error) {
+            if (![200, 202, 409].includes(autoResp.status) && autoData.error) {
               alert(`Auto-pilot non démarré : ${autoData.error}`)
             }
           } catch (e) {
@@ -843,7 +828,8 @@ export default function HRDashboard() {
         resetCreateForm()
         setShowModulesModal(false)
         setCardPage(Math.floor(platforms.length / CARDS_PER_PAGE))
-        fetchPlatforms()
+        setNewlyCreatedPlatformId(data.platform?.id || null)
+        await fetchPlatforms()
       } else {
         alert(data.error || 'Erreur lors de la création')
       }
@@ -851,7 +837,49 @@ export default function HRDashboard() {
       console.error('Erreur création plateforme:', e)
       alert('Impossible de créer la plateforme')
     } finally {
+      creatingRef.current = false
       setCreating(false)
+    }
+  }
+
+  const handleRetryTeacherPreparation = async (platform) => {
+    if (!platform?.source_formation_id || retryingPlatformId) return
+    setRetryingPlatformId(platform.id)
+    try {
+      const response = await apiFetch(
+        `/api/formation/${platform.source_formation_id}/run-auto/resume`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ force: false }),
+        },
+      )
+      const payload = await response.json()
+      if (![200, 202, 409].includes(response.status)) {
+        throw new Error(payload.error || 'Reprise impossible')
+      }
+      setPlatforms((current) => current.map((item) => (
+        item.id === platform.id
+          ? {
+              ...item,
+              status: 'pending',
+              pipeline_auto_pilot_error: '',
+              teacher_preparation: {
+                status: 'preparing',
+                progress: item.teacher_preparation?.progress || 8,
+                stage: payload.next_step ? 'Reprise de la préparation' : 'Initialisation',
+                can_retry: false,
+              },
+            }
+          : item
+      )))
+      await fetchPlatforms()
+    } catch (error) {
+      console.error('Erreur reprise professeur IA:', error)
+      setPlatformsErrorTone('error')
+      setPlatformsError(error.message || 'Impossible de reprendre la préparation.')
+    } finally {
+      setRetryingPlatformId(null)
     }
   }
 
@@ -1112,6 +1140,9 @@ export default function HRDashboard() {
               onPdfUpload={handlePdfUpload}
               onDeletePdf={handleDeletePdf}
               onDeletePlatform={handleDeletePlatform}
+              newlyCreatedPlatformId={newlyCreatedPlatformId}
+              retryingPlatformId={retryingPlatformId}
+              onRetryPreparation={handleRetryTeacherPreparation}
             />
           )}
         </div>
@@ -1633,6 +1664,9 @@ function PlatformCardsView({
   onPdfUpload,
   onDeletePdf,
   onDeletePlatform,
+  newlyCreatedPlatformId,
+  retryingPlatformId,
+  onRetryPreparation,
 }) {
   const totalPages = Math.ceil(platforms.length / cardsPerPage)
 
@@ -1707,6 +1741,9 @@ function PlatformCardsView({
             onPdfUpload={(file) => onPdfUpload(p.id, file)}
             onDeletePdf={() => onDeletePdf(p.id)}
             onDeletePlatform={() => onDeletePlatform(p.id)}
+            newlyCreated={newlyCreatedPlatformId === p.id}
+            retryingPreparation={retryingPlatformId === p.id}
+            onRetryPreparation={() => onRetryPreparation(p)}
           />
         ))}
       </div>
@@ -3339,13 +3376,17 @@ function PlatformCard({
   onAttendanceDateChange, onRefreshAttendance, onUpdateAttendanceDraft, onSaveAttendance,
   onExportAttendance, onOpenPdfModal, onOpenCourseTimeModal,
   onDeleteAudio, onPlayAudio, onPdfUpload, onDeletePdf, onOpenCoursFolders, onDeletePlatform,
+  newlyCreated = false, retryingPreparation = false, onRetryPreparation,
 }) {
   const pdfInputId = `pdf-input-${p.id}`
   const platformThumbnail = getPlatformThumbnail(p)
   const [deleteHover, setDeleteHover] = useState(false)
   const [flipped, setFlipped] = useState(false)
-  const theme = getRobotTheme(p.id)
+  const theme = getRobotTheme(p.id, p.teacher_color)
   const creationProgress = getHiddenPipelineProgress(p)
+  const preparation = getTeacherPreparation(p)
+  const isPreparing = preparation.status === 'preparing'
+  const hasFailed = preparation.status === 'failed'
   const faceStyle = {
     backgroundColor: colors.cardBg,
     border: p.active ? '1px solid #E4E4E4' : `1px solid ${colors.border}`,
@@ -3357,7 +3398,7 @@ function PlatformCard({
     // pour révéler au verso la fiche formation (inchangée). Les deux faces se
     // superposent dans la même cellule grid → la cellule prend la hauteur de
     // la plus grande (la fiche).
-    <div className="flex flex-col">
+    <div className={`flex flex-col ${newlyCreated ? 'teacher-card-enter' : ''}`}>
       <div className="group [perspective:1600px]">
       <div
         className="relative grid transition-transform duration-700 ease-out"
@@ -3388,7 +3429,7 @@ function PlatformCard({
           {/* Robot — en grand, sans cadre */}
           <img
             src={theme.src}
-            alt={`Professeur IA — ${p.name}`}
+            alt={`Professeur IA ${p.teacher_name || p.name}`}
             draggable={false}
             className="relative z-10 w-full max-w-[88%] object-contain transition-transform duration-500 ease-out group-hover:-translate-y-2 group-hover:scale-[1.05]"
             style={{ minHeight: '290px' }}
@@ -3402,23 +3443,38 @@ function PlatformCard({
             >
               P{p.id}
             </span>
-            <h3 className="truncate text-base font-semibold tracking-tight" style={{ color: colors.text }}>
-              {p.name}
-            </h3>
+            <div className="min-w-0">
+              <h3 className="truncate text-base font-semibold tracking-tight" style={{ color: colors.text }}>
+                {p.teacher_name || p.name}
+              </h3>
+              {p.teacher_name && (
+                <p className="truncate text-xs" style={{ color: colors.textMuted }}>
+                  {p.source_tp_name || p.name}
+                </p>
+              )}
+            </div>
+            {preparation.status === 'ready' && (
+              <span
+                className="rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase"
+                style={{ backgroundColor: 'rgba(16, 185, 129, 0.12)', color: darkMode ? '#6ee7b7' : '#047857', letterSpacing: '0.1em' }}
+              >
+                Prêt
+              </span>
+            )}
             {!p.active && (
               <span className="text-[10px] font-semibold uppercase tracking-wide" style={{ color: '#94a3b8' }}>
                 · bientôt
               </span>
             )}
           </div>
-          {p.active && p.status === 'pending' && (
+          {p.active && isPreparing && (
             <div
               className="relative z-10 mt-4 w-full max-w-[280px] rounded-xl px-4 py-3"
               style={{ backgroundColor: darkMode ? 'rgba(15, 23, 42, 0.72)' : 'rgba(255, 255, 255, 0.86)', border: `1px solid ${colors.border}`, backdropFilter: 'blur(6px)' }}
             >
               <div className="mb-2 flex items-center justify-between gap-3">
                 <span className="text-xs font-semibold" style={{ color: colors.text }}>
-                  Création en cours
+                  {preparation.stage || 'Préparation des cours'}
                 </span>
                 <span className="inline-flex h-4 w-4 animate-spin rounded-full border-2" style={{ borderColor: '#ddd6fe', borderTopColor: '#8B5CF6' }} />
               </div>
@@ -3436,6 +3492,41 @@ function PlatformCard({
                   style={{ width: `${creationProgress}%`, backgroundColor: '#8B5CF6' }}
                 />
               </div>
+              {newlyCreated && (
+                <p className="mt-3 text-xs leading-5" style={{ color: colors.textSecondary }}>
+                  Votre professeur prépare les cours. Vous pouvez revenir plus tard, la préparation continue automatiquement.
+                </p>
+              )}
+            </div>
+          )}
+          {p.active && hasFailed && (
+            <div
+              className="relative z-10 mt-4 w-full max-w-[280px] rounded-xl px-4 py-3"
+              style={{ backgroundColor: darkMode ? 'rgba(127, 29, 29, 0.22)' : '#fef2f2', border: `1px solid ${darkMode ? 'rgba(248, 113, 113, 0.3)' : '#fecaca'}` }}
+            >
+              <div className="flex items-start gap-2.5">
+                <Icon name="error_outline" className="mt-0.5 text-[17px]" style={{ color: '#dc2626' }} aria-hidden="true" />
+                <div className="min-w-0">
+                  <p className="text-xs font-semibold" style={{ color: darkMode ? '#fecaca' : '#991b1b' }}>
+                    Préparation interrompue
+                  </p>
+                  <p className="mt-1 text-xs leading-5" style={{ color: colors.textSecondary }}>
+                    Les étapes terminées sont conservées.
+                  </p>
+                </div>
+              </div>
+              {preparation.can_retry && onRetryPreparation && (
+                <button
+                  type="button"
+                  onClick={onRetryPreparation}
+                  disabled={retryingPreparation}
+                  className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-lg px-3 py-2 text-xs font-semibold text-white transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40 disabled:cursor-wait disabled:opacity-60"
+                  style={{ backgroundColor: '#8B5CF6' }}
+                >
+                  <Icon name={retryingPreparation ? 'hourglass_top' : 'refresh'} className="text-[16px]" aria-hidden="true" />
+                  {retryingPreparation ? 'Reprise en cours…' : 'Reprendre la préparation'}
+                </button>
+              )}
             </div>
           )}
         </div>
@@ -3493,7 +3584,7 @@ function PlatformCard({
       )}
 
       {/* Pending overlay : clone de formation en cours ou pipeline initiée */}
-      {p.active && p.status === 'pending' && (
+      {p.active && isPreparing && (
         <div
           className="absolute inset-0 z-20 flex items-center justify-center rounded-2xl"
           style={{ backgroundColor: darkMode ? 'rgba(15, 23, 42, 0.92)' : 'rgba(248, 250, 252, 0.98)', backdropFilter: 'blur(4px)' }}
@@ -3502,35 +3593,17 @@ function PlatformCard({
             <div className="mx-auto mb-4 h-10 w-10 animate-spin rounded-full border-[3px]"
               style={{ borderColor: darkMode ? '#334155' : '#e2e8f0', borderTopColor: '#8B5CF6' }} />
             <p className="text-sm font-semibold mb-1" style={{ color: colors.text }}>
-              {p.source_formation_id ? 'Clone des cours en cours' : 'Module en construction'}
+              {preparation.stage || 'Préparation du professeur'}
             </p>
             <p className="text-xs mb-4" style={{ color: colors.textMuted }}>
-              {p.source_formation_id
-                ? 'Copie des cours + blobs Azure — quelques instants…'
-                : 'La pipeline est initiée. Finalise les étapes sur la page de suivi.'}
+              Les étapes techniques sont exécutées automatiquement. Les étapes déjà terminées sont conservées après un redémarrage.
             </p>
-            {!p.source_formation_id && (
-              <a
-                href="/formation-pipeline"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex items-center gap-2 rounded-lg px-4 py-2 text-xs font-medium transition-all"
-                style={{
-                  backgroundColor: '#8B5CF6',
-                  color: 'white',
-                  textDecoration: 'none',
-                }}
-              >
-                <Icon name="open_in_new" className="text-sm" />
-                Suivre la pipeline
-              </a>
-            )}
           </div>
         </div>
       )}
 
       {/* Error overlay : clone ou pipeline échoué */}
-      {p.active && p.status === 'error' && (
+      {p.active && hasFailed && (
         <div
           className="absolute inset-0 z-20 flex items-center justify-center rounded-2xl"
           style={{ backgroundColor: darkMode ? 'rgba(15, 23, 42, 0.92)' : 'rgba(248, 250, 252, 0.98)', backdropFilter: 'blur(4px)' }}
@@ -3539,8 +3612,22 @@ function PlatformCard({
             <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full" style={{ backgroundColor: '#fee2e2' }}>
               <Icon name="error" className="text-2xl" style={{ color: '#dc2626' }} />
             </div>
-            <p className="text-sm font-semibold mb-1" style={{ color: colors.text }}>Erreur de setup</p>
-            <p className="text-xs" style={{ color: colors.textMuted }}>Voir les logs backend pour le détail.</p>
+            <p className="mb-1 text-sm font-semibold" style={{ color: colors.text }}>Préparation interrompue</p>
+            <p className="text-xs leading-5" style={{ color: colors.textMuted }}>
+              Les étapes terminées sont conservées. Vous pouvez reprendre sans recréer le professeur.
+            </p>
+            {preparation.can_retry && onRetryPreparation && (
+              <button
+                type="button"
+                onClick={onRetryPreparation}
+                disabled={retryingPreparation}
+                className="mt-4 inline-flex items-center gap-2 rounded-lg px-3.5 py-2 text-xs font-semibold text-white transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40 disabled:cursor-wait disabled:opacity-60"
+                style={{ backgroundColor: '#8B5CF6' }}
+              >
+                <Icon name={retryingPreparation ? 'hourglass_top' : 'refresh'} className="text-[16px]" aria-hidden="true" />
+                {retryingPreparation ? 'Reprise en cours…' : 'Reprendre la préparation'}
+              </button>
+            )}
           </div>
         </div>
       )}

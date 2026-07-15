@@ -232,7 +232,10 @@ def init_database(_recovered_from_corruption: bool = False):
                 upload_locked INTEGER DEFAULT 1,
                 pdf_filename TEXT,
                 pdf_uploaded_at TEXT,
-                updated_at TEXT NOT NULL
+                updated_at TEXT NOT NULL,
+                teacher_name TEXT,
+                teacher_color TEXT,
+                creation_request_id TEXT
             )
             """
         )
@@ -445,6 +448,19 @@ def init_database(_recovered_from_corruption: bool = False):
             cursor.execute("ALTER TABLE platform_config ADD COLUMN public_access_enabled INTEGER DEFAULT 1")
             cursor.execute("UPDATE platform_config SET public_access_enabled = 1 WHERE public_access_enabled IS NULL")
             logger.info("✅ Colonne public_access_enabled ajoutée à platform_config")
+        if "teacher_name" not in pc_columns:
+            cursor.execute("ALTER TABLE platform_config ADD COLUMN teacher_name TEXT")
+            logger.info("✅ Colonne teacher_name ajoutée à platform_config")
+        if "teacher_color" not in pc_columns:
+            cursor.execute("ALTER TABLE platform_config ADD COLUMN teacher_color TEXT")
+            logger.info("✅ Colonne teacher_color ajoutée à platform_config")
+        if "creation_request_id" not in pc_columns:
+            cursor.execute("ALTER TABLE platform_config ADD COLUMN creation_request_id TEXT")
+            logger.info("✅ Colonne creation_request_id ajoutée à platform_config")
+        cursor.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_platform_config_creation_request "
+            "ON platform_config(creation_request_id) WHERE creation_request_id IS NOT NULL"
+        )
         if "slug" in pc_columns:
             cursor.execute("SELECT id, name, slug FROM platform_config")
             for platform_id, platform_name, existing_slug in cursor.fetchall():

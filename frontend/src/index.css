@@ -72,6 +72,29 @@ body {
   background-color: #F8F7F5;
 }
 
+@keyframes teacher-card-enter {
+  from {
+    opacity: 0;
+    transform: translateY(14px) scale(0.97);
+    filter: blur(5px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+    filter: blur(0);
+  }
+}
+
+.teacher-card-enter {
+  animation: teacher-card-enter 520ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .teacher-card-enter {
+    animation: none;
+  }
+}
+
 a {
   color: inherit;
 }

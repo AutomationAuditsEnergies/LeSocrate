@@ -143,6 +143,9 @@ def list_platforms(
                 SELECT
                     pc.id,
                     pc.name,
+                    pc.teacher_name,
+                    pc.teacher_color,
+                    pc.creation_request_id,
                     pc.slug,
                     pc.upload_locked,
                     pc.pdf_filename,

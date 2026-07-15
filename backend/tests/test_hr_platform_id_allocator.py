@@ -33,7 +33,10 @@ def _make_hr_database():
             archive_container TEXT,
             status TEXT DEFAULT 'ready',
             source_formation_id INTEGER,
-            source_module_id INTEGER
+            source_module_id INTEGER,
+            teacher_name TEXT,
+            teacher_color TEXT,
+            creation_request_id TEXT
         );
         INSERT INTO platform_config (id, name, slug) VALUES (7, 'Existante', 'existante');
 

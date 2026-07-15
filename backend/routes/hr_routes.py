@@ -12,6 +12,7 @@ from config import FRANCE_TZ, PIPELINE_DATABASE_BACKEND
 from database.db import get_db_connection
 from database.postgres import postgres_enabled
 from repositories.core_repository import (
+    get_platform_by_creation_request_id,
     get_training_center_by_id,
     upsert_cours_config,
     upsert_platform_config,
@@ -55,6 +56,7 @@ from services.course_schedule_service import (
 )
 from services.export_service import generate_attendance_excel_export
 from services.scheduled_audio_service import process_due_audio_generations
+from services.teacher_preparation_service import build_teacher_preparation_state
 from services.audio_publish_service import archive_public_platform_audios, publish_playlist_audio_to_platform
 from utils.logger import get_logger
 from utils.slug import slugify, unique_slug
@@ -786,30 +788,12 @@ def create_hr_blueprint(socketio):
                         FROM formation_pipeline_jobs j
                         WHERE j.status IN (
                                 'text_ready',
-                                'tts_launched',
                                 'audio_running',
                                 'audio_launched',
                                 'audio_completed',
                                 'completed'
                             )
                            OR j.auto_pilot_step = 'done'
-                           OR COALESCE(j.auto_pilot_post_review_docs_done, 0) = 1
-                           OR (
-                                EXISTS (
-                                    SELECT 1
-                                    FROM cours_folders cf
-                                    JOIN content_generation_jobs cgj ON cgj.folder_id = cf.id
-                                    WHERE cf.formation_job_id = j.id
-                                      AND cgj.status = 'completed'
-                                )
-                            AND NOT EXISTS (
-                                    SELECT 1
-                                    FROM cours_folders cf
-                                    LEFT JOIN content_generation_jobs cgj ON cgj.folder_id = cf.id
-                                    WHERE cf.formation_job_id = j.id
-                                      AND COALESCE(cgj.status, '') != 'completed'
-                                )
-                           )
                       )
                 """)
                 if cursor.rowcount > 0:
@@ -866,6 +850,9 @@ def create_hr_blueprint(socketio):
                     SELECT
                         pc.id,
                         pc.name,
+                        pc.teacher_name,
+                        pc.teacher_color,
+                        pc.creation_request_id,
                         pc.slug,
                         pc.upload_locked,
                         pc.pdf_filename,
@@ -899,6 +886,9 @@ def create_hr_blueprint(socketio):
                 rows = [(
                     row["id"],
                     row.get("name"),
+                    row.get("teacher_name"),
+                    row.get("teacher_color"),
+                    row.get("creation_request_id"),
                     row.get("slug"),
                     row.get("upload_locked"),
                     row.get("pdf_filename"),
@@ -942,6 +932,9 @@ def create_hr_blueprint(socketio):
                 (
                     pid,
                     name,
+                    teacher_name,
+                    teacher_color,
+                    creation_request_id,
                     slug,
                     upload_locked,
                     pdf_filename,
@@ -1026,8 +1019,11 @@ def create_hr_blueprint(socketio):
                 effective_status = p_status or "ready"
                 if effective_status == "pending":
                     pipeline_done = (
-                        p_pipeline_auto_pilot_step == "done"
-                        or p_pipeline_status in ("text_ready", "audio_completed", "audio_launched", "completed")
+                        not p_source_module_id
+                        and (
+                            p_pipeline_auto_pilot_step == "done"
+                            or p_pipeline_status in ("text_ready", "audio_completed", "audio_launched", "completed")
+                        )
                     )
                     pipeline_failed = (
                         bool(p_pipeline_auto_pilot_error)
@@ -1051,6 +1047,9 @@ def create_hr_blueprint(socketio):
                 platforms.append({
                     "id": pid,
                     "name": name,
+                    "teacher_name": teacher_name or "",
+                    "teacher_color": teacher_color or "",
+                    "creation_request_id": creation_request_id or "",
                     "slug": slug,
                     "center_account_id": p_center_account_id,
                     "center_slug": p_center_slug,
@@ -1075,6 +1074,14 @@ def create_hr_blueprint(socketio):
                     "pipeline_auto_pilot_step": p_pipeline_auto_pilot_step or "",
                     "pipeline_auto_pilot_error": p_pipeline_auto_pilot_error or "",
                     "pipeline_auto_pilot_enabled": bool(p_pipeline_auto_pilot_enabled),
+                    "teacher_preparation": build_teacher_preparation_state(
+                        platform_status=effective_status,
+                        pipeline_status=p_pipeline_status,
+                        pipeline_step=p_pipeline_auto_pilot_step,
+                        pipeline_error=p_pipeline_auto_pilot_error,
+                        source_formation_id=p_source_formation_id,
+                        source_module_id=p_source_module_id,
+                    ),
                     "blob_stats_loaded": include_blob_stats,
                 })
 
@@ -1259,9 +1266,59 @@ def create_hr_blueprint(socketio):
         module_id = data.get("module_id")         # NOUVEAU — mode module maître
         formation_id = data.get("formation_id")   # legacy
         new_formation = data.get("new_formation") # mode pipeline
+        teacher_name = str(data.get("teacher_name") or "").strip()[:80] or None
+        teacher_color = str(data.get("teacher_color") or "").strip().lower() or None
+        creation_request_id = str(data.get("creation_request_id") or "").strip() or None
 
         if not name:
             return jsonify({"success": False, "error": "Le nom est requis"}), 400
+        if teacher_color and teacher_color not in {"violet", "blue", "pink", "amber"}:
+            return jsonify({"success": False, "error": "Couleur de professeur invalide"}), 400
+        if creation_request_id and not re.fullmatch(r"[A-Za-z0-9_-]{16,80}", creation_request_id):
+            return jsonify({"success": False, "error": "Identifiant de création invalide"}), 400
+        if new_formation and not teacher_name:
+            return jsonify({"success": False, "error": "Le prénom du professeur IA est requis"}), 400
+
+        # A browser retry or double click must resolve to the same professor.
+        # The key is looked up inside the current centre only, so it cannot be
+        # used to discover another tenant's platform.
+        if (
+            creation_request_id
+            and session.get("admin_account_type") == "training_center"
+            and postgres_enabled()
+        ):
+            existing = get_platform_by_creation_request_id(
+                creation_request_id,
+                session.get("admin_account_id"),
+            )
+            if existing:
+                existing_id = int(existing["id"])
+                center = get_training_center_by_id(session.get("admin_account_id"))
+                center_slug = (center or {}).get("slug") or "le-socrate"
+                existing_status = existing.get("status") or "pending"
+                return jsonify({
+                    "success": True,
+                    "deduplicated": True,
+                    "platform": {
+                        "id": existing_id,
+                        "name": existing.get("name"),
+                        "slug": existing.get("slug"),
+                        "center_slug": center_slug,
+                        "public_path": _class_public_path(center_slug, existing.get("slug")),
+                        "public_url": _class_public_url(
+                            _get_platform_info(existing_id).get("frontend_url"),
+                            center_slug,
+                            existing.get("slug"),
+                        ),
+                        "status": existing_status,
+                        "source_formation_id": existing.get("source_formation_id"),
+                        "source_module_id": existing.get("source_module_id"),
+                        "pipeline_job_id": existing.get("source_formation_id"),
+                        "teacher_name": existing.get("teacher_name") or teacher_name or "",
+                        "teacher_color": existing.get("teacher_color") or teacher_color or "violet",
+                        "creation_request_id": creation_request_id,
+                    },
+                }), 200
         # Vérif qu'au plus un des 3 modes "avec contenu" est fourni
         content_modes = sum(1 for x in (module_id, formation_id, new_formation) if x)
         if content_modes > 1:
@@ -1475,8 +1532,9 @@ def create_hr_blueprint(socketio):
                     """INSERT INTO platform_config
                        (id, name, upload_locked, updated_at, slug, status,
                         source_formation_id, source_module_id, center_account_id,
-                        public_access_enabled)
-                       VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, 1)""",
+                        public_access_enabled, teacher_name, teacher_color,
+                        creation_request_id)
+                       VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)""",
                     (
                         new_id,
                         name,
@@ -1486,14 +1544,24 @@ def create_hr_blueprint(socketio):
                         formation_id,
                         module_id,
                         center_account_id,
+                        teacher_name,
+                        teacher_color,
+                        creation_request_id,
                     ),
                 )
             else:
                 cursor.execute(
                     """INSERT INTO platform_config
-                       (name, upload_locked, updated_at, slug, status, source_formation_id, source_module_id, center_account_id, public_access_enabled)
-                       VALUES (?, 1, ?, ?, ?, ?, ?, ?, 1)""",
-                    (name, now_str, slug, initial_status, formation_id, module_id, center_account_id),
+                       (name, upload_locked, updated_at, slug, status,
+                        source_formation_id, source_module_id, center_account_id,
+                        public_access_enabled, teacher_name, teacher_color,
+                        creation_request_id)
+                       VALUES (?, 1, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)""",
+                    (
+                        name, now_str, slug, initial_status, formation_id,
+                        module_id, center_account_id, teacher_name,
+                        teacher_color, creation_request_id,
+                    ),
                 )
                 new_id = cursor.lastrowid
 
@@ -1578,6 +1646,9 @@ def create_hr_blueprint(socketio):
                         "status": initial_status,
                         "source_formation_id": formation_id,
                         "source_module_id": module_id,
+                        "teacher_name": teacher_name,
+                        "teacher_color": teacher_color,
+                        "creation_request_id": creation_request_id,
                     })
                     upsert_cours_config({
                         "id": new_id,
@@ -1701,6 +1772,9 @@ def create_hr_blueprint(socketio):
                             "status": initial_status,
                             "source_formation_id": linked_job_id,
                             "source_module_id": module_id,
+                            "teacher_name": teacher_name,
+                            "teacher_color": teacher_color,
+                            "creation_request_id": creation_request_id,
                         })
                     except Exception:
                         logger.warning(
@@ -1726,6 +1800,9 @@ def create_hr_blueprint(socketio):
                     "source_formation_id": formation_id,
                     "source_module_id": module_id,
                     "pipeline_job_id": linked_job_id,
+                    "teacher_name": teacher_name or "",
+                    "teacher_color": teacher_color or "violet",
+                    "creation_request_id": creation_request_id or "",
                     "schedule": schedule_config_result,
                     "audio_container": audio_container,
                     "pdf_container": pdf_container,

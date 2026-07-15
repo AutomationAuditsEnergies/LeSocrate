@@ -189,6 +189,54 @@ class HrTenantIsolationRouteTest(unittest.TestCase):
         self.assertEqual(formation_response.status_code, 404)
         job_belongs.assert_called_once_with(777, 10)
 
+    def test_platform_creation_request_is_idempotent_inside_current_center(self):
+        self._login()
+        existing = {
+            "id": 41,
+            "name": "Camille · Employé commercial",
+            "slug": "camille-employe-commercial",
+            "status": "pending",
+            "source_formation_id": 71,
+            "source_module_id": None,
+            "teacher_name": "Camille",
+            "teacher_color": "violet",
+            "creation_request_id": "request_1234567890",
+        }
+        with patch("routes.hr_routes.HR_ENABLED", True), patch(
+            "routes.hr_routes.postgres_enabled", return_value=True,
+        ), patch(
+            "routes.hr_routes.get_platform_by_creation_request_id",
+            return_value=existing,
+        ) as find_existing, patch(
+            "routes.hr_routes.get_training_center_by_id",
+            return_value={"slug": "centre-a"},
+        ), patch(
+            "routes.hr_routes.get_db_connection",
+            side_effect=AssertionError("a duplicate request must not create a second platform"),
+        ):
+            response = self.client.post(
+                "/api/hr/platforms",
+                json={
+                    "name": "Camille · Employé commercial",
+                    "teacher_name": "Camille",
+                    "teacher_color": "violet",
+                    "creation_request_id": "request_1234567890",
+                    "new_formation": {
+                        "tp_name": "Employé commercial",
+                        "rncp_code": "RNCP37099",
+                        "total_hours": 14,
+                    },
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertTrue(payload["success"])
+        self.assertTrue(payload["deduplicated"])
+        self.assertEqual(payload["platform"]["id"], 41)
+        self.assertEqual(payload["platform"]["pipeline_job_id"], 71)
+        find_existing.assert_called_once_with("request_1234567890", 10)
+
     def test_postgres_clone_source_is_resolved_before_sqlite_mirror_transaction(self):
         self._login()
         with patch("routes.hr_routes.HR_ENABLED", True), patch(

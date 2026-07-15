@@ -34,8 +34,18 @@ CREATE TABLE IF NOT EXISTS platform_config (
     status TEXT NOT NULL DEFAULT 'ready',
     source_formation_id BIGINT,
     source_module_id BIGINT,
+    teacher_name TEXT,
+    teacher_color TEXT,
+    creation_request_id TEXT,
     UNIQUE(center_account_id, slug)
 );
+
+ALTER TABLE platform_config
+    ADD COLUMN IF NOT EXISTS teacher_name TEXT;
+ALTER TABLE platform_config
+    ADD COLUMN IF NOT EXISTS teacher_color TEXT;
+ALTER TABLE platform_config
+    ADD COLUMN IF NOT EXISTS creation_request_id TEXT;
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_platform_config_global_slug
     ON platform_config(slug)
@@ -432,6 +442,9 @@ CREATE TABLE IF NOT EXISTS script_slide_decks (
 );
 
 CREATE INDEX IF NOT EXISTS idx_platform_config_center ON platform_config(center_account_id);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_platform_config_creation_request
+    ON platform_config(creation_request_id)
+    WHERE creation_request_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_deletion_requests_platform_status_created
     ON deletion_requests(platform_id, status, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_cours_config_platform ON cours_config(platform_id);
