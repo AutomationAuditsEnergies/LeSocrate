@@ -133,6 +133,23 @@ class HrPostgresReadRoutesTest(unittest.TestCase):
             "routes.hr_routes.list_hr_platforms",
             return_value=repository_rows,
         ) as list_platforms, patch(
+            "routes.hr_routes.schedule_store_is_postgres", return_value=True,
+        ), patch(
+            "routes.hr_routes.list_course_schedule_dashboard_states",
+            return_value={12: {
+                "platform_id": 12,
+                "timezone": "Europe/Paris",
+                "start_time": "09:00",
+                "session_id": 91,
+                "session_index": 1,
+                "scheduled_at": FRANCE_TZ.localize(datetime(2026, 7, 20, 9, 0)),
+                "audio_generation_status": "pending",
+                "audio_generation_started_at": None,
+                "audio_generation_completed_at": None,
+                "audio_generation_attempts": 0,
+                "audio_generation_next_retry_at": None,
+            }},
+        ), patch(
             "routes.hr_routes.get_db_connection",
             side_effect=AssertionError("SQLite/lazy repair must not run in PostgreSQL mode"),
         ):
@@ -146,6 +163,7 @@ class HrPostgresReadRoutesTest(unittest.TestCase):
         self.assertEqual(platform["teacher_name"], "Camille")
         self.assertEqual(platform["teacher_color"], "violet")
         self.assertEqual(platform["teacher_preparation"]["status"], "preparing")
+        self.assertEqual(platform["course_schedule"]["next_session"]["audio_status"], "scheduled")
         self.assertIn("2 demande(s) de suppression", platform["alerts"])
         self.assertFalse(platform["blob_stats_loaded"])
         list_platforms.assert_called_once_with(42, scope_to_center=True)
@@ -165,7 +183,7 @@ class HrPostgresReadRoutesTest(unittest.TestCase):
         ), patch(
             "routes.hr_routes.schedule_store_is_postgres", return_value=True
         ), patch(
-            "routes.hr_routes.get_course_schedule_summary", return_value=summary
+            "routes.hr_routes.get_course_schedule_details", return_value=summary
         ) as get_summary, patch(
             "services.time_service.get_heure_debut_cours", return_value=course_start
         ), patch(
@@ -207,7 +225,7 @@ class HrPostgresReadRoutesTest(unittest.TestCase):
             allow_imminent=False,
         )
 
-    def test_admin_can_force_an_imminent_course_schedule(self):
+    def test_training_center_cannot_force_an_imminent_course_schedule(self):
         updated = {"start_time": "09:00", "weekdays": [0], "total_sessions": 1}
         with patch("routes.hr_routes.HR_ENABLED", True), patch(
             "routes.hr_routes.hr_resource_belongs_to_center", return_value=True
@@ -236,8 +254,30 @@ class HrPostgresReadRoutesTest(unittest.TestCase):
             12,
             start_time="09:00",
             weekdays=[0],
-            allow_imminent=True,
+            allow_imminent=False,
         )
+
+    def test_training_center_can_retry_and_cancel_owned_course_session(self):
+        with patch("routes.hr_routes.HR_ENABLED", True), patch(
+            "routes.hr_routes.hr_resource_belongs_to_center", return_value=True
+        ), patch(
+            "routes.hr_routes.retry_scheduled_audio_generation",
+            return_value=({"success": True, "status": 202}, 202),
+        ) as retry, patch(
+            "routes.hr_routes.cancel_course_session",
+            return_value=True,
+        ) as cancel:
+            retry_response = self.client.post(
+                "/api/hr/platforms/12/sessions/91/audio/retry"
+            )
+            cancel_response = self.client.delete(
+                "/api/hr/platforms/12/sessions/92"
+            )
+
+        self.assertEqual(retry_response.status_code, 202)
+        self.assertEqual(cancel_response.status_code, 200)
+        retry.assert_called_once_with(12, 91)
+        cancel.assert_called_once_with(12, 92)
 
     def test_explicit_reminder_recipients_use_repository_without_sqlite(self):
         recipients = [{"id": 4, "email": "eleve@example.com", "created_at": "2026-07-10 10:00:00"}]

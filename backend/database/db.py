@@ -154,6 +154,8 @@ def init_database(_recovered_from_corruption: bool = False):
                 audio_generation_started_at TEXT,
                 audio_generation_completed_at TEXT,
                 audio_generation_error TEXT,
+                audio_generation_attempts INTEGER NOT NULL DEFAULT 0,
+                audio_generation_next_retry_at TEXT,
                 audio_job_id INTEGER,
                 audio_folder_id INTEGER,
                 created_at TEXT NOT NULL,
@@ -179,6 +181,8 @@ def init_database(_recovered_from_corruption: bool = False):
             "audio_generation_started_at": "TEXT",
             "audio_generation_completed_at": "TEXT",
             "audio_generation_error": "TEXT",
+            "audio_generation_attempts": "INTEGER NOT NULL DEFAULT 0",
+            "audio_generation_next_retry_at": "TEXT",
             "audio_job_id": "INTEGER",
             "audio_folder_id": "INTEGER",
         }
@@ -186,6 +190,10 @@ def init_database(_recovered_from_corruption: bool = False):
             if col not in course_session_columns:
                 cursor.execute(f"ALTER TABLE course_sessions ADD COLUMN {col} {col_type}")
                 logger.info(f"✅ Colonne {col} ajoutée à course_sessions")
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_course_sessions_audio_due "
+            "ON course_sessions(audio_generation_status, audio_generation_next_retry_at, scheduled_at)"
+        )
         logger.info("✅ Tables course_schedule_config/course_sessions créées/vérifiées")
 
         cursor.execute(

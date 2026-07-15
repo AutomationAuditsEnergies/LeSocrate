@@ -10,6 +10,7 @@ from email.mime.text import MIMEText
 from email.utils import make_msgid
 
 import requests as http_requests
+from pytz.exceptions import AmbiguousTimeError, NonExistentTimeError
 
 from config import FRANCE_TZ
 from database.db import get_db_connection
@@ -70,6 +71,8 @@ def ensure_course_schedule_tables(cursor):
             audio_generation_started_at TEXT,
             audio_generation_completed_at TEXT,
             audio_generation_error TEXT,
+            audio_generation_attempts INTEGER NOT NULL DEFAULT 0,
+            audio_generation_next_retry_at TEXT,
             audio_job_id INTEGER,
             audio_folder_id INTEGER,
             created_at TEXT NOT NULL,
@@ -95,11 +98,17 @@ def ensure_course_schedule_tables(cursor):
         "audio_generation_started_at": "TEXT",
         "audio_generation_completed_at": "TEXT",
         "audio_generation_error": "TEXT",
+        "audio_generation_attempts": "INTEGER NOT NULL DEFAULT 0",
+        "audio_generation_next_retry_at": "TEXT",
         "audio_job_id": "INTEGER",
         "audio_folder_id": "INTEGER",
     }.items():
         if col not in columns:
             cursor.execute(f"ALTER TABLE course_sessions ADD COLUMN {col} {col_type}")
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_course_sessions_audio_due "
+        "ON course_sessions(audio_generation_status, audio_generation_next_retry_at, scheduled_at)"
+    )
 
 
 def _generate_session_password():
@@ -179,6 +188,12 @@ def _audio_schedule_window_hours():
     horizon = float(os.environ.get("SCHEDULED_AUDIO_HORIZON_HOURS", "24"))
     late_grace = float(os.environ.get("SCHEDULED_AUDIO_LATE_GRACE_HOURS", "2"))
     return horizon, late_grace
+
+
+def schedule_change_cutoff_hours():
+    """Business cutoff before which an occurrence becomes immutable."""
+    value = float(os.environ.get("COURSE_SCHEDULE_CHANGE_CUTOFF_HOURS", "72"))
+    return max(24.0, value)
 
 
 def _format_session_for_error(scheduled_at):
@@ -278,13 +293,20 @@ def _assert_requested_sessions_are_not_due_soon(sessions):
         )
 
 
-def _generate_session_datetimes(total_training_days, weekdays, start_time, start_date=None):
+def _generate_session_datetimes(
+    total_training_days,
+    weekdays,
+    start_time,
+    start_date=None,
+    not_before=None,
+):
     total = int(total_training_days)
     if total <= 0:
         raise ValueError("total_training_days doit être positif")
 
     course_time = _parse_start_time(start_time)
     now = datetime.now(FRANCE_TZ)
+    minimum = _parse_local_datetime(not_before) if not_before is not None else now
     if start_date:
         cursor_date = datetime.strptime(str(start_date), "%Y-%m-%d").date()
     else:
@@ -294,8 +316,22 @@ def _generate_session_datetimes(total_training_days, weekdays, start_time, start
     max_days = total * 14 + 370
     for _ in range(max_days):
         if cursor_date.weekday() in weekdays:
-            scheduled = FRANCE_TZ.localize(datetime.combine(cursor_date, course_time))
-            if scheduled > now:
+            try:
+                scheduled = FRANCE_TZ.localize(
+                    datetime.combine(cursor_date, course_time),
+                    is_dst=None,
+                )
+            except NonExistentTimeError as exc:
+                raise ValueError(
+                    "Cette heure n'existe pas le jour du passage à l'heure d'été. "
+                    "Choisissez une autre heure."
+                ) from exc
+            except AmbiguousTimeError as exc:
+                raise ValueError(
+                    "Cette heure est ambiguë le jour du passage à l'heure d'hiver. "
+                    "Choisissez une autre heure."
+                ) from exc
+            if scheduled > minimum:
                 sessions.append(scheduled)
                 if len(sessions) >= total:
                     break
@@ -313,106 +349,56 @@ def save_course_schedule(cursor, platform_id, schedule):
     weekdays = _normalize_weekdays(schedule.get("weekdays"), weekly_course_count)
     start_time = str(schedule.get("start_time") or "09:00").strip()
     start_date = schedule.get("start_date") or None
+    replace_after = schedule.get("_replace_after")
+    not_before = schedule.get("_not_before") or replace_after
+    fill_remaining_to_total = bool(schedule.get("_fill_remaining_to_total"))
 
     sessions = _generate_session_datetimes(
         total_training_days=total_training_days,
         weekdays=weekdays,
         start_time=start_time,
         start_date=start_date,
+        not_before=not_before,
     )
     now_dt = datetime.now(FRANCE_TZ)
-    now = now_dt.strftime("%Y-%m-%d %H:%M:%S")
     weekdays_json = json.dumps(weekdays)
-
-    if schedule_repo.schedule_store_is_postgres():
-        horizon, late_grace = _audio_schedule_window_hours()
-        session_rows = [
-            {
-                "session_index": index,
-                "scheduled_at": scheduled,
-                "session_password": _generate_session_password(),
-            }
-            for index, scheduled in enumerate(sessions, start=1)
-        ]
-        schedule_repo.replace_course_schedule(
-            platform_id=int(platform_id),
-            total_training_days=total_training_days,
-            weekly_course_count=weekly_course_count,
-            weekdays_json=weekdays_json,
-            start_time=start_time,
-            timezone_name="Europe/Paris",
-            sessions=session_rows,
-            now=now_dt,
-            guard_lower_bound=now_dt - timedelta(hours=late_grace),
-            guard_upper_bound=now_dt + timedelta(hours=horizon),
-        )
-        return {
-            "total_sessions": len(sessions),
-            "first_session_at": sessions[0].strftime("%Y-%m-%d %H:%M:%S") if sessions else None,
-            "last_session_at": sessions[-1].strftime("%Y-%m-%d %H:%M:%S") if sessions else None,
+    session_rows = [
+        {
+            "session_index": index,
+            "scheduled_at": scheduled,
+            "session_password": _generate_session_password(),
         }
-
-    ensure_course_schedule_tables(cursor)
-
-    cursor.execute(
-        """
-        INSERT INTO course_schedule_config (
-            platform_id, total_training_days, weekly_course_count, weekdays_json,
-            start_time, timezone, created_at, updated_at
-        )
-        VALUES (?, ?, ?, ?, ?, 'Europe/Paris', ?, ?)
-        ON CONFLICT(platform_id) DO UPDATE SET
-            total_training_days = excluded.total_training_days,
-            weekly_course_count = excluded.weekly_course_count,
-            weekdays_json = excluded.weekdays_json,
-            start_time = excluded.start_time,
-            timezone = excluded.timezone,
-            updated_at = excluded.updated_at
-        """,
-        (platform_id, total_training_days, weekly_course_count, weekdays_json, start_time, now, now),
+        for index, scheduled in enumerate(sessions, start=1)
+    ]
+    sqlite_connection = None
+    if not schedule_repo.schedule_store_is_postgres():
+        ensure_course_schedule_tables(cursor)
+        sqlite_connection = getattr(cursor, "connection", None)
+        if sqlite_connection is None:
+            raise RuntimeError("Connexion SQLite du planning indisponible")
+    storage_result = schedule_repo.replace_course_schedule(
+        platform_id=int(platform_id),
+        total_training_days=total_training_days,
+        weekly_course_count=weekly_course_count,
+        weekdays_json=weekdays_json,
+        start_time=start_time,
+        timezone_name="Europe/Paris",
+        sessions=session_rows,
+        now=now_dt,
+        replace_after=replace_after,
+        fill_remaining_to_total=fill_remaining_to_total,
+        sqlite_connection=sqlite_connection,
     )
-    # A planning update must not erase attendance/reminder/audio history. Only
-    # replace sessions that are still mutable and scheduled in the future.
-    cursor.execute(
-        """
-        DELETE FROM course_sessions
-        WHERE platform_id = ?
-          AND status IN ('planned', 'active')
-          AND scheduled_at >= ?
-        """,
-        (platform_id, now),
+    horizon, _ = _audio_schedule_window_hours()
+    immediate_audio = bool(
+        sessions and sessions[0] <= now_dt + timedelta(hours=horizon)
     )
-    cursor.execute(
-        "SELECT COALESCE(MAX(session_index), 0) FROM course_sessions WHERE platform_id = ?",
-        (platform_id,),
-    )
-    retained_max_index = int(cursor.fetchone()[0] or 0)
-    for offset, scheduled in enumerate(sessions, start=1):
-        index = retained_max_index + offset
-        session_password = _generate_session_password()
-        cursor.execute(
-            """
-            INSERT INTO course_sessions (
-                platform_id, session_index, scheduled_at, status,
-                session_password, session_password_generated_at,
-                created_at, updated_at
-            )
-            VALUES (?, ?, ?, 'planned', ?, ?, ?, ?)
-            """,
-            (
-                platform_id,
-                index,
-                scheduled.strftime("%Y-%m-%d %H:%M:%S"),
-                session_password,
-                now,
-                now,
-                now,
-            ),
-        )
     return {
-        "total_sessions": len(sessions),
+        "total_sessions": total_training_days,
         "first_session_at": sessions[0].strftime("%Y-%m-%d %H:%M:%S") if sessions else None,
         "last_session_at": sessions[-1].strftime("%Y-%m-%d %H:%M:%S") if sessions else None,
+        "audio_generation_immediate": immediate_audio,
+        **(storage_result or {}),
     }
 
 
@@ -451,14 +437,17 @@ def create_missing_course_schedule(
         start_time=requested_start_time,
         start_date=start_date,
     )
-    if allow_imminent:
+    horizon, _ = _audio_schedule_window_hours()
+    immediate_audio = bool(
+        requested_sessions
+        and requested_sessions[0] <= datetime.now(FRANCE_TZ) + timedelta(hours=horizon)
+    )
+    if allow_imminent or immediate_audio:
         logger.warning(
-            "COURSE_SCHEDULE_IMMINENT_OVERRIDE platform_id=%s operation=create first_session=%s",
+            "COURSE_SCHEDULE_IMMINENT_CREATE platform_id=%s operation=create first_session=%s",
             platform_id,
             requested_sessions[0].isoformat() if requested_sessions else None,
         )
-    else:
-        _assert_requested_sessions_are_not_due_soon(requested_sessions)
 
     result = save_course_schedule(
         cursor,
@@ -480,6 +469,7 @@ def create_missing_course_schedule(
         "weekdays": requested_weekdays,
         "start_time": requested_start_time,
         "timezone": "Europe/Paris",
+        "audio_generation_immediate": immediate_audio,
     }
 
 
@@ -553,6 +543,84 @@ def get_course_schedule_summary(cursor, platform_id):
     }
 
 
+def _schedule_datetime_iso(value):
+    if not value:
+        return None
+    return _parse_local_datetime(value).isoformat()
+
+
+def build_course_session_state(row, *, now=None):
+    """Map durable technical fields to the centre-facing occurrence state."""
+    now = now or datetime.now(FRANCE_TZ)
+    scheduled_at = _parse_local_datetime(row.get("scheduled_at"))
+    raw_audio = str(row.get("audio_generation_status") or "pending").lower()
+    raw_status = str(row.get("status") or "planned").lower()
+    if raw_status == "cancelled":
+        audio_status = "cancelled"
+    elif row.get("audio_generation_completed_at") or raw_audio == "completed":
+        audio_status = "ready"
+    elif raw_audio in {"running", "processing", "queued"}:
+        audio_status = "preparing"
+    elif raw_audio == "error":
+        audio_status = "error"
+    elif raw_audio == "waiting_content":
+        audio_status = "waiting_content"
+    else:
+        audio_status = "scheduled"
+
+    horizon, _ = _audio_schedule_window_hours()
+    cutoff_hours = schedule_change_cutoff_hours()
+    change_cutoff_at = scheduled_at - timedelta(hours=cutoff_hours)
+    trigger_at = scheduled_at - timedelta(hours=horizon)
+    audio_started = bool(row.get("audio_generation_started_at"))
+    audio_completed = bool(row.get("audio_generation_completed_at"))
+    return {
+        "id": int(row["id"]),
+        "session_index": int(row.get("session_index") or 0),
+        "scheduled_at": scheduled_at.isoformat(),
+        "status": raw_status,
+        "audio_status": audio_status,
+        "audio_trigger_at": trigger_at.isoformat(),
+        "change_cutoff_at": change_cutoff_at.isoformat(),
+        "is_locked": now >= change_cutoff_at or audio_started,
+        "can_retry_audio": audio_status == "error" and raw_status in {"planned", "active"},
+        "can_cancel": raw_status == "planned" and not audio_started and not audio_completed,
+        "audio_attempts": int(row.get("audio_generation_attempts") or 0),
+        "audio_next_retry_at": _schedule_datetime_iso(row.get("audio_generation_next_retry_at")),
+    }
+
+
+def get_course_schedule_details(cursor, platform_id):
+    summary = get_course_schedule_summary(cursor, platform_id)
+    if not summary:
+        return None
+    sessions = schedule_repo.list_course_sessions(int(platform_id))
+    public_sessions = [build_course_session_state(row) for row in sessions]
+    next_session = next(
+        (item for item in public_sessions if item["status"] in {"planned", "active"}),
+        None,
+    )
+    return {
+        **summary,
+        "next_session_at": next_session["scheduled_at"] if next_session else None,
+        "next_audio_status": next_session["audio_status"] if next_session else None,
+        "sessions": public_sessions,
+        "change_cutoff_hours": int(schedule_change_cutoff_hours()),
+        "audio_horizon_hours": int(_audio_schedule_window_hours()[0]),
+    }
+
+
+def cancel_course_session(platform_id, session_id):
+    changed = schedule_repo.cancel_course_session(
+        int(platform_id),
+        int(session_id),
+        cancelled_at=datetime.now(FRANCE_TZ),
+    )
+    if not changed:
+        raise ValueError("Cette séance ne peut plus être annulée car son audio a déjà démarré")
+    return True
+
+
 def update_course_schedule_start_time(cursor, platform_id, start_time):
     return update_course_schedule(cursor, platform_id, start_time=start_time)
 
@@ -587,12 +655,15 @@ def update_course_schedule(
             "weekdays": requested_weekdays,
         }
 
-    if not allow_imminent:
-        _assert_schedule_can_be_changed(cursor, platform_id)
+    now = datetime.now(FRANCE_TZ)
+    cutoff_hours = 0.0 if allow_imminent else schedule_change_cutoff_hours()
+    replace_after = now + timedelta(hours=cutoff_hours)
     requested_sessions = _generate_session_datetimes(
         total_training_days=summary["total_training_days"],
         weekdays=requested_weekdays,
         start_time=requested_start_time,
+        start_date=replace_after.strftime("%Y-%m-%d"),
+        not_before=replace_after,
     )
     if allow_imminent:
         logger.warning(
@@ -600,9 +671,6 @@ def update_course_schedule(
             platform_id,
             requested_sessions[0].isoformat() if requested_sessions else None,
         )
-    else:
-        _assert_requested_sessions_are_not_due_soon(requested_sessions)
-
     result = save_course_schedule(
         cursor,
         platform_id,
@@ -611,11 +679,24 @@ def update_course_schedule(
             "weekly_course_count": summary["weekly_course_count"],
             "weekdays": requested_weekdays,
             "start_time": requested_start_time,
+            "start_date": replace_after.strftime("%Y-%m-%d"),
+            "_replace_after": replace_after,
+            "_not_before": replace_after,
+            "_fill_remaining_to_total": True,
         },
     )
-    if result.get("first_session_at"):
-        _upsert_course_time(cursor, platform_id, result["first_session_at"])
-    return {**summary, **result, "start_time": requested_start_time, "weekdays": requested_weekdays}
+    refreshed = get_course_schedule_summary(cursor, platform_id) or {}
+    if refreshed.get("next_session_at"):
+        _upsert_course_time(cursor, platform_id, refreshed["next_session_at"])
+    return {
+        **summary,
+        **refreshed,
+        **result,
+        "start_time": requested_start_time,
+        "weekdays": requested_weekdays,
+        "change_cutoff_hours": int(schedule_change_cutoff_hours()),
+        "effective_from": replace_after.isoformat(),
+    }
 
 
 def create_course_schedule(platform_id, schedule):

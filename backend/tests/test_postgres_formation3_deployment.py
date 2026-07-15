@@ -26,6 +26,16 @@ class Formation3PurePostgresDeploymentTest(unittest.TestCase):
         self.assertIn("PURE_POSTGRES_CONFIGURATION_FAILED", self.workflow)
         self.assertIn("PURE_POSTGRES_CONFIGURATION_OK", self.workflow)
 
+    def test_formation3_runs_the_durable_course_scheduler(self):
+        for setting in (
+            "COURSE_SCHEDULER_ENABLED=1",
+            "COURSE_SCHEDULER_INTERVAL_SECONDS=300",
+            "COURSE_SCHEDULE_CHANGE_CUTOFF_HOURS=72",
+            "SCHEDULED_AUDIO_HORIZON_HOURS=24",
+            "SCHEDULED_AUDIO_MAX_AUTO_ATTEMPTS=4",
+        ):
+            self.assertIn(setting, self.workflow)
+
 
 if __name__ == "__main__":
     unittest.main()

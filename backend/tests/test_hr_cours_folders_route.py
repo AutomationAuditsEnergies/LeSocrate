@@ -63,6 +63,9 @@ class HrCoursFoldersRouteTest(unittest.TestCase):
             CREATE TABLE platform_config (
                 id INTEGER PRIMARY KEY,
                 name TEXT,
+                teacher_name TEXT,
+                teacher_color TEXT,
+                creation_request_id INTEGER,
                 slug TEXT,
                 upload_locked INTEGER,
                 pdf_filename TEXT,

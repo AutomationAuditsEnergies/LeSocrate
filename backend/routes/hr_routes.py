@@ -20,6 +20,7 @@ from repositories.core_repository import (
 from repositories.course_schedule_repository import (
     add_explicit_course_reminder_recipients,
     delete_explicit_course_reminder_recipient,
+    list_course_schedule_dashboard_states,
     list_explicit_course_reminder_recipients,
     schedule_store_is_postgres,
 )
@@ -46,16 +47,22 @@ from repositories.pipeline_repository import (
     platform_ids_use_postgres_allocator,
 )
 from services.course_schedule_service import (
+    build_course_session_state,
+    cancel_course_session,
     create_missing_course_schedule,
     ensure_course_schedule_tables,
     get_course_schedule_summary,
+    get_course_schedule_details,
     process_due_reminders,
     run_scheduler_tick,
     save_course_schedule,
     update_course_schedule,
 )
 from services.export_service import generate_attendance_excel_export
-from services.scheduled_audio_service import process_due_audio_generations
+from services.scheduled_audio_service import (
+    process_due_audio_generations,
+    retry_scheduled_audio_generation,
+)
 from services.teacher_preparation_service import build_teacher_preparation_state
 from services.audio_publish_service import archive_public_platform_audios, publish_playlist_audio_to_platform
 from utils.logger import get_logger
@@ -927,6 +934,12 @@ def create_hr_blueprint(socketio):
             # PDF réel depuis Azure (source de vérité)
             azure_pdf_filename, azure_pdf_url = _get_azure_pdf_info() if include_blob_stats else (None, None)
 
+            platform_ids = [int(row["id"] if isinstance(row, dict) else row[0]) for row in rows]
+            schedule_dashboard_states = (
+                list_course_schedule_dashboard_states(platform_ids)
+                if schedule_store_is_postgres()
+                else {}
+            )
             platforms = []
             for row in rows:
                 (
@@ -953,6 +966,27 @@ def create_hr_blueprint(socketio):
                     p_pipeline_auto_pilot_enabled,
                 ) = row
                 pinfo = _get_platform_info(pid)
+                schedule_row = schedule_dashboard_states.get(int(pid))
+                course_schedule = None
+                if schedule_row:
+                    next_session = None
+                    if schedule_row.get("session_id"):
+                        next_session = build_course_session_state({
+                            "id": schedule_row["session_id"],
+                            "session_index": schedule_row.get("session_index"),
+                            "scheduled_at": schedule_row.get("scheduled_at"),
+                            "status": "planned",
+                            "audio_generation_status": schedule_row.get("audio_generation_status"),
+                            "audio_generation_started_at": schedule_row.get("audio_generation_started_at"),
+                            "audio_generation_completed_at": schedule_row.get("audio_generation_completed_at"),
+                            "audio_generation_attempts": schedule_row.get("audio_generation_attempts"),
+                            "audio_generation_next_retry_at": schedule_row.get("audio_generation_next_retry_at"),
+                        })
+                    course_schedule = {
+                        "timezone": schedule_row.get("timezone") or "Europe/Paris",
+                        "start_time": schedule_row.get("start_time") or "09:00",
+                        "next_session": next_session,
+                    }
                 # En multi-tenant, toute plateforme en BDD est active
                 active = pid == 1 or bool(pinfo.get("backend_url")) or pid >= 4
 
@@ -1082,6 +1116,7 @@ def create_hr_blueprint(socketio):
                         source_formation_id=p_source_formation_id,
                         source_module_id=p_source_module_id,
                     ),
+                    "course_schedule": course_schedule,
                     "blob_stats_loaded": include_blob_stats,
                 })
 
@@ -2678,7 +2713,7 @@ def create_hr_blueprint(socketio):
             try:
                 conn = None if schedule_store_is_postgres() else get_db_connection()
                 cursor = conn.cursor() if conn is not None else None
-                schedule_summary = get_course_schedule_summary(cursor, platform_id)
+                schedule_summary = get_course_schedule_details(cursor, platform_id)
                 if conn is not None:
                     conn.close()
                 from services.time_service import get_heure_debut_cours
@@ -3137,7 +3172,7 @@ def create_hr_blueprint(socketio):
         date_str = (data or {}).get("date_cours", "").strip()
         heure_str = (data or {}).get("heure_cours", "").strip()
         weekdays = data.get("weekdays") if "weekdays" in data else None
-        allow_imminent = bool(data.get("force_schedule"))
+        allow_imminent = bool(data.get("force_schedule")) and _admin_account_type() in _HR_SUPERADMIN_ACCOUNT_TYPES
         if not heure_str:
             return jsonify({"success": False, "error": "heure_cours requis"}), 400
 
@@ -3160,10 +3195,19 @@ def create_hr_blueprint(socketio):
                         conn.commit()
                         conn.close()
                         conn = None
+                    schedule_details = schedule_update
+                    locked_count = int(schedule_update.get("locked_future_sessions") or 0)
+                    message = "Planning des journées mis à jour"
+                    if locked_count:
+                        suffix = "s" if locked_count > 1 else ""
+                        message = (
+                            f"Planning mis à jour. {locked_count} séance{suffix} dans les 72 h "
+                            "reste inchangée" + ("s" if locked_count > 1 else "") + "."
+                        )
                     return jsonify({
                         "success": True,
-                        "message": "Planning des journées mis à jour",
-                        "schedule": schedule_update,
+                        "message": message,
+                        "schedule": schedule_details or schedule_update,
                     }), 200
                 if postgres_schedule:
                     folder_count = len(
@@ -3189,10 +3233,11 @@ def create_hr_blueprint(socketio):
                         conn.commit()
                         conn.close()
                         conn = None
+                    schedule_details = schedule_update
                     return jsonify({
                         "success": True,
                         "message": "Planning des journées créé",
-                        "schedule": schedule_update,
+                        "schedule": schedule_details or schedule_update,
                     }), 200
                 if conn is not None:
                     conn.close()
@@ -3230,6 +3275,53 @@ def create_hr_blueprint(socketio):
             if result is None:
                 return jsonify({"success": False, "error": "Plateforme non configurée"}), 400
             return jsonify(result), 200
+
+    @hr_bp.route(
+        "/api/hr/platforms/<int:platform_id>/sessions/<int:session_id>/audio/retry",
+        methods=["POST"],
+    )
+    def retry_platform_session_audio(platform_id, session_id):
+        denied = _require_admin()
+        if denied:
+            return denied
+        try:
+            payload, status = retry_scheduled_audio_generation(platform_id, session_id)
+            if status >= 500:
+                logger.error(
+                    "SCHEDULED_AUDIO_MANUAL_RETRY_FAILED platform_id=%s session_id=%s",
+                    platform_id,
+                    session_id,
+                )
+                return jsonify({"success": False, "error": "La reprise audio n'a pas pu démarrer"}), status
+            return jsonify(payload), status
+        except Exception:
+            logger.exception(
+                "SCHEDULED_AUDIO_MANUAL_RETRY_CRASHED platform_id=%s session_id=%s",
+                platform_id,
+                session_id,
+            )
+            return jsonify({"success": False, "error": "La reprise audio n'a pas pu démarrer"}), 500
+
+    @hr_bp.route(
+        "/api/hr/platforms/<int:platform_id>/sessions/<int:session_id>",
+        methods=["DELETE"],
+    )
+    def cancel_platform_session(platform_id, session_id):
+        denied = _require_admin()
+        if denied:
+            return denied
+        try:
+            cancel_course_session(platform_id, session_id)
+            return jsonify({"success": True, "message": "Séance annulée"}), 200
+        except ValueError as exc:
+            return jsonify({"success": False, "error": str(exc)}), 409
+        except Exception:
+            logger.exception(
+                "COURSE_SESSION_CANCEL_FAILED platform_id=%s session_id=%s",
+                platform_id,
+                session_id,
+            )
+            return jsonify({"success": False, "error": "La séance n'a pas pu être annulée"}), 500
 
     # ─── POST /api/internal/auto-schedule ────────────────────────────────
     @hr_bp.route("/api/internal/auto-schedule", methods=["POST"])

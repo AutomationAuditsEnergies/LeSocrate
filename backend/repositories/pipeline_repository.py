@@ -2458,18 +2458,24 @@ def list_due_audio_generation_sessions(
     platform_ids: list[int] | None = None,
     stale_started_before=None,
     stale_updated_before=None,
+    retry_due_before=None,
+    max_auto_attempts: int = 4,
 ) -> list[dict[str, Any]]:
     postgres_schedule = schedule_store_is_postgres()
     ph = "%s" if postgres_schedule else "?"
     params: list[Any] = [lower_bound, upper_bound]
     stale_heartbeat_before = stale_updated_before or stale_started_before
-    retry_conditions = """
+    retry_due_before = retry_due_before or upper_bound
+    retry_conditions = f"""
               cs.audio_generation_started_at IS NULL
               OR (
                   COALESCE(cs.audio_generation_status, 'pending') = 'error'
                   AND cs.audio_generation_completed_at IS NULL
+                  AND (cs.audio_generation_next_retry_at IS NULL OR cs.audio_generation_next_retry_at <= {ph})
+                  AND COALESCE(cs.audio_generation_attempts, 0) < {ph}
               )
     """
+    params.extend([retry_due_before, int(max_auto_attempts)])
     if stale_heartbeat_before:
         retry_conditions += f"""
               OR (
@@ -2499,6 +2505,8 @@ def list_due_audio_generation_sessions(
             cs.scheduled_at,
             cs.audio_generation_status,
             cs.audio_generation_started_at,
+            cs.audio_generation_attempts,
+            cs.audio_generation_next_retry_at,
             cs.updated_at,
             pc.name,
             COALESCE(

@@ -107,6 +107,42 @@ def _seed_schedule(cursor, platform_id=12):
 
 
 class CourseScheduleServiceTest(unittest.TestCase):
+    def test_public_session_state_exposes_cutoffs_without_internal_error(self):
+        now = FRANCE_TZ.localize(datetime(2026, 7, 15, 9, 0))
+        scheduled = now + timedelta(days=4)
+        state = css.build_course_session_state({
+            "id": 9,
+            "session_index": 1,
+            "scheduled_at": scheduled,
+            "status": "planned",
+            "audio_generation_status": "error",
+            "audio_generation_started_at": now,
+            "audio_generation_completed_at": None,
+            "audio_generation_attempts": 2,
+            "audio_generation_next_retry_at": now + timedelta(minutes=10),
+            "audio_generation_error": "secret provider failure",
+        }, now=now)
+
+        self.assertEqual(state["audio_status"], "error")
+        self.assertTrue(state["can_retry_audio"])
+        self.assertTrue(state["is_locked"])
+        self.assertEqual(state["audio_attempts"], 2)
+        self.assertNotIn("secret", json.dumps(state))
+
+    def test_dst_nonexistent_and_ambiguous_times_are_rejected(self):
+        for start_date, error in (
+            ("2027-03-28", "heure d'été"),
+            ("2026-10-25", "heure d'hiver"),
+        ):
+            with self.subTest(start_date=start_date):
+                with self.assertRaisesRegex(ValueError, error):
+                    css._generate_session_datetimes(
+                        1,
+                        [6],
+                        "02:30",
+                        start_date=start_date,
+                    )
+
     def test_create_missing_course_schedule_from_existing_pipeline_days(self):
         conn = _connect()
         cursor = conn.cursor()
@@ -176,7 +212,7 @@ class CourseScheduleServiceTest(unittest.TestCase):
         self.assertTrue(results[0]["session_password"])
         self.assertEqual(results[0]["recipients"][0]["email"], "eleve@example.com")
 
-    def test_update_is_blocked_inside_audio_preparation_window(self):
+    def test_update_preserves_occurrence_inside_72_hour_cutoff(self):
         conn = _connect()
         cursor = conn.cursor()
         weekday = _seed_schedule(cursor)
@@ -186,12 +222,14 @@ class CourseScheduleServiceTest(unittest.TestCase):
             (locked_at, 12),
         )
 
-        with patch.dict("os.environ", {"SCHEDULED_AUDIO_HORIZON_HOURS": "24"}):
-            with self.assertRaisesRegex(ValueError, "Planning verrouillé"):
-                update_course_schedule(cursor, 12, weekdays=[(weekday + 1) % 7])
+        with patch.dict("os.environ", {"COURSE_SCHEDULE_CHANGE_CUTOFF_HOURS": "72"}):
+            result = update_course_schedule(cursor, 12, weekdays=[(weekday + 1) % 7])
 
         cursor.execute("SELECT scheduled_at FROM course_sessions WHERE platform_id = ?", (12,))
         self.assertEqual(cursor.fetchone()[0], locked_at)
+        self.assertEqual(result["locked_future_sessions"], 1)
+        cursor.execute("SELECT weekdays_json FROM course_schedule_config WHERE platform_id = ?", (12,))
+        self.assertEqual(json.loads(cursor.fetchone()[0]), [(weekday + 1) % 7])
         conn.close()
 
     def test_update_can_change_weekdays_when_next_session_is_not_due_for_audio(self):
@@ -214,7 +252,7 @@ class CourseScheduleServiceTest(unittest.TestCase):
         self.assertEqual(cursor.fetchone()[0], 1)
         conn.close()
 
-    def test_update_rejects_new_next_session_inside_audio_preparation_window(self):
+    def test_update_never_creates_replacement_inside_72_hour_cutoff(self):
         conn = _connect()
         cursor = conn.cursor()
         _seed_schedule(cursor)
@@ -225,14 +263,16 @@ class CourseScheduleServiceTest(unittest.TestCase):
         )
 
         due_soon = datetime.now(FRANCE_TZ) + timedelta(hours=12)
-        with patch.dict("os.environ", {"SCHEDULED_AUDIO_HORIZON_HOURS": "24"}):
-            with self.assertRaisesRegex(ValueError, "Planning refusé"):
-                update_course_schedule(
-                    cursor,
-                    12,
-                    start_time=due_soon.strftime("%H:%M"),
-                    weekdays=[due_soon.weekday()],
-                )
+        with patch.dict("os.environ", {"COURSE_SCHEDULE_CHANGE_CUTOFF_HOURS": "72"}):
+            update_course_schedule(
+                cursor,
+                12,
+                start_time=due_soon.strftime("%H:%M"),
+                weekdays=[due_soon.weekday()],
+            )
+        cursor.execute("SELECT scheduled_at FROM course_sessions WHERE platform_id = ?", (12,))
+        replacement = FRANCE_TZ.localize(datetime.strptime(cursor.fetchone()[0], "%Y-%m-%d %H:%M:%S"))
+        self.assertGreater(replacement, datetime.now(FRANCE_TZ) + timedelta(hours=71))
         conn.close()
 
     def test_admin_override_accepts_next_session_inside_audio_preparation_window(self):

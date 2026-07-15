@@ -72,6 +72,20 @@ class HrTenantIsolationRouteTest(unittest.TestCase):
                 "platform",
                 2,
             ),
+            (
+                "post",
+                "/api/hr/platforms/2/sessions/91/audio/retry",
+                {},
+                "platform",
+                2,
+            ),
+            (
+                "delete",
+                "/api/hr/platforms/2/sessions/91",
+                {},
+                "platform",
+                2,
+            ),
         )
         for method, path, kwargs, resource_type, resource_id in cases:
             with self.subTest(path=path):

@@ -79,10 +79,12 @@ def replace_course_schedule(
     timezone_name: str,
     sessions: list[dict[str, Any]],
     now,
+    replace_after=None,
+    fill_remaining_to_total=False,
     guard_lower_bound=None,
     guard_upper_bound=None,
     sqlite_connection=None,
-) -> None:
+) -> dict[str, Any]:
     """Replace future planned sessions without deleting course history.
 
     Completed, failed, cancelled and already-started/past rows are immutable
@@ -92,6 +94,7 @@ def replace_course_schedule(
     if schedule_store_is_postgres():
         with get_postgres_connection() as conn:
             with conn.cursor() as cur:
+                replacement_boundary = replace_after or now
                 cur.execute(
                     "SELECT pg_advisory_xact_lock(hashtext(%s))",
                     (f"course-schedule:{int(platform_id)}",),
@@ -152,9 +155,27 @@ def replace_course_schedule(
                     WHERE platform_id = %s
                       AND status IN ('planned', 'active')
                       AND scheduled_at >= %s
+                      AND audio_generation_started_at IS NULL
+                      AND audio_generation_completed_at IS NULL
                     """,
-                    (platform_id, now),
+                    (platform_id, replacement_boundary),
                 )
+                deleted_count = int(cur.rowcount or 0)
+                cur.execute(
+                    """
+                    SELECT COUNT(*) AS retained_count,
+                           COUNT(*) FILTER (
+                               WHERE status IN ('planned', 'active')
+                                 AND scheduled_at >= %s
+                           ) AS locked_future_count
+                    FROM course_sessions
+                    WHERE platform_id = %s
+                    """,
+                    (now, platform_id),
+                )
+                counts = cur.fetchone() or {}
+                retained_count = int(counts.get("retained_count") or 0)
+                locked_future_count = int(counts.get("locked_future_count") or 0)
                 cur.execute(
                     """
                     SELECT COALESCE(MAX(session_index), 0) AS max_session_index
@@ -164,7 +185,13 @@ def replace_course_schedule(
                     (platform_id,),
                 )
                 retained_max_index = int(cur.fetchone()["max_session_index"] or 0)
-                if sessions:
+                remaining_count = (
+                    max(0, int(total_training_days) - retained_count)
+                    if fill_remaining_to_total
+                    else len(sessions)
+                )
+                sessions_to_insert = list(sessions[:remaining_count])
+                if sessions_to_insert:
                     cur.executemany(
                         """
                         INSERT INTO course_sessions (
@@ -184,16 +211,22 @@ def replace_course_schedule(
                                 now,
                                 now,
                             )
-                            for offset, item in enumerate(sessions, start=1)
+                            for offset, item in enumerate(sessions_to_insert, start=1)
                         ],
                     )
-        return
+        return {
+            "deleted_sessions": deleted_count,
+            "retained_sessions": retained_count,
+            "locked_future_sessions": locked_future_count,
+            "inserted_sessions": len(sessions_to_insert),
+        }
 
     own_connection = sqlite_connection is None
     conn = sqlite_connection or get_db_connection()
     try:
         cursor = conn.cursor()
         now_sqlite = _sqlite_datetime(now)
+        replacement_boundary = _sqlite_datetime(replace_after or now)
         cursor.execute(
             """
             INSERT INTO course_schedule_config (
@@ -226,9 +259,24 @@ def replace_course_schedule(
             WHERE platform_id = ?
               AND status IN ('planned', 'active')
               AND scheduled_at >= ?
+              AND audio_generation_started_at IS NULL
+              AND audio_generation_completed_at IS NULL
             """,
-            (platform_id, now_sqlite),
+            (platform_id, replacement_boundary),
         )
+        deleted_count = int(cursor.rowcount or 0)
+        cursor.execute(
+            """
+            SELECT COUNT(*),
+                   SUM(CASE WHEN status IN ('planned', 'active') AND scheduled_at >= ? THEN 1 ELSE 0 END)
+            FROM course_sessions
+            WHERE platform_id = ?
+            """,
+            (now_sqlite, platform_id),
+        )
+        counts = cursor.fetchone() or (0, 0)
+        retained_count = int(counts[0] or 0)
+        locked_future_count = int(counts[1] or 0)
         cursor.execute(
             """
             SELECT COALESCE(MAX(session_index), 0)
@@ -238,6 +286,12 @@ def replace_course_schedule(
             (platform_id,),
         )
         retained_max_index = int(cursor.fetchone()[0] or 0)
+        remaining_count = (
+            max(0, int(total_training_days) - retained_count)
+            if fill_remaining_to_total
+            else len(sessions)
+        )
+        sessions_to_insert = list(sessions[:remaining_count])
         cursor.executemany(
             """
             INSERT INTO course_sessions (
@@ -257,11 +311,17 @@ def replace_course_schedule(
                     now_sqlite,
                     now_sqlite,
                 )
-                for offset, item in enumerate(sessions, start=1)
+                for offset, item in enumerate(sessions_to_insert, start=1)
             ],
         )
         if own_connection:
             conn.commit()
+        return {
+            "deleted_sessions": deleted_count,
+            "retained_sessions": retained_count,
+            "locked_future_sessions": locked_future_count,
+            "inserted_sessions": len(sessions_to_insert),
+        }
     finally:
         if own_connection:
             conn.close()
@@ -382,6 +442,206 @@ def get_course_schedule_summary(platform_id: int, *, sqlite_connection=None) -> 
     finally:
         if own_connection:
             conn.close()
+
+
+def list_course_sessions(platform_id: int, *, limit: int = 50) -> list[dict[str, Any]]:
+    """Return the product-facing session state for one owned platform."""
+    safe_limit = max(1, min(int(limit or 50), 200))
+    columns = """
+        id, platform_id, session_index, scheduled_at, status,
+        audio_generation_status, audio_generation_started_at,
+        audio_generation_completed_at, audio_generation_attempts,
+        audio_generation_next_retry_at, audio_job_id, audio_folder_id,
+        created_at, updated_at
+    """
+    if schedule_store_is_postgres():
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    SELECT {columns}
+                    FROM course_sessions
+                    WHERE platform_id = %s
+                    ORDER BY session_index ASC
+                    LIMIT %s
+                    """,
+                    (platform_id, safe_limit),
+                )
+                return [dict(row) for row in cur.fetchall()]
+    conn = get_db_connection()
+    try:
+        conn.row_factory = __import__("sqlite3").Row
+        cursor = conn.cursor()
+        cursor.execute(
+            f"""
+            SELECT {columns}
+            FROM course_sessions
+            WHERE platform_id = ?
+            ORDER BY session_index ASC
+            LIMIT ?
+            """,
+            (platform_id, safe_limit),
+        )
+        return [dict(row) for row in cursor.fetchall()]
+    finally:
+        conn.close()
+
+
+def get_audio_generation_session(platform_id: int, session_id: int) -> dict[str, Any] | None:
+    """Resolve a scheduled audio job through its platform boundary."""
+    postgres = schedule_store_is_postgres()
+    ph = "%s" if postgres else "?"
+    query = f"""
+        SELECT cs.id, cs.platform_id, cs.session_index, cs.scheduled_at,
+               cs.status, cs.audio_generation_status,
+               cs.audio_generation_started_at, cs.audio_generation_completed_at,
+               cs.audio_generation_attempts, cs.audio_generation_next_retry_at,
+               pc.name,
+               COALESCE(
+                   pc.source_formation_id,
+                   (
+                       SELECT j.id FROM formation_pipeline_jobs j
+                       WHERE j.platform_id = cs.platform_id
+                       ORDER BY j.id DESC LIMIT 1
+                   )
+               ) AS formation_job_id
+        FROM course_sessions cs
+        JOIN platform_config pc ON pc.id = cs.platform_id
+        WHERE cs.platform_id = {ph} AND cs.id = {ph}
+    """
+    if postgres:
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, (platform_id, session_id))
+                row = cur.fetchone()
+                return dict(row) if row else None
+    conn = get_db_connection()
+    try:
+        conn.row_factory = __import__("sqlite3").Row
+        cursor = conn.cursor()
+        cursor.execute(query, (platform_id, session_id))
+        row = cursor.fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def cancel_course_session(platform_id: int, session_id: int, *, cancelled_at) -> bool:
+    """Cancel an occurrence only while no audio worker has claimed it."""
+    if schedule_store_is_postgres():
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT pg_advisory_xact_lock(hashtext(%s))",
+                    (f"course-schedule:{int(platform_id)}",),
+                )
+                cur.execute(
+                    """
+                    UPDATE course_sessions
+                    SET status = 'cancelled', updated_at = %s
+                    WHERE id = %s AND platform_id = %s
+                      AND status = 'planned'
+                      AND audio_generation_started_at IS NULL
+                      AND audio_generation_completed_at IS NULL
+                    """,
+                    (cancelled_at, session_id, platform_id),
+                )
+                return cur.rowcount == 1
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        value = _sqlite_datetime(cancelled_at)
+        cursor.execute(
+            """
+            UPDATE course_sessions
+            SET status = 'cancelled', updated_at = ?
+            WHERE id = ? AND platform_id = ?
+              AND status = 'planned'
+              AND audio_generation_started_at IS NULL
+              AND audio_generation_completed_at IS NULL
+            """,
+            (value, session_id, platform_id),
+        )
+        changed = cursor.rowcount == 1
+        conn.commit()
+        return changed
+    finally:
+        conn.close()
+
+
+def mark_audio_waiting_for_content(session_id: int, *, updated_at) -> bool:
+    """Expose a recoverable J-1 warning while course material is not ready."""
+    if schedule_store_is_postgres():
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE course_sessions
+                    SET audio_generation_status = 'waiting_content', updated_at = %s
+                    WHERE id = %s
+                      AND status IN ('planned', 'active')
+                      AND audio_generation_started_at IS NULL
+                      AND audio_generation_completed_at IS NULL
+                    """,
+                    (updated_at, session_id),
+                )
+                return cur.rowcount == 1
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            UPDATE course_sessions
+            SET audio_generation_status = 'waiting_content', updated_at = ?
+            WHERE id = ?
+              AND status IN ('planned', 'active')
+              AND audio_generation_started_at IS NULL
+              AND audio_generation_completed_at IS NULL
+            """,
+            (_sqlite_datetime(updated_at), session_id),
+        )
+        changed = cursor.rowcount == 1
+        conn.commit()
+        return changed
+    finally:
+        conn.close()
+
+
+def list_course_schedule_dashboard_states(platform_ids: list[int]) -> dict[int, dict[str, Any]]:
+    """Batch-load the next occurrence for dashboard cards without N+1 reads."""
+    ids = sorted({int(platform_id) for platform_id in platform_ids if platform_id})
+    if not ids or not schedule_store_is_postgres():
+        return {}
+    with get_postgres_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT cfg.platform_id, cfg.timezone, cfg.start_time,
+                       next_session.id AS session_id,
+                       next_session.session_index,
+                       next_session.scheduled_at,
+                       next_session.audio_generation_status,
+                       next_session.audio_generation_started_at,
+                       next_session.audio_generation_completed_at,
+                       next_session.audio_generation_attempts,
+                       next_session.audio_generation_next_retry_at
+                FROM course_schedule_config cfg
+                LEFT JOIN LATERAL (
+                    SELECT cs.*
+                    FROM course_sessions cs
+                    WHERE cs.platform_id = cfg.platform_id
+                      AND cs.status IN ('planned', 'active')
+                    ORDER BY cs.scheduled_at ASC
+                    LIMIT 1
+                ) next_session ON TRUE
+                WHERE cfg.platform_id = ANY(%s)
+                """,
+                (ids,),
+            )
+            return {
+                int(row["platform_id"]): dict(row)
+                for row in cur.fetchall()
+            }
 
 
 def find_schedule_update_lock(
@@ -1215,10 +1475,13 @@ def claim_audio_generation_session(
                         audio_generation_started_at = %s,
                         audio_generation_completed_at = NULL,
                         audio_generation_error = NULL,
+                        audio_generation_attempts = COALESCE(audio_generation_attempts, 0) + 1,
+                        audio_generation_next_retry_at = NULL,
                         audio_job_id = %s,
                         audio_folder_id = %s,
                         updated_at = %s
                     WHERE id = %s
+                      AND status IN ('planned', 'active')
                       AND (
                         audio_generation_started_at IS NULL
                         OR (
@@ -1255,10 +1518,13 @@ def claim_audio_generation_session(
                 audio_generation_started_at = ?,
                 audio_generation_completed_at = NULL,
                 audio_generation_error = NULL,
+                audio_generation_attempts = COALESCE(audio_generation_attempts, 0) + 1,
+                audio_generation_next_retry_at = NULL,
                 audio_job_id = ?,
                 audio_folder_id = ?,
                 updated_at = ?
             WHERE id = ?
+              AND status IN ('planned', 'active')
               AND (
                 audio_generation_started_at IS NULL
                 OR (
@@ -1332,6 +1598,7 @@ def complete_audio_generation_session(session_id: int, *, completed_at, expected
                     SET audio_generation_status = 'completed',
                         audio_generation_completed_at = %s,
                         audio_generation_error = NULL,
+                        audio_generation_next_retry_at = NULL,
                         updated_at = %s
                     WHERE id = %s AND audio_generation_completed_at IS NULL
                     {owner_sql}
@@ -1351,7 +1618,8 @@ def complete_audio_generation_session(session_id: int, *, completed_at, expected
             f"""
             UPDATE course_sessions
             SET audio_generation_status = 'completed',
-                audio_generation_completed_at = ?, audio_generation_error = NULL, updated_at = ?
+                audio_generation_completed_at = ?, audio_generation_error = NULL,
+                audio_generation_next_retry_at = NULL, updated_at = ?
             WHERE id = ? AND audio_generation_completed_at IS NULL
             {owner_sql}
             """,
@@ -1364,6 +1632,12 @@ def complete_audio_generation_session(session_id: int, *, completed_at, expected
         conn.close()
 
 
+def _audio_retry_delay_minutes(attempts: int) -> float:
+    base = max(1.0, float(os.environ.get("SCHEDULED_AUDIO_RETRY_BASE_MINUTES", "5")))
+    maximum = max(base, float(os.environ.get("SCHEDULED_AUDIO_RETRY_MAX_MINUTES", "60")))
+    return min(maximum, base * (2 ** max(0, int(attempts or 1) - 1)))
+
+
 def fail_audio_generation_session(
     session_id: int,
     *,
@@ -1373,37 +1647,73 @@ def fail_audio_generation_session(
 ) -> bool:
     message = str(error or "")[:500]
     if schedule_store_is_postgres():
-        owner_sql = " AND audio_generation_started_at = %s" if expected_started_at is not None else ""
-        params = [message, failed_at, session_id]
-        if expected_started_at is not None:
-            params.append(expected_started_at)
         with get_postgres_connection() as conn:
             with conn.cursor() as cur:
+                owner_sql = " AND audio_generation_started_at = %s" if expected_started_at is not None else ""
+                owner_params = [session_id]
+                if expected_started_at is not None:
+                    owner_params.append(expected_started_at)
                 cur.execute(
                     f"""
-                    UPDATE course_sessions
-                    SET audio_generation_status = 'error', audio_generation_error = %s, updated_at = %s
+                    SELECT COALESCE(audio_generation_attempts, 1) AS attempts
+                    FROM course_sessions
                     WHERE id = %s AND audio_generation_completed_at IS NULL
                     {owner_sql}
+                    FOR UPDATE
                     """,
-                    params,
+                    owner_params,
+                )
+                row = cur.fetchone()
+                if not row:
+                    return False
+                next_retry_at = failed_at + timedelta(
+                    minutes=_audio_retry_delay_minutes(int(row["attempts"] or 1))
+                )
+                cur.execute(
+                    """
+                    UPDATE course_sessions
+                    SET audio_generation_status = 'error', audio_generation_error = %s,
+                        audio_generation_next_retry_at = %s, updated_at = %s
+                    WHERE id = %s AND audio_generation_completed_at IS NULL
+                    """,
+                    (message, next_retry_at, failed_at, session_id),
                 )
                 return cur.rowcount == 1
     conn = get_db_connection()
     try:
         cursor = conn.cursor()
         owner_sql = " AND audio_generation_started_at = ?" if expected_started_at is not None else ""
-        params = [message, _sqlite_datetime(failed_at), session_id]
+        owner_params = [session_id]
         if expected_started_at is not None:
-            params.append(_sqlite_datetime(expected_started_at))
+            owner_params.append(_sqlite_datetime(expected_started_at))
         cursor.execute(
             f"""
-            UPDATE course_sessions
-            SET audio_generation_status = 'error', audio_generation_error = ?, updated_at = ?
+            SELECT COALESCE(audio_generation_attempts, 1)
+            FROM course_sessions
             WHERE id = ? AND audio_generation_completed_at IS NULL
             {owner_sql}
             """,
-            params,
+            owner_params,
+        )
+        row = cursor.fetchone()
+        if not row:
+            return False
+        next_retry_at = failed_at + timedelta(
+            minutes=_audio_retry_delay_minutes(int(row[0] or 1))
+        )
+        cursor.execute(
+            """
+            UPDATE course_sessions
+            SET audio_generation_status = 'error', audio_generation_error = ?,
+                audio_generation_next_retry_at = ?, updated_at = ?
+            WHERE id = ? AND audio_generation_completed_at IS NULL
+            """,
+            (
+                message,
+                _sqlite_datetime(next_retry_at),
+                _sqlite_datetime(failed_at),
+                session_id,
+            ),
         )
         changed = cursor.rowcount == 1
         conn.commit()

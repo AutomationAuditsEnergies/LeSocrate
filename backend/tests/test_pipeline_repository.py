@@ -59,6 +59,8 @@ def _make_pipeline_db():
             audio_generation_started_at TEXT,
             audio_generation_completed_at TEXT,
             audio_generation_error TEXT,
+            audio_generation_attempts INTEGER NOT NULL DEFAULT 0,
+            audio_generation_next_retry_at TEXT,
             audio_job_id INTEGER,
             audio_folder_id INTEGER,
             created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,

@@ -33,6 +33,8 @@ def _make_schedule_db():
             audio_generation_started_at TEXT,
             audio_generation_completed_at TEXT,
             audio_generation_error TEXT,
+            audio_generation_attempts INTEGER NOT NULL DEFAULT 0,
+            audio_generation_next_retry_at TEXT,
             audio_job_id INTEGER,
             audio_folder_id INTEGER,
             created_at TEXT NOT NULL,
@@ -361,6 +363,65 @@ class CourseScheduleRepositoryTest(unittest.TestCase):
             self.assertEqual(row[1:3], (41, 55))
             self.assertIsNotNone(row[3])
             self.assertIsNone(row[4])
+        finally:
+            os.unlink(db_path)
+
+    def test_audio_failures_receive_exponential_retry_deadlines(self):
+        db_path = _make_schedule_db()
+        try:
+            started = datetime.now(FRANCE_TZ)
+            with (
+                patch.object(repo, "schedule_store_is_postgres", lambda: False),
+                patch.object(repo, "get_db_connection", side_effect=lambda: sqlite3.connect(db_path)),
+                patch.dict("os.environ", {
+                    "SCHEDULED_AUDIO_RETRY_BASE_MINUTES": "5",
+                    "SCHEDULED_AUDIO_RETRY_MAX_MINUTES": "60",
+                }),
+            ):
+                self.assertTrue(repo.claim_audio_generation_session(
+                    session_id=9,
+                    job_id=41,
+                    folder_id=55,
+                    started_at=started,
+                ))
+                self.assertTrue(repo.fail_audio_generation_session(
+                    9,
+                    error="provider timeout",
+                    failed_at=started + timedelta(minutes=1),
+                    expected_started_at=started,
+                ))
+
+            conn = sqlite3.connect(db_path)
+            attempts, retry_at = conn.execute(
+                "SELECT audio_generation_attempts, audio_generation_next_retry_at FROM course_sessions WHERE id = 9"
+            ).fetchone()
+            conn.close()
+            self.assertEqual(attempts, 1)
+            self.assertEqual(
+                retry_at,
+                (started + timedelta(minutes=6)).strftime("%Y-%m-%d %H:%M:%S"),
+            )
+        finally:
+            os.unlink(db_path)
+
+    def test_cancel_is_atomic_with_audio_claim(self):
+        db_path = _make_schedule_db()
+        try:
+            with (
+                patch.object(repo, "schedule_store_is_postgres", lambda: False),
+                patch.object(repo, "get_db_connection", side_effect=lambda: sqlite3.connect(db_path)),
+            ):
+                self.assertTrue(repo.cancel_course_session(
+                    12,
+                    9,
+                    cancelled_at=datetime.now(FRANCE_TZ),
+                ))
+                self.assertFalse(repo.claim_audio_generation_session(
+                    session_id=9,
+                    job_id=41,
+                    folder_id=55,
+                    started_at=datetime.now(FRANCE_TZ),
+                ))
         finally:
             os.unlink(db_path)
 

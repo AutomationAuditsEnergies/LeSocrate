@@ -1,4 +1,5 @@
 import json
+import inspect
 import os
 import sqlite3
 import types
@@ -91,6 +92,12 @@ def _job(**overrides):
 
 
 class PipelineOrderTest(unittest.TestCase):
+    def test_scheduled_audio_is_not_completed_after_partial_publication(self):
+        source = inspect.getsource(fr.start_folder_audio_generation)
+        publication_guard = source.index("if publish_errors or not published_files")
+        completion = source.index("complete_audio_generation_session")
+        self.assertLess(publication_guard, completion)
+
     def test_scheduled_audio_progress_fails_closed_when_claim_is_lost(self):
         state = {"error": None}
         callback = fr._make_audio_progress_logger(

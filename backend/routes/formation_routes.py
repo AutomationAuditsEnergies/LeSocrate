@@ -2858,6 +2858,14 @@ def start_folder_audio_generation(
                     archive_existing=True,
                     archive_reason=f"{trigger_source}-folder-{folder_id}",
                 )
+                publish_errors = publish_result.get("publish_errors") or []
+                published_files = publish_result.get("published") or []
+                if publish_errors or not published_files:
+                    raise RuntimeError(
+                        "Publication audio incomplète: "
+                        f"{len(published_files)} fichier(s) publié(s), "
+                        f"{len(publish_errors)} erreur(s)"
+                    )
             except Exception as publish_error:
                 publish_result = {"published": [], "publish_errors": [{"error": str(publish_error)}]}
                 logger.error(

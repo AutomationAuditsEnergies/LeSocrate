@@ -3,6 +3,7 @@ import { apiFetch } from '../api'
 import CoursFoldersModal from '../components/CoursFolders'
 import SlideToConfirm, { BackupPipeline } from '../components/SlideToConfirm'
 import { getHiddenPipelineProgress, getTeacherPreparation } from '../teacherPreparation'
+import { getAudioStatusMeta, getNextCourseSession, scheduleSelectionIsValid } from '../courseSchedule'
 
 // ─── Material Icon Component ─────────────────────────────────────────────────
 const Icon = ({ name, className = '' }) => (
@@ -100,6 +101,8 @@ export default function HRDashboard() {
   const [teacherColor, setTeacherColor] = useState('violet')
   const [weeklyCourseCount, setWeeklyCourseCount] = useState('2')
   const [teachingDays, setTeachingDays] = useState(['mardi', 'jeudi'])
+  const [scheduleStartDate, setScheduleStartDate] = useState(todayDateInput)
+  const [scheduleStartTime, setScheduleStartTime] = useState('09:00')
   const [newFormTpName, setNewFormTpName] = useState('')
   const [newFormRncp, setNewFormRncp] = useState('')
   const [newFormHours, setNewFormHours] = useState('')
@@ -131,7 +134,22 @@ export default function HRDashboard() {
   const [attendanceLoading, setAttendanceLoading] = useState(false)
   const [attendanceError, setAttendanceError] = useState('')
   const [attendanceSavingStudentId, setAttendanceSavingStudentId] = useState(null)
+  const [loggingOut, setLoggingOut] = useState(false)
   const CARDS_PER_PAGE = 3
+
+  const handleLogout = async () => {
+    if (loggingOut) return
+    setLoggingOut(true)
+    try {
+      await apiFetch('/api/admin/logout', { method: 'POST' })
+    } catch (error) {
+      console.warn('Déconnexion serveur indisponible, nettoyage local appliqué.', error)
+    } finally {
+      localStorage.removeItem('admin_auth_token')
+      localStorage.removeItem('auth_token')
+      window.location.assign('/connexion-centre')
+    }
+  }
 
   // ─── Fetch data ──────────────────────────────────────────────────────
   const fetchPlatforms = async (refreshSelectedId = null) => {
@@ -474,7 +492,7 @@ export default function HRDashboard() {
 
   const handleSetCourseTime = async (dateCours, heureCours, weekdays = null) => {
     try {
-      const payload = { date_cours: dateCours, heure_cours: heureCours, force_schedule: true }
+      const payload = { date_cours: dateCours, heure_cours: heureCours }
       if (Array.isArray(weekdays)) payload.weekdays = weekdays
       const resp = await apiFetch(`/api/hr/platforms/${courseTimePlatformId}/config-cours`, {
         method: 'POST',
@@ -482,11 +500,54 @@ export default function HRDashboard() {
         body: JSON.stringify(payload),
       })
       const data = await resp.json()
+      if (resp.ok && data.success) {
+        const refreshed = await apiFetch(`/api/hr/platforms/${courseTimePlatformId}/course-time`)
+        const refreshedData = await refreshed.json()
+        if (refreshed.ok && refreshedData.success) {
+          setCurrentCourseTime(refreshedData)
+        } else {
+          setCurrentCourseTime((current) => ({
+            ...(current || {}),
+            success: true,
+            schedule: data.schedule,
+            heure_cours: data.schedule?.start_time || heureCours,
+          }))
+        }
+        await fetchPlatforms(courseTimePlatformId)
+      }
       return data
     } catch (e) {
       console.error('Erreur config cours:', e)
       return { success: false, error: e.message }
     }
+  }
+
+  const handleRetrySessionAudio = async (sessionId) => {
+    const resp = await apiFetch(
+      `/api/hr/platforms/${courseTimePlatformId}/sessions/${sessionId}/audio/retry`,
+      { method: 'POST' },
+    )
+    const data = await resp.json()
+    if (!resp.ok && resp.status !== 409) throw new Error(data.error || 'Reprise impossible')
+    const refreshed = await apiFetch(`/api/hr/platforms/${courseTimePlatformId}/course-time`)
+    const refreshedData = await refreshed.json()
+    if (refreshed.ok && refreshedData.success) setCurrentCourseTime(refreshedData)
+    await fetchPlatforms(courseTimePlatformId)
+    return data
+  }
+
+  const handleCancelSession = async (sessionId) => {
+    const resp = await apiFetch(
+      `/api/hr/platforms/${courseTimePlatformId}/sessions/${sessionId}`,
+      { method: 'DELETE' },
+    )
+    const data = await resp.json()
+    if (!resp.ok) throw new Error(data.error || 'Annulation impossible')
+    const refreshed = await apiFetch(`/api/hr/platforms/${courseTimePlatformId}/course-time`)
+    const refreshedData = await refreshed.json()
+    if (refreshed.ok && refreshedData.success) setCurrentCourseTime(refreshedData)
+    await fetchPlatforms(courseTimePlatformId)
+    return data
   }
 
   const handleDeletePdf = (platformId) => {
@@ -629,6 +690,8 @@ export default function HRDashboard() {
     setTeacherColor('violet')
     setWeeklyCourseCount('2')
     setTeachingDays(['mardi', 'jeudi'])
+    setScheduleStartDate(todayDateInput())
+    setScheduleStartTime('09:00')
     setNewFormTpName('')
     setNewFormRncp('')
     setNewFormHours('')
@@ -763,6 +826,10 @@ export default function HRDashboard() {
         alert('Le nombre de cours par semaine doit correspondre aux jours sélectionnés')
         return
       }
+      if (!scheduleStartDate || !scheduleStartTime) {
+        alert('Indique la date de début et l’heure des journées')
+        return
+      }
       body.new_formation = {
         tp_name: tpName,
         rncp_code: rncp,
@@ -771,7 +838,8 @@ export default function HRDashboard() {
           total_training_days: trainingDaysCount,
           weekly_course_count: weeklyCount,
           weekdays: teachingDays,
-          start_time: '09:00',
+          start_date: scheduleStartDate,
+          start_time: scheduleStartTime,
         },
       }
     }
@@ -830,6 +898,10 @@ export default function HRDashboard() {
         setCardPage(Math.floor(platforms.length / CARDS_PER_PAGE))
         setNewlyCreatedPlatformId(data.platform?.id || null)
         await fetchPlatforms()
+        if (data.platform?.schedule?.audio_generation_immediate) {
+          setPlatformsErrorTone('warning')
+          setPlatformsError('La première séance est prévue dans moins de 24 h. Son audio va être préparé immédiatement.')
+        }
       } else {
         alert(data.error || 'Erreur lors de la création')
       }
@@ -941,16 +1013,17 @@ export default function HRDashboard() {
           <div className="mx-auto max-w-7xl px-6 pt-4">
             <div className="flex items-center justify-end gap-4">
               <div className="flex items-center gap-2">
-                {/* Back to admin — tertiary navigation, muted text */}
-                <a
-                  href="/admin"
+                <button
+                  type="button"
+                  onClick={handleLogout}
+                  disabled={loggingOut}
                   className="flex items-center gap-2 rounded-lg px-3.5 py-2 text-sm font-medium transition-colors hover:bg-black/5 dark:hover:bg-white/5"
                   style={{ color: colors.textMuted, border: `1px solid ${colors.border}` }}
-                  title="Revenir à l'administration P1"
+                  title="Se déconnecter de l’espace centre"
                 >
-                  <Icon name="arrow_back" className="text-base" />
-                  <span>Retour Admin</span>
-                </a>
+                  <Icon name="logout" className="text-base" />
+                  <span>{loggingOut ? 'Déconnexion…' : 'Se déconnecter'}</span>
+                </button>
               </div>
             </div>
 
@@ -1064,6 +1137,10 @@ export default function HRDashboard() {
               setWeeklyCourseCount={setWeeklyCourseCount}
               teachingDays={teachingDays}
               setTeachingDays={setTeachingDays}
+              scheduleStartDate={scheduleStartDate}
+              setScheduleStartDate={setScheduleStartDate}
+              scheduleStartTime={scheduleStartTime}
+              setScheduleStartTime={setScheduleStartTime}
               formationMode={formationMode}
               setFormationMode={setFormationMode}
               selectedModuleId={selectedModuleId}
@@ -1188,6 +1265,8 @@ export default function HRDashboard() {
           initialDate={currentCourseTime?.date_cours}
           initialHeure={currentCourseTime?.heure_cours}
           schedule={currentCourseTime?.schedule}
+          onRetryAudio={handleRetrySessionAudio}
+          onCancelSession={handleCancelSession}
         />
       )}
 
@@ -2619,6 +2698,10 @@ function CreatePlatformView({
   setWeeklyCourseCount,
   teachingDays,
   setTeachingDays,
+  scheduleStartDate,
+  setScheduleStartDate,
+  scheduleStartTime,
+  setScheduleStartTime,
   newFormTpName,
   setNewFormTpName,
   newFormRncp,
@@ -2650,6 +2733,8 @@ function CreatePlatformView({
     && Number(newFormHours) > 0
     && Number(weeklyCourseCount) > 0
     && teachingDays.length > 0
+    && scheduleStartDate
+    && scheduleStartTime
   )
   const inputStyle = {
     backgroundColor: darkMode ? '#0f172a' : '#F8F7F5',
@@ -2837,6 +2922,37 @@ function CreatePlatformView({
                 )
               })}
             </div>
+          </div>
+        </div>
+
+        <div className="mt-5 grid gap-4 md:grid-cols-2">
+          <div>
+            <label className="mb-2 block text-sm font-medium" style={{ color: darkMode ? '#94a3b8' : '#64748b' }}>
+              Début de la formation
+            </label>
+            <input
+              type="date"
+              value={scheduleStartDate}
+              min={todayDateInput()}
+              onChange={(event) => setScheduleStartDate(event.target.value)}
+              className="w-full rounded-lg px-4 py-3 text-sm outline-none transition-all"
+              style={inputStyle}
+            />
+          </div>
+          <div>
+            <label className="mb-2 block text-sm font-medium" style={{ color: darkMode ? '#94a3b8' : '#64748b' }}>
+              Heure de chaque journée
+            </label>
+            <input
+              type="time"
+              value={scheduleStartTime}
+              onChange={(event) => setScheduleStartTime(event.target.value)}
+              className="w-full rounded-lg px-4 py-3 text-sm outline-none transition-all"
+              style={inputStyle}
+            />
+            <p className="mt-2 text-xs leading-5" style={{ color: colors.textMuted }}>
+              L’audio de chaque journée sera préparé automatiquement 24 h avant.
+            </p>
           </div>
         </div>
 
@@ -3387,6 +3503,7 @@ function PlatformCard({
   const preparation = getTeacherPreparation(p)
   const isPreparing = preparation.status === 'preparing'
   const hasFailed = preparation.status === 'failed'
+  const nextCourseSession = getNextCourseSession(p)
   const faceStyle = {
     backgroundColor: colors.cardBg,
     border: p.active ? '1px solid #E4E4E4' : `1px solid ${colors.border}`,
@@ -3527,6 +3644,20 @@ function PlatformCard({
                   {retryingPreparation ? 'Reprise en cours…' : 'Reprendre la préparation'}
                 </button>
               )}
+            </div>
+          )}
+          {p.active && preparation.status === 'ready' && nextCourseSession && (
+            <div
+              className="relative z-10 mt-4 flex w-full max-w-[280px] items-center justify-between gap-3 rounded-xl px-4 py-3"
+              style={{ backgroundColor: darkMode ? '#0f172a' : '#ffffff', border: `1px solid ${colors.border}` }}
+            >
+              <div className="min-w-0">
+                <p className="text-[11px] font-medium" style={{ color: colors.textMuted }}>Prochaine séance</p>
+                <p className="mt-0.5 truncate text-xs font-semibold" style={{ color: colors.text }}>
+                  {formatScheduleDateTime(nextCourseSession.scheduled_at)}
+                </p>
+              </div>
+              <AudioStatusBadge status={nextCourseSession.audio_status} darkMode={darkMode} />
             </div>
           )}
         </div>
@@ -3730,7 +3861,7 @@ function PlatformCard({
               }}
             >
               <Icon name="schedule" className="text-lg" style={{ color: colors.textMuted }} />
-              <span>Horaire</span>
+              <span>Planning</span>
             </button>
           )}
 
@@ -4120,8 +4251,23 @@ function formatScheduleDateTime(value) {
   })
 }
 
+function AudioStatusBadge({ status, darkMode = false }) {
+  const meta = getAudioStatusMeta(status)
+  return (
+    <span
+      className="inline-flex flex-shrink-0 items-center rounded-full px-2 py-1 text-[10px] font-semibold"
+      style={{
+        color: darkMode ? '#f8fafc' : meta.color,
+        backgroundColor: darkMode ? 'rgba(148, 163, 184, 0.16)' : meta.background,
+      }}
+    >
+      {meta.label}
+    </span>
+  )
+}
+
 // ─── Course Time Modal ───────────────────────────────────────────────────────
-function CourseTimeModal({ onClose, onSubmit, initialDate, initialHeure, schedule }) {
+function CourseTimeModal({ onClose, onSubmit, initialDate, initialHeure, schedule, onRetryAudio, onCancelSession }) {
   const today = new Date().toISOString().split('T')[0]
   const hasSchedule = !!schedule
   const [date, setDate] = useState(initialDate || today)
@@ -4134,8 +4280,10 @@ function CourseTimeModal({ onClose, onSubmit, initialDate, initialHeure, schedul
   )
   const [loading, setLoading] = useState(false)
   const [result, setResult] = useState(null)
+  const [busySessionId, setBusySessionId] = useState(null)
+  const [actionError, setActionError] = useState('')
   const expectedWeekdayCount = Number(schedule?.weekly_course_count || selectedWeekdays.length || 0)
-  const weekdaySelectionError = hasSchedule && expectedWeekdayCount > 0 && selectedWeekdays.length !== expectedWeekdayCount
+  const weekdaySelectionError = hasSchedule && !scheduleSelectionIsValid({ selectedWeekdays, expectedWeekdayCount })
     ? `Sélectionnez ${expectedWeekdayCount} jour${expectedWeekdayCount > 1 ? 's' : ''}.`
     : ''
 
@@ -4157,6 +4305,24 @@ function CourseTimeModal({ onClose, onSubmit, initialDate, initialHeure, schedul
     setLoading(false)
   }
 
+  const runSessionAction = async (session, action) => {
+    setBusySessionId(session.id)
+    setActionError('')
+    try {
+      if (action === 'cancel') {
+        const confirmed = window.confirm(`Annuler la journée ${session.session_index} ?`)
+        if (!confirmed) return
+        await onCancelSession(session.id)
+      } else {
+        await onRetryAudio(session.id)
+      }
+    } catch (error) {
+      setActionError(error.message || 'Action impossible')
+    } finally {
+      setBusySessionId(null)
+    }
+  }
+
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center p-4"
@@ -4164,26 +4330,36 @@ function CourseTimeModal({ onClose, onSubmit, initialDate, initialHeure, schedul
       onClick={onClose}
     >
       <div
-        className="bg-white rounded-2xl shadow-2xl overflow-hidden"
-        style={{ width: '100%', maxWidth: '420px' }}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="course-planning-title"
+        className="overflow-hidden rounded-2xl bg-white"
+        style={{ width: '100%', maxWidth: '760px', maxHeight: '92vh', boxShadow: '0 8px 24px rgba(15, 23, 42, 0.18)' }}
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b" style={{ borderColor: '#e2e8f0', backgroundColor: '#137fec' }}>
-          <div className="flex items-center gap-3 text-white">
-            <Icon name="schedule" className="text-2xl" />
-            <h3 className="text-lg font-bold">{hasSchedule ? 'HORAIRE DES JOURNÉES' : 'HEURE DU COURS'}</h3>
+        <div className="flex items-center justify-between border-b px-6 py-4" style={{ borderColor: '#e2e8f0', backgroundColor: '#ffffff' }}>
+          <div className="flex items-center gap-3">
+            <span className="flex h-9 w-9 items-center justify-center rounded-lg" style={{ backgroundColor: '#ede9fe', color: '#7c3aed' }}>
+              <Icon name="calendar_month" className="text-xl" />
+            </span>
+            <div>
+              <h3 id="course-planning-title" className="text-base font-semibold" style={{ color: '#0f172a' }}>Planning de la formation</h3>
+              <p className="text-xs" style={{ color: '#64748b' }}>Fuseau horaire Europe/Paris</p>
+            </div>
           </div>
           <button
             onClick={onClose}
-            className="text-white hover:bg-white/20 rounded-full p-1 transition-colors"
+            aria-label="Fermer le planning"
+            className="rounded-lg p-2 transition-colors hover:bg-slate-100"
+            style={{ color: '#64748b' }}
           >
             <Icon name="close" className="text-2xl" />
           </button>
         </div>
 
         {/* Body */}
-        <div className="p-6">
+        <div className="overflow-y-auto p-6" style={{ maxHeight: 'calc(92vh - 74px)' }}>
           {result?.success ? (
             <div className="flex flex-col items-center gap-4 py-4 text-center">
               <div className="flex items-center justify-center size-14 rounded-full" style={{ backgroundColor: 'rgba(16, 185, 129, 0.1)' }}>
@@ -4231,7 +4407,7 @@ function CourseTimeModal({ onClose, onSubmit, initialDate, initialHeure, schedul
                     </p>
                   )}
                   <p className="mt-3 text-xs" style={{ color: '#64748b' }}>
-                    Le planning est verrouillé dans les 24h avant une journée, car l'audio peut être préparé automatiquement.
+                    Les séances prévues dans les 72 h restent inchangées. Le nouveau planning s’applique automatiquement aux suivantes.
                   </p>
                   <div className="mt-3 space-y-1 text-xs" style={{ color: '#64748b' }}>
                     <p>{schedule.total_training_days} journée{schedule.total_training_days > 1 ? 's' : ''} au total</p>
@@ -4289,7 +4465,7 @@ function CourseTimeModal({ onClose, onSubmit, initialDate, initialHeure, schedul
                   type="submit"
                   disabled={loading || (!hasSchedule && !date) || !heure || !!weekdaySelectionError}
                   className="flex-1 flex items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm font-semibold text-white transition-opacity"
-                  style={{ backgroundColor: '#137fec', opacity: (loading || (!hasSchedule && !date) || !heure || !!weekdaySelectionError) ? 0.6 : 1 }}
+                  style={{ backgroundColor: '#8B5CF6', opacity: (loading || (!hasSchedule && !date) || !heure || !!weekdaySelectionError) ? 0.6 : 1 }}
                 >
                   {loading ? (
                     <div className="h-4 w-4 animate-spin rounded-full border-2 border-white/30 border-t-white" />
@@ -4300,6 +4476,72 @@ function CourseTimeModal({ onClose, onSubmit, initialDate, initialHeure, schedul
                 </button>
               </div>
             </form>
+          )}
+
+          {hasSchedule && Array.isArray(schedule.sessions) && (
+            <section className="mt-6 border-t pt-5" style={{ borderColor: '#e2e8f0' }}>
+              <div className="mb-3 flex items-center justify-between gap-3">
+                <div>
+                  <h4 className="text-sm font-semibold" style={{ color: '#0f172a' }}>Journées programmées</h4>
+                  <p className="mt-0.5 text-xs" style={{ color: '#64748b' }}>
+                    L’audio démarre 24 h avant chaque séance.
+                  </p>
+                </div>
+                <span className="text-xs font-medium" style={{ color: '#64748b' }}>
+                  {schedule.sessions.length} séance{schedule.sessions.length > 1 ? 's' : ''}
+                </span>
+              </div>
+
+              {actionError && (
+                <p className="mb-3 rounded-lg px-3 py-2 text-xs" style={{ color: '#b91c1c', backgroundColor: '#fee2e2' }}>
+                  {actionError}
+                </p>
+              )}
+
+              <div className="divide-y overflow-hidden rounded-xl" style={{ border: '1px solid #e2e8f0', borderColor: '#e2e8f0' }}>
+                {schedule.sessions.map((session) => (
+                  <div key={session.id} className="flex flex-wrap items-center gap-3 px-4 py-3" style={{ borderColor: '#e2e8f0' }}>
+                    <span
+                      className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg text-xs font-semibold"
+                      style={{ backgroundColor: '#f1f5f9', color: '#475569' }}
+                    >
+                      J{session.session_index}
+                    </span>
+                    <div className="min-w-[180px] flex-1">
+                      <p className="text-xs font-semibold" style={{ color: '#0f172a' }}>
+                        {formatScheduleDateTime(session.scheduled_at)}
+                      </p>
+                      <p className="mt-0.5 text-[11px]" style={{ color: '#64748b' }}>
+                        {session.is_locked ? 'Date verrouillée' : `Modifiable jusqu’au ${formatScheduleDateTime(session.change_cutoff_at)}`}
+                      </p>
+                    </div>
+                    <AudioStatusBadge status={session.audio_status} />
+                    {session.can_retry_audio && (
+                      <button
+                        type="button"
+                        disabled={busySessionId === session.id}
+                        onClick={() => runSessionAction(session, 'retry')}
+                        className="rounded-lg px-3 py-2 text-xs font-semibold text-white transition-opacity disabled:opacity-50"
+                        style={{ backgroundColor: '#8B5CF6' }}
+                      >
+                        {busySessionId === session.id ? 'Relance…' : 'Relancer l’audio'}
+                      </button>
+                    )}
+                    {session.can_cancel && (
+                      <button
+                        type="button"
+                        disabled={busySessionId === session.id}
+                        onClick={() => runSessionAction(session, 'cancel')}
+                        className="rounded-lg px-3 py-2 text-xs font-medium transition-colors disabled:opacity-50"
+                        style={{ color: '#b91c1c', backgroundColor: '#fff1f2' }}
+                      >
+                        Annuler la séance
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </section>
           )}
         </div>
       </div>

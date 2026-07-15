@@ -26,6 +26,8 @@ class PostgresSchemaContractTest(unittest.TestCase):
             "audio_generation_started_at",
             "audio_generation_completed_at",
             "audio_generation_error",
+            "audio_generation_attempts",
+            "audio_generation_next_retry_at",
             "audio_job_id",
             "audio_folder_id",
         ):

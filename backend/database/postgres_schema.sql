@@ -97,6 +97,8 @@ CREATE TABLE IF NOT EXISTS course_sessions (
     audio_generation_started_at TIMESTAMPTZ,
     audio_generation_completed_at TIMESTAMPTZ,
     audio_generation_error TEXT,
+    audio_generation_attempts INTEGER NOT NULL DEFAULT 0,
+    audio_generation_next_retry_at TIMESTAMPTZ,
     audio_job_id BIGINT,
     audio_folder_id BIGINT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -122,6 +124,10 @@ ALTER TABLE course_sessions
     ADD COLUMN IF NOT EXISTS audio_generation_completed_at TIMESTAMPTZ;
 ALTER TABLE course_sessions
     ADD COLUMN IF NOT EXISTS audio_generation_error TEXT;
+ALTER TABLE course_sessions
+    ADD COLUMN IF NOT EXISTS audio_generation_attempts INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE course_sessions
+    ADD COLUMN IF NOT EXISTS audio_generation_next_retry_at TIMESTAMPTZ;
 ALTER TABLE course_sessions
     ADD COLUMN IF NOT EXISTS audio_job_id BIGINT;
 ALTER TABLE course_sessions
@@ -451,6 +457,8 @@ CREATE INDEX IF NOT EXISTS idx_cours_config_platform ON cours_config(platform_id
 CREATE UNIQUE INDEX IF NOT EXISTS idx_cours_config_platform_unique ON cours_config(platform_id);
 CREATE INDEX IF NOT EXISTS idx_course_sessions_platform_scheduled ON course_sessions(platform_id, scheduled_at);
 CREATE INDEX IF NOT EXISTS idx_course_sessions_status_scheduled ON course_sessions(status, scheduled_at);
+CREATE INDEX IF NOT EXISTS idx_course_sessions_audio_due
+    ON course_sessions(audio_generation_status, audio_generation_next_retry_at, scheduled_at);
 CREATE INDEX IF NOT EXISTS idx_course_reminder_recipients_platform ON course_reminder_recipients(platform_id);
 CREATE INDEX IF NOT EXISTS idx_logs_platform_arrivee ON logs(platform_id, arrivee);
 CREATE INDEX IF NOT EXISTS idx_video_visits_platform ON video_visits(platform_id);

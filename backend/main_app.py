@@ -1,6 +1,7 @@
 # main_app.py - Point d'entrée principal de l'application (refactorisé)
 # Backend API pur pour frontend React
 import os
+import time
 from flask import Flask, request, session
 from flask_socketio import SocketIO
 from flask_cors import CORS
@@ -33,6 +34,15 @@ from socketio_handlers.handlers import register_socketio_handlers
 # Configuration du logging
 configure_logging()
 logger = get_logger(__name__)
+
+_COURSE_SCHEDULER_ENABLED = os.getenv("COURSE_SCHEDULER_ENABLED", "0").strip().lower() in {
+    "1", "true", "yes", "on",
+}
+_COURSE_SCHEDULER_STATE = {
+    "started": False,
+    "last_success_monotonic": None,
+    "last_error": None,
+}
 
 # Initialisation de l'application Flask (API uniquement)
 app = Flask(__name__)
@@ -133,6 +143,13 @@ def readiness_probe():
             or os.getenv("AZURE_STORAGE_CONNECTION_STRING")
         ):
             raise RuntimeError("Stockage d'artefacts obligatoire non configuré")
+        if _COURSE_SCHEDULER_ENABLED:
+            interval = max(30.0, float(os.getenv("COURSE_SCHEDULER_INTERVAL_SECONDS", "300")))
+            last_success = _COURSE_SCHEDULER_STATE.get("last_success_monotonic")
+            if not _COURSE_SCHEDULER_STATE.get("started") or last_success is None:
+                raise RuntimeError("Planificateur des séances non démarré")
+            if time.monotonic() - float(last_success) > max(900.0, interval * 3):
+                raise RuntimeError("Planificateur des séances sans progression")
         return _jsonify({"status": "ready"}), 200
     except Exception as exc:
         logger.warning("READINESS_FAILED error=%s", str(exc)[:300])
@@ -369,6 +386,35 @@ if (
 ):
     socketio.start_background_task(_embedded_pipeline_worker_loop)
     logger.info("✅ Worker pipeline durable embarqué programmé")
+
+
+def _embedded_course_scheduler_loop():
+    """Run the durable occurrence/audio scheduler on every instance safely."""
+    from services.course_schedule_service import run_scheduler_tick
+    from services.scheduled_audio_service import process_due_audio_generations
+
+    interval = max(30.0, float(os.getenv("COURSE_SCHEDULER_INTERVAL_SECONDS", "300")))
+    _COURSE_SCHEDULER_STATE["started"] = True
+    while True:
+        try:
+            schedule_results = run_scheduler_tick()
+            audio_results = process_due_audio_generations()
+            _COURSE_SCHEDULER_STATE["last_success_monotonic"] = time.monotonic()
+            _COURSE_SCHEDULER_STATE["last_error"] = None
+            logger.info(
+                "COURSE_SCHEDULER_TICK_COMPLETED schedules=%s audio_candidates=%s",
+                len(schedule_results or []),
+                len(audio_results or []),
+            )
+        except Exception as exc:
+            _COURSE_SCHEDULER_STATE["last_error"] = str(exc)[:300]
+            logger.exception("COURSE_SCHEDULER_TICK_FAILED retry_in_seconds=%s", interval)
+        socketio.sleep(interval)
+
+
+if _COURSE_SCHEDULER_ENABLED:
+    socketio.start_background_task(_embedded_course_scheduler_loop)
+    logger.info("✅ Planificateur durable des séances et audios programmé")
 
 
 if __name__ == "__main__":
