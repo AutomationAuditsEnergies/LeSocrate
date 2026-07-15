@@ -626,6 +626,53 @@ class WorkItemRepository:
             row = _row_dict(cur.fetchone(), cur)
             return _to_work_item(row) if row else None
 
+    def readiness_snapshot(self, *, now: datetime | None = None) -> dict[str, Any]:
+        """Return a small, read-only snapshot used to detect a stalled queue."""
+        self.ensure_schema()
+        now = now or utcnow()
+        value = now if self.is_postgres else _sqlite_time(now)
+        ph = "%s" if self.is_postgres else "?"
+        query = f"""
+            SELECT
+                SUM(CASE
+                    WHEN status IN ('queued', 'retry_scheduled') AND available_at <= {ph}
+                    THEN 1 ELSE 0 END
+                ) AS due_count,
+                MIN(CASE
+                    WHEN status IN ('queued', 'retry_scheduled') AND available_at <= {ph}
+                    THEN COALESCE(available_at, created_at) END
+                ) AS oldest_due_at,
+                SUM(CASE
+                    WHEN status = 'running' AND lease_expires_at >= {ph}
+                    THEN 1 ELSE 0 END
+                ) AS active_running_count,
+                SUM(CASE
+                    WHEN status = 'running' AND lease_expires_at < {ph}
+                    THEN 1 ELSE 0 END
+                ) AS expired_running_count,
+                MIN(CASE
+                    WHEN status = 'running' AND lease_expires_at < {ph}
+                    THEN lease_expires_at END
+                ) AS oldest_expired_lease_at,
+                MAX(CASE
+                    WHEN status IN ('queued', 'retry_scheduled', 'running')
+                    THEN updated_at END
+                ) AS last_active_update_at
+            FROM pipeline_work_items
+        """
+        with self._connection() as conn:
+            cur = conn.cursor()
+            cur.execute(query, (value, value, value, value, value))
+            row = _row_dict(cur.fetchone(), cur) or {}
+        return {
+            "due_count": int(row.get("due_count") or 0),
+            "oldest_due_at": row.get("oldest_due_at"),
+            "active_running_count": int(row.get("active_running_count") or 0),
+            "expired_running_count": int(row.get("expired_running_count") or 0),
+            "oldest_expired_lease_at": row.get("oldest_expired_lease_at"),
+            "last_active_update_at": row.get("last_active_update_at"),
+        }
+
     def claim_next(self, *, owner: str, lease_seconds: int) -> WorkItem | None:
         return self._claim(owner=owner, lease_seconds=lease_seconds, work_item_id=None)
 

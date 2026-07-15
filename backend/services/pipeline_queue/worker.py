@@ -66,6 +66,7 @@ class LeaseGuard:
         *,
         lease_seconds: int,
         heartbeat_seconds: int,
+        health_callback: Callable[[], None] | None = None,
     ):
         if not item.lease_token:
             raise ValueError("Un work-item claimé doit avoir un lease_token")
@@ -73,9 +74,18 @@ class LeaseGuard:
         self.item = item
         self.lease_seconds = lease_seconds
         self.heartbeat_seconds = heartbeat_seconds
+        self.health_callback = health_callback
         self._stop = threading.Event()
         self._lost = threading.Event()
         self._thread: threading.Thread | None = None
+
+    def _signal_health(self) -> None:
+        if self.health_callback is None:
+            return
+        try:
+            self.health_callback()
+        except Exception:
+            logger.exception("PIPELINE_WORKER_HEALTH_CALLBACK_FAILED")
 
     @property
     def lease_token(self) -> str:
@@ -94,6 +104,7 @@ class LeaseGuard:
             daemon=True,
         )
         self._thread.start()
+        self._signal_health()
 
     def _heartbeat_loop(self) -> None:
         while not self._stop.wait(self.heartbeat_seconds):
@@ -109,9 +120,11 @@ class LeaseGuard:
             if not renewed:
                 self._lost.set()
                 return
+            self._signal_health()
 
     def checkpoint(self) -> None:
         """Handlers should call this between expensive sub-steps."""
+        self._signal_health()
         if self.lost:
             raise LeaseLostError(f"Lease perdu pendant le work-item {self.item.id}")
         current = self.repository.get(self.item.id)
@@ -125,6 +138,7 @@ class LeaseGuard:
 
     def report_progress(self, progress: Mapping) -> None:
         """Persist handler progress under the current fencing token."""
+        self._signal_health()
         if self.lost:
             raise LeaseLostError(f"Lease perdu pendant le work-item {self.item.id}")
         self.repository.update_progress(
@@ -149,6 +163,7 @@ class PipelineWorker:
         owner: str | None = None,
         retry_policy: RetryPolicy | None = None,
         on_dead_letter: Callable[[WorkItem, str], None] | None = None,
+        health_callback: Callable[[], None] | None = None,
     ):
         self.repository = repository
         self.handler = handler
@@ -156,8 +171,18 @@ class PipelineWorker:
         self.owner = owner or default_worker_identity()
         self.retry_policy = retry_policy or RetryPolicy()
         self.on_dead_letter = on_dead_letter
+        self.health_callback = health_callback
+
+    def _signal_health(self) -> None:
+        if self.health_callback is None:
+            return
+        try:
+            self.health_callback()
+        except Exception:
+            logger.exception("PIPELINE_WORKER_HEALTH_CALLBACK_FAILED owner=%s", self.owner)
 
     def process_next(self) -> ProcessOutcome:
+        self._signal_health()
         item = self.repository.claim_next(
             owner=self.owner,
             lease_seconds=self.settings.lease_seconds,
@@ -176,6 +201,7 @@ class PipelineWorker:
         return self._process_claimed(item)
 
     def process_work_item(self, work_item_id: str) -> ProcessOutcome:
+        self._signal_health()
         item = self.repository.claim(
             work_item_id,
             owner=self.owner,
@@ -207,6 +233,7 @@ class PipelineWorker:
             item,
             lease_seconds=self.settings.lease_seconds,
             heartbeat_seconds=self.settings.heartbeat_seconds,
+            health_callback=self.health_callback,
         )
         guard.start()
         logger.info(
@@ -341,6 +368,7 @@ class PipelineWorker:
         try:
             with transport.receiver() as receiver:
                 while not stop_event.is_set():
+                    self._signal_health()
                     dispatcher.dispatch_once(limit=self.settings.outbox_batch_size)
                     delivery = receiver.receive_one()
                     if delivery is None:

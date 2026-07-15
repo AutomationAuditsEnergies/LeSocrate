@@ -36,6 +36,9 @@ PIPELINE_EXECUTION_MODE=queue
 PIPELINE_QUEUE_BACKEND=database
 PIPELINE_EMBEDDED_WORKER=1
 PIPELINE_ARTIFACTS_REQUIRED=1
+PIPELINE_WORKER_READY_STALE_SECONDS=180
+PIPELINE_READY_QUEUE_STALL_SECONDS=600
+PIPELINE_READY_BLOB_CACHE_SECONDS=60
 ```
 
 `DATABASE_BACKEND=postgres` et `PIPELINE_DATABASE_BACKEND=postgres` rendent
@@ -55,6 +58,11 @@ recréer silencieusement `/home/database.db`.
 La file DB durable est traitée par un worker embarqué ; sous forte
 charge, passer ce worker dans un App Service ou WebJob séparé et activer Azure
 Service Bus.
+
+Le health check Azure pointe sur `/readyz`. Cette sonde exécute une requête
+PostgreSQL, authentifie réellement l'accès Azure Blob, contrôle le heartbeat du
+worker embarqué et refuse une file actionnable bloquée plus de dix minutes sans
+lease active. `/healthz` reste une simple sonde de vie du processus.
 
 Les générations audio lancées depuis le dashboard HR utilisent cette même
 file. Leur progression et leur résultat sont stockés dans

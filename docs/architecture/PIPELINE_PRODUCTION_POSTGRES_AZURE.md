@@ -125,6 +125,24 @@ Chaque worker possède une lease renouvelée et un jeton de fencing. Une instanc
 ancienne ne peut ni terminer ni libérer le travail repris par une nouvelle
 instance.
 
+## Liveness et readiness
+
+`/healthz` vérifie uniquement que le processus HTTP répond. `/readyz` vérifie
+les dépendances nécessaires avant de recevoir du trafic : requête SQL réelle,
+appel Azure Blob authentifié, heartbeat du worker embarqué et snapshot de la
+file durable. Une tâche en attente depuis trop longtemps sans lease active rend
+l'instance non prête ; une tâche longue avec lease renouvelée reste saine.
+
+```dotenv
+PIPELINE_WORKER_READY_STALE_SECONDS=180
+PIPELINE_READY_QUEUE_STALL_SECONDS=600
+PIPELINE_READY_BLOB_CACHE_SECONDS=60
+```
+
+Le cache Blob évite un appel Azure à chaque sonde tout en détectant les
+identifiants invalides. Les erreurs de readiness exposent seulement le composant
+en échec ; le détail reste dans les logs serveur.
+
 ## Migration et cutover
 
 1. Geler les écritures SQLite et réaliser une sauvegarde cohérente.

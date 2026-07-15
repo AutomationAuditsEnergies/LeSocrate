@@ -1,7 +1,7 @@
 # main_app.py - Point d'entrée principal de l'application (refactorisé)
 # Backend API pur pour frontend React
 import os
-from flask import Flask, request, session
+from flask import Flask, jsonify as _jsonify, request, session
 from flask_socketio import SocketIO
 from flask_cors import CORS
 
@@ -108,42 +108,26 @@ def liveness_probe():
 
 @app.get("/readyz")
 def readiness_probe():
-    """Fail deployment traffic when the authoritative database is unavailable."""
+    """Verify every production dependency required to accept pipeline traffic."""
     try:
-        from database.postgres import get_postgres_connection, postgres_enabled
+        from services.runtime_readiness_service import run_readiness_checks
 
-        if postgres_enabled():
-            with get_postgres_connection() as conn:
-                with conn.cursor() as cur:
-                    cur.execute("SELECT 1 AS ready")
-                    cur.fetchone()
-        else:
-            from database.db import get_db_connection
-
-            conn = get_db_connection()
-            try:
-                conn.execute("SELECT 1").fetchone()
-            finally:
-                conn.close()
-
-        if os.getenv("PIPELINE_ARTIFACTS_REQUIRED", "0").strip().lower() in {
-            "1", "true", "yes", "on",
-        } and not (
-            os.getenv("AZURE_TTS_STORAGE_CONNECTION_STRING")
-            or os.getenv("AZURE_STORAGE_CONNECTION_STRING")
-        ):
-            raise RuntimeError("Stockage d'artefacts obligatoire non configuré")
-        return _jsonify({"status": "ready"}), 200
+        checks = run_readiness_checks()
+        return _jsonify({"status": "ready", "checks": checks}), 200
     except Exception as exc:
-        logger.warning("READINESS_FAILED error=%s", str(exc)[:300])
-        return _jsonify({"status": "not_ready"}), 503
+        failed_check = getattr(exc, "check", "unknown")
+        logger.warning(
+            "READINESS_FAILED check=%s error=%s",
+            failed_check,
+            str(exc)[:300],
+        )
+        return _jsonify({"status": "not_ready", "failed_check": failed_check}), 503
 
 # Reconstituer la session Flask depuis le header X-Auth-Token
 # (pour navigation privée et navigateurs bloquant les cookies tiers)
 # + injecter platform_id depuis le header X-Platform-Id
 import state as _state
 from utils.auth_tokens import verify_auth_token
-from flask import jsonify as _jsonify
 @app.before_request
 def populate_session_from_token():
     # Mode maintenance DB : tout est bloqué en 503 sauf les endpoints admin
@@ -343,6 +327,11 @@ def _embedded_pipeline_worker_loop():
     from services.pipeline_queue.repository import WorkItemRepository
     from services.pipeline_queue.settings import QueueSettings
     from services.pipeline_queue.worker import PipelineWorker
+    from services.pipeline_runtime_health import (
+        mark_embedded_worker_error,
+        mark_embedded_worker_heartbeat,
+        mark_embedded_worker_started,
+    )
 
     while True:
         try:
@@ -353,10 +342,13 @@ def _embedded_pipeline_worker_loop():
                 handle_pipeline_work_item,
                 settings=QueueSettings.from_env(),
                 on_dead_letter=mark_pipeline_dead_letter,
+                health_callback=mark_embedded_worker_heartbeat,
             )
+            mark_embedded_worker_started(worker.owner)
             logger.info("PIPELINE_EMBEDDED_WORKER_STARTED owner=%s", worker.owner)
             worker.run_forever()
-        except Exception:
+        except Exception as exc:
+            mark_embedded_worker_error(exc)
             logger.exception("PIPELINE_EMBEDDED_WORKER_CRASHED restart_in_seconds=10")
             socketio.sleep(10)
 
@@ -367,7 +359,10 @@ if (
     and os.getenv("PIPELINE_EMBEDDED_WORKER", "0").strip().lower()
     in {"1", "true", "yes", "on"}
 ):
-    socketio.start_background_task(_embedded_pipeline_worker_loop)
+    from services.pipeline_runtime_health import register_embedded_worker_task
+
+    _embedded_worker_task = socketio.start_background_task(_embedded_pipeline_worker_loop)
+    register_embedded_worker_task(_embedded_worker_task)
     logger.info("✅ Worker pipeline durable embarqué programmé")
 
 

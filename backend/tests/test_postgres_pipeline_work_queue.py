@@ -148,6 +148,25 @@ class PostgresPipelineWorkQueueTest(unittest.TestCase):
         self.repo.complete(second.id, second.lease_token, result={"ok": True})
         self.assertEqual(self.repo.get(item.id).status, WorkStatus.COMPLETED.value)
 
+    def test_readiness_snapshot_tracks_postgres_due_and_active_work(self):
+        item = self.repo.enqueue(
+            WorkItemSpec(
+                pipeline_job_id=42,
+                run_id="pg-readiness",
+                task_type="test",
+                dedupe_key="pg-readiness:test",
+            )
+        )
+        due = self.repo.readiness_snapshot()
+        self.assertEqual(due["due_count"], 1)
+        self.assertEqual(due["active_running_count"], 0)
+
+        claimed = self.repo.claim(item.id, owner="worker-ready", lease_seconds=60)
+        self.assertIsNotNone(claimed)
+        active = self.repo.readiness_snapshot()
+        self.assertEqual(active["due_count"], 0)
+        self.assertEqual(active["active_running_count"], 1)
+
     def test_folder_scoped_audio_enqueue_is_atomic_without_pipeline_parent(self):
         def enqueue(index):
             return self.repo.enqueue(

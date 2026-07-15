@@ -159,6 +159,31 @@ class PipelineWorkQueueTest(unittest.TestCase):
                 {"status": "running", "step": 8},
             )
 
+    def test_readiness_snapshot_distinguishes_due_active_and_expired_work(self):
+        item = self._enqueue()
+        due = self.repo.readiness_snapshot()
+        self.assertEqual(due["due_count"], 1)
+        self.assertEqual(due["active_running_count"], 0)
+
+        claimed = self.repo.claim(item.id, owner="worker", lease_seconds=60)
+        self.assertIsNotNone(claimed)
+        active = self.repo.readiness_snapshot()
+        self.assertEqual(active["due_count"], 0)
+        self.assertEqual(active["active_running_count"], 1)
+
+        conn = sqlite3.connect(self.db_path)
+        conn.execute(
+            "UPDATE pipeline_work_items SET lease_expires_at = '2000-01-01T00:00:00+00:00' WHERE id = ?",
+            (item.id,),
+        )
+        conn.commit()
+        conn.close()
+
+        expired = self.repo.readiness_snapshot()
+        self.assertEqual(expired["active_running_count"], 0)
+        self.assertEqual(expired["expired_running_count"], 1)
+        self.assertIsNotNone(expired["oldest_expired_lease_at"])
+
     def test_stale_owner_cannot_complete_new_fenced_lease(self):
         item = self._enqueue()
         first = self.repo.claim(item.id, owner="worker-a", lease_seconds=60)
