@@ -22,15 +22,11 @@ export function setPlatformName(name) {
   localStorage.setItem('platform_name', name)
 }
 
-export function getStudentLoginPath() {
-  return localStorage.getItem('student_login_path') || '/'
-}
-
-export function setStudentLoginPath(path) {
-  localStorage.setItem('student_login_path', path || '/')
-}
-
-export function apiRequestHeaders(path = '', headers = {}) {
+/**
+ * Wrapper autour de fetch qui ajoute automatiquement credentials: 'include',
+ * le token X-Auth-Token et le header X-Platform-Id
+ */
+export function apiFetch(path, options = {}) {
   const adminToken = localStorage.getItem('admin_auth_token')
   const userToken = localStorage.getItem('auth_token')
   const prefersAdminToken = path.startsWith('/api/admin')
@@ -39,21 +35,14 @@ export function apiRequestHeaders(path = '', headers = {}) {
     || path.startsWith('/api/slides')
   const token = prefersAdminToken ? (adminToken || userToken) : (userToken || adminToken)
   const platformId = getPlatformId()
-  return {
-    ...headers,
+  const headers = {
+    ...(options.headers || {}),
     ...(token ? { 'X-Auth-Token': token } : {}),
     'X-Platform-Id': platformId,
   }
-}
-
-/**
- * Wrapper autour de fetch qui ajoute automatiquement credentials: 'include',
- * le token X-Auth-Token et le header X-Platform-Id
- */
-export function apiFetch(path, options = {}) {
   return fetch(apiUrl(path), {
     ...options,
-    headers: apiRequestHeaders(path, options.headers || {}),
+    headers,
     credentials: 'include',
   })
 }

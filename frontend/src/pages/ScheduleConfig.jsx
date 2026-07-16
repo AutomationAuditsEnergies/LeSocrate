@@ -142,7 +142,7 @@ export default function ScheduleConfig() {
       <div style={{ maxWidth: 600, margin: '0 auto' }}>
         {/* Header */}
         <a
-          href="/dashboard-centre"
+          href="/hr-dashboard"
           style={{
             display: 'inline-flex',
             alignItems: 'center',

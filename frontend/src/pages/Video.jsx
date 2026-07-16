@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import ChatPanel from '../components/ChatPanel.jsx'
-import { apiFetch, getPlatformId, getPlatformName, getStudentLoginPath, setPlatformId } from '../api'
+import { apiFetch, getPlatformId, getPlatformName, setPlatformId } from '../api'
 import { SlidePreviewFrame } from '../components/slides/PipelineSlidePreview.jsx'
 import {
   audioBasename,
@@ -155,10 +155,10 @@ export default function Video() {
   const handleHangup = async () => {
     try {
       await apiFetch('/api/auth/logout', { method: 'POST' })
-      navigate(getStudentLoginPath())
+      navigate('/')
     } catch (err) {
       console.error('Erreur déconnexion:', err)
-      navigate(getStudentLoginPath())
+      navigate('/')
     }
   }
 
@@ -204,8 +204,7 @@ export default function Video() {
 
       if (!data.authenticated) {
         const platformId = pParam || getPlatformId()
-        const loginPath = getStudentLoginPath()
-        navigate(loginPath !== '/' ? loginPath : (platformId && platformId !== '1' ? `/?p=${platformId}` : '/'), { replace: true })
+        navigate(platformId && platformId !== '1' ? `/?p=${platformId}` : '/', { replace: true })
         return
       }
 

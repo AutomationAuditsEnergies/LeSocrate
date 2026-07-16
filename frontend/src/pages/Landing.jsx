@@ -66,7 +66,7 @@ export default function Landing() {
                     Connexion
                   </button>
                   {!isLightNav && (
-                    <button type="button" onClick={() => navigate('/connexion-centre')} className={navTrialButtonClass}>
+                    <button className={navTrialButtonClass}>
                       Essai gratuit
                     </button>
                   )}
@@ -95,7 +95,7 @@ export default function Landing() {
                 Confiez-lui un titre professionnel, un rythme de cours et une durée. En quelques heures, il prépare l'année et dispense les sessions à vos élèves au jour prévu.
               </p>
               <div className="flex flex-col sm:flex-row items-center justify-center lg:justify-start gap-4">
-                <button onClick={() => navigate('/connexion-centre')} className="w-full sm:w-auto h-14 bg-[#3857FF] hover:bg-[#2946E8] text-white px-9 rounded-[10px] font-bold shadow-[0_14px_34px_rgba(56,87,255,0.35)] transition transform hover:-translate-y-1 inline-flex items-center justify-center gap-4 whitespace-nowrap">
+                <button onClick={() => navigate('/hr-dashboard')} className="w-full sm:w-auto h-14 bg-[#3857FF] hover:bg-[#2946E8] text-white px-9 rounded-[10px] font-bold shadow-[0_14px_34px_rgba(56,87,255,0.35)] transition transform hover:-translate-y-1 inline-flex items-center justify-center gap-4 whitespace-nowrap">
                   Découvrir les professeurs IA
                   <span className="material-icons-round text-white text-2xl leading-none">arrow_forward</span>
                 </button>
@@ -104,20 +104,6 @@ export default function Landing() {
                   Regarder une démo
                 </button>
               </div>
-            </div>
-            <div className="relative hidden min-h-[560px] lg:block" aria-hidden="true">
-              <img
-                src="/robot-violet.png"
-                alt=""
-                draggable={false}
-                className="absolute left-[4%] top-[9%] w-[330px] select-none object-contain drop-shadow-[0_34px_72px_rgba(91,91,255,0.38)] xl:w-[380px]"
-              />
-              <img
-                src="/robot-violet.png"
-                alt=""
-                draggable={false}
-                className="absolute bottom-[3%] right-[1%] w-[270px] select-none object-contain drop-shadow-[0_30px_64px_rgba(139,92,246,0.30)] xl:w-[320px]"
-              />
             </div>
           </div>
         </div>

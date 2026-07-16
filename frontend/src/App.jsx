@@ -1,5 +1,5 @@
 import { Component, lazy, Suspense, useState, useEffect } from 'react'
-import { BrowserRouter, Route, Routes, useNavigate } from 'react-router-dom'
+import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
 import { apiUrl } from './api'
 import Index from './pages/Index.jsx'
 import ProtectedAdminRoute from './components/ProtectedAdminRoute.jsx'
@@ -9,18 +9,16 @@ import ProtectedAdminRoute from './components/ProtectedAdminRoute.jsx'
 // le flash de fallback après validation du formulaire.
 const loadAdminPage = () => import('./pages/Admin.jsx')
 const loadAttentePage = () => import('./pages/Attente.jsx')
+const loadLoginAdminPage = () => import('./pages/LoginAdmin.jsx')
 const loadLoginCentrePage = () => import('./pages/LoginCentre.jsx')
 const loadVideoPage = () => import('./pages/Video.jsx')
 const loadHRDashboardPage = () => import('./pages/HRDashboard.jsx')
-const loadClassEntryPage = () => import('./pages/ClassEntry.jsx')
-
-const INTERNAL_ADMIN_TYPES = ['legacy_admin']
-const CENTER_DASHBOARD_TYPES = ['legacy_admin', 'training_center']
 
 const Admin = lazy(loadAdminPage)
 const Attente = lazy(loadAttentePage)
 const DebugCours = lazy(() => import('./pages/DebugCours.jsx'))
 const Intro = lazy(() => import('./pages/Intro.jsx'))
+const LoginAdmin = lazy(loadLoginAdminPage)
 const LoginCentre = lazy(loadLoginCentrePage)
 const Landing = lazy(() => import('./pages/Landing.jsx'))
 const Video = lazy(loadVideoPage)
@@ -30,7 +28,6 @@ const Recorder = lazy(() => import('./pages/Recorder.jsx'))
 const HRDashboard = lazy(loadHRDashboardPage)
 const ScheduleConfig = lazy(() => import('./pages/ScheduleConfig.jsx'))
 const FormationPipeline = lazy(() => import('./pages/FormationPipeline.jsx'))
-const ClassEntry = lazy(loadClassEntryPage)
 
 function preloadCourseRoutes() {
   return Promise.all([loadVideoPage(), loadAttentePage()])
@@ -218,65 +215,14 @@ function ProtectedHRRoute({ children }) {
   return children
 }
 
-function CenterDashboardRoute() {
-  return (
-    <ProtectedHRRoute>
-      <ProtectedAdminRoute loginPath="/connexion-centre" allowedAccountTypes={CENTER_DASHBOARD_TYPES}>
-        <HRDashboard />
-      </ProtectedAdminRoute>
-    </ProtectedHRRoute>
-  )
-}
-
-function hasSupabaseRecoveryHash() {
-  if (typeof window === 'undefined' || !window.location.hash) return false
-  const hashParams = new URLSearchParams(window.location.hash.slice(1))
-  return hashParams.get('type') === 'recovery'
-    || (hashParams.has('access_token') && hashParams.has('refresh_token'))
-}
-
-function AuthRecoveryRedirect() {
-  const navigate = useNavigate()
-
-  useEffect(() => {
-    if (window.location.pathname === '/' && hasSupabaseRecoveryHash()) {
-      navigate(`/connexion-centre${window.location.hash}`, { replace: true })
-    }
-  }, [navigate])
-
-  return null
-}
-
-function NotFound() {
-  return (
-    <main className="flex min-h-screen items-center justify-center bg-slate-950 px-6 text-white">
-      <div className="max-w-md">
-        <p className="text-sm font-semibold text-violet-300">Page introuvable</p>
-        <h1 className="mt-3 text-3xl font-bold">Cette adresse n'existe pas.</h1>
-        <a
-          href="/connexion-centre"
-          className="mt-8 inline-flex h-11 items-center justify-center rounded-lg bg-violet-500 px-5 text-sm font-semibold text-white transition hover:bg-violet-400"
-        >
-          Aller à la connexion
-        </a>
-      </div>
-    </main>
-  )
-}
-
 export default function App() {
   return (
     <AppErrorBoundary>
       <BrowserRouter>
-        <AuthRecoveryRedirect />
         <Suspense fallback={<RouteFallback />}>
           <Routes>
           <Route
             path="/"
-            element={<Landing />}
-          />
-          <Route
-            path="/cours"
             element={
               <Index
                 preloadCourseRoutes={preloadCourseRoutes}
@@ -285,34 +231,18 @@ export default function App() {
               />
             }
           />
-          <Route path="/landing" element={<Landing />} />
           <Route path="/attente" element={<Attente />} />
-          <Route
-            path="/classe/:centerSlug/:platformSlug"
-            element={
-              <ClassEntry
-                preloadCourseRoutes={preloadCourseRoutes}
-                preloadAttenteRoute={preloadAttenteRoute}
-                preloadVideoRoute={preloadVideoRoute}
-              />
-            }
-          />
+          <Route path="/landing" element={<Landing />} />
           <Route path="/video" element={<Video />} />
-          <Route
-            path="/connexion-centre"
-            element={(
-              <LoginCentre
-                preloadAdminRoute={loadAdminPage}
-                preloadDashboardRoute={loadHRDashboardPage}
-              />
-            )}
-          />
+          <Route path="/login-admin" element={<LoginAdmin preloadAdminRoute={loadAdminPage} />} />
+          <Route path="/connexion-centre" element={<LoginCentre preloadDashboardRoute={loadHRDashboardPage} />} />
+          <Route path="/login-centre" element={<LoginCentre preloadDashboardRoute={loadHRDashboardPage} />} />
 
           {/* Routes protégées admin */}
           <Route
             path="/admin"
             element={
-              <ProtectedAdminRoute allowedAccountTypes={INTERNAL_ADMIN_TYPES}>
+              <ProtectedAdminRoute>
                 <Admin />
               </ProtectedAdminRoute>
             }
@@ -320,21 +250,39 @@ export default function App() {
           <Route
             path="/debug"
             element={
-              <ProtectedAdminRoute allowedAccountTypes={INTERNAL_ADMIN_TYPES}>
+              <ProtectedAdminRoute>
                 <DebugCours />
               </ProtectedAdminRoute>
             }
           />
           <Route path="/recorder" element={<Recorder />} />
           <Route
+            path="/hr-dashboard"
+            element={
+              <ProtectedHRRoute>
+                <ProtectedAdminRoute loginPath="/connexion-centre">
+                  <HRDashboard />
+                </ProtectedAdminRoute>
+              </ProtectedHRRoute>
+            }
+          />
+          {/* Compatibilité avec l’URL publique actuelle de la Plateforme 1.
+              Le contenu reste celui du snapshot du 6 juillet. */}
+          <Route
             path="/dashboard-centre"
-            element={<CenterDashboardRoute />}
+            element={
+              <ProtectedHRRoute>
+                <ProtectedAdminRoute loginPath="/connexion-centre">
+                  <HRDashboard />
+                </ProtectedAdminRoute>
+              </ProtectedHRRoute>
+            }
           />
 
           <Route
             path="/schedule-config"
             element={
-              <ProtectedAdminRoute allowedAccountTypes={INTERNAL_ADMIN_TYPES}>
+              <ProtectedAdminRoute>
                 <ScheduleConfig />
               </ProtectedAdminRoute>
             }
@@ -342,7 +290,7 @@ export default function App() {
           <Route
             path="/formation-pipeline"
             element={
-              <ProtectedAdminRoute allowedAccountTypes={INTERNAL_ADMIN_TYPES}>
+              <ProtectedAdminRoute>
                 <FormationPipeline />
               </ProtectedAdminRoute>
             }
@@ -352,12 +300,12 @@ export default function App() {
           <Route
             path="/generated-slides"
             element={
-              <ProtectedAdminRoute allowedAccountTypes={INTERNAL_ADMIN_TYPES}>
+              <ProtectedAdminRoute>
                 <GeneratedSlides />
               </ProtectedAdminRoute>
             }
           />
-          <Route path="*" element={<NotFound />} />
+          <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </Suspense>
       </BrowserRouter>

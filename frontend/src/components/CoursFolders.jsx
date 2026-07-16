@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { apiFetch, apiUrl } from '../api'
+import { apiUrl } from '../api'
 import AudioEditor from './AudioEditor'
 
 // ─── Material Icon Component ─────────────────────────────────────────────────
@@ -449,7 +449,7 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
     if (!selectedFolder) return
     setLoadingContentScript(true)
     try {
-      const resp = await apiFetch(`/api/hr/cours-folders/${selectedFolder.id}/content-job/script`)
+      const resp = await fetch(apiUrl(`/api/hr/cours-folders/${selectedFolder.id}/content-job/script`), { credentials: 'include' })
       const data = await resp.json()
       if (data.success) {
         const visibleCourseBlocs = mergeCourseBlocsForScriptModal(data.course_blocs, data.planned_course_blocs)
@@ -1242,7 +1242,7 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
   // ─── Playlist pipeline ──────────────────────────────────────────────
   const fetchPlaylistStatus = async (folderId) => {
     try {
-      const resp = await apiFetch(`/api/hr/cours-folders/${folderId}/playlist-status`)
+      const resp = await fetch(apiUrl(`/api/hr/cours-folders/${folderId}/playlist-status`), { credentials: 'include' })
       const data = await resp.json()
       if (data.success) {
         setPlaylistJob(data)
@@ -1277,7 +1277,7 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
       if (!confirmed) return
     }
     try {
-      const resp = await apiFetch(`/api/hr/cours-folders/${selectedFolder.id}/generate-playlist`, {
+      const resp = await fetch(apiUrl(`/api/hr/cours-folders/${selectedFolder.id}/generate-playlist`), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -1316,7 +1316,7 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
       if (!confirmed) return
     }
     try {
-      const resp = await apiFetch(`/api/hr/cours-folders/${selectedFolder.id}/generate-playlist-item`, {
+      const resp = await fetch(apiUrl(`/api/hr/cours-folders/${selectedFolder.id}/generate-playlist-item`), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -1351,7 +1351,7 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
 
   const fetchGeneratedAudios = async (folderId) => {
     try {
-      const resp = await apiFetch(`/api/hr/cours-folders/${folderId}/generated-audios`)
+      const resp = await fetch(apiUrl(`/api/hr/cours-folders/${folderId}/generated-audios`), { credentials: 'include' })
       const data = await resp.json()
       if (data.success) setGeneratedAudios(data.audios)
     } catch (e) {
@@ -1369,10 +1369,11 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
 
     setDeletingAudioFile(filename)
     try {
-      const resp = await apiFetch(
-        `/api/hr/cours-folders/${selectedFolder.id}/audio/${encodeURIComponent(filename)}`,
+      const resp = await fetch(
+        apiUrl(`/api/hr/cours-folders/${selectedFolder.id}/audio/${encodeURIComponent(filename)}`),
         {
           method: 'DELETE',
+          credentials: 'include',
         }
       )
       const data = await resp.json().catch(() => ({}))
@@ -1470,7 +1471,7 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
     if (!selectedFolder) return
     setLoadingScript(true)
     try {
-      const resp = await apiFetch(`/api/hr/cours-folders/${selectedFolder.id}/playlist-script`)
+      const resp = await fetch(apiUrl(`/api/hr/cours-folders/${selectedFolder.id}/playlist-script`), { credentials: 'include' })
       const data = await resp.json()
       if (data.success) {
         setScriptModal(data)
@@ -2035,26 +2036,14 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
                         const audio = generatedMap[item.filename]
                         const meta = AUDIO_TYPE_META[item.type] || AUDIO_TYPE_META.cours
                         return (
-	                          <div
-	                            key={item.filename}
-	                            role={audio ? 'button' : undefined}
-	                            tabIndex={audio ? 0 : -1}
-	                            onClick={() => {
-	                              if (audio) setAudioEditorFile(item.filename)
-	                            }}
-	                            onKeyDown={(e) => {
-	                              if (audio && (e.key === 'Enter' || e.key === ' ')) {
-	                                e.preventDefault()
-	                                setAudioEditorFile(item.filename)
-	                              }
-	                            }}
-	                            className="flex min-h-[46px] items-center gap-3 rounded-lg px-3 py-2 outline-none transition-colors"
-	                            style={{
-	                              backgroundColor: audio ? (darkMode ? '#111827' : '#f8fafc') : 'transparent',
-	                              border: `1px solid ${audio ? colors.border : 'transparent'}`,
-	                              cursor: audio ? 'pointer' : 'default',
-	                            }}
-	                          >
+                          <div
+                            key={item.filename}
+                            className="flex min-h-[46px] items-center gap-3 rounded-lg px-3 py-2"
+                            style={{
+                              backgroundColor: audio ? (darkMode ? '#111827' : '#f8fafc') : 'transparent',
+                              border: `1px solid ${audio ? colors.border : 'transparent'}`,
+                            }}
+                          >
                             <Icon
                               name={audio ? 'check_circle' : 'radio_button_unchecked'}
                               style={{ color: audio ? colors.textSecondary : colors.textMuted, fontSize: '18px', flexShrink: 0 }}
@@ -2068,25 +2057,19 @@ export default function CoursFoldersModal({ platformId, platformName, onClose, o
                                 </span>
                               </p>
                             </div>
-	                            {audio && (
-	                              <div className="flex flex-shrink-0 items-center gap-1.5">
-	                                <button
-	                                  onClick={(e) => {
-	                                    e.stopPropagation()
-	                                    setAudioEditorFile(item.filename)
-	                                  }}
-	                                  title="Éditer cet audio (couper / remplacer)"
+                            {audio && (
+                              <div className="flex flex-shrink-0 items-center gap-1.5">
+                                <button
+                                  onClick={() => setAudioEditorFile(item.filename)}
+                                  title="Éditer cet audio (couper / remplacer)"
                                   className="inline-flex h-8 w-8 items-center justify-center rounded-lg transition-colors"
                                   style={{ backgroundColor: colors.innerBg, border: `1px solid ${colors.border}`, color: colors.textSecondary }}
                                 >
                                   <Icon name="content_cut" style={{ fontSize: '16px' }} />
                                 </button>
-	                                <button
-	                                  type="button"
-	                                  onClick={(e) => {
-	                                    e.stopPropagation()
-	                                    handleDeleteGeneratedAudio(item.filename)
-	                                  }}
+                                <button
+                                  type="button"
+                                  onClick={() => handleDeleteGeneratedAudio(item.filename)}
                                   disabled={deletingAudioFile === item.filename}
                                   title="Supprimer cet audio"
                                   className="inline-flex h-8 w-8 items-center justify-center rounded-lg transition-colors disabled:cursor-not-allowed disabled:opacity-50"

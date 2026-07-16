@@ -1,11 +1,11 @@
 import { useState, useEffect, useRef, useMemo } from 'react'
-import { apiFetch } from '../api'
+import { apiUrl } from '../api'
 import CoursFoldersModal from '../components/CoursFolders'
 import SlideToConfirm, { BackupPipeline } from '../components/SlideToConfirm'
 
 // ─── Material Icon Component ─────────────────────────────────────────────────
-const Icon = ({ name, className = '', ...props }) => (
-  <span className={`material-icons ${className}`} {...props}>{name}</span>
+const Icon = ({ name, className = '' }) => (
+  <span className={`material-icons ${className}`}>{name}</span>
 )
 
 const hasCrCdTitle = (title = '') => /\bCRCD\b/i.test(title)
@@ -34,72 +34,14 @@ const ROBOT_THEMES = [
   { src: '/robot-amber.png', glow: '#f59e0b' },  // ambre
 ]
 const getRobotTheme = (id = 0) => ROBOT_THEMES[((Number(id) || 1) - 1) % ROBOT_THEMES.length]
-const todayDateInput = () => {
-  const now = new Date()
-  const offset = now.getTimezoneOffset() * 60000
-  return new Date(now.getTime() - offset).toISOString().slice(0, 10)
-}
-
-const PIPELINE_PROGRESS_BY_STEP = {
-  reac: 12,
-  kb: 24,
-  global: 36,
-  daily: 48,
-  content: 64,
-  review: 78,
-  post_review_docs: 88,
-  slides: 96,
-  audio: 98,
-  done: 100,
-}
-
-const PIPELINE_PROGRESS_BY_STATUS = {
-  init: 8,
-  reac_ready: 18,
-  kb_building: 24,
-  global_generating: 34,
-  global_ready: 42,
-  global_validated: 46,
-  daily_splitting: 50,
-  daily_ready: 56,
-  daily_validated: 60,
-  tts_launched: 62,
-  text_ready: 100,
-  audio_running: 98,
-  audio_launched: 100,
-  audio_completed: 100,
-  completed: 100,
-}
-
-const PLATFORM_LOAD_TIMEOUT_MS = 30000
-
-const getHiddenPipelineProgress = (platform = {}) => {
-  if (platform.pipeline_auto_pilot_error) return 100
-  const step = String(platform.pipeline_auto_pilot_step || '').trim()
-  if (step && Object.prototype.hasOwnProperty.call(PIPELINE_PROGRESS_BY_STEP, step)) {
-    return PIPELINE_PROGRESS_BY_STEP[step]
-  }
-  const status = String(platform.pipeline_status || platform.status || '').trim()
-  if (status && Object.prototype.hasOwnProperty.call(PIPELINE_PROGRESS_BY_STATUS, status)) {
-    return PIPELINE_PROGRESS_BY_STATUS[status]
-  }
-  return 8
-}
 
 // ─── Component ───────────────────────────────────────────────────────────────
 export default function HRDashboard() {
   const [platforms, setPlatforms] = useState([])
   const [loading, setLoading] = useState(true)
   const [platformsError, setPlatformsError] = useState('')
-  const [platformsErrorTone, setPlatformsErrorTone] = useState('error')
-  const [loggingOut, setLoggingOut] = useState(false)
   const [expandedPlatform, setExpandedPlatform] = useState(null)
   const [platformAudios, setPlatformAudios] = useState({})
-  const [studentEmailsByPlatform, setStudentEmailsByPlatform] = useState({})
-  const [studentEmailsLoading, setStudentEmailsLoading] = useState(null)
-  const [studentEmailsSaving, setStudentEmailsSaving] = useState(null)
-  const [studentEmailDrafts, setStudentEmailDrafts] = useState({})
-  const [expandedStudentsPlatform, setExpandedStudentsPlatform] = useState(null)
   const [playingAudio, setPlayingAudio] = useState(null)
   const [pdfUploading, setPdfUploading] = useState(null)
   const [audiosLoading, setAudiosLoading] = useState(null)
@@ -119,7 +61,6 @@ export default function HRDashboard() {
   // proportionnelle à l'irréversibilité de l'action).
   const [deleteConfirmTypedName, setDeleteConfirmTypedName] = useState('')
   const [showCreateModal, setShowCreateModal] = useState(false)
-  const [expandedAttendancePlatform, setExpandedAttendancePlatform] = useState(null)
   const [newPlatformName, setNewPlatformName] = useState('')
   const [creating, setCreating] = useState(false)
   // Modules formation disponibles (produits persistants des pipelines terminées).
@@ -133,10 +74,6 @@ export default function HRDashboard() {
   const [moduleSearchQuery, setModuleSearchQuery] = useState('')
   const [formationMode, setFormationMode] = useState('existing') // 'existing' | 'new' | 'none'
   const [selectedModuleId, setSelectedModuleId] = useState('')
-  const [teacherFirstName, setTeacherFirstName] = useState('')
-  const [teacherColor, setTeacherColor] = useState('violet')
-  const [weeklyCourseCount, setWeeklyCourseCount] = useState('2')
-  const [teachingDays, setTeachingDays] = useState(['mardi', 'jeudi'])
   const [newFormTpName, setNewFormTpName] = useState('')
   const [newFormRncp, setNewFormRncp] = useState('')
   const [newFormHours, setNewFormHours] = useState('')
@@ -146,6 +83,7 @@ export default function HRDashboard() {
   // Sinon, comportement historique : redirection vers
   // /formation-pipeline pour validation manuelle étape par étape.
   const [autoPilot, setAutoPilot] = useState(false)
+  const [autoPilotTts, setAutoPilotTts] = useState('gtts')  // 'fish_audio' | 'gtts' | 'mock'
   // Mode d'exécution des étapes IA (KB, global, daily, content, review) :
   // - 'api'          : appels directs à l'API Anthropic (consomme ANTHROPIC_API_KEY)
   // - 'api_deepseek' : appels directs à l'API DeepSeek (consomme DEEPSEEK_API_KEY)
@@ -160,21 +98,16 @@ export default function HRDashboard() {
   const [showCoursFoldersModal, setShowCoursFoldersModal] = useState(false)
   const [selectedCoursPlatform, setSelectedCoursPlatform] = useState(null)
   const [cardPage, setCardPage] = useState(0)
-  const [attendancePlatformId, setAttendancePlatformId] = useState('')
-  const [attendanceDate, setAttendanceDate] = useState(todayDateInput)
-  const [attendanceData, setAttendanceData] = useState(null)
-  const [attendanceLoading, setAttendanceLoading] = useState(false)
-  const [attendanceError, setAttendanceError] = useState('')
-  const [attendanceSavingStudentId, setAttendanceSavingStudentId] = useState(null)
   const CARDS_PER_PAGE = 3
 
   // ─── Fetch data ──────────────────────────────────────────────────────
   const fetchPlatforms = async (refreshSelectedId = null) => {
     const controller = new AbortController()
-    const timeoutId = window.setTimeout(() => controller.abort(), PLATFORM_LOAD_TIMEOUT_MS)
+    const timeoutId = window.setTimeout(() => controller.abort(), 15000)
     try {
       setPlatformsError('')
-      const resp = await apiFetch('/api/hr/platforms?include_blob_stats=0', {
+      const resp = await fetch(apiUrl('/api/hr/platforms?include_blob_stats=0'), {
+        credentials: 'include',
         signal: controller.signal,
       })
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
@@ -194,15 +127,13 @@ export default function HRDashboard() {
           return fresh || prev
         })
       } else {
-        setPlatformsErrorTone('error')
         setPlatformsError(data.error || 'Impossible de charger les plateformes.')
       }
     } catch (e) {
       console.error('Erreur chargement plateformes:', e)
-      setPlatformsErrorTone(e.name === 'AbortError' ? 'warning' : 'error')
       setPlatformsError(
         e.name === 'AbortError'
-          ? 'Actualisation des plateformes encore en cours. Vous pouvez relancer le chargement.'
+          ? 'Chargement des plateformes trop long. Réessayez dans quelques secondes.'
           : 'Impossible de charger les plateformes.'
       )
     } finally {
@@ -214,7 +145,7 @@ export default function HRDashboard() {
   const fetchAudios = async (platformId) => {
     setAudiosLoading(platformId)
     try {
-      const resp = await apiFetch(`/api/hr/platforms/${platformId}/audios`)
+      const resp = await fetch(apiUrl(`/api/hr/platforms/${platformId}/audios`), { credentials: 'include' })
       const data = await resp.json()
       if (data.success) {
         setPlatformAudios(prev => ({ ...prev, [platformId]: data.audios }))
@@ -226,89 +157,6 @@ export default function HRDashboard() {
     }
   }
 
-  const fetchStudentEmails = async (platformId) => {
-    setStudentEmailsLoading(platformId)
-    try {
-      const resp = await apiFetch(`/api/hr/platforms/${platformId}/student-emails`)
-      const data = await resp.json()
-      if (data.success) {
-        setStudentEmailsByPlatform(prev => ({ ...prev, [platformId]: data.recipients || [] }))
-      }
-    } catch (e) {
-      console.error('Erreur chargement emails élèves:', e)
-    } finally {
-      setStudentEmailsLoading(null)
-    }
-  }
-
-  const handleToggleStudentEmails = (platformId) => {
-    setExpandedStudentsPlatform(prev => {
-      const next = prev === platformId ? null : platformId
-      if (next && !studentEmailsByPlatform[platformId]) fetchStudentEmails(platformId)
-      return next
-    })
-  }
-
-  const handleToggleAttendance = (platformId) => {
-    setExpandedAttendancePlatform(prev => {
-      const next = prev === platformId ? null : platformId
-      if (next) {
-        setAttendancePlatformId(String(platformId))
-        fetchAttendance(platformId, attendanceDate)
-      }
-      return next
-    })
-  }
-
-  const handleStudentEmailDraftChange = (platformId, value) => {
-    setStudentEmailDrafts(prev => ({ ...prev, [platformId]: value }))
-  }
-
-  const handleAddStudentEmails = async (platformId) => {
-    const draft = studentEmailDrafts[platformId] || ''
-    if (!draft.trim()) return
-    setStudentEmailsSaving(platformId)
-    try {
-      const resp = await apiFetch(`/api/hr/platforms/${platformId}/student-emails`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ emails: draft }),
-      })
-      const data = await resp.json()
-      if (data.success) {
-        setStudentEmailsByPlatform(prev => ({ ...prev, [platformId]: data.recipients || [] }))
-        setStudentEmailDrafts(prev => ({ ...prev, [platformId]: '' }))
-      } else {
-        alert(data.error || 'Impossible d’ajouter les emails')
-      }
-    } catch (e) {
-      console.error('Erreur ajout emails élèves:', e)
-      alert('Impossible d’ajouter les emails')
-    } finally {
-      setStudentEmailsSaving(null)
-    }
-  }
-
-  const handleDeleteStudentEmail = async (platformId, recipientId) => {
-    try {
-      const resp = await apiFetch(`/api/hr/platforms/${platformId}/student-emails/${recipientId}`, {
-        method: 'DELETE',
-      })
-      const data = await resp.json().catch(() => ({}))
-      if (!resp.ok || data.success === false) {
-        alert(data.error || 'Impossible de supprimer cet email')
-        return
-      }
-      setStudentEmailsByPlatform(prev => ({
-        ...prev,
-        [platformId]: (prev[platformId] || []).filter((item) => item.id !== recipientId),
-      }))
-    } catch (e) {
-      console.error('Erreur suppression email élève:', e)
-      alert('Impossible de supprimer cet email')
-    }
-  }
-
   const handleAudiosPublished = (platformId) => {
     fetchAudios(platformId)
     fetchPlatforms(platformId)
@@ -317,12 +165,6 @@ export default function HRDashboard() {
   useEffect(() => {
     fetchPlatforms()
   }, [])
-
-  useEffect(() => {
-    if (platforms.length > 0 && !attendancePlatformId) {
-      setAttendancePlatformId(String(platforms[0].id))
-    }
-  }, [platforms, attendancePlatformId])
 
   useEffect(() => {
     const bg = darkMode ? '#0f172a' : '#F8F7F5'
@@ -337,8 +179,8 @@ export default function HRDashboard() {
   // ─── Actions ─────────────────────────────────────────────────────────
   const handleLock = async (platformId) => {
     try {
-      const resp = await apiFetch(`/api/hr/platforms/${platformId}/toggle-lock`, {
-        method: 'POST',
+      const resp = await fetch(apiUrl(`/api/hr/platforms/${platformId}/toggle-lock`), {
+        method: 'POST', credentials: 'include',
       })
       const data = await resp.json()
       if (data.success) fetchPlatforms()
@@ -349,8 +191,8 @@ export default function HRDashboard() {
 
   const handleBackupAndUnlock = async (platformId) => {
     try {
-      const resp = await apiFetch(`/api/hr/platforms/${platformId}/backup-and-unlock`, {
-        method: 'POST',
+      const resp = await fetch(apiUrl(`/api/hr/platforms/${platformId}/backup-and-unlock`), {
+        method: 'POST', credentials: 'include',
       })
       const data = await resp.json()
       if (!data.success) {
@@ -368,7 +210,7 @@ export default function HRDashboard() {
     if (backupPollingRef.current[platformId]) clearInterval(backupPollingRef.current[platformId])
     backupPollingRef.current[platformId] = setInterval(async () => {
       try {
-        const resp = await apiFetch(`/api/hr/platforms/${platformId}/backup-status`)
+        const resp = await fetch(apiUrl(`/api/hr/platforms/${platformId}/backup-status`), { credentials: 'include' })
         const data = await resp.json()
         if (!data.success) return
         setBackupJobs(prev => ({ ...prev, [platformId]: data }))
@@ -397,8 +239,8 @@ export default function HRDashboard() {
 
     try {
       if (deleteConfirm.type === 'audio') {
-        const resp = await apiFetch(`/api/hr/platforms/${deleteConfirm.platformId}/audios/${encodeURIComponent(deleteConfirm.filename)}`, {
-          method: 'DELETE',
+        const resp = await fetch(apiUrl(`/api/hr/platforms/${deleteConfirm.platformId}/audios/${encodeURIComponent(deleteConfirm.filename)}`), {
+          method: 'DELETE', credentials: 'include',
         })
         const data = await resp.json()
         if (data.success) {
@@ -407,8 +249,8 @@ export default function HRDashboard() {
           setDeleteConfirm(null)
         }
       } else if (deleteConfirm.type === 'pdf') {
-        const resp = await apiFetch(`/api/hr/platforms/${deleteConfirm.platformId}/pdf`, {
-          method: 'DELETE',
+        const resp = await fetch(apiUrl(`/api/hr/platforms/${deleteConfirm.platformId}/pdf`), {
+          method: 'DELETE', credentials: 'include',
         })
         const data = await resp.json()
         if (data.success) {
@@ -417,8 +259,8 @@ export default function HRDashboard() {
         }
       } else if (deleteConfirm.type === 'module') {
         if (deleteConfirmTypedName !== deleteConfirm.confirmKey) return
-        const resp = await apiFetch(`/api/hr/formation-modules/${deleteConfirm.moduleId}`, {
-          method: 'DELETE',
+        const resp = await fetch(apiUrl(`/api/hr/formation-modules/${deleteConfirm.moduleId}`), {
+          method: 'DELETE', credentials: 'include',
         })
         const data = await resp.json()
         if (data.success) {
@@ -430,8 +272,8 @@ export default function HRDashboard() {
         }
       } else if (deleteConfirm.type === 'platform') {
         if (deleteConfirmTypedName !== deleteConfirm.platformName) return
-        const resp = await apiFetch(`/api/hr/platforms/${deleteConfirm.platformId}`, {
-          method: 'DELETE',
+        const resp = await fetch(apiUrl(`/api/hr/platforms/${deleteConfirm.platformId}`), {
+          method: 'DELETE', credentials: 'include',
         })
         const data = await resp.json()
         if (data.success) {
@@ -494,9 +336,8 @@ export default function HRDashboard() {
       const formData = new FormData()
       formData.append('file', file)
 
-      const resp = await apiFetch(`/api/hr/platforms/${platformId}/upload-pdf-rag`, {
-        method: 'POST',
-        body: formData,
+      const resp = await fetch(apiUrl(`/api/hr/platforms/${platformId}/upload-pdf-rag`), {
+        method: 'POST', credentials: 'include', body: formData,
       })
       const data = await resp.json()
       if (data.success) fetchPlatforms(platformId)
@@ -507,14 +348,13 @@ export default function HRDashboard() {
     }
   }
 
-  const handleSetCourseTime = async (dateCours, heureCours, weekdays = null) => {
+  const handleSetCourseTime = async (dateCours, heureCours) => {
     try {
-      const payload = { date_cours: dateCours, heure_cours: heureCours, force_schedule: true }
-      if (Array.isArray(weekdays)) payload.weekdays = weekdays
-      const resp = await apiFetch(`/api/hr/platforms/${courseTimePlatformId}/config-cours`, {
+      const resp = await fetch(apiUrl(`/api/hr/platforms/${courseTimePlatformId}/config-cours`), {
         method: 'POST',
+        credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
+        body: JSON.stringify({ date_cours: dateCours, heure_cours: heureCours }),
       })
       const data = await resp.json()
       return data
@@ -534,99 +374,9 @@ export default function HRDashboard() {
     setShowCoursFoldersModal(true)
   }
 
-  const fetchAttendance = async (platformId = attendancePlatformId, courseDate = attendanceDate) => {
-    if (!platformId || !courseDate) return
-    setAttendanceLoading(true)
-    setAttendanceError('')
-    try {
-      const resp = await apiFetch(`/api/hr/platforms/${platformId}/attendance?course_date=${encodeURIComponent(courseDate)}`)
-      const data = await resp.json()
-      if (resp.ok && data.success) {
-        setAttendanceData(data)
-      } else {
-        setAttendanceError(data.error || 'Impossible de charger les présences')
-      }
-    } catch (e) {
-      console.error('Erreur chargement présences:', e)
-      setAttendanceError('Impossible de charger les présences')
-    } finally {
-      setAttendanceLoading(false)
-    }
-  }
-
-  const updateAttendanceDraft = (studentId, updater) => {
-    setAttendanceData((current) => {
-      if (!current) return current
-      return {
-        ...current,
-        students: current.students.map((student) => {
-          if (student.id !== studentId) return student
-          const nextAttendance = typeof updater === 'function'
-            ? updater(student.attendance)
-            : { ...student.attendance, ...updater }
-          return { ...student, attendance: nextAttendance }
-        }),
-      }
-    })
-  }
-
-  const handleSaveAttendance = async (student, platformId = attendancePlatformId, courseDate = attendanceDate) => {
-    setAttendanceSavingStudentId(student.id)
-    setAttendanceError('')
-    try {
-      const resp = await apiFetch(`/api/hr/platforms/${platformId}/attendance/${student.id}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          course_date: courseDate,
-          slots: student.attendance?.slots || [],
-          status: student.attendance?.status || '',
-          notes: student.attendance?.notes || '',
-        }),
-      })
-      const data = await resp.json()
-      if (resp.ok && data.success) {
-        updateAttendanceDraft(student.id, { ...data.record, source: 'saved' })
-      } else {
-        setAttendanceError(data.error || 'Impossible d’enregistrer la présence')
-      }
-    } catch (e) {
-      console.error('Erreur sauvegarde présence:', e)
-      setAttendanceError('Impossible d’enregistrer la présence')
-    } finally {
-      setAttendanceSavingStudentId(null)
-    }
-  }
-
-  const handleExportAttendance = async (week = null, platformId = attendancePlatformId) => {
-    if (!platformId) return
-    try {
-      const params = week?.week_start
-        ? `?week_start=${encodeURIComponent(week.week_start)}&week_end=${encodeURIComponent(week.week_end || week.week_start)}`
-        : ''
-      const resp = await apiFetch(`/api/hr/platforms/${platformId}/attendance/export${params}`)
-      if (!resp.ok) {
-        setAttendanceError('Impossible de générer l’export Excel')
-        return
-      }
-      const blob = await resp.blob()
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = week?.week_start
-        ? `presences-${platformId}-semaine-${week.week_start}.xlsx`
-        : `presences-${platformId}.xlsx`
-      a.click()
-      URL.revokeObjectURL(url)
-    } catch (e) {
-      console.error('Erreur export présences:', e)
-      setAttendanceError('Impossible de générer l’export Excel')
-    }
-  }
-
   const fetchModules = async () => {
     try {
-      const resp = await apiFetch('/api/hr/formation-modules')
+      const resp = await fetch(apiUrl('/api/hr/formation-modules'), { credentials: 'include' })
       const data = await resp.json()
       if (data.success) setModules(data.modules || [])
     } catch (e) {
@@ -658,30 +408,13 @@ export default function HRDashboard() {
 
   const resetCreateForm = () => {
     setNewPlatformName('')
-    setFormationMode('new')
+    setFormationMode('existing')
     setSelectedModuleId('')
-    setTeacherFirstName('')
-    setTeacherColor('violet')
-    setWeeklyCourseCount('2')
-    setTeachingDays(['mardi', 'jeudi'])
     setNewFormTpName('')
     setNewFormRncp('')
     setNewFormHours('')
-    setAutoPilot(true)
-    setAutoPilotMode('api_deepseek')
-  }
-
-  const handleLogout = async () => {
-    if (loggingOut) return
-    setLoggingOut(true)
-    try {
-      await apiFetch('/api/admin/logout', { method: 'POST' })
-    } catch (error) {
-      console.error('Erreur déconnexion centre:', error)
-    } finally {
-      localStorage.removeItem('admin_auth_token')
-      window.location.assign('/connexion-centre')
-    }
+    setAutoPilot(false)
+    setAutoPilotTts('gtts')
   }
 
   // Ouvre la modale en pré-sélectionnant le mode "Nouvelle formation".
@@ -713,17 +446,8 @@ export default function HRDashboard() {
     setShowModulesModal(true)
   }
 
-  useEffect(() => {
-    if (expandedAttendancePlatform) {
-      fetchAttendance(expandedAttendancePlatform, attendanceDate)
-    }
-  }, [expandedAttendancePlatform, attendanceDate])
-
   const handleCreatePlatform = async () => {
-    const teacherName = teacherFirstName.trim()
-    const trainingTitle = newFormTpName.trim()
-    const platformName = newPlatformName.trim() || (teacherName && trainingTitle ? `${teacherName} · ${trainingTitle}` : '')
-    if (!platformName) return
+    if (!newPlatformName.trim()) return
 
     // ─── Branche TEST : bypass /api/hr/platforms, envoie multipart à /init-test ─
     // Crée plateforme + job + folders + segments depuis les DOCX, lance auto-pilot
@@ -731,13 +455,12 @@ export default function HRDashboard() {
     if (formationMode === 'new' && autoPilot && autoPilotMode === 'test') {
       const tpName = newFormTpName.trim()
       const rncp = newFormRncp.trim()
-      const trainingDaysCount = parseInt(newFormHours, 10)
-      if (!tpName || !rncp || !trainingDaysCount || trainingDaysCount <= 0) {
-        alert('Nom du TP, code RNCP et nombre de journées requis')
+      const hours = parseInt(newFormHours, 10)
+      if (!tpName || !rncp || !hours || hours <= 0) {
+        alert('Nom du TP, code RNCP et durée (h) requis')
         return
       }
-      const totalHours = trainingDaysCount * 7
-      const expectedDocs = trainingDaysCount
+      const expectedDocs = Math.ceil(hours / 7)
       if (testDocs.length !== expectedDocs) {
         alert(`Tu dois fournir exactement ${expectedDocs} fichier(s) (1 par journée de 7h). Reçu : ${testDocs.length}`)
         return
@@ -749,13 +472,14 @@ export default function HRDashboard() {
         fd.append('platform_name', newPlatformName.trim())
         fd.append('tp_name', tpName)
         fd.append('rncp_code', rncp)
-        fd.append('total_hours', String(totalHours))
+        fd.append('total_hours', String(hours))
         fd.append('tts_mode', 'mock')  // forcé en test
         fd.append('auto_pilot', 'true')
         testDocs.forEach((f) => fd.append('docs', f))
 
-        const resp = await apiFetch('/api/formation/init-test', {
+        const resp = await fetch(apiUrl('/api/formation/init-test'), {
           method: 'POST',
+          credentials: 'include',
           body: fd,
         })
         const data = await resp.json()
@@ -779,7 +503,7 @@ export default function HRDashboard() {
 
     // ─── Flow normal (API ou Claude Code) ─────────────────────────────────────
     // Validation selon le mode
-    let body = { name: platformName }
+    let body = { name: newPlatformName.trim() }
     if (formationMode === 'existing') {
       if (!selectedModuleId) {
         alert('Sélectionne un module ou bascule sur "Nouvelle formation"')
@@ -787,41 +511,23 @@ export default function HRDashboard() {
       }
       body.module_id = parseInt(selectedModuleId, 10)
     } else if (formationMode === 'new') {
-      const tpName = trainingTitle
+      const tpName = newFormTpName.trim()
       const rncp = newFormRncp.trim()
-      const trainingDaysCount = parseInt(newFormHours, 10)
-      const weeklyCount = parseInt(weeklyCourseCount, 10)
-      if (!teacherName || !tpName || !rncp || !trainingDaysCount || trainingDaysCount <= 0) {
-        alert('Prénom du professeur IA, nom de formation, code RNCP et nombre de journées requis')
+      const hours = parseInt(newFormHours, 10)
+      if (!tpName || !rncp || !hours || hours <= 0) {
+        alert('Nom du TP, code RNCP et durée (h) requis pour une nouvelle formation')
         return
       }
-      if (!weeklyCount || weeklyCount <= 0 || teachingDays.length === 0) {
-        alert('Indique la fréquence de cours et au moins un jour')
-        return
-      }
-      if (weeklyCount !== teachingDays.length) {
-        alert('Le nombre de cours par semaine doit correspondre aux jours sélectionnés')
-        return
-      }
-      body.new_formation = {
-        tp_name: tpName,
-        rncp_code: rncp,
-        total_hours: trainingDaysCount * 7,
-        schedule: {
-          total_training_days: trainingDaysCount,
-          weekly_course_count: weeklyCount,
-          weekdays: teachingDays,
-          start_time: '09:00',
-        },
-      }
+      body.new_formation = { tp_name: tpName, rncp_code: rncp, total_hours: hours }
     }
     // formationMode === 'none' → body reste {name} (plateforme vide, comportement historique)
 
     setCreating(true)
     try {
-      const resp = await apiFetch('/api/hr/platforms', {
+      const resp = await fetch(apiUrl('/api/hr/platforms'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify(body),
       })
       const data = await resp.json()
@@ -831,15 +537,16 @@ export default function HRDashboard() {
         // déclenche l'enchaînement automatique avant de fermer la modale.
         if (pipelineJobId && formationMode === 'new' && autoPilot) {
           try {
-            const autoResp = await apiFetch(
-              `/api/formation/${pipelineJobId}/run-auto`,
+            const autoResp = await fetch(
+              apiUrl(`/api/formation/${pipelineJobId}/run-auto`),
               {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
+                credentials: 'include',
                 body: JSON.stringify({
-                  tts_mode: 'fish_audio',
-                  use_claude_code: false,
-                  model: 'pro',
+                  tts_mode: autoPilotTts,
+                  use_claude_code: autoPilotMode === 'claude_code',
+                  model: autoPilotMode === 'api_deepseek' ? 'pro' : 'sonnet',
                   generate_audio: false,
                 }),
               },
@@ -855,9 +562,11 @@ export default function HRDashboard() {
         }
         setShowCreateModal(false)
         resetCreateForm()
-        setShowModulesModal(false)
-        setCardPage(Math.floor(platforms.length / CARDS_PER_PAGE))
         fetchPlatforms()
+        // Redirection vers /formation-pipeline pour suivi (auto ou manuel)
+        if (pipelineJobId) {
+          window.open(`/formation-pipeline?job=${pipelineJobId}`, '_blank')
+        }
       } else {
         alert(data.error || 'Erreur lors de la création')
       }
@@ -881,7 +590,7 @@ export default function HRDashboard() {
   // ─── Render ──────────────────────────────────────────────────────────
   if (loading) {
     return (
-      <div className="flex min-h-screen items-center justify-center" style={{ backgroundColor: darkMode ? '#0f172a' : '#f8fafc', fontFamily: 'Inter, sans-serif' }}>
+      <div className="flex min-h-screen items-center justify-center" style={{ backgroundColor: darkMode ? '#0f172a' : '#F8F7F5', fontFamily: 'Inter, sans-serif' }}>
         <div className="h-10 w-10 animate-spin rounded-full border-3 border-gray-700 border-t-purple-500" />
       </div>
     )
@@ -899,7 +608,7 @@ export default function HRDashboard() {
     hoverBg: '#1e293b',
     gridOpacity: '0.03'
   } : {
-    bg: '#f8fafc',
+    bg: '#F8F7F5',
     cardBg: '#ffffff',
     innerBg: '#f1f5f9',
     text: '#0f172a',
@@ -910,7 +619,6 @@ export default function HRDashboard() {
     hoverBg: '#f1f5f9',
     gridOpacity: '0.5'
   }
-  const platformsAlertIsWarning = platformsErrorTone === 'warning'
 
   return (
     <div className={darkMode ? 'dark' : ''}>
@@ -924,43 +632,50 @@ export default function HRDashboard() {
             backdropFilter: 'blur(8px)'
           }}
         >
-          <div className="mx-auto max-w-7xl px-4 pt-4 sm:px-6">
-            <div className="flex items-center justify-end">
-              <button
-                type="button"
-                onClick={handleLogout}
-                disabled={loggingOut}
-                className="flex flex-shrink-0 items-center gap-2 rounded-lg px-3.5 py-2 text-sm font-semibold transition-colors hover:bg-red-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500/30 disabled:cursor-wait disabled:opacity-60 dark:hover:bg-red-950/30"
-                style={{ color: darkMode ? '#fca5a5' : '#b91c1c', border: `1px solid ${colors.border}` }}
-              >
-                <Icon name={loggingOut ? 'hourglass_top' : 'logout'} className="text-[18px]" aria-hidden="true" />
-                <span>{loggingOut ? 'Déconnexion...' : 'Se déconnecter'}</span>
-              </button>
+          <div className="mx-auto max-w-7xl px-6 pt-4">
+            <div className="flex items-center justify-between gap-4">
+              <div className="flex flex-col leading-tight min-w-0">
+                <span
+                  className="text-[10px] font-semibold uppercase"
+                  style={{ fontFamily: 'Inter, sans-serif', color: colors.textMuted, letterSpacing: '0.2em' }}
+                >
+                  Le Socrate · HR
+                </span>
+                <h1 className="mt-1 text-2xl font-semibold tracking-tight" style={{ fontFamily: 'Inter, sans-serif', color: colors.text }}>
+                  Dashboard Formations
+                </h1>
+              </div>
+              <div className="flex items-center gap-2">
+                {/* Back to admin — tertiary navigation, muted text */}
+                <a
+                  href="/admin"
+                  className="flex items-center gap-2 rounded-lg px-3.5 py-2 text-sm font-medium transition-colors hover:bg-black/5 dark:hover:bg-white/5"
+                  style={{ color: colors.textMuted, border: `1px solid ${colors.border}` }}
+                  title="Revenir à l'administration P1"
+                >
+                  <Icon name="arrow_back" className="text-base" />
+                  <span>Retour Admin</span>
+                </a>
+              </div>
             </div>
 
-            <nav className="mt-4 grid grid-cols-3 items-end gap-1 sm:flex" aria-label="Navigation dashboard formations">
+            <nav className="mt-5 flex items-end gap-10" aria-label="Navigation dashboard formations">
               <SkoolTab
                 active={!showModulesModal && !showCreateModal}
                 onClick={showDashboardView}
-                icon="school"
-                label="Mes professeurs IA"
-                shortLabel="Professeurs"
+                label="Dashboard"
                 colors={colors}
               />
               <SkoolTab
                 active={showModulesModal}
                 onClick={showModulesView}
-                icon="history"
-                label="Réutiliser un professeur"
-                shortLabel="Réutiliser"
+                label="Modules"
                 colors={colors}
               />
               <SkoolTab
                 active={showCreateModal}
                 onClick={openCreateModal}
-                icon="add_circle_outline"
-                label="Nouveau professeur IA"
-                shortLabel="Nouveau"
+                label="Nouvelle plateforme"
                 colors={colors}
               />
             </nav>
@@ -981,46 +696,18 @@ export default function HRDashboard() {
           />
         )}
 
-        <div className="relative z-10 mx-auto max-w-7xl px-4 py-8 sm:px-6">
+        <div className="relative z-10 mx-auto max-w-7xl px-6 py-8">
           {platformsError && (
             <div
-              className="mb-6 flex flex-col gap-3 rounded-lg border px-4 py-3 text-sm sm:flex-row sm:items-center sm:justify-between"
+              className="mb-6 flex items-center gap-3 rounded-lg border px-4 py-3 text-sm"
               style={{
-                backgroundColor: platformsAlertIsWarning
-                  ? (darkMode ? 'rgba(146, 64, 14, 0.18)' : '#fffbeb')
-                  : (darkMode ? 'rgba(127, 29, 29, 0.18)' : '#fef2f2'),
-                borderColor: platformsAlertIsWarning
-                  ? (darkMode ? 'rgba(251, 191, 36, 0.32)' : '#fde68a')
-                  : (darkMode ? 'rgba(248, 113, 113, 0.28)' : '#fecaca'),
-                color: platformsAlertIsWarning
-                  ? (darkMode ? '#fde68a' : '#92400e')
-                  : (darkMode ? '#fecaca' : '#991b1b'),
+                backgroundColor: darkMode ? 'rgba(127, 29, 29, 0.18)' : '#fef2f2',
+                borderColor: darkMode ? 'rgba(248, 113, 113, 0.28)' : '#fecaca',
+                color: darkMode ? '#fecaca' : '#991b1b',
               }}
             >
-              <div className="flex min-w-0 items-center gap-3">
-                <Icon name="warning" className="text-base" />
-                <span>{platformsError}</span>
-              </div>
-              <button
-                type="button"
-                onClick={() => fetchPlatforms()}
-                disabled={loading}
-                className="inline-flex shrink-0 items-center justify-center gap-1.5 rounded-md border px-3 py-1.5 text-xs font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-60"
-                style={{
-                  backgroundColor: platformsAlertIsWarning
-                    ? (darkMode ? 'rgba(146, 64, 14, 0.28)' : '#fff')
-                    : (darkMode ? 'rgba(127, 29, 29, 0.28)' : '#fff'),
-                  borderColor: platformsAlertIsWarning
-                    ? (darkMode ? 'rgba(251, 191, 36, 0.4)' : '#fde68a')
-                    : (darkMode ? 'rgba(248, 113, 113, 0.36)' : '#fecaca'),
-                  color: platformsAlertIsWarning
-                    ? (darkMode ? '#fde68a' : '#92400e')
-                    : (darkMode ? '#fecaca' : '#991b1b'),
-                }}
-              >
-                <Icon name="refresh" className="text-sm" />
-                {loading ? 'Chargement...' : 'Réessayer'}
-              </button>
+              <Icon name="warning" className="text-base" />
+              <span>{platformsError}</span>
             </div>
           )}
 
@@ -1028,7 +715,6 @@ export default function HRDashboard() {
             <ModulesCatalogueView
               colors={colors}
               modules={filteredModules}
-              totalModules={modules.length}
               moduleSearchQuery={moduleSearchQuery}
               onModuleSearchChange={setModuleSearchQuery}
               onBack={closeModulesModal}
@@ -1047,14 +733,6 @@ export default function HRDashboard() {
               modules={modules}
               newPlatformName={newPlatformName}
               setNewPlatformName={setNewPlatformName}
-              teacherFirstName={teacherFirstName}
-              setTeacherFirstName={setTeacherFirstName}
-              teacherColor={teacherColor}
-              setTeacherColor={setTeacherColor}
-              weeklyCourseCount={weeklyCourseCount}
-              setWeeklyCourseCount={setWeeklyCourseCount}
-              teachingDays={teachingDays}
-              setTeachingDays={setTeachingDays}
               formationMode={formationMode}
               setFormationMode={setFormationMode}
               selectedModuleId={selectedModuleId}
@@ -1067,6 +745,8 @@ export default function HRDashboard() {
               setNewFormHours={setNewFormHours}
               autoPilot={autoPilot}
               setAutoPilot={setAutoPilot}
+              autoPilotTts={autoPilotTts}
+              setAutoPilotTts={setAutoPilotTts}
               autoPilotMode={autoPilotMode}
               setAutoPilotMode={setAutoPilotMode}
               testDocs={testDocs}
@@ -1089,28 +769,7 @@ export default function HRDashboard() {
               audioRef={audioRef}
               colors={colors}
               darkMode={darkMode}
-              studentEmailsByPlatform={studentEmailsByPlatform}
-              expandedStudentsPlatform={expandedStudentsPlatform}
-              expandedAttendancePlatform={expandedAttendancePlatform}
-              studentEmailsLoading={studentEmailsLoading}
-              studentEmailsSaving={studentEmailsSaving}
-              studentEmailDrafts={studentEmailDrafts}
-              attendanceDate={attendanceDate}
-              attendanceData={attendanceData}
-              attendanceLoading={attendanceLoading}
-              attendanceError={attendanceError}
-              attendanceSavingStudentId={attendanceSavingStudentId}
               onExpand={handleExpandPlatform}
-              onToggleStudentEmails={handleToggleStudentEmails}
-              onToggleAttendance={handleToggleAttendance}
-              onStudentEmailDraftChange={handleStudentEmailDraftChange}
-              onAddStudentEmails={handleAddStudentEmails}
-              onDeleteStudentEmail={handleDeleteStudentEmail}
-              onAttendanceDateChange={setAttendanceDate}
-              onRefreshAttendance={(platformId) => fetchAttendance(platformId, attendanceDate)}
-              onUpdateAttendanceDraft={updateAttendanceDraft}
-              onSaveAttendance={(student, platformId) => handleSaveAttendance(student, platformId, attendanceDate)}
-              onExportAttendance={(week, platformId) => handleExportAttendance(week, platformId)}
               onOpenPdfModal={(platform) => {
                 setSelectedPlatform(platform)
                 setShowPdfModal(true)
@@ -1118,7 +777,7 @@ export default function HRDashboard() {
               onOpenCourseTimeModal={async (platform) => {
                 setCourseTimePlatformId(platform.id)
                 try {
-                  const resp = await apiFetch(`/api/hr/platforms/${platform.id}/course-time`)
+                  const resp = await fetch(apiUrl(`/api/hr/platforms/${platform.id}/course-time`), { credentials: 'include' })
                   const data = await resp.json()
                   if (data.success) setCurrentCourseTime(data)
                   else setCurrentCourseTime(null)
@@ -1175,7 +834,6 @@ export default function HRDashboard() {
           onSubmit={handleSetCourseTime}
           initialDate={currentCourseTime?.date_cours}
           initialHeure={currentCourseTime?.heure_cours}
-          schedule={currentCourseTime?.schedule}
         />
       )}
 
@@ -1590,22 +1248,19 @@ export default function HRDashboard() {
   )
 }
 
-function SkoolTab({ active, onClick, icon, label, shortLabel, colors }) {
+function SkoolTab({ active, onClick, label, colors }) {
   return (
     <button
       type="button"
       onClick={onClick}
-      className="relative flex min-w-0 items-center justify-center gap-1.5 px-1 pb-4 pt-2 text-xs font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-violet-500/40 sm:flex-shrink-0 sm:justify-start sm:gap-2 sm:px-4 sm:text-sm"
-      style={{ color: active ? colors.text : colors.textMuted }}
-      aria-current={active ? 'page' : undefined}
+      className="relative pb-4 text-base font-semibold transition-colors"
+      style={{ color: active ? colors.text : '#8A8A8A' }}
     >
-      <Icon name={icon} className="text-[18px]" aria-hidden="true" />
-      <span className="truncate sm:hidden">{shortLabel || label}</span>
-      <span className="hidden sm:inline">{label}</span>
+      {label}
       {active && (
         <span
-          className="absolute bottom-[-1px] left-3 right-3 h-[3px] rounded-t-full sm:left-4 sm:right-4"
-          style={{ backgroundColor: '#8B5CF6' }}
+          className="absolute bottom-[-1px] left-0 h-[3px] w-full"
+          style={{ backgroundColor: colors.text }}
         />
       )}
     </button>
@@ -1625,28 +1280,7 @@ function PlatformCardsView({
   audioRef,
   colors,
   darkMode,
-  studentEmailsByPlatform,
-  expandedStudentsPlatform,
-  expandedAttendancePlatform,
-  studentEmailsLoading,
-  studentEmailsSaving,
-  studentEmailDrafts,
-  attendanceDate,
-  attendanceData,
-  attendanceLoading,
-  attendanceError,
-  attendanceSavingStudentId,
   onExpand,
-  onToggleStudentEmails,
-  onToggleAttendance,
-  onStudentEmailDraftChange,
-  onAddStudentEmails,
-  onDeleteStudentEmail,
-  onAttendanceDateChange,
-  onRefreshAttendance,
-  onUpdateAttendanceDraft,
-  onSaveAttendance,
-  onExportAttendance,
   onOpenPdfModal,
   onOpenCourseTimeModal,
   onDeleteAudio,
@@ -1699,28 +1333,7 @@ function PlatformCardsView({
             audioRef={audioRef}
             colors={colors}
             darkMode={darkMode}
-            studentEmails={studentEmailsByPlatform[p.id] || []}
-            studentsExpanded={expandedStudentsPlatform === p.id}
-            attendanceExpanded={expandedAttendancePlatform === p.id}
-            attendanceDate={attendanceDate}
-            attendanceData={expandedAttendancePlatform === p.id ? attendanceData : null}
-            attendanceLoading={attendanceLoading && expandedAttendancePlatform === p.id}
-            attendanceError={expandedAttendancePlatform === p.id ? attendanceError : ''}
-            attendanceSavingStudentId={attendanceSavingStudentId}
-            studentEmailsLoading={studentEmailsLoading === p.id}
-            studentEmailsSaving={studentEmailsSaving === p.id}
-            studentEmailDraft={studentEmailDrafts[p.id] || ''}
             onExpand={() => onExpand(p.id)}
-            onToggleStudentEmails={() => onToggleStudentEmails(p.id)}
-            onToggleAttendance={() => onToggleAttendance(p.id)}
-            onStudentEmailDraftChange={(value) => onStudentEmailDraftChange(p.id, value)}
-            onAddStudentEmails={() => onAddStudentEmails(p.id)}
-            onDeleteStudentEmail={(recipientId) => onDeleteStudentEmail(p.id, recipientId)}
-            onAttendanceDateChange={onAttendanceDateChange}
-            onRefreshAttendance={() => onRefreshAttendance(p.id)}
-            onUpdateAttendanceDraft={onUpdateAttendanceDraft}
-            onSaveAttendance={(student) => onSaveAttendance(student, p.id)}
-            onExportAttendance={(week) => onExportAttendance(week, p.id)}
             onOpenPdfModal={() => onOpenPdfModal(p)}
             onOpenCourseTimeModal={() => onOpenCourseTimeModal(p)}
             onDeleteAudio={(fn) => onDeleteAudio(p.id, fn)}
@@ -1733,613 +1346,6 @@ function PlatformCardsView({
         ))}
       </div>
     </>
-  )
-}
-
-const ATTENDANCE_STATUS_LABELS = {
-  present: 'Présent',
-  partial: 'Partiel',
-  absent: 'Absent',
-  excused: 'Absence justifiée',
-}
-
-function attendanceMinutes(slots = []) {
-  return slots.reduce((total, slot) => {
-    if (!slot?.start || !slot?.end) return total
-    const [sh, sm] = slot.start.split(':').map(Number)
-    const [eh, em] = slot.end.split(':').map(Number)
-    if ([sh, sm, eh, em].some((value) => Number.isNaN(value))) return total
-    const start = sh * 60 + sm
-    const end = eh * 60 + em
-    return end > start ? total + (end - start) : total
-  }, 0)
-}
-
-function formatAttendanceMinutes(totalMinutes = 0) {
-  const total = Number(totalMinutes) || 0
-  const hours = Math.floor(total / 60)
-  const minutes = total % 60
-  if (hours && minutes) return `${hours}h ${String(minutes).padStart(2, '0')}`
-  if (hours) return `${hours}h`
-  return `${minutes}min`
-}
-
-function AttendanceRegisterView({
-  colors,
-  darkMode,
-  platforms,
-  selectedPlatformId,
-  onPlatformChange,
-  courseDate,
-  onCourseDateChange,
-  data,
-  loading,
-  error,
-  savingStudentId,
-  onRefresh,
-  onUpdateDraft,
-  onSaveStudent,
-  onExport,
-}) {
-  const inputStyle = {
-    backgroundColor: colors.innerBg,
-    color: colors.text,
-    border: `1px solid ${colors.border}`,
-  }
-
-  const updateSlot = (studentId, index, field, value) => {
-    onUpdateDraft(studentId, (attendance) => {
-      const slots = [...(attendance?.slots || [])]
-      slots[index] = { ...(slots[index] || {}), [field]: value }
-      const total = attendanceMinutes(slots)
-      const nextStatus = total > 0 && attendance.status === 'absent' ? 'present' : attendance.status
-      return { ...attendance, slots, total_minutes: total, status: nextStatus }
-    })
-  }
-
-  const addSlot = (studentId) => {
-    onUpdateDraft(studentId, (attendance) => ({
-      ...attendance,
-      slots: [...(attendance?.slots || []), { start: '09:00', end: '12:00' }],
-    }))
-  }
-
-  const removeSlot = (studentId, index) => {
-    onUpdateDraft(studentId, (attendance) => {
-      const slots = (attendance?.slots || []).filter((_, slotIndex) => slotIndex !== index)
-      const total = attendanceMinutes(slots)
-      return {
-        ...attendance,
-        slots,
-        total_minutes: total,
-        status: total > 0 ? attendance.status : 'absent',
-      }
-    })
-  }
-
-  const totals = (data?.students || []).reduce((acc, student) => {
-    acc.minutes += Number(student.attendance?.total_minutes || 0)
-    acc.saved += student.attendance?.source === 'saved' ? 1 : 0
-    return acc
-  }, { minutes: 0, saved: 0 })
-
-  return (
-    <section className="mx-auto w-full max-w-6xl">
-      <header
-        className="mb-6 flex flex-wrap items-end justify-between gap-4"
-        style={{ borderBottom: `1px solid ${colors.border}` }}
-      >
-        <div className="pb-5">
-          <span
-            className="text-[10px] font-semibold uppercase"
-            style={{ color: colors.textMuted, letterSpacing: '0.22em' }}
-          >
-            Dossier formation
-          </span>
-          <h2 className="mt-1 text-xl font-semibold tracking-tight" style={{ color: colors.text }}>
-            Présences élèves
-          </h2>
-          <p className="mt-1 text-xs" style={{ color: colors.textMuted }}>
-            Relevé journalier par élève, consolidé sur toute la durée de la formation.
-          </p>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-2 pb-4">
-          <select
-            value={selectedPlatformId}
-            onChange={(e) => onPlatformChange(e.target.value)}
-            className="rounded-lg px-3 py-2 text-sm outline-none transition-colors"
-            style={inputStyle}
-          >
-            {platforms.map((platform) => (
-              <option key={platform.id} value={platform.id}>
-                {platform.name}
-              </option>
-            ))}
-          </select>
-          <input
-            type="date"
-            value={courseDate}
-            onChange={(e) => onCourseDateChange(e.target.value)}
-            className="rounded-lg px-3 py-2 text-sm outline-none transition-colors"
-            style={inputStyle}
-          />
-          <button
-            type="button"
-            onClick={onRefresh}
-            className="flex items-center gap-1.5 rounded-lg px-3.5 py-2 text-sm font-medium transition-colors hover:bg-black/5 dark:hover:bg-white/5"
-            style={{ color: colors.textSecondary, border: `1px solid ${colors.border}` }}
-          >
-            <Icon name="refresh" className="text-base" />
-            <span>Actualiser</span>
-          </button>
-          <button
-            type="button"
-            onClick={onExport}
-            className="flex items-center gap-1.5 rounded-lg px-3.5 py-2 text-sm font-medium text-white transition-colors"
-            style={{ backgroundColor: '#8B5CF6' }}
-            onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = '#7c3aed' }}
-            onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = '#8B5CF6' }}
-          >
-            <Icon name="download" className="text-base" />
-            <span>Exporter Excel</span>
-          </button>
-        </div>
-      </header>
-
-      {error && (
-        <div
-          className="mb-4 flex items-center gap-2 rounded-lg px-4 py-3 text-sm"
-          style={{
-            backgroundColor: darkMode ? 'rgba(127, 29, 29, 0.18)' : '#fef2f2',
-            border: darkMode ? '1px solid rgba(248, 113, 113, 0.28)' : '1px solid #fecaca',
-            color: darkMode ? '#fecaca' : '#991b1b',
-          }}
-        >
-          <Icon name="warning" className="text-base" />
-          <span>{error}</span>
-        </div>
-      )}
-
-      <div className="mb-4 grid gap-3 sm:grid-cols-3">
-        {[
-          ['Élèves', data?.students?.length || 0],
-          ['Relevés enregistrés', totals.saved],
-          ['Temps total du jour', formatAttendanceMinutes(totals.minutes)],
-        ].map(([label, value]) => (
-          <div
-            key={label}
-            className="rounded-xl px-4 py-3"
-            style={{ backgroundColor: colors.cardBg, border: `1px solid ${colors.border}` }}
-          >
-            <p className="text-[10px] font-semibold uppercase" style={{ color: colors.textMuted, letterSpacing: '0.18em' }}>
-              {label}
-            </p>
-            <p className="mt-1 text-lg font-semibold" style={{ color: colors.text }}>{value}</p>
-          </div>
-        ))}
-      </div>
-
-      <div
-        className="overflow-x-auto rounded-2xl"
-        style={{ backgroundColor: colors.cardBg, border: `1px solid ${colors.border}` }}
-      >
-        <table className="w-full min-w-[1080px] border-separate border-spacing-0 text-sm">
-          <thead>
-            <tr className="text-left text-[10px] font-semibold uppercase" style={{ color: colors.textMuted, letterSpacing: '0.16em' }}>
-              <th className="border-b px-4 py-3" style={{ borderColor: colors.border }}>Élève</th>
-              <th className="border-b px-4 py-3" style={{ borderColor: colors.border }}>Créneaux</th>
-              <th className="border-b px-4 py-3" style={{ borderColor: colors.border }}>Statut</th>
-              <th className="border-b px-4 py-3" style={{ borderColor: colors.border }}>Total</th>
-              <th className="border-b px-4 py-3" style={{ borderColor: colors.border }}>Notes</th>
-              <th className="border-b px-4 py-3 text-right" style={{ borderColor: colors.border }}>Action</th>
-            </tr>
-          </thead>
-          <tbody>
-            {loading ? (
-              <tr>
-                <td colSpan={6} className="px-4 py-10 text-center text-sm" style={{ color: colors.textMuted }}>
-                  Chargement des présences...
-                </td>
-              </tr>
-            ) : (data?.students || []).length === 0 ? (
-              <tr>
-                <td colSpan={6} className="px-4 py-10 text-center text-sm" style={{ color: colors.textMuted }}>
-                  Aucun compte élève n’est rattaché à cette formation.
-                </td>
-              </tr>
-            ) : (
-              data.students.map((student) => {
-                const attendance = student.attendance || {}
-                const slots = attendance.slots || []
-                return (
-                  <tr key={student.id} className="align-top transition-colors hover:bg-black/5 dark:hover:bg-white/5">
-                    <td className="border-b px-4 py-4" style={{ borderColor: colors.border }}>
-                      <div className="font-semibold" style={{ color: colors.text }}>
-                        {student.prenom} {student.nom}
-                      </div>
-                      <div className="mt-0.5 text-xs" style={{ color: colors.textMuted }}>{student.email}</div>
-                      <div className="mt-2 text-xs" style={{ color: colors.textMuted }}>
-                        Cumul: {formatAttendanceMinutes(student.totals?.total_minutes || 0)}
-                      </div>
-                    </td>
-                    <td className="border-b px-4 py-4" style={{ borderColor: colors.border }}>
-                      <div className="space-y-2">
-                        {slots.map((slot, index) => (
-                          <div key={`${student.id}-${index}`} className="flex items-center gap-2">
-                            <input
-                              type="time"
-                              value={slot.start || ''}
-                              onChange={(e) => updateSlot(student.id, index, 'start', e.target.value)}
-                              className="w-28 rounded-lg px-2 py-1.5 text-sm outline-none"
-                              style={inputStyle}
-                            />
-                            <span className="text-xs" style={{ color: colors.textMuted }}>à</span>
-                            <input
-                              type="time"
-                              value={slot.end || ''}
-                              onChange={(e) => updateSlot(student.id, index, 'end', e.target.value)}
-                              className="w-28 rounded-lg px-2 py-1.5 text-sm outline-none"
-                              style={inputStyle}
-                            />
-                            <button
-                              type="button"
-                              onClick={() => removeSlot(student.id, index)}
-                              aria-label="Retirer le créneau"
-                              className="flex h-8 w-8 items-center justify-center rounded-lg transition-colors hover:bg-rose-500/10"
-                              style={{ color: colors.textMuted, border: `1px solid ${colors.border}` }}
-                            >
-                              <Icon name="close" className="text-base" />
-                            </button>
-                          </div>
-                        ))}
-                        <button
-                          type="button"
-                          onClick={() => addSlot(student.id)}
-                          className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition-colors hover:bg-black/5 dark:hover:bg-white/5"
-                          style={{ color: colors.textSecondary, border: `1px solid ${colors.border}` }}
-                        >
-                          <Icon name="add" className="text-sm" />
-                          <span>Ajouter un créneau</span>
-                        </button>
-                        {attendance.source === 'logs' && (
-                          <p className="text-xs" style={{ color: colors.textMuted }}>
-                            Prérempli depuis les logs de connexion.
-                          </p>
-                        )}
-                      </div>
-                    </td>
-                    <td className="border-b px-4 py-4" style={{ borderColor: colors.border }}>
-                      <select
-                        value={attendance.status || 'absent'}
-                        onChange={(e) => onUpdateDraft(student.id, { ...attendance, status: e.target.value })}
-                        className="rounded-lg px-3 py-2 text-sm outline-none"
-                        style={inputStyle}
-                      >
-                        {Object.entries(ATTENDANCE_STATUS_LABELS).map(([value, label]) => (
-                          <option key={value} value={value}>{label}</option>
-                        ))}
-                      </select>
-                    </td>
-                    <td className="border-b px-4 py-4 font-semibold" style={{ borderColor: colors.border, color: colors.text }}>
-                      {formatAttendanceMinutes(attendance.total_minutes || 0)}
-                    </td>
-                    <td className="border-b px-4 py-4" style={{ borderColor: colors.border }}>
-                      <input
-                        type="text"
-                        value={attendance.notes || ''}
-                        onChange={(e) => onUpdateDraft(student.id, { ...attendance, notes: e.target.value })}
-                        placeholder="Retard, départ anticipé..."
-                        className="w-full rounded-lg px-3 py-2 text-sm outline-none"
-                        style={inputStyle}
-                      />
-                    </td>
-                    <td className="border-b px-4 py-4 text-right" style={{ borderColor: colors.border }}>
-                      <button
-                        type="button"
-                        onClick={() => onSaveStudent(student)}
-                        disabled={savingStudentId === student.id}
-                        className="rounded-lg px-3.5 py-2 text-xs font-semibold text-white transition-colors disabled:cursor-not-allowed disabled:opacity-60"
-                        style={{ backgroundColor: '#8B5CF6' }}
-                      >
-                        {savingStudentId === student.id ? 'Enregistrement...' : 'Enregistrer'}
-                      </button>
-                    </td>
-                  </tr>
-                )
-              })
-            )}
-          </tbody>
-        </table>
-      </div>
-
-      {(data?.recent_dates || []).length > 0 && (
-        <div className="mt-5">
-          <h3 className="mb-2 text-sm font-semibold" style={{ color: colors.text }}>Journées déjà consignées</h3>
-          <div className="flex flex-wrap gap-2">
-            {data.recent_dates.map((item) => (
-              <button
-                key={item.course_date}
-                type="button"
-                onClick={() => onCourseDateChange(item.course_date)}
-                className="rounded-lg px-3 py-2 text-xs font-medium transition-colors hover:bg-black/5 dark:hover:bg-white/5"
-                style={{ color: colors.textSecondary, border: `1px solid ${colors.border}` }}
-              >
-                {new Date(`${item.course_date}T00:00:00`).toLocaleDateString('fr-FR')} · {item.student_count} élève{item.student_count > 1 ? 's' : ''}
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
-    </section>
-  )
-}
-
-function AttendanceCardPanel({
-  colors,
-  darkMode,
-  courseDate,
-  data,
-  loading,
-  error,
-  savingStudentId,
-  onCourseDateChange,
-  onRefresh,
-  onUpdateDraft,
-  onSaveStudent,
-  onExport,
-}) {
-  const inputStyle = {
-    backgroundColor: colors.cardBg,
-    color: colors.text,
-    border: `1px solid ${colors.border}`,
-  }
-  const students = data?.students || []
-  const weeks = data?.recent_weeks || []
-  const totals = students.reduce((acc, student) => {
-    acc.minutes += Number(student.attendance?.total_minutes || 0)
-    acc.saved += student.attendance?.source === 'saved' ? 1 : 0
-    return acc
-  }, { minutes: 0, saved: 0 })
-
-  const formatDate = (value) => {
-    if (!value) return ''
-    return new Date(`${value}T00:00:00`).toLocaleDateString('fr-FR')
-  }
-
-  const updateSlot = (studentId, index, field, value) => {
-    onUpdateDraft(studentId, (attendance = {}) => {
-      const slots = [...(attendance.slots || [])]
-      slots[index] = { ...(slots[index] || {}), [field]: value }
-      const total = attendanceMinutes(slots)
-      const nextStatus = total > 0 && attendance.status === 'absent' ? 'present' : attendance.status
-      return { ...attendance, slots, total_minutes: total, status: nextStatus || (total > 0 ? 'present' : 'absent') }
-    })
-  }
-
-  const addSlot = (studentId) => {
-    onUpdateDraft(studentId, (attendance = {}) => ({
-      ...attendance,
-      slots: [...(attendance.slots || []), { start: '09:00', end: '12:00' }],
-    }))
-  }
-
-  const removeSlot = (studentId, index) => {
-    onUpdateDraft(studentId, (attendance = {}) => {
-      const slots = (attendance.slots || []).filter((_, slotIndex) => slotIndex !== index)
-      const total = attendanceMinutes(slots)
-      return {
-        ...attendance,
-        slots,
-        total_minutes: total,
-        status: total > 0 ? (attendance.status || 'present') : 'absent',
-      }
-    })
-  }
-
-  return (
-    <div
-      className="mb-3 rounded-xl p-3"
-      style={{ backgroundColor: colors.innerBg, border: `1px solid ${colors.border}` }}
-    >
-      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-        <div>
-          <span className="text-sm font-semibold" style={{ color: colors.text }}>
-            Présence
-          </span>
-          <p className="mt-0.5 text-xs" style={{ color: colors.textMuted }}>
-            {students.length} élève{students.length > 1 ? 's' : ''} · {totals.saved} relevé{totals.saved > 1 ? 's' : ''} enregistré{totals.saved > 1 ? 's' : ''}
-          </p>
-        </div>
-        <button
-          type="button"
-          onClick={() => onExport(null)}
-          className="inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-semibold text-white transition-colors"
-          style={{ backgroundColor: '#8B5CF6' }}
-        >
-          <Icon name="download" className="text-sm" />
-          Excel complet
-        </button>
-      </div>
-
-      <div className="mb-3 flex flex-wrap items-center gap-2">
-        <input
-          type="date"
-          value={courseDate}
-          onChange={(e) => onCourseDateChange(e.target.value)}
-          className="min-w-0 flex-1 rounded-lg px-3 py-2 text-sm outline-none transition-shadow focus:ring-2 focus:ring-violet-500/30"
-          style={inputStyle}
-        />
-        <button
-          type="button"
-          onClick={onRefresh}
-          className="flex h-10 w-10 items-center justify-center rounded-lg transition-colors hover:bg-black/5 dark:hover:bg-white/5"
-          style={{ color: colors.textMuted, border: `1px solid ${colors.border}` }}
-          title="Actualiser les présences"
-          aria-label="Actualiser les présences"
-        >
-          <Icon name="refresh" className="text-base" />
-        </button>
-      </div>
-
-      {error && (
-        <div
-          className="mb-3 flex items-center gap-2 rounded-lg px-3 py-2 text-xs"
-          style={{
-            backgroundColor: darkMode ? 'rgba(127, 29, 29, 0.18)' : '#fef2f2',
-            border: darkMode ? '1px solid rgba(248, 113, 113, 0.28)' : '1px solid #fecaca',
-            color: darkMode ? '#fecaca' : '#991b1b',
-          }}
-        >
-          <Icon name="warning" className="text-sm" />
-          <span>{error}</span>
-        </div>
-      )}
-
-      <div className="mb-3 rounded-lg p-2" style={{ backgroundColor: colors.cardBg, border: `1px solid ${colors.border}` }}>
-        <div className="mb-2 flex items-center justify-between gap-2">
-          <span className="text-xs font-semibold" style={{ color: colors.text }}>
-            Fichiers Excel par semaine
-          </span>
-          <span className="text-[10px] tabular-nums" style={{ color: colors.textMuted }}>
-            {weeks.length}
-          </span>
-        </div>
-        {weeks.length === 0 ? (
-          <p className="py-2 text-xs" style={{ color: colors.textMuted }}>
-            Aucune semaine exportable pour le moment.
-          </p>
-        ) : (
-          <div className="max-h-32 space-y-1 overflow-y-auto pr-1">
-            {weeks.map((week) => (
-              <button
-                key={week.week_start}
-                type="button"
-                onClick={() => onExport(week)}
-                className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left transition-colors hover:bg-black/5 dark:hover:bg-white/5"
-                style={{ color: colors.textSecondary, border: `1px solid ${colors.border}` }}
-              >
-                <Icon name="table_chart" className="text-sm" style={{ color: colors.textMuted }} />
-                <span className="min-w-0 flex-1 truncate text-xs">
-                  Semaine du {formatDate(week.week_start)} au {formatDate(week.week_end)}
-                </span>
-                <Icon name="download" className="text-sm" style={{ color: colors.textMuted }} />
-              </button>
-            ))}
-          </div>
-        )}
-      </div>
-
-      {loading ? (
-        <div className="flex items-center justify-center py-5">
-          <div className="h-5 w-5 animate-spin rounded-full border-2" style={{ borderColor: colors.border, borderTopColor: '#8B5CF6' }} />
-        </div>
-      ) : students.length === 0 ? (
-        <p className="py-3 text-xs" style={{ color: colors.textMuted }}>
-          Aucun compte élève n’est rattaché à cette formation.
-        </p>
-      ) : (
-        <div className="max-h-[420px] space-y-2 overflow-y-auto pr-1">
-          {students.map((student) => {
-            const attendance = student.attendance || {}
-            const slots = attendance.slots || []
-            return (
-              <div
-                key={student.id}
-                className="rounded-lg p-2"
-                style={{ backgroundColor: colors.cardBg, border: `1px solid ${colors.border}` }}
-              >
-                <div className="mb-2 flex items-start justify-between gap-2">
-                  <div className="min-w-0">
-                    <p className="truncate text-sm font-semibold" style={{ color: colors.text }}>
-                      {student.prenom} {student.nom}
-                    </p>
-                    <p className="truncate text-xs" style={{ color: colors.textMuted }} title={student.email}>
-                      {student.email}
-                    </p>
-                  </div>
-                  <span className="flex-shrink-0 text-xs font-semibold tabular-nums" style={{ color: colors.textSecondary }}>
-                    {formatAttendanceMinutes(attendance.total_minutes || 0)}
-                  </span>
-                </div>
-
-                <div className="space-y-2">
-                  {slots.map((slot, index) => (
-                    <div key={`${student.id}-${index}`} className="flex items-center gap-1.5">
-                      <input
-                        type="time"
-                        value={slot.start || ''}
-                        onChange={(e) => updateSlot(student.id, index, 'start', e.target.value)}
-                        className="min-w-0 flex-1 rounded-lg px-2 py-1.5 text-xs outline-none"
-                        style={inputStyle}
-                      />
-                      <span className="text-xs" style={{ color: colors.textMuted }}>à</span>
-                      <input
-                        type="time"
-                        value={slot.end || ''}
-                        onChange={(e) => updateSlot(student.id, index, 'end', e.target.value)}
-                        className="min-w-0 flex-1 rounded-lg px-2 py-1.5 text-xs outline-none"
-                        style={inputStyle}
-                      />
-                      <button
-                        type="button"
-                        onClick={() => removeSlot(student.id, index)}
-                        className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg transition-colors hover:bg-rose-500/10"
-                        style={{ color: colors.textMuted, border: `1px solid ${colors.border}` }}
-                        aria-label="Retirer le créneau"
-                      >
-                        <Icon name="close" className="text-sm" />
-                      </button>
-                    </div>
-                  ))}
-
-                  <div className="flex flex-wrap items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => addSlot(student.id)}
-                      className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium transition-colors hover:bg-black/5 dark:hover:bg-white/5"
-                      style={{ color: colors.textSecondary, border: `1px solid ${colors.border}` }}
-                    >
-                      <Icon name="add" className="text-sm" />
-                      Créneau
-                    </button>
-                    <select
-                      value={attendance.status || 'absent'}
-                      onChange={(e) => onUpdateDraft(student.id, { ...attendance, status: e.target.value })}
-                      className="min-w-0 flex-1 rounded-lg px-2.5 py-1.5 text-xs outline-none"
-                      style={inputStyle}
-                    >
-                      {Object.entries(ATTENDANCE_STATUS_LABELS).map(([value, label]) => (
-                        <option key={value} value={value}>{label}</option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <input
-                    type="text"
-                    value={attendance.notes || ''}
-                    onChange={(e) => onUpdateDraft(student.id, { ...attendance, notes: e.target.value })}
-                    placeholder="Retard, départ anticipé..."
-                    className="w-full rounded-lg px-2.5 py-1.5 text-xs outline-none"
-                    style={inputStyle}
-                  />
-
-                  <button
-                    type="button"
-                    onClick={() => onSaveStudent(student)}
-                    disabled={savingStudentId === student.id}
-                    className="w-full rounded-lg px-3 py-2 text-xs font-semibold text-white transition-colors disabled:cursor-not-allowed disabled:opacity-60"
-                    style={{ backgroundColor: '#8B5CF6' }}
-                  >
-                    {savingStudentId === student.id ? 'Enregistrement...' : 'Enregistrer la présence'}
-                  </button>
-                </div>
-              </div>
-            )
-          })}
-        </div>
-      )}
-    </div>
   )
 }
 
@@ -2368,33 +1374,9 @@ function ModuleDeleteButton({ onClick, colors, label }) {
   )
 }
 
-const MODULE_WEEKDAY_LABELS = ['Lun.', 'Mar.', 'Mer.', 'Jeu.', 'Ven.', 'Sam.', 'Dim.']
-
-function inferTeacherName(module = {}) {
-  const source = module.source_platform_name || ''
-  if (source.includes('·')) return source.split('·')[0].trim()
-  if (source && source !== module.tp_name) return source
-  return 'Professeur IA'
-}
-
-function formatModuleCadence(module = {}) {
-  const schedule = module.schedule
-  if (!schedule) {
-    return `${module.nb_folders || 0} journée${(module.nb_folders || 0) > 1 ? 's' : ''}`
-  }
-  const days = (schedule.weekdays || [])
-    .map((day) => MODULE_WEEKDAY_LABELS[Number(day)])
-    .filter(Boolean)
-    .join(', ')
-  const total = schedule.total_training_days || module.nb_folders || 0
-  const weekly = schedule.weekly_course_count || (schedule.weekdays || []).length
-  return `${total} journée${total > 1 ? 's' : ''} · ${weekly}/semaine${days ? ` · ${days}` : ''} · ${schedule.start_time || '09:00'}`
-}
-
 function ModulesCatalogueView({
   colors,
   modules,
-  totalModules,
   moduleSearchQuery,
   onModuleSearchChange,
   onBack,
@@ -2402,221 +1384,128 @@ function ModulesCatalogueView({
   onUseModule,
   onDeleteModule,
 }) {
-  const hasSearch = moduleSearchQuery.trim().length > 0
-  const resultLabel = `${modules.length} résultat${modules.length === 1 ? '' : 's'}`
-
   return (
-    <section className="mx-auto w-full max-w-6xl">
-      <header className="mb-8 flex flex-col gap-5 sm:flex-row sm:items-end sm:justify-between">
-        <div className="max-w-2xl">
-          <div className="mb-3 flex items-center gap-2 text-sm font-semibold" style={{ color: '#7c3aed' }}>
-            <Icon name="history" className="text-[18px]" aria-hidden="true" />
-            <span>Bibliothèque des professeurs</span>
-          </div>
-          <h1 className="text-2xl font-bold tracking-[-0.02em] sm:text-[28px]" style={{ color: colors.text }}>
-            Réutiliser un professeur IA
-          </h1>
-          <p className="mt-2 max-w-[65ch] text-sm leading-6" style={{ color: colors.textSecondary }}>
-            Relancez une formation avec un professeur dont l’identité pédagogique a déjà été préparée et validée.
+    <section
+      className="overflow-hidden rounded-2xl"
+      style={{ backgroundColor: colors.cardBg, border: `1px solid ${colors.border}` }}
+    >
+      <header
+        className="flex items-start justify-between gap-4 px-7 py-5"
+        style={{ borderBottom: `1px solid ${colors.border}` }}
+      >
+        <div className="flex flex-col leading-tight">
+          <span
+            className="text-[10px] font-semibold uppercase"
+            style={{ color: colors.textMuted, letterSpacing: '0.22em' }}
+          >
+            Catalogue
+          </span>
+          <h2 className="mt-1 text-xl font-semibold tracking-tight" style={{ color: colors.text }}>
+            Modules de formation
+          </h2>
+          <p className="mt-1 text-xs" style={{ color: colors.textMuted }}>
+            Produits durables des pipelines, réutilisables pour créer une nouvelle plateforme.
           </p>
         </div>
         <button
-          type="button"
-          onClick={onCreateModule}
-          className="flex flex-shrink-0 items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-violet-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40 focus-visible:ring-offset-2"
-          style={{ backgroundColor: '#8B5CF6' }}
+          onClick={onBack}
+          className="flex flex-shrink-0 items-center gap-2 rounded-lg px-3.5 py-2 text-sm font-medium transition-colors hover:bg-black/5 dark:hover:bg-white/5"
+          style={{ color: colors.textMuted, border: `1px solid ${colors.border}` }}
         >
-          <Icon name="add" className="text-[18px]" aria-hidden="true" />
-          <span>Créer un professeur IA</span>
+          <Icon name="view_module" className="text-base" />
+          <span>Plateformes</span>
         </button>
       </header>
 
       <div
-        className="mb-6 flex items-start gap-3 rounded-xl px-4 py-3.5 sm:items-center"
-        style={{
-          backgroundColor: 'rgba(139, 92, 246, 0.07)',
-          border: '1px solid rgba(139, 92, 246, 0.18)',
-        }}
+        className="flex items-center gap-3 px-7 py-4"
+        style={{ borderBottom: `1px solid ${colors.border}` }}
       >
-        <div
-          className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg"
-          style={{ backgroundColor: 'rgba(139, 92, 246, 0.12)', color: '#7c3aed' }}
-        >
-          <Icon name="replay" className="text-xl" aria-hidden="true" />
-        </div>
-        <div className="min-w-0">
-          <p className="text-sm font-semibold" style={{ color: colors.text }}>
-            Une nouvelle formation, sans recréer l’identité du professeur
-          </p>
-          <p className="mt-0.5 text-xs leading-5" style={{ color: colors.textSecondary }}>
-            Le contenu, le planning et les apprenants seront configurés pour la nouvelle session.
-          </p>
-        </div>
-      </div>
-
-      <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center">
-        <label className="relative min-w-0 flex-1">
-          <span className="sr-only">Rechercher un ancien professeur IA</span>
+        <div className="relative flex-1">
           <Icon
             name="search"
-            className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-xl"
+            className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-base"
             style={{ color: colors.textMuted }}
-            aria-hidden="true"
           />
           <input
-            type="search"
+            type="text"
             value={moduleSearchQuery}
             onChange={(e) => onModuleSearchChange(e.target.value)}
-            placeholder="Rechercher par professeur, formation ou code RNCP..."
-            autoComplete="off"
-            className="w-full rounded-lg py-3 pl-11 pr-4 text-sm outline-none transition-colors placeholder:text-slate-500 focus:ring-2 focus:ring-violet-500/30"
+            placeholder="Filtrer par nom de TP ou code RNCP..."
+            className="w-full rounded-lg py-2 pl-10 pr-3 text-sm outline-none transition-colors"
             style={{
-              backgroundColor: colors.cardBg,
+              backgroundColor: colors.innerBg,
               color: colors.text,
               border: `1px solid ${colors.border}`,
             }}
           />
-        </label>
-        <div
-          className="flex flex-shrink-0 items-center gap-2 rounded-lg px-3.5 py-3 text-xs font-semibold"
-          style={{ backgroundColor: colors.innerBg, color: colors.textSecondary }}
-          aria-live="polite"
-        >
-          <Icon name="inventory_2" className="text-[17px]" style={{ color: colors.textMuted }} aria-hidden="true" />
-          <span>{hasSearch ? resultLabel : `${totalModules} professeur${totalModules === 1 ? '' : 's'} archivé${totalModules === 1 ? '' : 's'}`}</span>
         </div>
+        <button
+          onClick={onCreateModule}
+          className="flex flex-shrink-0 items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium text-white transition-colors"
+          style={{ backgroundColor: '#8B5CF6' }}
+          onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = '#7c3aed' }}
+          onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = '#8B5CF6' }}
+          title="Lance une pipeline formation. Mode auto-pilot pour enchaîner toutes les étapes, ou manuel pour valider une à une."
+        >
+          <Icon name="add" className="text-base" />
+          <span>Nouveau module</span>
+        </button>
       </div>
 
-      <div>
+      <div className="px-7 py-2">
         {modules.length === 0 ? (
-          hasSearch ? (
-            <div
-              className="flex min-h-[280px] flex-col items-center justify-center rounded-xl px-6 text-center"
-              style={{ backgroundColor: colors.cardBg, border: `1px solid ${colors.border}` }}
-            >
-              <div
-                className="flex h-11 w-11 items-center justify-center rounded-full"
-                style={{ backgroundColor: colors.innerBg, color: colors.textMuted }}
-              >
-                <Icon name="search_off" className="text-xl" aria-hidden="true" />
-              </div>
-              <h2 className="mt-4 text-base font-semibold" style={{ color: colors.text }}>
-                Aucun professeur ne correspond à cette recherche
-              </h2>
-              <p className="mt-1 text-sm" style={{ color: colors.textMuted }}>
-                Essayez un prénom, un titre de formation ou un code RNCP.
-              </p>
-              <button
-                type="button"
-                onClick={() => onModuleSearchChange('')}
-                className="mt-5 rounded-lg px-3.5 py-2 text-sm font-semibold transition-colors hover:bg-black/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40 dark:hover:bg-white/5"
-                style={{ color: colors.textSecondary, border: `1px solid ${colors.border}` }}
-              >
-                Effacer la recherche
-              </button>
-            </div>
-          ) : (
-            <div
-              className="overflow-hidden rounded-xl"
-              style={{ backgroundColor: colors.cardBg, border: `1px solid ${colors.border}` }}
-            >
-              <div className="flex min-h-[390px] flex-col md:flex-row">
-                <div
-                  className="relative flex min-h-[230px] items-center justify-center overflow-hidden border-b px-8 md:w-[42%] md:border-b-0 md:border-r"
-                  style={{ backgroundColor: colors.innerBg, borderColor: colors.border }}
-                >
-                  <div
-                    className="absolute h-56 w-56 rounded-full"
-                    style={{ border: '1px solid rgba(139, 92, 246, 0.16)' }}
-                    aria-hidden="true"
-                  />
-                  <div
-                    className="absolute h-40 w-40 rounded-full"
-                    style={{ backgroundColor: 'rgba(139, 92, 246, 0.08)' }}
-                    aria-hidden="true"
-                  />
-                  <img
-                    src="/robot-violet.png"
-                    alt="Professeur IA Le Socrate"
-                    className="relative h-52 w-52 object-contain md:h-60 md:w-60"
-                    draggable={false}
-                  />
-                </div>
-
-                <div className="flex flex-1 flex-col justify-center px-6 py-8 sm:px-10 md:py-10">
-                  <h2 className="text-xl font-bold tracking-[-0.01em]" style={{ color: colors.text }}>
-                    Votre bibliothèque se constituera au fil des formations
-                  </h2>
-                  <p className="mt-2 max-w-[58ch] text-sm leading-6" style={{ color: colors.textSecondary }}>
-                    Lorsqu’un professeur termine sa formation, il est conservé ici. Vous pourrez ensuite le choisir pour préparer une nouvelle session.
-                  </p>
-
-                  <ol className="mt-6 space-y-3" aria-label="Cycle de réutilisation d’un professeur IA">
-                    {[
-                      ['Formation terminée', 'Le professeur quitte la liste des formations en cours.'],
-                      ['Archivage automatique', 'Son identité pédagogique reste disponible dans cette bibliothèque.'],
-                      ['Nouvelle session', 'Vous définissez un nouveau contenu, un planning et de nouveaux apprenants.'],
-                    ].map(([title, description], index) => (
-                      <li key={title} className="flex items-start gap-3">
-                        <span
-                          className="mt-0.5 flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full text-[11px] font-bold"
-                          style={{ backgroundColor: 'rgba(139, 92, 246, 0.11)', color: '#7c3aed' }}
-                        >
-                          {index + 1}
-                        </span>
-                        <span className="min-w-0">
-                          <span className="block text-sm font-semibold" style={{ color: colors.text }}>{title}</span>
-                          <span className="mt-0.5 block text-xs leading-5" style={{ color: colors.textMuted }}>{description}</span>
-                        </span>
-                      </li>
-                    ))}
-                  </ol>
-
-                  <button
-                    type="button"
-                    onClick={onBack}
-                    className="mt-7 flex w-fit items-center gap-2 rounded-lg px-3.5 py-2 text-sm font-semibold transition-colors hover:bg-black/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40 dark:hover:bg-white/5"
-                    style={{ color: colors.textSecondary, border: `1px solid ${colors.border}` }}
-                  >
-                    <Icon name="school" className="text-[18px]" aria-hidden="true" />
-                    Voir mes professeurs IA
-                  </button>
-                </div>
-              </div>
-            </div>
-          )
+          <div className="py-16 text-center">
+            <p className="text-sm font-medium" style={{ color: colors.text }}>
+              {moduleSearchQuery
+                ? 'Aucun module ne correspond à ce filtre.'
+                : 'Aucun module catalogué pour l’instant.'}
+            </p>
+            <p className="mt-2 text-xs" style={{ color: colors.textMuted }}>
+              {moduleSearchQuery
+                ? 'Essaie un autre nom de TP ou un code RNCP.'
+                : 'Lance une pipeline formation pour produire le premier module durable.'}
+            </p>
+          </div>
         ) : (
-          <ul className="space-y-3">
-            {modules.map((m) => (
+          <ul>
+            {modules.map((m, idx) => (
               <li
                 key={m.id}
-                className="flex flex-col gap-4 rounded-xl p-4 transition-colors sm:flex-row sm:items-center"
+                className="flex items-center gap-5 py-4"
                 style={{
-                  backgroundColor: colors.cardBg,
-                  border: `1px solid ${colors.border}`,
+                  borderTop: idx === 0 ? 'none' : `1px solid ${colors.border}`,
+                  opacity: m.reusable ? 1 : 0.55,
                 }}
               >
-                <div
-                  className="relative flex h-24 w-full flex-shrink-0 items-center justify-center overflow-hidden rounded-xl sm:h-24 sm:w-24"
-                  style={{ backgroundColor: colors.innerBg }}
-                >
-                  <div
-                    className="absolute h-16 w-16 rounded-full"
-                    style={{ backgroundColor: getRobotTheme(m.source_platform_id || m.id).glow, opacity: 0.09 }}
-                  />
-                  <img
-                    src={getRobotTheme(m.source_platform_id || m.id).src}
-                    alt=""
-                    className="relative h-24 w-24 object-contain"
-                    draggable={false}
-                  />
+                <div className="flex w-32 flex-shrink-0 flex-col gap-0.5">
+                  <span
+                    className="text-[10px] font-semibold uppercase"
+                    style={{
+                      color: colors.textMuted,
+                      letterSpacing: '0.12em',
+                      fontVariantNumeric: 'tabular-nums',
+                    }}
+                  >
+                    RNCP {m.rncp_code || '—'}
+                  </span>
+                  <span
+                    className="text-xs"
+                    style={{
+                      color: colors.textSecondary,
+                      fontFamily: '"Fira Code", ui-monospace, SFMono-Regular, monospace',
+                      fontVariantNumeric: 'tabular-nums',
+                    }}
+                  >
+                    {m.version}
+                  </span>
                 </div>
 
                 <div className="min-w-0 flex-1">
-                  <div className="flex min-w-0 flex-wrap items-center gap-2">
-                    <h3 className="truncate text-base font-semibold" style={{ color: colors.text }}>
-                      {inferTeacherName(m)}
-                    </h3>
+                  <div className="flex items-center gap-2">
+                    <span className="truncate text-sm font-semibold" style={{ color: colors.text }}>
+                      {m.tp_name}
+                    </span>
                     {m.status === 'validated' && (
                       <span
                         className="flex-shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase"
@@ -2626,7 +1515,7 @@ function ModulesCatalogueView({
                           letterSpacing: '0.15em',
                         }}
                       >
-                        Réutilisable
+                        Validé
                       </span>
                     )}
                     {m.status === 'draft' && (
@@ -2638,18 +1527,33 @@ function ModulesCatalogueView({
                           letterSpacing: '0.15em',
                         }}
                       >
-                        En préparation
+                        Brouillon
+                      </span>
+                    )}
+                    {/* Badge "Fait main" — modules sans pipeline source
+                        (plateformes vides où l'admin uploade le contenu lui-même).
+                        Slate neutre, lecture rapide, ne consomme pas l'accent violet. */}
+                    {!m.source_pipeline_job_id && (
+                      <span
+                        className="flex-shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium uppercase"
+                        style={{
+                          backgroundColor: colors.innerBg,
+                          color: colors.textMuted,
+                          border: `1px solid ${colors.border}`,
+                          letterSpacing: '0.15em',
+                        }}
+                      >
+                        Fait main
                       </span>
                     )}
                   </div>
-                  <p className="mt-1 truncate text-sm font-medium" style={{ color: colors.textSecondary }}>
-                    {m.tp_name}
-                  </p>
                   <p
                     className="mt-1 truncate text-xs"
                     style={{ color: colors.textMuted, fontVariantNumeric: 'tabular-nums' }}
                   >
-                    RNCP {m.rncp_code || '—'} · {formatModuleCadence(m)}
+                    {m.nb_folders} journée{m.nb_folders > 1 ? 's' : ''}
+                    {' · Source '}
+                    <span style={{ color: colors.textSecondary }}>P{m.source_platform_id}</span>
                     {m.created_at && (
                       <>
                         {' · créé le '}
@@ -2659,22 +1563,20 @@ function ModulesCatalogueView({
                   </p>
                 </div>
 
-                <div className="flex flex-shrink-0 items-center gap-2 sm:ml-auto">
+                <div className="flex flex-shrink-0 items-center gap-2">
                   {m.reusable ? (
                     <button
                       onClick={() => onUseModule(m.id)}
-                      className="flex flex-1 items-center justify-center gap-1.5 rounded-lg px-3.5 py-2.5 text-xs font-semibold text-white transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40 sm:flex-none"
-                      style={{ backgroundColor: '#8B5CF6' }}
-                      onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = '#7c3aed' }}
-                      onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = '#8B5CF6' }}
-                      title="Préparer une nouvelle formation avec ce professeur IA"
+                      className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition-colors hover:bg-black/5 dark:hover:bg-white/5"
+                      style={{ color: colors.textSecondary, border: `1px solid ${colors.border}` }}
+                      title="Créer une nouvelle plateforme à partir de ce module"
                     >
-                      <span>Réutiliser ce professeur</span>
+                      <span>Utiliser</span>
                       <Icon name="arrow_forward" className="text-sm" />
                     </button>
                   ) : (
                     <span className="text-xs" style={{ color: colors.textMuted }}>
-                      {m.nb_folders === 0 ? 'Cours non générés' : 'Bientôt'}
+                      {m.nb_folders === 0 ? 'Cours non générés' : 'Non réutilisable'}
                     </span>
                   )}
                   {/* Bouton supprimer module — icône seule, slate au repos,
@@ -2700,65 +1602,41 @@ function ModulesCatalogueView({
 function CreatePlatformView({
   colors,
   darkMode,
-  teacherFirstName,
-  setTeacherFirstName,
-  teacherColor,
-  setTeacherColor,
-  weeklyCourseCount,
-  setWeeklyCourseCount,
-  teachingDays,
-  setTeachingDays,
+  modules,
+  newPlatformName,
+  setNewPlatformName,
+  formationMode,
+  setFormationMode,
+  selectedModuleId,
+  setSelectedModuleId,
   newFormTpName,
   setNewFormTpName,
   newFormRncp,
   setNewFormRncp,
   newFormHours,
   setNewFormHours,
+  autoPilot,
+  setAutoPilot,
+  autoPilotTts,
+  setAutoPilotTts,
+  autoPilotMode,
+  setAutoPilotMode,
+  testDocs,
+  setTestDocs,
   creating,
   onCreate,
   onCancel,
 }) {
-  const teacherColors = [
-    { id: 'violet', label: 'Violet', swatch: '#8B5CF6', image: '/robot-violet.png' },
-    { id: 'blue', label: 'Bleu', swatch: '#3B82F6', image: '/robot-blue.png' },
-    { id: 'pink', label: 'Rose', swatch: '#EC4899', image: '/robot-pink.png' },
-    { id: 'amber', label: 'Ambre', swatch: '#F59E0B', image: '/robot-amber.png' },
-  ]
-  const weekDays = [
-    { id: 'lundi', label: 'Lun.' },
-    { id: 'mardi', label: 'Mar.' },
-    { id: 'mercredi', label: 'Mer.' },
-    { id: 'jeudi', label: 'Jeu.' },
-    { id: 'vendredi', label: 'Ven.' },
-  ]
-  const selectedColor = teacherColors.find((color) => color.id === teacherColor) || teacherColors[0]
-  const canCreateTeacher = (
-    teacherFirstName.trim()
-    && newFormTpName.trim()
-    && newFormRncp.trim()
-    && Number(newFormHours) > 0
-    && Number(weeklyCourseCount) > 0
-    && teachingDays.length > 0
-  )
-  const inputStyle = {
-    backgroundColor: darkMode ? '#0f172a' : '#F8F7F5',
-    color: darkMode ? '#f1f5f9' : '#1e293b',
-    border: `1px solid ${darkMode ? '#334155' : '#e2e8f0'}`,
-  }
-  const toggleTeachingDay = (dayId) => {
-    setTeachingDays((current) => (
-      current.includes(dayId)
-        ? current.filter((day) => day !== dayId)
-        : [...current, dayId]
-    ))
-  }
+  const reusable = modules.filter(m => m.reusable)
 
   return (
     <section
-      className="mx-auto w-full max-w-3xl"
+      className="mx-auto max-w-2xl overflow-hidden rounded-2xl"
+      style={{ backgroundColor: colors.cardBg, border: `1px solid ${colors.border}` }}
     >
       <header
-        className="mb-7 flex items-start justify-between gap-4"
+        className="flex items-start justify-between gap-4 px-7 py-5"
+        style={{ borderBottom: `1px solid ${colors.border}` }}
       >
         <div className="flex flex-col leading-tight">
           <span
@@ -2768,168 +1646,223 @@ function CreatePlatformView({
             Création
           </span>
           <h2 className="mt-1 text-xl font-semibold tracking-tight" style={{ color: colors.text }}>
-            Nouveau professeur IA
+            Nouvelle plateforme
           </h2>
         </div>
+        <button
+          onClick={onCancel}
+          disabled={creating}
+          className="flex flex-shrink-0 items-center gap-2 rounded-lg px-3.5 py-2 text-sm font-medium transition-colors hover:bg-black/5 dark:hover:bg-white/5 disabled:cursor-not-allowed disabled:opacity-50"
+          style={{ color: colors.textMuted, border: `1px solid ${colors.border}` }}
+        >
+          <Icon name="view_module" className="text-base" />
+          <span>Plateformes</span>
+        </button>
       </header>
 
-      <div>
-        <div className="grid gap-5 md:grid-cols-[1fr_180px]">
-          <div className="space-y-5">
-            <div>
-              <label className="mb-2 block text-sm font-medium" style={{ color: darkMode ? '#94a3b8' : '#64748b' }}>
-                Prénom du professeur IA
-              </label>
-              <input
-                type="text"
-                value={teacherFirstName}
-                onChange={(e) => setTeacherFirstName(e.target.value)}
-                placeholder="Ex: Lina"
-                autoFocus
-                className="w-full rounded-lg px-4 py-3 text-sm outline-none transition-all"
-                style={inputStyle}
-              />
-            </div>
-
-            <div>
-              <label className="mb-2 block text-sm font-medium" style={{ color: darkMode ? '#94a3b8' : '#64748b' }}>
-                Nom de la formation
-              </label>
-              <input
-                type="text"
-                value={newFormTpName}
-                onChange={(e) => setNewFormTpName(e.target.value)}
-                placeholder="Ex: TP CRCD"
-                className="w-full rounded-lg px-4 py-3 text-sm outline-none transition-all"
-                style={inputStyle}
-              />
-            </div>
-          </div>
-
-          <div
-            className="flex items-center justify-center rounded-xl"
-            style={{ backgroundColor: darkMode ? '#0f172a' : '#F8F7F5', border: `1px solid ${colors.border}` }}
-          >
-            <img src={selectedColor.image} alt="" className="h-36 w-36 object-contain" draggable="false" />
-          </div>
-        </div>
-
-        <div className="mt-5">
+      <div className="p-7">
+        <div className="mb-5">
           <label className="mb-2 block text-sm font-medium" style={{ color: darkMode ? '#94a3b8' : '#64748b' }}>
-            Couleur du professeur IA
+            Nom de la plateforme
           </label>
-          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-            {teacherColors.map((color) => {
-              const selected = teacherColor === color.id
-              return (
-                <button
-                  key={color.id}
-                  type="button"
-                  onClick={() => setTeacherColor(color.id)}
-                  className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition-all"
-                  style={{
-                    color: selected ? colors.text : colors.textSecondary,
-                    border: `1px solid ${selected ? color.swatch : colors.border}`,
-                    backgroundColor: selected ? `${color.swatch}14` : 'transparent',
-                  }}
-                >
-                  <span className="h-3 w-3 rounded-full" style={{ backgroundColor: color.swatch }} />
-                  {color.label}
-                </button>
-              )
-            })}
-          </div>
+          <input
+            type="text"
+            value={newPlatformName}
+            onChange={(e) => setNewPlatformName(e.target.value)}
+            placeholder="Ex: TP CRCD Septembre 2026"
+            autoFocus
+            className="w-full rounded-lg px-4 py-3 text-sm outline-none transition-all"
+            style={{
+              backgroundColor: darkMode ? '#0f172a' : '#F8F7F5',
+              color: darkMode ? '#f1f5f9' : '#1e293b',
+              border: `1px solid ${darkMode ? '#334155' : '#e2e8f0'}`,
+            }}
+          />
+          <p className="mt-2 text-xs" style={{ color: darkMode ? '#64748b' : '#94a3b8' }}>
+            Nom libre, identifie la promo/session. Ex: "TP CRCD Septembre 2026".
+          </p>
         </div>
 
-        <div className="mt-5 grid gap-4 md:grid-cols-2">
-          <div>
-            <label className="mb-2 block text-sm font-medium" style={{ color: darkMode ? '#94a3b8' : '#64748b' }}>
-              Code RNCP
-            </label>
-            <input
-              type="text"
-              value={newFormRncp}
-              onChange={(e) => setNewFormRncp(e.target.value)}
-              placeholder="Ex: 35304"
-              className="w-full rounded-lg px-4 py-3 text-sm outline-none transition-all"
-              style={inputStyle}
-            />
-          </div>
-          <div>
-            <label className="mb-2 flex items-center gap-2 text-sm font-medium" style={{ color: darkMode ? '#94a3b8' : '#64748b' }}>
-              <span>Nombre de journées que doit durer la formation</span>
-              <span className="group relative inline-flex">
-                <button
-                  type="button"
-                  className="inline-flex h-5 w-5 items-center justify-center rounded-full text-xs font-bold"
-                  style={{ color: '#8B5CF6', border: '1px solid rgba(139, 92, 246, 0.35)', backgroundColor: 'rgba(139, 92, 246, 0.08)' }}
-                  aria-label="Aide sur le nombre de journées"
-                >
-                  i
-                </button>
-                <span
-                  className="pointer-events-none absolute bottom-7 right-0 z-30 hidden w-72 rounded-lg px-3 py-2 text-xs font-medium leading-5 shadow-lg group-hover:block group-focus-within:block"
-                  style={{ color: '#334155', backgroundColor: '#ffffff', border: '1px solid #e2e8f0' }}
-                >
-                  Si la formation dure 52 semaines à raison de 1 jour par semaine, indiquez 52. Si elle dure 52 semaines à raison de 2 jours par semaine, indiquez 104.
-                </span>
-              </span>
-            </label>
-            <input
-              type="number"
-              value={newFormHours}
-              onChange={(e) => setNewFormHours(e.target.value)}
-              placeholder="Ex: 52"
-              min="1"
-              className="w-full rounded-lg px-4 py-3 text-sm outline-none transition-all"
-              style={inputStyle}
-            />
-          </div>
+        <div className="mb-5">
+          <label className="mb-2 block text-sm font-medium" style={{ color: darkMode ? '#94a3b8' : '#64748b' }}>
+            Module formation
+          </label>
+          <select
+            value={formationMode === 'existing' ? selectedModuleId : (formationMode === 'new' ? '__new__' : '__none__')}
+            onChange={(e) => {
+              const v = e.target.value
+              if (v === '__new__') { setFormationMode('new'); setSelectedModuleId('') }
+              else if (v === '__none__') { setFormationMode('none'); setSelectedModuleId('') }
+              else { setFormationMode('existing'); setSelectedModuleId(v) }
+            }}
+            className="w-full rounded-lg px-4 py-3 text-sm outline-none transition-all"
+            style={{
+              backgroundColor: darkMode ? '#0f172a' : '#F8F7F5',
+              color: darkMode ? '#f1f5f9' : '#1e293b',
+              border: `1px solid ${darkMode ? '#334155' : '#e2e8f0'}`,
+            }}
+          >
+            <option value="" disabled>Sélectionner un module...</option>
+            {reusable.length > 0 && (
+              <optgroup label="Modules disponibles (cours + audios prêts)">
+                {reusable.map(m => (
+                  <option key={m.id} value={m.id}>
+                    {m.tp_name} — RNCP {m.rncp_code || '?'} — {m.version} — {m.nb_folders} journée{m.nb_folders > 1 ? 's' : ''}
+                  </option>
+                ))}
+              </optgroup>
+            )}
+            <option value="__new__">+ Nouvelle formation (lance la pipeline)</option>
+            <option value="__none__">Plateforme vide (sans cours)</option>
+          </select>
+          {formationMode === 'existing' && selectedModuleId && (
+            <p className="mt-2 text-xs" style={{ color: '#10b981' }}>
+              ✓ Les cours + audios du module seront clonés vers la nouvelle plateforme. Module intact.
+            </p>
+          )}
+          {formationMode === 'new' && (
+            <p className="mt-2 text-xs" style={{ color: '#a78bfa' }}>
+              ⚙ Un job pipeline va être initié, tu finiras les étapes de validation sur /formation-pipeline.
+            </p>
+          )}
+          {formationMode === 'none' && (
+            <p className="mt-2 text-xs" style={{ color: darkMode ? '#64748b' : '#94a3b8' }}>
+              Plateforme sans cours, tu pourras uploader du contenu manuellement.
+            </p>
+          )}
         </div>
 
-        <div className="mt-5 grid gap-4 md:grid-cols-[180px_1fr]">
-          <div>
-            <label className="mb-2 block text-sm font-medium" style={{ color: darkMode ? '#94a3b8' : '#64748b' }}>
-              Cours par semaine
-            </label>
-            <input
-              type="number"
-              value={weeklyCourseCount}
-              onChange={(e) => setWeeklyCourseCount(e.target.value)}
-              min="1"
-              max="5"
-              className="w-full rounded-lg px-4 py-3 text-sm outline-none transition-all"
-              style={inputStyle}
-            />
-          </div>
-          <div>
-            <label className="mb-2 block text-sm font-medium" style={{ color: darkMode ? '#94a3b8' : '#64748b' }}>
-              Jours de cours
-            </label>
-            <div className="grid grid-cols-5 gap-2">
-              {weekDays.map((day) => {
-                const selected = teachingDays.includes(day.id)
-                return (
-                  <button
-                    key={day.id}
-                    type="button"
-                    onClick={() => toggleTeachingDay(day.id)}
-                    className="rounded-lg px-2 py-3 text-xs font-semibold transition-all"
-                    style={{
-                      color: selected ? '#ffffff' : colors.textSecondary,
-                      backgroundColor: selected ? '#8B5CF6' : darkMode ? '#0f172a' : '#F8F7F5',
-                      border: `1px solid ${selected ? '#8B5CF6' : colors.border}`,
-                    }}
-                  >
-                    {day.label}
-                  </button>
-                )
-              })}
+        {formationMode === 'new' && (
+          <div className="mb-5 rounded-lg p-4" style={{ backgroundColor: darkMode ? '#0f172a' : '#F8F7F5', border: `1px dashed ${darkMode ? '#334155' : '#cbd5e1'}` }}>
+            <div className="mb-3">
+              <label className="mb-1 block text-xs font-medium" style={{ color: darkMode ? '#94a3b8' : '#64748b' }}>Nom du TP</label>
+              <input type="text" value={newFormTpName} onChange={(e) => setNewFormTpName(e.target.value)} placeholder="Ex: TP CRCD"
+                className="w-full rounded-lg px-3 py-2 text-sm outline-none"
+                style={{ backgroundColor: darkMode ? '#1e293b' : '#ffffff', color: darkMode ? '#f1f5f9' : '#1e293b', border: `1px solid ${darkMode ? '#334155' : '#e2e8f0'}` }} />
+            </div>
+            <div className="mb-3">
+              <label className="mb-1 block text-xs font-medium" style={{ color: darkMode ? '#94a3b8' : '#64748b' }}>Code RNCP</label>
+              <input type="text" value={newFormRncp} onChange={(e) => setNewFormRncp(e.target.value)} placeholder="Ex: 35304"
+                className="w-full rounded-lg px-3 py-2 text-sm outline-none"
+                style={{ backgroundColor: darkMode ? '#1e293b' : '#ffffff', color: darkMode ? '#f1f5f9' : '#1e293b', border: `1px solid ${darkMode ? '#334155' : '#e2e8f0'}` }} />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs font-medium" style={{ color: darkMode ? '#94a3b8' : '#64748b' }}>Durée totale (heures)</label>
+              <input type="number" value={newFormHours} onChange={(e) => setNewFormHours(e.target.value)} placeholder="Ex: 70" min="1"
+                className="w-full rounded-lg px-3 py-2 text-sm outline-none"
+                style={{ backgroundColor: darkMode ? '#1e293b' : '#ffffff', color: darkMode ? '#f1f5f9' : '#1e293b', border: `1px solid ${darkMode ? '#334155' : '#e2e8f0'}` }} />
+            </div>
+
+            <div className="mt-4 pt-4" style={{ borderTop: `1px dashed ${darkMode ? '#334155' : '#cbd5e1'}` }}>
+              <label className="flex cursor-pointer items-start gap-3">
+                <input
+                  type="checkbox"
+                  checked={autoPilot}
+                  onChange={(e) => setAutoPilot(e.target.checked)}
+                  className="mt-1"
+                  style={{ accentColor: '#8B5CF6' }}
+                />
+                <div>
+                  <div className="text-xs font-semibold" style={{ color: darkMode ? '#f1f5f9' : '#1e293b' }}>
+                    Lancer en mode auto-pilot
+                  </div>
+                  <div className="mt-1 text-xs" style={{ color: darkMode ? '#94a3b8' : '#64748b' }}>
+                    Toutes les étapes texte s'enchaînent automatiquement jusqu'aux Word 2 et rapports. Les audios se génèrent ensuite à la demande, journée par journée.
+                  </div>
+                </div>
+              </label>
+
+              {autoPilot && (
+                <div className="ml-7 mt-3 space-y-3">
+                  <div>
+                    <label className="mb-1 block text-xs font-medium" style={{ color: darkMode ? '#94a3b8' : '#64748b' }}>
+                      Voix par défaut pour les audios ultérieurs
+                      {autoPilotMode === 'test' && (
+                        <span className="ml-2" style={{ color: '#a78bfa' }}>
+                          (forcé en mock pour le mode test)
+                        </span>
+                      )}
+                    </label>
+                    <select
+                      value={autoPilotMode === 'test' ? 'mock' : autoPilotTts}
+                      onChange={(e) => setAutoPilotTts(e.target.value)}
+                      disabled={autoPilotMode === 'test'}
+                      className="w-full rounded-lg px-3 py-2 text-sm outline-none"
+                      style={{
+                        backgroundColor: darkMode ? '#1e293b' : '#ffffff',
+                        color: darkMode ? '#f1f5f9' : '#1e293b',
+                        border: `1px solid ${darkMode ? '#334155' : '#e2e8f0'}`,
+                        opacity: autoPilotMode === 'test' ? 0.5 : 1,
+                      }}
+                    >
+                      <option value="gtts">Edge TTS — voix basique gratuite Microsoft (recommandé pour test)</option>
+                      <option value="mock">Mock — silence 1 s (gratuit, pour tester l'orchestration)</option>
+                      <option value="fish_audio">Fish Audio S2-Pro (payant, ~9$/journée)</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-xs font-medium" style={{ color: darkMode ? '#94a3b8' : '#64748b' }}>
+                      Mode d'exécution des étapes IA (KB · global · daily · content · review)
+                    </label>
+                    <select
+                      value={autoPilotMode}
+                      onChange={(e) => setAutoPilotMode(e.target.value)}
+                      className="w-full rounded-lg px-3 py-2 text-sm outline-none"
+                      style={{ backgroundColor: darkMode ? '#1e293b' : '#ffffff', color: darkMode ? '#f1f5f9' : '#1e293b', border: `1px solid ${darkMode ? '#334155' : '#e2e8f0'}` }}
+                    >
+                      <option value="api">API Anthropic — paie ta clé ANTHROPIC_API_KEY (~5–7$ pour 7h Sonnet)</option>
+                      <option value="api_deepseek">API DeepSeek — paie ta clé DEEPSEEK_API_KEY (deepseek-v4-pro, top modèle)</option>
+                      <option value="claude_code">Claude Code local — forfait Pro/Max via OAuth (gratuit côté API)</option>
+                      <option value="test">TEST — injecte des DOCX/TXT pré-rédigés (skip génération, ~5 min)</option>
+                    </select>
+                    <div className="mt-1 text-xs" style={{ color: darkMode ? '#64748b' : '#94a3b8' }}>
+                      {autoPilotMode === 'claude_code' && 'Le backend doit avoir LOCAL_DEV=true et le binaire `claude` dans son PATH.'}
+                      {autoPilotMode === 'api' && 'Mode standard, aucune dépendance locale requise.'}
+                      {autoPilotMode === 'api_deepseek' && 'Le backend doit avoir DEEPSEEK_API_KEY dans son .env. Endpoint compatible Anthropic, route automatique sur api.deepseek.com.'}
+                      {autoPilotMode === 'test' && 'Skip KB/global/daily/content (tu fournis 1 DOCX/TXT par journée). Conformité locale par morceau puis Word 2 tournent ensuite.'}
+                    </div>
+                  </div>
+
+                  {autoPilotMode === 'test' && (
+                    <div
+                      className="rounded-lg border-2 border-dashed p-3"
+                      style={{
+                        borderColor: '#a78bfa',
+                        backgroundColor: darkMode ? '#1e293b' : '#faf7ff',
+                      }}
+                    >
+                      <label className="mb-2 block text-xs font-semibold" style={{ color: '#8B5CF6' }}>
+                        📄 Documents source (1 par journée — total {Math.max(1, Math.ceil((parseInt(newFormHours, 10) || 7) / 7))})
+                      </label>
+                      <input
+                        type="file"
+                        accept=".docx,.txt"
+                        multiple
+                        onChange={(e) => setTestDocs(Array.from(e.target.files || []))}
+                        className="block w-full text-xs"
+                        style={{ color: darkMode ? '#cbd5e1' : '#475569' }}
+                      />
+                      {testDocs.length > 0 && (
+                        <ul className="mt-2 space-y-1 text-xs" style={{ color: darkMode ? '#94a3b8' : '#64748b' }}>
+                          {testDocs.map((f, i) => (
+                            <li key={i}>
+                              <span className="font-mono">Jour {i + 1}</span> · {f.name} ({(f.size / 1024).toFixed(1)} ko)
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                      <div className="mt-2 text-xs" style={{ color: '#a78bfa' }}>
+                        Chaque fichier sera découpé en 18 segments (6 sous-parties × 3 passes). Les 18 segments alimenteront review + audio.
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           </div>
-        </div>
+        )}
 
-        <div className="mt-6 flex justify-end gap-3">
+        <div className="flex justify-end gap-3">
           <button
             onClick={onCancel}
             disabled={creating}
@@ -2940,14 +1873,14 @@ function CreatePlatformView({
           </button>
           <button
             onClick={onCreate}
-            disabled={creating || !canCreateTeacher}
+            disabled={creating || !newPlatformName.trim()}
             className="rounded-lg px-5 py-2 text-sm font-medium text-white transition-all"
             style={{
-              backgroundColor: creating || !canCreateTeacher ? '#a78bfa' : '#8B5CF6',
-              opacity: creating || !canCreateTeacher ? 0.6 : 1,
+              backgroundColor: creating || !newPlatformName.trim() ? '#a78bfa' : '#8B5CF6',
+              opacity: creating || !newPlatformName.trim() ? 0.6 : 1,
             }}
           >
-            {creating ? 'Création...' : 'Créer le professeur IA'}
+            {creating ? 'Création...' : 'Créer la plateforme'}
           </button>
         </div>
       </div>
@@ -3021,7 +1954,7 @@ function AudiosModal({
     setSelectedFillFolderId('')
     setLoadingFolders(true)
     try {
-      const resp = await apiFetch(`/api/hr/platforms/${platformId}/cours-folders`)
+      const resp = await fetch(apiUrl(`/api/hr/platforms/${platformId}/cours-folders`), { credentials: 'include' })
       const data = await resp.json()
       if (data.success) setFolders(data.folders)
     } catch (e) {
@@ -3036,9 +1969,10 @@ function AudiosModal({
     setFilling(true)
     setFillResult(null)
     try {
-      const resp = await apiFetch(`/api/hr/platforms/${platformId}/fill-from-folder`, {
+      const resp = await fetch(apiUrl(`/api/hr/platforms/${platformId}/fill-from-folder`), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify({ folder_id: parseInt(selectedFillFolderId) }),
       })
       const data = await resp.json()
@@ -3457,21 +2391,13 @@ function AudioCard({ title, icon, bgColor, audios, iconColor, buttonColor }) {
 // déménagés dans CoursFoldersModal (la vue où l'admin voit les audios).
 function PlatformCard({
   platform: p, expanded, audios, audiosLoading, playingAudio, pdfUploading,
-  audioRef, colors, darkMode, studentEmails = [], studentsExpanded = false, studentEmailsLoading = false,
-  studentEmailsSaving = false, studentEmailDraft = '', attendanceExpanded = false,
-  attendanceDate, attendanceData, attendanceLoading = false, attendanceError = '',
-  attendanceSavingStudentId = null, onExpand, onToggleStudentEmails, onToggleAttendance,
-  onStudentEmailDraftChange, onAddStudentEmails, onDeleteStudentEmail,
-  onAttendanceDateChange, onRefreshAttendance, onUpdateAttendanceDraft, onSaveAttendance,
-  onExportAttendance, onOpenPdfModal, onOpenCourseTimeModal,
-  onDeleteAudio, onPlayAudio, onPdfUpload, onDeletePdf, onOpenCoursFolders, onDeletePlatform,
+  audioRef, colors, darkMode, onExpand, onOpenPdfModal, onOpenCourseTimeModal, onDeleteAudio, onPlayAudio, onPdfUpload, onDeletePdf, onOpenCoursFolders, onDeletePlatform,
 }) {
   const pdfInputId = `pdf-input-${p.id}`
   const platformThumbnail = getPlatformThumbnail(p)
   const [deleteHover, setDeleteHover] = useState(false)
   const [flipped, setFlipped] = useState(false)
   const theme = getRobotTheme(p.id)
-  const creationProgress = getHiddenPipelineProgress(p)
   const faceStyle = {
     backgroundColor: colors.cardBg,
     border: p.active ? '1px solid #E4E4E4' : `1px solid ${colors.border}`,
@@ -3537,33 +2463,6 @@ function PlatformCard({
               </span>
             )}
           </div>
-          {p.active && p.status === 'pending' && (
-            <div
-              className="relative z-10 mt-4 w-full max-w-[280px] rounded-xl px-4 py-3"
-              style={{ backgroundColor: darkMode ? 'rgba(15, 23, 42, 0.72)' : 'rgba(255, 255, 255, 0.86)', border: `1px solid ${colors.border}`, backdropFilter: 'blur(6px)' }}
-            >
-              <div className="mb-2 flex items-center justify-between gap-3">
-                <span className="text-xs font-semibold" style={{ color: colors.text }}>
-                  Création en cours
-                </span>
-                <span className="inline-flex h-4 w-4 animate-spin rounded-full border-2" style={{ borderColor: '#ddd6fe', borderTopColor: '#8B5CF6' }} />
-              </div>
-              <div
-                className="h-1.5 overflow-hidden rounded-full"
-                role="progressbar"
-                aria-label="Création du professeur IA"
-                aria-valuemin={0}
-                aria-valuemax={100}
-                aria-valuenow={creationProgress}
-                style={{ backgroundColor: darkMode ? '#334155' : '#ede9fe' }}
-              >
-                <div
-                  className="h-full rounded-full transition-[width] duration-700 ease-out"
-                  style={{ width: `${creationProgress}%`, backgroundColor: '#8B5CF6' }}
-                />
-              </div>
-            </div>
-          )}
         </div>
 
         {/* ═══ VERSO — la fiche formation (inchangée) ═══ */}
@@ -3769,7 +2668,7 @@ function PlatformCard({
               }}
             >
               <Icon name="schedule" className="text-lg" style={{ color: colors.textMuted }} />
-              <span>Horaire</span>
+              <span>Heure</span>
             </button>
           )}
 
@@ -3812,60 +2711,6 @@ function PlatformCard({
             >
               <Icon name="folder_special" className="text-lg" style={{ color: colors.textMuted }} />
               <span>Cours</span>
-            </button>
-          )}
-
-          {/* Élèves — emails utilisés pour les rappels automatiques */}
-          {p.active && (
-            <button
-              onClick={onToggleStudentEmails}
-              className="group flex items-center gap-2.5 rounded-lg px-3 py-2.5 text-sm font-medium tracking-tight transition-colors hover:bg-black/5 dark:hover:bg-white/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40"
-              style={
-                studentsExpanded
-                  ? {
-                      backgroundColor: 'rgba(139, 92, 246, 0.10)',
-                      border: '1px solid rgba(139, 92, 246, 0.35)',
-                      color: darkMode ? '#c4b5fd' : '#7c3aed',
-                    }
-                  : {
-                      border: `1px solid ${colors.border}`,
-                      color: colors.textSecondary,
-                    }
-              }
-            >
-              <Icon
-                name="group"
-                className="text-lg"
-                style={{ color: studentsExpanded ? (darkMode ? '#c4b5fd' : '#7c3aed') : colors.textMuted }}
-              />
-              <span>Élèves</span>
-            </button>
-          )}
-
-          {/* Présence — relevés journaliers et exports Excel hebdomadaires */}
-          {p.active && (
-            <button
-              onClick={onToggleAttendance}
-              className="group flex items-center gap-2.5 rounded-lg px-3 py-2.5 text-sm font-medium tracking-tight transition-colors hover:bg-black/5 dark:hover:bg-white/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40"
-              style={
-                attendanceExpanded
-                  ? {
-                      backgroundColor: 'rgba(139, 92, 246, 0.10)',
-                      border: '1px solid rgba(139, 92, 246, 0.35)',
-                      color: darkMode ? '#c4b5fd' : '#7c3aed',
-                    }
-                  : {
-                      border: `1px solid ${colors.border}`,
-                      color: colors.textSecondary,
-                    }
-              }
-            >
-              <Icon
-                name="fact_check"
-                className="text-lg"
-                style={{ color: attendanceExpanded ? (darkMode ? '#c4b5fd' : '#7c3aed') : colors.textMuted }}
-              />
-              <span>Présence</span>
             </button>
           )}
         </div>
@@ -3939,101 +2784,6 @@ function PlatformCard({
           </div>
         )}
 
-        {/* Emails élèves — liste de destinataires des rappels de cours */}
-        {studentsExpanded && p.active && (
-          <div
-            className="mb-3 rounded-xl p-3"
-            style={{ backgroundColor: colors.innerBg, border: `1px solid ${colors.border}` }}
-          >
-            <div className="mb-3 flex items-center justify-between gap-3">
-              <span className="text-sm font-semibold" style={{ color: colors.text }}>
-                Emails élèves
-              </span>
-              <span className="text-xs tabular-nums" style={{ color: colors.textMuted }}>
-                {studentEmails.length}
-              </span>
-            </div>
-
-            <textarea
-              value={studentEmailDraft}
-              onChange={(e) => onStudentEmailDraftChange(e.target.value)}
-              rows={3}
-              placeholder="prenom@exemple.com, autre@exemple.com"
-              className="mb-2 w-full resize-none rounded-lg px-3 py-2 text-sm outline-none transition-shadow focus:ring-2 focus:ring-violet-500/30"
-              style={{
-                backgroundColor: colors.cardBg,
-                border: `1px solid ${colors.border}`,
-                color: colors.text,
-              }}
-            />
-            <button
-              type="button"
-              onClick={onAddStudentEmails}
-              disabled={!studentEmailDraft.trim() || studentEmailsSaving}
-              className="mb-3 inline-flex items-center gap-2 rounded-lg px-3 py-2 text-xs font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-50"
-              style={{ backgroundColor: '#8B5CF6', color: 'white' }}
-            >
-              {studentEmailsSaving ? (
-                <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-white/40 border-t-white" />
-              ) : (
-                <Icon name="add" className="text-sm" />
-              )}
-              Ajouter
-            </button>
-
-            {studentEmailsLoading ? (
-              <div className="flex items-center justify-center py-4">
-                <div className="h-5 w-5 animate-spin rounded-full border-2" style={{ borderColor: colors.border, borderTopColor: '#8B5CF6' }} />
-              </div>
-            ) : studentEmails.length === 0 ? (
-              <p className="py-3 text-xs" style={{ color: colors.textMuted }}>
-                Aucun email élève ajouté.
-              </p>
-            ) : (
-              <div className="max-h-36 space-y-1 overflow-y-auto pr-1">
-                {studentEmails.map((recipient) => (
-                  <div
-                    key={recipient.id}
-                    className="flex items-center gap-2 rounded-lg px-2 py-1.5"
-                    style={{ backgroundColor: colors.cardBg, border: `1px solid ${colors.border}` }}
-                  >
-                    <Icon name="mail" className="text-sm" style={{ color: colors.textMuted }} />
-                    <span className="min-w-0 flex-1 truncate text-xs" style={{ color: colors.textSecondary }} title={recipient.email}>
-                      {recipient.email}
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => onDeleteStudentEmail(recipient.id)}
-                      className="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-md transition-colors hover:bg-rose-50"
-                      style={{ color: colors.textMuted }}
-                      title="Supprimer l'email"
-                    >
-                      <Icon name="close" className="text-sm" />
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        )}
-
-        {attendanceExpanded && p.active && (
-          <AttendanceCardPanel
-            colors={colors}
-            darkMode={darkMode}
-            courseDate={attendanceDate}
-            data={attendanceData}
-            loading={attendanceLoading}
-            error={attendanceError}
-            savingStudentId={attendanceSavingStudentId}
-            onCourseDateChange={onAttendanceDateChange}
-            onRefresh={onRefreshAttendance}
-            onUpdateDraft={onUpdateAttendanceDraft}
-            onSaveStudent={onSaveAttendance}
-            onExport={onExportAttendance}
-          />
-        )}
-
         {/* === Divider entre groupes A (boxed) et B (linky externes) === */}
         {p.active && (
           <div
@@ -4048,7 +2798,7 @@ function PlatformCard({
         {/* Lien vers la page apprenant — l'admin clique pour vérifier ce que voit l'apprenant */}
         {p.active && (
           <a
-            href={p.public_url || `${p.frontend_url || window.location.origin}/?p=${p.id}`}
+            href={`${p.frontend_url || window.location.origin}/?p=${p.id}`}
             target="_blank"
             rel="noopener noreferrer"
             className="flex w-full items-center justify-between rounded-md px-3 py-2 text-sm transition-colors hover:bg-black/5 dark:hover:bg-white/5"
@@ -4062,7 +2812,8 @@ function PlatformCard({
           </a>
         )}
 
-        {/* Accès au dashboard centre sur le domaine de la plateforme. */}
+        {/* Lien vers le dashboard centre de la plateforme distante. P3 utilise
+            la route SaaS actuelle tandis que P1 conserve l’interface historique. */}
         {p.active && (
           <a
             href={`${p.frontend_url || window.location.origin}/dashboard-centre?p=${p.id}`}
@@ -4143,55 +2894,20 @@ function formatRelativeTime(dateStr) {
 // `components/SlideToConfirm.jsx` pour être partagés avec CoursFoldersModal,
 // qui héberge maintenant l'action lock/unlock + le pipeline de backup.
 
-const COURSE_WEEKDAY_LABELS = ['Lun.', 'Mar.', 'Mer.', 'Jeu.', 'Ven.', 'Sam.', 'Dim.']
-
-function formatScheduleDateTime(value) {
-  if (!value) return 'Non programmé'
-  const normalized = String(value).includes('T') ? value : String(value).replace(' ', 'T')
-  const date = new Date(normalized)
-  if (Number.isNaN(date.getTime())) return value
-  return date.toLocaleDateString('fr-FR', {
-    weekday: 'short',
-    day: '2-digit',
-    month: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-  })
-}
-
 // ─── Course Time Modal ───────────────────────────────────────────────────────
-function CourseTimeModal({ onClose, onSubmit, initialDate, initialHeure, schedule }) {
+function CourseTimeModal({ onClose, onSubmit, initialDate, initialHeure }) {
   const today = new Date().toISOString().split('T')[0]
-  const hasSchedule = !!schedule
   const [date, setDate] = useState(initialDate || today)
-  const [heure, setHeure] = useState(schedule?.start_time || initialHeure || '')
-  const [selectedWeekdays, setSelectedWeekdays] = useState(
-    (schedule?.weekdays || [])
-      .map((day) => Number(day))
-      .filter((day) => Number.isInteger(day) && day >= 0 && day <= 6)
-      .sort((a, b) => a - b)
-  )
+  const [heure, setHeure] = useState(initialHeure || '')
   const [loading, setLoading] = useState(false)
   const [result, setResult] = useState(null)
-  const expectedWeekdayCount = Number(schedule?.weekly_course_count || selectedWeekdays.length || 0)
-  const weekdaySelectionError = hasSchedule && expectedWeekdayCount > 0 && selectedWeekdays.length !== expectedWeekdayCount
-    ? `Sélectionnez ${expectedWeekdayCount} jour${expectedWeekdayCount > 1 ? 's' : ''}.`
-    : ''
-
-  const toggleWeekday = (day) => {
-    setResult(null)
-    setSelectedWeekdays((current) => {
-      if (current.includes(day)) return current.filter((value) => value !== day)
-      return [...current, day].sort((a, b) => a - b)
-    })
-  }
 
   const handleSubmit = async (e) => {
     e.preventDefault()
-    if ((!hasSchedule && !date) || !heure || weekdaySelectionError) return
+    if (!date || !heure) return
     setLoading(true)
     setResult(null)
-    const data = await onSubmit(hasSchedule ? '' : date, heure, hasSchedule ? selectedWeekdays : undefined)
+    const data = await onSubmit(date, heure)
     setResult(data)
     setLoading(false)
   }
@@ -4211,7 +2927,7 @@ function CourseTimeModal({ onClose, onSubmit, initialDate, initialHeure, schedul
         <div className="flex items-center justify-between px-6 py-4 border-b" style={{ borderColor: '#e2e8f0', backgroundColor: '#137fec' }}>
           <div className="flex items-center gap-3 text-white">
             <Icon name="schedule" className="text-2xl" />
-            <h3 className="text-lg font-bold">{hasSchedule ? 'HORAIRE DES JOURNÉES' : 'HEURE DU COURS'}</h3>
+            <h3 className="text-lg font-bold">HEURE DU COURS</h3>
           </div>
           <button
             onClick={onClose}
@@ -4239,64 +2955,21 @@ function CourseTimeModal({ onClose, onSubmit, initialDate, initialHeure, schedul
             </div>
           ) : (
             <form onSubmit={handleSubmit} className="flex flex-col gap-4">
-              {hasSchedule ? (
-                <div className="rounded-xl px-4 py-3" style={{ backgroundColor: '#f8fafc', border: '1px solid #e2e8f0' }}>
-                  <p className="text-xs font-semibold uppercase tracking-wide mb-2" style={{ color: '#64748b' }}>
-                    Planning automatique
-                  </p>
-                  <div className="flex flex-wrap gap-2">
-                    {COURSE_WEEKDAY_LABELS.map((label, day) => {
-                      const selected = selectedWeekdays.includes(day)
-                      return (
-                        <button
-                          type="button"
-                          key={label}
-                          onClick={() => toggleWeekday(day)}
-                          className="rounded-full px-2.5 py-1 text-xs font-semibold transition-colors"
-                          style={{
-                            backgroundColor: selected ? '#ede9fe' : '#ffffff',
-                            color: selected ? '#7c3aed' : '#64748b',
-                            border: `1px solid ${selected ? '#c4b5fd' : '#e2e8f0'}`,
-                          }}
-                        >
-                          {label}
-                        </button>
-                      )
-                    })}
-                  </div>
-                  {weekdaySelectionError && (
-                    <p className="mt-2 text-xs" style={{ color: '#dc2626' }}>
-                      {weekdaySelectionError}
-                    </p>
-                  )}
-                  <p className="mt-3 text-xs" style={{ color: '#64748b' }}>
-                    Le planning est verrouillé dans les 24h avant une journée, car l'audio peut être préparé automatiquement.
-                  </p>
-                  <div className="mt-3 space-y-1 text-xs" style={{ color: '#64748b' }}>
-                    <p>{schedule.total_training_days} journée{schedule.total_training_days > 1 ? 's' : ''} au total</p>
-                    <p>Prochaine journée : {formatScheduleDateTime(schedule.next_session_at)}</p>
-                    <p>Dernière journée prévue : {formatScheduleDateTime(schedule.last_session_at)}</p>
-                  </div>
-                </div>
-              ) : (
-                <div>
-                  <label className="block text-xs font-semibold mb-1.5" style={{ color: '#334155' }}>Date du cours</label>
-                  <input
-                    type="date"
-                    value={date}
-                    onChange={(e) => setDate(e.target.value)}
-                    required
-                    className="w-full rounded-lg border px-3 py-2.5 text-sm outline-none transition-colors"
-                    style={{ borderColor: '#e2e8f0', color: '#0f172a', backgroundColor: '#F8F7F5' }}
-                    onFocus={(e) => { e.currentTarget.style.borderColor = '#137fec' }}
-                    onBlur={(e) => { e.currentTarget.style.borderColor = '#e2e8f0' }}
-                  />
-                </div>
-              )}
               <div>
-                <label className="block text-xs font-semibold mb-1.5" style={{ color: '#334155' }}>
-                  {hasSchedule ? 'Heure de début de chaque journée' : 'Heure de début'}
-                </label>
+                <label className="block text-xs font-semibold mb-1.5" style={{ color: '#334155' }}>Date du cours</label>
+                <input
+                  type="date"
+                  value={date}
+                  onChange={(e) => setDate(e.target.value)}
+                  required
+                  className="w-full rounded-lg border px-3 py-2.5 text-sm outline-none transition-colors"
+                  style={{ borderColor: '#e2e8f0', color: '#0f172a', backgroundColor: '#F8F7F5' }}
+                  onFocus={(e) => { e.currentTarget.style.borderColor = '#137fec' }}
+                  onBlur={(e) => { e.currentTarget.style.borderColor = '#e2e8f0' }}
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold mb-1.5" style={{ color: '#334155' }}>Heure de début</label>
                 <input
                   type="time"
                   value={heure}
@@ -4311,7 +2984,7 @@ function CourseTimeModal({ onClose, onSubmit, initialDate, initialHeure, schedul
 
               {result && !result.success && (
                 <p className="text-xs rounded-lg px-3 py-2" style={{ color: '#dc2626', backgroundColor: '#fee2e2' }}>
-                  {result.message || result.error || 'Une erreur est survenue'}
+                  {result.error || 'Une erreur est survenue'}
                 </p>
               )}
 
@@ -4326,16 +2999,16 @@ function CourseTimeModal({ onClose, onSubmit, initialDate, initialHeure, schedul
                 </button>
                 <button
                   type="submit"
-                  disabled={loading || (!hasSchedule && !date) || !heure || !!weekdaySelectionError}
+                  disabled={loading || !date || !heure}
                   className="flex-1 flex items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm font-semibold text-white transition-opacity"
-                  style={{ backgroundColor: '#137fec', opacity: (loading || (!hasSchedule && !date) || !heure || !!weekdaySelectionError) ? 0.6 : 1 }}
+                  style={{ backgroundColor: '#137fec', opacity: (loading || !date || !heure) ? 0.6 : 1 }}
                 >
                   {loading ? (
                     <div className="h-4 w-4 animate-spin rounded-full border-2 border-white/30 border-t-white" />
                   ) : (
                     <Icon name="save" className="text-base" />
                   )}
-                  {loading ? 'Enregistrement...' : hasSchedule ? 'Mettre à jour' : 'Enregistrer'}
+                  {loading ? 'Enregistrement...' : 'Enregistrer'}
                 </button>
               </div>
             </form>

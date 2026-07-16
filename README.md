@@ -6,7 +6,7 @@ TTS.
 
 ## Structure
 
-- `backend/` : API Flask, routes, services, PostgreSQL production / SQLite local, prompts backend.
+- `backend/` : API Flask, routes, services, base SQLite locale, prompts backend.
 - `frontend/` : application React/Vite, tests Playwright.
 - `azure-function/` : fonction Azure separee.
 - `cours/` : documents source lourds ou bureautiques (`.docx`, `.pdf`).
@@ -42,6 +42,3 @@ npm run dev
 
 Les fichiers locaux sensibles ou generes (`backend/.env`, bases `.db`,
 `node_modules`, sorties audio, caches, builds) sont ignores par Git.
-
-Architecture et cutover de la pipeline :
-[PostgreSQL + Azure Blob + file durable](docs/architecture/PIPELINE_PRODUCTION_POSTGRES_AZURE.md).

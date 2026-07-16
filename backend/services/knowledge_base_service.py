@@ -26,14 +26,7 @@ import time
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from repositories.pipeline_repository import (
-    clear_knowledge_base,
-    knowledge_base_stats_rows,
-    list_knowledge_base_rows,
-    mark_knowledge_base_entry_error,
-    save_enriched_knowledge_base_entry,
-    upsert_pending_knowledge_base_entries,
-)
+from database.db import get_db_connection
 from utils.anthropic_client import (
     AnthropicAPIError,
     AnthropicRateLimitError,
@@ -352,56 +345,111 @@ def _repair_truncated_json(text: str) -> str:
 
 def clear_kb(job_id: int) -> None:
     """Supprime toutes les entrées KB d'un job (pour relance complète)."""
-    clear_knowledge_base(job_id)
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM formation_knowledge_base WHERE job_id = ?", (job_id,))
+    conn.commit()
+    conn.close()
 
 
 def insert_pending_competences(job_id: int, competences: list) -> None:
     """Insère les compétences extraites en status='pending'."""
-    upsert_pending_knowledge_base_entries(job_id, competences)
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    for idx, c in enumerate(competences):
+        cursor.execute(
+            """INSERT OR REPLACE INTO formation_knowledge_base
+               (job_id, competence_index, competence_key, competence_title, bloc, raw_source, status, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, 'pending', CURRENT_TIMESTAMP)""",
+            (job_id, idx, c["competence_key"], c["competence_title"], c.get("bloc", ""), c.get("raw_source", "")),
+        )
+    conn.commit()
+    conn.close()
 
 
 def save_enriched_competence(job_id: int, competence_index: int, enriched: dict, word_count: int) -> None:
     """Enregistre le contenu enrichi d'une compétence. Protégé par lock pour workers parallèles."""
     with _DB_WRITE_LOCK:
-        save_enriched_knowledge_base_entry(
-            job_id=job_id,
-            competence_index=competence_index,
-            definition_pedagogique=enriched.get("definition_pedagogique", ""),
-            etudes_de_cas_json=json.dumps(enriched.get("etudes_de_cas", []), ensure_ascii=False),
-            pieges_frequents_json=json.dumps(enriched.get("pieges_frequents", []), ensure_ascii=False),
-            vocabulaire_metier_json=json.dumps(enriched.get("vocabulaire_metier", {}), ensure_ascii=False),
-            contexte_terrain=enriched.get("contexte_terrain", ""),
-            liens_connexes_json=json.dumps(enriched.get("liens_connexes", []), ensure_ascii=False),
-            word_count=word_count,
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            """UPDATE formation_knowledge_base
+               SET definition_pedagogique = ?,
+                   etudes_de_cas = ?,
+                   pieges_frequents = ?,
+                   vocabulaire_metier = ?,
+                   contexte_terrain = ?,
+                   liens_connexes = ?,
+                   total_words = ?,
+                   status = 'completed',
+                   dirty = 0,
+                   error_message = NULL,
+                   updated_at = CURRENT_TIMESTAMP
+               WHERE job_id = ? AND competence_index = ?""",
+            (
+                enriched.get("definition_pedagogique", ""),
+                json.dumps(enriched.get("etudes_de_cas", []), ensure_ascii=False),
+                json.dumps(enriched.get("pieges_frequents", []), ensure_ascii=False),
+                json.dumps(enriched.get("vocabulaire_metier", {}), ensure_ascii=False),
+                enriched.get("contexte_terrain", ""),
+                json.dumps(enriched.get("liens_connexes", []), ensure_ascii=False),
+                word_count,
+                job_id,
+                competence_index,
+            ),
         )
+        conn.commit()
+        conn.close()
 
 
 def mark_competence_error(job_id: int, competence_index: int, error_msg: str) -> None:
     """Marque une compétence en erreur. Protégé par lock pour workers parallèles."""
     with _DB_WRITE_LOCK:
-        mark_knowledge_base_entry_error(job_id, competence_index, error_msg)
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            """UPDATE formation_knowledge_base
+               SET status = 'error', error_message = ?, updated_at = CURRENT_TIMESTAMP
+               WHERE job_id = ? AND competence_index = ?""",
+            (error_msg, job_id, competence_index),
+        )
+        conn.commit()
+        conn.close()
 
 
 def list_kb(job_id: int) -> list:
     """Liste toutes les entrées KB d'un job (pour UI + consommation)."""
-    rows = list_knowledge_base_rows(job_id)
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """SELECT id, competence_index, competence_key, competence_title, bloc,
+                  definition_pedagogique, etudes_de_cas, pieges_frequents,
+                  vocabulaire_metier, contexte_terrain, liens_connexes,
+                  status, total_words, error_message, raw_source
+           FROM formation_knowledge_base
+           WHERE job_id = ?
+           ORDER BY competence_index""",
+        (job_id,),
+    )
+    rows = cursor.fetchall()
+    conn.close()
     return [
         {
-            "id": r.get("id"),
-            "competence_index": r.get("competence_index"),
-            "competence_key": r.get("competence_key"),
-            "competence_title": r.get("competence_title"),
-            "bloc": r.get("bloc"),
-            "definition_pedagogique": r.get("definition_pedagogique"),
-            "etudes_de_cas": json.loads(r.get("etudes_de_cas")) if r.get("etudes_de_cas") else [],
-            "pieges_frequents": json.loads(r.get("pieges_frequents")) if r.get("pieges_frequents") else [],
-            "vocabulaire_metier": json.loads(r.get("vocabulaire_metier")) if r.get("vocabulaire_metier") else {},
-            "contexte_terrain": r.get("contexte_terrain"),
-            "liens_connexes": json.loads(r.get("liens_connexes")) if r.get("liens_connexes") else [],
-            "status": r.get("status"),
-            "total_words": r.get("total_words") or 0,
-            "error_message": r.get("error_message"),
-            "raw_source": r.get("raw_source") or "",
+            "id": r[0],
+            "competence_index": r[1],
+            "competence_key": r[2],
+            "competence_title": r[3],
+            "bloc": r[4],
+            "definition_pedagogique": r[5],
+            "etudes_de_cas": json.loads(r[6]) if r[6] else [],
+            "pieges_frequents": json.loads(r[7]) if r[7] else [],
+            "vocabulaire_metier": json.loads(r[8]) if r[8] else {},
+            "contexte_terrain": r[9],
+            "liens_connexes": json.loads(r[10]) if r[10] else [],
+            "status": r[11],
+            "total_words": r[12] or 0,
+            "error_message": r[13],
+            "raw_source": r[14] or "",
         }
         for r in rows
     ]
@@ -409,12 +457,19 @@ def list_kb(job_id: int) -> list:
 
 def kb_stats(job_id: int) -> dict:
     """Statistiques agrégées : nb total, nb completed, nb error, total mots."""
-    rows = knowledge_base_stats_rows(job_id)
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """SELECT status, COUNT(*), COALESCE(SUM(total_words), 0)
+           FROM formation_knowledge_base
+           WHERE job_id = ?
+           GROUP BY status""",
+        (job_id,),
+    )
+    rows = cursor.fetchall()
+    conn.close()
     stats = {"total": 0, "pending": 0, "processing": 0, "completed": 0, "error": 0, "total_words": 0}
-    for row in rows:
-        status = row.get("status")
-        count = row.get("count") or 0
-        words = row.get("words") or 0
+    for status, count, words in rows:
         stats[status] = count
         stats["total"] += count
         stats["total_words"] += words or 0
