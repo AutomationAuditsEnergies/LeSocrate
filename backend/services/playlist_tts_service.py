@@ -481,11 +481,28 @@ def _build_contextual_break_audio(
         return _get_recycled_qa_pause(filename)
 
 
-def _fetch_effective_cours_documents(folder_id):
-    """Retourne les documents depuis le stockage pipeline autoritaire."""
-    from repositories.pipeline_repository import list_effective_course_documents
+def _fetch_effective_cours_documents(cursor, folder_id):
+    """Retourne le script final unique s'il existe, sinon les documents sources."""
+    cursor.execute(
+        """
+        SELECT id, filename, original_name
+        FROM cours_documents
+        WHERE folder_id = ?
+          AND (doc_type = 'final_script' OR original_name LIKE 'cours_genere_%.txt')
+        ORDER BY created_at DESC, id DESC
+        LIMIT 1
+        """,
+        (folder_id,),
+    )
+    final_doc = cursor.fetchone()
+    if final_doc:
+        return [final_doc]
 
-    return list_effective_course_documents(folder_id)
+    cursor.execute(
+        "SELECT id, filename, original_name FROM cours_documents WHERE folder_id = ? ORDER BY id",
+        (folder_id,),
+    )
+    return cursor.fetchall()
 
 
 def count_words_in_folder(platform_id, folder_id):
@@ -493,7 +510,11 @@ def count_words_in_folder(platform_id, folder_id):
     Compte les mots de tous les PDFs d'un dossier.
     Retourne un dict avec total_words, days_coverable, sufficient, words_missing.
     """
-    documents = _fetch_effective_cours_documents(folder_id)
+    from database.db import get_db_connection
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    documents = _fetch_effective_cours_documents(cursor, folder_id)
+    conn.close()
 
     if not documents:
         return {"total_words": 0, "days_coverable": 0, "sufficient": False, "words_missing": WORDS_NEEDED_PER_DAY, "documents": []}
@@ -604,7 +625,11 @@ def generate_playlist_for_folder(platform_id, folder_id, progress_callback=None,
     # ── Étape 1 : récupérer les documents du dossier ──
     progress(1, total_steps, "Récupération des documents du dossier...")
 
-    documents = _fetch_effective_cours_documents(folder_id)
+    from database.db import get_db_connection
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    documents = _fetch_effective_cours_documents(cursor, folder_id)
+    conn.close()
 
     if not documents:
         raise ValueError("Aucun document dans ce dossier")

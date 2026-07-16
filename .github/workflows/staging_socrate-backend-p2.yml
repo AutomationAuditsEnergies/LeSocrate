@@ -1,12 +1,6 @@
 name: Deploy Backend to Azure Web App - socrate-backend-p2
 
 on:
-  push:
-    branches:
-      - staging
-    paths:
-      - 'backend/**'
-      - '.github/workflows/staging_socrate-backend-p2.yml'
   workflow_dispatch:
 
 jobs:
@@ -81,7 +75,6 @@ jobs:
               ENABLE_ORYX_BUILD=true \
               PORT=8000 \
               WEBSITES_PORT=8000 \
-              FORMATION_CONTENT_DAY_WORKERS=52 \
               PLATFORM_2_FRONTEND_URL=https://brave-mud-064e06d03.2.azurestaticapps.net
 
           az webapp config set \

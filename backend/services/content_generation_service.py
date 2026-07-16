@@ -23,37 +23,7 @@ import uuid as uuid_mod
 from difflib import SequenceMatcher
 from datetime import datetime
 
-from config import PIPELINE_DATABASE_BACKEND
-
-from repositories.pipeline_repository import (
-    clear_cross_day_carryover,
-    completed_content_segment_keys,
-    delete_content_segments_for_job,
-    ensure_content_generation_carryover_columns,
-    ensure_content_review_state_columns,
-    find_next_course_folder_id,
-    get_existing_carryover_out_row,
-    get_content_generation_job_by_folder,
-    get_content_segment_text,
-    list_completed_content_segment_rows,
-    list_content_segment_status_rows,
-    list_final_script_document_rows,
-    mark_content_segment_modified,
-    mark_content_segment_review_clean,
-    mark_content_segment_review_patched,
-    mark_content_segments_clean,
-    replace_final_script_document_record,
-    record_content_segment_review_error,
-    reset_and_upsert_content_generation_job,
-    reset_content_segments_review_state,
-    save_completed_content_segment,
-    select_content_segments_for_review,
-    snapshot_content_segments_pre_review,
-    store_cross_day_carryover,
-    update_content_segment_audio_calibration,
-    update_content_segment_plan_repair,
-    update_content_generation_job,
-)
+from database.db import get_db_connection
 from utils.anthropic_client import (
     AnthropicAPIError,
     AnthropicRateLimitError,
@@ -98,51 +68,6 @@ from services.content_pipeline.validators import (
 )
 
 logger = get_logger(__name__)
-
-
-def _log_content_pipeline_event(
-    job: dict,
-    event_type: str,
-    *,
-    folder_id: int | None = None,
-    status: str = "info",
-    message: str | None = None,
-    model: str | None = None,
-    duration_ms: int | None = None,
-    data: dict | None = None,
-    error: str | None = None,
-) -> None:
-    """Best-effort durable event for content generation debugging."""
-    formation_job_id = job.get("formation_job_id")
-    if not formation_job_id:
-        return
-    try:
-        from services.formation_observability_service import log_pipeline_event
-
-        payload = {
-            "content_job_id": job.get("id"),
-            **(data or {}),
-        }
-        log_pipeline_event(
-            int(formation_job_id),
-            event_type,
-            step="content",
-            status=status,
-            folder_id=folder_id,
-            message=message,
-            model=model or CLAUDE_MODEL,
-            duration_ms=duration_ms,
-            data=payload,
-            error=error,
-        )
-    except Exception as exc:
-        logger.warning(
-            "PIPELINE_CONTENT_EVENT_LOG_FAILED formation_job_id=%s content_job_id=%s event_type=%s error=%s",
-            formation_job_id,
-            job.get("id"),
-            event_type,
-            str(exc)[:240],
-        )
 
 
 CLAUDE_MODEL = default_model()
@@ -2550,17 +2475,14 @@ def _enrich_structured_course_plan_with_beats(*, plan: dict, course_plan: dict, 
 
 
 def _generate_structured_course_plan_two_stage(job: dict, playlist_items: list, sub_parts: list, module_contents: dict, model=None) -> dict:
-    started_at = time.time()
     logger.info(
-        "PIPELINE_STRUCTURED_PLAN_TWO_STAGE_SKELETON_START formation_job_id=%s content_job_id=%s folder=%s model=%s playlist_items=%s sub_parts=%s module_chars=%s",
+        "PIPELINE_STRUCTURED_PLAN_TWO_STAGE_SKELETON_START formation_job_id=%s content_job_id=%s folder=%s model=%s",
         job.get("formation_job_id"),
         job.get("id"),
         job.get("folder_id"),
         model or CLAUDE_MODEL,
-        len(playlist_items or []),
-        len(sub_parts or []),
-        sum(len(str(value or "")) for value in (module_contents or {}).values()),
     )
+    started_at = time.time()
     skeleton_prompt = _build_structured_course_plan_prompt(
         job,
         playlist_items,
@@ -2568,26 +2490,10 @@ def _generate_structured_course_plan_two_stage(job: dict, playlist_items: list, 
         module_contents,
         planning_mode="skeleton",
     )
-    logger.info(
-        "PIPELINE_STRUCTURED_PLAN_TWO_STAGE_SKELETON_PROMPT_READY formation_job_id=%s content_job_id=%s folder=%s prompt_chars=%s max_tokens=%s",
-        job.get("formation_job_id"),
-        job.get("id"),
-        job.get("folder_id"),
-        len(skeleton_prompt),
-        7000,
-    )
     raw = _anthropic_post(
         messages=[{"role": "user", "content": skeleton_prompt}],
         max_tokens=7000,
         model=model,
-    )
-    logger.info(
-        "PIPELINE_STRUCTURED_PLAN_TWO_STAGE_SKELETON_RESPONSE formation_job_id=%s content_job_id=%s folder=%s response_chars=%s duration_ms=%s",
-        job.get("formation_job_id"),
-        job.get("id"),
-        job.get("folder_id"),
-        len(raw or ""),
-        int((time.time() - started_at) * 1000),
     )
     skeleton_plan = _normalize_structured_course_plans(
         _parse_structured_course_plan(raw),
@@ -2603,7 +2509,6 @@ def _generate_structured_course_plan_two_stage(job: dict, playlist_items: list, 
         int((time.time() - started_at) * 1000),
     )
     workers = _structured_course_parallel_workers()
-    enrichment_started_at = time.time()
     logger.info(
         "PIPELINE_STRUCTURED_PLAN_TWO_STAGE_ENRICH_START formation_job_id=%s content_job_id=%s courses=%s workers=%s",
         job.get("formation_job_id"),
@@ -2639,13 +2544,11 @@ def _generate_structured_course_plan_two_stage(job: dict, playlist_items: list, 
         },
     }
     logger.info(
-        "PIPELINE_STRUCTURED_PLAN_TWO_STAGE_DONE formation_job_id=%s content_job_id=%s courses=%s beats=%s enrich_duration_ms=%s total_duration_ms=%s",
+        "PIPELINE_STRUCTURED_PLAN_TWO_STAGE_DONE formation_job_id=%s content_job_id=%s courses=%s beats=%s",
         job.get("formation_job_id"),
         job.get("id"),
         len(enriched_courses),
         total_beats,
-        int((time.time() - enrichment_started_at) * 1000),
-        int((time.time() - started_at) * 1000),
     )
     return plan
 
@@ -2667,42 +2570,20 @@ def _generate_structured_course_plan(job: dict, playlist_items: list, sub_parts:
                     raise
         raise ValueError("Plan structuré deux niveaux impossible")
 
+    prompt = _build_structured_course_plan_prompt(job, playlist_items, sub_parts, module_contents, planning_mode="full")
     for attempt in range(3):
         try:
-            attempt_started_at = time.time()
-            prompt = _build_structured_course_plan_prompt(job, playlist_items, sub_parts, module_contents, planning_mode="full")
-            logger.info(
-                "PIPELINE_STRUCTURED_PLAN_FULL_START formation_job_id=%s content_job_id=%s folder=%s attempt=%s model=%s prompt_chars=%s max_tokens=%s",
-                job.get("formation_job_id"),
-                job.get("id"),
-                job.get("folder_id"),
-                attempt + 1,
-                model or CLAUDE_MODEL,
-                len(prompt),
-                9000,
-            )
             raw = _anthropic_post(
                 messages=[{"role": "user", "content": prompt}],
                 max_tokens=9000,
                 model=model,
             )
-            plan = _normalize_structured_course_plans(
+            return _normalize_structured_course_plans(
                 _parse_structured_course_plan(raw),
                 job=job,
                 playlist_items=playlist_items,
                 sub_parts=sub_parts,
             )
-            logger.info(
-                "PIPELINE_STRUCTURED_PLAN_FULL_DONE formation_job_id=%s content_job_id=%s folder=%s attempt=%s response_chars=%s courses=%s duration_ms=%s",
-                job.get("formation_job_id"),
-                job.get("id"),
-                job.get("folder_id"),
-                attempt + 1,
-                len(raw or ""),
-                len(plan.get("courses") or []),
-                int((time.time() - attempt_started_at) * 1000),
-            )
-            return plan
         except Exception as e:
             logger.warning("⚠️ Plan structuré tentative %s/3 échouée : %s", attempt + 1, str(e)[:300])
             if attempt == 2:
@@ -3445,13 +3326,27 @@ def compute_course_day_word_budget_audit(folder_id: int, job: dict | None = None
             "overflow": 0,
         }
 
-    rows = list_completed_content_segment_rows(job["id"])
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        SELECT COALESCE(text_content, ''), COALESCE(word_count, 0)
+        FROM content_generation_segments
+        WHERE job_id = ? AND status = 'completed'
+        ORDER BY sub_part_index ASC, passe ASC
+        """,
+        (job["id"],),
+    )
+    rows = cursor.fetchall()
+    conn.close()
 
     raw_words = 0
     spoken_words = 0
     for row in rows:
-        text = row.get("text_content") or ""
-        wc = row.get("word_count") or 0
+        if len(row) >= 4 and not isinstance(row[0], str):
+            text, wc = row[2], row[3]
+        else:
+            text, wc = row[0], row[1]
         raw_words += int(wc or len((text or "").split()))
         spoken_words += count_tts_spoken_words(text)
 
@@ -3975,291 +3870,6 @@ def _reproject_slides_to_audio_bloc(slides: list, bloc: dict) -> list:
         reprojected_by_index.get(idx, slide)
         for idx, slide in enumerate(slides)
     ]
-
-
-def _timeline_word_tokens(actual_reading: dict) -> list[str]:
-    tokens = []
-    for item in actual_reading.get("timeline") or []:
-        folded = _fold_display_token(item.get("text") or "")
-        if folded:
-            tokens.append(folded)
-    return tokens
-
-
-def _approx_timeline_index_for_bloc_word(
-    word_index: int,
-    bloc_word_count: int,
-    timeline_len: int,
-) -> int:
-    if timeline_len <= 0:
-        return 0
-    if bloc_word_count <= 1:
-        return 0
-    ratio = max(0.0, min(1.0, float(word_index) / float(bloc_word_count)))
-    return max(0, min(timeline_len - 1, int(round(ratio * (timeline_len - 1)))))
-
-
-def _locate_chunk_in_timeline(
-    chunk: dict,
-    timeline_tokens: list[str],
-    min_start: int,
-    fallback_word_index: int,
-    bloc_word_count: int,
-) -> tuple[int, str]:
-    candidates = []
-    chunk_tokens = _folded_token_values(chunk.get("text") or "")
-    for size in (48, 36, 24, 16, 12, 8):
-        if len(chunk_tokens) >= size:
-            candidates.append(chunk_tokens[:size])
-
-    for candidate in candidates:
-        match = _find_token_sequence(timeline_tokens, candidate, min_start)
-        if match is None:
-            match = _find_fuzzy_token_sequence(timeline_tokens, candidate, min_start)
-        if match is not None:
-            return match, "timeline_text_match"
-
-    return (
-        _approx_timeline_index_for_bloc_word(
-            fallback_word_index,
-            bloc_word_count,
-            len(timeline_tokens),
-        ),
-        "timeline_word_ratio_fallback",
-    )
-
-
-def _repair_bloc_timings_from_timeline(bloc: dict, slides: list, filename: str) -> tuple[list[dict], dict]:
-    actual_reading = bloc.get("actual_reading") if isinstance(bloc.get("actual_reading"), dict) else {}
-    timeline = actual_reading.get("timeline") if isinstance(actual_reading.get("timeline"), list) else []
-    if not timeline:
-        return _repair_bloc_timings_by_word_ratio(bloc, slides, filename, reason="missing_timeline")
-
-    chunks = _build_slide_audio_chunks(bloc, slides)
-    chunks = [chunk for chunk in chunks if chunk.get("slide_id")]
-    if not chunks:
-        return [], {"filename": filename, "status": "no_slide_chunks", "timings": 0}
-
-    timeline_tokens = _timeline_word_tokens(actual_reading)
-    if not timeline_tokens:
-        return _repair_bloc_timings_by_word_ratio(bloc, slides, filename, reason="empty_timeline_tokens")
-
-    bloc_start = int(bloc.get("start_w") or 0)
-    bloc_word_count = max(1, len((bloc.get("text") or "").split()))
-    located = []
-    cursor = 0
-    fallback_count = 0
-    for chunk in chunks:
-        fallback_word_index = max(0, int(chunk.get("word_start") or bloc_start) - bloc_start)
-        start_idx, method = _locate_chunk_in_timeline(
-            chunk,
-            timeline_tokens,
-            cursor,
-            fallback_word_index,
-            bloc_word_count,
-        )
-        if method.endswith("fallback"):
-            fallback_count += 1
-        located.append((chunk, start_idx, method))
-        cursor = max(cursor, start_idx + 1)
-
-    timings = []
-    for idx, (chunk, start_idx, method) in enumerate(located):
-        next_start_idx = located[idx + 1][1] if idx + 1 < len(located) else None
-        start_item = timeline[max(0, min(len(timeline) - 1, start_idx))]
-        if next_start_idx is not None:
-            end_item = timeline[max(0, min(len(timeline) - 1, next_start_idx))]
-            end_time = float(end_item.get("start") or end_item.get("end") or 0.0)
-        else:
-            end_item = timeline[-1]
-            end_time = float(
-                end_item.get("end")
-                or actual_reading.get("audio_duration_sec")
-                or end_item.get("start")
-                or 0.0
-            )
-        start_time = float(start_item.get("start") or 0.0)
-        if end_time <= start_time:
-            end_time = float(start_item.get("end") or start_time)
-        timings.append({
-            "slide_id": chunk.get("slide_id"),
-            "audio_filename": filename,
-            "start_time": round(start_time, 3),
-            "end_time": round(end_time, 3),
-            "duration": round(max(0.0, end_time - start_time), 3),
-            "word_start": chunk.get("word_start"),
-            "word_end": chunk.get("word_end"),
-            "repair_method": method,
-        })
-
-    merged_timings = _merge_adjacent_slide_timings(timings)
-    return merged_timings, {
-        "filename": filename,
-        "status": "repaired",
-        "timings": len(merged_timings),
-        "timeline_words": len(timeline_tokens),
-        "fallback_timings": fallback_count,
-    }
-
-
-def _repair_bloc_timings_by_word_ratio(
-    bloc: dict,
-    slides: list,
-    filename: str,
-    *,
-    reason: str,
-) -> tuple[list[dict], dict]:
-    """Fallback when Fish did not persist word timestamps for an existing MP3."""
-    try:
-        duration_sec = float(
-            bloc.get("actual_reading", {}).get("audio_duration_sec")
-            if isinstance(bloc.get("actual_reading"), dict) else 0
-        )
-    except (TypeError, ValueError):
-        duration_sec = 0.0
-    if duration_sec <= 0:
-        for key in ("target_duration_sec", "duration_sec", "expected_duration_sec"):
-            try:
-                duration_sec = float(bloc.get(key) or 0.0)
-            except (TypeError, ValueError):
-                duration_sec = 0.0
-            if duration_sec > 0:
-                break
-
-    if duration_sec <= 0:
-        return [], {"filename": filename, "status": f"{reason}_no_duration", "timings": 0}
-
-    chunks = _build_slide_audio_chunks(bloc, slides)
-    chunks = [chunk for chunk in chunks if chunk.get("slide_id")]
-    if not chunks:
-        return [], {"filename": filename, "status": f"{reason}_no_slide_chunks", "timings": 0}
-
-    bloc_start = int(bloc.get("start_w") or 0)
-    bloc_word_count = max(1, len(_strip_tts_tags_for_sync(bloc.get("text") or "").split()))
-    timings = []
-    for chunk in chunks:
-        local_start = max(0, int(chunk.get("word_start") or bloc_start) - bloc_start)
-        local_end = max(local_start + 1, int(chunk.get("word_end") or bloc_start) - bloc_start)
-        start_time = duration_sec * min(1.0, local_start / bloc_word_count)
-        end_time = duration_sec * min(1.0, local_end / bloc_word_count)
-        if end_time <= start_time:
-            continue
-        timings.append({
-            "slide_id": chunk.get("slide_id"),
-            "audio_filename": filename,
-            "start_time": round(start_time, 3),
-            "end_time": round(end_time, 3),
-            "duration": round(end_time - start_time, 3),
-            "word_start": chunk.get("word_start"),
-            "word_end": chunk.get("word_end"),
-            "repair_method": "word_ratio_no_fish_timeline",
-        })
-
-    merged_timings = _merge_adjacent_slide_timings(timings)
-    return merged_timings, {
-        "filename": filename,
-        "status": "repaired_by_word_ratio",
-        "source_reason": reason,
-        "timings": len(merged_timings),
-        "duration_sec": round(duration_sec, 3),
-        "bloc_words": bloc_word_count,
-    }
-
-
-def repair_audio_sync_from_existing_timelines(folder_id: int, *, dry_run: bool = False) -> dict:
-    """Répare audio_sync_json sans régénérer les MP3, à partir des timelines Fish stockées."""
-    job = get_job_from_db(folder_id)
-    if not job:
-        raise ValueError(f"Content job introuvable pour folder {folder_id}")
-    platform_id = int(job.get("platform_id") or 0)
-    if not platform_id:
-        raise ValueError("platform_id introuvable pour ce dossier")
-
-    from services.script_slide_generation_service import (
-        get_latest_script_slide_deck,
-        update_script_slide_deck_audio_sync,
-    )
-
-    deck = get_latest_script_slide_deck(folder_id, content_job_id=job.get("id"))
-    if not deck:
-        raise ValueError("Aucun deck slides trouvé pour ce dossier")
-
-    audio_plan = _load_content_artifact(platform_id, folder_id, _CONTENT_AUDIO_PLAN_BLOB) or {}
-    course_blocs = [
-        bloc for bloc in (audio_plan.get("course_blocs") or [])
-        if isinstance(bloc, dict) and str(bloc.get("filename") or "").endswith(".mp3")
-    ]
-    if not course_blocs:
-        raise ValueError("Aucun content-audio-plan exploitable pour ce dossier")
-
-    slides = deck.get("slides") or []
-    repaired_timings = []
-    repaired_files = []
-    skipped = []
-    details = []
-    cursor = 0
-    for bloc in course_blocs:
-        filename = bloc.get("filename") or f"cours_bloc_{int(bloc.get('bloc_number') or 0)}.mp3"
-        text = _strip_tts_tags_for_sync(bloc.get("text") or "")
-        word_count = len(text.split())
-        working_bloc = dict(bloc)
-        working_bloc["text"] = text
-        working_bloc["word_count"] = word_count
-        working_bloc["start_w"] = cursor
-        working_bloc["end_w"] = cursor + word_count
-        cursor += word_count
-
-        timings, detail = _repair_bloc_timings_from_timeline(working_bloc, slides, filename)
-        details.append(detail)
-        if timings:
-            repaired_timings.extend(timings)
-            repaired_files.append(filename)
-        else:
-            skipped.append({"filename": filename, "reason": detail.get("status") or "unknown"})
-
-    current_sync = deck.get("audio_sync") or {}
-    repaired_set = set(repaired_files)
-    preserved_timings = [
-        timing for timing in (current_sync.get("timings") or [])
-        if timing.get("audio_filename") not in repaired_set
-    ]
-    merged_files = []
-    for filename in list(current_sync.get("generated_files") or []) + repaired_files:
-        if filename and filename not in merged_files:
-            merged_files.append(filename)
-
-    repaired_sync = {
-        **current_sync,
-        "enabled": True,
-        "mode": current_sync.get("mode") or audio_plan.get("mode") or "fish_audio",
-        "folder_id": folder_id,
-        "content_job_id": job.get("id"),
-        "generated_files": merged_files,
-        "timings": preserved_timings + repaired_timings,
-        "repair": {
-            "source": "content-audio-plan.actual_reading.timeline",
-            "dry_run": bool(dry_run),
-            "repaired_files": repaired_files,
-            "skipped": skipped,
-            "details": details,
-            "timings_repaired": len(repaired_timings),
-        },
-    }
-
-    if not dry_run:
-        update_script_slide_deck_audio_sync(deck["deck_id"], repaired_sync)
-
-    return {
-        "success": True,
-        "dry_run": bool(dry_run),
-        "folder_id": folder_id,
-        "deck_id": deck.get("deck_id"),
-        "repaired_files": repaired_files,
-        "skipped": skipped,
-        "timings_repaired": len(repaired_timings),
-        "timings_preserved": len(preserved_timings),
-        "details": details,
-    }
 
 
 # ── Runtime fit Edge TTS : sub-chunking adaptatif + frontières naturelles ───
@@ -5429,40 +5039,171 @@ def _ensure_carryover_columns() -> None:
     global _CARRYOVER_COLUMNS_READY
     if _CARRYOVER_COLUMNS_READY:
         return
-    ensure_content_generation_carryover_columns()
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("PRAGMA table_info(content_generation_jobs)")
+    cols = {row[1] for row in cursor.fetchall()}
+    wanted = {
+        "carryover_in_text": "TEXT DEFAULT ''",
+        "carryover_in_source_folder_id": "INTEGER",
+        "carryover_out_text": "TEXT DEFAULT ''",
+        "carryover_out_target_folder_id": "INTEGER",
+    }
+    for col, col_type in wanted.items():
+        if col not in cols:
+            cursor.execute(f"ALTER TABLE content_generation_jobs ADD COLUMN {col} {col_type}")
+    conn.commit()
+    conn.close()
     _CARRYOVER_COLUMNS_READY = True
 
 
 def _find_next_folder_id(platform_id: int, folder_id: int) -> int | None:
     """Retourne le dossier suivant de la même plateforme, selon position/id."""
-    return find_next_course_folder_id(platform_id, folder_id)
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT position, id FROM cours_folders WHERE id = ? AND platform_id = ?",
+        (folder_id, platform_id),
+    )
+    row = cursor.fetchone()
+    if not row:
+        conn.close()
+        return None
+    position, current_id = row
+    cursor.execute(
+        """
+        SELECT id FROM cours_folders
+        WHERE platform_id = ?
+          AND (position > ? OR (position = ? AND id > ?))
+        ORDER BY position ASC, id ASC
+        LIMIT 1
+        """,
+        (platform_id, position, position, current_id),
+    )
+    next_row = cursor.fetchone()
+    conn.close()
+    return next_row[0] if next_row else None
 
 
 def _store_cross_day_carryover(source_folder_id: int, target_folder_id: int, text: str) -> None:
     """Persiste le report J→J+1 de manière idempotente."""
+    _ensure_carryover_columns()
     clean = (text or "").strip()
-    store_cross_day_carryover(
-        source_folder_id=source_folder_id,
-        target_folder_id=target_folder_id,
-        carryover_out_text=clean,
-        carryover_in_text=_format_carryover_for_next_course(clean) if clean else "",
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        UPDATE content_generation_jobs
+        SET carryover_out_text = ?, carryover_out_target_folder_id = ?,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE folder_id = ?
+        """,
+        (clean, target_folder_id if clean else None, source_folder_id),
     )
+    cursor.execute(
+        """
+        UPDATE content_generation_jobs
+        SET carryover_in_text = ?, carryover_in_source_folder_id = ?,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE folder_id = ?
+        """,
+        (_format_carryover_for_next_course(clean) if clean else "", source_folder_id if clean else None, target_folder_id),
+    )
+    cursor.execute(
+        """
+        UPDATE content_generation_segments
+        SET dirty = 1
+        WHERE job_id = (SELECT id FROM content_generation_jobs WHERE folder_id = ?)
+          AND sub_part_index = 0 AND passe = 1
+        """,
+        (target_folder_id,),
+    )
+    conn.commit()
+    conn.close()
 
 
 def _clear_cross_day_carryover_from_source(source_folder_id: int, target_folder_id: int | None = None) -> None:
     """Nettoie un ancien report si le nouveau découpage n'en produit plus."""
-    clear_cross_day_carryover(
-        source_folder_id=source_folder_id,
-        target_folder_id=target_folder_id,
+    _ensure_carryover_columns()
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        UPDATE content_generation_jobs
+        SET carryover_out_text = '', carryover_out_target_folder_id = NULL,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE folder_id = ?
+        """,
+        (source_folder_id,),
     )
+    if target_folder_id:
+        cursor.execute(
+            """
+            UPDATE content_generation_jobs
+            SET carryover_in_text = '', carryover_in_source_folder_id = NULL,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE folder_id = ? AND carryover_in_source_folder_id = ?
+            """,
+            (target_folder_id, source_folder_id),
+        )
+        cursor.execute(
+            """
+            UPDATE content_generation_segments
+            SET dirty = 1
+            WHERE job_id = (SELECT id FROM content_generation_jobs WHERE folder_id = ?)
+              AND sub_part_index = 0 AND passe = 1
+            """,
+            (target_folder_id,),
+        )
+    else:
+        cursor.execute(
+            """
+            SELECT folder_id FROM content_generation_jobs
+            WHERE carryover_in_source_folder_id = ?
+            """,
+            (source_folder_id,),
+        )
+        target_rows = cursor.fetchall()
+        cursor.execute(
+            """
+            UPDATE content_generation_jobs
+            SET carryover_in_text = '', carryover_in_source_folder_id = NULL,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE carryover_in_source_folder_id = ?
+            """,
+            (source_folder_id,),
+        )
+        for (target_id,) in target_rows:
+            cursor.execute(
+                """
+                UPDATE content_generation_segments
+                SET dirty = 1
+                WHERE job_id = (SELECT id FROM content_generation_jobs WHERE folder_id = ?)
+                  AND sub_part_index = 0 AND passe = 1
+                """,
+                (target_id,),
+            )
+    conn.commit()
+    conn.close()
 
 
 def _get_existing_carryover_out(source_folder_id: int, target_folder_id: int | None) -> str:
-    row = get_existing_carryover_out_row(source_folder_id)
+    _ensure_carryover_columns()
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        SELECT carryover_out_text, carryover_out_target_folder_id
+        FROM content_generation_jobs
+        WHERE folder_id = ?
+        """,
+        (source_folder_id,),
+    )
+    row = cursor.fetchone()
+    conn.close()
     if not row:
         return ""
-    text = row.get("carryover_out_text")
-    stored_target = row.get("carryover_out_target_folder_id")
+    text, stored_target = row
     if target_folder_id is not None and stored_target != target_folder_id:
         return ""
     return (text or "").strip()
@@ -6185,8 +5926,20 @@ def _persist_calibrated_audio_blocks(job: dict, calibrated_blocks: list[dict]) -
         return 0
 
     review_signature = _current_humanization_review_signature()
-    rows = list_completed_content_segment_rows(job["id"])
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        SELECT id, sub_part_index, sub_part_name, passe
+        FROM content_generation_segments
+        WHERE job_id = ? AND status = 'completed'
+        ORDER BY sub_part_index ASC, passe ASC
+        """,
+        (job["id"],),
+    )
+    rows = cursor.fetchall()
     if len(rows) < len(calibrated_blocks):
+        conn.close()
         raise ValueError(
             f"Calibrage blocs impossible : {len(rows)} segment(s) disponibles "
             f"pour {len(calibrated_blocks)} bloc(s) audio"
@@ -6194,28 +5947,45 @@ def _persist_calibrated_audio_blocks(job: dict, calibrated_blocks: list[dict]) -
 
     total_words = 0
     for idx, block in enumerate(calibrated_blocks):
-        seg_id = rows[idx]["id"]
+        seg_id = rows[idx][0]
         bloc_num = int(block["bloc_number"])
         text = (block.get("text") or "").strip()
         stored_text = f"<<<BLOC_AUDIO_{bloc_num}>>>\n\n{text}".strip()
         words = count_tts_spoken_words(text)
         total_words += words
-        update_content_segment_audio_calibration(
-            segment_id=seg_id,
-            text_content=stored_text,
-            word_count=words,
-            humanization_signature=review_signature,
+        cursor.execute(
+            """
+            UPDATE content_generation_segments
+            SET text_content = ?, word_count = ?, dirty = 1,
+                humanized = 1, humanization_error = NULL, humanization_signature = ?,
+                reviewed = 0, review_error = NULL, review_signature = NULL
+            WHERE id = ?
+            """,
+            (stored_text, words, review_signature, seg_id),
         )
 
     for row in rows[len(calibrated_blocks):]:
-        update_content_segment_audio_calibration(
-            segment_id=row["id"],
-            text_content="",
-            word_count=0,
-            humanization_signature=review_signature,
+        cursor.execute(
+            """
+            UPDATE content_generation_segments
+            SET text_content = '', word_count = 0, dirty = 1,
+                humanized = 1, humanization_error = NULL, humanization_signature = ?,
+                reviewed = 0, review_error = NULL, review_signature = NULL
+            WHERE id = ?
+            """,
+            (review_signature, row[0]),
         )
 
-    update_content_generation_job(job["id"], total_words=total_words)
+    cursor.execute(
+        """
+        UPDATE content_generation_jobs
+        SET total_words = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+        """,
+        (total_words, job["id"]),
+    )
+    conn.commit()
+    conn.close()
     return total_words
 
 
@@ -7087,15 +6857,28 @@ def start_generation_job(folder_id: int, platform_id: int, program_text: str,
         sub_parts = extracted["sub_parts"]
         title = extracted.get("title", program_title) or program_title
 
-    reset_and_upsert_content_generation_job(
-        folder_id=folder_id,
-        platform_id=platform_id,
-        program_text=program_text,
-        program_title=title,
-        sub_parts_json=json.dumps(sub_parts, ensure_ascii=False),
-        from_scratch=from_scratch,
-        module_contents_json=json.dumps(module_contents or {}, ensure_ascii=False),
-    )
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    # Supprimer anciens segments si réinitialisation
+    cursor.execute("""
+        DELETE FROM content_generation_segments WHERE job_id IN (
+            SELECT id FROM content_generation_jobs WHERE folder_id = ?
+        )
+    """, (folder_id,))
+    cursor.execute("""
+        INSERT OR REPLACE INTO content_generation_jobs
+            (folder_id, platform_id, program_text, program_title, sub_parts,
+             from_scratch, module_contents,
+             status, current_sub_part, current_passe, total_words, error_message)
+        VALUES (?, ?, ?, ?, ?, ?, ?, 'idle', 0, 1, 0, NULL)
+    """, (
+        folder_id, platform_id, program_text, title,
+        json.dumps(sub_parts, ensure_ascii=False),
+        1 if from_scratch else 0,
+        json.dumps(module_contents or {}, ensure_ascii=False),
+    ))
+    conn.commit()
+    conn.close()
 
     # Lancer génération en background
     def _run():
@@ -7111,56 +6894,107 @@ def start_generation_job(folder_id: int, platform_id: int, program_text: str,
 
 def get_job_from_db(folder_id):
     """Retourne le job DB pour un dossier, ou None."""
-    row = get_content_generation_job_by_folder(folder_id)
+    _ensure_carryover_columns()
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT cgj.id, cgj.platform_id, cgj.program_text, cgj.program_title,
+               cgj.sub_parts, cgj.status, cgj.current_sub_part,
+               cgj.current_passe, cgj.total_words, cgj.error_message,
+               cgj.from_scratch, cgj.module_contents,
+               cgj.carryover_in_text, cgj.carryover_in_source_folder_id,
+               cgj.carryover_out_text, cgj.carryover_out_target_folder_id,
+               cf.formation_job_id, cf.name, cf.position,
+               fpj.nb_days, fpj.total_hours
+        FROM content_generation_jobs cgj
+        LEFT JOIN cours_folders cf ON cf.id = cgj.folder_id
+        LEFT JOIN formation_pipeline_jobs fpj ON fpj.id = cf.formation_job_id
+        WHERE cgj.folder_id = ?
+    """, (folder_id,))
+    row = cursor.fetchone()
+    conn.close()
     if not row:
         return None
     return {
-        "id": row["id"], "folder_id": folder_id, "platform_id": row["platform_id"], "program_text": row["program_text"],
-        "program_title": row["program_title"], "sub_parts": json.loads(row["sub_parts"] or "[]"),
-        "status": row["status"], "current_sub_part": row["current_sub_part"], "current_passe": row["current_passe"],
-        "total_words": row["total_words"], "error_message": row["error_message"],
-        "from_scratch": bool(row["from_scratch"]),
-        "module_contents": json.loads(row["module_contents"] or "{}"),
-        "carryover_in_text": row["carryover_in_text"] or "",
-        "carryover_in_source_folder_id": row["carryover_in_source_folder_id"],
-        "carryover_out_text": row["carryover_out_text"] or "",
-        "carryover_out_target_folder_id": row["carryover_out_target_folder_id"],
-        "formation_job_id": row["formation_job_id"],
-        "folder_name": row["name"],
-        "folder_position": row["position"],
-        "nb_days": row["nb_days"],
-        "total_hours": row["total_hours"],
+        "id": row[0], "folder_id": folder_id, "platform_id": row[1], "program_text": row[2],
+        "program_title": row[3], "sub_parts": json.loads(row[4] or "[]"),
+        "status": row[5], "current_sub_part": row[6], "current_passe": row[7],
+        "total_words": row[8], "error_message": row[9],
+        "from_scratch": bool(row[10]),
+        "module_contents": json.loads(row[11] or "{}"),
+        "carryover_in_text": row[12] or "",
+        "carryover_in_source_folder_id": row[13],
+        "carryover_out_text": row[14] or "",
+        "carryover_out_target_folder_id": row[15],
+        "formation_job_id": row[16],
+        "folder_name": row[17],
+        "folder_position": row[18],
+        "nb_days": row[19],
+        "total_hours": row[20],
     }
 
 
 def get_segments_status(job_id):
     """Retourne la liste des segments avec leur statut."""
-    rows = list_content_segment_status_rows(job_id)
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT sub_part_index, sub_part_name, passe, status, word_count
+        FROM content_generation_segments
+        WHERE job_id = ?
+        ORDER BY sub_part_index ASC, passe ASC
+    """, (job_id,))
+    rows = cursor.fetchall()
+    conn.close()
     return [
-        {"sub_part_index": r["sub_part_index"], "sub_part_name": r["sub_part_name"], "passe": r["passe"],
-         "status": r["status"], "word_count": r["word_count"]}
+        {"sub_part_index": r[0], "sub_part_name": r[1], "passe": r[2],
+         "status": r[3], "word_count": r[4]}
         for r in rows
     ]
 
 
 def _update_job_db(job_id, **kwargs):
-    update_content_generation_job(job_id, **kwargs)
+    if not kwargs:
+        return
+    fields = ", ".join(f"{k} = ?" for k in kwargs)
+    values = list(kwargs.values()) + [job_id]
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        f"UPDATE content_generation_jobs SET {fields}, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+        values,
+    )
+    conn.commit()
+    conn.close()
 
 
 def _get_completed_segments(job_id):
-    return completed_content_segment_keys(job_id)
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT sub_part_index, passe FROM content_generation_segments
+        WHERE job_id = ? AND status = 'completed'
+    """, (job_id,))
+    done = set((r[0], r[1]) for r in cursor.fetchall())
+    conn.close()
+    return done
 
 
 def _save_segment_db(job_id, sub_idx, sub_part_name, passe, text):
     word_count = len(text.split())
-    save_completed_content_segment(
-        job_id=job_id,
-        sub_part_index=sub_idx,
-        sub_part_name=sub_part_name,
-        passe=passe,
-        text_content=text,
-        word_count=word_count,
-    )
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    # Un texte nouveau/réécrit doit repasser par conformité locale.
+    cursor.execute("""
+        INSERT OR REPLACE INTO content_generation_segments
+            (job_id, sub_part_index, sub_part_name, passe, status,
+             text_content, word_count, dirty,
+             humanized, humanization_error, humanization_signature,
+             reviewed, review_error, review_signature)
+        VALUES (?, ?, ?, ?, 'completed', ?, ?, 1, 0, NULL, NULL, 0, NULL, NULL)
+    """, (job_id, sub_idx, sub_part_name, passe, text, word_count))
+    conn.commit()
+    conn.close()
     logger.info(f"  💾 Checkpoint : sous-partie {sub_idx+1}, passe {passe} ({word_count} mots)")
 
 
@@ -7175,28 +7009,48 @@ def mark_segment_modified(job_id: int, sub_idx: int, passe: int) -> None:
     - route d'édition UI d'un segment — à appeler explicitement
     - apply_review_patch ci-dessous — à appeler explicitement
     """
-    mark_content_segment_modified(job_id, sub_idx, passe)
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        UPDATE content_generation_segments
+        SET dirty = 1,
+            humanized = 0, humanization_error = NULL, humanization_signature = NULL,
+            reviewed = 0, review_error = NULL, review_signature = NULL
+        WHERE job_id = ? AND sub_part_index = ? AND passe = ?
+    """, (job_id, sub_idx, passe))
+    conn.commit()
+    conn.close()
 
 
 def _get_segment_text(job_id, sub_idx, passe):
-    return get_content_segment_text(job_id, sub_idx, passe)
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT text_content FROM content_generation_segments
+        WHERE job_id = ? AND sub_part_index = ? AND passe = ?
+    """, (job_id, sub_idx, passe))
+    row = cursor.fetchone()
+    conn.close()
+    return row[0] if row else ""
 
 
 def _content_segments_artifact_snapshot(job_id: int) -> list[dict]:
-    rows = list_completed_content_segment_rows(job_id)
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT sub_part_index, sub_part_name, passe, text_content, word_count, dirty,
+               COALESCE(humanized, 0), COALESCE(reviewed, 0),
+               humanization_error, review_error
+        FROM content_generation_segments
+        WHERE job_id = ? AND status = 'completed'
+        ORDER BY sub_part_index ASC, passe ASC
+    """, (job_id,))
+    rows = cursor.fetchall()
+    conn.close()
 
     courses = []
     for row in rows:
-        sub_idx = row["sub_part_index"]
-        sub_name = row["sub_part_name"]
-        passe = row["passe"]
-        text = row["text_content"]
-        word_count = row["word_count"]
-        dirty = row["dirty"]
-        humanized = row["humanized"]
-        reviewed = row["reviewed"]
-        humanization_error = row["humanization_error"]
-        review_error = row["review_error"]
+        sub_idx, sub_name, passe, text, word_count, dirty, humanized, reviewed, humanization_error, review_error = row
         marker_course_number = _extract_audio_block_number(text or "")
         course_number = marker_course_number or int(sub_idx or 0) + 1
         clean_text = _strip_audio_block_markers(text or "")
@@ -7259,14 +7113,20 @@ def _assemble_and_upload(folder_id, platform_id, job_id):
         upload_blob,
     )
 
-    rows = list_completed_content_segment_rows(job_id)
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT sub_part_index, passe, text_content
+        FROM content_generation_segments
+        WHERE job_id = ? AND status = 'completed'
+        ORDER BY sub_part_index ASC, passe ASC
+    """, (job_id,))
+    rows = cursor.fetchall()
+    conn.close()
 
     # Assembler dans l'ordre sous-partie → passe
     parts_by_idx = {}
-    for row in rows:
-        sub_idx = row["sub_part_index"]
-        passe = row["passe"]
-        text = row.get("text_content") or ""
+    for sub_idx, passe, text in rows:
         parts_by_idx.setdefault(sub_idx, {})[passe] = text
 
     final_parts = []
@@ -7287,10 +7147,16 @@ def _assemble_and_upload(folder_id, platform_id, job_id):
 
     # Remplacer les anciennes versions finales du script TTS pour garder un seul
     # document exploitable par cours.
-    old_final_docs = list_final_script_document_rows(folder_id)
-    for old_doc in old_final_docs:
-        old_filename = old_doc.get("filename")
-        old_audio_filename = old_doc.get("audio_filename")
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT id, filename, audio_filename
+        FROM cours_documents
+        WHERE folder_id = ?
+          AND (doc_type = 'final_script' OR original_name LIKE 'cours_genere_%.txt')
+    """, (folder_id,))
+    old_final_docs = cursor.fetchall()
+    for _doc_id, old_filename, old_audio_filename in old_final_docs:
         try:
             delete_blob(CONTAINER_DOCUMENTS, old_filename)
         except Exception as e:
@@ -7300,11 +7166,17 @@ def _assemble_and_upload(folder_id, platform_id, job_id):
                 delete_blob(CONTAINER_AUDIOS, old_audio_filename)
             except Exception as e:
                 logger.warning(f"⚠️ Ancien audio final non supprimé ({old_audio_filename}): {e}")
-    replace_final_script_document_record(
-        folder_id=folder_id,
-        filename=blob_path,
-        original_name=original_name,
-    )
+    cursor.execute("""
+        DELETE FROM cours_documents
+        WHERE folder_id = ?
+          AND (doc_type = 'final_script' OR original_name LIKE 'cours_genere_%.txt')
+    """, (folder_id,))
+    cursor.execute("""
+        INSERT INTO cours_documents (folder_id, filename, original_name, doc_type, status)
+        VALUES (?, ?, ?, 'final_script', 'uploaded')
+    """, (folder_id, blob_path, original_name))
+    conn.commit()
+    conn.close()
 
     logger.info(f"✅ Texte final : {total_words} mots → {blob_path}")
     return total_words, original_name
@@ -10788,7 +10660,11 @@ def _run_plan_adherence_on_generated_drafts(
 
 
 def _clear_content_segments_for_structured(job_id: int) -> None:
-    delete_content_segments_for_job(job_id)
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM content_generation_segments WHERE job_id = ?", (job_id,))
+    conn.commit()
+    conn.close()
 
 
 def _save_structured_course_segment(job_id: int, course_plan: dict, text: str) -> None:
@@ -10882,44 +10758,15 @@ def _generate_structured_course_body(
     )
     for section in _structured_body_sections_for_course(course_plan):
         label = _section_label(section)
-        section_started_at = time.time()
-        logger.info(
-            "PIPELINE_STRUCTURED_SECTION_START formation_job_id=%s content_job_id=%s course=%s section=%s kind=%s part=%s target_words=%s beats=%s generated_so_far_words=%s module_chars=%s model=%s",
-            job.get("formation_job_id"),
-            job.get("id"),
-            course_number,
-            label,
-            section.get("kind"),
-            section.get("part_number"),
-            int(section.get("target_words") or 0),
-            len(_section_teaching_beats(section)),
-            count_tts_spoken_words("\n\n".join(section_texts)),
-            len(module_content or ""),
-            model or CLAUDE_MODEL,
+        section_generation = _generate_structured_section_record(
+            job=job,
+            course_plan=course_plan,
+            section=section,
+            previous_course_summary="",
+            generated_so_far="\n\n".join(section_texts),
+            module_content=module_content,
+            model=model,
         )
-        try:
-            section_generation = _generate_structured_section_record(
-                job=job,
-                course_plan=course_plan,
-                section=section,
-                previous_course_summary="",
-                generated_so_far="\n\n".join(section_texts),
-                module_content=module_content,
-                model=model,
-            )
-        except Exception as exc:
-            logger.exception(
-                "PIPELINE_STRUCTURED_SECTION_ERROR formation_job_id=%s content_job_id=%s course=%s section=%s kind=%s part=%s duration_ms=%s error=%s",
-                job.get("formation_job_id"),
-                job.get("id"),
-                course_number,
-                label,
-                section.get("kind"),
-                section.get("part_number"),
-                int((time.time() - section_started_at) * 1000),
-                str(exc)[:300],
-            )
-            raise
         section_text = section_generation["text"]
         section_texts.append(section_text)
         section_records.append({
@@ -10936,19 +10783,6 @@ def _generate_structured_course_body(
             **_slide_display_generation_fields(section_generation),
             **_section_artifact_metadata(section),
         })
-        logger.info(
-            "PIPELINE_STRUCTURED_SECTION_DONE formation_job_id=%s content_job_id=%s course=%s section=%s kind=%s part=%s words=%s mode=%s beat_status=%s duration_ms=%s",
-            job.get("formation_job_id"),
-            job.get("id"),
-            course_number,
-            label,
-            section.get("kind"),
-            section.get("part_number"),
-            count_tts_spoken_words(section_text),
-            section_generation.get("generation_mode"),
-            section_generation.get("beat_alignment_status"),
-            int((time.time() - section_started_at) * 1000),
-        )
     body_text = "\n\n".join(s for s in section_texts if s.strip()).strip()
     logger.info(
         "PIPELINE_STRUCTURED_BODY_DONE formation_job_id=%s content_job_id=%s course=%s words=%s",
@@ -11084,85 +10918,6 @@ def _run_structured_content_generation(
 ) -> tuple[int, str, dict]:
     playlist_items = _playlist_items_for_platform(platform_id)
     job["_ethical_micro_review_records"] = []
-    structured_started_at = time.time()
-
-    def _phase_start(phase: str, message: str, data: dict | None = None) -> float:
-        phase_started_at = time.time()
-        logger.info(
-            "PIPELINE_STRUCTURED_PHASE_START formation_job_id=%s content_job_id=%s folder_id=%s phase=%s model=%s data=%s",
-            job.get("formation_job_id"),
-            job.get("id"),
-            folder_id,
-            phase,
-            model or CLAUDE_MODEL,
-            json.dumps(data or {}, ensure_ascii=False, default=str, sort_keys=True)[:1200],
-        )
-        _log_content_pipeline_event(
-            job,
-            "content_phase_started",
-            folder_id=folder_id,
-            status="running",
-            message=message,
-            model=model,
-            data={"phase": phase, **(data or {})},
-        )
-        return phase_started_at
-
-    def _phase_done(phase: str, phase_started_at: float, message: str, data: dict | None = None) -> None:
-        duration_ms = int((time.time() - phase_started_at) * 1000)
-        logger.info(
-            "PIPELINE_STRUCTURED_PHASE_DONE formation_job_id=%s content_job_id=%s folder_id=%s phase=%s duration_ms=%s data=%s",
-            job.get("formation_job_id"),
-            job.get("id"),
-            folder_id,
-            phase,
-            duration_ms,
-            json.dumps(data or {}, ensure_ascii=False, default=str, sort_keys=True)[:1200],
-        )
-        _log_content_pipeline_event(
-            job,
-            "content_phase_completed",
-            folder_id=folder_id,
-            status="completed",
-            message=message,
-            model=model,
-            duration_ms=duration_ms,
-            data={"phase": phase, **(data or {})},
-        )
-
-    logger.info(
-        "PIPELINE_STRUCTURED_RUN_START formation_job_id=%s content_job_id=%s folder_id=%s platform_id=%s model=%s playlist_items=%s sub_parts=%s module_parts=%s",
-        job.get("formation_job_id"),
-        job.get("id"),
-        folder_id,
-        platform_id,
-        model or CLAUDE_MODEL,
-        len(playlist_items or []),
-        len(sub_parts or []),
-        len(module_contents or {}),
-    )
-    _log_content_pipeline_event(
-        job,
-        "content_structured_started",
-        folder_id=folder_id,
-        status="running",
-        message="Génération structurée démarrée",
-        model=model,
-        data={
-            "playlist_items": len(playlist_items or []),
-            "sub_parts": len(sub_parts or []),
-            "module_parts": len(module_contents or {}),
-        },
-    )
-
-    plan_phase = _phase_start(
-        "plan_json",
-        "Plan JSON verrouillé — génération du plan structuré",
-        {
-            "playlist_items": len(playlist_items or []),
-            "sub_parts": len(sub_parts or []),
-        },
-    )
     plan = _generate_structured_course_plan(job, playlist_items, sub_parts, module_contents, model=model)
     plan_validation = _validate_structured_course_plan(plan)
     _save_content_artifact(
@@ -11186,30 +10941,7 @@ def _run_structured_content_generation(
             plan_validation.get("errors"),
             plan_validation.get("warnings"),
         )
-    _phase_done(
-        "plan_json",
-        plan_phase,
-        "Plan JSON verrouillé terminé",
-        {
-            "courses": len(plan.get("courses") or []),
-            "validation_ok": bool(plan_validation.get("ok")),
-            "validation_errors": len(plan_validation.get("errors") or []),
-            "validation_warnings": len(plan_validation.get("warnings") or []),
-        },
-    )
-    logger.info(
-        "PIPELINE_STRUCTURED_SEGMENTS_CLEAR_START formation_job_id=%s content_job_id=%s folder_id=%s",
-        job.get("formation_job_id"),
-        job.get("id"),
-        folder_id,
-    )
     _clear_content_segments_for_structured(job["id"])
-    logger.info(
-        "PIPELINE_STRUCTURED_SEGMENTS_CLEAR_DONE formation_job_id=%s content_job_id=%s folder_id=%s",
-        job.get("formation_job_id"),
-        job.get("id"),
-        folder_id,
-    )
 
     generated_blocks = []
     course_scripts = []
@@ -11237,11 +10969,6 @@ def _run_structured_content_generation(
 
     if on_progress:
         on_progress(0, NUM_SUB_PARTS, 1, total_words, f"Génération parallèle des contenus principaux ({workers} cours à la fois)")
-    body_phase = _phase_start(
-        "body_sections",
-        "Génération des sections principales",
-        {"workers": workers, "courses": total_courses},
-    )
     body_results = _run_structured_parallel(
         course_plans,
         lambda course_plan: _generate_structured_course_body(
@@ -11254,23 +10981,9 @@ def _run_structured_content_generation(
         workers=workers,
     )
     body_results = sorted(body_results, key=lambda item: int(item.get("course_number") or 0))
-    _phase_done(
-        "body_sections",
-        body_phase,
-        "Sections principales générées",
-        {
-            "courses": len(body_results),
-            "body_words": sum(count_tts_spoken_words(result.get("body_text") or "") for result in body_results),
-        },
-    )
 
     if on_progress:
         on_progress(0, NUM_SUB_PARTS, 1, total_words, "Résumés courts des cours pour les reprises tardives")
-    summary_phase = _phase_start(
-        "summaries",
-        "Résumés courts pour les transitions",
-        {"courses": len(body_results), "workers": workers},
-    )
     summary_pairs = _run_structured_parallel(
         body_results,
         lambda body_result: _summarize_structured_course_body(body_result, model=model),
@@ -11281,23 +10994,9 @@ def _run_structured_content_generation(
         f"Cours {course_number}: {course_summaries.get(course_number) or ''}"
         for course_number in sorted(course_summaries)
     )
-    _phase_done(
-        "summaries",
-        summary_phase,
-        "Résumés courts terminés",
-        {
-            "summaries": len(course_summaries),
-            "summary_chars": sum(len(summary or "") for summary in course_summaries.values()),
-        },
-    )
 
     if on_progress:
         on_progress(0, NUM_SUB_PARTS, 1, total_words, "Génération tardive des introductions et raccords")
-    openings_phase = _phase_start(
-        "late_openings",
-        "Génération tardive des introductions",
-        {"courses": len(body_results), "workers": workers},
-    )
     opening_results = _run_structured_parallel(
         body_results,
         lambda body_result: _generate_late_opening_for_structured_course(
@@ -11312,22 +11011,11 @@ def _run_structured_content_generation(
         int(opening.get("course_number") or 0): opening
         for opening in opening_results
     }
-    _phase_done(
-        "late_openings",
-        openings_phase,
-        "Introductions tardives terminées",
-        {"openings": len(openings_by_course)},
-    )
     day_conclusion_tasks = [
         body_result
         for body_result in body_results
         if _structured_day_conclusion_section_for_course(body_result["course_plan"])
     ]
-    conclusions_phase = _phase_start(
-        "day_conclusions",
-        "Génération des conclusions de journée",
-        {"courses": len(day_conclusion_tasks), "workers": max(1, min(workers, len(day_conclusion_tasks) or 1))},
-    )
     day_conclusion_results = _run_structured_parallel(
         day_conclusion_tasks,
         lambda body_result: _generate_late_day_conclusion_for_structured_course(
@@ -11343,18 +11031,7 @@ def _run_structured_content_generation(
         for result in day_conclusion_results
         if result
     }
-    _phase_done(
-        "day_conclusions",
-        conclusions_phase,
-        "Conclusions de journée terminées",
-        {"conclusions": len(day_conclusions_by_course)},
-    )
 
-    drafts_phase = _phase_start(
-        "draft_artifacts",
-        "Assemblage des brouillons structurés",
-        {"courses": len(body_results)},
-    )
     draft_courses = []
     for body_result in body_results:
         course_number = int(body_result.get("course_number") or 0)
@@ -11390,23 +11067,9 @@ def _run_structured_content_generation(
             },
         ),
     )
-    _phase_done(
-        "draft_artifacts",
-        drafts_phase,
-        "Brouillons structurés sauvegardés",
-        {
-            "courses": len(draft_courses),
-            "draft_words": sum(int(course.get("draft_word_count") or 0) for course in draft_courses),
-        },
-    )
 
     if on_progress:
         on_progress(0, NUM_SUB_PARTS, 1, total_words, "Adhérence au plan après génération par section")
-    adherence_phase = _phase_start(
-        "plan_adherence",
-        "Review adhérence au plan",
-        {"courses": len(body_results), "workers": workers},
-    )
     body_results = _run_plan_adherence_on_generated_drafts(
         job=job,
         platform_id=platform_id,
@@ -11418,12 +11081,6 @@ def _run_structured_content_generation(
         total_words=total_words,
         on_progress=on_progress,
         model=model,
-    )
-    _phase_done(
-        "plan_adherence",
-        adherence_phase,
-        "Review adhérence au plan terminée",
-        {"courses": len(body_results)},
     )
 
     if on_progress:
@@ -11566,26 +11223,12 @@ def _run_structured_content_generation(
             "module_content": module_content,
         }
 
-    calibration_phase = _phase_start(
-        "budget_calibration",
-        "Calibrage des budgets texte",
-        {"courses": len(body_results), "workers": workers},
-    )
     calibrated_results = _run_structured_parallel(
         body_results,
         _calibrate_draft,
         workers=workers,
     )
     calibrated_results = sorted(calibrated_results, key=lambda item: int(item.get("course_number") or 0))
-    _phase_done(
-        "budget_calibration",
-        calibration_phase,
-        "Calibrage budgets texte terminé",
-        {
-            "courses": len(calibrated_results),
-            "words": sum(int(result.get("calibrated_words") or result.get("words") or 0) for result in calibrated_results),
-        },
-    )
 
     budget_calibration_records = []
     for result in calibrated_results:
@@ -11787,27 +11430,12 @@ def _run_structured_content_generation(
             "post_micro_budget_repair": post_micro_budget_repair,
         }
 
-    micro_phase = _phase_start(
-        "ethical_micro_review",
-        "Micro-conformité éthique",
-        {"courses": len(calibrated_results), "workers": workers},
-    )
     final_course_results = _run_structured_parallel(
         calibrated_results,
         _micro_review_calibrated_course,
         workers=workers,
     )
     final_course_results = sorted(final_course_results, key=lambda item: int(item.get("course_number") or 0))
-    _phase_done(
-        "ethical_micro_review",
-        micro_phase,
-        "Micro-conformité éthique terminée",
-        {
-            "courses": len(final_course_results),
-            "words": sum(int(result.get("words") or 0) for result in final_course_results),
-            "changed": sum(1 for result in final_course_results if result.get("micro_changed")),
-        },
-    )
 
     micro_records = _sorted_ethical_micro_review_records(job)
     _save_content_artifact(
@@ -11831,38 +11459,13 @@ def _run_structured_content_generation(
         ),
     )
 
-    persist_phase = _phase_start(
-        "persist_courses",
-        "Sauvegarde des cours générés en Postgres",
-        {"courses": len(final_course_results)},
-    )
     for result in final_course_results:
         course_number = int(result.get("course_number") or 0)
         course_plan = result["course_plan"]
         course_text = result["course_text"]
         words = int(result.get("words") or 0)
         calibration = result.get("calibration") or {}
-        segment_started_at = time.time()
-        logger.info(
-            "PIPELINE_STRUCTURED_SEGMENT_SAVE_START formation_job_id=%s content_job_id=%s folder_id=%s course=%s/%s words=%s",
-            job.get("formation_job_id"),
-            job["id"],
-            folder_id,
-            course_number,
-            total_courses,
-            words,
-        )
         _save_structured_course_segment(job["id"], course_plan, course_text)
-        logger.info(
-            "PIPELINE_STRUCTURED_SEGMENT_SAVE_DONE formation_job_id=%s content_job_id=%s folder_id=%s course=%s/%s words=%s duration_ms=%s",
-            job.get("formation_job_id"),
-            job["id"],
-            folder_id,
-            course_number,
-            total_courses,
-            words,
-            int((time.time() - segment_started_at) * 1000),
-        )
         total_words += words
         generated_block = {
             "bloc_number": course_number,
@@ -11915,18 +11518,7 @@ def _run_structured_content_generation(
             words,
             course_plan.get("target_words"),
         )
-    _phase_done(
-        "persist_courses",
-        persist_phase,
-        "Cours générés sauvegardés en Postgres",
-        {"courses": len(final_course_results), "total_words": total_words},
-    )
 
-    course_scripts_phase = _phase_start(
-        "course_scripts_artifact",
-        "Sauvegarde de l'artefact scripts cours",
-        {"courses": len(course_scripts)},
-    )
     _save_content_artifact(
         platform_id,
         folder_id,
@@ -11943,18 +11535,7 @@ def _run_structured_content_generation(
             },
         ),
     )
-    _phase_done(
-        "course_scripts_artifact",
-        course_scripts_phase,
-        "Artefact scripts cours sauvegardé",
-        {"courses": len(course_scripts)},
-    )
 
-    final_phase = _phase_start(
-        "final_assembly",
-        "Assemblage et upload du texte final",
-        {"total_words_before_assembly": total_words},
-    )
     final_words, filename = _assemble_and_upload(folder_id, platform_id, job["id"])
     payload = {
         "generated_at": datetime.utcnow().isoformat() + "Z",
@@ -11966,31 +11547,6 @@ def _run_structured_content_generation(
         "course_blocs": [],
     }
     _save_course_script_plan(platform_id, folder_id, payload)
-    _phase_done(
-        "final_assembly",
-        final_phase,
-        "Assemblage final terminé",
-        {"final_words": final_words, "filename": filename},
-    )
-    logger.info(
-        "PIPELINE_STRUCTURED_RUN_DONE formation_job_id=%s content_job_id=%s folder_id=%s final_words=%s filename=%s duration_ms=%s",
-        job.get("formation_job_id"),
-        job.get("id"),
-        folder_id,
-        final_words,
-        filename,
-        int((time.time() - structured_started_at) * 1000),
-    )
-    _log_content_pipeline_event(
-        job,
-        "content_structured_completed",
-        folder_id=folder_id,
-        status="completed",
-        message="Génération structurée terminée",
-        model=model,
-        duration_ms=int((time.time() - structured_started_at) * 1000),
-        data={"final_words": final_words, "filename": filename},
-    )
     return final_words, filename, payload
 
 
@@ -12315,17 +11871,6 @@ def run_content_generation(folder_id, on_progress=None, mode="normal", model=Non
             int((time.time() - started_at) * 1000),
             e,
         )
-        _log_content_pipeline_event(
-            job,
-            "content_generation_error",
-            folder_id=folder_id,
-            status="error",
-            message="Génération contenu échouée",
-            model=model,
-            duration_ms=int((time.time() - started_at) * 1000),
-            data={"mode": mode},
-            error=str(e)[:1000],
-        )
         _update_job_db(job_id, status="error", error_message=str(e))
         raise
 
@@ -12339,17 +11884,6 @@ def _playlist_items_for_platform(platform_id: int) -> list:
         from services.audio_service import get_playlist
         playlist = get_playlist(platform_id)
     except Exception as e:
-        if PIPELINE_DATABASE_BACKEND in {"postgres", "postgresql", "supabase"}:
-            logger.error(
-                "PIPELINE_PLAYLIST_CONFIG_REQUIRED platform_id=%s backend=%s error=%s",
-                platform_id,
-                PIPELINE_DATABASE_BACKEND,
-                str(e)[:500],
-                exc_info=True,
-            )
-            raise RuntimeError(
-                f"Configuration playlist PostgreSQL indisponible pour la plateforme {platform_id}"
-            ) from e
         logger.warning(f"⚠️ Playlist plateforme indisponible, fallback PLAYLIST_SPEC : {e}")
         return list(PLAYLIST_SPEC)
 
@@ -13094,7 +12628,22 @@ def _build_contextual_break_audio(
 
 
 def _mark_content_segments_clean(job_id: int, seg_keys) -> None:
-    mark_content_segments_clean(job_id, seg_keys)
+    unique_keys = sorted(set(seg_keys or []))
+    if not unique_keys:
+        return
+
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        for sub_idx, passe in unique_keys:
+            cur.execute("""
+                UPDATE content_generation_segments
+                SET dirty = 0
+                WHERE job_id = ? AND sub_part_index = ? AND passe = ?
+            """, (job_id, sub_idx, passe))
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def _allow_audio_overflow_lost() -> bool:
@@ -13297,7 +12846,16 @@ def generate_audio_from_script(
         )
 
     # ── 1. Charger tous les segments complétés dans l'ordre ──
-    rows = list_completed_content_segment_rows(job_id)
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT sub_part_index, passe, text_content, word_count, dirty
+        FROM content_generation_segments
+        WHERE job_id = ? AND status = 'completed'
+        ORDER BY sub_part_index ASC, passe ASC
+    """, (job_id,))
+    rows = cursor.fetchall()
+    conn.close()
 
     if not rows:
         raise ValueError("Aucun segment généré — lancez d'abord la génération du script")
@@ -13305,15 +12863,15 @@ def generate_audio_from_script(
     # Construire la liste ordonnée des segments avec leur index global
     segments = []
     for r in rows:
-        text = r.get("text_content") or ""
+        text = r[2] or ""
         if sync_slides:
             text = _strip_tts_tags_for_sync(text)
         segments.append({
-            "sub_idx": r["sub_part_index"],
-            "passe": r["passe"],
+            "sub_idx": r[0],
+            "passe": r[1],
             "text": text,
-            "word_count": len(text.split()) if sync_slides else r["word_count"],
-            "dirty": bool(r["dirty"]),
+            "word_count": len(text.split()) if sync_slides else r[3],
+            "dirty": bool(r[4]),
         })
 
     carryover_in = (job.get("carryover_in_text") or "").strip()
@@ -13424,54 +12982,6 @@ def generate_audio_from_script(
     skipped = []
     slide_audio_timings = []
     slide_sync_files = []
-    if sync_slides and slide_deck and preserve_existing:
-        existing_audio_sync = slide_deck.get("audio_sync") or {}
-        for existing_file in existing_audio_sync.get("generated_files") or []:
-            if existing_file and existing_file not in slide_sync_files:
-                slide_sync_files.append(existing_file)
-        for existing_timing in existing_audio_sync.get("timings") or []:
-            if isinstance(existing_timing, dict):
-                slide_audio_timings.append(dict(existing_timing))
-
-    def _replace_slide_sync_for_file(filename: str, timings: list[dict] | None) -> None:
-        if not filename:
-            return
-        slide_audio_timings[:] = [
-            timing for timing in slide_audio_timings
-            if timing.get("audio_filename") != filename
-        ]
-        slide_audio_timings.extend(timings or [])
-        slide_sync_files[:] = [item for item in slide_sync_files if item != filename]
-        slide_sync_files.append(filename)
-
-    def _persist_slide_audio_sync_snapshot(reason: str) -> None:
-        if not (sync_slides and slide_deck):
-            return
-        try:
-            from services.script_slide_generation_service import update_script_slide_deck_audio_sync
-            audio_mode = "mock" if mock else "gtts" if basic_tts else "fish_audio"
-            update_script_slide_deck_audio_sync(
-                slide_deck["deck_id"],
-                {
-                    "enabled": True,
-                    "mode": audio_mode,
-                    "folder_id": folder_id,
-                    "content_job_id": job_id,
-                    "generated_files": list(slide_sync_files),
-                    "timings": list(slide_audio_timings),
-                    "partial": True,
-                    "partial_reason": reason,
-                },
-            )
-        except Exception:
-            logger.warning(
-                "PIPELINE_AUDIO_SYNC_PARTIAL_SAVE_FAILED formation_job_id=%s content_job_id=%s folder_id=%s reason=%s",
-                formation_job_id,
-                job_id,
-                folder_id,
-                reason,
-                exc_info=True,
-            )
 
     # Tampon intra-jour : chunks structurés non consommés par un bloc cours
     # précédent (runtime_fit a stoppé avant la fin) → préfixés au bloc suivant.
@@ -14306,7 +13816,8 @@ def generate_audio_from_script(
                     len(intra_day_carryover_chunks), unconsumed_words,
                     fit_method,
                 )
-            _replace_slide_sync_for_file(filename, bloc_timings)
+            slide_audio_timings.extend(bloc_timings)
+            slide_sync_files.append(filename)
             logger.info(
                 f"   TTS sync voix : {voice_duration:.1f}s "
                 f"({fit_method}, chunks={len(attempts)}, cible : {target_sec}s)"
@@ -14522,7 +14033,6 @@ def generate_audio_from_script(
             actual_reading=actual_reading,
         )
         generated.append(filename)
-        _persist_slide_audio_sync_snapshot(f"generated:{filename}")
 
         # Marquer les segments contributeurs comme propres (dirty=0)
         seg_keys = [
@@ -14707,19 +14217,28 @@ def _serialize_course_bloc(
 
 
 def _load_segments_for_course_plan(job: dict, *, sync_slides: bool = False) -> list:
-    rows = list_completed_content_segment_rows(job["id"])
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT sub_part_index, passe, text_content, word_count, dirty
+        FROM content_generation_segments
+        WHERE job_id = ? AND status = 'completed'
+        ORDER BY sub_part_index ASC, passe ASC
+    """, (job["id"],))
+    rows = cursor.fetchall()
+    conn.close()
 
     segments = []
     for r in rows:
-        text = r.get("text_content") or ""
+        text = r[2] or ""
         if sync_slides:
             text = _strip_tts_tags_for_sync(text)
         segments.append({
-            "sub_idx": r["sub_part_index"],
-            "passe": r["passe"],
+            "sub_idx": r[0],
+            "passe": r[1],
             "text": text,
-            "word_count": len(text.split()) if sync_slides else r["word_count"],
-            "dirty": bool(r["dirty"]),
+            "word_count": len(text.split()) if sync_slides else r[3],
+            "dirty": bool(r[4]),
         })
 
     carryover_in = (job.get("carryover_in_text") or "").strip()
@@ -14938,11 +14457,20 @@ def _update_segment_after_plan_adherence_repair(seg_id: int, original_text: str,
     if marker_course_number and not _extract_audio_block_number(stored_text):
         stored_text = f"<<<BLOC_AUDIO_{marker_course_number}>>>\n\n{stored_text}".strip()
     word_count = count_tts_spoken_words(stored_text)
-    update_content_segment_plan_repair(
-        segment_id=seg_id,
-        text_content=stored_text,
-        word_count=word_count,
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        UPDATE content_generation_segments
+        SET text_content = ?, word_count = ?, dirty = 1,
+            humanized = 0, humanization_error = NULL, humanization_signature = NULL,
+            reviewed = 0, review_error = NULL, review_signature = NULL
+        WHERE id = ?
+        """,
+        (stored_text, word_count, seg_id),
     )
+    conn.commit()
+    conn.close()
     return word_count
 
 
@@ -15057,7 +14585,19 @@ def run_plan_adherence_review(folder_id, on_progress=None, model=None, force: bo
         if isinstance(record, dict)
     }
 
-    rows = list_completed_content_segment_rows(job["id"])
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        SELECT id, sub_part_index, sub_part_name, passe, text_content
+        FROM content_generation_segments
+        WHERE job_id = ? AND status = 'completed'
+        ORDER BY sub_part_index ASC, passe ASC
+        """,
+        (job["id"],),
+    )
+    rows = cursor.fetchall()
+    conn.close()
 
     total = len(rows)
     details = []
@@ -15080,10 +14620,8 @@ def run_plan_adherence_review(folder_id, on_progress=None, model=None, force: bo
     )
 
     for step, row in enumerate(rows, start=1):
-        seg_id = row["id"]
-        sub_idx = row["sub_part_index"]
-        passe = row["passe"]
-        original_text = row.get("text_content") or ""
+        seg_id, sub_idx, _sub_part_name, passe, text_content = row
+        original_text = text_content or ""
         course_number = _extract_audio_block_number(original_text) or int(sub_idx or 0) + 1
         course_plan = _course_plan_for_number(structured_plan, course_number)
         clean_text = _strip_audio_block_markers(original_text)
@@ -15380,20 +14918,21 @@ def get_script_dirty_blocs(folder_id):
     if not job:
         return {"dirty_blocs": 0, "total_blocs": 7, "has_script": False}
 
-    rows = list_completed_content_segment_rows(job["id"])
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT sub_part_index, passe, word_count, dirty
+        FROM content_generation_segments
+        WHERE job_id = ? AND status = 'completed'
+        ORDER BY sub_part_index ASC, passe ASC
+    """, (job["id"],))
+    rows = cursor.fetchall()
+    conn.close()
 
     if not rows:
         return {"dirty_blocs": 0, "total_blocs": 7, "has_script": True}
 
-    segments = [
-        {
-            "sub_idx": r["sub_part_index"],
-            "passe": r["passe"],
-            "wc": r["word_count"],
-            "dirty": bool(r["dirty"]),
-        }
-        for r in rows
-    ]
+    segments = [{"sub_idx": r[0], "passe": r[1], "wc": r[2], "dirty": bool(r[3])} for r in rows]
     total_words = sum(s["wc"] for s in segments)
 
     word_to_seg_idx = []
@@ -15589,7 +15128,25 @@ def _ensure_review_state_columns() -> None:
     global _REVIEW_SIGNATURE_COLUMNS_READY
     if _REVIEW_SIGNATURE_COLUMNS_READY:
         return
-    ensure_content_review_state_columns()
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("ALTER TABLE content_generation_segments ADD COLUMN review_signature TEXT")
+        logger.info("✅ Colonne review_signature ajoutée à content_generation_segments")
+    except Exception:
+        pass
+    for sql, label in (
+        ("ALTER TABLE content_generation_segments ADD COLUMN humanized INTEGER DEFAULT 0", "humanized"),
+        ("ALTER TABLE content_generation_segments ADD COLUMN humanization_error TEXT", "humanization_error"),
+        ("ALTER TABLE content_generation_segments ADD COLUMN humanization_signature TEXT", "humanization_signature"),
+    ):
+        try:
+            cursor.execute(sql)
+            logger.info("✅ Colonne %s ajoutée à content_generation_segments", label)
+        except Exception:
+            pass
+    conn.commit()
+    conn.close()
     _REVIEW_SIGNATURE_COLUMNS_READY = True
 
 
@@ -16014,7 +15571,28 @@ def _apply_review_budget_guard(
 
 def _snapshot_pre_review_for_content_job(job_id: int) -> int:
     """Persist the exact text state before API review mutates segments."""
-    snapshotted = snapshot_content_segments_pre_review(job_id)
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            "ALTER TABLE content_generation_segments ADD COLUMN text_content_pre_review TEXT"
+        )
+        conn.commit()
+    except Exception:
+        pass
+    cursor.execute(
+        """
+        UPDATE content_generation_segments
+        SET text_content_pre_review = text_content
+        WHERE job_id = ?
+          AND status = 'completed'
+          AND text_content_pre_review IS NULL
+        """,
+        (job_id,),
+    )
+    snapshotted = cursor.rowcount or 0
+    conn.commit()
+    conn.close()
     if snapshotted:
         logger.info(
             "PIPELINE_REVIEW_SNAPSHOT content_job_id=%s segments=%s",
@@ -16091,18 +15669,51 @@ def _run_content_review_pass(
     )
     _ensure_review_state_columns()
     _snapshot_pre_review_for_content_job(job_id)
-    total_completed, rows = select_content_segments_for_review(
-        job_id=job_id,
-        reviewed_column=reviewed_column,
-        signature_column=signature_column,
-        review_signature=review_signature,
-        force=force,
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT COUNT(*) FROM content_generation_segments WHERE job_id = ? AND status = 'completed'",
+        (job_id,),
     )
-    reset_content_segments_review_state(
-        segment_ids=[int(row["id"]) for row in rows],
-        reviewed_column=reviewed_column,
-        error_column=error_column,
-    )
+    total_completed = int(cursor.fetchone()[0] or 0)
+    if force:
+        cursor.execute(
+            """
+            SELECT id, sub_part_index, sub_part_name, passe, text_content
+            FROM content_generation_segments
+            WHERE job_id = ? AND status = 'completed'
+            ORDER BY sub_part_index ASC, passe ASC
+            """,
+            (job_id,),
+        )
+    else:
+        cursor.execute(
+            f"""
+            SELECT id, sub_part_index, sub_part_name, passe, text_content
+            FROM content_generation_segments
+            WHERE job_id = ? AND status = 'completed'
+              AND (
+                    COALESCE({reviewed_column}, 0) = 0
+                 OR {signature_column} IS NULL
+                 OR {signature_column} != ?
+              )
+            ORDER BY sub_part_index ASC, passe ASC
+            """,
+            (job_id, review_signature),
+        )
+    rows = cursor.fetchall()
+    if rows:
+        placeholders = ",".join("?" * len(rows))
+        cursor.execute(
+            f"""
+            UPDATE content_generation_segments
+            SET {reviewed_column} = 0, {error_column} = NULL
+            WHERE id IN ({placeholders})
+            """,
+            tuple(row[0] for row in rows),
+        )
+        conn.commit()
+    conn.close()
 
     total = len(rows)
     total_already_current = max(0, total_completed - total) if not force else 0
@@ -16164,11 +15775,7 @@ def _run_content_review_pass(
 
     for step, row in enumerate(rows, start=1):
         segment_started_at = time.time()
-        seg_id = row["id"]
-        sub_idx = row["sub_part_index"]
-        sub_part_name = row["sub_part_name"]
-        passe = row["passe"]
-        text_content = row.get("text_content") or ""
+        seg_id, sub_idx, sub_part_name, passe, text_content = row
         label = f"sous-partie {sub_idx + 1} / passe {passe}"
         _progress(step, total, f"{review_label} {label} ({len(groups)} salves)…")
         logger.info(
@@ -16379,13 +15986,18 @@ def _run_content_review_pass(
                     segment_error[:300],
                 )
 
+        # Écriture finale en DB (une seule transaction par segment)
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
         if segment_error:
             # Une salve a échoué : review_error, PAS reviewed=1
-            record_content_segment_review_error(
-                segment_id=seg_id,
-                error_column=error_column,
-                error_message=segment_error,
+            cursor.execute(
+                f"UPDATE content_generation_segments SET {error_column} = ? WHERE id = ?",
+                (segment_error[:500], seg_id),
             )
+            conn.commit()
+            conn.close()
             total_failed += 1
             details.append({
                 "segment_id": seg_id,
@@ -16411,15 +16023,15 @@ def _run_content_review_pass(
         # Toutes les salves ont réussi
         if all_applied:
             new_word_count = count_tts_spoken_words(current_text)
-            mark_content_segment_review_patched(
-                segment_id=seg_id,
-                text_content=current_text,
-                word_count=new_word_count,
-                reviewed_column=reviewed_column,
-                error_column=error_column,
-                signature_column=signature_column,
-                review_signature=review_signature,
-                invalidate_compliance_on_change=invalidate_compliance_on_change,
+            cursor.execute(
+                f"""
+                UPDATE content_generation_segments
+                SET text_content = ?, word_count = ?, dirty = 1,
+                    {reviewed_column} = 1, {error_column} = NULL, {signature_column} = ?
+                    {", reviewed = 0, review_error = NULL, review_signature = NULL" if invalidate_compliance_on_change else ""}
+                WHERE id = ?
+                """,
+                (current_text, new_word_count, review_signature, seg_id),
             )
             logger.info(
                 "PIPELINE_REVIEW_SEGMENT_PATCHED formation_job_id=%s content_job_id=%s folder_id=%s segment_id=%s proposed=%s applied=%s rejected=%s new_words=%s",
@@ -16433,12 +16045,13 @@ def _run_content_review_pass(
                 new_word_count,
             )
         else:
-            mark_content_segment_review_clean(
-                segment_id=seg_id,
-                reviewed_column=reviewed_column,
-                error_column=error_column,
-                signature_column=signature_column,
-                review_signature=review_signature,
+            cursor.execute(
+                f"""
+                UPDATE content_generation_segments
+                SET {reviewed_column} = 1, {error_column} = NULL, {signature_column} = ?
+                WHERE id = ?
+                """,
+                (review_signature, seg_id),
             )
             logger.info(
                 "PIPELINE_REVIEW_SEGMENT_CLEAN formation_job_id=%s content_job_id=%s folder_id=%s segment_id=%s proposed=%s rejected=%s",
@@ -16449,6 +16062,8 @@ def _run_content_review_pass(
                 all_proposed,
                 len(all_rejected),
             )
+        conn.commit()
+        conn.close()
 
         total_applied += len(all_applied)
         total_rejected += len(all_rejected)

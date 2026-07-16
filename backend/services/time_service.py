@@ -3,7 +3,6 @@ from datetime import datetime
 import state
 from config import FRANCE_TZ
 from database.db import get_db_connection
-from repositories import course_schedule_repository as schedule_repo
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -11,8 +10,6 @@ logger = get_logger(__name__)
 
 def _ensure_cours_config(cursor):
     """Ensure the course-time table exists before reading/writing it."""
-    if schedule_repo.schedule_store_is_postgres():
-        return
     cursor.execute(
         """
         CREATE TABLE IF NOT EXISTS cours_config (
@@ -55,17 +52,12 @@ def set_heure_debut_cours(nouvelle_heure, platform_id=1):
     """Met à jour l'heure de début du cours dans la base de données"""
     try:
         logger.info(f"⏰ Mise à jour heure début cours P{platform_id}: {nouvelle_heure}")
-        if nouvelle_heure.tzinfo is None:
-            nouvelle_heure = FRANCE_TZ.localize(nouvelle_heure)
-
-        if schedule_repo.schedule_store_is_postgres():
-            schedule_repo.upsert_course_start(int(platform_id), nouvelle_heure)
-            logger.info(f"✅ Heure début cours P{platform_id} mise à jour: {nouvelle_heure.isoformat()}")
-            return
-
         conn = get_db_connection()
         cursor = conn.cursor()
         _ensure_cours_config(cursor)
+
+        if nouvelle_heure.tzinfo is None:
+            nouvelle_heure = FRANCE_TZ.localize(nouvelle_heure)
 
         heure_str = nouvelle_heure.strftime("%Y-%m-%d %H:%M:%S")
 
@@ -92,21 +84,6 @@ def set_heure_debut_cours(nouvelle_heure, platform_id=1):
 def get_heure_debut_cours(platform_id=1):
     """Récupère l'heure de début du cours EN HEURE FRANÇAISE"""
     try:
-        if schedule_repo.schedule_store_is_postgres():
-            value = schedule_repo.get_course_start(int(platform_id))
-            if isinstance(value, datetime):
-                if value.tzinfo is None:
-                    return FRANCE_TZ.localize(value)
-                return value.astimezone(FRANCE_TZ)
-            if value:
-                parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
-                if parsed.tzinfo is None:
-                    return FRANCE_TZ.localize(parsed)
-                return parsed.astimezone(FRANCE_TZ)
-            raise LookupError(
-                f"Aucune heure de cours configurée pour la plateforme {int(platform_id)}"
-            )
-
         conn = get_db_connection()
         cursor = conn.cursor()
         _ensure_cours_config(cursor)
@@ -130,9 +107,5 @@ def get_heure_debut_cours(platform_id=1):
             return FRANCE_TZ.localize(dt_naive)
     except Exception as e:
         logger.error(f"❌ Erreur get_heure_debut_cours: {e}")
-        # In PostgreSQL SaaS mode, never consult or emulate another tenant's
-        # schedule. A missing row is a configuration error and must fail closed.
-        if schedule_repo.schedule_store_is_postgres():
-            raise
         dt_naive = datetime(2025, 5, 28, 16, 35, 0)
         return FRANCE_TZ.localize(dt_naive)
