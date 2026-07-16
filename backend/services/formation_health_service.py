@@ -22,11 +22,44 @@ import os
 import shutil
 from typing import Optional
 
-from database.db import get_db_connection
+from repositories.pipeline_repository import (
+    count_completed_segments_for_folders,
+    count_dirty_completed_segments_for_folders,
+    count_segments_with_pre_review_snapshot_for_folders,
+    count_unhumanized_segments_without_error_for_folders,
+    count_unreviewed_segments_without_error_for_folders,
+    get_content_job_docx_state,
+    get_formation_module_for_pipeline_job,
+    get_pipeline_job,
+    list_health_course_folder_rows,
+)
 from utils.anthropic_client import default_model
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+
+def _expected_structured_segment_count(job: dict, daily_programs: list) -> int:
+    """Return the segment count produced by the current structured pipeline.
+
+    The legacy pipeline generated three passes per sub-part. The structured
+    generator persists one final segment per sub-part, so multiplying by three
+    makes successful PostgreSQL pipelines look incomplete.
+    """
+    expected = 0
+    for day_data in daily_programs:
+        if not isinstance(day_data, dict):
+            continue
+        sub_parts = day_data.get("sub_parts")
+        expected += max(1, len(sub_parts) if sub_parts else 6)
+    if expected:
+        return expected
+    return int(job.get("nb_days") or 0) * 7
+
+
+def _humanization_is_embedded(job: dict) -> bool:
+    """The auto-pilot structured prompt embeds oral style in initial content."""
+    return bool(job.get("auto_pilot_enabled"))
 
 
 # ─── Pre-flight ──────────────────────────────────────────────────────────────
@@ -249,15 +282,7 @@ def compute_health(job_id: int) -> dict:
     except Exception:
         COURSE_AUDIO_SLOTS = [None] * 7
         daily_programs = []
-    expected_total_segments = 0
-    for day_data in daily_programs:
-        if isinstance(day_data, dict):
-            sub_parts = day_data.get("sub_parts")
-            expected_sub_parts = len(sub_parts) if sub_parts else 6
-            expected_total_segments += max(1, expected_sub_parts) * 3
-    if expected_total_segments == 0:
-        expected_total_segments = nb_days * len(COURSE_AUDIO_SLOTS) * 3
-    expected_segments_per_day = len(COURSE_AUDIO_SLOTS) * 3
+    expected_total_segments = _expected_structured_segment_count(job, daily_programs)
 
     # Inventaire des cours_folders + cg_jobs + segments. On audite uniquement
     # le folder canonique de chaque journée attendue : des doublons peuvent
@@ -279,23 +304,9 @@ def compute_health(job_id: int) -> dict:
     duplicate_folders = folder_state.get("duplicates") or []
     missing_folders = folder_state.get("missing") or []
 
-    conn = get_db_connection()
-    cursor = conn.cursor()
     if canonical_folder_ids:
-        placeholders = ",".join("?" * len(canonical_folder_ids))
-        cursor.execute(
-            f"""
-            SELECT cf.id, cf.name, cf.position, cj.id, cj.status
-            FROM cours_folders cf
-            LEFT JOIN content_generation_jobs cj ON cj.folder_id = cf.id
-            WHERE cf.id IN ({placeholders})
-            ORDER BY cf.position ASC
-            """,
-            tuple(canonical_folder_ids),
-        )
-        folders = cursor.fetchall()  # [(folder_id, name, position, cg_job_id, cg_status)]
+        folders = list_health_course_folder_rows(canonical_folder_ids)
     else:
-        placeholders = ""
         folders = []
     checks["course_folders_expected"] = {
         "ok": len(folders) == nb_days and not missing_folders,
@@ -318,15 +329,8 @@ def compute_health(job_id: int) -> dict:
     # 1. Segments completed
     n_completed = 0
     if folders:
-        folder_ids = [f[0] for f in folders]
-        placeholders = ",".join("?" * len(folder_ids))
-        cursor.execute(
-            f"""SELECT COUNT(*) FROM content_generation_segments s
-                JOIN content_generation_jobs cj ON cj.id = s.job_id
-                WHERE cj.folder_id IN ({placeholders}) AND s.status = 'completed'""",
-            tuple(folder_ids),
-        )
-        n_completed = cursor.fetchone()[0]
+        folder_ids = [int(f["id"]) for f in folders]
+        n_completed = count_completed_segments_for_folders(folder_ids)
 
     seg_ok = n_completed >= expected_total_segments
     checks["segments_completed"] = {
@@ -339,7 +343,11 @@ def compute_health(job_id: int) -> dict:
         blocking.append("segments_completed")
 
     # 2. cg_jobs en status='completed'
-    idle_folders = [(f[0], f[1]) for f in folders if f[4] != "completed"]
+    idle_folders = [
+        (f["id"], f["name"])
+        for f in folders
+        if f.get("content_status") != "completed"
+    ]
     cg_ok = len(idle_folders) == 0 and len(folders) == nb_days
     checks["cg_jobs_completed"] = {
         "ok": cg_ok,
@@ -369,15 +377,7 @@ def compute_health(job_id: int) -> dict:
     # 4. Snapshot pre-review présent (text_content_pre_review IS NOT NULL)
     n_snapshot = 0
     if folders:
-        cursor.execute(
-            f"""SELECT COUNT(*) FROM content_generation_segments s
-                JOIN content_generation_jobs cj ON cj.id = s.job_id
-                WHERE cj.folder_id IN ({placeholders})
-                AND s.status = 'completed'
-                AND s.text_content_pre_review IS NOT NULL""",
-            tuple(folder_ids),
-        )
-        n_snapshot = cursor.fetchone()[0]
+        n_snapshot = count_segments_with_pre_review_snapshot_for_folders(folder_ids)
     snap_ok = n_snapshot == n_completed and n_completed > 0
     checks["pre_review_snapshotted"] = {
         "ok": snap_ok,
@@ -391,25 +391,21 @@ def compute_health(job_id: int) -> dict:
     # 5. Humanisation cohérente : tous les segments completed → humanized=1 OU erreur.
     n_unhumanized_no_error = 0
     if folders:
-        cursor.execute(
-            f"""SELECT COUNT(*) FROM content_generation_segments s
-                JOIN content_generation_jobs cj ON cj.id = s.job_id
-                WHERE cj.folder_id IN ({placeholders})
-                AND s.status = 'completed'
-                AND COALESCE(s.humanized, 0) = 0
-                AND s.humanization_error IS NULL""",
-            tuple(folder_ids),
-        )
-        n_unhumanized_no_error = cursor.fetchone()[0]
-    humanization_ok = n_unhumanized_no_error == 0
+        n_unhumanized_no_error = count_unhumanized_segments_without_error_for_folders(folder_ids)
+    humanization_embedded = _humanization_is_embedded(job)
+    humanization_ok = humanization_embedded or n_unhumanized_no_error == 0
     checks["humanization_consistent"] = {
         "ok": humanization_ok,
         "detail": (
+            "oralité intégrée à la génération structurée initiale"
+            if humanization_embedded
+            else
             f"{n_unhumanized_no_error} segment(s) non passés en humanisation"
             if not humanization_ok
             else "tous les segments ont été tentés en humanisation"
         ),
         "unhumanized_segments": n_unhumanized_no_error,
+        "applicable": not humanization_embedded,
     }
     if not humanization_ok:
         blocking.append("humanization_consistent")
@@ -417,16 +413,7 @@ def compute_health(job_id: int) -> dict:
     # 6. Review cohérent : tous les segments completed → reviewed=1 OU review_error
     n_unreviewed_no_error = 0
     if folders:
-        cursor.execute(
-            f"""SELECT COUNT(*) FROM content_generation_segments s
-                JOIN content_generation_jobs cj ON cj.id = s.job_id
-                WHERE cj.folder_id IN ({placeholders})
-                AND s.status = 'completed'
-                AND COALESCE(s.reviewed, 0) = 0
-                AND s.review_error IS NULL""",
-            tuple(folder_ids),
-        )
-        n_unreviewed_no_error = cursor.fetchone()[0]
+        n_unreviewed_no_error = count_unreviewed_segments_without_error_for_folders(folder_ids)
     review_ok = n_unreviewed_no_error == 0
     checks["review_consistent"] = {
         "ok": review_ok,
@@ -445,14 +432,7 @@ def compute_health(job_id: int) -> dict:
     # il signifie "texte prêt, audio à générer plus tard".
     n_dirty = 0
     if folders:
-        cursor.execute(
-            f"""SELECT COUNT(*) FROM content_generation_segments s
-                JOIN content_generation_jobs cj ON cj.id = s.job_id
-                WHERE cj.folder_id IN ({placeholders})
-                AND s.status = 'completed' AND s.dirty = 1""",
-            tuple(folder_ids),
-        )
-        n_dirty = cursor.fetchone()[0]
+        n_dirty = count_dirty_completed_segments_for_folders(folder_ids)
     audio_ok = (n_dirty == 0 and n_completed > 0) or audio_deferred
     checks["audio_tts_files"] = {
         "ok": audio_ok,
@@ -472,24 +452,18 @@ def compute_health(job_id: int) -> dict:
 
     # 8. Module persistant créé. En pipeline texte-only, il sera finalisé après
     # la génération audio de toutes les journées.
-    cursor.execute(
-        "SELECT id, version, status FROM formation_modules WHERE source_pipeline_job_id = ?",
-        (job_id,),
-    )
-    mod_row = cursor.fetchone()
+    mod_row = get_formation_module_for_pipeline_job(job_id)
     mod_ok = bool(mod_row)
     checks["module_persistant"] = {
         "ok": mod_ok,
         "detail": (
-            f"module {mod_row[1]} (status={mod_row[2]})"
+            f"module {mod_row['version']} (status={mod_row['status']})"
             if mod_row
             else "aucune ligne dans formation_modules pour ce job"
         ),
     }
     if not mod_ok:
         warnings.append("module_persistant")
-
-    conn.close()
 
     return {
         "ok": len(blocking) == 0,
@@ -503,16 +477,7 @@ def compute_health(job_id: int) -> dict:
 
 def _get_job(job_id: int) -> Optional[dict]:
     """Charge un formation_pipeline_jobs en dict."""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("PRAGMA table_info(formation_pipeline_jobs)")
-    cols = [c[1] for c in cursor.fetchall()]
-    cursor.execute("SELECT * FROM formation_pipeline_jobs WHERE id = ?", (job_id,))
-    row = cursor.fetchone()
-    conn.close()
-    if not row:
-        return None
-    return dict(zip(cols, row))
+    return get_pipeline_job(job_id)
 
 
 def _check_azure_blob(env_var: str) -> tuple:
@@ -557,26 +522,20 @@ def _check_docx_buildable(folders: list) -> tuple:
     if not folders:
         return False, "aucun folder", []
 
-    conn = get_db_connection()
-    cursor = conn.cursor()
     missing = []
-    for fid, fname, _, cg_job_id, _ in folders:
+    for folder in folders:
+        fid = folder["id"]
+        fname = folder["name"]
+        cg_job_id = folder.get("content_job_id")
         if not cg_job_id:
             missing.append({"folder_id": fid, "name": fname, "reason": "pas de cg_job"})
             continue
-        cursor.execute(
-            "SELECT COUNT(*), sub_parts FROM content_generation_segments s "
-            "JOIN content_generation_jobs cj ON cj.id = s.job_id "
-            "WHERE cj.id = ? AND s.status = 'completed'",
-            (cg_job_id,),
-        )
-        row = cursor.fetchone()
-        if not row or row[0] == 0:
+        row = get_content_job_docx_state(cg_job_id)
+        if not row or int(row.get("completed_count") or 0) == 0:
             missing.append({"folder_id": fid, "name": fname, "reason": "0 segments completed"})
             continue
-        if not row[1]:
+        if not row.get("sub_parts"):
             missing.append({"folder_id": fid, "name": fname, "reason": "sub_parts vide dans cg_job"})
-    conn.close()
 
     if missing:
         return False, f"{len(missing)}/{len(folders)} DOCX non buildables", missing

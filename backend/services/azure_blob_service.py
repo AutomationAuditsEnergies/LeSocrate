@@ -1,11 +1,14 @@
 import os
+from functools import lru_cache
 from azure.storage.blob import BlobServiceClient, ContentSettings
+from azure.core.exceptions import ResourceExistsError
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-CONTAINER_DOCUMENTS = "documenttts"
-CONTAINER_AUDIOS = "audiostts"
+CONTAINER_DOCUMENTS = os.getenv("AZURE_TTS_DOCUMENT_CONTAINER", "documenttts")
+CONTAINER_AUDIOS = os.getenv("AZURE_TTS_AUDIO_CONTAINER", "audiostts")
+CONTAINER_ARTIFACTS = os.getenv("AZURE_PIPELINE_ARTIFACT_CONTAINER", "pipeline-artifacts")
 
 
 def _content_settings_for_blob(blob_path):
@@ -20,21 +23,42 @@ def _content_settings_for_blob(blob_path):
         return ContentSettings(content_type="application/json; charset=utf-8")
     if lower.endswith(".txt"):
         return ContentSettings(content_type="text/plain; charset=utf-8")
+    if lower.endswith(".md"):
+        return ContentSettings(content_type="text/markdown; charset=utf-8")
     if lower.endswith(".pdf"):
         return ContentSettings(content_type="application/pdf")
     return None
 
 
+@lru_cache(maxsize=1)
 def _get_blob_service_client():
-    conn_str = os.getenv("AZURE_TTS_STORAGE_CONNECTION_STRING")
+    """Reuse the SDK transport/pool instead of rebuilding it for every segment."""
+    conn_str = (
+        os.getenv("AZURE_TTS_STORAGE_CONNECTION_STRING")
+        or os.getenv("AZURE_STORAGE_CONNECTION_STRING")
+    )
     if not conn_str:
-        raise ValueError("AZURE_TTS_STORAGE_CONNECTION_STRING non définie dans .env")
+        raise ValueError(
+            "AZURE_TTS_STORAGE_CONNECTION_STRING/AZURE_STORAGE_CONNECTION_STRING non définie"
+        )
     return BlobServiceClient.from_connection_string(conn_str)
 
 
 def build_blob_path(platform_id, folder_id, filename):
     """Construit le chemin du blob: platform-{id}/folder-{id}/{filename}"""
     return f"platform-{platform_id}/folder-{folder_id}/{filename}"
+
+
+@lru_cache(maxsize=32)
+def ensure_private_container(container_name):
+    """Create a private container once; never enable anonymous access."""
+    client = _get_blob_service_client()
+    try:
+        client.create_container(container_name)
+        logger.info("✅ Container Blob privé créé: %s", container_name)
+    except ResourceExistsError:
+        pass
+    return container_name
 
 
 def upload_blob(container_name, blob_path, data):

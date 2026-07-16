@@ -16,15 +16,17 @@ POST /api/formation/<job_id>/launch-audio Lance la synthèse TTS Fish Audio sur 
 GET  /api/formation/list                  Liste les jobs de la plateforme
 """
 
-import math
 import os
+import socket
 import threading
 import time
+import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from flask import Blueprint, jsonify, request, session, send_file
 from io import BytesIO
 
+from config import PIPELINE_DATABASE_BACKEND
 from services.formation_pipeline_service import (
     search_rncp,
     download_reac_text_with_retry,
@@ -37,7 +39,6 @@ from services.formation_pipeline_service import (
     create_job,
     update_job,
     get_job,
-    list_jobs,
     HOURS_PER_DAY,
     COURSE_AUDIO_SLOTS,
     _normalize_day_audio_slots,
@@ -63,6 +64,19 @@ _PIPELINE_MODEL_ALIASES = {
 _PIPELINE_MODEL_CHOICES = set(_PIPELINE_MODEL_ALIASES)
 
 
+def _claude_code_pipeline_supported() -> bool:
+    """Return whether the legacy local Claude Code runner is safe to use.
+
+    Its mission workspace still contains SQLite-specific imports. Production
+    Postgres uses the API implementation of the same steps until that optional
+    local developer tool has been fully repository-ported.
+    """
+    return (
+        os.getenv("LOCAL_DEV", "").strip().lower() == "true"
+        and PIPELINE_DATABASE_BACKEND not in {"postgres", "postgresql", "supabase"}
+    )
+
+
 def _slides_folder_workers(default: int = 3) -> int:
     """Nombre de journées dont les decks slides sont générés en parallèle."""
     try:
@@ -85,13 +99,21 @@ def _resolve_pipeline_slide_model(api_model: str | None) -> str | None:
     return "deepseek-v4-pro"
 
 
-def _formation_content_day_workers(default: int = 1) -> int:
-    """Nombre de journees de contenu generees en parallele par l'auto-pilot API."""
+def _formation_content_day_workers(default: int = 3) -> int:
+    """Bound per-job fan-out so one 52-day course cannot exhaust the service.
+
+    Horizontal queue workers provide SaaS throughput; unbounded fan-out inside
+    one job used to multiply day × course workers and overwhelm DB/LLM limits.
+    """
     try:
         workers = int(os.getenv("FORMATION_CONTENT_DAY_WORKERS", str(default)))
     except (TypeError, ValueError):
         workers = default
-    return max(1, min(52, workers))
+    try:
+        maximum = int(os.getenv("FORMATION_CONTENT_DAY_WORKERS_MAX", "8"))
+    except (TypeError, ValueError):
+        maximum = 8
+    return max(1, min(max(1, maximum), workers))
 
 
 def _normalize_pipeline_model_choice(raw, default=None):
@@ -148,6 +170,102 @@ def _get_platform_id():
 def _require_admin():
     """Retourne True si l'utilisateur est authentifié admin."""
     return session.get("is_admin", False)
+
+
+_PIPELINE_SUPERADMIN_ACCOUNT_TYPES = {"legacy_admin", "superadmin"}
+
+
+def _admin_account_type() -> str:
+    """Normalise le type explicite; une session incomplète reste non autorisée."""
+    return str(session.get("admin_account_type") or "").strip().lower()
+
+
+def _training_center_account_id() -> int | None:
+    """Retourne un identifiant centre valide, sans valeur implicite permissive."""
+    value = session.get("admin_account_id")
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        account_id = int(value)
+    except (TypeError, ValueError):
+        return None
+    return account_id if account_id > 0 else None
+
+
+def _pipeline_job_not_found():
+    """Réponse volontairement non révélatrice pour toute violation de tenant."""
+    return jsonify({"error": "Job introuvable"}), 404
+
+
+def _formation_admin_forbidden():
+    return jsonify({"error": "Non autorisé"}), 403
+
+
+@formation_bp.before_request
+def _enforce_pipeline_job_tenant_scope():
+    """Authenticate and scope every Formation HTTP route before execution.
+
+    Internal workers call services/repositories directly and are unaffected.
+    Job ownership is centre-scoped; folder ownership is always checked against
+    the URL job, including for superadmins, before any DB/Blob/report read.
+    """
+    if request.method == "OPTIONS":
+        # Browser CORS preflight carries no authenticated application session.
+        return None
+    view_args = request.view_args or {}
+    if not session.get("is_admin"):
+        return _formation_admin_forbidden()
+
+    account_type = _admin_account_type()
+    center_account_id = None
+    if account_type == "training_center":
+        center_account_id = _training_center_account_id()
+        if center_account_id is None:
+            return _formation_admin_forbidden()
+    elif account_type not in _PIPELINE_SUPERADMIN_ACCOUNT_TYPES:
+        return _formation_admin_forbidden()
+
+    if "job_id" in view_args and center_account_id is not None:
+        try:
+            from repositories.pipeline_repository import pipeline_job_belongs_to_center
+
+            allowed = pipeline_job_belongs_to_center(
+                int(view_args["job_id"]),
+                center_account_id,
+            )
+        except Exception:
+            logger.warning(
+                "PIPELINE_TENANT_SCOPE_LOOKUP_FAILED job_id=%s center_account_id=%s",
+                view_args.get("job_id"),
+                center_account_id,
+                exc_info=True,
+            )
+            allowed = False
+
+        if not allowed:
+            return _pipeline_job_not_found()
+
+    if "folder_id" in view_args:
+        if "job_id" not in view_args:
+            return _pipeline_job_not_found()
+        try:
+            from repositories.pipeline_repository import course_folder_belongs_to_job
+
+            folder_allowed = course_folder_belongs_to_job(
+                int(view_args["folder_id"]),
+                int(view_args["job_id"]),
+            )
+        except Exception:
+            logger.warning(
+                "PIPELINE_FOLDER_SCOPE_LOOKUP_FAILED job_id=%s folder_id=%s",
+                view_args.get("job_id"),
+                view_args.get("folder_id"),
+                exc_info=True,
+            )
+            folder_allowed = False
+        if not folder_allowed:
+            return _pipeline_job_not_found()
+    return None
 
 
 # ─── Recherche RNCP ───────────────────────────────────────────────────────────
@@ -252,61 +370,55 @@ def init_formation():
         return jsonify({"error": "Le champ 'total_hours' doit être > 0"}), 400
 
     total_hours = int(total_hours)
-    nb_days = math.ceil(total_hours / HOURS_PER_DAY)
+    if total_hours % HOURS_PER_DAY != 0:
+        return jsonify({
+            "error": f"Le champ 'total_hours' doit être un multiple de {HOURS_PER_DAY} (1 journée = {HOURS_PER_DAY}h)",
+        }), 400
+    nb_days = total_hours // HOURS_PER_DAY
 
     try:
-        from database.db import get_db_connection
-        from datetime import datetime
-        from config import FRANCE_TZ
-
-        conn = get_db_connection()
-        cursor = conn.cursor()
-
-        # Créer une nouvelle plateforme dédiée à cette formation
-        now_str = datetime.now(FRANCE_TZ).strftime("%Y-%m-%d %H:%M:%S")
-        cursor.execute(
-            "INSERT INTO platform_config (name, upload_locked, updated_at) VALUES (?, 1, ?)",
-            (platform_name, now_str)
+        from repositories.pipeline_repository import (
+            create_postgres_pipeline_aggregate,
+            create_pipeline_platform,
+            link_pipeline_platform_to_job,
         )
-        new_platform_id = cursor.lastrowid
 
-        # Containers Azure auto-générés (à créer manuellement dans Azure si besoin)
-        slug = platform_name.lower().replace(" ", "-").replace("_", "-")[:40]
-        cursor.execute(
-            """UPDATE platform_config
-               SET audio_container=?, pdf_container=?, archive_container=?, slug=?, audio_base_url=?
-               WHERE id=?""",
-            (
-                f"formationaudio-p{new_platform_id}",
-                f"formationpdf-p{new_platform_id}",
-                f"formationaudio-p{new_platform_id}-archives",
-                slug,
-                "",  # à configurer dans Azure ensuite
-                new_platform_id,
+        center_account_id = (
+            session.get("admin_account_id")
+            if session.get("admin_account_type") == "training_center"
+            else None
+        )
+        if PIPELINE_DATABASE_BACKEND in {"postgres", "postgresql", "supabase"}:
+            aggregate = create_postgres_pipeline_aggregate(
+                platform_name=platform_name,
+                center_account_id=center_account_id,
+                tp_name=tp_name,
+                rncp_code=rncp_code,
+                total_hours=total_hours,
+                nb_days=nb_days,
+                model=model_choice,
             )
-        )
-        conn.commit()
-        conn.close()
+            platform = aggregate["platform"]
+            job_id = int(aggregate["job_id"])
+            new_platform_id = int(platform["id"])
+        else:
+            platform = create_pipeline_platform(
+                name=platform_name,
+                center_account_id=center_account_id,
+            )
+            new_platform_id = int(platform["id"])
+            job_id = create_job(
+                platform_id=new_platform_id,
+                tp_name=tp_name,
+                rncp_code=rncp_code,
+                total_hours=total_hours,
+                nb_days=nb_days,
+            )
+            link_pipeline_platform_to_job(new_platform_id, job_id)
+            if model_choice:
+                update_job(job_id, auto_pilot_model=model_choice)
 
         logger.info(f"✅ Nouvelle plateforme créée : id={new_platform_id} '{platform_name}'")
-
-        job_id = create_job(
-            platform_id=new_platform_id,
-            tp_name=tp_name,
-            rncp_code=rncp_code,
-            total_hours=total_hours,
-            nb_days=nb_days,
-        )
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute(
-            "UPDATE platform_config SET source_formation_id = ? WHERE id = ? AND source_formation_id IS NULL",
-            (job_id, new_platform_id),
-        )
-        conn.commit()
-        conn.close()
-        if model_choice:
-            update_job(job_id, auto_pilot_model=model_choice)
         logger.info(f"✅ Job formation créé : {job_id} ({tp_name}, {total_hours}h, {nb_days} jours, plateforme {new_platform_id})")
         return jsonify({
             "job_id": job_id,
@@ -365,58 +477,86 @@ def init_test_pipeline():
         return jsonify({"error": "total_hours doit être un entier"}), 400
     if total_hours <= 0:
         return jsonify({"error": "total_hours doit être > 0"}), 400
+    if total_hours % HOURS_PER_DAY != 0:
+        return jsonify({
+            "error": f"total_hours doit être un multiple de {HOURS_PER_DAY} (1 journée = {HOURS_PER_DAY}h)",
+        }), 400
 
-    nb_days = math.ceil(total_hours / HOURS_PER_DAY)
+    nb_days = total_hours // HOURS_PER_DAY
     docs = request.files.getlist("docs")
     if len(docs) != nb_days:
         return jsonify({
             "error": f"Tu dois fournir exactement {nb_days} fichier(s) (1 par journée de 7h). Reçu : {len(docs)}",
         }), 400
 
+    # Validate every upload before creating the platform/job aggregate.  A
+    # malformed second document must not leave a valid first day (or an empty
+    # platform) behind in either SQLite or PostgreSQL.
+    prepared_docs = []
+    for doc_file in docs:
+        try:
+            full_text = _read_doc_text(doc_file)
+            if not full_text.strip():
+                raise ValueError("fichier vide")
+            chunks_21 = _split_into_21_chunks(full_text)
+            if len(chunks_21) != 21 or any(not chunk.strip() for chunk in chunks_21):
+                raise ValueError("le document ne produit pas 21 segments texte valides")
+        except Exception as exc:
+            return jsonify({
+                "error": f"Lecture fichier '{doc_file.filename}': {exc}",
+            }), 400
+        prepared_docs.append({
+            "filename": doc_file.filename,
+            "chunks": chunks_21,
+        })
+
     try:
-        from database.db import get_db_connection
-        from datetime import datetime
-        from config import FRANCE_TZ
         import json
+        from repositories.pipeline_repository import (
+            create_course_folder_for_job,
+            create_postgres_pipeline_aggregate,
+            create_pipeline_platform,
+            get_content_generation_job_by_folder,
+            link_pipeline_platform_to_job,
+            reset_and_upsert_content_generation_job,
+            save_completed_content_segments,
+            update_content_generation_job,
+        )
 
         # 1. Crée la plateforme (idem init_formation)
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        now_str = datetime.now(FRANCE_TZ).strftime("%Y-%m-%d %H:%M:%S")
-        cursor.execute(
-            "INSERT INTO platform_config (name, upload_locked, updated_at) VALUES (?, 1, ?)",
-            (platform_name, now_str),
+        center_account_id = (
+            session.get("admin_account_id")
+            if session.get("admin_account_type") == "training_center"
+            else None
         )
-        platform_id = cursor.lastrowid
-        slug = platform_name.lower().replace(" ", "-").replace("_", "-")[:40]
-        cursor.execute(
-            """UPDATE platform_config
-               SET audio_container=?, pdf_container=?, archive_container=?, slug=?, audio_base_url=?
-               WHERE id=?""",
-            (
-                f"formationaudio-p{platform_id}",
-                f"formationpdf-p{platform_id}",
-                f"formationaudio-p{platform_id}-archives",
-                slug, "", platform_id,
-            ),
-        )
-        conn.commit()
-        conn.close()
+        use_cc = _claude_code_pipeline_supported()
+        model_choice = "sonnet" if use_cc else "pro"
+        if PIPELINE_DATABASE_BACKEND in {"postgres", "postgresql", "supabase"}:
+            aggregate = create_postgres_pipeline_aggregate(
+                platform_name=platform_name,
+                center_account_id=center_account_id,
+                tp_name=tp_name,
+                rncp_code=rncp_code,
+                total_hours=total_hours,
+                nb_days=nb_days,
+                model=model_choice,
+            )
+            platform = aggregate["platform"]
+            job_id = int(aggregate["job_id"])
+        else:
+            platform = create_pipeline_platform(
+                name=platform_name,
+                center_account_id=center_account_id,
+            )
+            job_id = create_job(
+                platform_id=int(platform["id"]), tp_name=tp_name, rncp_code=rncp_code,
+                total_hours=total_hours, nb_days=nb_days,
+            )
+            link_pipeline_platform_to_job(int(platform["id"]), job_id)
+        platform_id = int(platform["id"])
         logger.info(f"🧪 [TEST] Plateforme créée : id={platform_id} '{platform_name}'")
 
-        # 2. Crée le job pipeline avec stubs (REAC mock, global mock, daily mock)
-        job_id = create_job(
-            platform_id=platform_id, tp_name=tp_name, rncp_code=rncp_code,
-            total_hours=total_hours, nb_days=nb_days,
-        )
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute(
-            "UPDATE platform_config SET source_formation_id = ? WHERE id = ? AND source_formation_id IS NULL",
-            (job_id, platform_id),
-        )
-        conn.commit()
-        conn.close()
+        # 2. Complète le job pipeline avec stubs (REAC mock, global mock, daily mock)
 
         daily_programs_stub = [
             _normalize_day_audio_slots({
@@ -447,78 +587,71 @@ def init_test_pipeline():
         logger.info(f"🧪 [TEST] Job pipeline {job_id} créé avec stubs (KB/global/daily seront skippés par l'auto-pilot)")
 
         # 3. Crée N cours_folders + cg_jobs + 21 segments par cg_job
-        conn = get_db_connection()
-        cursor = conn.cursor()
         segments_inserted = 0
-        for day_idx, doc_file in enumerate(docs):
+        for day_idx, prepared_doc in enumerate(prepared_docs):
             day_num = day_idx + 1
             folder_name = f"Jour {day_num} — Journée {day_num} (test)"
 
-            cursor.execute(
-                "SELECT COALESCE(MAX(position), -1) + 1 FROM cours_folders WHERE platform_id = ?",
-                (platform_id,),
+            folder = create_course_folder_for_job(
+                platform_id=platform_id,
+                folder_name=folder_name,
+                formation_job_id=job_id,
             )
-            position = cursor.fetchone()[0]
-            cursor.execute(
-                """
-                INSERT INTO cours_folders (platform_id, name, position, formation_job_id)
-                VALUES (?, ?, ?, ?)
-                """,
-                (platform_id, folder_name, position, job_id),
-            )
-            folder_id = cursor.lastrowid
-
-            cursor.execute(
-                """
-                INSERT INTO content_generation_jobs
-                    (folder_id, platform_id, program_text, program_title,
-                     sub_parts, from_scratch, module_contents,
-                     status, current_sub_part, current_passe, total_words, error_message)
-                VALUES (?, ?, ?, ?, ?, 1, ?, 'idle', 0, 1, 0, NULL)
-                """,
-                (
-                    folder_id, platform_id,
-                    f"[TEST] Programme journée {day_num}", tp_name,
-                    json.dumps(_TEST_SUB_PARTS, ensure_ascii=False),
-                    json.dumps({sp: f"Contenu test {sp}" for sp in _TEST_SUB_PARTS}, ensure_ascii=False),
+            folder_id = int(folder["id"])
+            reset_and_upsert_content_generation_job(
+                folder_id=folder_id,
+                platform_id=platform_id,
+                program_text=f"[TEST] Programme journée {day_num}",
+                program_title=tp_name,
+                sub_parts_json=json.dumps(_TEST_SUB_PARTS, ensure_ascii=False),
+                from_scratch=True,
+                module_contents_json=json.dumps(
+                    {sp: f"Contenu test {sp}" for sp in _TEST_SUB_PARTS},
+                    ensure_ascii=False,
                 ),
             )
-            cg_job_id = cursor.lastrowid
+            content_job = get_content_generation_job_by_folder(folder_id)
+            if not content_job:
+                raise RuntimeError(f"Content job non créé pour folder {folder_id}")
+            cg_job_id = int(content_job["id"])
 
-            # Parse le doc + split en 21 chunks
-            try:
-                full_text = _read_doc_text(doc_file)
-            except Exception as e:
-                conn.close()
-                return jsonify({"error": f"Lecture fichier '{doc_file.filename}' : {e}"}), 400
-            chunks_21 = _split_into_21_chunks(full_text)
+            chunks_21 = prepared_doc["chunks"]
 
             # Insère 21 segments (7 créneaux cours × 3 passes)
+            day_segments = []
+            day_total_words = 0
             for sub_idx in range(len(_TEST_SUB_PARTS)):
                 for passe in range(1, 4):
                     seg_idx = sub_idx * 3 + (passe - 1)
                     text = chunks_21[seg_idx]
                     word_count = len(text.split())
-                    cursor.execute(
-                        """
-                        INSERT INTO content_generation_segments
-                            (job_id, sub_part_index, sub_part_name, passe, status,
-                             text_content, word_count, dirty, reviewed, review_error)
-                        VALUES (?, ?, ?, ?, 'completed', ?, ?, 1, 0, NULL)
-                        """,
-                        (
-                            cg_job_id, sub_idx, _TEST_SUB_PARTS[sub_idx], passe,
-                            text, word_count,
-                        ),
-                    )
+                    day_total_words += word_count
+                    day_segments.append({
+                        "job_id": cg_job_id,
+                        "sub_part_index": sub_idx,
+                        "sub_part_name": _TEST_SUB_PARTS[sub_idx],
+                        "passe": passe,
+                        "text_content": text,
+                        "word_count": word_count,
+                    })
                     segments_inserted += 1
+            save_completed_content_segments(day_segments)
+            update_content_generation_job(
+                cg_job_id,
+                status="completed",
+                total_words=day_total_words,
+                current_sub_part=len(_TEST_SUB_PARTS),
+                current_passe=3,
+                error_message=None,
+            )
 
-            logger.info(f"🧪 [TEST] Folder {folder_id} (Jour {day_num}) : 21 segments injectés depuis '{doc_file.filename}'")
+            logger.info(
+                f"🧪 [TEST] Folder {folder_id} (Jour {day_num}) : "
+                f"21 segments injectés depuis '{prepared_doc['filename']}'"
+            )
 
-        conn.commit()
-        conn.close()
-
-        # 4. Si auto_pilot demandé, lancer l'auto-pilot en mode Claude Code.
+        # 4. Si auto_pilot demandé, lancer la machine d'état. Claude Code est
+        # réservé au développement SQLite; le chemin PostgreSQL utilise l'API.
         # Important : même si KB/global/daily/content sont skippés (segments déjà
         # en DB), la conformité locale en aval CONSOMME de l'IA et donc du crédit :
         #   - Review conformité : audit règles hors micro-éthique, par morceau
@@ -530,13 +663,13 @@ def init_test_pipeline():
         # Modèle SONNET (pas Haiku) : la conformité locale demande du jugement
         # linguistique fin. Haiku produit des patches mécaniques et parfois cassés.
         # Le coût est sur le forfait CC, donc gratuit côté API.
+        dispatch = None
         if auto_pilot:
-            import eventlet
             update_job(job_id,
                        auto_pilot_enabled=1,
-                       auto_pilot_model="sonnet",
+                       auto_pilot_model=model_choice,
                        auto_pilot_tts_mode=tts_mode,
-                       auto_pilot_use_cc=1,
+                       auto_pilot_use_cc=int(use_cc),
                        auto_pilot_skip_vs=1,   # volume safety skippée en mode TEST
                        auto_pilot_generate_audio=0,
                        auto_pilot_volume_done=0,
@@ -549,16 +682,16 @@ def init_test_pipeline():
                     "pipeline_started",
                     step="start",
                     status="running",
-                    model="sonnet",
+                    model=model_choice,
                     message="Auto-pilot test lancé",
-                    data={"tts_mode": tts_mode, "use_claude_code": True, "test_mode": True},
+                    data={"tts_mode": tts_mode, "use_claude_code": use_cc, "test_mode": True},
                 )
             except Exception:
                 pass
-            eventlet.spawn(_tick_auto_pilot, job_id)
+            dispatch = _dispatch_auto_pilot_tick(job_id, reason="init_test")
             logger.info(
                 f"🧪 [TEST] Auto-pilot (DB state machine) spawné pour job {job_id} "
-                f"(tts={tts_mode}, CC Sonnet, volume_safety skippée)"
+                f"(tts={tts_mode}, model={model_choice}, cc={use_cc}, volume_safety skippée)"
             )
 
         return jsonify({
@@ -569,6 +702,7 @@ def init_test_pipeline():
             "nb_days": nb_days,
             "segments_inserted": segments_inserted,
             "auto_pilot_started": auto_pilot,
+            "dispatch": dispatch,
             "tts_mode": tts_mode,
             "test_mode": True,
         }), 202
@@ -966,9 +1100,10 @@ def list_content(job_id):
     except Exception as e:
         logger.warning(f"⚠️ Réparation cours_folders job {job_id} ignorée : {e}")
 
-    from database.db import get_db_connection
     import json as _json
     from services.formation_pipeline_service import get_expected_course_folders
+    from repositories.pipeline_repository import list_content_completion_rows_for_folders
+    from services.script_slide_generation_service import get_latest_script_slide_deck
 
     folder_state = get_expected_course_folders(job_id)
     folders = [
@@ -981,96 +1116,42 @@ def list_content(job_id):
         )
         for f in folder_state.get("folders", [])
     ]
-    conn = get_db_connection()
-    cursor = conn.cursor()
+    folder_ids = [int(folder[0]) for folder in folders]
+    content_rows = {
+        int(row["folder_id"]): row
+        for row in list_content_completion_rows_for_folders(folder_ids)
+    }
 
     daily_programs = _json.loads(job["daily_programs"] or "[]")
     result = []
     for idx, (fid, fname, fpos, f_platform_id, f_formation_job_id) in enumerate(folders):
         day_meta = daily_programs[idx] if idx < len(daily_programs) else {}
-
-        cursor.execute(
-            """SELECT id, status, total_words, current_sub_part, current_passe, error_message
-               FROM content_generation_jobs WHERE folder_id = ?""",
-            (fid,),
-        )
-        cg = cursor.fetchone()
-        if cg:
-            cg_id, cg_status, cg_words, cur_sub, cur_passe, cg_err = cg
-            cursor.execute(
-                "SELECT COUNT(*) FROM content_generation_segments WHERE job_id = ? AND status = 'completed'",
-                (cg_id,),
-            )
-            n_completed = cursor.fetchone()[0]
-            cursor.execute(
-                "SELECT COUNT(*) FROM content_generation_segments "
-                "WHERE job_id = ? AND status = 'completed' AND COALESCE(reviewed, 0) = 1",
-                (cg_id,),
-            )
-            n_reviewed = cursor.fetchone()[0]
-            cursor.execute(
-                "SELECT COUNT(*) FROM content_generation_segments "
-                "WHERE job_id = ? AND status = 'completed' AND COALESCE(humanized, 0) = 1",
-                (cg_id,),
-            )
-            n_humanized = cursor.fetchone()[0]
-            # Segments dont la tentative de review a échoué (reviewed=0 ET
-            # review_error défini). Comptent comme "traités" pour arrêter
-            # le polling frontend, sans mentir sur la conformité.
-            cursor.execute(
-                "SELECT COUNT(*) FROM content_generation_segments "
-                "WHERE job_id = ? AND status = 'completed' "
-                "AND COALESCE(reviewed, 0) = 0 AND review_error IS NOT NULL",
-                (cg_id,),
-            )
-            n_review_errors = cursor.fetchone()[0]
-            cursor.execute(
-                "SELECT COUNT(*) FROM content_generation_segments "
-                "WHERE job_id = ? AND status = 'completed' AND COALESCE(dirty, 0) = 1",
-                (cg_id,),
-            )
-            n_dirty = cursor.fetchone()[0]
-            slide_deck_id = None
-            slide_count = 0
-            slide_generation_mode = None
+        content_row = content_rows.get(int(fid)) or {}
+        cg_id = content_row.get("content_job_id")
+        cg_status = content_row.get("status")
+        cg_words = content_row.get("total_words") or 0
+        cur_sub = content_row.get("current_sub_part") or 0
+        cur_passe = content_row.get("current_passe") or 1
+        cg_err = content_row.get("error_message")
+        n_completed = content_row.get("completed_segments") or 0
+        n_reviewed = content_row.get("reviewed_segments") or 0
+        n_humanized = content_row.get("humanized_segments") or 0
+        n_review_errors = content_row.get("review_error_segments") or 0
+        n_dirty = content_row.get("dirty_segments") or 0
+        slide_deck_id = None
+        slide_count = 0
+        slide_generation_mode = None
+        if cg_id:
             try:
-                cursor.execute(
-                    "SELECT name FROM sqlite_master WHERE type='table' AND name='script_slide_decks'"
-                )
-                has_slide_table = bool(cursor.fetchone())
-                if has_slide_table:
-                    cursor.execute(
-                        """
-                        SELECT id, slides_json, stats_json
-                        FROM script_slide_decks
-                        WHERE folder_id = ? AND content_job_id = ?
-                        ORDER BY id DESC
-                        LIMIT 1
-                        """,
-                        (fid, cg_id),
-                    )
-                    deck_row = cursor.fetchone()
-                    if deck_row:
-                        slide_deck_id = deck_row[0]
-                        try:
-                            slide_count = len(_json.loads(deck_row[1] or "[]"))
-                        except Exception:
-                            slide_count = 0
-                        try:
-                            slide_generation_mode = (_json.loads(deck_row[2] or "{}") or {}).get("generation_mode")
-                        except Exception:
-                            slide_generation_mode = None
+                deck = get_latest_script_slide_deck(int(fid), content_job_id=int(cg_id))
+                if deck:
+                    slide_deck_id = deck.get("deck_id")
+                    slide_count = len(deck.get("slides") or [])
+                    slide_generation_mode = (deck.get("stats") or {}).get("generation_mode")
             except Exception:
                 slide_deck_id = None
                 slide_count = 0
                 slide_generation_mode = None
-        else:
-            cg_id = None
-            cg_status, cg_words, cur_sub, cur_passe, cg_err = None, 0, 0, 1, None
-            n_completed, n_reviewed, n_humanized, n_review_errors, n_dirty = 0, 0, 0, 0, 0
-            slide_deck_id = None
-            slide_count = 0
-            slide_generation_mode = None
 
         day_sub_parts = day_meta.get("sub_parts")
         segment_total = (len(day_sub_parts) if day_sub_parts else 6) * 3
@@ -1100,7 +1181,6 @@ def list_content(job_id):
             "error_message": cg_err,
         })
 
-    conn.close()
     return jsonify({
         "folders": result,
         "job_status": job["status"],
@@ -1153,24 +1233,18 @@ def get_content_artifact(job_id, folder_id, filename):
         CONTENT_ARTIFACT_BLOBS,
         load_content_artifact,
     )
-    from database.db import get_db_connection
+    from repositories.pipeline_repository import get_content_generation_job_by_folder
 
     filename = os.path.basename(str(filename or ""))
     if filename not in CONTENT_ARTIFACT_BLOBS:
         return jsonify({"error": "Artefact non autorisé"}), 400
 
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        "SELECT platform_id, name FROM cours_folders WHERE id = ? AND formation_job_id = ?",
-        (folder_id, job_id),
-    )
-    row = cursor.fetchone()
-    conn.close()
-    if not row:
+    folder_row = get_content_generation_job_by_folder(folder_id)
+    if not folder_row or int(folder_row.get("formation_job_id") or 0) != int(job_id):
         return jsonify({"error": "Folder introuvable ou hors pipeline"}), 404
 
-    platform_id, folder_name = row
+    platform_id = int(folder_row["platform_id"])
+    folder_name = folder_row.get("name") or ""
     artifact = load_content_artifact(platform_id, folder_id, filename)
     if not artifact:
         return jsonify({"error": "Artefact indisponible", "filename": filename}), 404
@@ -1236,36 +1310,30 @@ def _build_db_review_report(job_id: int, folder_id: int) -> dict | None:
     erreurs éventuelles, et segments dont le texte courant diffère du snapshot
     pre-review.
     """
-    from database.db import get_db_connection
+    from repositories.pipeline_repository import list_completed_segment_review_rows_for_folder
 
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        """
-        SELECT cf.name, s.id, s.sub_part_index, s.passe,
-               COALESCE(s.reviewed, 0), COALESCE(s.review_error, ''),
-               COALESCE(s.text_content, ''), COALESCE(s.text_content_pre_review, ''),
-               COALESCE(s.word_count, 0)
-        FROM cours_folders cf
-        JOIN content_generation_jobs cj ON cj.folder_id = cf.id
-        JOIN content_generation_segments s ON s.job_id = cj.id
-        WHERE cf.id = ? AND cf.formation_job_id = ? AND s.status = 'completed'
-        ORDER BY s.sub_part_index ASC, s.passe ASC
-        """,
-        (folder_id, job_id),
+    rows = list_completed_segment_review_rows_for_folder(
+        formation_job_id=job_id,
+        folder_id=folder_id,
     )
-    rows = cursor.fetchall()
-    conn.close()
     if not rows:
         return None
 
-    folder_name = rows[0][0]
+    folder_name = rows[0]["folder_name"]
     by_segment = []
     changed_count = 0
     reviewed_count = 0
     failed_count = 0
 
-    for _, seg_id, sub_idx, passe, reviewed, review_error, text, pre_text, word_count in rows:
+    for row in rows:
+        seg_id = row["segment_id"]
+        sub_idx = row["sub_part_index"]
+        passe = row["passe"]
+        reviewed = row["reviewed"]
+        review_error = row["review_error"] or ""
+        text = row["text_content"] or ""
+        pre_text = row["text_content_pre_review"] or ""
+        word_count = row["word_count"] or 0
         reviewed = int(reviewed or 0)
         if reviewed:
             reviewed_count += 1
@@ -1360,19 +1428,13 @@ def _write_api_review_report(job_id: int, folder_id: int, result: dict, model: s
     import os
     from datetime import datetime
     from services.claude_code_mission_service import mission_dir
-    from database.db import get_db_connection
+    from repositories.pipeline_repository import get_text_folder_state
 
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        "SELECT name, position FROM cours_folders WHERE id = ? AND formation_job_id = ?",
-        (folder_id, job_id),
-    )
-    row = cursor.fetchone()
-    conn.close()
-    if not row:
+    folder = get_text_folder_state(folder_id)
+    if not folder or int(folder.get("formation_job_id") or 0) != int(job_id):
         return
-    folder_name, position = row
+    folder_name = folder.get("folder_name") or ""
+    position = int(folder.get("position") or 0)
     review_kind = result.get("review_kind") or "compliance"
     review_label = result.get("review_label") or "Révision conformité"
 
@@ -1538,25 +1600,15 @@ def _parse_report_timestamp(value):
 
 
 def _latest_continue_after_text_started_at(job_id: int, folder_id: int) -> str | None:
-    from database.db import get_db_connection
+    from repositories.pipeline_repository import get_latest_pipeline_event_created_at
 
     try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute(
-            """
-            SELECT created_at
-            FROM formation_pipeline_events
-            WHERE job_id = ? AND folder_id = ?
-              AND event_type = 'continue_after_text_started'
-            ORDER BY created_at DESC, id DESC
-            LIMIT 1
-            """,
-            (job_id, folder_id),
+        created_at = get_latest_pipeline_event_created_at(
+            job_id=job_id,
+            folder_id=folder_id,
+            event_type="continue_after_text_started",
         )
-        row = cursor.fetchone()
-        conn.close()
-        return row[0] if row else None
+        return created_at.isoformat() if hasattr(created_at, "isoformat") else created_at
     except Exception:
         return None
 
@@ -1623,18 +1675,11 @@ def get_review_report(job_id, folder_id):
     if not job:
         return jsonify({"error": "Job introuvable"}), 404
 
-    from database.db import get_db_connection
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        "SELECT position FROM cours_folders WHERE id = ? AND formation_job_id = ?",
-        (folder_id, job_id),
-    )
-    row = cursor.fetchone()
-    conn.close()
-    if not row:
+    from repositories.pipeline_repository import get_text_folder_state
+    folder = get_text_folder_state(folder_id)
+    if not folder or int(folder.get("formation_job_id") or 0) != int(job_id):
         return jsonify({"error": "Folder introuvable ou hors pipeline"}), 404
-    position = row[0]
+    position = int(folder.get("position") or 0)
     retry_cutoff = _latest_continue_after_text_started_at(job_id, folder_id)
     stale_report_ignored = False
 
@@ -1815,26 +1860,17 @@ def get_review_report(job_id, folder_id):
             input_segments = []
 
     # Récupère les textes actuels en DB (résolution par sub_idx, passe via folder)
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        """
-        SELECT s.id, s.sub_part_index, s.passe, s.text_content
-        FROM content_generation_segments s
-        JOIN content_generation_jobs cj ON cj.id = s.job_id
-        WHERE cj.folder_id = ? AND s.status = 'completed'
-        ORDER BY cj.id DESC, s.sub_part_index ASC, s.passe ASC
-        """,
-        (folder_id,),
+    from repositories.pipeline_repository import list_completed_segment_review_rows_for_folder
+    db_rows = list_completed_segment_review_rows_for_folder(
+        formation_job_id=job_id,
+        folder_id=folder_id,
     )
-    db_rows = cursor.fetchall()
-    conn.close()
     # Map (sub_idx, passe) → text actuel (le plus récent en cas de doublons)
     db_text_by_sp = {}
     for r in db_rows:
-        key = (r[1], r[2])
+        key = (r["sub_part_index"], r["passe"])
         if key not in db_text_by_sp:
-            db_text_by_sp[key] = (r[0], r[3])
+            db_text_by_sp[key] = (r["segment_id"], r["text_content"])
 
     # Construction du rapport lite
     by_rule = {}
@@ -2055,25 +2091,20 @@ def resume_content(job_id):
     if not job:
         return jsonify({"error": "Job introuvable"}), 404
 
-    from database.db import get_db_connection
+    from repositories.pipeline_repository import list_content_completion_rows_for_folders
     from services.formation_pipeline_service import get_expected_course_folders
     folder_ids = get_expected_course_folders(job_id).get("folder_ids") or []
     if not folder_ids:
         return jsonify({"error": "Aucun cours_folder attendu pour ce job"}), 400
-    placeholders = ",".join("?" * len(folder_ids))
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        f"""SELECT f.id, cg.status
-           FROM cours_folders f
-           LEFT JOIN content_generation_jobs cg ON cg.folder_id = f.id
-           WHERE f.id IN ({placeholders}) ORDER BY f.position ASC, f.id ASC""",
-        tuple(folder_ids),
-    )
-    rows = cursor.fetchall()
-    conn.close()
-
-    to_resume = [fid for fid, status in rows if status != "completed"]
+    rows_by_folder = {
+        int(row["folder_id"]): row
+        for row in list_content_completion_rows_for_folders(folder_ids)
+    }
+    to_resume = [
+        int(folder_id)
+        for folder_id in folder_ids
+        if (rows_by_folder.get(int(folder_id)) or {}).get("status") != "completed"
+    ]
     if not to_resume:
         return jsonify({"message": "Tous les dossiers sont déjà complets", "resumed": []})
 
@@ -2123,16 +2154,9 @@ def review_content(job_id, folder_id):
         return jsonify({"error": "Job pipeline introuvable"}), 404
 
     # Vérifier que le folder appartient bien à ce job formation
-    from database.db import get_db_connection
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        "SELECT id FROM cours_folders WHERE id = ? AND formation_job_id = ?",
-        (folder_id, job_id),
-    )
-    row = cursor.fetchone()
-    conn.close()
-    if not row:
+    from repositories.pipeline_repository import get_text_folder_state
+    folder = get_text_folder_state(folder_id)
+    if not folder or int(folder.get("formation_job_id") or 0) != int(job_id):
         return jsonify({"error": "Folder inexistant ou hors pipeline"}), 404
 
     data = request.get_json(silent=True) or {}
@@ -2455,8 +2479,75 @@ def health_pipeline(job_id):
 
 # ─── Étape 7 : Lancement de la synthèse TTS Fish Audio ───────────────────────
 
-def _make_audio_progress_logger(job_id: int, folder_id: int, voice_type: str):
+
+class _ScheduledAudioLeaseLost(RuntimeError):
+    """The scheduled-session fencing token no longer belongs to this worker."""
+
+
+def _assert_scheduled_audio_ownership(
+    schedule_session_id: int | None,
+    schedule_claim_started_at,
+    *,
+    ownership_state: dict | None = None,
+) -> None:
+    """Touch and validate the scheduled-audio fencing token.
+
+    A database error is treated exactly like a lost token: without a durable
+    ownership proof the worker must not publish or finalize generated audio.
+    """
+    if not schedule_session_id:
+        return
+    if schedule_claim_started_at is None:
+        raise _ScheduledAudioLeaseLost(
+            f"Claim audio absent pour la séance {schedule_session_id}"
+        )
+    if ownership_state and ownership_state.get("error"):
+        raise _ScheduledAudioLeaseLost(str(ownership_state["error"]))
+
+    try:
+        from datetime import datetime
+        from config import FRANCE_TZ
+        from repositories.course_schedule_repository import (
+            touch_audio_generation_session,
+        )
+
+        owned = touch_audio_generation_session(
+            int(schedule_session_id),
+            updated_at=datetime.now(FRANCE_TZ),
+            expected_started_at=schedule_claim_started_at,
+        )
+    except _ScheduledAudioLeaseLost:
+        raise
+    except Exception as exc:
+        message = (
+            f"Impossible de confirmer le lock audio de la séance "
+            f"{schedule_session_id}: {exc}"
+        )
+        if ownership_state is not None:
+            ownership_state["error"] = message
+        raise _ScheduledAudioLeaseLost(message) from exc
+
+    if not owned:
+        message = (
+            f"Lock audio perdu pour la séance {schedule_session_id}: "
+            "le claim a été remplacé ou finalisé"
+        )
+        if ownership_state is not None:
+            ownership_state["error"] = message
+        raise _ScheduledAudioLeaseLost(message)
+
+
+def _make_audio_progress_logger(
+    job_id: int,
+    folder_id: int,
+    voice_type: str,
+    schedule_session_id: int | None = None,
+    schedule_claim_started_at=None,
+    ownership_state: dict | None = None,
+):
     """Callback branché sur generate_audio_from_script pour sortir de la boîte noire."""
+    last_session_touch = {"at": 0.0}
+
     def _on_progress(step, total, message):
         try:
             from services.formation_observability_service import log_pipeline_event
@@ -2476,6 +2567,17 @@ def _make_audio_progress_logger(job_id: int, folder_id: int, voice_type: str):
             )
         except Exception:
             pass
+        if schedule_session_id:
+            if ownership_state and ownership_state.get("error"):
+                raise _ScheduledAudioLeaseLost(str(ownership_state["error"]))
+            now = time.time()
+            if now - last_session_touch["at"] >= 60:
+                last_session_touch["at"] = now
+                _assert_scheduled_audio_ownership(
+                    int(schedule_session_id),
+                    schedule_claim_started_at,
+                    ownership_state=ownership_state,
+                )
     return _on_progress
 
 
@@ -2486,78 +2588,30 @@ def _finalize_audio_ready_state(job_id: int, voice_type: str) -> dict:
     `continue_after_text`, où les MP3 sont déjà produits mais la finalisation
     historique de `launch_audio` n'était pas rejouée.
     """
-    from datetime import datetime as _dt
-    from config import FRANCE_TZ as _tz
-    from database.db import get_db_connection
+    from repositories.pipeline_repository import finalize_pipeline_module
 
     job = get_job(job_id)
     if not job:
         raise ValueError(f"Job {job_id} introuvable pour finalisation audio")
-
-    platform_id = job.get("platform_id")
-    rncp = job.get("rncp_code") or ""
-    tp_name = job.get("tp_name") or f"Job {job_id}"
-
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    try:
-        cursor.execute(
-            "UPDATE platform_config SET status = 'ready' WHERE id = ? AND status = 'pending'",
-            (platform_id,),
-        )
-        platform_ready_updated = cursor.rowcount or 0
-
-        cursor.execute(
-            "SELECT id, version FROM formation_modules WHERE source_pipeline_job_id = ?",
-            (job_id,),
-        )
-        existing = cursor.fetchone()
-
-        if existing:
-            module_id, version = existing[0], existing[1]
-            cursor.execute(
-                """UPDATE formation_modules
-                   SET voice_type = ?, voice_updated_at = CURRENT_TIMESTAMP,
-                       source_platform_id = COALESCE(source_platform_id, ?),
-                       status = 'validated',
-                       validated_at = COALESCE(validated_at, CURRENT_TIMESTAMP)
-                   WHERE id = ?""",
-                (voice_type, platform_id, module_id),
-            )
-            module_created = False
-        else:
-            cursor.execute("SELECT COUNT(*) FROM formation_modules WHERE rncp_code = ?", (rncp,))
-            n = cursor.fetchone()[0] + 1
-            version = f"{_dt.now(_tz).year}-v{n}"
-            cursor.execute(
-                """
-                INSERT INTO formation_modules
-                (rncp_code, tp_name, version, status, source_pipeline_job_id,
-                 source_platform_id, voice_type, voice_updated_at, validated_at)
-                VALUES (?, ?, ?, 'validated', ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-                """,
-                (rncp, tp_name, version, job_id, platform_id, voice_type),
-            )
-            module_id = cursor.lastrowid
-            module_created = True
-
-        conn.commit()
-        result = {
-            "platform_id": platform_id,
-            "platform_ready_updated": int(platform_ready_updated),
-            "module_id": module_id,
-            "module_created": module_created,
-            "module_version": version,
-            "voice_type": voice_type,
-        }
-        logger.info(
-            "PIPELINE_AUDIO_FINALIZED formation_job_id=%s platform_id=%s "
-            "module_id=%s module_created=%s voice_type=%s ready_updated=%s",
-            job_id, platform_id, module_id, module_created, voice_type, platform_ready_updated,
-        )
-        return result
-    finally:
-        conn.close()
+    result = finalize_pipeline_module(
+        formation_job_id=job_id,
+        platform_id=int(job["platform_id"]),
+        rncp_code=job.get("rncp_code") or "",
+        tp_name=job.get("tp_name") or f"Job {job_id}",
+        audio_ready=True,
+        voice_type=voice_type,
+    )
+    logger.info(
+        "PIPELINE_AUDIO_FINALIZED formation_job_id=%s platform_id=%s "
+        "module_id=%s module_created=%s voice_type=%s ready_updated=%s",
+        job_id,
+        result["platform_id"],
+        result["module_id"],
+        result["module_created"],
+        voice_type,
+        result["platform_ready_updated"],
+    )
+    return result
 
 
 def _finalize_text_ready_state(job_id: int) -> dict:
@@ -2568,173 +2622,98 @@ def _finalize_text_ready_state(job_id: int) -> dict:
     module qui pointe vers les dossiers de cours, sans marquer le module comme
     validé audio.
     """
-    from datetime import datetime as _dt
-    from config import FRANCE_TZ as _tz
-    from database.db import get_db_connection
+    from repositories.pipeline_repository import finalize_pipeline_module
 
     job = get_job(job_id)
     if not job:
         raise ValueError(f"Job {job_id} introuvable pour finalisation texte")
-
-    platform_id = job.get("platform_id")
-    rncp = job.get("rncp_code") or ""
-    tp_name = job.get("tp_name") or f"Job {job_id}"
-
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    try:
-        cursor.execute(
-            "UPDATE platform_config SET status = 'ready' WHERE id = ? AND status = 'pending'",
-            (platform_id,),
-        )
-        platform_ready_updated = cursor.rowcount or 0
-
-        cursor.execute(
-            "SELECT id, version, status FROM formation_modules WHERE source_pipeline_job_id = ?",
-            (job_id,),
-        )
-        existing = cursor.fetchone()
-
-        if existing:
-            module_id, version, status = existing[0], existing[1], existing[2]
-            cursor.execute(
-                """UPDATE formation_modules
-                   SET source_platform_id = COALESCE(source_platform_id, ?),
-                       status = CASE WHEN status = 'validated' THEN status ELSE 'draft' END
-                   WHERE id = ?""",
-                (platform_id, module_id),
-            )
-            module_created = False
-            module_status = status if status == "validated" else "draft"
-        else:
-            cursor.execute("SELECT COUNT(*) FROM formation_modules WHERE rncp_code = ?", (rncp,))
-            n = cursor.fetchone()[0] + 1
-            version = f"{_dt.now(_tz).year}-v{n}"
-            cursor.execute(
-                """
-                INSERT INTO formation_modules
-                (rncp_code, tp_name, version, status, source_pipeline_job_id,
-                 source_platform_id, voice_type, voice_updated_at, validated_at)
-                VALUES (?, ?, ?, 'draft', ?, ?, NULL, NULL, NULL)
-                """,
-                (rncp, tp_name, version, job_id, platform_id),
-            )
-            module_id = cursor.lastrowid
-            module_created = True
-            module_status = "draft"
-
-        conn.commit()
-        result = {
-            "platform_id": platform_id,
-            "platform_ready_updated": int(platform_ready_updated),
-            "module_id": module_id,
-            "module_created": module_created,
-            "module_version": version,
-            "module_status": module_status,
-        }
-        logger.info(
-            "PIPELINE_TEXT_FINALIZED formation_job_id=%s platform_id=%s "
-            "module_id=%s module_created=%s status=%s ready_updated=%s",
-            job_id, platform_id, module_id, module_created, module_status, platform_ready_updated,
-        )
-        return result
-    finally:
-        conn.close()
+    result = finalize_pipeline_module(
+        formation_job_id=job_id,
+        platform_id=int(job["platform_id"]),
+        rncp_code=job.get("rncp_code") or "",
+        tp_name=job.get("tp_name") or f"Job {job_id}",
+        audio_ready=False,
+    )
+    logger.info(
+        "PIPELINE_TEXT_FINALIZED formation_job_id=%s platform_id=%s "
+        "module_id=%s module_created=%s status=%s ready_updated=%s",
+        job_id,
+        result["platform_id"],
+        result["module_id"],
+        result["module_created"],
+        result["module_status"],
+        result["platform_ready_updated"],
+    )
+    return result
 
 
 def _count_dirty_segments_for_job(job_id: int) -> int:
-    from database.db import get_db_connection
+    from repositories.pipeline_repository import count_dirty_completed_segments_for_folders
     from services.formation_pipeline_service import get_expected_course_folders
 
     folder_ids = get_expected_course_folders(job_id).get("folder_ids") or []
     if not folder_ids:
         return 0
-    placeholders = ",".join("?" * len(folder_ids))
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        f"""
-        SELECT COUNT(*)
-        FROM content_generation_segments cgs
-        JOIN content_generation_jobs cgj ON cgj.id = cgs.job_id
-        WHERE cgj.folder_id IN ({placeholders})
-          AND cgs.status = 'completed'
-          AND COALESCE(cgs.dirty, 1) = 1
-        """,
-        tuple(folder_ids),
-    )
-    n_dirty = int(cursor.fetchone()[0] or 0)
-    conn.close()
-    return n_dirty
+    return count_dirty_completed_segments_for_folders(folder_ids)
 
 
 def _folder_text_reviews_ready(job_id: int, folder_id: int) -> tuple[bool, dict]:
-    from database.db import get_db_connection
+    from repositories.pipeline_repository import get_folder_text_review_readiness
     from services.content_generation_service import (
         _current_compliance_review_signature,
     )
 
     compliance_signature = _current_compliance_review_signature()
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        """
-        SELECT
-            COUNT(*),
-            SUM(CASE WHEN COALESCE(cgs.reviewed, 0) = 1
-                      AND cgs.review_signature = ? THEN 1 ELSE 0 END),
-            SUM(CASE WHEN cgs.review_error IS NOT NULL THEN 1 ELSE 0 END)
-        FROM content_generation_segments cgs
-        JOIN content_generation_jobs cgj ON cgj.id = cgs.job_id
-        JOIN cours_folders cf ON cf.id = cgj.folder_id
-        WHERE cf.id = ? AND cf.formation_job_id = ?
-          AND cgs.status = 'completed'
-        """,
-        (compliance_signature, folder_id, job_id),
+    detail = get_folder_text_review_readiness(
+        job_id=job_id,
+        folder_id=folder_id,
+        review_signature=compliance_signature,
     )
-    total, reviewed, review_errors = cursor.fetchone()
-    conn.close()
-    total = int(total or 0)
-    detail = {
-        "segments_completed": total,
-        "reviewed_current": int(reviewed or 0),
-        "review_errors": int(review_errors or 0),
-    }
+    total = int(detail.get("segments_completed") or 0)
     return total > 0 and detail["reviewed_current"] >= total, detail
 
 
-@formation_bp.route("/api/formation/<int:job_id>/content/<int:folder_id>/generate-audio", methods=["POST"])
-def generate_folder_audio(job_id, folder_id):
-    """Génère l'audio d'une seule journée/semaine, après pipeline texte complète."""
-    if not _require_admin():
-        return jsonify({"error": "Non autorisé"}), 403
+def start_folder_audio_generation(
+    job_id,
+    folder_id,
+    payload=None,
+    *,
+    schedule_session_id=None,
+    trigger_source="manual",
+    stale_started_before=None,
+):
+    """Lance l'audio d'une seule journée.
 
+    Utilisé par le bouton manuel d'une journée et par le timer 24h avant cours.
+    Retourne (payload, http_status) pour rester réutilisable hors route Flask.
+    """
     job = get_job(job_id)
     if not job:
-        return jsonify({"error": "Job introuvable"}), 404
+        return {"error": "Job introuvable"}, 404
 
     try:
         folder_id, folder_resolution = _resolve_continue_after_text_folder(job_id, int(folder_id))
     except ValueError as e:
-        return jsonify({"error": str(e)}), 400
+        return {"error": str(e)}, 400
 
-    data = request.get_json(silent=True) or {}
+    data = payload or {}
     reviews_ready, review_detail = _folder_text_reviews_ready(job_id, folder_id)
     if not reviews_ready and not bool(data.get("allow_unreviewed")):
-        return jsonify({
+        return {
             "error": "Texte pas prêt pour l'audio : la conformité locale par morceau doit être terminée.",
             "review_detail": review_detail,
-        }), 400
+        }, 400
 
     tts_mode = (data.get("tts_mode") or job.get("auto_pilot_tts_mode") or "gtts").lower()
     if tts_mode not in ("fish_audio", "gtts", "mock"):
-        return jsonify({"error": "tts_mode invalide (fish_audio | gtts | mock)"}), 400
+        return {"error": "tts_mode invalide (fish_audio | gtts | mock)"}, 400
     mock = tts_mode == "mock"
     basic_tts = tts_mode == "gtts"
     voice_type = "mock" if mock else ("gtts" if basic_tts else "fish_audio")
     force_all = bool(data.get("force_all", True))
     sync_slides = bool(data.get("sync_slides", True))
     auto_generate_slides = bool(data.get("auto_generate_slides", True))
+    preserve_existing = bool(data.get("preserve_existing", False))
     max_slides = int(data.get("max_slides") or 60)
     pace = data.get("pace") or "normal"
     model = _resolve_pipeline_api_model(job, data.get("model"))
@@ -2742,15 +2721,82 @@ def generate_folder_audio(job_id, folder_id):
     from services.formation_pipeline_service import get_expected_course_folders
     folder_ids = get_expected_course_folders(job_id).get("folder_ids") or []
     if folder_id not in folder_ids:
-        return jsonify({"error": "Folder hors journées attendues"}), 400
+        return {"error": "Folder hors journées attendues"}, 400
     idx = folder_ids.index(folder_id)
     next_folder_id = folder_ids[idx + 1] if idx + 1 < len(folder_ids) else None
 
     import eventlet
+    from datetime import datetime
+    from config import FRANCE_TZ
     from services.content_generation_service import generate_audio_from_script
+
+    schedule_claim_started_at = None
+    if schedule_session_id:
+        try:
+            from repositories.course_schedule_repository import (
+                claim_audio_generation_session,
+            )
+
+            schedule_claim_started_at = datetime.now(FRANCE_TZ)
+            claimed = claim_audio_generation_session(
+                session_id=int(schedule_session_id),
+                job_id=int(job_id),
+                folder_id=int(folder_id),
+                started_at=schedule_claim_started_at,
+                stale_started_before=stale_started_before,
+            )
+            if not claimed:
+                return {"error": "Audio déjà lancé ou terminé pour cette séance"}, 409
+        except Exception as exc:
+            logger.warning("⚠️ Impossible de marquer la séance audio running", exc_info=True)
+            return {"error": f"Impossible de verrouiller la séance audio: {str(exc)[:200]}"}, 500
 
     def _run_one():
         started_at = time.time()
+        ownership_state = {"error": None}
+        heartbeat_stop = [False]
+        heartbeat = None
+        audio_runner_greenlet = eventlet.getcurrent()
+
+        if schedule_session_id:
+            try:
+                heartbeat_seconds = max(
+                    5.0,
+                    float(os.getenv("SCHEDULED_AUDIO_HEARTBEAT_SECONDS", "30") or "30"),
+                )
+            except (TypeError, ValueError):
+                heartbeat_seconds = 30.0
+
+            def _scheduled_audio_heartbeat():
+                while not heartbeat_stop[0]:
+                    eventlet.sleep(heartbeat_seconds)
+                    if heartbeat_stop[0]:
+                        return
+                    try:
+                        _assert_scheduled_audio_ownership(
+                            int(schedule_session_id),
+                            schedule_claim_started_at,
+                            ownership_state=ownership_state,
+                        )
+                    except _ScheduledAudioLeaseLost as exc:
+                        ownership_state["error"] = str(exc)
+                        logger.error(
+                            "PIPELINE_SCHEDULED_AUDIO_LOCK_LOST session=%s job=%s folder=%s error=%s",
+                            schedule_session_id,
+                            job_id,
+                            folder_id,
+                            exc,
+                        )
+                        # Interrupt cooperative long provider calls immediately;
+                        # the explicit checks below remain the final guard for
+                        # non-cooperative calls that only return later.
+                        eventlet.greenthread.kill(audio_runner_greenlet, exc)
+                        return
+
+            # This heartbeat is independent from progress callbacks. Some TTS
+            # and slide-provider calls can remain silent for several minutes.
+            heartbeat = eventlet.spawn(_scheduled_audio_heartbeat)
+
         try:
             from services.formation_observability_service import log_pipeline_event
             update_job(job_id, status="audio_running", error_message=None)
@@ -2765,14 +2811,24 @@ def generate_folder_audio(job_id, folder_id):
                 data={
                     "voice_type": voice_type,
                     "force_all": force_all,
+                    "preserve_existing": preserve_existing,
                     "sync_slides": sync_slides,
                     "auto_generate_slides": auto_generate_slides,
                     "single_folder": True,
+                    "trigger_source": trigger_source,
+                    "schedule_session_id": schedule_session_id,
                 },
             )
-            generate_audio_from_script(
+            result_audio = generate_audio_from_script(
                 folder_id,
-                on_progress=_make_audio_progress_logger(job_id, folder_id, voice_type),
+                on_progress=_make_audio_progress_logger(
+                    job_id,
+                    folder_id,
+                    voice_type,
+                    schedule_session_id=schedule_session_id,
+                    schedule_claim_started_at=schedule_claim_started_at,
+                    ownership_state=ownership_state,
+                ),
                 force_all=force_all,
                 mock=mock,
                 basic_tts=basic_tts,
@@ -2784,9 +2840,71 @@ def generate_folder_audio(job_id, folder_id):
                 slide_pace=pace,
                 slide_model=model,
                 llm_model=model,
+                preserve_existing=preserve_existing,
+            )
+            # Generation may have taken minutes. Re-fence immediately before
+            # publishing anything to the learner-visible namespace.
+            _assert_scheduled_audio_ownership(
+                schedule_session_id,
+                schedule_claim_started_at,
+                ownership_state=ownership_state,
+            )
+            publish_result = None
+            try:
+                from services.audio_publish_service import publish_playlist_audio_to_platform
+                publish_result = publish_playlist_audio_to_platform(
+                    job["platform_id"],
+                    folder_id,
+                    archive_existing=True,
+                    archive_reason=f"{trigger_source}-folder-{folder_id}",
+                )
+            except Exception as publish_error:
+                publish_result = {"published": [], "publish_errors": [{"error": str(publish_error)}]}
+                logger.error(
+                    "❌ Publication audio journée échouée job=%s platform=%s folder=%s: %s",
+                    job_id,
+                    job.get("platform_id"),
+                    folder_id,
+                    publish_error,
+                    exc_info=True,
+                )
+                raise RuntimeError(
+                    "Publication des audios vers la plateforme apprenant échouée: "
+                    f"{str(publish_error)[:300]}"
+                ) from publish_error
+            # Publication itself can be long. A stale worker must not mark the
+            # session or pipeline successful after a successor took over.
+            _assert_scheduled_audio_ownership(
+                schedule_session_id,
+                schedule_claim_started_at,
+                ownership_state=ownership_state,
             )
             n_dirty = _count_dirty_segments_for_job(job_id)
             finalize_result = None
+            if schedule_session_id:
+                from repositories.course_schedule_repository import (
+                    complete_audio_generation_session,
+                )
+
+                # Final fencing check is immediately adjacent to the guarded
+                # completion write. Stop further heartbeats once completion
+                # succeeds because completed sessions are intentionally no
+                # longer touchable.
+                _assert_scheduled_audio_ownership(
+                    int(schedule_session_id),
+                    schedule_claim_started_at,
+                    ownership_state=ownership_state,
+                )
+                completed = complete_audio_generation_session(
+                    int(schedule_session_id),
+                    completed_at=datetime.now(FRANCE_TZ),
+                    expected_started_at=schedule_claim_started_at,
+                )
+                if not completed:
+                    raise _ScheduledAudioLeaseLost(
+                        f"Finalisation refusée: lock audio perdu pour la séance {schedule_session_id}"
+                    )
+                heartbeat_stop[0] = True
             # L'audio d'une journée est une action d'exploitation à la demande :
             # elle ne clôture pas la pipeline de fabrication du module.
             update_job(job_id, status="text_ready", error_message=None)
@@ -2804,31 +2922,60 @@ def generate_folder_audio(job_id, folder_id):
                     "remaining_dirty_segments": n_dirty,
                     "finalized": False,
                     "finalize_result": finalize_result,
+                    "generated": result_audio.get("generated") if isinstance(result_audio, dict) else None,
+                    "skipped": result_audio.get("skipped") if isinstance(result_audio, dict) else None,
+                    "publish": publish_result,
                     "single_folder": True,
+                    "trigger_source": trigger_source,
+                    "schedule_session_id": schedule_session_id,
                 },
             )
         except Exception as e:
-            update_job(job_id, status="text_ready", error_message=f"audio folder {folder_id}: {str(e)[:500]}")
-            try:
-                from services.formation_observability_service import log_pipeline_event
-                log_pipeline_event(
-                    job_id,
-                    "audio_folder_failed",
-                    step="audio",
-                    status="error",
-                    folder_id=folder_id,
-                    model=str(model) if model else None,
-                    duration_ms=int((time.time() - started_at) * 1000),
-                    message="Synthèse audio journée échouée",
-                    data={"voice_type": voice_type},
-                    error=str(e)[:500],
-                )
-            except Exception:
-                pass
+            lease_lost = isinstance(e, _ScheduledAudioLeaseLost)
+            if not lease_lost:
+                update_job(job_id, status="text_ready", error_message=f"audio folder {folder_id}: {str(e)[:500]}")
+                try:
+                    from services.formation_observability_service import log_pipeline_event
+                    log_pipeline_event(
+                        job_id,
+                        "audio_folder_failed",
+                        step="audio",
+                        status="error",
+                        folder_id=folder_id,
+                        model=str(model) if model else None,
+                        duration_ms=int((time.time() - started_at) * 1000),
+                        message="Synthèse audio journée échouée",
+                        data={
+                            "voice_type": voice_type,
+                            "trigger_source": trigger_source,
+                            "schedule_session_id": schedule_session_id,
+                        },
+                        error=str(e)[:500],
+                    )
+                except Exception:
+                    pass
+            if schedule_session_id:
+                try:
+                    from repositories.course_schedule_repository import (
+                        fail_audio_generation_session,
+                    )
+
+                    fail_audio_generation_session(
+                        int(schedule_session_id),
+                        error=str(e),
+                        failed_at=datetime.now(FRANCE_TZ),
+                        expected_started_at=schedule_claim_started_at,
+                    )
+                except Exception:
+                    logger.warning("⚠️ Impossible de marquer la séance audio error", exc_info=True)
             logger.error("❌ Audio folder job=%s folder=%s : %s", job_id, folder_id, e, exc_info=True)
+        finally:
+            heartbeat_stop[0] = True
+            if heartbeat is not None:
+                heartbeat.kill()
 
     eventlet.spawn(_run_one)
-    return jsonify({
+    return {
         "message": "Synthèse audio lancée pour cette journée",
         "job_id": job_id,
         "folder_id": folder_id,
@@ -2838,7 +2985,23 @@ def generate_folder_audio(job_id, folder_id):
         "tts_mode": tts_mode,
         "voice_type": voice_type,
         "status": "audio_running",
-    }), 202
+        "schedule_session_id": schedule_session_id,
+        "trigger_source": trigger_source,
+    }, 202
+
+
+@formation_bp.route("/api/formation/<int:job_id>/content/<int:folder_id>/generate-audio", methods=["POST"])
+def generate_folder_audio(job_id, folder_id):
+    """Génère l'audio d'une seule journée/semaine, après pipeline texte complète."""
+    if not _require_admin():
+        return jsonify({"error": "Non autorisé"}), 403
+    payload, status = start_folder_audio_generation(
+        job_id,
+        folder_id,
+        request.get_json(silent=True) or {},
+        trigger_source="manual",
+    )
+    return jsonify(payload), status
 
 
 @formation_bp.route("/api/formation/<int:job_id>/launch-audio", methods=["POST"])
@@ -2856,32 +3019,14 @@ def launch_audio(job_id):
     if not job:
         return jsonify({"error": "Job introuvable"}), 404
 
-    from database.db import get_db_connection
+    from repositories.pipeline_repository import list_completed_content_jobs_for_folders
     from services.formation_pipeline_service import get_expected_course_folders
     folder_ids = get_expected_course_folders(job_id).get("folder_ids") or []
     if not folder_ids:
         return jsonify({"error": "Aucun cours_folder attendu pour ce job"}), 400
-    placeholders = ",".join("?" * len(folder_ids))
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        f"""SELECT f.id FROM cours_folders f
-           WHERE f.id IN ({placeholders}) ORDER BY f.position ASC, f.id ASC""",
-        tuple(folder_ids),
-    )
-    folder_ids = [r[0] for r in cursor.fetchall()]
-
-    # Vérifier que tous les dossiers ont leur texte généré
-    missing = []
-    for fid in folder_ids:
-        cursor.execute(
-            "SELECT status FROM content_generation_jobs WHERE folder_id = ?",
-            (fid,),
-        )
-        row = cursor.fetchone()
-        if not row or row[0] != "completed":
-            missing.append(fid)
-    conn.close()
+    completed_rows = list_completed_content_jobs_for_folders(folder_ids)
+    completed_ids = {int(row["folder_id"]) for row in completed_rows}
+    missing = [int(folder_id) for folder_id in folder_ids if int(folder_id) not in completed_ids]
 
     if missing:
         return jsonify({
@@ -2908,6 +3053,7 @@ def launch_audio(job_id):
     # régénérations partielles ultérieures (via édition segment) utilisent le
     # dirty flag naturellement.
     force_all = bool(data.get("force_all", True))
+    preserve_existing = bool(data.get("preserve_existing", True))
     # 3 modes de synthèse audio (priorité décroissante) :
     # - mock=True      → MP3 silence 1s, test gratuit
     # - basic_tts=True → Edge TTS (voix basique gratuite ; identifiant DB historique "gtts")
@@ -2965,6 +3111,7 @@ def launch_audio(job_id):
                 data={
                     "voice_type": voice_type,
                     "force_all": force_all,
+                    "preserve_existing": preserve_existing,
                     "sync_slides": sync_slides,
                     "auto_generate_slides": auto_generate_slides,
                 },
@@ -2985,6 +3132,7 @@ def launch_audio(job_id):
                 sync_slides=sync_slides,
                 auto_generate_slides=auto_generate_slides,
                 llm_model=_resolve_pipeline_api_model(job),
+                preserve_existing=preserve_existing,
             )
             duration_ms = int((time.time() - started_at) * 1000)
             try:
@@ -3103,6 +3251,10 @@ def launch_audio(job_id):
             )
         else:
             update_job(job_id, status="audio_completed", error_message=None)
+            _finalize_audio_ready_state(
+                job_id,
+                "mock" if mock else ("gtts" if basic_tts else "fish_audio"),
+            )
 
     update_job(job_id, status="audio_running", error_message=None)
     try:
@@ -3117,6 +3269,7 @@ def launch_audio(job_id):
                 "folder_ids": folder_ids,
                 "voice_type": "mock" if mock else ("gtts" if basic_tts else "fish_audio"),
                 "force_all": force_all,
+                "preserve_existing": preserve_existing,
                 "sync_slides": sync_slides,
                 "auto_generate_slides": auto_generate_slides,
             },
@@ -3126,79 +3279,13 @@ def launch_audio(job_id):
 
     eventlet.spawn(_run_all_audios)
 
-    # Marquer la plateforme comme 'ready' : le contenu est validé, la synthèse
-    # audio tourne en background. Côté HR Dashboard, l'overlay "Module en
-    # construction" disparaît dès ce moment — le module est exploitable même
-    # si les derniers MP3 finissent de s'uploader (surtout en mode mock où
-    # c'est instantané).
+    # Le texte est exploitable immédiatement, mais le module reste en draft
+    # tant que tous les audios ne sont pas réellement terminés.
     try:
-        from database.db import get_db_connection as _get_conn
-        _c = _get_conn()
-        _cur = _c.cursor()
-        _cur.execute(
-            "UPDATE platform_config SET status = 'ready' WHERE id = ? AND status = 'pending'",
-            (job["platform_id"],),
-        )
-        _c.commit()
-        _c.close()
-        logger.info(f"✅ Plateforme {job['platform_id']} : status pending → ready")
+        _finalize_text_ready_state(job_id)
+        logger.info(f"✅ Plateforme {job['platform_id']} : texte prêt, module draft")
     except Exception as e:
         logger.warning(f"⚠️ Impossible de marquer la plateforme ready : {e}")
-
-    # Auto-création du module persistant (idempotent via UNIQUE constraint sur
-    # source_pipeline_job_id). Principe "1 RNCP = 1 module durable" : ce module
-    # devient sélectionnable dans la modale "Nouvelle plateforme" pour créer
-    # les futures promos sans re-lancer la pipeline.
-    #
-    # voice_type trace la voix TTS qui a produit les MP3 du module. À chaque
-    # relance de l'étape 7 avec une voix différente, le champ est UPDATE.
-    # Les MP3 dans Azure (clé = platform_id/folder_id/filename) sont écrasés
-    # par le nouveau run, donc le module pointe automatiquement vers les
-    # nouveaux audios — voice_type reflète ce changement de manière persistante.
-    voice_type = "mock" if mock else ("gtts" if basic_tts else "fish_audio")
-    try:
-        from database.db import get_db_connection as _gc
-        from datetime import datetime as _dt
-        from config import FRANCE_TZ as _tz
-        _c2 = _gc()
-        _cur2 = _c2.cursor()
-        year = _dt.now(_tz).year
-        rncp = job.get("rncp_code") or ""
-        _cur2.execute("SELECT COUNT(*) FROM formation_modules WHERE rncp_code = ?", (rncp,))
-        n = _cur2.fetchone()[0] + 1
-        version = f"{year}-v{n}"
-        _cur2.execute("""
-            INSERT OR IGNORE INTO formation_modules
-            (rncp_code, tp_name, version, status, source_pipeline_job_id,
-             source_platform_id, voice_type, voice_updated_at, validated_at)
-            VALUES (?, ?, ?, 'validated', ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-        """, (rncp, job["tp_name"], version, job_id, job["platform_id"], voice_type))
-        if _cur2.rowcount > 0:
-            logger.info(
-                f"📦 Module créé : {job['tp_name']} {version} (job {job_id}) "
-                f"voix={voice_type}"
-            )
-        else:
-            # Module déjà existant — relance TTS avec une voix possiblement
-            # différente. On UPDATE voice_type pour refléter les MP3 actuels.
-            _cur2.execute(
-                """UPDATE formation_modules
-                   SET voice_type = ?,
-                       voice_updated_at = CURRENT_TIMESTAMP,
-                       source_platform_id = COALESCE(source_platform_id, ?),
-                       status = 'validated',
-                       validated_at = COALESCE(validated_at, CURRENT_TIMESTAMP)
-                   WHERE source_pipeline_job_id = ?""",
-                (voice_type, job["platform_id"], job_id),
-            )
-            logger.info(
-                f"♻️ Module mis à jour pour job {job_id} : voix={voice_type} "
-                f"(les MP3 Azure sont écrasés en place)"
-            )
-        _c2.commit()
-        _c2.close()
-    except Exception as e:
-        logger.warning(f"⚠️ Création/MAJ module échouée : {e}")
 
     if mock:
         mode_suffix = " (MOCK — silence 1s)"
@@ -3222,86 +3309,13 @@ def launch_audio(job_id):
 
 def _reset_folder_downstream_to_generated_text(job_id: int, folder_id: int) -> dict:
     """Conserve le texte initial et remet à zéro volume/review/slides/audio."""
-    from database.db import get_db_connection
+    from repositories.pipeline_repository import reset_folder_downstream_state
 
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        """
-        SELECT cf.id, cf.name, cf.position, cj.id, cj.platform_id
-        FROM cours_folders cf
-        JOIN content_generation_jobs cj ON cj.folder_id = cf.id
-        WHERE cf.id = ? AND cf.formation_job_id = ? AND cj.status = 'completed'
-        """,
-        (folder_id, job_id),
+    result = reset_folder_downstream_state(
+        formation_job_id=job_id,
+        folder_id=folder_id,
     )
-    row = cursor.fetchone()
-    if not row:
-        conn.close()
-        raise ValueError("Journée introuvable ou texte non généré")
-
-    _, folder_name, position, content_job_id, platform_id = row
-    cursor.execute(
-        """
-        SELECT id, COALESCE(text_content, ''), text_content_pre_review
-        FROM content_generation_segments
-        WHERE job_id = ? AND status = 'completed'
-        ORDER BY sub_part_index ASC, passe ASC
-        """,
-        (content_job_id,),
-    )
-    segments = cursor.fetchall()
-    if not segments:
-        conn.close()
-        raise ValueError("Aucun segment texte complété pour cette journée")
-
-    restored = 0
-    total_words = 0
-    for seg_id, current_text, original_text in segments:
-        base_text = (original_text if original_text is not None else current_text) or ""
-        word_count = len(base_text.split())
-        total_words += word_count
-        if original_text is not None and original_text != current_text:
-            restored += 1
-        cursor.execute(
-            """
-            UPDATE content_generation_segments
-            SET text_content = ?, word_count = ?, dirty = 1,
-                humanized = 0, humanization_error = NULL, humanization_signature = NULL,
-                reviewed = 0, review_error = NULL, review_signature = NULL
-            WHERE id = ?
-            """,
-            (base_text, word_count, seg_id),
-        )
-
-    cursor.execute(
-        """
-        UPDATE content_generation_jobs
-        SET total_words = ?, status = 'completed', error_message = NULL,
-            updated_at = CURRENT_TIMESTAMP
-        WHERE id = ?
-        """,
-        (total_words, content_job_id),
-    )
-    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='content_review_reports'")
-    if cursor.fetchone():
-        cursor.execute(
-            "DELETE FROM content_review_reports WHERE job_id = ? AND folder_id = ?",
-            (job_id, folder_id),
-        )
-    deleted_review_artifacts = _delete_active_review_artifacts(job_id, position)
-    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='script_slide_decks'")
-    if cursor.fetchone():
-        cursor.execute(
-            "DELETE FROM script_slide_decks WHERE folder_id = ? AND content_job_id = ?",
-            (folder_id, content_job_id),
-        )
-        deleted_decks = cursor.rowcount
-    else:
-        deleted_decks = 0
-
-    conn.commit()
-    conn.close()
+    deleted_review_artifacts = _delete_active_review_artifacts(job_id, result["position"])
 
     update_job(
         job_id,
@@ -3311,188 +3325,56 @@ def _reset_folder_downstream_to_generated_text(job_id: int, folder_id: int) -> d
         auto_pilot_error=None,
     )
     return {
-        "folder_id": folder_id,
-        "folder_name": folder_name,
-        "position": position,
-        "content_job_id": content_job_id,
-        "platform_id": platform_id,
-        "segments": len(segments),
-        "segments_restored": restored,
-        "total_words": total_words,
+        **result,
         "deleted_review_artifacts": deleted_review_artifacts,
-        "deleted_slide_decks": deleted_decks,
     }
 
 
 def _completed_text_folder_candidates(job_id: int) -> list[dict]:
     """Liste les dossiers rattachés au job qui ont vraiment un texte complet."""
-    from database.db import get_db_connection
+    from repositories.pipeline_repository import list_text_folder_states_for_folders
     from services.formation_pipeline_service import get_expected_course_folders
 
     folder_ids = get_expected_course_folders(job_id).get("folder_ids") or []
     if not folder_ids:
         return []
-    placeholders = ",".join("?" * len(folder_ids))
-
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        f"""
-        SELECT
-            cf.id,
-            cf.name,
-            cf.position,
-            cf.platform_id,
-            cgj.id,
-            cgj.status,
-            COALESCE(cgj.total_words, 0),
-            SUM(CASE WHEN cgs.status = 'completed' THEN 1 ELSE 0 END)
-        FROM cours_folders cf
-        JOIN content_generation_jobs cgj ON cgj.folder_id = cf.id
-        LEFT JOIN content_generation_segments cgs ON cgs.job_id = cgj.id
-        WHERE cf.id IN ({placeholders})
-        GROUP BY cf.id, cf.name, cf.position, cf.platform_id, cgj.id, cgj.status, cgj.total_words
-        HAVING cgj.status = 'completed'
-           AND SUM(CASE WHEN cgs.status = 'completed' THEN 1 ELSE 0 END) > 0
-        ORDER BY cf.position ASC, cf.id ASC
-        """,
-        tuple(folder_ids),
-    )
-    rows = cursor.fetchall()
-    conn.close()
-    return [
-        {
-            "folder_id": row[0],
-            "folder_name": row[1],
-            "position": row[2],
-            "platform_id": row[3],
-            "content_job_id": row[4],
-            "content_status": row[5],
-            "total_words": row[6] or 0,
-            "segments_completed": row[7] or 0,
-        }
-        for row in rows
-    ]
+    return list_text_folder_states_for_folders(folder_ids, completed_only=True)
 
 
 def _requested_text_folder_state(job_id: int, folder_id: int) -> dict | None:
     """Retourne l'état texte du folder demandé, même s'il n'est pas completed."""
-    from database.db import get_db_connection
+    from repositories.pipeline_repository import get_text_folder_state
 
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        """
-        SELECT
-            cf.id,
-            cf.name,
-            cf.position,
-            cf.platform_id,
-            cf.formation_job_id,
-            cgj.id,
-            cgj.status,
-            COALESCE(cgj.total_words, 0),
-            COALESCE(SUM(CASE WHEN cgs.status = 'completed' THEN 1 ELSE 0 END), 0)
-        FROM cours_folders cf
-        LEFT JOIN content_generation_jobs cgj ON cgj.folder_id = cf.id
-        LEFT JOIN content_generation_segments cgs ON cgs.job_id = cgj.id
-        WHERE cf.id = ?
-        GROUP BY cf.id, cf.name, cf.position, cf.platform_id, cf.formation_job_id,
-                 cgj.id, cgj.status, cgj.total_words
-        """,
-        (folder_id,),
-    )
-    row = cursor.fetchone()
-    conn.close()
-    if not row:
-        return None
-    return {
-        "folder_id": row[0],
-        "folder_name": row[1],
-        "position": row[2],
-        "platform_id": row[3],
-        "formation_job_id": row[4],
-        "content_job_id": row[5],
-        "content_status": row[6],
-        "total_words": row[7] or 0,
-        "segments_completed": row[8] or 0,
-    }
+    return get_text_folder_state(folder_id)
 
 
 def _claim_single_completed_orphan_folder(job_id: int, requested: dict | None) -> dict | None:
     """Rattache un unique folder completed orphelin quand l'ancien lien est cassé."""
-    from database.db import get_db_connection
+    from repositories.pipeline_repository import claim_single_completed_orphan_folder
 
     job = get_job(job_id)
     if not job:
         return None
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    params = [job["platform_id"]]
-    day_filter = ""
+    day_number = None
     if requested and requested.get("folder_name"):
         import re
 
         match = re.match(r"^\s*Jour\s+(\d+)\b", requested["folder_name"], flags=re.IGNORECASE)
         if match:
-            day_filter = "AND cf.name LIKE ?"
-            params.append(f"Jour {match.group(1)}%")
-    cursor.execute(
-        f"""
-        SELECT
-            cf.id,
-            cf.name,
-            cf.position,
-            cf.platform_id,
-            cgj.id,
-            cgj.status,
-            COALESCE(cgj.total_words, 0),
-            SUM(CASE WHEN cgs.status = 'completed' THEN 1 ELSE 0 END)
-        FROM cours_folders cf
-        JOIN content_generation_jobs cgj ON cgj.folder_id = cf.id
-        LEFT JOIN content_generation_segments cgs ON cgs.job_id = cgj.id
-        WHERE cf.platform_id = ?
-          AND cf.formation_job_id IS NULL
-          {day_filter}
-        GROUP BY cf.id, cf.name, cf.position, cf.platform_id, cgj.id, cgj.status, cgj.total_words
-        HAVING cgj.status = 'completed'
-           AND SUM(CASE WHEN cgs.status = 'completed' THEN 1 ELSE 0 END) > 0
-        ORDER BY cf.created_at DESC, cf.id DESC
-        """,
-        tuple(params),
+            day_number = int(match.group(1))
+    row = claim_single_completed_orphan_folder(
+        formation_job_id=job_id,
+        platform_id=int(job["platform_id"]),
+        day_number=day_number,
     )
-    rows = cursor.fetchall()
-    if len(rows) != 1:
-        conn.close()
+    if not row:
         return None
-
-    row = rows[0]
-    folder_id = row[0]
-    cursor.execute(
-        """
-        UPDATE cours_folders
-        SET formation_job_id = ?
-        WHERE id = ? AND formation_job_id IS NULL
-        """,
-        (job_id, folder_id),
-    )
-    conn.commit()
-    conn.close()
     logger.warning(
         "PIPELINE_FOLDER_REPAIR job=%s repaired=1 missing=0 folders=%s reason=continue_after_text_orphan",
         job_id,
-        [{"folder_id": folder_id, "name": row[1]}],
+        [{"folder_id": row["folder_id"], "name": row["folder_name"]}],
     )
-    return {
-        "folder_id": row[0],
-        "folder_name": row[1],
-        "position": row[2],
-        "platform_id": row[3],
-        "content_job_id": row[4],
-        "content_status": row[5],
-        "total_words": row[6] or 0,
-        "segments_completed": row[7] or 0,
-    }
+    return row
 
 
 def _resolve_continue_after_text_folder(job_id: int, requested_folder_id: int) -> tuple[int, dict | None]:
@@ -3577,49 +3459,29 @@ def _next_folder_in_formation(job_id: int, folder_id: int) -> int | None:
 
 def _get_folder_info_for_resume(job_id: int, folder_id: int) -> dict:
     """Lit platform_id / content_job_id sans modifier l'état."""
-    from database.db import get_db_connection
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        """
-        SELECT cf.id, cf.name, cf.position, cj.id, cj.platform_id
-        FROM cours_folders cf
-        JOIN content_generation_jobs cj ON cj.folder_id = cf.id
-        WHERE cf.id = ? AND cf.formation_job_id = ? AND cj.status = 'completed'
-        """,
-        (folder_id, job_id),
-    )
-    row = cursor.fetchone()
-    conn.close()
-    if not row:
+    from repositories.pipeline_repository import get_text_folder_state
+
+    row = get_text_folder_state(folder_id)
+    if (
+        not row
+        or int(row.get("formation_job_id") or 0) != int(job_id)
+        or row.get("content_status") != "completed"
+    ):
         raise ValueError("Journée introuvable ou texte non généré")
-    _, folder_name, position, content_job_id, platform_id = row
     return {
         "folder_id": folder_id,
-        "folder_name": folder_name,
-        "position": position,
-        "content_job_id": content_job_id,
-        "platform_id": platform_id,
+        "folder_name": row["folder_name"],
+        "position": row["position"],
+        "content_job_id": row["content_job_id"],
+        "platform_id": row["platform_id"],
     }
 
 
 def _delete_slide_deck_for_resume(folder_id: int, content_job_id: int) -> int:
     """Supprime le deck slides existant pour forcer la régénération à l'étape suivante."""
-    from database.db import get_db_connection
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='script_slide_decks'")
-    if not cursor.fetchone():
-        conn.close()
-        return 0
-    cursor.execute(
-        "DELETE FROM script_slide_decks WHERE folder_id = ? AND content_job_id = ?",
-        (folder_id, content_job_id),
-    )
-    deleted = cursor.rowcount
-    conn.commit()
-    conn.close()
-    return deleted
+    from repositories.pipeline_repository import delete_script_slide_decks_for_content_job
+
+    return delete_script_slide_decks_for_content_job(folder_id, content_job_id)
 
 
 @formation_bp.route(
@@ -3731,6 +3593,13 @@ def continue_after_text(job_id, folder_id):
         auto_pilot_locked_at=None,
         auto_pilot_lock_owner=None,
     )
+    if _durable_pipeline_queue_enabled():
+        try:
+            from services.pipeline_queue import cancel_latest_work_item
+
+            cancel_latest_work_item(job_id)
+        except Exception:
+            logger.warning("PIPELINE_QUEUE_CANCEL_FAILED job=%s", job_id, exc_info=True)
 
     # Reset agressif du status job : si on était en `audio_running` /
     # `audio_error` d'un run précédent (qui peut avoir crashé), on le repose
@@ -3825,24 +3694,22 @@ def continue_after_text(job_id, folder_id):
                     "PIPELINE_RESUME_STEP_CONTENT_START formation_job_id=%s folder_id=%s",
                     job_id, folder_id,
                 )
-                from database.db import get_db_connection
-                conn = get_db_connection()
-                cj = conn.execute(
-                    "SELECT id FROM content_generation_jobs WHERE folder_id = ?", (folder_id,)
-                ).fetchone()
-                conn.close()
-                if cj:
-                    conn = get_db_connection()
-                    conn.execute(
-                        "DELETE FROM content_generation_segments WHERE job_id = ?", (cj[0],)
+                from repositories.pipeline_repository import (
+                    delete_content_segments_for_job,
+                    get_content_generation_job_by_folder,
+                    update_content_generation_job,
+                )
+                content_job = get_content_generation_job_by_folder(folder_id)
+                if content_job:
+                    content_job_id = int(content_job["id"])
+                    delete_content_segments_for_job(content_job_id)
+                    update_content_generation_job(
+                        content_job_id,
+                        status="pending",
+                        total_words=0,
+                        current_sub_part=0,
+                        current_passe=1,
                     )
-                    conn.execute(
-                        "UPDATE content_generation_jobs SET status='pending', total_words=0, "
-                        "current_sub_part=0, current_passe=1 WHERE id = ?",
-                        (cj[0],),
-                    )
-                    conn.commit()
-                    conn.close()
                 run_content_generation(folder_id, model=model)
                 logger.info(
                     "PIPELINE_RESUME_STEP_CONTENT_DONE formation_job_id=%s folder_id=%s duration_ms=%s",
@@ -4251,11 +4118,22 @@ def continue_after_text(job_id, folder_id):
 
 @formation_bp.route("/api/formation/list", methods=["GET"])
 def list_formations():
-    """Liste tous les jobs formation (toutes plateformes)."""
+    """Liste les jobs visibles par le compte admin courant."""
     if not _require_admin():
         return jsonify({"error": "Non autorisé"}), 403
 
-    jobs = list_jobs()
+    from repositories.pipeline_repository import list_pipeline_jobs
+
+    account_type = _admin_account_type()
+    if account_type in _PIPELINE_SUPERADMIN_ACCOUNT_TYPES:
+        jobs = list_pipeline_jobs()
+    elif account_type == "training_center":
+        center_account_id = _training_center_account_id()
+        if center_account_id is None:
+            return _pipeline_job_not_found()
+        jobs = list_pipeline_jobs(center_account_id=center_account_id)
+    else:
+        return _pipeline_job_not_found()
     return jsonify({"jobs": jobs})
 
 
@@ -4279,54 +4157,110 @@ _AP_WATCHDOG_INTERVAL = int(os.getenv("AUTO_PILOT_WATCHDOG_INTERVAL_SEC", "60"))
 _AP_WATCHDOG_STARTED = False
 
 
-def _acquire_ap_lock(job_id: int) -> bool:
+def _durable_pipeline_queue_enabled() -> bool:
+    return os.getenv("PIPELINE_EXECUTION_MODE", "inline").strip().lower() in {
+        "queue", "queued", "durable",
+    }
+
+
+def _dispatch_auto_pilot_tick(
+    job_id: int,
+    *,
+    reason: str,
+    force_new_run: bool = False,
+) -> dict:
+    """Dispatch one resumable tick to the durable queue or local dev runner."""
+    if not _durable_pipeline_queue_enabled():
+        import eventlet
+
+        eventlet.spawn(_tick_auto_pilot, job_id)
+        return {"mode": "inline", "work_item_id": None, "run_id": None}
+
+    from services.pipeline_queue import enqueue_work_item, get_latest_work_item
+
+    latest = get_latest_work_item(job_id)
+    if latest and not latest.terminal and not force_new_run:
+        return {
+            "mode": "queue",
+            "work_item_id": latest.id,
+            "run_id": latest.run_id,
+            "deduplicated": True,
+            "queue_status": latest.status,
+        }
+
+    step = _determine_next_ap_step(job_id)
+    run_id = uuid.uuid4().hex
+    try:
+        max_attempts = int(os.getenv("PIPELINE_WORK_MAX_ATTEMPTS", "5"))
+    except (TypeError, ValueError):
+        max_attempts = 5
+    max_attempts = max(1, min(20, max_attempts))
+    item = enqueue_work_item(
+        pipeline_job_id=job_id,
+        task_type="auto_pilot_tick",
+        scope_key="pipeline",
+        run_id=run_id,
+        dedupe_key=f"job:{job_id}:run:{run_id}:step:{step or 'done'}",
+        payload={"expected_step": step, "dispatch_reason": reason},
+        max_attempts=max_attempts,
+    )
+    return {
+        "mode": "queue",
+        "work_item_id": item.id,
+        "run_id": item.run_id,
+        "deduplicated": False,
+        "queue_status": item.status,
+    }
+
+
+def _queue_status_for_job(job_id: int) -> dict:
+    if not _durable_pipeline_queue_enabled():
+        return {"mode": "inline"}
+    try:
+        from services.pipeline_queue import get_latest_work_item
+
+        item = get_latest_work_item(job_id)
+        if not item:
+            return {"mode": "queue", "status": "missing"}
+        return {
+            "mode": "queue",
+            "status": item.status,
+            "work_item_id": item.id,
+            "run_id": item.run_id,
+            "attempt": item.attempt_count,
+            "max_attempts": item.max_attempts,
+            "last_error": item.last_error,
+        }
+    except Exception as exc:
+        logger.warning("PIPELINE_QUEUE_STATUS_FAILED job=%s", job_id, exc_info=True)
+        return {"mode": "queue", "status": "unavailable", "error": str(exc)[:300]}
+
+
+def _new_ap_lock_owner() -> str:
+    """Unique fencing token, including the instance for useful diagnostics."""
+    instance = os.getenv("WEBSITE_INSTANCE_ID") or socket.gethostname()
+    return f"{instance}:{os.getpid()}:{uuid.uuid4().hex}"
+
+
+def _acquire_ap_lock(job_id: int, owner: str) -> bool:
     """Pose un lock optimiste sur l'auto-pilot. Retourne True si acquis."""
-    from database.db import get_db_connection
-    owner = str(os.getpid())
-    stale_cutoff = int(time.time()) - _AP_LOCK_TTL
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        UPDATE formation_pipeline_jobs
-        SET auto_pilot_locked_at = CURRENT_TIMESTAMP,
-            auto_pilot_lock_owner = ?
-        WHERE id = ?
-          AND auto_pilot_enabled = 1
-          AND (auto_pilot_locked_at IS NULL
-               OR CAST(strftime('%s', auto_pilot_locked_at) AS INTEGER) < ?)
-    """, (owner, job_id, stale_cutoff))
-    acquired = cursor.rowcount == 1
-    conn.commit()
-    conn.close()
-    return acquired
+    from repositories.pipeline_repository import acquire_auto_pilot_lock
+    return acquire_auto_pilot_lock(job_id, owner=owner, ttl_seconds=_AP_LOCK_TTL)
 
 
-def _release_ap_lock(job_id: int) -> None:
-    from database.db import get_db_connection
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        UPDATE formation_pipeline_jobs
-        SET auto_pilot_locked_at = NULL, auto_pilot_lock_owner = NULL
-        WHERE id = ?
-    """, (job_id,))
-    conn.commit()
-    conn.close()
+def _release_ap_lock(job_id: int, owner: str) -> None:
+    from repositories.pipeline_repository import release_auto_pilot_lock
+    release_auto_pilot_lock(job_id, owner=owner)
 
 
-def _refresh_ap_lock(job_id: int) -> None:
+class _AutoPilotLockLost(RuntimeError):
+    """Raised in the runner as soon as its database fencing token is lost."""
+
+
+def _refresh_ap_lock(job_id: int, owner: str) -> bool:
     """Rafraîchit le timestamp du lock pour éviter l'expiration pendant une étape longue."""
-    from database.db import get_db_connection
-    owner = str(os.getpid())
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        UPDATE formation_pipeline_jobs
-        SET auto_pilot_locked_at = CURRENT_TIMESTAMP
-        WHERE id = ? AND auto_pilot_lock_owner = ?
-    """, (job_id, owner))
-    conn.commit()
-    conn.close()
+    from repositories.pipeline_repository import refresh_auto_pilot_lock
+    return refresh_auto_pilot_lock(job_id, owner=owner)
 
 
 def _ap_lock_age_seconds(job: dict | None) -> float | None:
@@ -4349,7 +4283,6 @@ def _ap_lock_age_seconds(job: dict | None) -> float | None:
 def _determine_next_ap_step(job_id: int) -> str | None:
     """Détermine la prochaine étape à exécuter (checks idempotents). None = terminé."""
     import json as _json
-    from database.db import get_db_connection
     j = get_job(job_id)
     if not j:
         return None
@@ -4409,27 +4342,19 @@ def _determine_next_ap_step(job_id: int) -> str | None:
     expected_folder_count = int(j.get("nb_days") or 0)
     if len(folder_ids) < expected_folder_count:
         return "content"
-    placeholders = ",".join("?" * len(folder_ids))
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute(f"""
-        SELECT
-            cf.id,
-            cgj.status,
-            COALESCE(cgj.total_words, 0),
-            COALESCE(SUM(CASE WHEN cgs.status = 'completed' THEN 1 ELSE 0 END), 0)
-        FROM cours_folders cf
-        LEFT JOIN content_generation_jobs cgj ON cgj.folder_id = cf.id
-        LEFT JOIN content_generation_segments cgs ON cgs.job_id = cgj.id
-        WHERE cf.id IN ({placeholders})
-        GROUP BY cf.id, cgj.status, cgj.total_words
-    """, tuple(folder_ids))
-    content_rows = cursor.fetchall()
-    conn.close()
+    from repositories.pipeline_repository import (
+        count_dirty_completed_segments_for_folders,
+        count_segments_pending_review_for_folders,
+        get_latest_script_slide_deck_row,
+        list_completed_content_jobs_for_folders,
+        list_content_completion_rows_for_folders,
+    )
+    content_rows = list_content_completion_rows_for_folders(folder_ids)
     completed_folder_ids = {
-        row[0]
+        row["folder_id"]
         for row in content_rows
-        if row[1] == "completed" and (int(row[2] or 0) > 0 or int(row[3] or 0) > 0)
+        if row.get("status") == "completed"
+        and (int(row.get("total_words") or 0) > 0 or int(row.get("completed_segments") or 0) > 0)
     }
     if len(completed_folder_ids) < len(folder_ids):
         return "content"
@@ -4443,21 +4368,7 @@ def _determine_next_ap_step(job_id: int) -> str | None:
 
     # 6. Conformité locale par segment, après adhérence au plan, calibrage
     # budget et micro-review éthique intégrés à la génération structurée.
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute(f"""
-        SELECT COUNT(*) FROM content_generation_segments cgs
-        JOIN content_generation_jobs cgj ON cgj.id = cgs.job_id
-        JOIN cours_folders cf ON cf.id = cgj.folder_id
-        WHERE cf.id IN ({placeholders}) AND cgs.status = 'completed'
-          AND (
-                COALESCE(cgs.reviewed, 0) = 0
-             OR cgs.review_signature IS NULL
-             OR cgs.review_signature != ?
-          )
-    """, tuple(folder_ids) + (compliance_signature,))
-    not_reviewed = cursor.fetchone()[0]
-    conn.close()
+    not_reviewed = count_segments_pending_review_for_folders(folder_ids, compliance_signature)
     if not_reviewed > 0:
         return "review"
 
@@ -4468,43 +4379,22 @@ def _determine_next_ap_step(job_id: int) -> str | None:
 
     # 8. Slides anchor-first : elles sont générées explicitement avant la fin
     # texte, pour ne plus rester cachées dans l'étape TTS synchronisée.
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute(f"""
-        SELECT cf.id, cgj.id
-        FROM cours_folders cf
-        JOIN content_generation_jobs cgj ON cgj.folder_id = cf.id
-        WHERE cf.id IN ({placeholders}) AND cgj.status = 'completed'
-        ORDER BY cf.position ASC
-    """, tuple(folder_ids))
-    slide_rows = cursor.fetchall()
-    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='script_slide_decks'")
-    has_slide_table = bool(cursor.fetchone())
+    slide_rows = list_completed_content_jobs_for_folders(folder_ids)
     missing_slide_decks = []
-    if not has_slide_table:
-        missing_slide_decks = [fid for fid, _ in slide_rows]
-    else:
-        for fid, cg_job_id in slide_rows:
-            cursor.execute(
-                """
-                SELECT id, slides_json
-                FROM script_slide_decks
-                WHERE folder_id = ? AND content_job_id = ?
-                ORDER BY id DESC
-                LIMIT 1
-                """,
-                (fid, cg_job_id),
-            )
-            deck_row = cursor.fetchone()
-            deck_has_slides = False
-            if deck_row:
-                try:
-                    deck_has_slides = len(_json.loads(deck_row[1] or "[]")) > 0
-                except Exception:
-                    deck_has_slides = False
-            if not deck_has_slides:
-                missing_slide_decks.append(fid)
-    conn.close()
+    for row in slide_rows:
+        fid = int(row["folder_id"])
+        deck_row = get_latest_script_slide_deck_row(
+            folder_id=fid,
+            content_job_id=int(row["content_job_id"]),
+        )
+        deck_has_slides = False
+        if deck_row:
+            try:
+                deck_has_slides = len(_json.loads(deck_row.get("slides_json") or "[]")) > 0
+            except Exception:
+                deck_has_slides = False
+        if not deck_has_slides:
+            missing_slide_decks.append(fid)
     if missing_slide_decks:
         return "slides"
 
@@ -4521,16 +4411,7 @@ def _determine_next_ap_step(job_id: int) -> str | None:
 
     # Si l'audio auto est explicitement demandé, on vérifie via dirty=0 sur tous les segments (pas le status qui
     # est positionné au début du loop audio, donc non fiable en cas de restart)
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute(f"""
-        SELECT COUNT(*) FROM content_generation_segments cgs
-        JOIN content_generation_jobs cgj ON cgj.id = cgs.job_id
-        JOIN cours_folders cf ON cf.id = cgj.folder_id
-        WHERE cf.id IN ({placeholders}) AND COALESCE(cgs.dirty, 1) = 1
-    """, tuple(folder_ids))
-    dirty_count = cursor.fetchone()[0]
-    conn.close()
+    dirty_count = count_dirty_completed_segments_for_folders(folder_ids)
     if dirty_count > 0 or j.get("status") not in ("audio_completed", "audio_launched"):
         return "audio"
 
@@ -4541,12 +4422,16 @@ def _determine_next_ap_step(job_id: int) -> str | None:
 def _execute_ap_step(job_id: int, step: str, job: dict) -> None:
     """Exécute UNE étape de l'auto-pilot (synchrone — bloque le tick courant)."""
     import eventlet
-    from database.db import get_db_connection
     from services.claude_code_mission_service import execute_mission_locally
 
     model = _normalize_pipeline_model_choice(job.get("auto_pilot_model"), default="pro")
     tts_mode = job.get("auto_pilot_tts_mode") or "gtts"
     use_cc = bool(job.get("auto_pilot_use_cc"))
+    if use_cc and not _claude_code_pipeline_supported():
+        raise RuntimeError(
+            "Claude Code est réservé au développement SQLite. "
+            "Relancez ce job PostgreSQL avec use_claude_code=false."
+        )
     platform_id = job["platform_id"]
 
     api_model = _PIPELINE_MODEL_ALIASES[model]
@@ -4671,7 +4556,11 @@ def _execute_ap_step(job_id: int, step: str, job: dict) -> None:
             #   - aucun thread mort possible (pas de thread du tout)
             import json as _json
             import eventlet as _eventlet
-            from services.content_generation_service import run_content_generation, get_job_from_db
+            from services.content_generation_service import run_content_generation
+            from repositories.pipeline_repository import (
+                list_content_completion_rows_for_folders,
+                reset_and_upsert_content_generation_jobs,
+            )
             from services.formation_pipeline_service import (
                 _format_day_program_text,
                 expected_course_folder_name,
@@ -4709,7 +4598,7 @@ def _execute_ap_step(job_id: int, step: str, job: dict) -> None:
                     ],
                 )
 
-            day_tasks = []
+            planned_days = []
             for idx, day_data in enumerate(daily_programs):
                 day_data = _normalize_day_audio_slots(day_data)
                 folder_name = expected_course_folder_name(day_data, idx + 1)
@@ -4719,36 +4608,54 @@ def _execute_ap_step(job_id: int, step: str, job: dict) -> None:
                 folder_id = folder_info["folder_id"]
                 day_num = day_data.get("day_number", idx + 1)
 
-                # 2. Créer le content_generation_job s'il n'existe pas (sans thread)
-                cg_job = get_job_from_db(folder_id)
-                if cg_job and cg_job.get("status") == "completed":
+                planned_days.append({
+                    "day_num": day_num,
+                    "folder_id": folder_id,
+                    "day_data": day_data,
+                })
+
+            folder_ids = [day["folder_id"] for day in planned_days]
+            content_rows = {
+                int(row["folder_id"]): row
+                for row in list_content_completion_rows_for_folders(folder_ids)
+            }
+            day_tasks = []
+            jobs_to_create = []
+            for planned_day in planned_days:
+                day_num = planned_day["day_num"]
+                folder_id = planned_day["folder_id"]
+                content_row = content_rows.get(folder_id) or {}
+                if content_row.get("content_job_id") and content_row.get("status") == "completed":
                     logger.info(f"🤖   ⏭ Jour {day_num} déjà complété (folder {folder_id}), skip")
                     continue
 
-                if not cg_job:
+                if not content_row.get("content_job_id"):
+                    day_data = planned_day["day_data"]
                     sub_parts = [sp["name"] for sp in day_data.get("sub_parts", [])]
                     module_contents = {}
                     for sp in day_data.get("sub_parts", []):
                         module_contents[sp["name"]] = _format_slot_generation_source(sp)
-                    conn = get_db_connection()
-                    cursor = conn.cursor()
-                    cursor.execute("""
-                        INSERT INTO content_generation_jobs
-                            (folder_id, platform_id, program_text, program_title,
-                             sub_parts, from_scratch, module_contents,
-                             status, current_sub_part, current_passe, total_words, error_message)
-                        VALUES (?, ?, ?, ?, ?, 1, ?, 'idle', 0, 1, 0, NULL)
-                    """, (
-                        folder_id, platform_id,
-                        _format_day_program_text(day_data, job["tp_name"]),
-                        job["tp_name"],
-                        _json.dumps(sub_parts, ensure_ascii=False),
-                        _json.dumps(module_contents, ensure_ascii=False),
-                    ))
-                    conn.commit()
-                    conn.close()
+                    jobs_to_create.append({
+                        "folder_id": folder_id,
+                        "platform_id": platform_id,
+                        "program_text": _format_day_program_text(day_data, job["tp_name"]),
+                        "program_title": job["tp_name"],
+                        "sub_parts_json": _json.dumps(sub_parts, ensure_ascii=False),
+                        "from_scratch": True,
+                        "module_contents_json": _json.dumps(module_contents, ensure_ascii=False),
+                    })
 
                 day_tasks.append({"day_num": day_num, "folder_id": folder_id})
+
+            if jobs_to_create:
+                reset_and_upsert_content_generation_jobs(jobs_to_create)
+            logger.info(
+                "PIPELINE_CONTENT_DAY_JOB_PREP job=%s folders=%s created=%s runnable=%s",
+                job_id,
+                len(planned_days),
+                len(jobs_to_create),
+                len(day_tasks),
+            )
 
             day_workers = min(_formation_content_day_workers(), max(1, len(day_tasks) or 1))
             logger.info(
@@ -4865,24 +4772,14 @@ def _execute_ap_step(job_id: int, step: str, job: dict) -> None:
             assert_course_day_word_budget,
         )
         from services.formation_pipeline_service import get_expected_course_folders
+        from repositories.pipeline_repository import list_completed_content_jobs_for_folders
         folder_ids = get_expected_course_folders(job_id).get("folder_ids") or []
         if not folder_ids:
             raise RuntimeError("Aucun texte complété à assembler après révision")
-        placeholders = ",".join("?" * len(folder_ids))
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute(
-            f"""
-            SELECT cf.id, cgj.id
-            FROM cours_folders cf
-            JOIN content_generation_jobs cgj ON cgj.folder_id = cf.id
-            WHERE cf.id IN ({placeholders}) AND cgj.status = 'completed'
-            ORDER BY cf.position ASC
-            """,
-            tuple(folder_ids),
-        )
-        rows = cursor.fetchall()
-        conn.close()
+        rows = [
+            (int(row["folder_id"]), int(row["content_job_id"]))
+            for row in list_completed_content_jobs_for_folders(folder_ids)
+        ]
         if not rows:
             raise RuntimeError("Aucun texte complété à assembler après révision")
 
@@ -4947,25 +4844,15 @@ def _execute_ap_step(job_id: int, step: str, job: dict) -> None:
             get_latest_script_slide_deck,
         )
         from services.formation_observability_service import log_pipeline_event
+        from repositories.pipeline_repository import list_completed_content_jobs_for_folders
 
         folder_ids = get_expected_course_folders(job_id).get("folder_ids") or []
         if not folder_ids:
             raise RuntimeError("Aucun cours_folder trouvé pour générer les slides")
-        placeholders = ",".join("?" * len(folder_ids))
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute(
-            f"""
-            SELECT cf.id, cgj.id
-            FROM cours_folders cf
-            JOIN content_generation_jobs cgj ON cgj.folder_id = cf.id
-            WHERE cf.id IN ({placeholders}) AND cgj.status = 'completed'
-            ORDER BY cf.position ASC
-            """,
-            tuple(folder_ids),
-        )
-        rows = cursor.fetchall()
-        conn.close()
+        rows = [
+            (int(row["folder_id"]), int(row["content_job_id"]))
+            for row in list_completed_content_jobs_for_folders(folder_ids)
+        ]
         if not rows:
             raise RuntimeError("Aucun texte complété disponible pour générer les slides")
 
@@ -5170,33 +5057,7 @@ def _execute_ap_step(job_id: int, step: str, job: dict) -> None:
         # de détecter que l'audio est incomplet et de relancer l'étape.
         update_job(job_id, status="audio_completed", error_message=None)
 
-        # Module persistant
-        try:
-            from datetime import datetime as _dt
-            from config import FRANCE_TZ as _tz
-            j2 = get_job(job_id)
-            conn = get_db_connection()
-            cur = conn.cursor()
-            rncp = j2.get("rncp_code") or ""
-            cur.execute("SELECT COUNT(*) FROM formation_modules WHERE rncp_code = ?", (rncp,))
-            n = cur.fetchone()[0] + 1
-            version = f"{_dt.now(_tz).year}-v{n}"
-            cur.execute("""
-                INSERT OR IGNORE INTO formation_modules
-                (rncp_code, tp_name, version, status, source_pipeline_job_id,
-                 source_platform_id, voice_type, voice_updated_at, validated_at)
-                VALUES (?, ?, ?, 'validated', ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-            """, (rncp, j2["tp_name"], version, job_id, platform_id, voice_type))
-            if cur.rowcount == 0:
-                cur.execute(
-                    "UPDATE formation_modules SET voice_type=?, voice_updated_at=CURRENT_TIMESTAMP "
-                    "WHERE source_pipeline_job_id=?",
-                    (voice_type, job_id),
-                )
-            conn.commit()
-            conn.close()
-        except Exception as e:
-            logger.warning(f"⚠️ Module persistant : {e}")
+        _finalize_audio_ready_state(job_id, voice_type)
 
         # Health-check final — bloque sur les incohérences bloquantes.
         # Un warning silencieux permettrait à l'auto-pilot de finir avec une
@@ -5221,18 +5082,45 @@ def _tick_auto_pilot(job_id: int) -> None:
     """
     import eventlet
 
-    if not _acquire_ap_lock(job_id):
+    lock_owner = _new_ap_lock_owner()
+    if not _acquire_ap_lock(job_id, lock_owner):
         logger.info(f"🤖 Auto-pilot job {job_id} : lock tenu par un autre worker, skip")
         return
 
     # Heartbeat : rafraîchit le lock toutes les 60 s pour les étapes qui durent
     # plus que le TTL (content = 2-4h, audio = 30-60 min).
     _hb_stop = [False]
+    current_step = "?"
+    runner_greenlet = eventlet.getcurrent()
+
     def _heartbeat():
         while not _hb_stop[0]:
             eventlet.sleep(60)
             if not _hb_stop[0]:
-                _refresh_ap_lock(job_id)
+                try:
+                    refreshed = _refresh_ap_lock(job_id, lock_owner)
+                except Exception as exc:
+                    refreshed = False
+                    reason = f"échec heartbeat: {exc}"
+                else:
+                    reason = "fencing token remplacé ou supprimé"
+                if not refreshed:
+                    _hb_stop[0] = True
+                    lost = _AutoPilotLockLost(
+                        f"Lock auto-pilot perdu pour le job {job_id}: {reason}"
+                    )
+                    logger.error(
+                        "PIPELINE_AUTOPILOT_LOCK_LOST job=%s step=%s owner=%s reason=%s",
+                        job_id,
+                        current_step,
+                        lock_owner,
+                        reason,
+                    )
+                    # Raising only inside this child greenlet would leave the
+                    # stale runner alive. Inject the fencing error into the
+                    # runner so it cannot publish a completed step or respawn.
+                    eventlet.greenthread.kill(runner_greenlet, lost)
+                    return
                 logger.info(
                     "PIPELINE_AUTOPILOT_HEARTBEAT job=%s step=%s lock_refreshed=1",
                     job_id,
@@ -5241,8 +5129,8 @@ def _tick_auto_pilot(job_id: int) -> None:
     hb = eventlet.spawn(_heartbeat)
 
     should_respawn = False
-    current_step = "?"
     started_at = None
+    j = None
     try:
         j = get_job(job_id)
         if not j or not j.get("auto_pilot_enabled"):
@@ -5312,29 +5200,33 @@ def _tick_auto_pilot(job_id: int) -> None:
     except Exception as e:
         err = str(e)[:500]
         logger.error(f"❌ Auto-pilot job {job_id} step={current_step} : {err}")
-        update_job(job_id, auto_pilot_error=err)
-        try:
-            from services.formation_observability_service import log_pipeline_event
-            log_pipeline_event(
-                job_id,
-                "step_failed",
-                step=current_step,
-                status="error",
-                duration_ms=int((time.time() - started_at) * 1000) if started_at else None,
-                message=f"Étape auto-pilot échouée : {current_step}",
-                error=err,
-                model=_resolve_pipeline_api_model(job),
-            )
-        except Exception:
-            pass
+        # Once fencing is lost, this worker is stale: even writing an error on
+        # the shared job could overwrite the successor's state. The current
+        # owner (or watchdog) is solely responsible for subsequent mutations.
+        if not isinstance(e, _AutoPilotLockLost):
+            update_job(job_id, auto_pilot_error=err)
+            try:
+                from services.formation_observability_service import log_pipeline_event
+                log_pipeline_event(
+                    job_id,
+                    "step_failed",
+                    step=current_step,
+                    status="error",
+                    duration_ms=int((time.time() - started_at) * 1000) if started_at else None,
+                    message=f"Étape auto-pilot échouée : {current_step}",
+                    error=err,
+                    model=_resolve_pipeline_api_model(j),
+                )
+            except Exception:
+                pass
 
     finally:
         _hb_stop[0] = True
         hb.kill()
-        _release_ap_lock(job_id)
+        _release_ap_lock(job_id, lock_owner)
 
     if should_respawn:
-        eventlet.spawn(_tick_auto_pilot, job_id)
+        _dispatch_auto_pilot_tick(job_id, reason="inline_step_completed")
 
 
 def resume_interrupted_auto_pilots() -> None:
@@ -5347,7 +5239,7 @@ def resume_interrupted_auto_pilots() -> None:
         if job_ids:
             logger.info(f"🤖 Boot recovery : {len(job_ids)} auto-pilot(s) à reprendre : {job_ids}")
             for jid in job_ids:
-                eventlet.spawn(_tick_auto_pilot, jid)
+                _dispatch_auto_pilot_tick(jid, reason="boot_recovery")
         else:
             logger.info("🤖 Boot recovery : aucun auto-pilot interrompu")
     except Exception as e:
@@ -5368,7 +5260,7 @@ def _auto_pilot_watchdog_loop(interval_sec: int) -> None:
                     f"🤖 Watchdog auto-pilot : reprise de {len(job_ids)} job(s) : {job_ids}"
                 )
                 for jid in job_ids:
-                    eventlet.spawn(_tick_auto_pilot, jid)
+                    _dispatch_auto_pilot_tick(jid, reason="watchdog_recovery")
             else:
                 logger.debug("🤖 Watchdog auto-pilot : aucun job à reprendre")
         except Exception as e:
@@ -5410,6 +5302,17 @@ def run_auto_pilot(job_id):
     job = get_job(job_id)
     if not job:
         return jsonify({"error": "Job introuvable"}), 404
+    if _durable_pipeline_queue_enabled():
+        from services.pipeline_queue import get_latest_work_item
+
+        active_item = get_latest_work_item(job_id)
+        if active_item and not active_item.terminal:
+            return jsonify({
+                "error": "Auto-pilot déjà en file ou en cours pour ce job",
+                "work_item_id": active_item.id,
+                "queue_status": active_item.status,
+                "run_id": active_item.run_id,
+            }), 409
 
     payload = request.get_json(silent=True) or {}
     tts_mode = (payload.get("tts_mode") or "gtts").lower()
@@ -5419,28 +5322,28 @@ def run_auto_pilot(job_id):
     if model not in _PIPELINE_MODEL_CHOICES:
         return jsonify({"error": "model invalide (sonnet | haiku | flash | pro)"}), 400
     use_cc = bool(payload.get("use_claude_code", False))
+    if use_cc and not _claude_code_pipeline_supported():
+        return jsonify({
+            "error": (
+                "use_claude_code=true est réservé au développement SQLite. "
+                "La pipeline PostgreSQL de production utilise le mode API."
+            )
+        }), 400
     if use_cc and model in ("flash", "pro"):
         return jsonify({
             "error": "use_claude_code=true est incompatible avec DeepSeek. Lance l'auto-pilot en mode API."
         }), 400
     generate_audio = bool(payload.get("generate_audio") or payload.get("include_audio"))
 
-    # Vérifie qu'un tick n'est pas déjà en cours (lock actif non-périmé)
+    # Vérifie qu'un tick n'est pas déjà en cours (lock actif non-périmé).
+    # Psycopg renvoie un datetime, SQLite une chaîne : le helper gère les deux.
     if job.get("auto_pilot_step") and job.get("auto_pilot_step") != "done":
-        locked_at = job.get("auto_pilot_locked_at")
-        if locked_at:
-            try:
-                import datetime, pytz
-                from config import FRANCE_TZ
-                if isinstance(locked_at, str):
-                    dt = datetime.datetime.fromisoformat(locked_at)
-                    if dt.tzinfo is None:
-                        dt = dt.replace(tzinfo=pytz.utc)
-                    age = (datetime.datetime.now(pytz.utc) - dt).total_seconds()
-                    if age < _AP_LOCK_TTL:
-                        return jsonify({"error": "Auto-pilot déjà en cours pour ce job"}), 409
-            except Exception:
-                pass
+        lock_age = _ap_lock_age_seconds(job)
+        if lock_age is not None and lock_age < _AP_LOCK_TTL:
+            return jsonify({
+                "error": "Auto-pilot déjà en cours pour ce job",
+                "lock_age_seconds": lock_age,
+            }), 409
 
     update_job(job_id,
                auto_pilot_enabled=1,
@@ -5466,13 +5369,13 @@ def run_auto_pilot(job_id):
     except Exception:
         pass
 
-    import eventlet
-    eventlet.spawn(_tick_auto_pilot, job_id)
+    dispatch = _dispatch_auto_pilot_tick(job_id, reason="run_auto")
     return jsonify({
         "ok": True, "status": "auto_pilot_started",
         "tts_mode": tts_mode, "model": model,
         "use_claude_code": use_cc,
         "generate_audio": generate_audio,
+        "dispatch": dispatch,
     }), 202
 
 
@@ -5494,6 +5397,25 @@ def resume_auto_pilot(job_id):
             "error": "Auto-pilot déjà en cours pour ce job",
             "lock_age_seconds": lock_age,
         }), 409
+    if _durable_pipeline_queue_enabled():
+        from services.pipeline_queue import get_latest_work_item
+
+        active_item = get_latest_work_item(job_id)
+        if active_item and not active_item.terminal:
+            if force and active_item.status != "running":
+                active_item = None
+            else:
+                message = (
+                    "Une étape est réellement en cours; arrêt coopératif requis avant reprise"
+                    if force and active_item.status == "running"
+                    else "Auto-pilot déjà en file ou en cours pour ce job"
+                )
+                return jsonify({
+                    "error": message,
+                    "work_item_id": active_item.id,
+                    "queue_status": active_item.status,
+                    "run_id": active_item.run_id,
+                }), 409
 
     try:
         next_step = _determine_next_ap_step(job_id)
@@ -5531,8 +5453,15 @@ def resume_auto_pilot(job_id):
     except Exception:
         pass
 
-    import eventlet
-    eventlet.spawn(_tick_auto_pilot, job_id)
+    if force and _durable_pipeline_queue_enabled():
+        from services.pipeline_queue import cancel_latest_work_item
+
+        cancel_latest_work_item(job_id)
+    dispatch = _dispatch_auto_pilot_tick(
+        job_id,
+        reason="manual_resume",
+        force_new_run=force,
+    )
     return jsonify({
         "ok": True,
         "status": "auto_pilot_resumed",
@@ -5541,6 +5470,7 @@ def resume_auto_pilot(job_id):
         "model": job.get("auto_pilot_model"),
         "tts_mode": job.get("auto_pilot_tts_mode"),
         "generate_audio": bool(job.get("auto_pilot_generate_audio")),
+        "dispatch": dispatch,
     }), 202
 
 
@@ -5566,6 +5496,15 @@ def stop_auto_pilot(job_id):
         auto_pilot_locked_at=None,
         auto_pilot_lock_owner=None,
     )
+    cancelled_work_item_id = None
+    if _durable_pipeline_queue_enabled():
+        try:
+            from services.pipeline_queue import cancel_latest_work_item
+
+            cancelled_item = cancel_latest_work_item(job_id)
+            cancelled_work_item_id = cancelled_item.id if cancelled_item else None
+        except Exception:
+            logger.warning("PIPELINE_QUEUE_CANCEL_FAILED job=%s", job_id, exc_info=True)
     try:
         from services.formation_observability_service import log_pipeline_event
         log_pipeline_event(
@@ -5579,7 +5518,12 @@ def stop_auto_pilot(job_id):
     except Exception:
         pass
     logger.warning("🤖 Auto-pilot job %s stoppé manuellement", job_id)
-    return jsonify({"ok": True, "status": "stopped"}), 200
+    return jsonify({
+        "ok": True,
+        "status": "stopped",
+        "queue_work_item_cancelled": bool(cancelled_work_item_id),
+        "queue_work_item_id": cancelled_work_item_id,
+    }), 200
 
 
 @formation_bp.route("/api/formation/<int:job_id>/run-auto/status", methods=["GET"])
@@ -5590,6 +5534,7 @@ def auto_pilot_status(job_id):
     job = get_job(job_id)
     if not job:
         return jsonify({"error": "Job introuvable"}), 404
+    queue_state = _queue_status_for_job(job_id)
     if not job.get("auto_pilot_enabled"):
         if job.get("auto_pilot_step") == "stopped":
             try:
@@ -5603,8 +5548,9 @@ def auto_pilot_status(job_id):
                 "model": job.get("auto_pilot_model"),
                 "tts_mode": job.get("auto_pilot_tts_mode"),
                 "generate_audio": bool(job.get("auto_pilot_generate_audio")),
+                "queue": queue_state,
             }), 200
-        return jsonify({"status": "idle"}), 200
+        return jsonify({"status": "idle", "queue": queue_state}), 200
     step = job.get("auto_pilot_step")
     error = job.get("auto_pilot_error")
     model = job.get("auto_pilot_model")
@@ -5617,12 +5563,12 @@ def auto_pilot_status(job_id):
     except Exception:
         next_step = None
     if step == "done":
-        return jsonify({"status": "done", "step": "done", "next_step": next_step, "model": model, "tts_mode": tts_mode, "generate_audio": generate_audio}), 200
+        return jsonify({"status": "done", "step": "done", "next_step": next_step, "model": model, "tts_mode": tts_mode, "generate_audio": generate_audio, "queue": queue_state}), 200
     if error:
-        return jsonify({"status": "error", "step": step, "next_step": next_step, "error": error, "model": model, "tts_mode": tts_mode, "generate_audio": generate_audio, "lock_stale": lock_stale, "lock_age_seconds": lock_age}), 200
+        return jsonify({"status": "error", "step": step, "next_step": next_step, "error": error, "model": model, "tts_mode": tts_mode, "generate_audio": generate_audio, "lock_stale": lock_stale, "lock_age_seconds": lock_age, "queue": queue_state}), 200
     if step:
-        return jsonify({"status": "running", "step": step, "next_step": next_step, "model": model, "tts_mode": tts_mode, "generate_audio": generate_audio, "lock_stale": lock_stale, "lock_age_seconds": lock_age}), 200
-    return jsonify({"status": "starting", "next_step": next_step, "model": model, "tts_mode": tts_mode, "generate_audio": generate_audio}), 200
+        return jsonify({"status": "running", "step": step, "next_step": next_step, "model": model, "tts_mode": tts_mode, "generate_audio": generate_audio, "lock_stale": lock_stale, "lock_age_seconds": lock_age, "queue": queue_state}), 200
+    return jsonify({"status": "starting", "next_step": next_step, "model": model, "tts_mode": tts_mode, "generate_audio": generate_audio, "queue": queue_state}), 200
 
 
 @formation_bp.route("/api/formation/<int:job_id>/events", methods=["GET"])
@@ -5702,71 +5648,35 @@ def formation_pipeline_diagnostic(job_id):
 
     folders = []
     try:
-        from database.db import get_db_connection
-        conn = get_db_connection()
-        cursor = conn.cursor()
+        from repositories.pipeline_repository import (
+            list_content_completion_rows_for_folders,
+            list_text_folder_states_for_folders,
+        )
         folder_ids = folder_state.get("folder_ids") or []
         if folder_ids:
-            placeholders = ",".join("?" * len(folder_ids))
-            cursor.execute(
-                f"""
-            SELECT
-                cf.id,
-                cf.name,
-                cf.position,
-                cf.platform_id,
-                cf.formation_job_id,
-                cgj.id,
-                cgj.status,
-                COALESCE(cgj.total_words, 0),
-                COUNT(cgs.id),
-                SUM(CASE WHEN cgs.status = 'completed' THEN 1 ELSE 0 END),
-                SUM(CASE WHEN COALESCE(cgs.reviewed, 0) = 1 THEN 1 ELSE 0 END),
-                SUM(CASE WHEN cgs.review_error IS NOT NULL THEN 1 ELSE 0 END),
-                SUM(CASE WHEN COALESCE(cgs.dirty, 0) = 1 THEN 1 ELSE 0 END)
-            FROM cours_folders cf
-            LEFT JOIN content_generation_jobs cgj ON cgj.folder_id = cf.id
-            LEFT JOIN content_generation_segments cgs ON cgs.job_id = cgj.id
-            WHERE cf.id IN ({placeholders})
-            GROUP BY cf.id, cf.name, cf.position, cf.platform_id, cf.formation_job_id,
-                     cgj.id, cgj.status, cgj.total_words
-            ORDER BY cf.position ASC, cf.id ASC
-            """,
-                tuple(folder_ids),
-            )
-            for row in cursor.fetchall():
-                (
-                    folder_id,
-                    name,
-                    position,
-                    platform_id,
-                    formation_job_id,
-                    content_job_id,
-                    content_status,
-                    total_words,
-                    segments_total,
-                    segments_completed,
-                    reviewed_segments,
-                    review_errors,
-                    dirty_segments,
-                ) = row
+            completion_by_folder = {
+                int(row["folder_id"]): row
+                for row in list_content_completion_rows_for_folders(folder_ids)
+            }
+            for state in list_text_folder_states_for_folders(folder_ids):
+                folder_id = int(state["folder_id"])
+                completion = completion_by_folder.get(folder_id) or {}
                 folders.append({
                     "folder_id": folder_id,
                     "folder_label": f"F{folder_id}",
-                    "name": name,
-                    "position": position,
-                    "platform_id": platform_id,
-                    "formation_job_id": formation_job_id,
-                    "content_job_id": content_job_id,
-                    "content_status": content_status,
-                    "total_words": total_words or 0,
-                    "segments_total": segments_total or 0,
-                    "segments_completed": segments_completed or 0,
-                    "reviewed_segments": reviewed_segments or 0,
-                    "review_errors": review_errors or 0,
-                    "dirty_segments": dirty_segments or 0,
+                    "name": state.get("folder_name"),
+                    "position": state.get("position"),
+                    "platform_id": state.get("platform_id"),
+                    "formation_job_id": state.get("formation_job_id"),
+                    "content_job_id": state.get("content_job_id"),
+                    "content_status": state.get("content_status"),
+                    "total_words": state.get("total_words") or 0,
+                    "segments_total": completion.get("segments_total") or 0,
+                    "segments_completed": completion.get("completed_segments") or 0,
+                    "reviewed_segments": completion.get("reviewed_segments") or 0,
+                    "review_errors": completion.get("review_error_segments") or 0,
+                    "dirty_segments": completion.get("dirty_segments") or 0,
                 })
-        conn.close()
     except Exception as e:
         logger.warning(f"⚠️ Diagnostic folders job {job_id} : {e}")
 

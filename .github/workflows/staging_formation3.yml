@@ -11,7 +11,11 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  postgres-integration:
+    uses: ./.github/workflows/postgres-ci.yml
+
   build:
+    needs: postgres-integration
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -56,6 +60,16 @@ jobs:
       SUPABASE_URL: ${{ secrets.SAAS_SUPABASE_URL || secrets.SUPABASE_URL }}
       SUPABASE_ANON_KEY: ${{ secrets.SAAS_SUPABASE_ANON_KEY || secrets.SUPABASE_ANON_KEY }}
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SAAS_SUPABASE_SERVICE_ROLE_KEY || secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      AZURE_TTS_STORAGE_CONNECTION_STRING: ${{ secrets.SAAS_AZURE_TTS_STORAGE_CONNECTION_STRING || secrets.AZURE_TTS_STORAGE_CONNECTION_STRING }}
+      INTERNAL_ADMIN_PASSWORD_HASH: ${{ secrets.SAAS_INTERNAL_ADMIN_PASSWORD_HASH || secrets.INTERNAL_ADMIN_PASSWORD_HASH }}
+      SECRET_KEY: ${{ secrets.SAAS_SECRET_KEY || secrets.SECRET_KEY }}
+      AUTO_LOGOUT_WEBHOOK_SECRET: ${{ secrets.SAAS_AUTO_LOGOUT_WEBHOOK_SECRET || secrets.AUTO_LOGOUT_WEBHOOK_SECRET }}
+      ANTHROPIC_API_KEY: ${{ secrets.SAAS_ANTHROPIC_API_KEY || secrets.ANTHROPIC_API_KEY }}
+      DEEPSEEK_API_KEY: ${{ secrets.SAAS_DEEPSEEK_API_KEY || secrets.DEEPSEEK_API_KEY }}
+      FISH_AUDIO_API_KEY: ${{ secrets.SAAS_FISH_AUDIO_API_KEY || secrets.FISH_AUDIO_API_KEY }}
+      FISH_AUDIO_VOICE_ID: ${{ secrets.SAAS_FISH_AUDIO_VOICE_ID || secrets.FISH_AUDIO_VOICE_ID }}
+      AZURE_AUDIO_STORAGE_CONNECTION_STRING: ${{ secrets.SAAS_AZURE_AUDIO_STORAGE_CONNECTION_STRING || secrets.AZURE_AUDIO_STORAGE_CONNECTION_STRING }}
+      AZURE_STORAGE_CONNECTION_STRING: ${{ secrets.SAAS_AZURE_STORAGE_CONNECTION_STRING || secrets.AZURE_STORAGE_CONNECTION_STRING }}
 
     steps:
       - name: Download artifact from build job
@@ -63,7 +77,7 @@ jobs:
         with:
           name: python-app
 
-      - name: Login to Azure
+      - name: Login to Azure Formation3
         uses: azure/login@v2
         with:
           client-id: ${{ secrets.AZUREAPPSERVICE_CLIENTID_27CAD6565966460DAF8B1817C6400475 }}
@@ -84,7 +98,7 @@ jobs:
         shell: bash
         run: |
           missing=()
-          for key in DATABASE_URL SUPABASE_URL SUPABASE_ANON_KEY SUPABASE_SERVICE_ROLE_KEY; do
+          for key in DATABASE_URL SUPABASE_URL SUPABASE_ANON_KEY SUPABASE_SERVICE_ROLE_KEY SECRET_KEY AUTO_LOGOUT_WEBHOOK_SECRET; do
             value="${!key:-}"
             existing="$(az webapp config appsettings list \
               --resource-group "${RESOURCE_GROUP}" \
@@ -93,8 +107,55 @@ jobs:
               -o tsv)"
             if [ -z "${value}" ] && [ -z "${existing}" ]; then
               missing+=("${key}")
+            elif [ -z "${value}" ]; then
+              printf '%s=%s\n' "${key}" "${existing}" >> "${GITHUB_ENV}"
             fi
           done
+
+          for key in ANTHROPIC_API_KEY FISH_AUDIO_API_KEY AZURE_AUDIO_STORAGE_CONNECTION_STRING; do
+            if [ -z "${!key:-}" ]; then
+              missing+=("${key}")
+              printf 'PIPELINE_DEPENDENCY_MISSING target=%s key=%s\n' "${APP_NAME}" "${key}" >&2
+            else
+              printf 'PIPELINE_DEPENDENCY_READY target=%s key=%s\n' "${APP_NAME}" "${key}"
+            fi
+          done
+
+          if [ -z "${AZURE_TTS_STORAGE_CONNECTION_STRING:-}" ]; then
+            existing_tts_storage="$(az webapp config appsettings list \
+              --resource-group "${RESOURCE_GROUP}" \
+              --name "${APP_NAME}" \
+              --query "[?name=='AZURE_TTS_STORAGE_CONNECTION_STRING'].value | [0]" \
+              -o tsv)"
+            existing_general_storage="$(az webapp config appsettings list \
+              --resource-group "${RESOURCE_GROUP}" \
+              --name "${APP_NAME}" \
+              --query "[?name=='AZURE_STORAGE_CONNECTION_STRING'].value | [0]" \
+              -o tsv)"
+            if [ -z "${existing_tts_storage}" ] && [ -z "${existing_general_storage}" ]; then
+              missing+=("AZURE_TTS_STORAGE_CONNECTION_STRING|AZURE_STORAGE_CONNECTION_STRING")
+            elif [ -n "${existing_tts_storage}" ]; then
+              printf 'AZURE_TTS_STORAGE_CONNECTION_STRING=%s\n' "${existing_tts_storage}" >> "${GITHUB_ENV}"
+            fi
+          fi
+
+          if [ -z "${INTERNAL_ADMIN_PASSWORD_HASH:-}" ]; then
+            existing_admin_hash="$(az webapp config appsettings list \
+              --resource-group "${RESOURCE_GROUP}" \
+              --name "${APP_NAME}" \
+              --query "[?name=='INTERNAL_ADMIN_PASSWORD_HASH'].value | [0]" \
+              -o tsv)"
+            existing_admin_secret="$(az webapp config appsettings list \
+              --resource-group "${RESOURCE_GROUP}" \
+              --name "${APP_NAME}" \
+              --query "[?name=='INTERNAL_ADMIN_PASSWORD'].value | [0]" \
+              -o tsv)"
+            if [ -z "${existing_admin_hash}" ] && [ -z "${existing_admin_secret}" ]; then
+              missing+=("INTERNAL_ADMIN_PASSWORD_HASH")
+            elif [ -n "${existing_admin_hash}" ]; then
+              printf 'INTERNAL_ADMIN_PASSWORD_HASH=%s\n' "${existing_admin_hash}" >> "${GITHUB_ENV}"
+            fi
+          fi
 
           if [ "${#missing[@]}" -gt 0 ]; then
             printf 'Missing required SaaS app setting(s) on %s: %s\n' "${APP_NAME}" "${missing[*]}" >&2
@@ -102,9 +163,24 @@ jobs:
             exit 1
           fi
 
+      - name: Apply idempotent Postgres schema
+        shell: bash
+        run: |
+          python -m pip install "psycopg[binary]>=3.2.0"
+          mkdir -p "${RUNNER_TEMP}/socrate-backend"
+          unzip -q python-app.zip -d "${RUNNER_TEMP}/socrate-backend"
+          python "${RUNNER_TEMP}/socrate-backend/tools/database/apply_postgres_schema.py" \
+            --database-url "${DATABASE_URL}"
+
       - name: Configure SaaS Postgres copy
         shell: bash
         run: |
+          az webapp config appsettings delete \
+            --resource-group "${RESOURCE_GROUP}" \
+            --name "${APP_NAME}" \
+            --setting-names DB_PATH SQLITE_SAFETY_STRICT \
+            >/dev/null
+
           az webapp config appsettings set \
             --resource-group "${RESOURCE_GROUP}" \
             --name "${APP_NAME}" \
@@ -113,15 +189,37 @@ jobs:
               ENABLE_ORYX_BUILD=true \
               PORT=8000 \
               WEBSITES_PORT=8000 \
-              DB_PATH=/home/database.db \
-              SQLITE_SAFETY_STRICT=0 \
-              DATABASE_BACKEND=hybrid \
+              DATABASE_BACKEND=postgres \
               PIPELINE_DATABASE_BACKEND=postgres \
               PIPELINE_POSTGRES_MIRROR=0 \
+              PIPELINE_EXECUTION_MODE=queue \
+              PIPELINE_QUEUE_BACKEND=database \
+              PIPELINE_EMBEDDED_WORKER=1 \
+              PIPELINE_WORK_MAX_ATTEMPTS=5 \
+              PIPELINE_WORK_LEASE_SECONDS=300 \
+              PIPELINE_WORK_HEARTBEAT_SECONDS=60 \
+              PIPELINE_WORKER_POLL_SECONDS=1 \
+              PIPELINE_WORKER_READY_STALE_SECONDS=180 \
+              PIPELINE_READY_QUEUE_STALL_SECONDS=600 \
+              PIPELINE_READY_BLOB_CACHE_SECONDS=60 \
+              PIPELINE_ARTIFACTS_REQUIRED=1 \
+              PIPELINE_BLOB_MAX_ATTEMPTS=3 \
+              AZURE_PIPELINE_ARTIFACT_CONTAINER=pipeline-artifacts \
+              POSTGRES_POOL_MIN_SIZE=1 \
+              POSTGRES_POOL_MAX_SIZE=12 \
+              POSTGRES_POOL_TIMEOUT_SECONDS=30 \
+              POSTGRES_POOL_MAX_LIFETIME_SECONDS=1800 \
+              POSTGRES_POOL_MAX_IDLE_SECONDS=300 \
+              POSTGRES_POOL_RECONNECT_TIMEOUT_SECONDS=60 \
+              POSTGRES_CONNECT_TIMEOUT_SECONDS=20 \
+              POSTGRES_FORCE_IPV4=0 \
+              POSTGRES_TIMEZONE=Europe/Paris \
+              SUPABASE_DATABASE_REST_FALLBACK=0 \
               STUDENT_AUTH_LEGACY_FALLBACK=0 \
               HR_DASHBOARD_ENABLED=true \
               HR_DASHBOARD_REPAIR_ON_LOAD=false \
-              FORMATION_CONTENT_DAY_WORKERS=1 \
+              FORMATION_CONTENT_DAY_WORKERS=3 \
+              FORMATION_CONTENT_DAY_WORKERS_MAX=8 \
               FORMATION_STRUCTURED_COURSE_WORKERS=7 \
               FORMATION_TTS_WORDS_PER_MINUTE=165.7 \
               BASIC_TTS_SPEED=1.15 \
@@ -141,6 +239,16 @@ jobs:
           [ -n "${SUPABASE_URL:-}" ] && secret_settings+=("SUPABASE_URL=${SUPABASE_URL}")
           [ -n "${SUPABASE_ANON_KEY:-}" ] && secret_settings+=("SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY}")
           [ -n "${SUPABASE_SERVICE_ROLE_KEY:-}" ] && secret_settings+=("SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}")
+          [ -n "${AZURE_TTS_STORAGE_CONNECTION_STRING:-}" ] && secret_settings+=("AZURE_TTS_STORAGE_CONNECTION_STRING=${AZURE_TTS_STORAGE_CONNECTION_STRING}")
+          [ -n "${INTERNAL_ADMIN_PASSWORD_HASH:-}" ] && secret_settings+=("INTERNAL_ADMIN_PASSWORD_HASH=${INTERNAL_ADMIN_PASSWORD_HASH}")
+          [ -n "${SECRET_KEY:-}" ] && secret_settings+=("SECRET_KEY=${SECRET_KEY}")
+          [ -n "${AUTO_LOGOUT_WEBHOOK_SECRET:-}" ] && secret_settings+=("AUTO_LOGOUT_WEBHOOK_SECRET=${AUTO_LOGOUT_WEBHOOK_SECRET}")
+          [ -n "${ANTHROPIC_API_KEY:-}" ] && secret_settings+=("ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}")
+          [ -n "${DEEPSEEK_API_KEY:-}" ] && secret_settings+=("DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}")
+          [ -n "${FISH_AUDIO_API_KEY:-}" ] && secret_settings+=("FISH_AUDIO_API_KEY=${FISH_AUDIO_API_KEY}")
+          [ -n "${FISH_AUDIO_VOICE_ID:-}" ] && secret_settings+=("FISH_AUDIO_VOICE_ID=${FISH_AUDIO_VOICE_ID}")
+          [ -n "${AZURE_AUDIO_STORAGE_CONNECTION_STRING:-}" ] && secret_settings+=("AZURE_AUDIO_STORAGE_CONNECTION_STRING=${AZURE_AUDIO_STORAGE_CONNECTION_STRING}")
+          [ -n "${AZURE_STORAGE_CONNECTION_STRING:-}" ] && secret_settings+=("AZURE_STORAGE_CONNECTION_STRING=${AZURE_STORAGE_CONNECTION_STRING}")
 
           if [ "${#secret_settings[@]}" -gt 0 ]; then
             az webapp config appsettings set \
@@ -154,7 +262,25 @@ jobs:
             --resource-group "${RESOURCE_GROUP}" \
             --name "${APP_NAME}" \
             --startup-file "${STARTUP_COMMAND}" \
+            --generic-configurations '{"healthCheckPath":"/readyz"}' \
             >/dev/null
+
+          configured_backend="$(az webapp config appsettings list \
+            --resource-group "${RESOURCE_GROUP}" \
+            --name "${APP_NAME}" \
+            --query "[?name=='DATABASE_BACKEND'].value | [0]" \
+            -o tsv)"
+          stale_sqlite_settings="$(az webapp config appsettings list \
+            --resource-group "${RESOURCE_GROUP}" \
+            --name "${APP_NAME}" \
+            --query "[?name=='DB_PATH' || name=='SQLITE_SAFETY_STRICT'].name" \
+            -o tsv)"
+          if [ "${configured_backend}" != "postgres" ] || [ -n "${stale_sqlite_settings}" ]; then
+            printf 'PURE_POSTGRES_CONFIGURATION_FAILED backend=%s stale_sqlite_settings=%s\n' \
+              "${configured_backend:-missing}" "${stale_sqlite_settings:-none}" >&2
+            exit 1
+          fi
+          printf 'PURE_POSTGRES_CONFIGURATION_OK backend=postgres sqlite_settings=absent\n'
 
       - name: Deploy to Azure Web App
         uses: azure/webapps-deploy@v3

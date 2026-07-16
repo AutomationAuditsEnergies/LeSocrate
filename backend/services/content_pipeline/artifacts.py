@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
+import random
+import time
 from datetime import datetime
 
 from utils.logger import get_logger
@@ -30,6 +33,8 @@ CONTENT_ARTIFACT_BLOBS = [
     COURSE_SCRIPT_PLAN_BLOB,
 ]
 
+SCRIPT_REVIEW_ARTIFACT_PREFIX = "script-reviews"
+
 CONTENT_ARTIFACT_DESCRIPTIONS = {
     CONTENT_PLAN_BLOB: "Plan JSON verrouillé et validation serveur.",
     CONTENT_DRAFT_SECTIONS_BLOB: "Sections brutes générées avant assemblage/calibrage.",
@@ -46,6 +51,152 @@ CONTENT_ARTIFACT_DESCRIPTIONS = {
 
 def content_artifact_blob_path(platform_id: int, folder_id: int, filename: str) -> str:
     return f"platform-{platform_id}/folder-{folder_id}/playlist/{filename}"
+
+
+def script_review_artifact_blob_path(platform_id: int, folder_id: int, filename: str) -> str:
+    safe_filename = os.path.basename(str(filename or "").strip())
+    if not safe_filename:
+        raise ValueError("Nom d'artefact de revue manquant")
+    return (
+        f"platform-{int(platform_id)}/folder-{int(folder_id)}/"
+        f"{SCRIPT_REVIEW_ARTIFACT_PREFIX}/{safe_filename}"
+    )
+
+
+def _azure_artifact_storage_configured() -> bool:
+    return bool(
+        os.getenv("AZURE_TTS_STORAGE_CONNECTION_STRING")
+        or os.getenv("AZURE_STORAGE_CONNECTION_STRING")
+    )
+
+
+def _local_script_review_path(platform_id: int, folder_id: int, filename: str) -> str:
+    root = os.path.abspath(
+        os.getenv(
+            "PIPELINE_LOCAL_ARTIFACT_DIR",
+            os.path.join(os.getcwd(), ".pipeline-artifacts"),
+        )
+    )
+    path = os.path.join(
+        root,
+        f"platform-{int(platform_id)}",
+        f"folder-{int(folder_id)}",
+        SCRIPT_REVIEW_ARTIFACT_PREFIX,
+        os.path.basename(filename),
+    )
+    return path
+
+
+def script_review_markdown_locator(platform_id: int, folder_id: int, filename: str) -> str:
+    blob_path = script_review_artifact_blob_path(platform_id, folder_id, filename)
+    if _azure_artifact_storage_configured():
+        from services.azure_blob_service import CONTAINER_ARTIFACTS
+
+        return f"azureblob://{CONTAINER_ARTIFACTS}/{blob_path}"
+    return _local_script_review_path(platform_id, folder_id, filename)
+
+
+def save_script_review_markdown(
+    platform_id: int,
+    folder_id: int,
+    filename: str,
+    markdown: str,
+) -> str:
+    """Persist review Markdown in Blob, with a local-development fallback."""
+    blob_path = script_review_artifact_blob_path(platform_id, folder_id, filename)
+    raw = (markdown or "").encode("utf-8")
+    if _azure_artifact_storage_configured():
+        try:
+            from services.azure_blob_service import (
+                CONTAINER_ARTIFACTS,
+                ensure_private_container,
+                upload_blob,
+            )
+
+            logger.info(
+                "SCRIPT_REVIEW_ARTIFACT_STORAGE_SELECTED storage=azure_blob "
+                "platform_id=%s folder_id=%s blob_path=%s",
+                platform_id,
+                folder_id,
+                blob_path,
+            )
+
+            def _upload():
+                ensure_private_container(CONTAINER_ARTIFACTS)
+                return upload_blob(CONTAINER_ARTIFACTS, blob_path, raw)
+
+            _with_blob_retry(filename, _upload)
+            locator = f"azureblob://{CONTAINER_ARTIFACTS}/{blob_path}"
+            logger.info("SCRIPT_REVIEW_ARTIFACT_SAVED storage=azure_blob locator=%s", locator)
+            return locator
+        except Exception as exc:
+            logger.error(
+                "SCRIPT_REVIEW_ARTIFACT_SAVE_FAILED storage=azure_blob platform_id=%s "
+                "folder_id=%s filename=%s required=%s error=%s",
+                platform_id,
+                folder_id,
+                filename,
+                _artifacts_required(),
+                exc,
+            )
+            if _artifacts_required():
+                raise RuntimeError(
+                    f"Markdown de revue Azure Blob obligatoire non sauvegardé: {filename}"
+                ) from exc
+
+    if _artifacts_required():
+        raise RuntimeError(
+            "Stockage Azure Blob obligatoire mais aucune chaîne de connexion n'est configurée"
+        )
+
+    path = _local_script_review_path(platform_id, folder_id, filename)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as handle:
+        handle.write(markdown or "")
+    logger.info(
+        "SCRIPT_REVIEW_ARTIFACT_SAVED storage=local_dev path=%s platform_id=%s folder_id=%s",
+        path,
+        platform_id,
+        folder_id,
+    )
+    return path
+
+
+def _artifacts_required() -> bool:
+    return os.getenv("PIPELINE_ARTIFACTS_REQUIRED", "0").strip().lower() in {
+        "1", "true", "yes", "on",
+    }
+
+
+def _blob_attempts() -> int:
+    try:
+        return max(1, min(8, int(os.getenv("PIPELINE_BLOB_MAX_ATTEMPTS", "3"))))
+    except (TypeError, ValueError):
+        return 3
+
+
+def _is_missing_blob(exc: Exception) -> bool:
+    message = str(exc)
+    return "BlobNotFound" in message or "The specified blob does not exist" in message
+
+
+def _with_blob_retry(label: str, operation):
+    attempts = _blob_attempts()
+    for attempt in range(1, attempts + 1):
+        try:
+            return operation()
+        except Exception as exc:
+            if attempt >= attempts or _is_missing_blob(exc):
+                raise
+            delay = min(8.0, (0.4 * (2 ** (attempt - 1))) + random.uniform(0, 0.2))
+            logger.warning(
+                "PIPELINE_BLOB_RETRY artifact=%s attempt=%s/%s wait=%.2fs",
+                label,
+                attempt,
+                attempts,
+                delay,
+            )
+            time.sleep(delay)
 
 
 def artifact_payload(job: dict | None, artifact_type: str, payload: dict) -> dict:
@@ -65,26 +216,59 @@ def artifact_payload(job: dict | None, artifact_type: str, payload: dict) -> dic
 
 def save_content_artifact(platform_id: int, folder_id: int, filename: str, payload: dict) -> None:
     try:
-        from services.azure_blob_service import CONTAINER_AUDIOS, upload_blob
+        from services.azure_blob_service import (
+            CONTAINER_ARTIFACTS,
+            ensure_private_container,
+            upload_blob,
+        )
 
-        upload_blob(
-            CONTAINER_AUDIOS,
-            content_artifact_blob_path(platform_id, folder_id, filename),
-            json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8"),
+        raw = json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
+        def _upload():
+            ensure_private_container(CONTAINER_ARTIFACTS)
+            return upload_blob(
+                CONTAINER_ARTIFACTS,
+                content_artifact_blob_path(platform_id, folder_id, filename),
+                raw,
+            )
+
+        _with_blob_retry(
+            filename,
+            _upload,
         )
     except Exception as e:
-        logger.warning("⚠️ Sauvegarde artefact contenu impossible %s folder=%s: %s", filename, folder_id, e)
+        logger.error(
+            "PIPELINE_BLOB_SAVE_FAILED artifact=%s platform=%s folder=%s required=%s error=%s",
+            filename,
+            platform_id,
+            folder_id,
+            _artifacts_required(),
+            e,
+        )
+        if _artifacts_required():
+            raise RuntimeError(
+                f"Artefact Azure Blob obligatoire non sauvegardé: {filename}"
+            ) from e
 
 
 def load_content_artifact(platform_id: int, folder_id: int, filename: str) -> dict | None:
     try:
-        from services.azure_blob_service import CONTAINER_AUDIOS, download_blob
+        from services.azure_blob_service import CONTAINER_ARTIFACTS, download_blob
 
-        raw = download_blob(CONTAINER_AUDIOS, content_artifact_blob_path(platform_id, folder_id, filename))
+        raw = _with_blob_retry(
+            filename,
+            lambda: download_blob(
+                CONTAINER_ARTIFACTS,
+                content_artifact_blob_path(platform_id, folder_id, filename),
+            ),
+        )
         return json.loads(raw.decode("utf-8"))
     except Exception as e:
-        if "BlobNotFound" not in str(e) and "The specified blob does not exist" not in str(e):
+        if not _is_missing_blob(e):
             logger.warning("⚠️ Lecture artefact contenu impossible %s folder=%s: %s", filename, folder_id, e)
+            if _artifacts_required():
+                raise RuntimeError(
+                    f"Artefact Azure Blob obligatoire illisible: {filename}"
+                ) from e
         return None
 
 

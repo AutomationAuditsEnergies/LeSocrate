@@ -3,10 +3,28 @@ import os
 import shutil
 import sqlite3
 from datetime import datetime
-from config import DB_PATH, FRANCE_TZ
+from config import DB_PATH, FRANCE_TZ, sqlite_runtime_enabled
 from utils.logger import get_logger
+from utils.slug import slugify, unique_slug
 
 logger = get_logger(__name__)
+
+
+class SQLiteRuntimeDisabledError(RuntimeError):
+    """Raised when legacy code tries to open SQLite in pure Postgres mode."""
+
+
+def _require_sqlite_runtime(operation: str) -> None:
+    if sqlite_runtime_enabled():
+        return
+    logger.error(
+        "SQLITE_ACCESS_BLOCKED operation=%s backend=postgres path=%s",
+        operation,
+        DB_PATH,
+    )
+    raise SQLiteRuntimeDisabledError(
+        "Accès SQLite interdit : ce déploiement utilise PostgreSQL comme source unique"
+    )
 
 
 def get_db_connection():
@@ -18,6 +36,7 @@ def get_db_connection():
     par db_safety.startup_check, persistant) permet lecteurs + 1 écrivain
     simultanés et réduit fortement le risque de corruption.
     """
+    _require_sqlite_runtime("get_db_connection")
     conn = sqlite3.connect(DB_PATH, timeout=30)
     # NORMAL n'est sûr qu'avec WAL (jamais activé sur Azure : /home est un
     # partage réseau, cf. db_safety.enable_wal). En mode rollback journal on
@@ -56,6 +75,7 @@ def _quarantine_corrupt_database(db_path: str) -> str:
 
 def init_database(_recovered_from_corruption: bool = False):
     """Initialise la base de données avec les tables nécessaires"""
+    _require_sqlite_runtime("init_database")
     logger.info("🗄️ Initialisation de la base de données...")
     conn = None
     try:
@@ -99,6 +119,90 @@ def init_database(_recovered_from_corruption: bool = False):
             """
         )
         logger.info("✅ Table cours_config créée/vérifiée")
+
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS course_schedule_config (
+                platform_id INTEGER PRIMARY KEY,
+                total_training_days INTEGER NOT NULL,
+                weekly_course_count INTEGER NOT NULL,
+                weekdays_json TEXT NOT NULL,
+                start_time TEXT NOT NULL DEFAULT '09:00',
+                timezone TEXT NOT NULL DEFAULT 'Europe/Paris',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS course_sessions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                platform_id INTEGER NOT NULL,
+                session_index INTEGER NOT NULL,
+                scheduled_at TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'planned',
+                activated_at TEXT,
+                completed_at TEXT,
+                reminder_previous_evening_sent_at TEXT,
+                reminder_5min_sent_at TEXT,
+                reminder_previous_evening_claimed_at TEXT,
+                reminder_5min_claimed_at TEXT,
+                session_password TEXT,
+                session_password_generated_at TEXT,
+                audio_generation_status TEXT DEFAULT 'pending',
+                audio_generation_started_at TEXT,
+                audio_generation_completed_at TEXT,
+                audio_generation_error TEXT,
+                audio_job_id INTEGER,
+                audio_folder_id INTEGER,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(platform_id, session_index)
+            )
+            """
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_course_sessions_platform_scheduled ON course_sessions(platform_id, scheduled_at)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_course_sessions_status_scheduled ON course_sessions(status, scheduled_at)"
+        )
+        cursor.execute("PRAGMA table_info(course_sessions)")
+        course_session_columns = [col[1] for col in cursor.fetchall()]
+        _course_session_audio_cols = {
+            "session_password": "TEXT",
+            "session_password_generated_at": "TEXT",
+            "reminder_previous_evening_claimed_at": "TEXT",
+            "reminder_5min_claimed_at": "TEXT",
+            "audio_generation_status": "TEXT DEFAULT 'pending'",
+            "audio_generation_started_at": "TEXT",
+            "audio_generation_completed_at": "TEXT",
+            "audio_generation_error": "TEXT",
+            "audio_job_id": "INTEGER",
+            "audio_folder_id": "INTEGER",
+        }
+        for col, col_type in _course_session_audio_cols.items():
+            if col not in course_session_columns:
+                cursor.execute(f"ALTER TABLE course_sessions ADD COLUMN {col} {col_type}")
+                logger.info(f"✅ Colonne {col} ajoutée à course_sessions")
+        logger.info("✅ Tables course_schedule_config/course_sessions créées/vérifiées")
+
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS course_reminder_recipients (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                platform_id INTEGER NOT NULL,
+                email TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                UNIQUE(platform_id, email)
+            )
+            """
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_course_reminder_recipients_platform ON course_reminder_recipients(platform_id)"
+        )
+        logger.info("✅ Table course_reminder_recipients créée/vérifiée")
 
         # Insérer une heure par défaut si la table est vide
         cursor.execute("SELECT COUNT(*) FROM cours_config")
@@ -189,10 +293,36 @@ def init_database(_recovered_from_corruption: bool = False):
 
         cursor.execute(
             """
+            CREATE TABLE IF NOT EXISTS student_attendance_records (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                platform_id INTEGER NOT NULL,
+                student_profile_id INTEGER NOT NULL,
+                course_date TEXT NOT NULL,
+                slots_json TEXT NOT NULL DEFAULT '[]',
+                total_minutes INTEGER NOT NULL DEFAULT 0,
+                status TEXT NOT NULL DEFAULT 'absent',
+                notes TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(platform_id, student_profile_id, course_date)
+            )
+            """
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_student_attendance_platform_date ON student_attendance_records(platform_id, course_date)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_student_attendance_student ON student_attendance_records(student_profile_id)"
+        )
+        logger.info("✅ Table student_attendance_records créée/vérifiée")
+
+        cursor.execute(
+            """
             CREATE TABLE IF NOT EXISTS training_center_accounts (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 username TEXT NOT NULL UNIQUE,
                 password_hash TEXT NOT NULL,
+                password_debug_plaintext TEXT,
                 center_name TEXT NOT NULL,
                 is_active INTEGER NOT NULL DEFAULT 1,
                 created_at TEXT NOT NULL,
@@ -201,6 +331,37 @@ def init_database(_recovered_from_corruption: bool = False):
             """
         )
         logger.info("✅ Table training_center_accounts créée/vérifiée")
+
+        cursor.execute("PRAGMA table_info(training_center_accounts)")
+        center_columns = [col[1] for col in cursor.fetchall()]
+        if "slug" not in center_columns:
+            cursor.execute("ALTER TABLE training_center_accounts ADD COLUMN slug TEXT")
+            logger.info("✅ Colonne slug ajoutée à training_center_accounts")
+        if "password_debug_plaintext" not in center_columns:
+            cursor.execute("ALTER TABLE training_center_accounts ADD COLUMN password_debug_plaintext TEXT")
+            logger.info("✅ Colonne password_debug_plaintext ajoutée à training_center_accounts")
+        # Never retain reversible credentials. The compatibility column stays
+        # temporarily so old binaries/migrations don't fail, but is always NULL.
+        cursor.execute(
+            "UPDATE training_center_accounts SET password_debug_plaintext = NULL "
+            "WHERE password_debug_plaintext IS NOT NULL"
+        )
+        cursor.execute("SELECT id, center_name, username, slug FROM training_center_accounts")
+        for center_id, center_name, username, existing_slug in cursor.fetchall():
+            if existing_slug:
+                continue
+            base_slug = slugify(center_name or username, fallback=f"centre-{center_id}")
+            slug = unique_slug(cursor, "training_center_accounts", base_slug, exclude_id=center_id)
+            cursor.execute(
+                "UPDATE training_center_accounts SET slug = ? WHERE id = ?",
+                (slug, center_id),
+            )
+        try:
+            cursor.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_training_center_accounts_slug ON training_center_accounts(slug)"
+            )
+        except sqlite3.IntegrityError:
+            logger.warning("⚠️ Impossible de créer l'index unique centre slug : doublons existants")
 
         # Seed plateformes si la table est vide
         cursor.execute("SELECT COUNT(*) FROM platform_config")
@@ -277,6 +438,24 @@ def init_database(_recovered_from_corruption: bool = False):
         if "source_formation_id" not in pc_columns:
             cursor.execute("ALTER TABLE platform_config ADD COLUMN source_formation_id INTEGER")
             logger.info("✅ Colonne source_formation_id ajoutée à platform_config")
+        if "center_account_id" not in pc_columns:
+            cursor.execute("ALTER TABLE platform_config ADD COLUMN center_account_id INTEGER")
+            logger.info("✅ Colonne center_account_id ajoutée à platform_config")
+        if "public_access_enabled" not in pc_columns:
+            cursor.execute("ALTER TABLE platform_config ADD COLUMN public_access_enabled INTEGER DEFAULT 1")
+            cursor.execute("UPDATE platform_config SET public_access_enabled = 1 WHERE public_access_enabled IS NULL")
+            logger.info("✅ Colonne public_access_enabled ajoutée à platform_config")
+        if "slug" in pc_columns:
+            cursor.execute("SELECT id, name, slug FROM platform_config")
+            for platform_id, platform_name, existing_slug in cursor.fetchall():
+                if existing_slug:
+                    continue
+                base_slug = slugify(platform_name, fallback=f"formation-{platform_id}")
+                slug = unique_slug(cursor, "platform_config", base_slug, exclude_id=platform_id)
+                cursor.execute(
+                    "UPDATE platform_config SET slug = ? WHERE id = ?",
+                    (slug, platform_id),
+                )
 
         # Migration multi-tenant : platform_id dans logs
         cursor.execute("PRAGMA table_info(logs)")
@@ -700,6 +879,25 @@ def init_database(_recovered_from_corruption: bool = False):
         if "voice_updated_at" not in fm_cols:
             cursor.execute("ALTER TABLE formation_modules ADD COLUMN voice_updated_at TIMESTAMP")
             logger.info("✅ Colonne voice_updated_at ajoutée à formation_modules")
+        if "center_account_id" not in fm_cols:
+            cursor.execute("ALTER TABLE formation_modules ADD COLUMN center_account_id INTEGER")
+            logger.info("✅ Colonne center_account_id ajoutée à formation_modules")
+        cursor.execute("""
+            UPDATE formation_modules
+            SET center_account_id = (
+                SELECT pc.center_account_id
+                FROM platform_config pc
+                WHERE pc.id = formation_modules.source_platform_id
+            )
+            WHERE center_account_id IS NULL
+              AND source_platform_id IS NOT NULL
+              AND EXISTS (
+                SELECT 1
+                FROM platform_config pc
+                WHERE pc.id = formation_modules.source_platform_id
+                  AND pc.center_account_id IS NOT NULL
+              )
+        """)
 
         # ─── Observabilité pipeline : rapports conformité + événements ───────
         # Les rapports de conformité ne peuvent pas dépendre uniquement du
@@ -776,16 +974,29 @@ def init_database(_recovered_from_corruption: bool = False):
         for j_id, j_rncp, j_tp, j_pid, j_created in jobs_to_migrate:
             # Version = {year}-v{n} où n = modules existants pour ce RNCP + 1
             cursor.execute(
-                "SELECT COUNT(*) FROM formation_modules WHERE rncp_code = ?",
-                (j_rncp or "",),
+                "SELECT center_account_id FROM platform_config WHERE id = ?",
+                (j_pid,),
             )
+            center_row = cursor.fetchone()
+            j_center_account_id = center_row[0] if center_row else None
+            if j_center_account_id is None:
+                cursor.execute(
+                    "SELECT COUNT(*) FROM formation_modules WHERE rncp_code = ? AND center_account_id IS NULL",
+                    (j_rncp or "",),
+                )
+            else:
+                cursor.execute(
+                    "SELECT COUNT(*) FROM formation_modules WHERE rncp_code = ? AND center_account_id = ?",
+                    (j_rncp or "", j_center_account_id),
+                )
             n = cursor.fetchone()[0] + 1
             version = f"{current_year}-v{n}"
             cursor.execute("""
                 INSERT OR IGNORE INTO formation_modules
-                (rncp_code, tp_name, version, status, source_pipeline_job_id, source_platform_id, validated_at)
-                VALUES (?, ?, ?, 'validated', ?, ?, CURRENT_TIMESTAMP)
-            """, (j_rncp, j_tp, version, j_id, j_pid))
+                (rncp_code, tp_name, version, status, source_pipeline_job_id,
+                 source_platform_id, center_account_id, validated_at)
+                VALUES (?, ?, ?, 'validated', ?, ?, ?, CURRENT_TIMESTAMP)
+            """, (j_rncp, j_tp, version, j_id, j_pid, j_center_account_id))
             if cursor.rowcount > 0:
                 logger.info(f"🔄 Module rétro-créé : {j_tp} {version} (job {j_id})")
         if jobs_to_migrate:

@@ -7,7 +7,15 @@ FRANCE_TZ = pytz.timezone("Europe/Paris")
 
 # Configuration Flask
 SECRET_KEY = os.getenv("SECRET_KEY", "fallback_secret_key_for_dev")
-STUDENT_AUTH_LEGACY_FALLBACK = os.getenv("STUDENT_AUTH_LEGACY_FALLBACK", "1").lower() in (
+_student_auth_default = (
+    "0"
+    if os.getenv("DATABASE_BACKEND", "sqlite").strip().lower()
+    in {"postgres", "postgresql", "supabase"}
+    else "1"
+)
+STUDENT_AUTH_LEGACY_FALLBACK = os.getenv(
+    "STUDENT_AUTH_LEGACY_FALLBACK", _student_auth_default
+).lower() in (
     "1",
     "true",
     "yes",
@@ -22,6 +30,38 @@ RAG_SERVICE_URL = os.getenv(
 SUPABASE_URL = os.getenv("SUPABASE_URL", "").rstrip("/")
 SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY", "")
 SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
+
+# Postgres cible pour le SaaS multi-tenant.
+# En pratique, utiliser l'URL "Connection string" Supabase/Postgres en variable
+# d'environnement, jamais en dur dans le repo.
+DATABASE_URL = os.getenv("DATABASE_URL") or os.getenv("SUPABASE_DB_URL", "")
+DATABASE_BACKEND = os.getenv("DATABASE_BACKEND", "sqlite").strip().lower()
+PIPELINE_DATABASE_BACKEND = os.getenv("PIPELINE_DATABASE_BACKEND", "sqlite").strip().lower()
+PIPELINE_POSTGRES_MIRROR = os.getenv("PIPELINE_POSTGRES_MIRROR", "").strip().lower() in (
+    "1",
+    "true",
+    "yes",
+    "on",
+)
+
+
+def sqlite_runtime_enabled() -> bool:
+    """Whether any authoritative runtime domain still requires SQLite.
+
+    ``hybrid`` and ``postgres_core`` are explicit migration modes. A deployment
+    configured with both business and pipeline data on Postgres must not create,
+    validate, back up, or silently read a local SQLite database.
+    """
+    return (
+        DATABASE_BACKEND in {"sqlite", "hybrid", "postgres_core"}
+        or PIPELINE_DATABASE_BACKEND not in {"postgres", "postgresql", "supabase"}
+    )
+SQLITE_SAFETY_STRICT = os.getenv("SQLITE_SAFETY_STRICT", "1").strip().lower() in (
+    "1",
+    "true",
+    "yes",
+    "on",
+)
 
 # Base de données - /home est persistant sur Azure App Service, /tmp ne l'est pas.
 # DB_PATH peut être surchargé par environnement Azure. Indispensable pour un

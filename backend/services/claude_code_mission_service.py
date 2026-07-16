@@ -22,6 +22,7 @@ import time
 from datetime import datetime, timedelta
 
 from database.db import get_db_connection
+from repositories import pipeline_repository as pipeline_repo
 from utils.logger import get_logger
 
 
@@ -3198,7 +3199,7 @@ def compute_volume_audit(job_id: int) -> dict:
     segments_count, shortest_segments[]}].
     """
     budget = _course_day_budget_for_volume()
-    job = _get_job_row(job_id)
+    job = pipeline_repo.get_pipeline_job(job_id)
     if not job:
         return {
             "target": budget["target_words"],
@@ -3216,34 +3217,21 @@ def compute_volume_audit(job_id: int) -> dict:
         logger.warning("Volume audit canonical folders failed for job %s", job_id, exc_info=True)
         canonical_ids = []
 
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    if canonical_ids:
-        placeholders = ",".join("?" * len(canonical_ids))
-        cursor.execute(
-            f"""SELECT id, name, position FROM cours_folders
-               WHERE id IN ({placeholders}) ORDER BY position ASC""",
-            tuple(canonical_ids),
-        )
-        folders = cursor.fetchall()
-    else:
-        folders = []
+    rows = pipeline_repo.list_volume_audit_rows_for_folders(canonical_ids)
+    folders: dict[int, dict] = {}
+    for row in rows:
+        folder_id = int(row["folder_id"])
+        folder = folders.setdefault(folder_id, {
+            "folder_id": folder_id,
+            "folder_name": row["folder_name"],
+            "position": row["position"],
+            "segments": [],
+        })
+        folder["segments"].append(row)
 
     out = []
-    for fid, fname, pos in folders:
-        cursor.execute(
-            """SELECT s.id, s.sub_part_index, s.sub_part_name, s.passe,
-                      COALESCE(s.text_content, '') AS text_content,
-                      COALESCE(s.word_count, 0) AS wc
-               FROM content_generation_segments s
-               JOIN content_generation_jobs cj ON cj.id = s.job_id
-               WHERE cj.folder_id = ? AND s.status = 'completed'
-               ORDER BY s.sub_part_index ASC, s.passe ASC""",
-            (fid,),
-        )
-        segs = cursor.fetchall()
-        if not segs:
-            continue
+    for folder in folders.values():
+        segs = folder["segments"]
         try:
             from services.content_generation_service import count_tts_spoken_words
         except Exception:
@@ -3253,15 +3241,16 @@ def compute_volume_audit(job_id: int) -> dict:
         total = 0
         raw_total = 0
         for s in segs:
-            spoken_wc = count_tts_spoken_words(s[4] or "")
-            raw_wc = int(s[5] or len((s[4] or "").split()))
+            text_content = s["text_content"] or ""
+            spoken_wc = count_tts_spoken_words(text_content)
+            raw_wc = int(s["word_count"] or len(text_content.split()))
             total += spoken_wc
             raw_total += raw_wc
             normalized_segments.append({
-                "segment_id": s[0],
-                "sub_idx": s[1],
-                "sub_part_name": s[2],
-                "passe": s[3],
+                "segment_id": s["segment_id"],
+                "sub_idx": s["sub_part_index"],
+                "sub_part_name": s["sub_part_name"],
+                "passe": s["passe"],
                 "word_count": int(spoken_wc),
                 "raw_word_count": int(raw_wc),
             })
@@ -3269,9 +3258,9 @@ def compute_volume_audit(job_id: int) -> dict:
         deficit = max(0, int(budget["min_words"]) - total)
         overflow = max(0, total - int(budget["max_words"]))
         out.append({
-            "folder_id": fid,
-            "folder_name": fname,
-            "day_number": (pos or 0) + 1,
+            "folder_id": folder["folder_id"],
+            "folder_name": folder["folder_name"],
+            "day_number": (folder["position"] or 0) + 1,
             "total_words": total,
             "raw_words": raw_total,
             "deficit": deficit,
@@ -3282,7 +3271,14 @@ def compute_volume_audit(job_id: int) -> dict:
             "segments_count": len(segs),
             "shortest_segments": normalized_segments[:_VOLUME_SAFETY_TOP_N],
         })
-    conn.close()
+    logger.info(
+        "VOLUME_AUDIT_COMPUTED job_id=%s canonical_folders=%s audited_folders=%s "
+        "completed_segments=%s",
+        job_id,
+        len(canonical_ids),
+        len(out),
+        len(rows),
+    )
     return {
         "target": budget["target_words"],
         "min_target": budget["min_words"],

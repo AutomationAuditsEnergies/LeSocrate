@@ -16,6 +16,7 @@ import os
 import shutil
 import subprocess
 import threading
+import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
 
@@ -203,7 +204,29 @@ class AnthropicAPIError(Exception):
     @property
     def is_deterministic(self) -> bool:
         """True si retry n'aidera pas (mauvaise requête, auth, crédits…)."""
-        return self.status_code in (400, 401, 403, 404, 422)
+        return self.status_code in (400, 401, 402, 403, 404, 422)
+
+
+def _sleep(seconds: float) -> None:
+    try:
+        import eventlet
+        eventlet.sleep(seconds)
+    except Exception:
+        time.sleep(seconds)
+
+
+def _transient_http_wait(attempt: int) -> float:
+    base = max(0.25, float(os.getenv("LLM_HTTP_RETRY_BASE_WAIT_SEC", "2")))
+    cap = max(base, float(os.getenv("LLM_HTTP_RETRY_MAX_WAIT_SEC", "20")))
+    return min(cap, base * (2 ** max(0, attempt - 1)))
+
+
+def _llm_http_max_attempts() -> int:
+    return max(1, min(6, _int_env("LLM_HTTP_MAX_ATTEMPTS", 3)))
+
+
+def _is_retryable_http_status(status_code: int) -> bool:
+    return status_code in (408, 409, 425, 500, 502, 503, 504, 520, 522, 524)
 
 
 def parse_retry_after(resp) -> float:
@@ -331,59 +354,91 @@ def post_message(messages, max_tokens=8000, model=None, timeout=600, temperature
         if thinking == "enabled" and effort in ("high", "max"):
             payload["output_config"] = {"effort": effort}
 
-    with _llm_concurrency_slot(config["provider"], model):
-        resp = _http.post(
-            config["url"],
-            headers={
-                "x-api-key": config["api_key"],
-                "anthropic-version": "2023-06-01",
-                "content-type": "application/json",
-            },
-            json=payload,
-            timeout=timeout,
-        )
-
-    if resp.status_code == 429:
-        wait = parse_retry_after(resp)
+    max_attempts = _llm_http_max_attempts()
+    transient_errors = (
+        _http.exceptions.ChunkedEncodingError,
+        _http.exceptions.ConnectionError,
+        _http.exceptions.Timeout,
+    )
+    for attempt in range(1, max_attempts + 1):
         try:
-            error_body = resp.json()
-        except Exception:
-            error_body = resp.text[:500]
-        logger.warning(
-            f"⏳ {config['provider']} 429 ({model}, max_tokens={max_tokens}) — "
-            f"retry conseillé dans {wait:.0f}s : {error_body}"
-        )
-        raise AnthropicRateLimitError(wait)
+            with _llm_concurrency_slot(config["provider"], model):
+                resp = _http.post(
+                    config["url"],
+                    headers={
+                        "x-api-key": config["api_key"],
+                        "anthropic-version": "2023-06-01",
+                        "content-type": "application/json",
+                    },
+                    json=payload,
+                    timeout=timeout,
+                )
 
-    if not resp.ok:
-        try:
-            error_body = resp.json()
-        except Exception:
-            error_body = resp.text[:500]
-        logger.error(
-            f"❌ {config['provider']} API {resp.status_code} ({model}, max_tokens={max_tokens}) : {error_body}"
-        )
-        # Extrait un message lisible depuis le JSON Anthropic standard :
-        #   {"type": "error", "error": {"type": "...", "message": "..."}}
-        err_type = ""
-        err_msg = ""
-        if isinstance(error_body, dict):
-            err = error_body.get("error", {})
-            if isinstance(err, dict):
-                err_type = err.get("type", "") or ""
-                err_msg = err.get("message", "") or ""
-        if not err_msg:
-            err_msg = str(error_body)[:300]
-        raise AnthropicAPIError(resp.status_code, err_type, err_msg)
+            if resp.status_code == 429:
+                wait = parse_retry_after(resp)
+                try:
+                    error_body = resp.json()
+                except Exception:
+                    error_body = resp.text[:500]
+                logger.warning(
+                    f"⏳ {config['provider']} 429 ({model}, max_tokens={max_tokens}) — "
+                    f"retry conseillé dans {wait:.0f}s : {error_body}"
+                )
+                raise AnthropicRateLimitError(wait)
 
-    data = resp.json()
-    content = data.get("content")
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        for block in content:
-            if isinstance(block, dict) and block.get("type") == "text":
-                return block.get("text", "")
-            if isinstance(block, dict) and "text" in block:
-                return block.get("text", "")
-    raise AnthropicAPIError(200, "invalid_response", f"Réponse {config['provider']} sans bloc texte")
+            if not resp.ok:
+                try:
+                    error_body = resp.json()
+                except Exception:
+                    error_body = resp.text[:500]
+                logger.error(
+                    f"❌ {config['provider']} API {resp.status_code} ({model}, max_tokens={max_tokens}) : {error_body}"
+                )
+                # Extrait un message lisible depuis le JSON Anthropic standard :
+                #   {"type": "error", "error": {"type": "...", "message": "..."}}
+                err_type = ""
+                err_msg = ""
+                if isinstance(error_body, dict):
+                    err = error_body.get("error", {})
+                    if isinstance(err, dict):
+                        err_type = err.get("type", "") or ""
+                        err_msg = err.get("message", "") or ""
+                if not err_msg:
+                    err_msg = str(error_body)[:300]
+                api_error = AnthropicAPIError(resp.status_code, err_type, err_msg)
+                if (
+                    api_error.is_deterministic
+                    or not _is_retryable_http_status(resp.status_code)
+                    or attempt >= max_attempts
+                ):
+                    raise api_error
+                wait = _transient_http_wait(attempt)
+                logger.warning(
+                    f"⚠️ {config['provider']} API {resp.status_code} transitoire "
+                    f"({model}, tentative {attempt}/{max_attempts}) — retry dans {wait:.1f}s"
+                )
+                _sleep(wait)
+                continue
+
+            data = resp.json()
+            content = data.get("content")
+            if isinstance(content, str):
+                return content
+            if isinstance(content, list):
+                for block in content:
+                    if isinstance(block, dict) and block.get("type") == "text":
+                        return block.get("text", "")
+                    if isinstance(block, dict) and "text" in block:
+                        return block.get("text", "")
+            raise AnthropicAPIError(200, "invalid_response", f"Réponse {config['provider']} sans bloc texte")
+        except transient_errors as exc:
+            if attempt >= max_attempts:
+                raise
+            wait = _transient_http_wait(attempt)
+            logger.warning(
+                f"⚠️ {config['provider']} réseau interrompu ({model}, tentative {attempt}/{max_attempts}) — "
+                f"{type(exc).__name__}: {str(exc)[:200]} — retry dans {wait:.1f}s"
+            )
+            _sleep(wait)
+
+    raise AnthropicAPIError(500, "retry_exhausted", f"{config['provider']} retry épuisé")

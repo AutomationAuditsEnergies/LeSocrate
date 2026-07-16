@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - staging
+    paths:
+      - 'backend/**'
+      - '.github/workflows/staging_plateforme4.yml'
   workflow_dispatch:
 
 jobs:

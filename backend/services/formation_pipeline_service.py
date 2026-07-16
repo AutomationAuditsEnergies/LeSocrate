@@ -21,7 +21,18 @@ from urllib.parse import quote
 
 import requests as _http
 
-from database.db import get_db_connection
+from repositories.pipeline_repository import (
+    attach_course_folder_to_job,
+    course_folder_exists_for_job,
+    create_pipeline_job,
+    create_course_folder_for_job,
+    find_orphan_course_folder,
+    get_auto_pilot_pipeline_jobs_to_resume,
+    get_pipeline_job,
+    list_expected_course_folder_matches,
+    list_pipeline_jobs,
+    update_pipeline_job,
+)
 from utils.anthropic_client import (
     AnthropicRateLimitError,
     default_model,
@@ -1276,17 +1287,17 @@ def expected_course_folder_name(day_data: dict, fallback_day_number: int) -> str
 
 def _folder_row_to_dict(row, day_data: dict, day_index: int, duplicate_of: int = None) -> dict:
     return {
-        "folder_id": row[0],
-        "name": row[1],
-        "position": row[2],
-        "platform_id": row[3],
-        "formation_job_id": row[4],
-        "content_job_id": row[5],
-        "content_status": row[6],
-        "total_words": row[7] or 0,
-        "segments_completed": row[8] or 0,
+        "folder_id": row["id"],
+        "name": row["name"],
+        "position": row["position"],
+        "platform_id": row["platform_id"],
+        "formation_job_id": row["formation_job_id"],
+        "content_job_id": row.get("content_job_id"),
+        "content_status": row.get("content_status"),
+        "total_words": row.get("total_words") or 0,
+        "segments_completed": row.get("segments_completed") or 0,
         "day_number": (day_data or {}).get("day_number") or day_index + 1,
-        "day_title": (day_data or {}).get("title") or row[1],
+        "day_title": (day_data or {}).get("title") or row["name"],
         "expected_name": expected_course_folder_name(day_data, day_index + 1),
         "duplicate_of": duplicate_of,
     }
@@ -1315,94 +1326,37 @@ def get_expected_course_folders(
     missing = []
     created = []
 
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    try:
-        for idx, day_data in enumerate(daily_programs):
-            folder_name = expected_course_folder_name(day_data, idx + 1)
-            cursor.execute(
-                """
-                SELECT
-                    cf.id,
-                    cf.name,
-                    cf.position,
-                    cf.platform_id,
-                    cf.formation_job_id,
-                    cgj.id,
-                    cgj.status,
-                    COALESCE(cgj.total_words, 0),
-                    COALESCE(SUM(CASE WHEN cgs.status = 'completed' THEN 1 ELSE 0 END), 0)
-                FROM cours_folders cf
-                LEFT JOIN content_generation_jobs cgj ON cgj.folder_id = cf.id
-                LEFT JOIN content_generation_segments cgs ON cgs.job_id = cgj.id
-                WHERE cf.formation_job_id = ? AND cf.name = ?
-                GROUP BY cf.id, cf.name, cf.position, cf.platform_id, cf.formation_job_id,
-                         cgj.id, cgj.status, cgj.total_words
-                ORDER BY
-                    CASE
-                        WHEN cgj.status = 'completed' THEN 0
-                        WHEN COALESCE(cgj.total_words, 0) > 0 THEN 1
-                        WHEN cgj.status = 'running' THEN 2
-                        WHEN cgj.status = 'idle' THEN 3
-                        WHEN cgj.id IS NULL THEN 5
-                        ELSE 4
-                    END,
-                    COALESCE(cgj.total_words, 0) DESC,
-                    COALESCE(SUM(CASE WHEN cgs.status = 'completed' THEN 1 ELSE 0 END), 0) DESC,
-                    cf.position ASC,
-                    cf.id ASC
-                """,
-                (job_id, folder_name),
+    for idx, day_data in enumerate(daily_programs):
+        folder_name = expected_course_folder_name(day_data, idx + 1)
+        matches = list_expected_course_folder_matches(job_id, folder_name)
+
+        if not matches and create_missing:
+            created_row = create_course_folder_for_job(
+                platform_id=resolved_platform_id,
+                folder_name=folder_name,
+                formation_job_id=job_id,
             )
-            matches = cursor.fetchall()
+            created.append({"folder_id": created_row["id"], "name": folder_name})
+            matches = [created_row]
 
-            if not matches and create_missing:
-                cursor.execute(
-                    "SELECT COALESCE(MAX(position), -1) + 1 FROM cours_folders WHERE platform_id = ?",
-                    (resolved_platform_id,),
+        if not matches:
+            missing.append({
+                "day_number": (day_data or {}).get("day_number") or idx + 1,
+                "name": folder_name,
+            })
+            continue
+
+        canonical = _folder_row_to_dict(matches[0], day_data, idx)
+        folders.append(canonical)
+        for duplicate in matches[1:]:
+            duplicates.append(
+                _folder_row_to_dict(
+                    duplicate,
+                    day_data,
+                    idx,
+                    duplicate_of=canonical["folder_id"],
                 )
-                position = cursor.fetchone()[0]
-                cursor.execute(
-                    "INSERT INTO cours_folders (platform_id, name, position, formation_job_id) VALUES (?, ?, ?, ?)",
-                    (resolved_platform_id, folder_name, position, job_id),
-                )
-                folder_id = cursor.lastrowid
-                created.append({"folder_id": folder_id, "name": folder_name})
-                matches = [(
-                    folder_id,
-                    folder_name,
-                    position,
-                    resolved_platform_id,
-                    job_id,
-                    None,
-                    None,
-                    0,
-                    0,
-                )]
-
-            if not matches:
-                missing.append({
-                    "day_number": (day_data or {}).get("day_number") or idx + 1,
-                    "name": folder_name,
-                })
-                continue
-
-            canonical = _folder_row_to_dict(matches[0], day_data, idx)
-            folders.append(canonical)
-            for duplicate in matches[1:]:
-                duplicates.append(
-                    _folder_row_to_dict(
-                        duplicate,
-                        day_data,
-                        idx,
-                        duplicate_of=canonical["folder_id"],
-                    )
-                )
-
-        if created:
-            conn.commit()
-    finally:
-        conn.close()
+            )
 
     return {
         "expected_count": len(daily_programs),
@@ -1524,62 +1478,23 @@ def repair_orphan_content_folders(job_id: int) -> dict:
     if not daily_programs:
         return {"repaired": 0, "missing": 0, "folders": []}
 
-    conn = get_db_connection()
-    cursor = conn.cursor()
     repaired = []
     missing = 0
-    try:
-        for day_data in daily_programs:
-            day_num = day_data.get("day_number", len(repaired) + missing + 1)
-            day_title = day_data.get("title", f"Jour {day_num}")
-            folder_name = f"Jour {day_num} — {day_title}"
+    for day_data in daily_programs:
+        day_num = day_data.get("day_number", len(repaired) + missing + 1)
+        day_title = day_data.get("title", f"Jour {day_num}")
+        folder_name = f"Jour {day_num} — {day_title}"
 
-            cursor.execute(
-                """
-                SELECT id FROM cours_folders
-                WHERE formation_job_id = ? AND name = ?
-                LIMIT 1
-                """,
-                (job_id, folder_name),
-            )
-            if cursor.fetchone():
-                continue
+        if course_folder_exists_for_job(job_id, folder_name):
+            continue
 
-            cursor.execute(
-                """
-                SELECT cf.id
-                FROM cours_folders cf
-                LEFT JOIN content_generation_jobs cgj ON cgj.folder_id = cf.id
-                WHERE cf.platform_id = ?
-                  AND cf.name = ?
-                  AND cf.formation_job_id IS NULL
-                ORDER BY CASE WHEN cgj.id IS NULL THEN 1 ELSE 0 END,
-                         cf.created_at DESC,
-                         cf.id DESC
-                LIMIT 1
-                """,
-                (job["platform_id"], folder_name),
-            )
-            row = cursor.fetchone()
-            if not row:
-                missing += 1
-                continue
+        folder_id = find_orphan_course_folder(job["platform_id"], folder_name)
+        if not folder_id:
+            missing += 1
+            continue
 
-            folder_id = row[0]
-            cursor.execute(
-                """
-                UPDATE cours_folders
-                SET formation_job_id = ?
-                WHERE id = ? AND formation_job_id IS NULL
-                """,
-                (job_id, folder_id),
-            )
-            if cursor.rowcount:
-                repaired.append({"folder_id": folder_id, "name": folder_name})
-
-        conn.commit()
-    finally:
-        conn.close()
+        if attach_course_folder_to_job(job_id, folder_id):
+            repaired.append({"folder_id": folder_id, "name": folder_name})
 
     if repaired:
         logger.warning(
@@ -1619,159 +1534,30 @@ def _format_day_program_text(day_data: dict, tp_name: str) -> str:
 def create_job(platform_id: int, tp_name: str, rncp_code: str,
                total_hours: int, nb_days: int) -> int:
     """Crée un job pipeline formation en DB. Retourne l'id."""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        INSERT INTO formation_pipeline_jobs
-            (platform_id, tp_name, rncp_code, total_hours, nb_days, status)
-        VALUES (?, ?, ?, ?, ?, 'init')
-    """, (platform_id, tp_name, rncp_code, total_hours, nb_days))
-    job_id = cursor.lastrowid
-    conn.commit()
-    conn.close()
-    return job_id
+    return create_pipeline_job(
+        platform_id=platform_id,
+        tp_name=tp_name,
+        rncp_code=rncp_code,
+        total_hours=total_hours,
+        nb_days=nb_days,
+    )
 
 
 def update_job(job_id: int, **kwargs):
     """Met à jour les champs d'un job."""
-    if not kwargs:
-        return
-    allowed = {
-        "status", "rncp_code", "reac_text", "rc_text", "rome_text",
-        "global_program", "global_program_validated",
-        "daily_programs", "daily_programs_validated",
-        "error_message",
-        # Origine de chaque artefact (audit fix #5) — 'api' / 'claude_code_haiku' / 'claude_code_sonnet'
-        "kb_generated_via", "global_program_generated_via", "daily_programs_generated_via",
-        # State machine auto-pilot persistée (résiste aux restarts Azure)
-        "auto_pilot_enabled", "auto_pilot_step", "auto_pilot_model",
-        "auto_pilot_tts_mode", "auto_pilot_use_cc", "auto_pilot_skip_vs",
-        "auto_pilot_generate_audio",
-        "auto_pilot_volume_done", "auto_pilot_post_review_docs_done", "auto_pilot_error",
-        "auto_pilot_locked_at", "auto_pilot_lock_owner",
-    }
-    fields = {k: v for k, v in kwargs.items() if k in allowed}
-    # Effacer automatiquement error_message quand on passe à un statut non-erreur
-    if "status" in fields and fields["status"] != "error" and "error_message" not in fields:
-        fields["error_message"] = None
-    if not fields:
-        return
-
-    set_clause = ", ".join(f"{k} = ?" for k in fields)
-    values = list(fields.values()) + [job_id]
-
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        f"UPDATE formation_pipeline_jobs SET {set_clause}, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-        values,
-    )
-    conn.commit()
-    conn.close()
+    update_pipeline_job(job_id, **kwargs)
 
 
 def get_job(job_id: int) -> dict | None:
     """Retourne le job ou None."""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        SELECT j.id, j.platform_id, j.tp_name, j.rncp_code, j.total_hours, j.nb_days,
-               j.reac_text, j.rc_text, j.rome_text, j.global_program, j.global_program_validated,
-               j.daily_programs, j.daily_programs_validated, j.status, j.error_message,
-               j.created_at, j.updated_at,
-               j.kb_generated_via, j.global_program_generated_via, j.daily_programs_generated_via,
-               p.name AS platform_name,
-               j.auto_pilot_enabled, j.auto_pilot_step, j.auto_pilot_model,
-               j.auto_pilot_tts_mode, j.auto_pilot_use_cc, j.auto_pilot_skip_vs,
-               COALESCE(j.auto_pilot_generate_audio, 0),
-               j.auto_pilot_volume_done, j.auto_pilot_post_review_docs_done,
-               j.auto_pilot_error,
-               j.auto_pilot_locked_at, j.auto_pilot_lock_owner
-        FROM formation_pipeline_jobs j
-        LEFT JOIN platform_config p ON p.id = j.platform_id
-        WHERE j.id = ?
-    """, (job_id,))
-    row = cursor.fetchone()
-    conn.close()
-    if not row:
-        return None
-    return {
-        "id": row[0], "job_label": f"Job #{row[0]}",
-        "platform_id": row[1],
-        "platform_label": f"P{row[1]}" if row[1] is not None else None,
-        "tp_name": row[2],
-        "rncp_code": row[3], "total_hours": row[4], "nb_days": row[5],
-        "reac_text": row[6], "rc_text": row[7], "rome_text": row[8],
-        "global_program": row[9],
-        "global_program_validated": bool(row[10]),
-        "daily_programs": row[11], "daily_programs_validated": bool(row[12]),
-        "status": row[13], "error_message": row[14],
-        "created_at": row[15], "updated_at": row[16],
-        "kb_generated_via": row[17],
-        "global_program_generated_via": row[18],
-        "daily_programs_generated_via": row[19],
-        "platform_name": row[20],
-        # State machine auto-pilot persistée
-        "auto_pilot_enabled": bool(row[21]),
-        "auto_pilot_step": row[22],
-        "auto_pilot_model": row[23],
-        "auto_pilot_tts_mode": row[24],
-        "auto_pilot_use_cc": bool(row[25]),
-        "auto_pilot_skip_vs": bool(row[26]),
-        "auto_pilot_generate_audio": bool(row[27]),
-        "auto_pilot_volume_done": bool(row[28]),
-        "auto_pilot_post_review_docs_done": bool(row[29]),
-        "auto_pilot_error": row[30],
-        "auto_pilot_locked_at": row[31],
-        "auto_pilot_lock_owner": row[32],
-    }
+    return get_pipeline_job(job_id)
 
 
 def get_auto_pilot_jobs_to_resume() -> list:
     """Retourne les job_ids auto-pilot interrompus : activés, pas terminés, lock absent ou périmé."""
-    import time as _time
-    stale_cutoff = int(_time.time()) - 300  # lock > 5 min = périmé
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        SELECT id FROM formation_pipeline_jobs
-        WHERE auto_pilot_enabled = 1
-          AND (auto_pilot_step IS NULL OR auto_pilot_step != 'done')
-          AND auto_pilot_error IS NULL
-          AND (auto_pilot_locked_at IS NULL
-               OR CAST(strftime('%s', auto_pilot_locked_at) AS INTEGER) < ?)
-    """, (stale_cutoff,))
-    rows = cursor.fetchall()
-    conn.close()
-    return [r[0] for r in rows]
+    return get_auto_pilot_pipeline_jobs_to_resume()
 
 
 def list_jobs(platform_id: int = None) -> list:
     """Liste tous les jobs (toutes plateformes), avec le nom de la plateforme."""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        SELECT j.id, j.tp_name, j.rncp_code, j.total_hours, j.nb_days, j.status,
-               j.global_program_validated, j.daily_programs_validated,
-               j.created_at, j.updated_at, j.platform_id,
-               p.name AS platform_name
-        FROM formation_pipeline_jobs j
-        LEFT JOIN platform_config p ON p.id = j.platform_id
-        ORDER BY j.created_at DESC
-    """)
-    rows = cursor.fetchall()
-    conn.close()
-    return [
-        {
-            "id": r[0], "tp_name": r[1], "rncp_code": r[2],
-            "job_label": f"Job #{r[0]}",
-            "total_hours": r[3], "nb_days": r[4], "status": r[5],
-            "global_program_validated": bool(r[6]),
-            "daily_programs_validated": bool(r[7]),
-            "created_at": r[8], "updated_at": r[9],
-            "platform_id": r[10],
-            "platform_label": f"P{r[10]}" if r[10] is not None else None,
-            "platform_name": r[11],
-        }
-        for r in rows
-    ]
+    return list_pipeline_jobs(platform_id)

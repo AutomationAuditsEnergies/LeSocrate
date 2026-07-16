@@ -1,0 +1,132 @@
+name: PostgreSQL integration
+
+on:
+  push:
+    branches:
+      - main
+      - staging
+      - 'codex/**'
+  pull_request:
+    paths:
+      - 'backend/database/**'
+      - 'backend/repositories/**'
+      - 'backend/config.py'
+      - 'backend/main_app.py'
+      - 'backend/routes/admin_routes.py'
+      - 'backend/routes/auth_routes.py'
+      - 'backend/routes/formation_routes.py'
+      - 'backend/routes/hr_routes.py'
+      - 'backend/services/**'
+      - 'backend/tools/database/**'
+      - 'backend/utils/**'
+      - 'backend/workers/**'
+      - 'backend/tests/test_admin*.py'
+      - 'backend/tests/test_audio_postgres_runtime.py'
+      - 'backend/tests/test_auth*.py'
+      - 'backend/tests/test_claude_code_humanization.py'
+      - 'backend/tests/test_course_schedule_repository.py'
+      - 'backend/tests/test_database_runtime_mode.py'
+      - 'backend/tests/test_hr*.py'
+      - 'backend/tests/test_pipeline*.py'
+      - 'backend/tests/test_postgres*.py'
+      - 'backend/tests/test_runtime_readiness.py'
+      - 'backend/tests/test_script_review_blob_storage.py'
+      - '.github/workflows/postgres-ci.yml'
+  workflow_call:
+  workflow_dispatch:
+
+jobs:
+  postgres-integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: socrate
+          POSTGRES_PASSWORD: socrate-test-password
+          POSTGRES_DB: socrate_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U socrate -d socrate_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+
+    env:
+      DATABASE_URL: postgresql://socrate:socrate-test-password@127.0.0.1:5432/socrate_test
+      POSTGRES_TEST_DATABASE_URL: postgresql://socrate:socrate-test-password@127.0.0.1:5432/socrate_test
+      POSTGRES_TEST_RESET_SCHEMA: '1'
+      DATABASE_BACKEND: postgres
+      PIPELINE_DATABASE_BACKEND: postgres
+      PYTHONPATH: .
+
+    defaults:
+      run:
+        working-directory: backend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install backend dependencies
+        run: python -m pip install -r requirements.txt
+
+      - name: Apply schema twice
+        run: |
+          python tools/database/apply_postgres_schema.py
+          python tools/database/apply_postgres_schema.py
+
+      - name: Run PostgreSQL contract and integration tests
+        run: python -m unittest discover -s tests -p 'test_postgres*.py' -v
+
+      - name: Run repository parity tests
+        run: python -m unittest discover -s tests -p 'test_pipeline_repository.py' -v
+
+      - name: Run Formation3 PostgreSQL runtime boundary tests
+        run: >-
+          python -m unittest -v
+          tests.test_audio_postgres_runtime
+          tests.test_auth_training_center
+          tests.test_claude_code_humanization
+          tests.test_course_schedule_repository.CourseScheduleRepositoryTest.test_schedule_backend_follows_pipeline_postgres_in_hybrid_mode
+          tests.test_course_schedule_repository.CourseScheduleRepositoryTest.test_hybrid_pipeline_postgres_schedule_summary_never_opens_sqlite
+          tests.test_course_schedule_repository.CourseScheduleRepositoryTest.test_hybrid_pipeline_postgres_reminders_never_open_sqlite
+          tests.test_course_schedule_repository.CourseScheduleRepositoryTest.test_postgres_audio_claim_uses_update_returning_without_sqlite
+          tests.test_course_schedule_repository.CourseScheduleRepositoryTest.test_missing_postgres_course_start_never_falls_back_to_platform_one_or_sqlite
+          tests.test_course_schedule_repository.CourseScheduleRepositoryTest.test_service_creates_postgres_schedule_without_opening_sqlite
+          tests.test_course_schedule_repository.CourseScheduleRepositoryTest.test_postgres_reminder_tick_claims_before_dispatch_without_sqlite
+          tests.test_database_runtime_mode
+          tests.test_hr_postgres_read_routes
+          tests.test_hr_playlist_queue_handler
+          tests.test_hr_playlist_queue_routes
+          tests.test_postgres_formation3_deployment
+          tests.test_runtime_readiness
+          tests.test_script_review_blob_storage
+
+      - name: Run legacy compatibility and general runtime safety tests
+        env:
+          DATABASE_BACKEND: sqlite
+          PIPELINE_DATABASE_BACKEND: sqlite
+        run: >-
+          python -m unittest -v
+          tests.test_admin_secret_safety
+          tests.test_admin_tenant_scope
+          tests.test_auth_postgres_runtime
+          tests.test_auth_tokens
+          tests.test_course_schedule_repository
+          tests.test_hr_platform_id_allocator
+          tests.test_hr_read_repository
+          tests.test_hr_tenant_isolation
+          tests.test_pipeline_artifacts
+          tests.test_pipeline_queue_handler
+          tests.test_pipeline_queue_routes
+          tests.test_pipeline_service_bus
+          tests.test_pipeline_tenant_scope
+          tests.test_pipeline_work_queue

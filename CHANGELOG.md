@@ -1,5 +1,44 @@
 # Changelog
 
+## 2026-07-01
+
+### feat(database): socle de migration pipeline vers Postgres
+
+Premiere tranche de migration progressive de la pipeline formation vers
+Postgres, sans changer le comportement metier visible. Le schema Postgres couvre
+desormais les tables pipeline principales : jobs, knowledge base, dossiers,
+documents, jobs/segments de generation, annotations, regles, rapports de revue,
+evenements, modules durables et decks slides.
+
+Ajout du script `migrate_sqlite_pipeline_to_postgres.py` pour copier les tables
+pipeline depuis SQLite apres la migration du coeur SaaS. Ajout d'un repository
+`pipeline_repository.py` qui conserve SQLite comme source de verite par defaut,
+peut miroir-ecrire les jobs vers Postgres avec `PIPELINE_POSTGRES_MIRROR=1`, et
+peut basculer les fonctions centralisees de jobs avec
+`PIPELINE_DATABASE_BACKEND=postgres`.
+
+Deuxieme tranche : les operations canoniques sur `cours_folders` attendus par
+journee (`get_expected_course_folders`, reparation des dossiers orphelins) passent
+elles aussi par le repository pipeline, toujours avec SQLite comme comportement
+par defaut.
+
+Troisieme tranche : l'observabilite pipeline (`content_review_reports` et
+`formation_pipeline_events`) passe par le meme repository, avec conservation de
+la creation lazy des tables en SQLite et schema explicite en Postgres.
+
+Quatrieme tranche : les checkpoints `formation_knowledge_base` (clear, insert
+pending, save enriched, mark error, list, stats) passent par le repository
+pipeline afin de preparer leur lecture/ecriture Postgres.
+
+Cinquieme tranche : les primitives centralisees de `content_generation_jobs` et
+`content_generation_segments` (creation/reset de job, lecture du job, statuts,
+checkpoint segment, dirty flag, texte segment, snapshot artefact) passent par le
+repository pipeline, tout en conservant SQLite comme backend par defaut.
+
+Sixieme tranche : le report inter-journees `carryover` (dossier suivant, stockage
+source/cible, nettoyage et dirty flag du premier segment cible) passe par le
+repository pipeline.
+
 ## 2026-06-29
 
 ### feat(hr-dashboard): robots transparents pré-colorés + flip au clic

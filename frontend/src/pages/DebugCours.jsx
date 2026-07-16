@@ -181,7 +181,7 @@ export default function DebugCours() {
       <div className="bg-gray-900 text-white p-8 min-h-screen flex items-center justify-center">
         <div className="text-center">
           <p className="text-red-500 text-xl mb-4">{error}</p>
-          <a href={`/login-admin?p=${platformId}`} className="bg-blue-600 hover:bg-blue-700 px-6 py-3 rounded-lg font-medium transition">
+          <a href="/connexion-centre" className="bg-blue-600 hover:bg-blue-700 px-6 py-3 rounded-lg font-medium transition">
             Se connecter
           </a>
         </div>

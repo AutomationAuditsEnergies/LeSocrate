@@ -1066,6 +1066,28 @@ function hasCompletedPipelineEvent(events, predicate) {
   return (events || []).some(event => event?.status === 'completed' && predicate(event))
 }
 
+function latestContentPhaseKey(events) {
+  const phaseToStage = {
+    plan_json: 'plan_json',
+    body_sections: 'section_generation',
+    summaries: 'section_generation',
+    late_openings: 'section_generation',
+    day_conclusions: 'section_generation',
+    draft_artifacts: 'structured_artifacts',
+    plan_adherence: 'plan_adherence',
+    budget_calibration: 'budget_calibration',
+    ethical_micro_review: 'ethical_micro',
+    reviewed_scripts: 'structured_artifacts',
+  }
+  for (const event of [...(events || [])].reverse()) {
+    const phase = event?.data?.phase
+    if (event?.step === 'content' && event?.event_type === 'content_phase_started' && phaseToStage[phase]) {
+      return phaseToStage[phase]
+    }
+  }
+  return null
+}
+
 function PipelineStagePill({ stage, index, onClick }) {
   const tone = stage.done
     ? { color: '#34d399', bg: 'rgba(16,185,129,0.10)', border: 'rgba(16,185,129,0.24)', icon: 'check_circle' }
@@ -1147,6 +1169,7 @@ function PipelineVisualMap({ job, currentStep, autoPilotState, contentFolders, d
   const folders = contentFolders || []
   const expectedFolders = diagnostic?.folder_resolution?.expected_count || job.nb_days || folders.length || 0
   const completedFolders = folders.filter(f => f.content_status === 'completed').length
+  const completedContentSegments = folders.reduce((sum, f) => sum + (f.segments_completed || 0), 0)
   const allContentCompleted = folders.length > 0 && folders.every(f => f.content_status === 'completed')
   const allReviewProcessed = folders.length > 0 && folders.every(f => {
     const completed = f.segments_completed || 0
@@ -1166,6 +1189,11 @@ function PipelineVisualMap({ job, currentStep, autoPilotState, contentFolders, d
     autoPassed('slides')
 
   const contentActive = autoActive('content') || (job.status === 'tts_launched' && !allContentCompleted)
+  const activeContentPhaseKey = latestContentPhaseKey(events)
+  const activeContentStageKey = contentActive && !allContentCompleted
+    ? (activeContentPhaseKey || (completedContentSegments > 0 ? 'section_generation' : 'plan_json'))
+    : null
+  const contentStageActive = key => activeContentStageKey === key
   const stages = [
     {
       key: 'start',
@@ -1220,7 +1248,7 @@ function PipelineVisualMap({ job, currentStep, autoPilotState, contentFolders, d
       artifacts: ['content-plan.json'],
       auditMode: 'plan_json',
       done: allContentCompleted || autoPassed('content'),
-      active: contentActive,
+      active: contentStageActive('plan_json'),
     },
     {
       key: 'slide_beats',
@@ -1230,7 +1258,7 @@ function PipelineVisualMap({ job, currentStep, autoPilotState, contentFolders, d
       artifacts: ['content-plan.json'],
       auditMode: 'slide_beats',
       done: allContentCompleted || autoPassed('content'),
-      active: contentActive,
+      active: contentStageActive('slide_beats'),
     },
     {
       key: 'section_generation',
@@ -1240,7 +1268,7 @@ function PipelineVisualMap({ job, currentStep, autoPilotState, contentFolders, d
       artifacts: ['content-plan.json', 'content-draft-sections.json'],
       auditMode: 'section_generation',
       done: allContentCompleted || autoPassed('content'),
-      active: contentActive,
+      active: contentStageActive('section_generation'),
     },
     {
       key: 'plan_adherence',
@@ -1250,7 +1278,7 @@ function PipelineVisualMap({ job, currentStep, autoPilotState, contentFolders, d
       artifacts: ['content-quality-reviews.json', 'content-draft-sections.json'],
       auditMode: 'plan_adherence',
       done: planAdherenceDone,
-      active: contentActive,
+      active: contentStageActive('plan_adherence'),
     },
     {
       key: 'budget_calibration',
@@ -1260,7 +1288,7 @@ function PipelineVisualMap({ job, currentStep, autoPilotState, contentFolders, d
       artifacts: ['content-budget-calibration.json', 'content-draft-sections.json', 'content-course-scripts.json'],
       auditMode: 'budget_calibration',
       done: allContentCompleted || autoPassed('content'),
-      active: contentActive,
+      active: contentStageActive('budget_calibration'),
     },
     {
       key: 'ethical_micro',
@@ -1270,7 +1298,7 @@ function PipelineVisualMap({ job, currentStep, autoPilotState, contentFolders, d
       artifacts: ['content-ethical-micro-review.json'],
       auditMode: 'ethical_micro',
       done: allContentCompleted || autoPassed('content'),
-      active: contentActive,
+      active: contentStageActive('ethical_micro'),
     },
     {
       key: 'structured_artifacts',
@@ -1279,7 +1307,7 @@ function PipelineVisualMap({ job, currentStep, autoPilotState, contentFolders, d
       icon: 'data_object',
       artifacts: ['content-plan.json', 'content-draft-sections.json', 'content-course-scripts.json', 'content-reviewed-scripts.json'],
       done: allContentCompleted || autoPassed('content'),
-      active: contentActive,
+      active: contentStageActive('structured_artifacts'),
     },
     {
       key: 'local_compliance',
@@ -4725,7 +4753,7 @@ function StepEventsList({ events }) {
             border: '1px solid rgba(148,163,184,0.10)', borderRadius: '7px',
             color: '#94a3b8', fontSize: '11px',
           }}>
-            <span>{event.created_at ? new Date(String(event.created_at).replace(' ', 'T')).toLocaleString('fr-FR') : '—'}</span>
+            <span>{formatEventTime(event.created_at) || '—'}</span>
             <span style={{ color: event.status === 'completed' ? '#34d399' : event.status === 'error' ? '#f87171' : '#fbbf24', fontWeight: 800 }}>
               {event.status || event.event_type}
             </span>
@@ -7784,7 +7812,7 @@ export default function FormationPipeline() {
                       onClick={() => handleLaunchTTS()}
                       disabled={launchingTTS || actionLoading || !job.daily_programs_validated}
                     >
-                      <Icon name="edit_note" /> {launchingTTS ? 'Lancement…' : `Générer — ${selectedPipelineModel} (${job.nb_days} journées)`}
+                      <Icon name="edit_note" /> {launchingTTS ? 'Lancement…' : `Générer les textes — ${selectedPipelineModel} (${job.nb_days} journées)`}
                     </button>
                     <button
                       style={S.btn('neutral')}

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import Sidebar from '../components/Sidebar.jsx'
 import { apiFetch, apiUrl, getPlatformId, setPlatformId, setPlatformName } from '../api'
@@ -17,6 +17,9 @@ export default function Admin() {
   const [studentForm, setStudentForm] = useState({ email: '', password: '', nom: '', prenom: '' })
   const [studentMessage, setStudentMessage] = useState('')
   const [studentError, setStudentError] = useState('')
+  const [internalDashboard, setInternalDashboard] = useState(null)
+  const [internalLoading, setInternalLoading] = useState(true)
+  const [internalError, setInternalError] = useState('')
 
   // État pour l'upload PDF
   const [pdfFile, setPdfFile] = useState(null)
@@ -40,11 +43,84 @@ export default function Admin() {
     }
   }, [searchParams])
 
+  const fetchLogs = useCallback(async () => {
+    try {
+      setLoading(true)
+      const url = search
+        ? `/api/admin/logs?prenom=${encodeURIComponent(search)}`
+        : '/api/admin/logs'
+
+      const response = await apiFetch(url)
+
+      if (response.ok) {
+        const data = await response.json()
+        setLogs(data.logs || [])
+        setHeureDebut(data.heure_debut_cours || '')
+        setTempsTotal(data.temps_total || '')
+
+        // Initialiser les champs de config avec l'heure actuelle
+        if (data.heure_debut_cours && !configDate) {
+          const [date, heure] = data.heure_debut_cours.split(' ')
+          setConfigDate(date)
+          setConfigHeure(heure.substring(0, 5)) // HH:MM seulement
+        }
+      }
+    } catch (error) {
+      console.error('Erreur chargement logs:', error)
+    } finally {
+      setLoading(false)
+    }
+  }, [configDate, search])
+
+  const filteredLogs = useMemo(
+    () => logs,
+    [logs]
+  )
+
+  const fetchStudentAccounts = useCallback(async () => {
+    try {
+      const response = await apiFetch('/api/admin/student-accounts')
+      const data = await response.json()
+      if (response.ok && data.success) {
+        setStudentAccounts(data.accounts || [])
+      }
+    } catch (error) {
+      console.error('Erreur chargement comptes élèves:', error)
+    }
+  }, [])
+
+  const fetchInternalDashboard = useCallback(async () => {
+    try {
+      setInternalLoading(true)
+      setInternalError('')
+      const response = await apiFetch('/api/admin/internal-dashboard')
+      const data = await response.json()
+      if (response.ok && data.success) {
+        setInternalDashboard(data)
+      } else if (response.status !== 403) {
+        setInternalError(data.error || 'Erreur lors du chargement du dashboard interne')
+      }
+    } catch (error) {
+      console.error('Erreur dashboard interne:', error)
+      setInternalError('Erreur de connexion au serveur')
+    } finally {
+      setInternalLoading(false)
+    }
+  }, [])
+
   // Charger les logs depuis l'API
   useEffect(() => {
-    fetchLogs()
-    fetchStudentAccounts()
-  }, [search])
+    Promise.resolve().then(() => {
+      fetchLogs()
+      fetchStudentAccounts()
+    })
+  }, [fetchLogs, fetchStudentAccounts])
+
+  useEffect(() => {
+    Promise.resolve().then(() => {
+      fetchInternalDashboard()
+    })
+  }, [fetchInternalDashboard])
 
   // Vérifier le statut de l'indexer au chargement (persistance après refresh)
   useEffect(() => {
@@ -87,52 +163,6 @@ export default function Admin() {
     }
     checkIndexerOnLoad()
   }, [])
-
-  const fetchLogs = async () => {
-    try {
-      setLoading(true)
-      const url = search
-        ? `/api/admin/logs?prenom=${encodeURIComponent(search)}`
-        : '/api/admin/logs'
-
-      const response = await apiFetch(url)
-
-      if (response.ok) {
-        const data = await response.json()
-        setLogs(data.logs || [])
-        setHeureDebut(data.heure_debut_cours || '')
-        setTempsTotal(data.temps_total || '')
-
-        // Initialiser les champs de config avec l'heure actuelle
-        if (data.heure_debut_cours && !configDate) {
-          const [date, heure] = data.heure_debut_cours.split(' ')
-          setConfigDate(date)
-          setConfigHeure(heure.substring(0, 5)) // HH:MM seulement
-        }
-      }
-    } catch (error) {
-      console.error('Erreur chargement logs:', error)
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  const filteredLogs = useMemo(
-    () => logs,
-    [logs]
-  )
-
-  const fetchStudentAccounts = async () => {
-    try {
-      const response = await apiFetch('/api/admin/student-accounts')
-      const data = await response.json()
-      if (response.ok && data.success) {
-        setStudentAccounts(data.accounts || [])
-      }
-    } catch (error) {
-      console.error('Erreur chargement comptes élèves:', error)
-    }
-  }
 
   const handleStudentFormChange = (event) => {
     const { name, value } = event.target
@@ -361,10 +391,10 @@ export default function Admin() {
           </div>
           <div className="flex items-center gap-2">
             <a
-              href="/hr-dashboard"
+              href="/dashboard-centre"
               className="rounded-lg border border-fuchsia-500/40 bg-fuchsia-900/30 px-4 py-2 text-sm font-medium text-fuchsia-200 transition hover:-translate-y-0.5 hover:bg-fuchsia-900/50"
             >
-              Dashboard RH
+              Dashboard centre
             </a>
             <a
               href={`/debug?p=${currentPlatformId}`}
@@ -380,6 +410,162 @@ export default function Admin() {
             </a>
           </div>
         </div>
+
+        <Sidebar>
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <h3 className="text-base font-semibold text-white">Pilotage interne SaaS</h3>
+              <p className="mt-1 text-sm text-gray-400">
+                Centres de formation, comptes élèves et dernières connexions. Les mots de passe ne sont jamais affichés.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={fetchInternalDashboard}
+              className="rounded-lg border border-gray-600 bg-gray-700 px-3 py-2 text-sm text-gray-100 transition hover:bg-gray-600"
+            >
+              Actualiser
+            </button>
+          </div>
+
+          {internalLoading && (
+            <p className="mt-4 text-sm text-gray-400">Chargement du dashboard interne...</p>
+          )}
+          {internalError && (
+            <div className="mt-4 rounded-xl border border-rose-400/40 bg-rose-900/30 p-3 text-sm text-rose-200">
+              {internalError}
+            </div>
+          )}
+
+          {internalDashboard && (
+            <div className="mt-5 space-y-6">
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+                {[
+                  ['Centres', internalDashboard.summary?.center_count ?? 0],
+                  ['Centres clients', internalDashboard.summary?.external_center_count ?? 0],
+                  ['Comptes élèves', internalDashboard.summary?.student_count ?? 0],
+                  ['Logs récents', internalDashboard.summary?.recent_log_count ?? 0],
+                  ['Sessions actives', internalDashboard.summary?.active_session_count ?? 0],
+                ].map(([label, value]) => (
+                  <div key={label} className="rounded-xl border border-gray-700 bg-gray-900/60 p-4">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">{label}</p>
+                    <p className="mt-2 text-2xl font-semibold text-white">{value}</p>
+                  </div>
+                ))}
+              </div>
+
+              <div>
+                <div className="mb-3 flex items-center justify-between">
+                  <h4 className="text-sm font-semibold text-white">Centres de formation</h4>
+                  <span className="text-xs text-gray-500">Mot de passe: statut uniquement</span>
+                </div>
+                <div className="overflow-x-auto rounded-xl border border-gray-700">
+                  <table className="w-full min-w-[980px] border-separate border-spacing-0 text-sm text-gray-200">
+                    <thead className="bg-gray-900/70">
+                      <tr className="text-left text-xs uppercase tracking-wide text-gray-400">
+                        <th className="border-b border-gray-700 px-3 py-3">Centre</th>
+                        <th className="border-b border-gray-700 px-3 py-3">Utilisateur</th>
+                        <th className="border-b border-gray-700 px-3 py-3">Email</th>
+                        <th className="border-b border-gray-700 px-3 py-3">Mot de passe</th>
+                        <th className="border-b border-gray-700 px-3 py-3">Plateformes</th>
+                        <th className="border-b border-gray-700 px-3 py-3">Élèves</th>
+                        <th className="border-b border-gray-700 px-3 py-3">Logs</th>
+                        <th className="border-b border-gray-700 px-3 py-3">Statut</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {internalDashboard.centers?.map((center) => (
+                        <tr key={center.internal ? 'internal' : center.id} className="transition hover:bg-gray-700/40">
+                          <td className="border-b border-gray-800 px-3 py-3">
+                            <div className="font-medium text-white">{center.center_name}</div>
+                            <div className="text-xs text-gray-500">{center.slug || '-'}</div>
+                          </td>
+                          <td className="border-b border-gray-800 px-3 py-3">{center.username || '-'}</td>
+                          <td className="border-b border-gray-800 px-3 py-3">{center.email || '-'}</td>
+                          <td className="border-b border-gray-800 px-3 py-3 text-gray-400">{center.password_status}</td>
+                          <td className="border-b border-gray-800 px-3 py-3">{center.platform_count}</td>
+                          <td className="border-b border-gray-800 px-3 py-3">{center.student_count}</td>
+                          <td className="border-b border-gray-800 px-3 py-3">{center.log_count}</td>
+                          <td className="border-b border-gray-800 px-3 py-3">
+                            {center.is_active ? 'Actif' : 'Désactivé'}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              <div className="grid gap-6 xl:grid-cols-2">
+                <div>
+                  <h4 className="mb-3 text-sm font-semibold text-white">Comptes élèves récents</h4>
+                  <div className="max-h-[360px] overflow-auto rounded-xl border border-gray-700">
+                    <table className="w-full min-w-[760px] border-separate border-spacing-0 text-sm text-gray-200">
+                      <thead className="sticky top-0 bg-gray-900">
+                        <tr className="text-left text-xs uppercase tracking-wide text-gray-400">
+                          <th className="border-b border-gray-700 px-3 py-3">Email</th>
+                          <th className="border-b border-gray-700 px-3 py-3">Nom</th>
+                          <th className="border-b border-gray-700 px-3 py-3">Centre</th>
+                          <th className="border-b border-gray-700 px-3 py-3">Plateforme</th>
+                          <th className="border-b border-gray-700 px-3 py-3">Mot de passe</th>
+                          <th className="border-b border-gray-700 px-3 py-3">Statut</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {internalDashboard.students?.map((student) => (
+                          <tr key={student.id} className="transition hover:bg-gray-700/40">
+                            <td className="border-b border-gray-800 px-3 py-3">{student.email}</td>
+                            <td className="border-b border-gray-800 px-3 py-3">{student.prenom} {student.nom}</td>
+                            <td className="border-b border-gray-800 px-3 py-3">{student.center_name}</td>
+                            <td className="border-b border-gray-800 px-3 py-3">{student.platform_name || `P${student.platform_id}`}</td>
+                            <td className="border-b border-gray-800 px-3 py-3 text-gray-400">{student.password_status}</td>
+                            <td className="border-b border-gray-800 px-3 py-3">{student.is_active ? 'Actif' : 'Désactivé'}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                    {(internalDashboard.students || []).length === 0 && (
+                      <p className="p-4 text-sm text-gray-400">Aucun compte élève enregistré.</p>
+                    )}
+                  </div>
+                </div>
+
+                <div>
+                  <h4 className="mb-3 text-sm font-semibold text-white">Dernières connexions</h4>
+                  <div className="max-h-[360px] overflow-auto rounded-xl border border-gray-700">
+                    <table className="w-full min-w-[720px] border-separate border-spacing-0 text-sm text-gray-200">
+                      <thead className="sticky top-0 bg-gray-900">
+                        <tr className="text-left text-xs uppercase tracking-wide text-gray-400">
+                          <th className="border-b border-gray-700 px-3 py-3">Élève</th>
+                          <th className="border-b border-gray-700 px-3 py-3">Centre</th>
+                          <th className="border-b border-gray-700 px-3 py-3">Plateforme</th>
+                          <th className="border-b border-gray-700 px-3 py-3">Arrivée</th>
+                          <th className="border-b border-gray-700 px-3 py-3">Départ</th>
+                          <th className="border-b border-gray-700 px-3 py-3">Statut</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {internalDashboard.recent_logs?.map((log) => (
+                          <tr key={log.id} className="transition hover:bg-gray-700/40">
+                            <td className="border-b border-gray-800 px-3 py-3">{log.prenom} {log.nom}</td>
+                            <td className="border-b border-gray-800 px-3 py-3">{log.center_name}</td>
+                            <td className="border-b border-gray-800 px-3 py-3">{log.platform_name || `P${log.platform_id}`}</td>
+                            <td className="border-b border-gray-800 px-3 py-3">{log.arrivee}</td>
+                            <td className="border-b border-gray-800 px-3 py-3">{log.depart || '-'}</td>
+                            <td className="border-b border-gray-800 px-3 py-3">{log.status}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                    {(internalDashboard.recent_logs || []).length === 0 && (
+                      <p className="p-4 text-sm text-gray-400">Aucun log récent.</p>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+        </Sidebar>
 
         <Sidebar>
           <h3 className="text-base font-semibold text-white">Configuration de l&apos;heure du cours</h3>

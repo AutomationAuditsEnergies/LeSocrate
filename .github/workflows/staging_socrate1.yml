@@ -1,9 +1,6 @@
 name: Deploy Backend - socrate1
 
 on:
-  push:
-    branches:
-      - staging
   workflow_dispatch:
 
 jobs:
@@ -47,6 +44,8 @@ jobs:
     env:
       RESOURCE_GROUP: socrate1_group
       STARTUP_COMMAND: python run.py
+      SECRET_KEY: ${{ secrets.SOCRATE1_SECRET_KEY }}
+      INTERNAL_ADMIN_PASSWORD_HASH: ${{ secrets.SOCRATE1_INTERNAL_ADMIN_PASSWORD_HASH }}
 
     steps:
       - name: Download artifact from build job
@@ -61,6 +60,17 @@ jobs:
           tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_41081722FD194A6DBBEE83B7861AA33F }}
           subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_DD044DCD13764A6CBF8D1889CF9E5B07 }}
 
+      - name: Validate production runtime secrets
+        shell: bash
+        run: |
+          missing=()
+          [ -z "${SECRET_KEY:-}" ] && missing+=("SOCRATE1_SECRET_KEY")
+          [ -z "${INTERNAL_ADMIN_PASSWORD_HASH:-}" ] && missing+=("SOCRATE1_INTERNAL_ADMIN_PASSWORD_HASH")
+          if [ "${#missing[@]}" -gt 0 ]; then
+            printf 'Missing required GitHub secret(s): %s\n' "${missing[*]}" >&2
+            exit 1
+          fi
+
       - name: Configure Azure App Service production
         shell: bash
         run: |
@@ -70,20 +80,65 @@ jobs:
             --settings \
               SCM_DO_BUILD_DURING_DEPLOYMENT=true \
               ENABLE_ORYX_BUILD=true \
+              SECRET_KEY="${SECRET_KEY}" \
+              INTERNAL_ADMIN_PASSWORD_HASH="${INTERNAL_ADMIN_PASSWORD_HASH}" \
+              DEPLOYMENT_COMMIT="${GITHUB_SHA}" \
               PORT=8000 \
               WEBSITES_PORT=8000 \
+              FORMATION_CONTENT_DAY_WORKERS=1 \
+              FORMATION_STRUCTURED_COURSE_WORKERS=7 \
               FORMATION_TTS_WORDS_PER_MINUTE=165.7 \
               BASIC_TTS_SPEED=1.15 \
-              PLATFORM_1_FRONTEND_URL=https://thankful-wave-043aa3b03.4.azurestaticapps.net \
-              PLATFORM_3_FRONTEND_URL=https://polite-bush-07d4fdd03.1.azurestaticapps.net
+              PLATFORM_1_FRONTEND_URL=https://thankful-wave-043aa3b03.4.azurestaticapps.net
 
           az webapp config set \
             --resource-group "${RESOURCE_GROUP}" \
             --name socrate1 \
-            --startup-file "${STARTUP_COMMAND}"
+            --startup-file "${STARTUP_COMMAND}" \
+            --generic-configurations '{"healthCheckPath":"/readyz"}'
+
+          if az webapp config set \
+              --resource-group "${RESOURCE_GROUP}" \
+              --name socrate1 \
+              --always-on true; then
+            echo "Always On activé pour Socrate1."
+          else
+            echo "Always On indisponible sur ce plan Azure; le déploiement continue avec le contrôle de disponibilité." >&2
+          fi
 
       - name: Deploy to Azure Web App production
         uses: azure/webapps-deploy@v3
         with:
           app-name: 'socrate1'
           package: python-app.zip
+
+      - name: Wait for Socrate1 readiness
+        shell: bash
+        run: |
+          app_url="https://socrate1-fyhgbqh7ejeyb2f3.francecentral-01.azurewebsites.net"
+          response_file="${RUNNER_TEMP}/socrate1-readiness.json"
+
+          for attempt in $(seq 1 40); do
+            http_code="$(curl \
+              --silent \
+              --show-error \
+              --max-time 20 \
+              --output "${response_file}" \
+              --write-out '%{http_code}' \
+              "${app_url}/readyz" || true)"
+
+            if [ "${http_code}" = "200" ] \
+                && grep -Eq '"status"[[:space:]]*:[[:space:]]*"ready"' "${response_file}" \
+                && grep -Fq "\"deployment_commit\":\"${GITHUB_SHA}\"" "${response_file}"; then
+              echo "Socrate1 prêt après ${attempt} tentative(s)."
+              exit 0
+            fi
+
+            echo "Socrate1 non prêt (tentative ${attempt}/40, HTTP ${http_code:-000})."
+            [ -f "${response_file}" ] && head -c 500 "${response_file}" || true
+            echo
+            sleep 15
+          done
+
+          echo "Socrate1 n'est pas devenu opérationnel dans le délai imparti." >&2
+          exit 1

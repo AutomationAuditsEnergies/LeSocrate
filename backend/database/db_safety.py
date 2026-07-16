@@ -18,7 +18,7 @@ import sqlite3
 import threading
 from datetime import datetime
 
-from config import DB_PATH, FRANCE_TZ
+from config import DB_PATH, FRANCE_TZ, SQLITE_SAFETY_STRICT, sqlite_runtime_enabled
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -60,6 +60,11 @@ def set_maintenance(enabled: bool, reason: str | None = None):
 
 def is_maintenance() -> bool:
     return db_health["maintenance"]
+
+
+def maintenance_blocks_requests() -> bool:
+    """SQLite recovery maintenance only applies when SQLite is authoritative."""
+    return sqlite_runtime_enabled() and is_maintenance()
 
 
 def check_integrity(db_path: str = DB_PATH) -> tuple[bool, str]:
@@ -251,10 +256,16 @@ def startup_check():
                 )
             logger.warning("♻️ Récupération automatique réussie depuis %s", restored)
             return
-        if db_exists:
+        if db_exists and SQLITE_SAFETY_STRICT:
             set_maintenance(
                 True,
                 "Base de données anormalement petite et aucun backup complet sain disponible.",
+            )
+        elif db_exists:
+            logger.warning(
+                "⚠️ Base SQLite anormalement petite (%s octets), mais "
+                "SQLITE_SAFETY_STRICT=0 : démarrage autorisé.",
+                db_size,
             )
 
     ok, detail = check_integrity()

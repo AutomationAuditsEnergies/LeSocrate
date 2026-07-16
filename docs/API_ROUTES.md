@@ -54,15 +54,18 @@ Déconnexion utilisateur
 
 ---
 
-### POST `/api/auth/deconnexion-auto`
+### POST `/deconnexion-auto`
 Déconnexion automatique d'un utilisateur (interne)
 
 **Response (204):** No content
 
 ---
 
-### POST `/api/auth/deconnexion-auto-tous`
+### POST `/deconnexion-auto-tous`
 Déconnexion automatique de TOUS les utilisateurs (Azure Logic Apps)
+
+**Authentification :** session administrateur ou header
+`X-Internal-Secret: <AUTO_LOGOUT_WEBHOOK_SECRET>`.
 
 **Response (200):**
 ```json
@@ -172,7 +175,7 @@ Connexion administrateur
 ```json
 {
   "username": "admin",
-  "password": "secret123"
+  "password": "<mot-de-passe-du-déploiement>"
 }
 ```
 
@@ -463,7 +466,9 @@ socket.on('force_logout', (data) => {
 
 4. **Authentification Admin:**
    - Username: `admin`
-   - Password: `secret123`
+   - Mot de passe défini par `INTERNAL_ADMIN_PASSWORD_HASH` (recommandé) ou,
+     temporairement, `INTERNAL_ADMIN_PASSWORD`. Aucun mot de passe par défaut
+     n'est accepté.
 
 5. **Timezone:** Toutes les dates sont en heure française (Europe/Paris).
 
