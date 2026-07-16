@@ -24,9 +24,15 @@ from repositories.core_repository import (
     upsert_log,
     upsert_student_profile,
 )
-from repositories.course_schedule_repository import list_session_passwords_for_window
+from repositories.course_schedule_repository import (
+    get_audio_generation_session,
+    list_course_session_credentials_for_window,
+)
 from utils.logger import get_logger
-from utils.auth_tokens import issue_auth_token
+from utils.auth_tokens import (
+    issue_auth_token,
+    verify_course_invitation_token,
+)
 import state
 
 logger = get_logger(__name__)
@@ -39,10 +45,22 @@ def _postgres_only_runtime():
     return DATABASE_BACKEND in POSTGRES_ONLY_BACKENDS
 
 
-def _create_student_session(cursor, nom, prenom, platform_id):
+def _create_student_session(
+    cursor,
+    nom,
+    prenom,
+    platform_id,
+    *,
+    course_session_id=None,
+):
     session["nom"] = nom
     session["prenom"] = prenom
     session["platform_id"] = platform_id
+    if course_session_id is not None:
+        course_session_id = int(course_session_id)
+        session["course_session_id"] = course_session_id
+    else:
+        session.pop("course_session_id", None)
     arrivee_time = datetime.now(FRANCE_TZ).strftime("%Y-%m-%d %H:%M:%S")
     session["arrivee"] = arrivee_time
 
@@ -71,6 +89,8 @@ def _create_student_session(cursor, nom, prenom, platform_id):
         "log_id": log_id,
         "platform_id": platform_id,
     }
+    if course_session_id is not None:
+        token_payload["course_session_id"] = course_session_id
     token = issue_auth_token("student", token_payload)
     if not _postgres_only_runtime() and postgres_enabled():
         try:
@@ -96,46 +116,137 @@ def _get_supabase_user(access_token):
     return response.json()
 
 
-def _course_session_password_valid(cursor, platform_id, password):
+def _course_session_access_window():
+    now = datetime.now(FRANCE_TZ)
+    try:
+        early_hours = max(
+            1.0,
+            min(8784.0, float(os.environ.get("COURSE_SESSION_PASSWORD_EARLY_HOURS", "8784"))),
+        )
+    except (TypeError, ValueError):
+        early_hours = 8784.0
+    try:
+        active_hours = max(1.0, float(os.environ.get("COURSE_SESSION_ACTIVE_HOURS", "12")))
+    except (TypeError, ValueError):
+        active_hours = 12.0
+    return now, now - timedelta(hours=active_hours), now + timedelta(hours=early_hours)
+
+
+def _resolve_course_session_by_code(cursor, platform_id, password):
+    """Resolve a secret to exactly one occurrence instead of platform-wide access."""
     supplied = str(password or "").strip()
     if not supplied:
-        return False
+        return None
 
-    now = datetime.now(FRANCE_TZ)
-    early_hours = float(os.environ.get("COURSE_SESSION_PASSWORD_EARLY_HOURS", "24"))
-    active_hours = float(os.environ.get("COURSE_SESSION_ACTIVE_HOURS", "12"))
-    lower_bound = now - timedelta(hours=active_hours)
-    upper_bound = now + timedelta(hours=early_hours)
+    _now, lower_bound, upper_bound = _course_session_access_window()
 
     if _postgres_only_runtime():
         # Do not swallow a Postgres outage and silently grant legacy access.
-        session_passwords = list_session_passwords_for_window(
+        credentials = list_course_session_credentials_for_window(
             platform_id,
             lower_bound=lower_bound,
             upper_bound=upper_bound,
         )
-        if session_passwords:
-            return any(hmac.compare_digest(supplied, expected) for expected in session_passwords)
     else:
         try:
             from services.course_schedule_service import ensure_course_schedule_tables
 
             ensure_course_schedule_tables(cursor)
-            session_passwords = list_session_passwords_for_window(
+            credentials = list_course_session_credentials_for_window(
                 platform_id,
                 lower_bound=lower_bound,
                 upper_bound=upper_bound,
                 sqlite_cursor=cursor,
             )
-            if session_passwords:
-                return any(hmac.compare_digest(supplied, expected) for expected in session_passwords)
         except Exception:
             logger.warning("⚠️ Vérification mot de passe séance impossible", exc_info=True)
+            return None
+
+    matches = [
+        row
+        for row in credentials
+        if row.get("session_password")
+        and hmac.compare_digest(supplied, str(row["session_password"]))
+    ]
+    if len(matches) != 1:
+        if len(matches) > 1:
+            logger.error(
+                "COURSE_SESSION_CODE_COLLISION platform_id=%s matching_sessions=%s",
+                platform_id,
+                [row.get("id") for row in matches],
+            )
+        return None
+    return matches[0]
+
+
+def _course_session_code_valid(cursor, platform_id, password):
+    """Backward-compatible boolean wrapper around occurrence resolution."""
+    return _resolve_course_session_by_code(cursor, platform_id, password) is not None
+
+
+def _course_session_password_valid(cursor, platform_id, password):
+    """Compatibility password check, used only when legacy access is enabled."""
+    supplied = str(password or "").strip()
+    if not supplied:
+        return False
+    if _course_session_code_valid(cursor, platform_id, supplied):
+        return True
 
     expected = os.environ.get("COURSE_SESSION_PASSWORD", "").strip()
     if expected:
         return hmac.compare_digest(supplied, expected)
     return STUDENT_AUTH_LEGACY_FALLBACK
+
+
+def _as_france_datetime(value):
+    if isinstance(value, datetime):
+        return FRANCE_TZ.localize(value) if value.tzinfo is None else value.astimezone(FRANCE_TZ)
+    parsed = datetime.fromisoformat(str(value or "").strip().replace("Z", "+00:00"))
+    return FRANCE_TZ.localize(parsed) if parsed.tzinfo is None else parsed.astimezone(FRANCE_TZ)
+
+
+def _resolve_course_invitation(platform_id, token):
+    payload = verify_course_invitation_token(str(token or "").strip())
+    if not payload or int(payload["platform_id"]) != int(platform_id):
+        return None
+    now = datetime.now(FRANCE_TZ)
+    if now.timestamp() > int(payload["exp"]):
+        return None
+    course_session = get_audio_generation_session(platform_id, int(payload["session_id"]))
+    if not course_session or course_session.get("status") not in {"planned", "active"}:
+        return None
+    scheduled_at = _as_france_datetime(course_session.get("scheduled_at"))
+    if int(scheduled_at.timestamp()) != int(payload["scheduled_at"]):
+        # A report invalidates links containing the former occurrence time.
+        return None
+    try:
+        active_hours = max(1.0, float(os.environ.get("COURSE_SESSION_ACTIVE_HOURS", "12")))
+    except (TypeError, ValueError):
+        active_hours = 12.0
+    return course_session if now <= scheduled_at + timedelta(hours=active_hours) else None
+
+
+def _course_invitation_valid(platform_id, token):
+    """Backward-compatible boolean wrapper around occurrence resolution."""
+    return _resolve_course_invitation(platform_id, token) is not None
+
+
+def _resolve_requested_course_session(platform_id, raw_session_id):
+    """Bind an already authenticated platform account to an explicit occurrence."""
+    if raw_session_id in (None, "") or isinstance(raw_session_id, bool):
+        return None
+    try:
+        session_id = int(raw_session_id)
+    except (TypeError, ValueError):
+        return None
+    if session_id <= 0:
+        return None
+    row = get_audio_generation_session(int(platform_id), session_id)
+    if not row or int(row.get("platform_id") or 0) != int(platform_id):
+        return None
+    if str(row.get("status") or "").lower() not in {"planned", "active"}:
+        return None
+    return row
 
 
 def _close_student_log(log_id, depart):
@@ -205,6 +316,8 @@ def create_auth_blueprint(socketio):
             data = request.get_json(silent=True) or {}
             username = str(data.get("username") or "").strip().lower()
             password = str(data.get("password") or "")
+            invitation_token = str(data.get("invitation_token") or "").strip()
+            requested_course_session_id = data.get("course_session_id")
             nom = str(data.get("nom") or "").strip()
             prenom = str(data.get("prenom") or "").strip()
             try:
@@ -213,6 +326,20 @@ def create_auth_blueprint(socketio):
                 return jsonify({"success": False, "error": "Plateforme invalide"}), 400
 
             logger.info(f"👤 Tentative connexion élève: {username or nom} (P{platform_id})")
+
+            invitation_access = False
+            authenticated_course_session = None
+            if invitation_token:
+                if not nom or not prenom:
+                    return jsonify({"success": False, "error": "Nom et prénom requis"}), 400
+                authenticated_course_session = _resolve_course_invitation(
+                    platform_id,
+                    invitation_token,
+                )
+                if not authenticated_course_session:
+                    logger.warning("❌ Invitation de cours invalide ou expirée sur P%s", platform_id)
+                    return jsonify({"success": False, "error": "Lien d'invitation invalide ou expiré"}), 401
+                invitation_access = True
 
             postgres_only = _postgres_only_runtime()
             cursor = None
@@ -239,7 +366,9 @@ def create_auth_blueprint(socketio):
                     except Exception:
                         logger.warning("⚠️ Lecture compte élève Postgres impossible", exc_info=True)
 
-            if pg_account:
+            if invitation_access:
+                logger.info("✅ Invitation signée acceptée sur P%s", platform_id)
+            elif pg_account:
                 if not pg_account["is_active"]:
                     logger.warning("⚠️ Compte élève Postgres désactivé: %s P%s", username, platform_id)
                     return jsonify({"success": False, "error": "Compte désactivé"}), 403
@@ -258,34 +387,67 @@ def create_auth_blueprint(socketio):
                 nom = account[3]
                 prenom = account[4]
             else:
-                if postgres_only:
-                    has_accounts = count_student_accounts(platform_id) > 0
-                else:
-                    cursor.execute(
-                        "SELECT COUNT(*) FROM student_accounts WHERE platform_id = ?",
-                        (platform_id,),
+                if nom and prenom:
+                    authenticated_course_session = _resolve_course_session_by_code(
+                        cursor,
+                        platform_id,
+                        password,
                     )
-                    has_accounts = cursor.fetchone()[0] > 0
-                if not postgres_only and postgres_enabled():
-                    try:
-                        has_accounts = has_accounts or count_student_accounts(platform_id) > 0
-                    except Exception:
-                        logger.warning("⚠️ Comptage comptes élèves Postgres impossible", exc_info=True)
-                if has_accounts or not STUDENT_AUTH_LEGACY_FALLBACK:
-                    logger.warning("❌ Compte élève inconnu: %s P%s", username, platform_id)
-                    return jsonify({"success": False, "error": "Identifiants incorrects"}), 401
-                if not nom or not prenom:
-                    logger.warning("⚠️ Identifiants élève manquants")
-                    return jsonify({"success": False, "error": "Identifiant et mot de passe requis"}), 400
-                if not _course_session_password_valid(cursor, platform_id, password):
-                    logger.warning("❌ Mot de passe session invalide: %s %s P%s", prenom, nom, platform_id)
-                    return jsonify({"success": False, "error": "Mot de passe incorrect"}), 401
-                logger.warning(
-                    "⚠️ Connexion élève legacy nom/prénom acceptée sur P%s car aucun compte n'existe",
-                    platform_id,
-                )
+                session_code_access = bool(authenticated_course_session)
+                if session_code_access:
+                    logger.info(
+                        "✅ Code de séance accepté sur P%s occurrence=%s",
+                        platform_id,
+                        authenticated_course_session.get("id"),
+                    )
+                else:
+                    if postgres_only:
+                        has_accounts = count_student_accounts(platform_id) > 0
+                    else:
+                        cursor.execute(
+                            "SELECT COUNT(*) FROM student_accounts WHERE platform_id = ?",
+                            (platform_id,),
+                        )
+                        has_accounts = cursor.fetchone()[0] > 0
+                    if not postgres_only and postgres_enabled():
+                        try:
+                            has_accounts = has_accounts or count_student_accounts(platform_id) > 0
+                        except Exception:
+                            logger.warning("⚠️ Comptage comptes élèves Postgres impossible", exc_info=True)
+                    if has_accounts or not STUDENT_AUTH_LEGACY_FALLBACK:
+                        logger.warning("❌ Compte élève inconnu: %s P%s", username, platform_id)
+                        return jsonify({"success": False, "error": "Identifiants incorrects"}), 401
+                    if not nom or not prenom:
+                        logger.warning("⚠️ Identifiants élève manquants")
+                        return jsonify({"success": False, "error": "Identifiant et mot de passe requis"}), 400
+                    if not _course_session_password_valid(cursor, platform_id, password):
+                        logger.warning("❌ Mot de passe session invalide: %s %s P%s", prenom, nom, platform_id)
+                        return jsonify({"success": False, "error": "Mot de passe incorrect"}), 401
+                    logger.warning(
+                        "⚠️ Connexion élève legacy nom/prénom acceptée sur P%s car aucun compte n'existe",
+                        platform_id,
+                    )
 
-            log_id, token = _create_student_session(cursor, nom, prenom, platform_id)
+            if authenticated_course_session is None and requested_course_session_id not in (None, ""):
+                authenticated_course_session = _resolve_requested_course_session(
+                    platform_id,
+                    requested_course_session_id,
+                )
+                if authenticated_course_session is None:
+                    return jsonify({"success": False, "error": "Séance non autorisée"}), 403
+
+            course_session_id = (
+                int(authenticated_course_session["id"])
+                if authenticated_course_session and authenticated_course_session.get("id") is not None
+                else None
+            )
+            log_id, token = _create_student_session(
+                cursor,
+                nom,
+                prenom,
+                platform_id,
+                course_session_id=course_session_id,
+            )
             if conn is not None:
                 conn.commit()
 
@@ -297,6 +459,7 @@ def create_auth_blueprint(socketio):
                         "success": True,
                         "user": {"nom": nom, "prenom": prenom},
                         "log_id": log_id,
+                        "course_session_id": course_session_id,
                         "token": token,
                     }
                 ),
@@ -319,6 +482,7 @@ def create_auth_blueprint(socketio):
         try:
             data = request.get_json(silent=True) or {}
             access_token = str(data.get("access_token") or "").strip()
+            requested_course_session_id = data.get("course_session_id")
             try:
                 requested_platform_id = int(data.get("platform_id", 1))
             except (TypeError, ValueError):
@@ -400,7 +564,24 @@ def create_auth_blueprint(socketio):
                     except Exception:
                         logger.warning("⚠️ Synchronisation profil élève Postgres impossible", exc_info=True)
 
-            log_id, token = _create_student_session(cursor, nom, prenom, int(platform_id))
+            authenticated_course_session = _resolve_requested_course_session(
+                int(platform_id),
+                requested_course_session_id,
+            )
+            if requested_course_session_id not in (None, "") and authenticated_course_session is None:
+                return jsonify({"success": False, "error": "Séance non autorisée"}), 403
+            course_session_id = (
+                int(authenticated_course_session["id"])
+                if authenticated_course_session
+                else None
+            )
+            log_id, token = _create_student_session(
+                cursor,
+                nom,
+                prenom,
+                int(platform_id),
+                course_session_id=course_session_id,
+            )
             if conn is not None:
                 conn.commit()
             logger.info("✅ Session Supabase reliée au log %s pour %s P%s", log_id, email, platform_id)
@@ -408,6 +589,7 @@ def create_auth_blueprint(socketio):
                 "success": True,
                 "user": {"nom": nom, "prenom": prenom, "email": email},
                 "log_id": log_id,
+                "course_session_id": course_session_id,
                 "token": token,
             }), 200
         except Exception as e:

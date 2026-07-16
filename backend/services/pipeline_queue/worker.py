@@ -66,6 +66,7 @@ class LeaseGuard:
         *,
         lease_seconds: int,
         heartbeat_seconds: int,
+        health_callback: Callable[[str, str | None], None] | None = None,
     ):
         if not item.lease_token:
             raise ValueError("Un work-item claimé doit avoir un lease_token")
@@ -73,6 +74,7 @@ class LeaseGuard:
         self.item = item
         self.lease_seconds = lease_seconds
         self.heartbeat_seconds = heartbeat_seconds
+        self.health_callback = health_callback
         self._stop = threading.Event()
         self._lost = threading.Event()
         self._thread: threading.Thread | None = None
@@ -109,6 +111,11 @@ class LeaseGuard:
             if not renewed:
                 self._lost.set()
                 return
+            if self.health_callback:
+                try:
+                    self.health_callback("working", self.item.id)
+                except Exception:
+                    logger.warning("PIPELINE_WORKER_HEALTH_CALLBACK_FAILED", exc_info=True)
 
     def checkpoint(self) -> None:
         """Handlers should call this between expensive sub-steps."""
@@ -149,6 +156,7 @@ class PipelineWorker:
         owner: str | None = None,
         retry_policy: RetryPolicy | None = None,
         on_dead_letter: Callable[[WorkItem, str], None] | None = None,
+        health_callback: Callable[[str, str | None], None] | None = None,
     ):
         self.repository = repository
         self.handler = handler
@@ -156,6 +164,15 @@ class PipelineWorker:
         self.owner = owner or default_worker_identity()
         self.retry_policy = retry_policy or RetryPolicy()
         self.on_dead_letter = on_dead_letter
+        self.health_callback = health_callback
+
+    def _report_health(self, phase: str, work_item_id: str | None = None) -> None:
+        if not self.health_callback:
+            return
+        try:
+            self.health_callback(phase, work_item_id)
+        except Exception:
+            logger.warning("PIPELINE_WORKER_HEALTH_CALLBACK_FAILED", exc_info=True)
 
     def process_next(self) -> ProcessOutcome:
         item = self.repository.claim_next(
@@ -202,11 +219,13 @@ class PipelineWorker:
         return self._process_claimed(item)
 
     def _process_claimed(self, item: WorkItem) -> ProcessOutcome:
+        self._report_health("working", item.id)
         guard = LeaseGuard(
             self.repository,
             item,
             lease_seconds=self.settings.lease_seconds,
             heartbeat_seconds=self.settings.heartbeat_seconds,
+            health_callback=self.health_callback,
         )
         guard.start()
         logger.info(
@@ -327,6 +346,7 @@ class PipelineWorker:
 
     def _run_database(self, stop_event: threading.Event) -> None:
         while not stop_event.is_set():
+            self._report_health("polling")
             outcome = self.process_next()
             if outcome.status == "idle":
                 stop_event.wait(self.settings.poll_seconds)
@@ -341,6 +361,7 @@ class PipelineWorker:
         try:
             with transport.receiver() as receiver:
                 while not stop_event.is_set():
+                    self._report_health("polling")
                     dispatcher.dispatch_once(limit=self.settings.outbox_batch_size)
                     delivery = receiver.receive_one()
                     if delivery is None:

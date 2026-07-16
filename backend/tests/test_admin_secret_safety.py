@@ -47,6 +47,103 @@ class AdminSecretSafetyTest(unittest.TestCase):
         self.assertEqual(response.status_code, 401)
         self.assertEqual(response.get_json()["error"], "Identifiants incorrects")
 
+    def test_registration_never_opens_sqlite_in_pure_postgres(self):
+        app = Flask(__name__)
+        app.secret_key = "test-secret"
+        app.register_blueprint(admin_routes.create_admin_blueprint(Mock()))
+        account = {
+            "id": 42,
+            "username": "centre@example.test",
+            "password_hash": "hash",
+            "center_name": "Centre Test",
+            "slug": "centre-test",
+            "is_active": True,
+        }
+
+        with app.test_client() as client, patch.object(
+            admin_routes, "postgres_enabled", return_value=True
+        ), patch.object(
+            admin_routes, "sqlite_runtime_enabled", return_value=False
+        ), patch.object(
+            admin_routes, "create_training_center", return_value=account
+        ) as create_center, patch.object(
+            admin_routes,
+            "get_db_connection",
+            side_effect=AssertionError("SQLite must not be opened"),
+        ):
+            response = client.post(
+                "/api/admin/register",
+                json={
+                    "username": "centre@example.test",
+                    "password": "correct-password",
+                    "center_name": "Centre Test",
+                },
+            )
+
+        self.assertEqual(response.status_code, 201, response.get_json())
+        self.assertTrue(response.get_json()["success"])
+        self.assertEqual(response.get_json()["account"]["id"], 42)
+        create_center.assert_called_once()
+
+    def test_unknown_password_reset_never_opens_sqlite_in_pure_postgres(self):
+        app = Flask(__name__)
+        app.secret_key = "test-secret"
+        app.register_blueprint(admin_routes.create_admin_blueprint(Mock()))
+
+        with app.test_client() as client, patch.object(
+            admin_routes, "DATABASE_BACKEND", "postgres"
+        ), patch.object(
+            admin_routes, "postgres_enabled", return_value=True
+        ), patch.object(
+            admin_routes, "get_training_center_by_username", return_value=None
+        ), patch.object(
+            admin_routes,
+            "get_db_connection",
+            side_effect=AssertionError("SQLite must not be opened"),
+        ):
+            response = client.post(
+                "/api/admin/forgot-password",
+                json={"username": "unknown@example.test"},
+            )
+
+        self.assertEqual(response.status_code, 200, response.get_json())
+        self.assertTrue(response.get_json()["success"])
+        self.assertIn("Si un compte existe", response.get_json()["message"])
+
+    def test_postgres_registration_ignores_optional_sqlite_mirror_failure(self):
+        app = Flask(__name__)
+        app.secret_key = "test-secret"
+        app.register_blueprint(admin_routes.create_admin_blueprint(Mock()))
+        account = {
+            "id": 43,
+            "username": "hybrid@example.test",
+            "password_hash": "hash",
+            "center_name": "Centre Hybride",
+            "slug": "centre-hybride",
+            "is_active": True,
+        }
+
+        with app.test_client() as client, patch.object(
+            admin_routes, "postgres_enabled", return_value=True
+        ), patch.object(
+            admin_routes, "sqlite_runtime_enabled", return_value=True
+        ), patch.object(
+            admin_routes, "create_training_center", return_value=account
+        ), patch.object(
+            admin_routes, "get_db_connection", side_effect=RuntimeError("mirror unavailable")
+        ):
+            response = client.post(
+                "/api/admin/register",
+                json={
+                    "username": "hybrid@example.test",
+                    "password": "correct-password",
+                    "center_name": "Centre Hybride",
+                },
+            )
+
+        self.assertEqual(response.status_code, 201, response.get_json())
+        self.assertTrue(response.get_json()["success"])
+
 
 if __name__ == "__main__":
     unittest.main()

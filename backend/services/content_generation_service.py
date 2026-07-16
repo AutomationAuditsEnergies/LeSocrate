@@ -163,8 +163,8 @@ _DEFAULT_TTS_WPM_BY_BLOC = {
     7: 208.3,  # 38:47 -> ~48:45
 }
 _COURSE_CONCLUSION_START_MARGIN_SECONDS = 0
-# Marge utilisée pour estimer le budget mots. L'audio final n'est ni coupé ni
-# rejeté si la durée réelle dépasse ensuite le créneau.
+# Marge utilisée pour estimer le budget mots et garder une fin de créneau
+# silencieuse. Une voix qui empiète sur cette marge est rejetée avant upload.
 _COURSE_FINAL_SILENCE_SECONDS = 120
 _DEFAULT_TTS_SPEED = 0.90
 _DEFAULT_TTS_LOCAL_MAX_SPEEDUP = 1.0
@@ -509,7 +509,8 @@ def _runtime_intra_day_carryover_enabled() -> bool:
     """Autorise le report technique d'un reste audio vers le cours suivant.
 
     Désactivé par défaut : chaque cours doit rester autonome. Si un bloc est
-    trop long, l'audio complet est conservé pour recalibrer ensuite les budgets.
+    trop long, son texte complet reste canonique mais l'audio doit être
+    recalibré avant de pouvoir être publié.
     """
     value = (os.getenv("FORMATION_RUNTIME_INTRA_DAY_CARRYOVER") or "").strip().lower()
     return value in {"1", "true", "yes", "on"}
@@ -4418,6 +4419,20 @@ def _assert_audio_duration_within_slot(filename: str, duration_sec: float, targe
         )
 
 
+def _assert_course_voice_before_final_silence(bloc: dict, voice_duration_sec: float) -> None:
+    """Keep spoken course audio before the reserved final-silence window."""
+    target_sec = int(bloc.get("target_sec") or 0)
+    if not target_sec or voice_duration_sec is None:
+        return
+    max_voice_sec = _course_voice_window_sec(target_sec)
+    if float(voice_duration_sec) > max_voice_sec:
+        raise ValueError(
+            f"Bloc {bloc.get('bloc_number')} dépasse la limite de parole avant "
+            f"le silence final ({float(voice_duration_sec):.1f}s > "
+            f"{max_voice_sec:.1f}s). Audio non uploadé."
+        )
+
+
 def _runtime_conclusions_from_attempts(attempts: list) -> list:
     return [
         {
@@ -5357,15 +5372,14 @@ def _synthesize_course_audio_synced_to_slides(
             )
         voice_stop_duration = cursor_sec
         if target_sec > voice_stop_duration:
-            if use_runtime_fit:
-                silence_bytes, silence_duration = _edge_muted_padding_audio(
-                    target_sec - voice_stop_duration,
-                    on_progress=_emit,
-                )
-            else:
-                silence_bytes, silence_duration = _silent_mp3_approx_no_ffmpeg(
-                    target_sec - voice_stop_duration
-                )
+            # Toujours produire le remplissage avec Edge lui-même. Le MP3
+            # silencieux embarqué n'a pas le même profil (sample rate/bitrate)
+            # et sa concaténation avec Edge fausse la durée lue par certains
+            # navigateurs.
+            silence_bytes, silence_duration = _edge_muted_padding_audio(
+                target_sec - voice_stop_duration,
+                on_progress=_emit,
+            )
             if silence_bytes and silence_duration > 0:
                 audio_parts.append(silence_bytes)
                 attempts.append({
@@ -6614,9 +6628,8 @@ def _synthesize_course_audio_to_fit(
     convert_to_speech_with_timestamps=None,
 ):
     """
-    Génère un bloc cours tel quel.
-    La durée réelle peut dépasser le créneau prévu : on conserve l'audio complet
-    pour permettre de recalibrer ensuite les budgets mots à partir du résultat.
+    Génère un bloc cours tel quel et refuse une voix qui empiète sur la
+    fenêtre de silence final réservée par la playlist.
     """
     target_sec = int(bloc["target_sec"])
     max_voice_sec = _course_voice_window_sec(target_sec)
@@ -6644,6 +6657,7 @@ def _synthesize_course_audio_to_fit(
             raw_duration = _mp3_duration_seconds_no_ffprobe(audio_bytes)
         except Exception:
             raw_duration = measure_duration_ms(audio_bytes) / 1000
+    _assert_course_voice_before_final_silence(bloc, raw_duration)
     attempts.append({
         "kind": "api_timestamped" if actual_reading else "api",
         "speed": api_speed,
@@ -6661,9 +6675,8 @@ def _synthesize_fish_course_audio_observe(
     convert_to_speech_with_timestamps=None,
 ):
     """
-    Génère Fish Audio tel quel et mesure la durée réelle.
-    Utilisé pour lancer les cours d'une journée en parallèle sans réduire le
-    texte ni rejeter un bloc parce qu'il dépasse son créneau théorique.
+    Génère Fish Audio tel quel et mesure la durée réelle, avec la même
+    garde de silence final que le chemin séquentiel.
     """
     api_speed = _course_tts_speed()
     actual_reading = None
@@ -6707,6 +6720,7 @@ def _synthesize_fish_course_audio_observe(
             raw_duration = _mp3_duration_seconds_no_ffprobe(audio_bytes)
         except Exception:
             raw_duration = measure_duration_ms(audio_bytes) / 1000
+    _assert_course_voice_before_final_silence(bloc, raw_duration)
 
     attempts = [{
         "kind": "api_observe_timestamped" if actual_reading else "api_observe",
@@ -14451,20 +14465,8 @@ def generate_audio_from_script(
                 final_duration = _mp3_duration_seconds_no_ffprobe(final_bytes)
             except Exception:
                 final_duration = target_sec
-        if not mock and target_sec and float(final_duration) > float(target_sec) + _UPLOAD_DURATION_TOLERANCE_SEC:
-            logger.warning(
-                "PIPELINE_AUDIO_COURSE_DURATION_OVERFLOW_NON_BLOCKING "
-                "formation_job_id=%s content_job_id=%s folder_id=%s filename=%s "
-                "bloc=%s duration=%.1f target=%s overflow=%.1f",
-                formation_job_id,
-                job_id,
-                folder_id,
-                filename,
-                bloc["bloc_number"],
-                float(final_duration),
-                target_sec,
-                float(final_duration) - float(target_sec),
-            )
+        if not mock:
+            _assert_audio_duration_within_slot(filename, final_duration, target_sec)
         blob_path = f"{azure_prefix}{filename}"
         upload_blob(CONTAINER_AUDIOS, blob_path, final_bytes)
         logger.info(f"   ✅ {filename} : {final_duration:.1f}s uploadé")

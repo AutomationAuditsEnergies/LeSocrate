@@ -2,7 +2,7 @@ import unittest
 import sys
 import types
 from datetime import datetime
-from unittest.mock import patch
+from unittest.mock import ANY, patch
 
 from flask import Flask
 from config import FRANCE_TZ
@@ -340,6 +340,138 @@ class HrPostgresReadRoutesTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.get_json()["recipients"], recipients)
         list_recipients.assert_called_once_with(12)
+
+    def test_student_email_batch_is_limited_to_one_thousand(self):
+        emails = [f"eleve{index}@example.test" for index in range(1001)]
+        with patch("routes.hr_routes.HR_ENABLED", True), patch(
+            "routes.hr_routes.hr_resource_belongs_to_center", return_value=True
+        ), patch(
+            "routes.hr_routes.add_explicit_course_reminder_recipients"
+        ) as add_recipients:
+            response = self.client.post(
+                "/api/hr/platforms/12/student-emails",
+                json={"emails": emails},
+            )
+
+        self.assertEqual(response.status_code, 413)
+        self.assertIn("1000 emails maximum", response.get_json()["error"])
+        add_recipients.assert_not_called()
+
+    def test_student_email_valid_batch_is_normalized_and_tenant_scoped(self):
+        saved = [
+            {"id": 4, "email": "alice@example.test"},
+            {"id": 5, "email": "bob@example.test"},
+        ]
+        with patch("routes.hr_routes.HR_ENABLED", True), patch(
+            "routes.hr_routes.hr_resource_belongs_to_center", return_value=True
+        ), patch(
+            "routes.hr_routes.add_explicit_course_reminder_recipients",
+            return_value=saved,
+        ) as add_recipients:
+            response = self.client.post(
+                "/api/hr/platforms/12/student-emails",
+                json={"emails": [" Alice@Example.Test ", "bob@example.test"]},
+            )
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.get_json()["recipients"], saved)
+        add_recipients.assert_called_once_with(
+            12,
+            ["alice@example.test", "bob@example.test"],
+            created_at=ANY,
+        )
+
+    def test_student_email_write_rejects_another_centers_platform(self):
+        with patch("routes.hr_routes.HR_ENABLED", True), patch(
+            "routes.hr_routes.hr_resource_belongs_to_center", return_value=False
+        ), patch(
+            "routes.hr_routes.add_explicit_course_reminder_recipients"
+        ) as add_recipients:
+            response = self.client.post(
+                "/api/hr/platforms/99/student-emails",
+                json={"emails": ["alice@example.test"]},
+            )
+
+        self.assertEqual(response.status_code, 404)
+        add_recipients.assert_not_called()
+
+    def test_student_email_rejects_oversized_or_malformed_address(self):
+        invalid_email = f"{'a' * 245}@example.test"
+        with patch("routes.hr_routes.HR_ENABLED", True), patch(
+            "routes.hr_routes.hr_resource_belongs_to_center", return_value=True
+        ), patch(
+            "routes.hr_routes.add_explicit_course_reminder_recipients"
+        ) as add_recipients:
+            response = self.client.post(
+                "/api/hr/platforms/12/student-emails",
+                json={"emails": [invalid_email]},
+            )
+
+        self.assertEqual(response.status_code, 400)
+        add_recipients.assert_not_called()
+
+    def test_reminder_rule_route_rejects_subject_header_injection(self):
+        payload = {
+            "name": "Rappel",
+            "trigger_mode": "relative_minutes",
+            "minutes_before": 30,
+            "subject_template": "Cours\r\nBcc: pirate@example.test",
+            "content_template": "Cours à {time}",
+            "recipient_scope": "all",
+        }
+        with patch("routes.hr_routes.HR_ENABLED", True), patch(
+            "routes.hr_routes.hr_resource_belongs_to_center", return_value=True
+        ):
+            response = self.client.post(
+                "/api/hr/platforms/12/reminder-rules",
+                json=payload,
+            )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("saut de ligne", response.get_json()["error"])
+
+    def test_reminder_rules_can_be_listed_and_created_by_the_center(self):
+        existing = [{
+            "id": 7,
+            "name": "Deux jours avant",
+            "trigger_mode": "local_day_time",
+            "days_before": 2,
+            "local_time": "18:30",
+            "recipient_scope": "all",
+            "recipient_ids": [],
+            "is_active": True,
+        }]
+        created = {**existing[0], "id": 8}
+        request_payload = {
+            "name": "Deux jours avant",
+            "trigger_mode": "local_day_time",
+            "days_before": 2,
+            "local_time": "18:30",
+            "subject_template": "Rappel",
+            "content_template": "Cours le {date} à {time}",
+            "recipient_scope": "all",
+            "recipient_ids": [],
+            "is_active": True,
+        }
+        with patch("routes.hr_routes.HR_ENABLED", True), patch(
+            "routes.hr_routes.hr_resource_belongs_to_center", return_value=True
+        ), patch(
+            "routes.hr_routes.get_course_reminder_rules", return_value=existing
+        ) as list_rules, patch(
+            "routes.hr_routes.save_course_reminder_rule", return_value=created
+        ) as save_rule:
+            response = self.client.get("/api/hr/platforms/12/reminder-rules")
+            create_response = self.client.post(
+                "/api/hr/platforms/12/reminder-rules",
+                json=request_payload,
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()["rules"], existing)
+        self.assertEqual(create_response.status_code, 201)
+        self.assertEqual(create_response.get_json()["rule"], created)
+        list_rules.assert_called_once_with(12)
+        save_rule.assert_called_once_with(12, request_payload)
 
 
 if __name__ == "__main__":

@@ -617,6 +617,31 @@ class PipelineRepositoryTest(unittest.TestCase):
         )
         self.assertEqual(rows[0]["formation_job_id"], old_job_id)
 
+    def test_due_audio_generation_sessions_are_stably_bounded_by_urgency(self):
+        conn = sqlite3.connect(self.db_path)
+        conn.executescript(
+            """
+            INSERT INTO course_sessions
+                (id, platform_id, session_index, scheduled_at, status,
+                 audio_generation_started_at)
+            VALUES
+                (142, 7, 3, '2026-01-01 11:00:00', 'planned', NULL),
+                (141, 7, 2, '2026-01-01 10:00:00', 'planned', NULL),
+                (140, 7, 1, '2026-01-01 10:00:00', 'planned', NULL);
+            """
+        )
+        conn.commit()
+        conn.close()
+
+        rows = repo.list_due_audio_generation_sessions(
+            lower_bound="2026-01-01 00:00:00",
+            upper_bound="2026-01-02 00:00:00",
+            platform_ids=[7],
+            batch_size=2,
+        )
+
+        self.assertEqual([row["id"] for row in rows], [140, 141])
+
     def test_due_audio_generation_sessions_retry_failed_unfinished_session(self):
         job_id = repo.create_pipeline_job(
             platform_id=7,
@@ -739,12 +764,16 @@ class PipelineRepositoryTest(unittest.TestCase):
                 lower_bound="2026-01-01 00:00:00",
                 upper_bound="2026-01-02 00:00:00",
                 platform_ids=[7],
+                batch_size=25,
             )
 
         self.assertEqual([row["id"] for row in rows], [120])
         self.assertEqual(rows[0]["formation_job_id"], 42)
         self.assertIn("cs.platform_id = ANY(%s)", executed["query"])
-        self.assertEqual(executed["params"][-1], [7])
+        self.assertIn("ORDER BY cs.scheduled_at ASC, cs.id ASC", executed["query"])
+        self.assertIn("LIMIT %s", executed["query"])
+        self.assertEqual(executed["params"][-2], [7])
+        self.assertEqual(executed["params"][-1], 25)
 
     def test_expected_course_folder_queries_rank_best_candidate(self):
         job_id = repo.create_pipeline_job(

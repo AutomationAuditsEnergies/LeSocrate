@@ -5,6 +5,7 @@ import re
 import time
 import requests as http_requests
 from datetime import datetime, timedelta, timezone
+from email.utils import parseaddr
 from flask import Blueprint, request, session, jsonify, Response, stream_with_context, send_file
 from azure.storage.blob import BlobServiceClient, generate_blob_sas, BlobSasPermissions
 from azure.core.exceptions import ResourceExistsError
@@ -60,11 +61,14 @@ from services.course_schedule_service import (
     get_course_schedule_summary,
     get_course_schedule_details,
     get_course_schedule_details_for_platform,
+    get_course_reminder_rules,
     process_due_reminders,
     postpone_course_session,
     preview_course_session_postponement,
     run_scheduler_tick,
     save_course_schedule,
+    save_course_reminder_rule,
+    delete_course_reminder_rule,
     update_course_schedule,
 )
 from services.export_service import generate_attendance_excel_export
@@ -97,6 +101,36 @@ CENTER_ONBOARDING_VERSION = 1
 
 _POSTGRES_PIPELINE_BACKENDS = {"postgres", "postgresql", "supabase"}
 _HR_SUPERADMIN_ACCOUNT_TYPES = {"legacy_admin", "superadmin"}
+_MAX_STUDENT_EMAILS_PER_REQUEST = 1000
+_MAX_STUDENT_EMAIL_REQUEST_BYTES = 300_000
+_STUDENT_EMAIL_RE = re.compile(
+    r"^[A-Z0-9!#$%&'*+/=?^_`{|}~.-]+@"
+    r"[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?"
+    r"(?:\.[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?)+$",
+    re.IGNORECASE,
+)
+
+
+def _normalize_student_email(value):
+    email = str(value or "").strip().lower()
+    if not email or len(email) > 254 or any(ord(char) < 32 for char in email):
+        raise ValueError(f"Email invalide: {email[:80]}")
+    display_name, parsed = parseaddr(email)
+    local_part, separator, domain = email.rpartition("@")
+    if (
+        display_name
+        or parsed.lower() != email
+        or separator != "@"
+        or not local_part
+        or len(local_part) > 64
+        or local_part.startswith(".")
+        or local_part.endswith(".")
+        or ".." in local_part
+        or len(domain) > 253
+        or not _STUDENT_EMAIL_RE.fullmatch(email)
+    ):
+        raise ValueError(f"Email invalide: {email[:80]}")
+    return email
 
 
 def _hr_pipeline_reads_use_postgres():
@@ -3335,22 +3369,42 @@ def create_hr_blueprint(socketio):
         denied = _require_admin()
         if denied:
             return denied
+        if (
+            request.content_length is not None
+            and request.content_length > _MAX_STUDENT_EMAIL_REQUEST_BYTES
+        ):
+            return jsonify({
+                "success": False,
+                "error": "Lot trop volumineux (1000 emails maximum)",
+            }), 413
         data = request.get_json(silent=True) or {}
+        if not isinstance(data, dict):
+            return jsonify({"success": False, "error": "Corps JSON invalide"}), 400
         raw_emails = data.get("emails")
         if raw_emails is None:
             raw_emails = data.get("email", "")
         if isinstance(raw_emails, str):
             candidates = raw_emails.replace(";", ",").replace("\n", ",").split(",")
+        elif isinstance(raw_emails, list):
+            candidates = raw_emails
         else:
-            candidates = raw_emails or []
+            return jsonify({"success": False, "error": "emails doit être une liste ou du texte"}), 400
+        if len(candidates) > _MAX_STUDENT_EMAILS_PER_REQUEST:
+            return jsonify({
+                "success": False,
+                "error": "1000 emails maximum par lot; ajoutez les suivants dans un autre lot",
+            }), 413
         emails = []
+        seen = set()
         for item in candidates:
-            email = str(item or "").strip().lower()
-            if not email:
+            if item is None or not str(item).strip():
                 continue
-            if "@" not in email or "." not in email.rsplit("@", 1)[-1]:
-                return jsonify({"success": False, "error": f"Email invalide: {email}"}), 400
-            if email not in emails:
+            try:
+                email = _normalize_student_email(item)
+            except ValueError as exc:
+                return jsonify({"success": False, "error": str(exc)}), 400
+            if email not in seen:
+                seen.add(email)
                 emails.append(email)
         if not emails:
             return jsonify({"success": False, "error": "Ajoute au moins un email"}), 400
@@ -3380,6 +3434,77 @@ def create_hr_blueprint(socketio):
             return jsonify({"success": True}), 200
         except Exception as e:
             logger.error(f"❌ Erreur delete student email P{platform_id}: {e}")
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    @hr_bp.route("/api/hr/platforms/<int:platform_id>/reminder-rules", methods=["GET"])
+    def get_platform_reminder_rules(platform_id):
+        denied = _require_admin()
+        if denied:
+            return denied
+        try:
+            rules = get_course_reminder_rules(platform_id)
+            return jsonify({"success": True, "rules": rules}), 200
+        except Exception as e:
+            logger.error(f"❌ Erreur get reminder rules P{platform_id}: {e}")
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    @hr_bp.route("/api/hr/platforms/<int:platform_id>/reminder-rules", methods=["POST"])
+    def create_platform_reminder_rule(platform_id):
+        denied = _require_admin()
+        if denied:
+            return denied
+        try:
+            rule = save_course_reminder_rule(
+                platform_id,
+                request.get_json(silent=True) or {},
+            )
+            return jsonify({"success": True, "rule": rule}), 201
+        except ValueError as e:
+            return jsonify({"success": False, "error": str(e)}), 400
+        except Exception as e:
+            logger.error(f"❌ Erreur create reminder rule P{platform_id}: {e}")
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    @hr_bp.route(
+        "/api/hr/platforms/<int:platform_id>/reminder-rules/<int:rule_id>",
+        methods=["PUT"],
+    )
+    def update_platform_reminder_rule(platform_id, rule_id):
+        denied = _require_admin()
+        if denied:
+            return denied
+        try:
+            rule = save_course_reminder_rule(
+                platform_id,
+                request.get_json(silent=True) or {},
+                rule_id=rule_id,
+            )
+            if not rule:
+                return jsonify({"success": False, "error": "Rappel introuvable"}), 404
+            return jsonify({"success": True, "rule": rule}), 200
+        except ValueError as e:
+            return jsonify({"success": False, "error": str(e)}), 400
+        except Exception as e:
+            logger.error(f"❌ Erreur update reminder rule P{platform_id}: {e}")
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    @hr_bp.route(
+        "/api/hr/platforms/<int:platform_id>/reminder-rules/<int:rule_id>",
+        methods=["DELETE"],
+    )
+    def delete_platform_reminder_rule(platform_id, rule_id):
+        denied = _require_admin()
+        if denied:
+            return denied
+        try:
+            if not delete_course_reminder_rule(platform_id, rule_id):
+                return jsonify({
+                    "success": False,
+                    "error": "Rappel introuvable ou rappel par défaut à désactiver plutôt qu'à supprimer",
+                }), 404
+            return jsonify({"success": True}), 200
+        except Exception as e:
+            logger.error(f"❌ Erreur delete reminder rule P{platform_id}: {e}")
             return jsonify({"success": False, "error": str(e)}), 500
 
     # ─── POST /api/hr/platforms/<id>/config-cours ─────────────────────────

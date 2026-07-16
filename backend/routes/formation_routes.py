@@ -55,6 +55,10 @@ logger = get_logger(__name__)
 
 formation_bp = Blueprint("formation", __name__)
 
+_SCHEDULED_AUDIO_CAPACITY_LOCK = threading.Lock()
+_SCHEDULED_AUDIO_CAPACITY = None
+_SCHEDULED_AUDIO_CAPACITY_LIMIT = None
+
 _PIPELINE_MODEL_ALIASES = {
     "sonnet": "claude-sonnet-4-20250514",
     "haiku": "claude-haiku-4-5-20251001",
@@ -2488,6 +2492,66 @@ class _ScheduledAudioLeaseLost(RuntimeError):
     """The scheduled-session fencing token no longer belongs to this worker."""
 
 
+def _legacy_bulk_audio_enabled() -> bool:
+    """Emergency-only opt-in for pre-SaaS all-days synthesis endpoints."""
+    return str(os.getenv("ALLOW_LEGACY_BULK_AUDIO", "0")).strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def _try_acquire_scheduled_audio_capacity() -> bool:
+    """Apply per-instance backpressure before claiming a durable occurrence."""
+    global _SCHEDULED_AUDIO_CAPACITY, _SCHEDULED_AUDIO_CAPACITY_LIMIT
+    try:
+        limit = max(1, int(os.getenv("SCHEDULED_AUDIO_MAX_CONCURRENCY", "1") or "1"))
+    except (TypeError, ValueError):
+        limit = 1
+    with _SCHEDULED_AUDIO_CAPACITY_LOCK:
+        if _SCHEDULED_AUDIO_CAPACITY is None:
+            _SCHEDULED_AUDIO_CAPACITY = threading.BoundedSemaphore(limit)
+            _SCHEDULED_AUDIO_CAPACITY_LIMIT = limit
+        # Do not replace a live semaphore when configuration changes at runtime;
+        # doing so would lose the count held by active workers.
+        capacity = _SCHEDULED_AUDIO_CAPACITY
+    return bool(capacity.acquire(blocking=False))
+
+
+def _release_scheduled_audio_capacity() -> None:
+    capacity = _SCHEDULED_AUDIO_CAPACITY
+    if capacity is None:
+        return
+    try:
+        capacity.release()
+    except ValueError:
+        logger.error("PIPELINE_SCHEDULED_AUDIO_CAPACITY_OVER_RELEASE", exc_info=True)
+
+
+def _spawn_audio_background_task(
+    target,
+    *,
+    use_native_thread: bool,
+    name: str,
+):
+    """Start audio independently from the caller's Eventlet hub.
+
+    The dedicated course-scheduler worker is a regular threaded process and
+    deliberately does not monkey-patch Eventlet. Scheduled J-1 work therefore
+    uses a native daemon thread; manual Flask launches keep their historical
+    Eventlet greenlet behavior.
+    """
+    if use_native_thread:
+        runner = threading.Thread(target=target, name=name, daemon=True)
+        runner.start()
+        return runner
+
+    import eventlet
+
+    return eventlet.spawn(target)
+
+
 def _assert_scheduled_audio_ownership(
     schedule_session_id: int | None,
     schedule_claim_started_at,
@@ -2597,6 +2661,20 @@ def _finalize_audio_ready_state(job_id: int, voice_type: str) -> dict:
     job = get_job(job_id)
     if not job:
         raise ValueError(f"Job {job_id} introuvable pour finalisation audio")
+    import json
+    from services.canonical_teacher_service import (
+        build_canonical_teacher_signature,
+        canonical_teacher_fingerprint,
+    )
+
+    canonical_signature = build_canonical_teacher_signature(
+        rncp_code=job.get("rncp_code") or "",
+        tp_name=job.get("tp_name") or f"Job {job_id}",
+        total_hours=int(job.get("total_hours") or 0),
+        nb_days=int(job.get("nb_days") or 1),
+        voice_type=voice_type,
+    )
+    canonical_fingerprint = canonical_teacher_fingerprint(canonical_signature)
     result = finalize_pipeline_module(
         formation_job_id=job_id,
         platform_id=int(job["platform_id"]),
@@ -2604,7 +2682,34 @@ def _finalize_audio_ready_state(job_id: int, voice_type: str) -> dict:
         tp_name=job.get("tp_name") or f"Job {job_id}",
         audio_ready=True,
         voice_type=voice_type,
+        canonical_fingerprint=canonical_fingerprint,
+        canonical_signature_json=json.dumps(canonical_signature, ensure_ascii=False, sort_keys=True),
+        canonical_generator_version=canonical_signature["generator_version"],
     )
+    if result.get("canonical_reuse_allowed") and result.get("center_account_id") is not None:
+        try:
+            from services.formation_pipeline_service import get_expected_course_folders
+            from services.teacher_asset_service import ensure_module_asset_manifest
+
+            folder_ids = get_expected_course_folders(job_id).get("folder_ids") or []
+            result["asset_manifest"] = ensure_module_asset_manifest(
+                module_id=int(result["module_id"]),
+                center_account_id=int(result["center_account_id"]),
+                source_platform_id=int(job["platform_id"]),
+                source_folder_ids=folder_ids,
+                force=True,
+            )
+        except Exception as exc:
+            # Module validation remains correct because every session asset was
+            # published. Global matching requires a ready manifest, so a failed
+            # inventory cannot be selected and will be retried on explicit reuse.
+            logger.warning(
+                "PIPELINE_CANONICAL_MANIFEST_DEFERRED job=%s module=%s error=%s",
+                job_id,
+                result.get("module_id"),
+                str(exc)[:300],
+            )
+            result["asset_manifest_error"] = str(exc)[:300]
     logger.info(
         "PIPELINE_AUDIO_FINALIZED formation_job_id=%s platform_id=%s "
         "module_id=%s module_created=%s voice_type=%s ready_updated=%s",
@@ -2651,6 +2756,38 @@ def _finalize_text_ready_state(job_id: int) -> dict:
     return result
 
 
+def _finalize_scheduled_audio_module_if_ready(
+    job_id: int,
+    voice_type: str,
+    *,
+    completing_session_id: int | None = None,
+) -> dict:
+    """Promote the durable teacher only after every scheduled day is ready."""
+    from repositories.course_schedule_repository import (
+        get_scheduled_audio_completion_readiness,
+    )
+
+    job = get_job(job_id)
+    if not job:
+        raise ValueError(f"Job {job_id} introuvable pour finalisation planifiée")
+    readiness = get_scheduled_audio_completion_readiness(
+        int(job["platform_id"]),
+        int(job_id),
+        required_session_count=int(job.get("nb_days") or 1),
+        completing_session_id=completing_session_id,
+    )
+    if not readiness["ready"]:
+        return {**readiness, "finalized": False, "finalize_result": None}
+
+    finalize_result = _finalize_audio_ready_state(job_id, voice_type)
+    update_job(job_id, status="audio_completed", error_message=None)
+    return {
+        **readiness,
+        "finalized": True,
+        "finalize_result": finalize_result,
+    }
+
+
 def _count_dirty_segments_for_job(job_id: int) -> int:
     from repositories.pipeline_repository import count_dirty_completed_segments_for_folders
     from services.formation_pipeline_service import get_expected_course_folders
@@ -2683,8 +2820,10 @@ def start_folder_audio_generation(
     payload=None,
     *,
     schedule_session_id=None,
+    target_platform_id=None,
     trigger_source="manual",
     stale_started_before=None,
+    wait_for_completion=False,
 ):
     """Lance l'audio d'une seule journée.
 
@@ -2694,6 +2833,8 @@ def start_folder_audio_generation(
     job = get_job(job_id)
     if not job:
         return {"error": "Job introuvable"}, 404
+
+    publish_platform_id = int(target_platform_id or job["platform_id"])
 
     try:
         folder_id, folder_resolution = _resolve_continue_after_text_folder(job_id, int(folder_id))
@@ -2729,13 +2870,19 @@ def start_folder_audio_generation(
     idx = folder_ids.index(folder_id)
     next_folder_id = folder_ids[idx + 1] if idx + 1 < len(folder_ids) else None
 
-    import eventlet
     from datetime import datetime
     from config import FRANCE_TZ
     from services.content_generation_service import generate_audio_from_script
 
     schedule_claim_started_at = None
+    scheduled_capacity_acquired = False
     if schedule_session_id:
+        if not _try_acquire_scheduled_audio_capacity():
+            return {
+                "error": "Capacité audio planifiée saturée; la séance restera due pour le prochain tick",
+                "code": "scheduled_audio_backpressure",
+            }, 429
+        scheduled_capacity_acquired = True
         try:
             from repositories.course_schedule_repository import (
                 claim_audio_generation_session,
@@ -2750,17 +2897,19 @@ def start_folder_audio_generation(
                 stale_started_before=stale_started_before,
             )
             if not claimed:
+                _release_scheduled_audio_capacity()
                 return {"error": "Audio déjà lancé ou terminé pour cette séance"}, 409
         except Exception as exc:
+            _release_scheduled_audio_capacity()
             logger.warning("⚠️ Impossible de marquer la séance audio running", exc_info=True)
             return {"error": f"Impossible de verrouiller la séance audio: {str(exc)[:200]}"}, 500
 
     def _run_one():
         started_at = time.time()
+        outcome = {"success": False, "error": None}
         ownership_state = {"error": None}
-        heartbeat_stop = [False]
+        heartbeat_stop = threading.Event()
         heartbeat = None
-        audio_runner_greenlet = eventlet.getcurrent()
 
         if schedule_session_id:
             try:
@@ -2772,10 +2921,7 @@ def start_folder_audio_generation(
                 heartbeat_seconds = 30.0
 
             def _scheduled_audio_heartbeat():
-                while not heartbeat_stop[0]:
-                    eventlet.sleep(heartbeat_seconds)
-                    if heartbeat_stop[0]:
-                        return
+                while not heartbeat_stop.wait(heartbeat_seconds):
                     try:
                         _assert_scheduled_audio_ownership(
                             int(schedule_session_id),
@@ -2791,15 +2937,20 @@ def start_folder_audio_generation(
                             folder_id,
                             exc,
                         )
-                        # Interrupt cooperative long provider calls immediately;
-                        # the explicit checks below remain the final guard for
-                        # non-cooperative calls that only return later.
-                        eventlet.greenthread.kill(audio_runner_greenlet, exc)
+                        # Native Python threads cannot safely be killed. The
+                        # progress callback and every publish/finalize boundary
+                        # re-check this state and fail closed when the provider
+                        # call returns.
                         return
 
             # This heartbeat is independent from progress callbacks. Some TTS
             # and slide-provider calls can remain silent for several minutes.
-            heartbeat = eventlet.spawn(_scheduled_audio_heartbeat)
+            heartbeat = threading.Thread(
+                target=_scheduled_audio_heartbeat,
+                name=f"scheduled-audio-heartbeat-{schedule_session_id}",
+                daemon=True,
+            )
+            heartbeat.start()
 
         try:
             from services.formation_observability_service import log_pipeline_event
@@ -2857,25 +3008,35 @@ def start_folder_audio_generation(
             try:
                 from services.audio_publish_service import publish_playlist_audio_to_platform
                 publish_result = publish_playlist_audio_to_platform(
-                    job["platform_id"],
+                    publish_platform_id,
                     folder_id,
+                    source_platform_id=int(job["platform_id"]),
                     archive_existing=True,
                     archive_reason=f"{trigger_source}-folder-{folder_id}",
+                    destination_prefix=(
+                        f"course-sessions/{int(schedule_session_id)}"
+                        if schedule_session_id
+                        else None
+                    ),
                 )
                 publish_errors = publish_result.get("publish_errors") or []
                 published_files = publish_result.get("published") or []
-                if publish_errors or not published_files:
+                from services.playlist_tts_service import PLAYLIST_SPEC
+                required_files = {item[0] for item in PLAYLIST_SPEC}
+                missing_files = sorted(required_files - set(published_files))
+                if publish_errors or missing_files:
                     raise RuntimeError(
                         "Publication audio incomplète: "
                         f"{len(published_files)} fichier(s) publié(s), "
-                        f"{len(publish_errors)} erreur(s)"
+                        f"{len(publish_errors)} erreur(s), "
+                        f"{len(missing_files)} fichier(s) requis manquant(s)"
                     )
             except Exception as publish_error:
                 publish_result = {"published": [], "publish_errors": [{"error": str(publish_error)}]}
                 logger.error(
                     "❌ Publication audio journée échouée job=%s platform=%s folder=%s: %s",
                     job_id,
-                    job.get("platform_id"),
+                    publish_platform_id,
                     folder_id,
                     publish_error,
                     exc_info=True,
@@ -2893,15 +3054,27 @@ def start_folder_audio_generation(
             )
             n_dirty = _count_dirty_segments_for_job(job_id)
             finalize_result = None
+            scheduled_readiness = None
             if schedule_session_id:
                 from repositories.course_schedule_repository import (
                     complete_audio_generation_session,
                 )
 
-                # Final fencing check is immediately adjacent to the guarded
-                # completion write. Stop further heartbeats once completion
-                # succeeds because completed sessions are intentionally no
-                # longer touchable.
+                # Treat the currently owned/published occurrence as complete
+                # for readiness. If durable module promotion fails, the claim
+                # remains fail-able and the normal retry path can repair it.
+                _assert_scheduled_audio_ownership(
+                    int(schedule_session_id),
+                    schedule_claim_started_at,
+                    ownership_state=ownership_state,
+                )
+                scheduled_readiness = _finalize_scheduled_audio_module_if_ready(
+                    int(job_id),
+                    voice_type,
+                    completing_session_id=int(schedule_session_id),
+                )
+                # Re-fence immediately after the idempotent promotion and next
+                # to the guarded completion write.
                 _assert_scheduled_audio_ownership(
                     int(schedule_session_id),
                     schedule_claim_started_at,
@@ -2916,10 +3089,9 @@ def start_folder_audio_generation(
                     raise _ScheduledAudioLeaseLost(
                         f"Finalisation refusée: lock audio perdu pour la séance {schedule_session_id}"
                     )
-                heartbeat_stop[0] = True
-            # L'audio d'une journée est une action d'exploitation à la demande :
-            # elle ne clôture pas la pipeline de fabrication du module.
-            update_job(job_id, status="text_ready", error_message=None)
+                heartbeat_stop.set()
+            if not scheduled_readiness or not scheduled_readiness.get("finalized"):
+                update_job(job_id, status="text_ready", error_message=None)
             log_pipeline_event(
                 job_id,
                 "audio_folder_completed",
@@ -2932,8 +3104,13 @@ def start_folder_audio_generation(
                 data={
                     "voice_type": voice_type,
                     "remaining_dirty_segments": n_dirty,
-                    "finalized": False,
-                    "finalize_result": finalize_result,
+                    "finalized": bool(scheduled_readiness and scheduled_readiness.get("finalized")),
+                    "finalize_result": (
+                        scheduled_readiness.get("finalize_result")
+                        if scheduled_readiness
+                        else finalize_result
+                    ),
+                    "scheduled_readiness": scheduled_readiness,
                     "generated": result_audio.get("generated") if isinstance(result_audio, dict) else None,
                     "skipped": result_audio.get("skipped") if isinstance(result_audio, dict) else None,
                     "publish": publish_result,
@@ -2942,7 +3119,9 @@ def start_folder_audio_generation(
                     "schedule_session_id": schedule_session_id,
                 },
             )
+            outcome["success"] = True
         except Exception as e:
+            outcome["error"] = str(e)[:500]
             lease_lost = isinstance(e, _ScheduledAudioLeaseLost)
             if not lease_lost:
                 update_job(job_id, status="text_ready", error_message=f"audio folder {folder_id}: {str(e)[:500]}")
@@ -2982,12 +3161,33 @@ def start_folder_audio_generation(
                     logger.warning("⚠️ Impossible de marquer la séance audio error", exc_info=True)
             logger.error("❌ Audio folder job=%s folder=%s : %s", job_id, folder_id, e, exc_info=True)
         finally:
-            heartbeat_stop[0] = True
+            heartbeat_stop.set()
             if heartbeat is not None:
-                heartbeat.kill()
+                heartbeat.join(timeout=1.0)
+            if scheduled_capacity_acquired:
+                _release_scheduled_audio_capacity()
+        return outcome
 
-    eventlet.spawn(_run_one)
-    return {
+    run_outcome = None
+    if wait_for_completion:
+        run_outcome = _run_one()
+    else:
+        try:
+            _spawn_audio_background_task(
+                _run_one,
+                use_native_thread=bool(schedule_session_id),
+                name=(
+                    f"scheduled-audio-{schedule_session_id}"
+                    if schedule_session_id
+                    else f"manual-audio-{job_id}-{folder_id}"
+                ),
+            )
+        except Exception:
+            if scheduled_capacity_acquired:
+                _release_scheduled_audio_capacity()
+            raise
+
+    response = {
         "message": "Synthèse audio lancée pour cette journée",
         "job_id": job_id,
         "folder_id": folder_id,
@@ -2998,8 +3198,19 @@ def start_folder_audio_generation(
         "voice_type": voice_type,
         "status": "audio_running",
         "schedule_session_id": schedule_session_id,
+        "target_platform_id": publish_platform_id,
         "trigger_source": trigger_source,
-    }, 202
+    }
+    if run_outcome is not None:
+        response["waited_for_completion"] = True
+        if run_outcome["success"]:
+            response["message"] = "Synthèse audio terminée pour cette journée"
+            response["status"] = "audio_completed"
+            return response, 200
+        response["error"] = run_outcome["error"] or "La synthèse audio a échoué"
+        response["status"] = "audio_error"
+        return response, 500
+    return response, 202
 
 
 @formation_bp.route("/api/formation/<int:job_id>/content/<int:folder_id>/generate-audio", methods=["POST"])
@@ -3030,6 +3241,14 @@ def launch_audio(job_id):
     job = get_job(job_id)
     if not job:
         return jsonify({"error": "Job introuvable"}), 404
+    if not _legacy_bulk_audio_enabled():
+        return jsonify({
+            "error": (
+                "La synthèse de toutes les journées est désactivée. "
+                "Chaque séance est générée automatiquement dans sa fenêtre J-1."
+            ),
+            "code": "scheduled_audio_required",
+        }), 409
 
     from repositories.pipeline_repository import list_completed_content_jobs_for_folders
     from services.formation_pipeline_service import get_expected_course_folders
@@ -4038,8 +4257,14 @@ def continue_after_text(job_id, folder_id):
                 "PIPELINE_RESUME_STEP_TTS_DONE formation_job_id=%s folder_id=%s duration_ms=%s",
                 job_id, folder_id, int((time.time() - tts_started) * 1000),
             )
-            finalize_result = _finalize_audio_ready_state(job_id, "gtts")
-            update_job(job_id, status="audio_completed", error_message=None)
+            # This is a single-folder maintenance path, not proof that every
+            # scheduled occurrence has a ready asset. Never validate the
+            # durable teacher from this shortcut.
+            finalize_result = {
+                "finalized": False,
+                "reason": "scheduled_audio_completion_required",
+            }
+            update_job(job_id, status="text_ready", error_message=None)
             logger.info(
                 "PIPELINE_RESUME_RUN_DONE formation_job_id=%s folder_id=%s from_step=%s "
                 "total_duration_ms=%s",
@@ -4412,11 +4637,15 @@ def _determine_next_ap_step(job_id: int) -> str | None:
 
     # 10. Audio TTS optionnel. Par défaut l'auto-pilot s'arrête texte prêt :
     # les audios se génèrent ensuite à la demande, journée/semaine par journée/semaine.
+    if j.get("auto_pilot_generate_audio") and not _legacy_bulk_audio_enabled():
+        update_job(job_id, auto_pilot_generate_audio=0)
+        j["auto_pilot_generate_audio"] = False
+
     if not j.get("auto_pilot_generate_audio"):
-        try:
-            _finalize_text_ready_state(job_id)
-        except Exception as e:
-            logger.warning(f"⚠️ Finalisation texte job {job_id} ignorée : {e}")
+        # This transition creates the reusable module envelope and exposes the
+        # platform.  It is part of fulfillment, not best-effort cleanup: a
+        # failure must retry/dead-letter instead of reporting a paid order ready.
+        _finalize_text_ready_state(job_id)
         if j.get("status") != "text_ready":
             update_job(job_id, status="text_ready", error_message=None)
         return None
@@ -4991,6 +5220,10 @@ def _execute_ap_step(job_id: int, step: str, job: dict) -> None:
         )
 
     elif step == "audio":
+        if not _legacy_bulk_audio_enabled():
+            raise RuntimeError(
+                "Synthèse audio bulk désactivée : utiliser le déclenchement durable J-1 par séance"
+            )
         from services.content_generation_service import generate_audio_from_script
         from services.formation_pipeline_service import get_expected_course_folders
         folder_ids = get_expected_course_folders(job_id).get("folder_ids") or []
@@ -5350,6 +5583,14 @@ def run_auto_pilot(job_id):
             "error": "use_claude_code=true est incompatible avec DeepSeek. Lance l'auto-pilot en mode API."
         }), 400
     generate_audio = bool(payload.get("generate_audio") or payload.get("include_audio"))
+    if generate_audio and not _legacy_bulk_audio_enabled():
+        return jsonify({
+            "error": (
+                "generate_audio n'est plus accepté dans l'auto-pilot. "
+                "Les audios sont synthétisés séance par séance à J-1."
+            ),
+            "code": "scheduled_audio_required",
+        }), 400
 
     # Vérifie qu'un tick n'est pas déjà en cours (lock actif non-périmé).
     # Psycopg renvoie un datetime, SQLite une chaîne : le helper gère les deux.
@@ -5702,7 +5943,7 @@ def formation_pipeline_diagnostic(job_id):
         audio_clean = bool(folders) and sum(int(f.get("dirty_segments") or 0) for f in folders) == 0
         if audio_done and audio_clean:
             voice_type = job.get("auto_pilot_tts_mode") or "gtts"
-            finalize_result = _finalize_audio_ready_state(job_id, voice_type)
+            finalize_result = _finalize_scheduled_audio_module_if_ready(job_id, voice_type)
             job = get_job(job_id) or job
             try:
                 from services.formation_health_service import compute_health

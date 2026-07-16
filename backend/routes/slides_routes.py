@@ -10,6 +10,7 @@ from services.script_slide_generation_service import (
     get_latest_script_slide_deck,
     preview_slides_from_text,
 )
+from repositories.pipeline_repository import hr_resource_belongs_to_center
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -24,6 +25,63 @@ _generation_timeline = None
 _transcription_full = None
 _pipeline_debug = None  # Données intermédiaires du pipeline
 _generation_mode = None
+
+
+@slides_bp.before_request
+def require_admin_for_slide_workbench():
+    """Keep every deck operation inside its owning centre boundary.
+
+    The legacy audio/preview/status endpoints use process-global prototype
+    state and therefore remain super-admin only. A training centre can use the
+    persisted script deck endpoints only after the referenced folder (and an
+    optional platform hint) resolves to its own PostgreSQL tenant.
+    """
+    if request.method == "OPTIONS":
+        return None
+    if not session.get("is_admin", False):
+        return jsonify({"status": "error", "message": "Non autorisé"}), 403
+
+    account_type = str(session.get("admin_account_type") or "").strip().lower()
+    if account_type == "legacy_admin":
+        return None
+    if account_type != "training_center":
+        return jsonify({"status": "error", "message": "Non autorisé"}), 403
+
+    if request.endpoint == "slides.generate_from_script":
+        data = request.get_json(silent=True) or {}
+        folder_id = data.get("folder_id")
+        platform_id = data.get("platform_id")
+    elif request.endpoint == "slides.get_slides":
+        folder_id = request.args.get("folder_id")
+        platform_id = None
+    else:
+        # Global prototype state is never shared between centre accounts.
+        return jsonify({"status": "error", "message": "Non autorisé"}), 403
+
+    try:
+        center_id = int(session.get("admin_account_id"))
+        folder_id = int(folder_id)
+        allowed = hr_resource_belongs_to_center("folder", folder_id, center_id)
+        if allowed and platform_id not in (None, ""):
+            allowed = hr_resource_belongs_to_center(
+                "platform",
+                int(platform_id),
+                center_id,
+            )
+    except (TypeError, ValueError):
+        allowed = False
+    except Exception:
+        logger.warning(
+            "SLIDES_TENANT_SCOPE_LOOKUP_FAILED folder_id=%s center_id=%s",
+            folder_id,
+            session.get("admin_account_id"),
+            exc_info=True,
+        )
+        allowed = False
+    if not allowed:
+        # Same response for a missing folder and another centre's folder.
+        return jsonify({"status": "error", "message": "Ressource introuvable"}), 404
+    return None
 
 
 @slides_bp.route("/generate", methods=["POST"])

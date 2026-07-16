@@ -7,34 +7,14 @@ from azure.core.exceptions import ResourceExistsError
 from azure.storage.blob import BlobServiceClient, BlobSasPermissions, ContentSettings, generate_blob_sas
 
 from config import FRANCE_TZ
+from services.platform_storage_service import (
+    ensure_platform_audio_storage,
+    platform_archive_container as _platform_archive_container,
+    platform_audio_container as _platform_audio_container,
+)
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
-
-_ARCHIVE_DEFAULTS = {
-    1: "formationaudio-archives",
-    2: "formationaudio-archives-p2",
-    3: "formationaudio-p3-archives",
-    4: "formationaudio-p4-archives",
-}
-
-
-def _platform_audio_container(platform_id):
-    platform_id = int(platform_id)
-    if platform_id == 1:
-        return os.environ.get("AZURE_AUDIO_CONTAINER", "formationaudio-dev")
-    return os.environ.get(f"PLATFORM_{platform_id}_AUDIO_CONTAINER", f"formationaudio-p{platform_id}")
-
-
-def _platform_archive_container(platform_id):
-    platform_id = int(platform_id)
-    if platform_id == 1:
-        return os.environ.get("AZURE_AUDIO_ARCHIVE_CONTAINER", _ARCHIVE_DEFAULTS[1])
-    return os.environ.get(
-        f"PLATFORM_{platform_id}_AUDIO_ARCHIVE_CONTAINER",
-        _ARCHIVE_DEFAULTS.get(platform_id, f"formationaudio-archives-p{platform_id}"),
-    )
-
 
 def _audio_storage_connection_string():
     return os.environ.get("AZURE_AUDIO_STORAGE_CONNECTION_STRING") or os.environ.get("AZURE_STORAGE_CONNECTION_STRING")
@@ -43,6 +23,15 @@ def _audio_storage_connection_string():
 def _safe_archive_reason(reason):
     cleaned = re.sub(r"[^a-zA-Z0-9_-]+", "-", str(reason or "auto-publish")).strip("-").lower()
     return cleaned or "auto-publish"
+
+
+def _safe_occurrence_prefix(value):
+    clean = str(value or "").strip().strip("/")
+    if not clean:
+        return ""
+    if not re.fullmatch(r"course-sessions/[1-9][0-9]*", clean):
+        raise ValueError("Préfixe de séance audio invalide")
+    return clean
 
 
 def archive_public_platform_audios(platform_id, *, reason="auto-publish", blob_service_client=None):
@@ -65,7 +54,13 @@ def archive_public_platform_audios(platform_id, *, reason="auto-publish", blob_s
     except ResourceExistsError:
         pass
 
-    source_blobs = list(source_cc.list_blobs())
+    # The legacy/current playlist lives at the container root. Occurrence
+    # assets are immutable playback snapshots and must never be archived or
+    # deleted when an operator republishes that legacy root playlist.
+    source_blobs = [
+        blob for blob in source_cc.list_blobs()
+        if "/" not in str(blob.name or "").strip("/")
+    ]
     if not source_blobs:
         return {
             "archived": 0,
@@ -140,8 +135,9 @@ def publish_playlist_audio_to_platform(
     source_platform_id=None,
     archive_existing=False,
     archive_reason="auto-publish",
+    destination_prefix=None,
 ):
-    """Copie les MP3 générés depuis audiostts vers le container audio public."""
+    """Copie les MP3 vers le cache privé global ou celui d'une occurrence."""
     tts_conn = os.environ.get("AZURE_TTS_STORAGE_CONNECTION_STRING")
     audio_conn = _audio_storage_connection_string()
     if not tts_conn or not audio_conn:
@@ -152,10 +148,12 @@ def publish_playlist_audio_to_platform(
     folder_id = int(folder_id)
     wanted = {os.path.basename(str(name).split("?", 1)[0]) for name in (filenames or []) if name}
     dest_container = _platform_audio_container(platform_id)
+    occurrence_prefix = _safe_occurrence_prefix(destination_prefix)
     prefix = f"platform-{source_platform_id}/folder-{folder_id}/playlist/"
 
     tts_bsc = BlobServiceClient.from_connection_string(tts_conn)
     audio_bsc = BlobServiceClient.from_connection_string(audio_conn)
+    ensure_platform_audio_storage(platform_id, blob_service_client=audio_bsc)
     source_cc = tts_bsc.get_container_client("audiostts")
     dest_cc = audio_bsc.get_container_client(dest_container)
 
@@ -168,7 +166,7 @@ def publish_playlist_audio_to_platform(
         raise ValueError("Aucun nouveau fichier MP3 généré à publier")
 
     archive_result = None
-    if archive_existing:
+    if archive_existing and not occurrence_prefix:
         archive_result = archive_public_platform_audios(
             platform_id,
             reason=archive_reason,
@@ -176,12 +174,18 @@ def publish_playlist_audio_to_platform(
         )
 
     copied = []
+    copied_blob_names = []
     errors = []
     for blob in source_blobs:
         filename = blob.name.split("/")[-1]
         try:
             audio_bytes = source_cc.get_blob_client(blob.name).download_blob().readall()
-            dest_cc.get_blob_client(filename).upload_blob(
+            destination_name = (
+                f"{occurrence_prefix}/{filename}"
+                if occurrence_prefix
+                else filename
+            )
+            dest_cc.get_blob_client(destination_name).upload_blob(
                 audio_bytes,
                 overwrite=True,
                 content_settings=ContentSettings(
@@ -190,13 +194,16 @@ def publish_playlist_audio_to_platform(
                 ),
             )
             copied.append(filename)
-            logger.info("📣 Audio publié vers %s/%s", dest_container, filename)
+            copied_blob_names.append(destination_name)
+            logger.info("📣 Audio publié vers %s/%s", dest_container, destination_name)
         except Exception as exc:
             logger.error("❌ Publication audio %s échouée: %s", filename, exc)
             errors.append({"filename": filename, "error": str(exc)})
 
     return {
         "published": copied,
+        "published_blob_names": copied_blob_names,
+        "destination_prefix": occurrence_prefix or None,
         "publish_errors": errors,
         "archive": archive_result,
     }

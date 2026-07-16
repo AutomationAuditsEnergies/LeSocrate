@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
-import { apiUrl } from '../api'
+import { apiFetch } from '../api'
 
 function formatMarkdown(text) {
   // Gras **texte**
@@ -71,10 +71,9 @@ export default function ChatPanel({ open, onClose }) {
     setLoading(true)
 
     try {
-      const response = await fetch(apiUrl('/api/chat'), {
+      const response = await apiFetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
         body: JSON.stringify({ question: text, history }),
       })
       const data = await response.json()
@@ -121,11 +120,19 @@ export default function ChatPanel({ open, onClose }) {
       </div>
       <div className="flex-1 flex flex-col border-l border-gray-200 overflow-hidden" style={{ backgroundColor: '#ffffff' }}>
       {/* Header */}
-      <div className="px-6 border-b border-gray-200 flex-shrink-0 flex flex-col justify-center" style={{ height: '64px' }}>
+      <div className="relative px-6 pr-14 border-b border-gray-200 flex-shrink-0 flex flex-col justify-center" style={{ height: '64px' }}>
         <h3 className="text-xl font-semibold text-gray-800">Messages</h3>
         <p className="text-sm text-gray-400 mt-0.5 truncate">
           Posez vos questions sur le cours, on vous répond en temps réel.
         </p>
+        <button
+          type="button"
+          onClick={onClose}
+          className="absolute right-4 top-1/2 -translate-y-1/2 rounded-lg p-2 text-gray-400 hover:bg-gray-100 hover:text-gray-700"
+          aria-label="Fermer le chat"
+        >
+          <span className="material-icons text-xl">close</span>
+        </button>
       </div>
 
       {/* Messages */}

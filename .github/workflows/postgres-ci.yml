@@ -12,22 +12,31 @@ on:
       - 'backend/repositories/**'
       - 'backend/config.py'
       - 'backend/main_app.py'
-      - 'backend/routes/admin_routes.py'
-      - 'backend/routes/auth_routes.py'
-      - 'backend/routes/formation_routes.py'
-      - 'backend/routes/hr_routes.py'
+      - 'backend/routes/**'
       - 'backend/services/**'
       - 'backend/tools/database/**'
       - 'backend/utils/**'
       - 'backend/workers/**'
       - 'backend/tests/test_admin*.py'
       - 'backend/tests/test_audio_postgres_runtime.py'
+      - 'backend/tests/test_audio_publish_storage.py'
       - 'backend/tests/test_auth*.py'
+      - 'backend/tests/test_billing*.py'
+      - 'backend/tests/test_canonical_teacher_service.py'
       - 'backend/tests/test_course_schedule_repository.py'
+      - 'backend/tests/test_course_schedule_service.py'
+      - 'backend/tests/test_course_scheduler_worker.py'
+      - 'backend/tests/test_core_repository_provider_safety.py'
+      - 'backend/tests/test_cors_config.py'
       - 'backend/tests/test_database_runtime_mode.py'
       - 'backend/tests/test_hr*.py'
       - 'backend/tests/test_pipeline*.py'
+      - 'backend/tests/test_platform_storage_service.py'
       - 'backend/tests/test_postgres*.py'
+      - 'backend/tests/test_scheduled_audio_service.py'
+      - 'backend/tests/test_slides_tenant_scope.py'
+      - 'backend/tests/test_student_course_access.py'
+      - 'backend/tests/test_teacher_order_asset_reuse.py'
       - '.github/workflows/postgres-ci.yml'
   workflow_call:
   workflow_dispatch:
@@ -95,9 +104,18 @@ jobs:
           tests.test_admin_secret_safety
           tests.test_admin_tenant_scope
           tests.test_audio_postgres_runtime
+          tests.test_audio_publish_storage
           tests.test_auth_postgres_runtime
           tests.test_auth_tokens
+          tests.test_billing_repository_retry
+          tests.test_billing_retry_routes
+          tests.test_billing_service
+          tests.test_canonical_teacher_service
           tests.test_course_schedule_repository
+          tests.test_course_schedule_service
+          tests.test_course_scheduler_worker
+          tests.test_core_repository_provider_safety
+          tests.test_cors_config
           tests.test_database_runtime_mode
           tests.test_hr_postgres_read_routes
           tests.test_hr_playlist_queue_handler
@@ -106,8 +124,14 @@ jobs:
           tests.test_hr_read_repository
           tests.test_hr_tenant_isolation
           tests.test_pipeline_artifacts
+          tests.test_pipeline_worker_health
           tests.test_pipeline_queue_handler
           tests.test_pipeline_queue_routes
           tests.test_pipeline_service_bus
           tests.test_pipeline_tenant_scope
           tests.test_pipeline_work_queue
+          tests.test_platform_storage_service
+          tests.test_scheduled_audio_service
+          tests.test_slides_tenant_scope
+          tests.test_student_course_access
+          tests.test_teacher_order_asset_reuse

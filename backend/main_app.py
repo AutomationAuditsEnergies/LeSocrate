@@ -4,7 +4,6 @@ import os
 import time
 from flask import Flask, request, session
 from flask_socketio import SocketIO
-from flask_cors import CORS
 
 # Configuration et logging
 from config import (
@@ -13,6 +12,14 @@ from config import (
     sqlite_runtime_enabled,
 )
 from utils.logger import configure_logging, get_logger
+from utils.cors_config import configure_api_cors
+from services.pipeline_worker_health import (
+    configure_pipeline_worker_health,
+    get_pipeline_worker_health,
+    mark_pipeline_worker_crashed,
+    mark_pipeline_worker_started,
+    record_pipeline_worker_heartbeat,
+)
 
 # Database
 from database.db import init_database
@@ -44,6 +51,22 @@ _COURSE_SCHEDULER_STATE = {
     "last_success_monotonic": None,
     "last_error": None,
 }
+_PIPELINE_EXECUTION_QUEUED = os.getenv("PIPELINE_EXECUTION_MODE", "inline").strip().lower() in {
+    "queue", "queued", "durable",
+}
+_EMBEDDED_PIPELINE_WORKER_ENABLED = (
+    _PIPELINE_EXECUTION_QUEUED
+    and os.getenv("PIPELINE_EMBEDDED_WORKER", "0").strip().lower()
+    in {"1", "true", "yes", "on"}
+)
+_worker_heartbeat_seconds = max(
+    5.0,
+    float(os.getenv("PIPELINE_WORK_HEARTBEAT_SECONDS", "60")),
+)
+configure_pipeline_worker_health(
+    enabled=_EMBEDDED_PIPELINE_WORKER_ENABLED,
+    stale_after_seconds=max(120.0, _worker_heartbeat_seconds * 4),
+)
 
 # Initialisation de l'application Flask (API uniquement)
 app = Flask(__name__)
@@ -72,15 +95,7 @@ for _i in range(1, 10):
     if _url and _url not in _cors_origins:
         _cors_origins.append(_url)
 
-CORS(app, resources={
-    r"/*": {
-        "origins": _cors_origins,
-        "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-        "allow_headers": ["Content-Type", "Authorization", "X-Auth-Token", "X-Platform-Id", "X-Internal-Secret", "Range"],
-        "expose_headers": ["Accept-Ranges", "Content-Length", "Content-Range", "Content-Disposition"],
-        "supports_credentials": True
-    }
-})
+configure_api_cors(app, _cors_origins)
 
 logger.info("🚀 Initialisation de l'application Flask (mode API)")
 logger.info(f"✅ CORS configuré pour: {_cors_origins}")
@@ -152,7 +167,10 @@ def readiness_probe():
                 raise RuntimeError("Planificateur des séances non démarré")
             if time.monotonic() - float(last_success) > max(900.0, interval * 3):
                 raise RuntimeError("Planificateur des séances sans progression")
-        return _jsonify({"status": "ready"}), 200
+        worker_health = get_pipeline_worker_health()
+        if _EMBEDDED_PIPELINE_WORKER_ENABLED and not worker_health["healthy"]:
+            raise RuntimeError(f"Worker pipeline indisponible: {worker_health['status']}")
+        return _jsonify({"status": "ready", "pipeline_worker": worker_health}), 200
     except Exception as exc:
         logger.warning("READINESS_FAILED error=%s", str(exc)[:300])
         return _jsonify({"status": "not_ready"}), 503
@@ -206,6 +224,8 @@ def populate_session_from_token():
             session["prenom"] = user["prenom"]
             session["log_id"] = user["log_id"]
             session["platform_id"] = user.get("platform_id", 1)
+            if user.get("course_session_id") is not None:
+                session["course_session_id"] = int(user["course_session_id"])
 
     # Injecter platform_id depuis le header si absent de la session
     if "platform_id" not in session:
@@ -372,27 +392,25 @@ def _embedded_pipeline_worker_loop():
                 handle_pipeline_work_item,
                 settings=QueueSettings.from_env(),
                 on_dead_letter=mark_pipeline_dead_letter,
+                health_callback=record_pipeline_worker_heartbeat,
             )
+            mark_pipeline_worker_started(worker.owner)
             logger.info("PIPELINE_EMBEDDED_WORKER_STARTED owner=%s", worker.owner)
             worker.run_forever()
-        except Exception:
+        except Exception as exc:
+            mark_pipeline_worker_crashed(str(exc))
             logger.exception("PIPELINE_EMBEDDED_WORKER_CRASHED restart_in_seconds=10")
             socketio.sleep(10)
 
 
-if (
-    os.getenv("PIPELINE_EXECUTION_MODE", "inline").strip().lower()
-    in {"queue", "queued", "durable"}
-    and os.getenv("PIPELINE_EMBEDDED_WORKER", "0").strip().lower()
-    in {"1", "true", "yes", "on"}
-):
+if _EMBEDDED_PIPELINE_WORKER_ENABLED:
     socketio.start_background_task(_embedded_pipeline_worker_loop)
     logger.info("✅ Worker pipeline durable embarqué programmé")
 
 
 def _embedded_course_scheduler_loop():
     """Run the durable occurrence/audio scheduler on every instance safely."""
-    from services.course_schedule_service import run_scheduler_tick
+    from services.course_schedule_service import process_due_reminders, run_scheduler_tick
     from services.scheduled_audio_service import process_due_audio_generations
 
     interval = max(30.0, float(os.getenv("COURSE_SCHEDULER_INTERVAL_SECONDS", "300")))
@@ -401,12 +419,19 @@ def _embedded_course_scheduler_loop():
         try:
             schedule_results = run_scheduler_tick()
             audio_results = process_due_audio_generations()
+            reminder_results = process_due_reminders(
+                base_url=(
+                    os.getenv("FRONTEND_PUBLIC_URL")
+                    or os.getenv("PLATFORM_1_FRONTEND_URL")
+                )
+            )
             _COURSE_SCHEDULER_STATE["last_success_monotonic"] = time.monotonic()
             _COURSE_SCHEDULER_STATE["last_error"] = None
             logger.info(
-                "COURSE_SCHEDULER_TICK_COMPLETED schedules=%s audio_candidates=%s",
+                "COURSE_SCHEDULER_TICK_COMPLETED schedules=%s audio_candidates=%s reminders=%s",
                 len(schedule_results or []),
                 len(audio_results or []),
+                len(reminder_results or []),
             )
         except Exception as exc:
             _COURSE_SCHEDULER_STATE["last_error"] = str(exc)[:300]

@@ -72,6 +72,10 @@ jobs:
       AZURE_STORAGE_CONNECTION_STRING: ${{ secrets.SAAS_AZURE_STORAGE_CONNECTION_STRING || secrets.AZURE_STORAGE_CONNECTION_STRING }}
       STRIPE_SECRET_KEY: ${{ secrets.SAAS_STRIPE_SECRET_KEY || secrets.STRIPE_SECRET_KEY }}
       STRIPE_WEBHOOK_SECRET: ${{ secrets.SAAS_STRIPE_WEBHOOK_SECRET || secrets.STRIPE_WEBHOOK_SECRET }}
+      REMINDER_WEBHOOK_URL: ${{ secrets.SAAS_REMINDER_WEBHOOK_URL || secrets.REMINDER_WEBHOOK_URL }}
+      REMINDER_WEBHOOK_KEY: ${{ secrets.SAAS_REMINDER_WEBHOOK_KEY || secrets.REMINDER_WEBHOOK_KEY }}
+      EMAIL_USERNAME: ${{ secrets.SAAS_EMAIL_USERNAME || secrets.EMAIL_USERNAME }}
+      EMAIL_PASSWORD: ${{ secrets.SAAS_EMAIL_PASSWORD || secrets.EMAIL_PASSWORD }}
 
     steps:
       - name: Download artifact from build job
@@ -100,7 +104,7 @@ jobs:
         shell: bash
         run: |
           missing=()
-          for key in DATABASE_URL SUPABASE_URL SUPABASE_ANON_KEY SUPABASE_SERVICE_ROLE_KEY SECRET_KEY AUTO_LOGOUT_WEBHOOK_SECRET STRIPE_SECRET_KEY STRIPE_WEBHOOK_SECRET; do
+          for key in DATABASE_URL SUPABASE_URL SUPABASE_ANON_KEY SUPABASE_SERVICE_ROLE_KEY SECRET_KEY AUTO_LOGOUT_WEBHOOK_SECRET STRIPE_SECRET_KEY STRIPE_WEBHOOK_SECRET AZURE_STORAGE_CONNECTION_STRING; do
             value="${!key:-}"
             existing="$(az webapp config appsettings list \
               --resource-group "${RESOURCE_GROUP}" \
@@ -159,6 +163,29 @@ jobs:
             fi
           fi
 
+          for key in REMINDER_WEBHOOK_URL REMINDER_WEBHOOK_KEY EMAIL_USERNAME EMAIL_PASSWORD; do
+            if [ -z "${!key:-}" ]; then
+              existing_reminder_setting="$(az webapp config appsettings list \
+                --resource-group "${RESOURCE_GROUP}" \
+                --name "${APP_NAME}" \
+                --query "[?name=='${key}'].value | [0]" \
+                -o tsv)"
+              if [ -n "${existing_reminder_setting}" ]; then
+                printf '%s=%s\n' "${key}" "${existing_reminder_setting}" >> "${GITHUB_ENV}"
+                printf -v "${key}" '%s' "${existing_reminder_setting}"
+                export "${key}"
+              fi
+            fi
+          done
+          if [ -n "${REMINDER_WEBHOOK_URL:-}" ] && [ -n "${REMINDER_WEBHOOK_KEY:-}" ]; then
+            printf 'REMINDER_DELIVERY_READY target=%s transport=webhook\n' "${APP_NAME}"
+          elif [ -n "${EMAIL_USERNAME:-}" ] && [ -n "${EMAIL_PASSWORD:-}" ]; then
+            printf 'REMINDER_DELIVERY_READY target=%s transport=smtp\n' "${APP_NAME}"
+          else
+            missing+=("REMINDER_WEBHOOK_URL+REMINDER_WEBHOOK_KEY|EMAIL_USERNAME+EMAIL_PASSWORD")
+            printf 'REMINDER_DELIVERY_MISSING target=%s\n' "${APP_NAME}" >&2
+          fi
+
           if [ "${#missing[@]}" -gt 0 ]; then
             printf 'Missing required SaaS app setting(s) on %s: %s\n' "${APP_NAME}" "${missing[*]}" >&2
             printf 'Add them either as Azure App Settings or GitHub Secrets prefixed with SAAS_ before deploying.\n' >&2
@@ -202,12 +229,29 @@ jobs:
               PIPELINE_WORK_HEARTBEAT_SECONDS=60 \
               PIPELINE_WORKER_POLL_SECONDS=1 \
               COURSE_SCHEDULER_ENABLED=1 \
-              COURSE_SCHEDULER_INTERVAL_SECONDS=300 \
+              COURSE_SCHEDULER_INTERVAL_SECONDS=30 \
+              COURSE_REMINDER_DELIVERY_BATCH_SIZE=100 \
+              COURSE_REMINDER_MAX_BATCHES_PER_TICK=20 \
+              COURSE_REMINDER_MAX_ATTEMPTS=5 \
+              REMINDER_WEBHOOK_MAX_CONCURRENCY=16 \
+              COURSE_REMINDER_CLAIM_LEASE_SECONDS=900 \
+              COURSE_REMINDER_SMTP_TIMEOUT_SECONDS=25 \
+              COURSE_REMINDER_IMAP_TIMEOUT_SECONDS=25 \
+              COURSE_SESSION_PASSWORD_EARLY_HOURS=8784 \
+              COURSE_SESSION_PASSWORD_LENGTH=8 \
+              COURSE_INVITATION_TOKEN_MAX_AGE_SECONDS=32000000 \
               COURSE_SCHEDULE_CHANGE_CUTOFF_HOURS=72 \
+              COURSE_START_TIME_POLICY=fixed_09 \
               SCHEDULED_AUDIO_HORIZON_HOURS=24 \
+              SCHEDULED_AUDIO_READY_HOURS_BEFORE=24 \
+              SCHEDULED_AUDIO_BUILD_BUFFER_HOURS=2 \
+              SCHEDULED_AUDIO_BATCH_SIZE=50 \
+              SCHEDULED_AUDIO_MAX_CONCURRENCY=1 \
               SCHEDULED_AUDIO_MAX_AUTO_ATTEMPTS=4 \
               SCHEDULED_AUDIO_RETRY_BASE_MINUTES=5 \
               SCHEDULED_AUDIO_RETRY_MAX_MINUTES=60 \
+              ALLOW_LEGACY_BULK_AUDIO=0 \
+              TEACHER_ASSET_GENERATOR_VERSION=pipeline-v1 \
               AI_TEACHER_COST_PER_DAY_CENTS=1500 \
               PIPELINE_ARTIFACTS_REQUIRED=1 \
               PIPELINE_BLOB_MAX_ATTEMPTS=3 \
@@ -223,6 +267,7 @@ jobs:
               POSTGRES_TIMEZONE=Europe/Paris \
               SUPABASE_DATABASE_REST_FALLBACK=0 \
               STUDENT_AUTH_LEGACY_FALLBACK=0 \
+              STUDENT_AUDIO_DELIVERY_MODE=redirect_sas \
               HR_DASHBOARD_ENABLED=true \
               HR_DASHBOARD_REPAIR_ON_LOAD=false \
               FORMATION_CONTENT_DAY_WORKERS=3 \
@@ -258,6 +303,10 @@ jobs:
           [ -n "${AZURE_STORAGE_CONNECTION_STRING:-}" ] && secret_settings+=("AZURE_STORAGE_CONNECTION_STRING=${AZURE_STORAGE_CONNECTION_STRING}")
           [ -n "${STRIPE_SECRET_KEY:-}" ] && secret_settings+=("STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY}")
           [ -n "${STRIPE_WEBHOOK_SECRET:-}" ] && secret_settings+=("STRIPE_WEBHOOK_SECRET=${STRIPE_WEBHOOK_SECRET}")
+          [ -n "${REMINDER_WEBHOOK_URL:-}" ] && secret_settings+=("REMINDER_WEBHOOK_URL=${REMINDER_WEBHOOK_URL}")
+          [ -n "${REMINDER_WEBHOOK_KEY:-}" ] && secret_settings+=("REMINDER_WEBHOOK_KEY=${REMINDER_WEBHOOK_KEY}")
+          [ -n "${EMAIL_USERNAME:-}" ] && secret_settings+=("EMAIL_USERNAME=${EMAIL_USERNAME}")
+          [ -n "${EMAIL_PASSWORD:-}" ] && secret_settings+=("EMAIL_PASSWORD=${EMAIL_PASSWORD}")
 
           if [ "${#secret_settings[@]}" -gt 0 ]; then
             az webapp config appsettings set \
@@ -302,3 +351,22 @@ jobs:
         with:
           app-name: 'Formation3'
           package: python-app.zip
+
+      - name: Verify deployed application readiness
+        shell: bash
+        run: |
+          app_host="$(az webapp show \
+            --resource-group "${RESOURCE_GROUP}" \
+            --name "${APP_NAME}" \
+            --query defaultHostName \
+            -o tsv)"
+          for attempt in {1..30}; do
+            if curl --fail --silent --show-error --max-time 10 \
+              "https://${app_host}/readyz" >/dev/null; then
+              printf 'DEPLOYMENT_READY target=%s attempt=%s\n' "${APP_NAME}" "${attempt}"
+              exit 0
+            fi
+            sleep 10
+          done
+          printf 'DEPLOYMENT_NOT_READY target=%s\n' "${APP_NAME}" >&2
+          exit 1

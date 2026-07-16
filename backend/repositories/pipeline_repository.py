@@ -2516,7 +2516,14 @@ def list_due_audio_generation_sessions(
     stale_updated_before=None,
     retry_due_before=None,
     max_auto_attempts: int = 4,
+    batch_size: int = 50,
 ) -> list[dict[str, Any]]:
+    try:
+        batch_size = int(batch_size)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("batch_size doit être un entier positif") from exc
+    batch_size = max(1, min(batch_size, 1000))
+
     postgres_schedule = schedule_store_is_postgres()
     ph = "%s" if postgres_schedule else "?"
     params: list[Any] = [lower_bound, upper_bound]
@@ -2553,6 +2560,8 @@ def list_due_audio_generation_sessions(
             platform_filter = f"AND cs.platform_id IN ({placeholders})"
             params.extend(ids)
 
+    params.append(batch_size)
+
     query = f"""
         SELECT
             cs.id,
@@ -2586,7 +2595,8 @@ def list_due_audio_generation_sessions(
               {retry_conditions}
           )
           {platform_filter}
-        ORDER BY cs.scheduled_at ASC, cs.platform_id ASC
+        ORDER BY cs.scheduled_at ASC, cs.id ASC
+        LIMIT {ph}
     """
     if postgres_schedule:
         with get_postgres_connection() as conn:
@@ -3443,6 +3453,9 @@ def finalize_pipeline_module(
     tp_name: str,
     audio_ready: bool,
     voice_type: str | None = None,
+    canonical_fingerprint: str | None = None,
+    canonical_signature_json: str | None = None,
+    canonical_generator_version: str | None = None,
 ) -> dict[str, Any]:
     """Finalize platform/module state in the pipeline's authoritative DB."""
     year = datetime.now().year
@@ -3451,7 +3464,7 @@ def finalize_pipeline_module(
         with get_postgres_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    "SELECT center_account_id, teacher_name, teacher_color "
+                    "SELECT center_account_id, teacher_name, teacher_color, creation_request_id "
                     "FROM platform_config WHERE id = %s FOR UPDATE",
                     (platform_id,),
                 )
@@ -3461,6 +3474,10 @@ def finalize_pipeline_module(
                 center_account_id = platform_row["center_account_id"]
                 teacher_name = platform_row.get("teacher_name")
                 teacher_color = platform_row.get("teacher_color")
+                canonical_reuse_allowed = bool(
+                    audio_ready
+                    and str(platform_row.get("creation_request_id") or "").startswith("teacher-order-")
+                )
                 cur.execute(
                     "UPDATE platform_config SET status = 'ready', updated_at = NOW() WHERE id = %s",
                     (platform_id,),
@@ -3497,7 +3514,17 @@ def finalize_pipeline_module(
                             validated_at = CASE
                                 WHEN %s THEN COALESCE(validated_at, NOW())
                                 ELSE validated_at
-                            END
+                            END,
+                            canonical_fingerprint = CASE
+                                WHEN %s THEN %s ELSE canonical_fingerprint
+                            END,
+                            canonical_signature_json = CASE
+                                WHEN %s THEN %s::jsonb ELSE canonical_signature_json
+                            END,
+                            canonical_generator_version = CASE
+                                WHEN %s THEN %s ELSE canonical_generator_version
+                            END,
+                            canonical_reuse_allowed = canonical_reuse_allowed OR %s
                         WHERE id = %s
                         """,
                         (
@@ -3508,6 +3535,13 @@ def finalize_pipeline_module(
                             voice_type,
                             audio_ready,
                             audio_ready,
+                            bool(audio_ready and canonical_fingerprint),
+                            canonical_fingerprint,
+                            bool(audio_ready and canonical_signature_json),
+                            canonical_signature_json,
+                            bool(audio_ready and canonical_generator_version),
+                            canonical_generator_version,
+                            canonical_reuse_allowed,
                             module_id,
                         ),
                     )
@@ -3530,13 +3564,19 @@ def finalize_pipeline_module(
                         INSERT INTO formation_modules (
                             rncp_code, tp_name, version, status,
                             source_pipeline_job_id, source_platform_id,
-                            center_account_id, voice_type, voice_updated_at, validated_at
+                            center_account_id, voice_type, voice_updated_at, validated_at,
+                            canonical_fingerprint, canonical_signature_json,
+                            canonical_generator_version, canonical_reuse_allowed
                         )
                         VALUES (
                             %s, %s, %s, %s, %s, %s, %s,
                             CASE WHEN %s THEN %s ELSE NULL END,
                             CASE WHEN %s THEN NOW() ELSE NULL END,
-                            CASE WHEN %s THEN NOW() ELSE NULL END
+                            CASE WHEN %s THEN NOW() ELSE NULL END,
+                            CASE WHEN %s THEN %s ELSE NULL END,
+                            CASE WHEN %s THEN %s::jsonb ELSE NULL END,
+                            CASE WHEN %s THEN %s ELSE NULL END,
+                            %s
                         )
                         ON CONFLICT (source_pipeline_job_id) DO UPDATE SET
                             source_platform_id = COALESCE(formation_modules.source_platform_id, EXCLUDED.source_platform_id),
@@ -3548,6 +3588,10 @@ def finalize_pipeline_module(
                             voice_type = COALESCE(EXCLUDED.voice_type, formation_modules.voice_type),
                             voice_updated_at = COALESCE(EXCLUDED.voice_updated_at, formation_modules.voice_updated_at),
                             validated_at = COALESCE(EXCLUDED.validated_at, formation_modules.validated_at)
+                            , canonical_fingerprint = COALESCE(EXCLUDED.canonical_fingerprint, formation_modules.canonical_fingerprint)
+                            , canonical_signature_json = COALESCE(EXCLUDED.canonical_signature_json, formation_modules.canonical_signature_json)
+                            , canonical_generator_version = COALESCE(EXCLUDED.canonical_generator_version, formation_modules.canonical_generator_version)
+                            , canonical_reuse_allowed = formation_modules.canonical_reuse_allowed OR EXCLUDED.canonical_reuse_allowed
                         RETURNING id, version, status, (xmax = 0) AS created
                         """,
                         (
@@ -3562,6 +3606,13 @@ def finalize_pipeline_module(
                             voice_type,
                             audio_ready,
                             audio_ready,
+                            bool(audio_ready and canonical_fingerprint),
+                            canonical_fingerprint,
+                            bool(audio_ready and canonical_signature_json),
+                            canonical_signature_json,
+                            bool(audio_ready and canonical_generator_version),
+                            canonical_generator_version,
+                            canonical_reuse_allowed,
                         ),
                     )
                     inserted = cur.fetchone()
@@ -3595,6 +3646,9 @@ def finalize_pipeline_module(
                     "module_version": version,
                     "module_status": module_status,
                     "voice_type": voice_type if audio_ready else None,
+                    "center_account_id": int(center_account_id) if center_account_id is not None else None,
+                    "canonical_fingerprint": canonical_fingerprint if audio_ready else None,
+                    "canonical_reuse_allowed": canonical_reuse_allowed,
                 }
 
         if _sqlite_pipeline_mirror_required():

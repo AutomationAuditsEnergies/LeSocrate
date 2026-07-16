@@ -67,6 +67,19 @@ def _log_pipeline_completed(item: WorkItem, job: dict) -> None:
     )
 
 
+def _teacher_order_chain_payload(item: WorkItem) -> dict:
+    order_id = int(item.payload.get("teacher_order_id") or 0)
+    return {"teacher_order_id": order_id} if order_id else {}
+
+
+def _complete_teacher_order_if_present(item: WorkItem, job: dict) -> None:
+    if not item.payload.get("teacher_order_id"):
+        return
+    from services.teacher_order_fulfillment_service import complete_teacher_order_pipeline
+
+    complete_teacher_order_pipeline(item, job)
+
+
 def handle_auto_pilot_work_item(item: WorkItem, lease) -> WorkResult:
     if item.task_type != "auto_pilot_tick":
         raise PermanentWorkError(f"task_type inconnu: {item.task_type}")
@@ -77,6 +90,10 @@ def handle_auto_pilot_work_item(item: WorkItem, lease) -> WorkResult:
     if not job:
         raise PermanentWorkError(f"Job pipeline {item.pipeline_job_id} introuvable")
     if not job.get("auto_pilot_enabled"):
+        if item.payload.get("teacher_order_id"):
+            raise PermanentWorkError(
+                f"Auto-pilot désactivé pour la commande du pipeline {item.pipeline_job_id}"
+            )
         return WorkResult(result={"status": "stopped", "step": None})
 
     step = routes._determine_next_ap_step(item.pipeline_job_id)
@@ -87,6 +104,7 @@ def handle_auto_pilot_work_item(item: WorkItem, lease) -> WorkResult:
             auto_pilot_error=None,
         )
         _log_pipeline_completed(item, job)
+        _complete_teacher_order_if_present(item, job)
         return WorkResult(result={"status": "done", "step": None})
 
     expected_step = item.payload.get("expected_step")
@@ -130,6 +148,7 @@ def handle_auto_pilot_work_item(item: WorkItem, lease) -> WorkResult:
                 "expected_step": step,
                 "reconciled_from_step": expected_step,
                 "reconciled_from_work_item_id": item.id,
+                **_teacher_order_chain_payload(item),
             },
             priority=item.priority,
             max_attempts=item.max_attempts,
@@ -198,6 +217,7 @@ def handle_auto_pilot_work_item(item: WorkItem, lease) -> WorkResult:
         )
         latest_job = routes.get_job(item.pipeline_job_id) or job
         _log_pipeline_completed(item, latest_job)
+        _complete_teacher_order_if_present(item, latest_job)
         return WorkResult(result={"status": "done", "step": step})
 
     next_item = WorkItemSpec(
@@ -206,7 +226,11 @@ def handle_auto_pilot_work_item(item: WorkItem, lease) -> WorkResult:
         task_type="auto_pilot_tick",
         scope_key="pipeline",
         dedupe_key=f"{item.run_id}:auto_pilot:{next_step}",
-        payload={"expected_step": next_step, "previous_step": step},
+        payload={
+            "expected_step": next_step,
+            "previous_step": step,
+            **_teacher_order_chain_payload(item),
+        },
         priority=item.priority,
         max_attempts=item.max_attempts,
     )
@@ -222,6 +246,10 @@ def mark_auto_pilot_dead_letter(item: WorkItem, error: str) -> None:
     from services.formation_pipeline_service import update_job
 
     update_job(item.pipeline_job_id, auto_pilot_error=error[:500])
+    if item.payload.get("teacher_order_id"):
+        from services.teacher_order_fulfillment_service import fail_teacher_order_pipeline
+
+        fail_teacher_order_pipeline(item, error)
 
 
 def mark_pipeline_dead_letter(item: WorkItem, error: str) -> None:

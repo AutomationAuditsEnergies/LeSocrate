@@ -4,7 +4,7 @@ import sys
 import unittest
 from datetime import datetime, timedelta
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 if str(BACKEND_DIR) not in sys.path:
@@ -107,6 +107,84 @@ def _seed_schedule(cursor, platform_id=12):
 
 
 class CourseScheduleServiceTest(unittest.TestCase):
+    def test_webhook_delivery_has_stable_idempotency_key(self):
+        response = Mock(status_code=200, text="")
+        with patch.dict("os.environ", {
+            "REMINDER_WEBHOOK_URL": "https://hooks.example.test/reminders",
+            "REMINDER_WEBHOOK_KEY": "secret-key",
+        }), patch.object(css.http_requests, "post", return_value=response) as post:
+            ok, error = css._post_reminder_webhook({
+                "delivery_id": 314,
+                "platform_id": 12,
+            })
+
+        self.assertTrue(ok)
+        self.assertIsNone(error)
+        self.assertEqual(
+            post.call_args.kwargs["headers"]["Idempotency-Key"],
+            "course-reminder-314",
+        )
+
+    def test_email_batch_uses_bounded_smtp_and_imap_timeouts(self):
+        smtp = Mock()
+        imap = Mock()
+        payload = {
+            "delivery_id": 9,
+            "recipient": {"email": "eleve@example.test"},
+            "subject": "Rappel",
+            "content": "Votre cours commence bientôt.",
+            "class_url": "https://example.test/classe/test?invite=signed",
+            "scheduled_at": "2026-07-20 09:00:00",
+            "session_password": "ABC123",
+        }
+        with patch.dict("os.environ", {
+            "EMAIL_USERNAME": "sender@example.test",
+            "EMAIL_PASSWORD": "secret",
+            "COURSE_REMINDER_SMTP_TIMEOUT_SECONDS": "7",
+            "COURSE_REMINDER_IMAP_TIMEOUT_SECONDS": "11",
+            "EMAIL_SEND_PAUSE_SECONDS": "0",
+        }, clear=False), patch.object(
+            css.smtplib, "SMTP_SSL", return_value=smtp
+        ) as smtp_factory, patch.object(
+            css.imaplib, "IMAP4_SSL", return_value=imap
+        ) as imap_factory:
+            result = css._send_reminder_email_batch([payload])
+
+        self.assertEqual(result, {9: (True, None)})
+        smtp_factory.assert_called_once_with("mail.infomaniak.com", 465, timeout=7.0)
+        imap_factory.assert_called_once_with("mail.infomaniak.com", 993, timeout=11.0)
+
+    def test_reminder_subject_rejects_header_injection(self):
+        with self.assertRaisesRegex(ValueError, "saut de ligne"):
+            css._validated_reminder_rule({
+                "name": "Rappel",
+                "trigger_mode": "relative_minutes",
+                "minutes_before": 30,
+                "subject_template": "Cours\r\nBcc: pirate@example.test",
+                "content_template": "Cours à {time}",
+            })
+
+    def test_same_day_reminder_cannot_be_at_or_after_fixed_course_start(self):
+        with self.assertRaisesRegex(ValueError, "avant le cours fixe de 09:00"):
+            css._validated_reminder_rule({
+                "name": "Jour J",
+                "trigger_mode": "local_day_time",
+                "days_before": 0,
+                "local_time": "09:00",
+                "subject_template": "Cours aujourd'hui",
+                "content_template": "Cours à {time}",
+            })
+
+    def test_relative_reminder_requires_at_least_one_minute_notice(self):
+        with self.assertRaisesRegex(ValueError, "entre 1 et 525600"):
+            css._validated_reminder_rule({
+                "name": "À l'heure exacte",
+                "trigger_mode": "relative_minutes",
+                "minutes_before": 0,
+                "subject_template": "Cours",
+                "content_template": "Cours à {time}",
+            })
+
     def test_postponing_j2_to_next_slot_keeps_j2_and_shifts_following_lessons(self):
         now = FRANCE_TZ.localize(datetime(2026, 7, 16, 8, 0))
         rows = [
@@ -139,6 +217,7 @@ class CourseScheduleServiceTest(unittest.TestCase):
             "start_time": "09:00",
         }
         with (
+            patch.dict("os.environ", {"COURSE_START_TIME_POLICY": "configured"}),
             patch.object(css.schedule_repo, "schedule_store_is_postgres", lambda: True),
             patch.object(css, "get_course_schedule_summary", return_value=summary),
             patch.object(css.schedule_repo, "list_course_sessions", return_value=rows),
@@ -167,6 +246,7 @@ class CourseScheduleServiceTest(unittest.TestCase):
             {"id": 23, "session_index": 3, "scheduled_at": "2026-07-20 09:00:00", "status": "planned"},
         ]
         with (
+            patch.dict("os.environ", {"COURSE_START_TIME_POLICY": "configured"}),
             patch.object(css.schedule_repo, "schedule_store_is_postgres", lambda: True),
             patch.object(css, "get_course_schedule_summary", return_value={
                 "weekly_course_count": 2,
@@ -185,6 +265,36 @@ class CourseScheduleServiceTest(unittest.TestCase):
 
         self.assertTrue(plan["changes"][0]["new_scheduled_at"].startswith("2026-07-17T14:30"))
         self.assertEqual(len(plan["changes"]), 1)
+
+    def test_fixed_09_policy_rejects_custom_postponement_time(self):
+        now = FRANCE_TZ.localize(datetime(2026, 7, 16, 8, 0))
+        rows = [
+            {"id": 22, "session_index": 2, "scheduled_at": "2026-07-16 09:00:00", "status": "planned"},
+        ]
+        with (
+            patch.dict("os.environ", {"COURSE_START_TIME_POLICY": "fixed_09"}),
+            patch.object(css.schedule_repo, "schedule_store_is_postgres", lambda: True),
+            patch.object(css, "get_course_schedule_summary", return_value={
+                "weekly_course_count": 1,
+                "weekdays": [3],
+                "start_time": "09:00",
+            }),
+            patch.object(css.schedule_repo, "list_course_sessions", return_value=rows),
+        ):
+            with self.assertRaisesRegex(ValueError, "09:00"):
+                css._build_course_session_postponement_plan(
+                    12,
+                    22,
+                    mode="specific_date",
+                    scheduled_at="2026-07-17T14:30",
+                    now=now,
+                )
+
+    def test_fixed_09_policy_rejects_schedule_creation_at_another_time(self):
+        with patch.dict("os.environ", {"COURSE_START_TIME_POLICY": "fixed_09"}):
+            with self.assertRaisesRegex(ValueError, "09:00"):
+                css._validated_course_write_start_time("10:00")
+            self.assertEqual(css._validated_course_write_start_time("09:00"), "09:00")
 
     def test_idempotent_retry_returns_original_report_without_shifting_again(self):
         prior = {
@@ -333,6 +443,29 @@ class CourseScheduleServiceTest(unittest.TestCase):
         self.assertEqual(results[0]["type"], "previous_evening")
         self.assertTrue(results[0]["session_password"])
         self.assertEqual(results[0]["recipients"][0]["email"], "eleve@example.com")
+
+    def test_reminder_tick_drains_multiple_bounded_batches(self):
+        first = [{"delivery_id": 1}, {"delivery_id": 2}]
+        second = [{"delivery_id": 3}]
+        with patch.dict(css.os.environ, {
+            "COURSE_REMINDER_DELIVERY_BATCH_SIZE": "2",
+            "COURSE_REMINDER_MAX_BATCHES_PER_TICK": "20",
+        }), patch.object(
+            css.schedule_repo,
+            "schedule_store_is_postgres",
+            return_value=True,
+        ), patch.object(
+            css,
+            "_process_due_delivery_candidates",
+            side_effect=[first, second],
+        ) as process_batch:
+            results = css.process_due_reminders(base_url="https://example.test")
+
+        self.assertEqual([item["delivery_id"] for item in results], [1, 2, 3])
+        self.assertEqual(process_batch.call_count, 2)
+        self.assertTrue(
+            all(call.kwargs["batch_size"] == 2 for call in process_batch.call_args_list)
+        )
 
     def test_update_preserves_occurrence_inside_72_hour_cutoff(self):
         conn = _connect()

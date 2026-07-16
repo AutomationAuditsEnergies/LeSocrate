@@ -135,6 +135,7 @@ CREATE TABLE IF NOT EXISTS course_sessions (
     audio_generation_next_retry_at TIMESTAMPTZ,
     audio_job_id BIGINT,
     audio_folder_id BIGINT,
+    audio_storage_prefix TEXT,
     postponed_from TIMESTAMPTZ,
     postponed_at TIMESTAMPTZ,
     postponement_count INTEGER NOT NULL DEFAULT 0,
@@ -170,6 +171,8 @@ ALTER TABLE course_sessions
 ALTER TABLE course_sessions
     ADD COLUMN IF NOT EXISTS audio_folder_id BIGINT;
 ALTER TABLE course_sessions
+    ADD COLUMN IF NOT EXISTS audio_storage_prefix TEXT;
+ALTER TABLE course_sessions
     ADD COLUMN IF NOT EXISTS postponed_from TIMESTAMPTZ;
 ALTER TABLE course_sessions
     ADD COLUMN IF NOT EXISTS postponed_at TIMESTAMPTZ;
@@ -204,6 +207,60 @@ CREATE TABLE IF NOT EXISTS course_reminder_recipients (
     email TEXT NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE(platform_id, email)
+);
+
+CREATE TABLE IF NOT EXISTS course_reminder_rules (
+    id BIGSERIAL PRIMARY KEY,
+    platform_id BIGINT NOT NULL REFERENCES platform_config(id) ON DELETE CASCADE,
+    system_key TEXT,
+    name TEXT NOT NULL,
+    trigger_mode TEXT NOT NULL,
+    days_before INTEGER,
+    minutes_before INTEGER,
+    local_time TIME,
+    subject_template TEXT NOT NULL,
+    content_template TEXT NOT NULL,
+    recipient_scope TEXT NOT NULL DEFAULT 'all',
+    is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CHECK (trigger_mode IN ('local_day_time', 'relative_minutes')),
+    CHECK (recipient_scope IN ('all', 'selected_explicit')),
+    CHECK (days_before IS NULL OR days_before >= 0),
+    CHECK (minutes_before IS NULL OR minutes_before >= 1)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_course_reminder_rules_system_key
+    ON course_reminder_rules(platform_id, system_key)
+    WHERE system_key IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS course_reminder_rule_recipients (
+    rule_id BIGINT NOT NULL REFERENCES course_reminder_rules(id) ON DELETE CASCADE,
+    recipient_id BIGINT NOT NULL REFERENCES course_reminder_recipients(id) ON DELETE CASCADE,
+    PRIMARY KEY(rule_id, recipient_id)
+);
+
+CREATE TABLE IF NOT EXISTS course_reminder_deliveries (
+    id BIGSERIAL PRIMARY KEY,
+    platform_id BIGINT NOT NULL REFERENCES platform_config(id) ON DELETE CASCADE,
+    session_id BIGINT NOT NULL REFERENCES course_sessions(id) ON DELETE CASCADE,
+    rule_id BIGINT NOT NULL REFERENCES course_reminder_rules(id) ON DELETE CASCADE,
+    recipient_id BIGINT NOT NULL REFERENCES course_reminder_recipients(id) ON DELETE CASCADE,
+    recipient_hash TEXT NOT NULL,
+    due_at TIMESTAMPTZ NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    claimed_at TIMESTAMPTZ,
+    lease_expires_at TIMESTAMPTZ,
+    sent_at TIMESTAMPTZ,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    max_attempts INTEGER NOT NULL DEFAULT 5,
+    next_retry_at TIMESTAMPTZ,
+    last_error TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(session_id, rule_id, recipient_hash),
+    CHECK (status IN ('pending', 'claimed', 'retry_scheduled', 'sent', 'dead_lettered')),
+    CHECK (max_attempts > 0)
 );
 
 CREATE TABLE IF NOT EXISTS logs (
@@ -563,6 +620,10 @@ CREATE TABLE IF NOT EXISTS formation_modules (
     teacher_color TEXT,
     asset_namespace TEXT,
     immutable BOOLEAN NOT NULL DEFAULT TRUE,
+    canonical_fingerprint TEXT,
+    canonical_signature_json JSONB,
+    canonical_generator_version TEXT,
+    canonical_reuse_allowed BOOLEAN NOT NULL DEFAULT FALSE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     validated_at TIMESTAMPTZ,
     archived_at TIMESTAMPTZ
@@ -576,6 +637,14 @@ ALTER TABLE formation_modules
     ADD COLUMN IF NOT EXISTS asset_namespace TEXT;
 ALTER TABLE formation_modules
     ADD COLUMN IF NOT EXISTS immutable BOOLEAN NOT NULL DEFAULT TRUE;
+ALTER TABLE formation_modules
+    ADD COLUMN IF NOT EXISTS canonical_fingerprint TEXT;
+ALTER TABLE formation_modules
+    ADD COLUMN IF NOT EXISTS canonical_signature_json JSONB;
+ALTER TABLE formation_modules
+    ADD COLUMN IF NOT EXISTS canonical_generator_version TEXT;
+ALTER TABLE formation_modules
+    ADD COLUMN IF NOT EXISTS canonical_reuse_allowed BOOLEAN NOT NULL DEFAULT FALSE;
 
 UPDATE formation_modules AS m
 SET teacher_name = COALESCE(m.teacher_name, pc.teacher_name),
@@ -657,6 +726,17 @@ CREATE INDEX IF NOT EXISTS idx_course_sessions_status_scheduled ON course_sessio
 CREATE INDEX IF NOT EXISTS idx_course_sessions_audio_due
     ON course_sessions(audio_generation_status, audio_generation_next_retry_at, scheduled_at);
 CREATE INDEX IF NOT EXISTS idx_course_reminder_recipients_platform ON course_reminder_recipients(platform_id);
+CREATE INDEX IF NOT EXISTS idx_course_reminder_rules_platform ON course_reminder_rules(platform_id, is_active);
+CREATE INDEX IF NOT EXISTS idx_course_reminder_rule_recipients_recipient
+    ON course_reminder_rule_recipients(recipient_id);
+CREATE INDEX IF NOT EXISTS idx_course_reminder_deliveries_due
+    ON course_reminder_deliveries(status, due_at, claimed_at);
+CREATE INDEX IF NOT EXISTS idx_course_reminder_deliveries_platform
+    ON course_reminder_deliveries(platform_id, session_id);
+CREATE INDEX IF NOT EXISTS idx_course_reminder_deliveries_recipient
+    ON course_reminder_deliveries(recipient_id);
+CREATE INDEX IF NOT EXISTS idx_course_reminder_deliveries_lookup
+    ON course_reminder_deliveries(session_id, rule_id, recipient_id);
 CREATE INDEX IF NOT EXISTS idx_logs_platform_arrivee ON logs(platform_id, arrivee);
 CREATE INDEX IF NOT EXISTS idx_video_visits_platform ON video_visits(platform_id);
 CREATE INDEX IF NOT EXISTS idx_video_visits_log ON video_visits(log_id);
@@ -706,6 +786,12 @@ CREATE INDEX IF NOT EXISTS idx_formation_pipeline_events_folder ON formation_pip
     WHERE folder_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_formation_modules_center_rncp ON formation_modules(center_account_id, rncp_code);
 CREATE INDEX IF NOT EXISTS idx_formation_modules_source_platform ON formation_modules(source_platform_id);
+CREATE INDEX IF NOT EXISTS idx_formation_modules_canonical_reuse
+    ON formation_modules(canonical_fingerprint, validated_at, id)
+    WHERE status = 'validated'
+      AND canonical_reuse_allowed = TRUE
+      AND archived_at IS NULL
+      AND canonical_fingerprint IS NOT NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_formation_modules_asset_namespace
     ON formation_modules(asset_namespace)
     WHERE asset_namespace IS NOT NULL;
@@ -738,6 +824,9 @@ ALTER TABLE course_schedule_config ENABLE ROW LEVEL SECURITY;
 ALTER TABLE course_sessions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE course_session_postponements ENABLE ROW LEVEL SECURITY;
 ALTER TABLE course_reminder_recipients ENABLE ROW LEVEL SECURITY;
+ALTER TABLE course_reminder_rules ENABLE ROW LEVEL SECURITY;
+ALTER TABLE course_reminder_rule_recipients ENABLE ROW LEVEL SECURITY;
+ALTER TABLE course_reminder_deliveries ENABLE ROW LEVEL SECURITY;
 ALTER TABLE logs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE video_visits ENABLE ROW LEVEL SECURITY;
 ALTER TABLE student_accounts ENABLE ROW LEVEL SECURITY;

@@ -188,6 +188,16 @@ def create_training_center(username, password_hash, center_name, slug_base, now=
     now = now or datetime.utcnow()
     try:
         with get_postgres_connection() as conn:
+            # Slug lookup + insert must be one serialized allocation. Without
+            # this transaction-scoped lock, two different accounts using the
+            # same centre name can both select the same free slug and one gets
+            # a spurious 500 from the UNIQUE constraint under load.
+            slug_lock_key = f"training-center-slug:{slugify(slug_base, fallback='centre')}"
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT pg_advisory_xact_lock(hashtext(%s))",
+                    (slug_lock_key,),
+                )
             slug = _unique_center_slug(conn, slug_base)
             with conn.cursor() as cur:
                 cur.execute(

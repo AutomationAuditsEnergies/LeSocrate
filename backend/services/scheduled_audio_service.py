@@ -12,6 +12,11 @@ from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
+_DEFAULT_SCHEDULED_AUDIO_BATCH_SIZE = 50
+_MAX_SCHEDULED_AUDIO_BATCH_SIZE = 1000
+_DEFAULT_AUDIO_READY_HOURS_BEFORE = 24.0
+_DEFAULT_AUDIO_BUILD_BUFFER_HOURS = 2.0
+
 
 def _scheduled_tts_mode():
     value = (os.environ.get("SCHEDULED_AUDIO_TTS_MODE") or "").strip().lower() or None
@@ -20,12 +25,65 @@ def _scheduled_tts_mode():
     return value
 
 
+def _scheduled_audio_batch_size() -> int:
+    raw = os.environ.get(
+        "SCHEDULED_AUDIO_BATCH_SIZE",
+        str(_DEFAULT_SCHEDULED_AUDIO_BATCH_SIZE),
+    )
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        logger.warning(
+            "SCHEDULED_AUDIO_BATCH_SIZE invalide (%r), fallback=%s",
+            raw,
+            _DEFAULT_SCHEDULED_AUDIO_BATCH_SIZE,
+        )
+        value = _DEFAULT_SCHEDULED_AUDIO_BATCH_SIZE
+    return max(1, min(value, _MAX_SCHEDULED_AUDIO_BATCH_SIZE))
+
+
+def _scheduled_audio_window_hours(horizon_hours=None) -> tuple[float, float]:
+    """Return the readiness target and the proactive generation buffer.
+
+    The pedagogical contract is that a day's files are ready 24 hours before
+    class. Generation therefore has to start *before* H-24; starting at H-24
+    would only guarantee that the work was queued, not that it was finished.
+    ``SCHEDULED_AUDIO_HORIZON_HOURS`` remains a compatibility fallback for
+    existing deployments and internal callers can override the target through
+    ``horizon_hours``.
+    """
+    ready_raw = (
+        horizon_hours
+        if horizon_hours is not None
+        else os.environ.get(
+            "SCHEDULED_AUDIO_READY_HOURS_BEFORE",
+            os.environ.get(
+                "SCHEDULED_AUDIO_HORIZON_HOURS",
+                str(_DEFAULT_AUDIO_READY_HOURS_BEFORE),
+            ),
+        )
+    )
+    buffer_raw = os.environ.get(
+        "SCHEDULED_AUDIO_BUILD_BUFFER_HOURS",
+        str(_DEFAULT_AUDIO_BUILD_BUFFER_HOURS),
+    )
+    try:
+        ready_hours = float(ready_raw)
+        buffer_hours = float(buffer_raw)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("La fenêtre de préparation audio J-1 est invalide") from exc
+    if ready_hours <= 0 or buffer_hours < 0:
+        raise ValueError("La fenêtre de préparation audio J-1 est invalide")
+    return ready_hours, buffer_hours
+
+
 def launch_scheduled_audio_session(
     session,
     *,
     tts_mode=None,
     stale_started_before=None,
-    trigger_source="scheduled_24h",
+    trigger_source="scheduled_j1_preparation",
+    wait_for_completion=False,
 ):
     """Launch one occurrence through the durable session claim."""
     session_id = int(session["id"])
@@ -73,14 +131,16 @@ def launch_scheduled_audio_session(
             folder_id,
             payload,
             schedule_session_id=session_id,
+            target_platform_id=platform_id,
             trigger_source=trigger_source,
             stale_started_before=stale_started_before,
+            wait_for_completion=wait_for_completion,
         )
         if status == 400:
             mark_audio_waiting_for_content(session_id, updated_at=datetime.now(FRANCE_TZ))
         return {
             **result,
-            "success": status == 202,
+            "success": status in {200, 202},
             "status": status,
             "launch": launch_payload,
         }
@@ -114,21 +174,31 @@ def retry_scheduled_audio_generation(platform_id: int, session_id: int):
     return result, int(result.get("status") or (202 if result.get("success") else 500))
 
 
-def process_due_audio_generations(platform_ids=None, dry_run=False, horizon_hours=None):
-    """Launch audio once for occurrences entering the 24-hour window.
+def process_due_audio_generations(
+    platform_ids=None,
+    dry_run=False,
+    horizon_hours=None,
+    *,
+    wait_for_completion=False,
+):
+    """Launch one day's audio before its J-1 readiness deadline.
 
     Database claims, fencing tokens and retry timestamps make repeated timer
-    calls safe across restarts and multiple Azure instances.
+    calls safe across restarts and multiple Azure instances. By default the
+    occurrence enters the queue at H-26: a two-hour build buffer before the
+    files must be ready at H-24. Later course days remain untouched.
     """
-    horizon = float(horizon_hours or os.environ.get("SCHEDULED_AUDIO_HORIZON_HOURS", "24"))
+    ready_hours, build_buffer_hours = _scheduled_audio_window_hours(horizon_hours)
+    claim_horizon_hours = ready_hours + build_buffer_hours
     late_grace = float(os.environ.get("SCHEDULED_AUDIO_LATE_GRACE_HOURS", "2"))
     stale_retry_minutes = float(os.environ.get("SCHEDULED_AUDIO_STALE_RETRY_MINUTES", "10"))
     max_auto_attempts = max(1, int(os.environ.get("SCHEDULED_AUDIO_MAX_AUTO_ATTEMPTS", "4")))
+    batch_size = _scheduled_audio_batch_size()
     tts_mode = _scheduled_tts_mode()
 
     now = datetime.now(FRANCE_TZ)
     lower_bound = now - timedelta(hours=late_grace)
-    upper_bound = now + timedelta(hours=horizon)
+    upper_bound = now + timedelta(hours=claim_horizon_hours)
     stale_started_before = now - timedelta(minutes=stale_retry_minutes)
 
     due_sessions = list_due_audio_generation_sessions(
@@ -138,6 +208,7 @@ def process_due_audio_generations(platform_ids=None, dry_run=False, horizon_hour
         stale_updated_before=stale_started_before,
         retry_due_before=now,
         max_auto_attempts=max_auto_attempts,
+        batch_size=batch_size,
     )
 
     results = []
@@ -153,11 +224,15 @@ def process_due_audio_generations(platform_ids=None, dry_run=False, horizon_hour
                 "dry_run": True,
             })
             continue
-        results.append(
-            launch_scheduled_audio_session(
-                session,
-                tts_mode=tts_mode,
-                stale_started_before=stale_started_before,
-            )
+        launched = launch_scheduled_audio_session(
+            session,
+            tts_mode=tts_mode,
+            stale_started_before=stale_started_before,
+            wait_for_completion=wait_for_completion,
         )
+        results.append(launched)
+        if int(launched.get("status") or 0) == 429:
+            # Remaining rows were never claimed and stay due. Avoid hammering
+            # the route while this process has reached its provider capacity.
+            break
     return results

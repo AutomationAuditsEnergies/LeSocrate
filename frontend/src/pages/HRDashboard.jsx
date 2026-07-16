@@ -149,6 +149,8 @@ export default function HRDashboard() {
   const [billing, setBilling] = useState(null)
   const [billingLoading, setBillingLoading] = useState(true)
   const [activeTeacherOrderId, setActiveTeacherOrderId] = useState(null)
+  const [failedTeacherOrderId, setFailedTeacherOrderId] = useState(null)
+  const [retryingTeacherOrderId, setRetryingTeacherOrderId] = useState(null)
   const [orderNotice, setOrderNotice] = useState(null)
   const [showOnboarding, setShowOnboarding] = useState(false)
   const [onboardingStep, setOnboardingStep] = useState(0)
@@ -354,6 +356,7 @@ export default function HRDashboard() {
     // State is intentionally initialized from the external Checkout redirect.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setActiveTeacherOrderId(orderId)
+    setFailedTeacherOrderId(null)
     if (checkout === 'success') {
       setOrderNotice({
         tone: 'info',
@@ -388,7 +391,7 @@ export default function HRDashboard() {
             setWeeklyCourseCount(String(schedule.weekly_course_count || 2))
             setTeachingDays(schedule.weekdays || [])
             setScheduleStartDate(schedule.start_date || todayDateInput())
-            setScheduleStartTime(schedule.start_time || '09:00')
+            setScheduleStartTime('09:00')
           }
           creationRequestRef.current = { fingerprint: '', id: data.order.creation_request_id || '' }
           setShowCreateModal(true)
@@ -409,6 +412,7 @@ export default function HRDashboard() {
         const order = data.order
         if (order.fulfillment_status === 'fulfilled') {
           setNewlyCreatedPlatformId(order.platform_id || null)
+          setFailedTeacherOrderId(null)
           setOrderNotice({
             tone: 'success',
             title: 'Votre professeur IA se prépare',
@@ -419,6 +423,7 @@ export default function HRDashboard() {
           setShowModulesModal(false)
           await fetchPlatforms()
         } else if (order.fulfillment_status === 'failed') {
+          setFailedTeacherOrderId(order.id || activeTeacherOrderId)
           setOrderNotice({
             tone: 'error',
             title: 'Préparation à relancer',
@@ -434,6 +439,35 @@ export default function HRDashboard() {
     const interval = window.setInterval(pollOrder, 3000)
     return () => { stopped = true; window.clearInterval(interval) }
   }, [activeTeacherOrderId])
+
+  const handleRetryTeacherOrder = async () => {
+    const orderId = failedTeacherOrderId
+    if (!orderId || retryingTeacherOrderId) return
+    setRetryingTeacherOrderId(orderId)
+    try {
+      const response = await apiFetch(`/api/hr/teacher-orders/${orderId}/retry`, { method: 'POST' })
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok || !data.success) {
+        throw new Error(data.error || 'Impossible de relancer la préparation.')
+      }
+      const trackedOrderId = data.order?.id || orderId
+      setFailedTeacherOrderId(null)
+      setActiveTeacherOrderId(trackedOrderId)
+      setOrderNotice({
+        tone: 'info',
+        title: 'Préparation relancée',
+        message: 'Votre commande payée est remise en file, sans nouveau prélèvement.',
+      })
+    } catch (error) {
+      setOrderNotice({
+        tone: 'error',
+        title: 'Relance impossible',
+        message: error.message || 'La préparation n’a pas pu être relancée. Réessayez dans un instant.',
+      })
+    } finally {
+      setRetryingTeacherOrderId(null)
+    }
+  }
 
   useEffect(() => {
     if (platforms.length > 0 && !attendancePlatformId) {
@@ -1272,6 +1306,18 @@ export default function HRDashboard() {
               <div className="min-w-0 flex-1">
                 <p className="font-semibold">{orderNotice.title}</p>
                 <p className="mt-0.5 leading-5" style={{ color: colors.textSecondary }}>{orderNotice.message}</p>
+                {failedTeacherOrderId && (
+                  <button
+                    type="button"
+                    onClick={handleRetryTeacherOrder}
+                    disabled={Boolean(retryingTeacherOrderId)}
+                    className="mt-3 inline-flex items-center gap-2 rounded-lg px-3 py-2 font-semibold text-white disabled:cursor-wait disabled:opacity-60"
+                    style={{ backgroundColor: colors.primary }}
+                  >
+                    <Icon name={retryingTeacherOrderId ? 'hourglass_top' : 'refresh'} className="text-base" />
+                    {retryingTeacherOrderId ? 'Relance en cours…' : 'Relancer la préparation'}
+                  </button>
+                )}
               </div>
               <button type="button" onClick={() => setOrderNotice(null)} className="rounded p-1" aria-label="Fermer">
                 <Icon name="close" className="text-base" />
@@ -1356,7 +1402,6 @@ export default function HRDashboard() {
               scheduleStartDate={scheduleStartDate}
               setScheduleStartDate={setScheduleStartDate}
               scheduleStartTime={scheduleStartTime}
-              setScheduleStartTime={setScheduleStartTime}
               formationMode={formationMode}
               setFormationMode={setFormationMode}
               selectedModuleId={selectedModuleId}
@@ -1483,7 +1528,6 @@ export default function HRDashboard() {
           onClose={() => setShowCourseTimeModal(false)}
           onSubmit={handleSetCourseTime}
           initialDate={currentCourseTime?.date_cours}
-          initialHeure={currentCourseTime?.heure_cours}
           schedule={currentCourseTime?.schedule}
           onRetryAudio={handleRetrySessionAudio}
           onPreviewPostponement={handlePreviewSessionPostponement}
@@ -3097,7 +3141,6 @@ function CreatePlatformView({
   scheduleStartDate,
   setScheduleStartDate,
   scheduleStartTime,
-  setScheduleStartTime,
   newFormTpName,
   setNewFormTpName,
   newFormRncp,
@@ -3368,15 +3411,12 @@ function CreatePlatformView({
             <label className="mb-2 block text-sm font-medium" style={{ color: darkMode ? '#94a3b8' : '#64748b' }}>
               Heure de chaque journée
             </label>
-            <input
-              type="time"
-              value={scheduleStartTime}
-              onChange={(event) => setScheduleStartTime(event.target.value)}
-              className="w-full rounded-lg px-4 py-3 text-sm outline-none transition-all"
-              style={inputStyle}
-            />
+            <div className="flex h-12 items-center justify-between rounded-lg px-4 text-sm" style={inputStyle}>
+              <span className="font-semibold" style={{ color: colors.text }}>09:00</span>
+              <span className="text-xs" style={{ color: colors.textMuted }}>Horaire pédagogique fixe</span>
+            </div>
             <p className="mt-2 text-xs leading-5" style={{ color: colors.textMuted }}>
-              L’audio de chaque journée sera préparé automatiquement 24 h avant.
+              La journée suit la playlist de 09:00 à 18:30. L’audio est préparé automatiquement 24 h avant.
             </p>
           </div>
         </div>
@@ -3955,6 +3995,290 @@ function AudioCard({ title, icon, bgColor, audios, iconColor, buttonColor }) {
 // ─── Platform Card ───────────────────────────────────────────────────────────
 // Slide-to-confirm + backup pipeline ne sont plus rendus ici : ils ont été
 // déménagés dans CoursFoldersModal (la vue où l'admin voit les audios).
+const newReminderRule = () => ({
+  name: '',
+  trigger_mode: 'relative_minutes',
+  days_before: 1,
+  minutes_before: 60,
+  local_time: '18:00',
+  subject_template: '',
+  content_template: '',
+  recipient_scope: 'all',
+  recipient_ids: [],
+  is_active: true,
+})
+
+function ReminderRulesPanel({ platformId, recipients, colors }) {
+  const [rules, setRules] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [editingId, setEditingId] = useState(null)
+  const [form, setForm] = useState(newReminderRule)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    let active = true
+    const timeoutId = window.setTimeout(async () => {
+      setLoading(true)
+      setError('')
+      try {
+        const response = await apiFetch(`/api/hr/platforms/${platformId}/reminder-rules`)
+        const data = await response.json().catch(() => ({}))
+        if (!response.ok || !data.success) throw new Error(data.error || 'Impossible de charger les rappels')
+        if (active) setRules(data.rules || [])
+      } catch (loadError) {
+        if (active) setError(loadError.message || 'Impossible de charger les rappels')
+      } finally {
+        if (active) setLoading(false)
+      }
+    }, 0)
+    return () => {
+      active = false
+      window.clearTimeout(timeoutId)
+    }
+  }, [platformId])
+
+  const editRule = (rule) => {
+    setEditingId(rule.id)
+    setForm({
+      ...newReminderRule(),
+      ...rule,
+      local_time: rule.local_time || '18:00',
+      recipient_ids: rule.recipient_ids || [],
+    })
+    setError('')
+  }
+
+  const resetForm = () => {
+    setEditingId(null)
+    setForm(newReminderRule())
+    setError('')
+  }
+
+  const persistRule = async (rule, ruleId = null) => {
+    const endpoint = ruleId
+      ? `/api/hr/platforms/${platformId}/reminder-rules/${ruleId}`
+      : `/api/hr/platforms/${platformId}/reminder-rules`
+    const response = await apiFetch(endpoint, {
+      method: ruleId ? 'PUT' : 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(rule),
+    })
+    const data = await response.json().catch(() => ({}))
+    if (!response.ok || !data.success) throw new Error(data.error || 'Impossible d’enregistrer le rappel')
+    return data.rule
+  }
+
+  const saveRule = async (event) => {
+    event.preventDefault()
+    setSaving(true)
+    setError('')
+    try {
+      const saved = await persistRule(form, editingId)
+      setRules((current) => {
+        const exists = current.some((rule) => rule.id === saved.id)
+        return exists
+          ? current.map((rule) => (rule.id === saved.id ? saved : rule))
+          : [...current, saved]
+      })
+      resetForm()
+    } catch (saveError) {
+      setError(saveError.message || 'Impossible d’enregistrer le rappel')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const toggleRule = async (rule) => {
+    setError('')
+    try {
+      const saved = await persistRule({ ...rule, is_active: !rule.is_active }, rule.id)
+      setRules((current) => current.map((item) => (item.id === saved.id ? saved : item)))
+    } catch (toggleError) {
+      setError(toggleError.message || 'Impossible de modifier le rappel')
+    }
+  }
+
+  const deleteRule = async (rule) => {
+    if (rule.system_key || !window.confirm(`Supprimer le rappel « ${rule.name} » ?`)) return
+    setError('')
+    try {
+      const response = await apiFetch(`/api/hr/platforms/${platformId}/reminder-rules/${rule.id}`, {
+        method: 'DELETE',
+      })
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok || !data.success) throw new Error(data.error || 'Impossible de supprimer le rappel')
+      setRules((current) => current.filter((item) => item.id !== rule.id))
+      if (editingId === rule.id) resetForm()
+    } catch (deleteError) {
+      setError(deleteError.message || 'Impossible de supprimer le rappel')
+    }
+  }
+
+  const describeRule = (rule) => {
+    if (rule.trigger_mode === 'local_day_time') {
+      const days = Number(rule.days_before || 0)
+      return `${days === 0 ? 'Le jour même' : `${days} jour${days > 1 ? 's' : ''} avant`} à ${rule.local_time}`
+    }
+    const minutes = Number(rule.minutes_before || 0)
+    if (minutes > 0 && minutes % 1440 === 0) return `${minutes / 1440} jour${minutes > 1440 ? 's' : ''} avant`
+    if (minutes >= 60 && minutes % 60 === 0) return `${minutes / 60} heure${minutes > 60 ? 's' : ''} avant`
+    return `${minutes} minute${minutes > 1 ? 's' : ''} avant`
+  }
+
+  const inputStyle = {
+    backgroundColor: colors.cardBg,
+    border: `1px solid ${colors.border}`,
+    color: colors.text,
+  }
+
+  return (
+    <section className="mt-4 border-t pt-4" style={{ borderColor: colors.border }} aria-label="Rappels automatiques">
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <div>
+          <h4 className="text-sm font-semibold" style={{ color: colors.text }}>Rappels automatiques</h4>
+          <p className="mt-0.5 text-xs" style={{ color: colors.textMuted }}>Chaque élève reçoit son propre lien d’accès.</p>
+        </div>
+        {!editingId && (
+          <button
+            type="button"
+            onClick={() => setEditingId('new')}
+            className="inline-flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-xs font-semibold transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet-500"
+            style={{ backgroundColor: '#8B5CF6', color: 'white' }}
+          >
+            <Icon name="add" className="text-sm" /> Ajouter un rappel
+          </button>
+        )}
+      </div>
+
+      {error && (
+        <p className="mb-3 rounded-lg bg-rose-50 px-3 py-2 text-xs text-rose-700" role="alert">{error}</p>
+      )}
+
+      {loading ? (
+        <div className="space-y-2" aria-label="Chargement des rappels">
+          {[0, 1].map((item) => (
+            <div key={item} className="h-12 animate-pulse rounded-lg" style={{ backgroundColor: colors.cardBg }} />
+          ))}
+        </div>
+      ) : rules.length === 0 ? (
+        <p className="py-3 text-xs" style={{ color: colors.textMuted }}>Ajoutez un rappel pour prévenir les élèves avant le cours.</p>
+      ) : (
+        <div className="space-y-2">
+          {rules.map((rule) => (
+            <div key={rule.id} className="flex items-center gap-2 rounded-lg px-2.5 py-2" style={inputStyle}>
+              <input
+                type="checkbox"
+                checked={Boolean(rule.is_active)}
+                onChange={() => toggleRule(rule)}
+                aria-label={`${rule.is_active ? 'Désactiver' : 'Activer'} ${rule.name}`}
+                className="h-4 w-4 accent-violet-600"
+              />
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-xs font-semibold" style={{ color: colors.text }}>{rule.name}</p>
+                <p className="truncate text-[11px]" style={{ color: colors.textMuted }}>{describeRule(rule)}</p>
+              </div>
+              <button type="button" onClick={() => editRule(rule)} className="rounded-md p-1" style={{ color: colors.textMuted }} title="Modifier le rappel">
+                <Icon name="edit" className="text-sm" />
+              </button>
+              {!rule.system_key && (
+                <button type="button" onClick={() => deleteRule(rule)} className="rounded-md p-1 hover:bg-rose-50" style={{ color: colors.textMuted }} title="Supprimer le rappel">
+                  <Icon name="delete" className="text-sm" />
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {editingId && (
+        <form className="mt-4 space-y-3" onSubmit={saveRule}>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <label className="text-xs font-medium" style={{ color: colors.textSecondary }}>
+              Nom du rappel
+              <input required maxLength={120} value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} className="mt-1 h-9 w-full rounded-lg px-2.5 outline-none focus:ring-2 focus:ring-violet-500/30" style={inputStyle} />
+            </label>
+            <label className="text-xs font-medium" style={{ color: colors.textSecondary }}>
+              Déclenchement
+              <select value={form.trigger_mode} onChange={(e) => setForm({ ...form, trigger_mode: e.target.value })} className="mt-1 h-9 w-full rounded-lg px-2.5 outline-none focus:ring-2 focus:ring-violet-500/30" style={inputStyle}>
+                <option value="relative_minutes">Délai avant le cours</option>
+                <option value="local_day_time">Jour et heure précis</option>
+              </select>
+            </label>
+          </div>
+
+          {form.trigger_mode === 'local_day_time' ? (
+            <div className="grid grid-cols-2 gap-3">
+              <label className="text-xs font-medium" style={{ color: colors.textSecondary }}>
+                Jours avant
+                <input type="number" min="0" max="365" required value={form.days_before} onChange={(e) => setForm({ ...form, days_before: Number(e.target.value) })} className="mt-1 h-9 w-full rounded-lg px-2.5 outline-none focus:ring-2 focus:ring-violet-500/30" style={inputStyle} />
+              </label>
+              <label className="text-xs font-medium" style={{ color: colors.textSecondary }}>
+                Heure d’envoi
+                <input type="time" required max={Number(form.days_before) === 0 ? '08:59' : undefined} value={form.local_time} onChange={(e) => setForm({ ...form, local_time: e.target.value })} className="mt-1 h-9 w-full rounded-lg px-2.5 outline-none focus:ring-2 focus:ring-violet-500/30" style={inputStyle} />
+              </label>
+            </div>
+          ) : (
+            <label className="block text-xs font-medium" style={{ color: colors.textSecondary }}>
+              Minutes avant le cours
+              <input type="number" min="1" max="525600" required value={form.minutes_before} onChange={(e) => setForm({ ...form, minutes_before: Number(e.target.value) })} className="mt-1 h-9 w-full rounded-lg px-2.5 outline-none focus:ring-2 focus:ring-violet-500/30" style={inputStyle} />
+            </label>
+          )}
+
+          <label className="block text-xs font-medium" style={{ color: colors.textSecondary }}>
+            Objet de l’e-mail
+            <input required maxLength={200} value={form.subject_template} onChange={(e) => setForm({ ...form, subject_template: e.target.value })} placeholder="Votre formation commence bientôt" className="mt-1 h-9 w-full rounded-lg px-2.5 outline-none placeholder:text-slate-500 focus:ring-2 focus:ring-violet-500/30" style={inputStyle} />
+          </label>
+          <label className="block text-xs font-medium" style={{ color: colors.textSecondary }}>
+            Message
+            <textarea required maxLength={5000} rows={3} value={form.content_template} onChange={(e) => setForm({ ...form, content_template: e.target.value })} placeholder="Rendez-vous le {date} à {time}." className="mt-1 w-full resize-y rounded-lg px-2.5 py-2 outline-none placeholder:text-slate-500 focus:ring-2 focus:ring-violet-500/30" style={inputStyle} />
+          </label>
+
+          <label className="block text-xs font-medium" style={{ color: colors.textSecondary }}>
+            Destinataires
+            <select value={form.recipient_scope} onChange={(e) => setForm({ ...form, recipient_scope: e.target.value, recipient_ids: e.target.value === 'all' ? [] : form.recipient_ids })} className="mt-1 h-9 w-full rounded-lg px-2.5 outline-none focus:ring-2 focus:ring-violet-500/30" style={inputStyle}>
+              <option value="all">Tous les e-mails élèves</option>
+              <option value="selected_explicit">Une sélection d’élèves</option>
+            </select>
+          </label>
+
+          {form.recipient_scope === 'selected_explicit' && (
+            <fieldset className="max-h-32 space-y-1 overflow-y-auto rounded-lg p-2" style={{ border: `1px solid ${colors.border}` }}>
+              <legend className="px-1 text-xs font-medium" style={{ color: colors.textSecondary }}>Élèves sélectionnés</legend>
+              {recipients.length === 0 ? (
+                <p className="text-xs" style={{ color: colors.textMuted }}>Ajoutez d’abord des e-mails élèves.</p>
+              ) : recipients.map((recipient) => (
+                <label key={recipient.id} className="flex items-center gap-2 text-xs" style={{ color: colors.textSecondary }}>
+                  <input
+                    type="checkbox"
+                    checked={form.recipient_ids.includes(recipient.id)}
+                    onChange={(e) => setForm({
+                      ...form,
+                      recipient_ids: e.target.checked
+                        ? [...form.recipient_ids, recipient.id]
+                        : form.recipient_ids.filter((id) => id !== recipient.id),
+                    })}
+                    className="h-4 w-4 accent-violet-600"
+                  />
+                  <span className="truncate">{recipient.email}</span>
+                </label>
+              ))}
+            </fieldset>
+          )}
+
+          <p className="text-[11px]" style={{ color: colors.textMuted }}>Variables disponibles : {'{date}'}, {'{time}'}, {'{session_code}'}, {'{class_url}'}.</p>
+          <div className="flex justify-end gap-2">
+            <button type="button" onClick={resetForm} className="rounded-lg px-3 py-2 text-xs font-semibold" style={{ color: colors.textSecondary }}>Annuler</button>
+            <button type="submit" disabled={saving} className="rounded-lg bg-violet-600 px-3 py-2 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50">
+              {saving ? 'Enregistrement…' : editingId === 'new' ? 'Créer le rappel' : 'Enregistrer le rappel'}
+            </button>
+          </div>
+        </form>
+      )}
+    </section>
+  )
+}
+
 function PlatformCard({
   platform: p, expanded, audios, audiosLoading, playingAudio, pdfUploading,
   audioRef, colors, darkMode, studentEmails = [], studentsExpanded = false, studentEmailsLoading = false,
@@ -4552,6 +4876,9 @@ function PlatformCard({
                 color: colors.text,
               }}
             />
+            <p className="mb-2 text-[11px]" style={{ color: colors.textMuted }}>
+              Jusqu’à 1000 adresses par lot. Vous pouvez ajouter plusieurs lots.
+            </p>
             <button
               type="button"
               onClick={onAddStudentEmails}
@@ -4600,6 +4927,11 @@ function PlatformCard({
                 ))}
               </div>
             )}
+            <ReminderRulesPanel
+              platformId={p.id}
+              recipients={studentEmails}
+              colors={colors}
+            />
           </div>
         )}
 
@@ -4961,16 +5293,17 @@ function PostponeSessionDialog({ session, onClose, onPreview, onConfirm }) {
 
               {mode === 'specific_date' && (
                 <div>
-                  <label htmlFor="postpone-specific-date" className="mb-1.5 block text-xs font-semibold" style={{ color: '#334155' }}>Nouvelle date et heure</label>
+                  <label htmlFor="postpone-specific-date" className="mb-1.5 block text-xs font-semibold" style={{ color: '#334155' }}>Nouvelle date</label>
                   <input
                     id="postpone-specific-date"
-                    type="datetime-local"
-                    value={customDate}
-                    min={toLocalDateTimeInput(new Date(new Date(session.scheduled_at).getTime() + 60000))}
-                    onChange={(event) => setCustomDate(event.target.value)}
+                    type="date"
+                    value={customDate.slice(0, 10)}
+                    min={toLocalDateTimeInput(new Date(new Date(session.scheduled_at).getTime() + 60000)).slice(0, 10)}
+                    onChange={(event) => setCustomDate(event.target.value ? `${event.target.value}T09:00` : '')}
                     className="h-11 w-full rounded-lg border px-3 text-sm outline-none focus:ring-2"
                     style={{ borderColor: '#cbd5e1', color: '#0f172a', '--tw-ring-color': '#ddd6fe' }}
                   />
+                  <p className="mt-1.5 text-xs" style={{ color: '#64748b' }}>Le cours commencera à 09:00.</p>
                 </div>
               )}
 
@@ -5065,11 +5398,11 @@ function PostponeSessionDialog({ session, onClose, onPreview, onConfirm }) {
 }
 
 // ─── Course Time Modal ───────────────────────────────────────────────────────
-function CourseTimeModal({ onClose, onSubmit, initialDate, initialHeure, schedule, onRetryAudio, onPreviewPostponement, onPostponeSession }) {
+function CourseTimeModal({ onClose, onSubmit, initialDate, schedule, onRetryAudio, onPreviewPostponement, onPostponeSession }) {
   const today = new Date().toISOString().split('T')[0]
   const hasSchedule = !!schedule
   const [date, setDate] = useState(initialDate || today)
-  const [heure, setHeure] = useState(schedule?.start_time || initialHeure || '')
+  const [heure] = useState('09:00')
   const [selectedWeekdays, setSelectedWeekdays] = useState(
     (schedule?.weekdays || [])
       .map((day) => Number(day))
@@ -5227,16 +5560,10 @@ function CourseTimeModal({ onClose, onSubmit, initialDate, initialHeure, schedul
                 <label className="block text-xs font-semibold mb-1.5" style={{ color: '#334155' }}>
                   {hasSchedule ? 'Heure de début de chaque journée' : 'Heure de début'}
                 </label>
-                <input
-                  type="time"
-                  value={heure}
-                  onChange={(e) => setHeure(e.target.value)}
-                  required
-                  className="w-full rounded-lg border px-3 py-2.5 text-sm outline-none transition-colors"
-                  style={{ borderColor: '#e2e8f0', color: '#0f172a', backgroundColor: '#F8F7F5' }}
-                  onFocus={(e) => { e.currentTarget.style.borderColor = '#137fec' }}
-                  onBlur={(e) => { e.currentTarget.style.borderColor = '#e2e8f0' }}
-                />
+                <div className="flex h-11 items-center justify-between rounded-lg border px-3 text-sm" style={{ borderColor: '#e2e8f0', color: '#0f172a', backgroundColor: '#F8F7F5' }}>
+                  <span className="font-semibold">09:00</span>
+                  <span className="text-xs" style={{ color: '#64748b' }}>Fixe jusqu’à 18:30</span>
+                </div>
               </div>
 
               {result && !result.success && (

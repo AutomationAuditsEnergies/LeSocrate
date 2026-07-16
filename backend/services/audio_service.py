@@ -1,5 +1,6 @@
 # audio_service.py - Logique de gestion de la playlist et des audios
 import copy
+from datetime import datetime
 from config import COURS_PLAYLIST, DATABASE_BACKEND, FRANCE_TZ, PIPELINE_DATABASE_BACKEND
 from services.time_service import get_heure_debut_cours, get_current_simulated_time
 from utils.logger import get_logger
@@ -161,6 +162,57 @@ def get_playlist(platform_id=None):
     return playlist
 
 
+def _as_france_datetime(value):
+    if isinstance(value, datetime):
+        parsed = value
+    else:
+        parsed = datetime.fromisoformat(str(value or "").strip().replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        return FRANCE_TZ.localize(parsed)
+    return parsed.astimezone(FRANCE_TZ)
+
+
+def _audio_info_for_start(platform_id, heure_debut_cours, *, now=None):
+    """Resolve playback from a server-owned occurrence start time."""
+    platform_id = int(platform_id or 1)
+    heure_debut_cours = _as_france_datetime(heure_debut_cours)
+    now = _as_france_datetime(now or get_current_simulated_time(platform_id))
+
+    logger.debug(f"🎵 Heure début: {heure_debut_cours}")
+    logger.debug(f"🎵 Heure actuelle: {now}")
+
+    if now < heure_debut_cours:
+        temps_restant = int((heure_debut_cours - now).total_seconds())
+        logger.debug(
+            f"🎵 Cours pas encore commencé, temps restant: {temps_restant}s"
+        )
+        return None, 0, temps_restant
+
+    temps_ecoule = int((now - heure_debut_cours).total_seconds())
+    logger.debug(f"🎵 Temps écoulé depuis début: {temps_ecoule}s")
+
+    playlist = get_playlist(platform_id)
+
+    temps_cumule = 0
+    for i, audio in enumerate(playlist):
+        if temps_cumule + audio["duration"] > temps_ecoule:
+            offset_dans_audio = temps_ecoule - temps_cumule
+            logger.info(
+                f"🎵 Audio actuel: {audio['title']} (ID: {audio['id']}) - Offset: {offset_dans_audio}s"
+            )
+            return audio, offset_dans_audio, 0
+        temps_cumule += audio["duration"]
+        logger.debug(f"🎵 Audio {i+1} passé, temps cumulé: {temps_cumule}s")
+
+    logger.info("🎵 Cours terminé - tous les audios ont été joués")
+    return None, 0, 0
+
+
+def get_course_session_audio_info(platform_id, scheduled_at, *, now=None):
+    """Resolve one authenticated occurrence without consulting another session."""
+    return _audio_info_for_start(platform_id, scheduled_at, now=now)
+
+
 def get_current_audio_info(platform_id=None):
     """
     Détermine quel fichier audio doit être joué et à quelle position.
@@ -169,41 +221,7 @@ def get_current_audio_info(platform_id=None):
     try:
         logger.debug("🎵 Calcul info audio actuel")
         heure_debut_cours = get_heure_debut_cours(platform_id or 1)
-        now = get_current_simulated_time(platform_id)
-
-        logger.debug(f"🎵 Heure début: {heure_debut_cours}")
-        logger.debug(f"🎵 Heure actuelle: {now}")
-
-        if now.tzinfo is None:
-            now = FRANCE_TZ.localize(now)
-        if heure_debut_cours.tzinfo is None:
-            heure_debut_cours = FRANCE_TZ.localize(heure_debut_cours)
-
-        if now < heure_debut_cours:
-            temps_restant = int((heure_debut_cours - now).total_seconds())
-            logger.debug(
-                f"🎵 Cours pas encore commencé, temps restant: {temps_restant}s"
-            )
-            return None, 0, temps_restant
-
-        temps_ecoule = int((now - heure_debut_cours).total_seconds())
-        logger.debug(f"🎵 Temps écoulé depuis début: {temps_ecoule}s")
-
-        playlist = get_playlist(platform_id)
-
-        temps_cumule = 0
-        for i, audio in enumerate(playlist):
-            if temps_cumule + audio["duration"] > temps_ecoule:
-                offset_dans_audio = temps_ecoule - temps_cumule
-                logger.info(
-                    f"🎵 Audio actuel: {audio['title']} (ID: {audio['id']}) - Offset: {offset_dans_audio}s"
-                )
-                return audio, offset_dans_audio, 0
-            temps_cumule += audio["duration"]
-            logger.debug(f"🎵 Audio {i+1} passé, temps cumulé: {temps_cumule}s")
-
-        logger.info("🎵 Cours terminé - tous les audios ont été joués")
-        return None, 0, 0
+        return _audio_info_for_start(platform_id or 1, heure_debut_cours)
 
     except Exception as e:
         logger.error(f"❌ Erreur dans get_current_audio_info: {e}")

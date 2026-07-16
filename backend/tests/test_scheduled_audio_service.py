@@ -7,6 +7,111 @@ from services import scheduled_audio_service as service
 
 
 class ScheduledAudioServiceTest(unittest.TestCase):
+    def test_due_tick_passes_configured_batch_size_to_repository(self):
+        captured = {}
+        due = [
+            {
+                "id": session_id,
+                "platform_id": 12,
+                "session_index": session_id,
+                "scheduled_at": f"2030-01-01 0{session_id}:00:00",
+                "formation_job_id": 8,
+            }
+            for session_id in (1, 2, 3)
+        ]
+
+        def fake_list_due(**kwargs):
+            captured.update(kwargs)
+            return due[:kwargs["batch_size"]]
+
+        with (
+            patch.dict(service.os.environ, {"SCHEDULED_AUDIO_BATCH_SIZE": "2"}),
+            patch.object(
+                service,
+                "list_due_audio_generation_sessions",
+                side_effect=fake_list_due,
+            ),
+        ):
+            results = service.process_due_audio_generations(dry_run=True)
+
+        self.assertEqual(captured["batch_size"], 2)
+        self.assertEqual([item["session_id"] for item in results], [1, 2])
+
+    def test_default_scan_starts_before_j1_readiness_deadline(self):
+        captured = {}
+
+        def fake_list_due(**kwargs):
+            captured.update(kwargs)
+            return []
+
+        with (
+            patch.dict(service.os.environ, {
+                "SCHEDULED_AUDIO_READY_HOURS_BEFORE": "24",
+                "SCHEDULED_AUDIO_BUILD_BUFFER_HOURS": "2",
+            }),
+            patch.object(
+                service,
+                "list_due_audio_generation_sessions",
+                side_effect=fake_list_due,
+            ),
+        ):
+            service.process_due_audio_generations(dry_run=True)
+
+        # retry_due_before is the tick's `now`; the claim window reaches H-26
+        # so the files can be completed by the H-24 business deadline.
+        self.assertEqual(
+            captured["upper_bound"] - captured["retry_due_before"],
+            service.timedelta(hours=26),
+        )
+
+    def test_explicit_ready_horizon_keeps_configured_build_buffer(self):
+        captured = {}
+
+        def fake_list_due(**kwargs):
+            captured.update(kwargs)
+            return []
+
+        with (
+            patch.dict(
+                service.os.environ,
+                {"SCHEDULED_AUDIO_BUILD_BUFFER_HOURS": "1.5"},
+            ),
+            patch.object(
+                service,
+                "list_due_audio_generation_sessions",
+                side_effect=fake_list_due,
+            ),
+        ):
+            service.process_due_audio_generations(
+                dry_run=True,
+                horizon_hours=10,
+            )
+
+        self.assertEqual(
+            captured["upper_bound"] - captured["retry_due_before"],
+            service.timedelta(hours=11.5),
+        )
+
+    def test_backpressure_stops_the_tick_without_claiming_later_sessions(self):
+        calls = []
+
+        def fake_launch(session, **_kwargs):
+            calls.append(session["id"])
+            return {"session_id": session["id"], "success": False, "status": 429}
+
+        due = [
+            {"id": 9, "platform_id": 12, "session_index": 1, "scheduled_at": "2030-01-01"},
+            {"id": 10, "platform_id": 13, "session_index": 1, "scheduled_at": "2030-01-01"},
+        ]
+        with (
+            patch.object(service, "list_due_audio_generation_sessions", return_value=due),
+            patch.object(service, "launch_scheduled_audio_session", side_effect=fake_launch),
+        ):
+            results = service.process_due_audio_generations()
+
+        self.assertEqual(calls, [9])
+        self.assertEqual(results[0]["status"], 429)
+
     def test_manual_retry_reuses_the_failed_occurrence(self):
         captured = {}
 
@@ -89,7 +194,10 @@ class ScheduledAudioServiceTest(unittest.TestCase):
             ),
             patch.dict(sys.modules, {"routes.formation_routes": fake_routes}),
         ):
-            results = service.process_due_audio_generations(platform_ids=[12])
+            results = service.process_due_audio_generations(
+                platform_ids=[12],
+                wait_for_completion=True,
+            )
 
         self.assertEqual(results[0]["success"], True)
         self.assertEqual(captured["job_id"], 8)
@@ -98,6 +206,8 @@ class ScheduledAudioServiceTest(unittest.TestCase):
         self.assertEqual(captured["payload"]["preserve_existing"], True)
         self.assertEqual(captured["payload"]["sync_slides"], True)
         self.assertEqual(captured["kwargs"]["schedule_session_id"], 9)
+        self.assertEqual(captured["kwargs"]["target_platform_id"], 12)
+        self.assertTrue(captured["kwargs"]["wait_for_completion"])
 
 
 if __name__ == "__main__":

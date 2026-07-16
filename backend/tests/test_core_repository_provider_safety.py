@@ -60,6 +60,61 @@ class CoreRepositoryProviderSafetyTest(unittest.TestCase):
 
         rest_upsert.assert_not_called()
 
+    def test_center_slug_is_allocated_under_transaction_advisory_lock(self):
+        queries = []
+
+        class Cursor:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def execute(self, query, params=None):
+                queries.append((" ".join(query.split()), params))
+                self.query = query
+
+            def fetchone(self):
+                if "SELECT 1 FROM training_center_accounts" in self.query:
+                    return None
+                if "RETURNING id" in self.query:
+                    return {
+                        "id": 7,
+                        "username": "centre@example.com",
+                        "password_hash": "hash",
+                        "center_name": "Même centre",
+                        "slug": "meme-centre",
+                        "is_active": True,
+                        "password_debug_plaintext": None,
+                    }
+                return None
+
+        class Connection:
+            def cursor(self):
+                return Cursor()
+
+        @contextmanager
+        def postgres_connection():
+            yield Connection()
+
+        with patch.object(
+            core_repository,
+            "get_postgres_connection",
+            postgres_connection,
+        ):
+            created = core_repository.create_training_center(
+                "centre@example.com",
+                "hash",
+                "Même centre",
+                "Même centre",
+            )
+
+        self.assertEqual(created["slug"], "meme-centre")
+        self.assertIn("pg_advisory_xact_lock", queries[0][0])
+        self.assertEqual(queries[0][1], ("training-center-slug:meme-centre",))
+        self.assertIn("SELECT 1 FROM training_center_accounts", queries[1][0])
+        self.assertIn("INSERT INTO training_center_accounts", queries[2][0])
+
 
 if __name__ == "__main__":
     unittest.main()

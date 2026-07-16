@@ -11,6 +11,7 @@ from __future__ import annotations
 from typing import Any
 
 from database.postgres import get_postgres_connection
+from repositories.teacher_asset_repository import canonical_audio_manifest_complete
 
 
 class CloneSourceNotFound(LookupError):
@@ -43,6 +44,7 @@ def _resolve_module_with_cursor(
     center_account_id: int | None,
     *,
     scope_to_center: bool,
+    require_canonical_reuse: bool = False,
 ) -> dict[str, Any]:
     scope_sql, scope_params = _tenant_predicate(
         ("m", "pc"),
@@ -57,15 +59,21 @@ def _resolve_module_with_cursor(
                m.source_pipeline_job_id,
                m.source_platform_id,
                m.center_account_id,
+               m.canonical_fingerprint,
+               m.canonical_reuse_allowed,
+               j.nb_days,
                pc.center_account_id AS platform_center_account_id,
                COUNT(cf.id)::integer AS folder_count
         FROM formation_modules m
         JOIN platform_config pc ON pc.id = m.source_platform_id
+        LEFT JOIN formation_pipeline_jobs j ON j.id = m.source_pipeline_job_id
         LEFT JOIN cours_folders cf ON cf.platform_id = m.source_platform_id
         WHERE m.id = %s
         {scope_sql}
         GROUP BY m.id, m.status, m.voice_type, m.source_pipeline_job_id,
-                 m.source_platform_id, m.center_account_id, pc.center_account_id
+                 m.source_platform_id, m.center_account_id,
+                 m.canonical_fingerprint, m.canonical_reuse_allowed,
+                 j.nb_days, pc.center_account_id
         """,
         (module_id, *scope_params),
     )
@@ -88,6 +96,31 @@ def _resolve_module_with_cursor(
         )
     if int(source.get("folder_count") or 0) <= 0:
         raise CloneSourceInvalid("Le module n'a pas de cours générés (source vide)")
+    if require_canonical_reuse and (
+        not source.get("canonical_reuse_allowed")
+        or not source.get("canonical_fingerprint")
+    ):
+        raise CloneSourceInvalid(
+            "Ce module n'est pas autorisé ou prêt pour une réutilisation canonique inter-centres"
+        )
+    if require_canonical_reuse:
+        cur.execute(
+            """
+            SELECT source_folder_id, logical_key
+            FROM formation_module_assets
+            WHERE module_id = %s
+              AND status = 'ready'
+              AND asset_kind = 'audio'
+            """,
+            (int(module_id),),
+        )
+        if not canonical_audio_manifest_complete(
+            [dict(row) for row in cur.fetchall()],
+            int(source.get("nb_days") or source.get("folder_count") or 1),
+        ):
+            raise CloneSourceInvalid(
+                "Le manifeste canonique ne couvre pas les 19 audios de chaque journée"
+            )
     return source
 
 
@@ -175,6 +208,7 @@ def clone_postgres_course_structure(
     formation_id: int | None = None,
     center_account_id: int | None = None,
     scope_to_center: bool = False,
+    allow_canonical_cross_tenant: bool = False,
 ) -> dict[str, Any]:
     """Clone folders/documents atomically and return the stable Blob ID map.
 
@@ -186,6 +220,10 @@ def clone_postgres_course_structure(
     """
     if (module_id is None) == (formation_id is None):
         raise ValueError("Fournir exactement une source module_id ou formation_id")
+    if allow_canonical_cross_tenant and module_id is None:
+        raise ValueError("La réutilisation canonique inter-centres exige un module_id")
+    if allow_canonical_cross_tenant and (not scope_to_center or center_account_id is None):
+        raise ValueError("La plateforme cible canonique doit rester bornée à son centre")
 
     target_platform_id = int(target_platform_id)
     with get_postgres_connection() as conn:
@@ -201,7 +239,8 @@ def clone_postgres_course_structure(
                     cur,
                     module_id,
                     center_account_id,
-                    scope_to_center=scope_to_center,
+                    scope_to_center=(scope_to_center and not allow_canonical_cross_tenant),
+                    require_canonical_reuse=allow_canonical_cross_tenant,
                 )
                 source_kind = "module"
                 source_id = module_id
@@ -356,6 +395,22 @@ def clone_postgres_course_structure(
                 "target_platform_id": target_platform_id,
                 "folder_id_map": folder_id_map,
             }
+
+
+def clone_canonical_module_course_structure(
+    *,
+    target_platform_id: int,
+    module_id: int,
+    target_center_account_id: int,
+) -> dict[str, Any]:
+    """Clone an authorized global module while always tenant-scoping the target."""
+    return clone_postgres_course_structure(
+        target_platform_id=int(target_platform_id),
+        module_id=int(module_id),
+        center_account_id=int(target_center_account_id),
+        scope_to_center=True,
+        allow_canonical_cross_tenant=True,
+    )
 
 
 def set_postgres_platform_status(

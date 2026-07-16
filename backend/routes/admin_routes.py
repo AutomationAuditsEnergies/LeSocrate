@@ -14,7 +14,15 @@ from azure.core.exceptions import ResourceExistsError
 from pydub import AudioSegment
 from werkzeug.security import check_password_hash, generate_password_hash
 import state
-from config import DATABASE_BACKEND, FRANCE_TZ, DB_PATH, SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY, SUPABASE_URL
+from config import (
+    DATABASE_BACKEND,
+    FRANCE_TZ,
+    DB_PATH,
+    SUPABASE_ANON_KEY,
+    SUPABASE_SERVICE_ROLE_KEY,
+    SUPABASE_URL,
+    sqlite_runtime_enabled,
+)
 from database.db import get_db_connection
 from database import db_safety
 from database.postgres import postgres_enabled
@@ -325,6 +333,73 @@ def _mirror_training_center_to_sqlite(cursor, account, password_hash, now_str, p
             now_str,
         ),
     )
+
+
+def _mirror_training_center_to_sqlite_if_enabled(account, password_hash, now_str):
+    """Best-effort compatibility mirror, never used by pure Postgres SaaS.
+
+    The authoritative Postgres insert commits before this compatibility write.
+    A mirror outage must therefore never turn a successfully-created SaaS
+    account into an HTTP 500. Pure Postgres deployments must not open SQLite at
+    all, because ``get_db_connection`` deliberately rejects that split-brain.
+    """
+    if not sqlite_runtime_enabled():
+        return False
+
+    mirror_conn = None
+    try:
+        mirror_conn = get_db_connection()
+        _mirror_training_center_to_sqlite(
+            mirror_conn.cursor(),
+            account,
+            password_hash,
+            now_str,
+            None,
+        )
+        mirror_conn.commit()
+        return True
+    except Exception:
+        if mirror_conn is not None:
+            mirror_conn.rollback()
+        logger.warning(
+            "TRAINING_CENTER_SQLITE_MIRROR_FAILED center_id=%s",
+            account.get("id"),
+            exc_info=True,
+        )
+        return False
+    finally:
+        if mirror_conn is not None:
+            mirror_conn.close()
+
+
+def _mirror_training_center_password_to_sqlite_if_enabled(username, password_hash):
+    """Mirror a password only in explicit compatibility runtimes."""
+    if not sqlite_runtime_enabled():
+        return False
+
+    mirror_conn = None
+    try:
+        mirror_conn = get_db_connection()
+        updated = _update_training_center_password_sqlite(
+            mirror_conn.cursor(),
+            username,
+            password_hash,
+            None,
+        )
+        mirror_conn.commit()
+        return bool(updated)
+    except Exception:
+        if mirror_conn is not None:
+            mirror_conn.rollback()
+        logger.warning(
+            "TRAINING_CENTER_PASSWORD_SQLITE_MIRROR_FAILED username=%s",
+            username,
+            exc_info=True,
+        )
+        return False
+    finally:
+        if mirror_conn is not None:
+            mirror_conn.close()
 
 
 def create_admin_blueprint(socketio):
@@ -1006,14 +1081,10 @@ def create_admin_blueprint(socketio):
                         password_ok = True
                         new_hash = generate_password_hash(password)
                         update_training_center_password(username, new_hash, password)
-                        try:
-                            mirror_conn = get_db_connection()
-                            mirror_cursor = mirror_conn.cursor()
-                            _update_training_center_password_sqlite(mirror_cursor, username, new_hash, password)
-                            mirror_conn.commit()
-                            mirror_conn.close()
-                        except Exception:
-                            logger.warning("⚠️ Miroir SQLite mot de passe centre impossible", exc_info=True)
+                        _mirror_training_center_password_to_sqlite_if_enabled(
+                            username,
+                            new_hash,
+                        )
 
                     if not password_ok:
                         logger.warning("❌ Échec connexion centre Postgres - identifiants incorrects")
@@ -1157,6 +1228,14 @@ def create_admin_blueprint(socketio):
                     "message": "Un email de réinitialisation va être envoyé.",
                 }), 200
 
+            if DATABASE_BACKEND in _POSTGRES_ONLY_BACKENDS:
+                # Keep account enumeration impossible while never consulting the
+                # forbidden local SQLite database in the SaaS runtime.
+                return jsonify({
+                    "success": True,
+                    "message": "Si un compte existe pour cette adresse, un email va être envoyé.",
+                }), 200
+
             conn = get_db_connection()
             cursor = conn.cursor()
             cursor.execute(
@@ -1239,10 +1318,11 @@ def create_admin_blueprint(socketio):
                 except DuplicateTrainingCenterUsername:
                     return jsonify({"success": False, "error": "Cet identifiant existe déjà"}), 409
 
-                conn = get_db_connection()
-                cursor = conn.cursor()
-                _mirror_training_center_to_sqlite(cursor, account, password_hash, now_str, None)
-                conn.commit()
+                _mirror_training_center_to_sqlite_if_enabled(
+                    account,
+                    password_hash,
+                    now_str,
+                )
 
                 if "@" in username:
                     ensured, ensure_error = _ensure_training_center_supabase_user(

@@ -14,6 +14,7 @@ from unittest.mock import Mock, patch
 from services import basic_tts_service as bts
 from services import break_transition_service as bks
 from services import content_generation_service as cgs
+from repositories import pipeline_repository as pipeline_repo
 
 
 def _id3_header(payload: bytes) -> bytes:
@@ -51,25 +52,21 @@ def _phrases_text(n_phrases: int, words_per_phrase: int = 7) -> str:
 
 
 class RuntimeFitStopsBeforeOverflowTest(unittest.TestCase):
-    def test_voice_duration_stays_under_target(self):
-        # Bloc avec ~1400 mots de phrases courtes (sub-chunkable proprement).
-        # Edge TTS mocké : chaque appel renvoie un chunk MP3 et une durée 200s.
-        # target_sec=2700, silence final=120 → dernière parole avant 2580s.
-        # À 200s/chunk, on stoppe forcément avant épuisement de la file.
+    def test_runtime_fit_flag_keeps_full_text_without_carryover(self):
+        # Le runtime-fit est volontairement neutralisé : le TTS doit toujours
+        # lire le texte canonique complet, sans couper ni reporter des chunks.
         text = _phrases_text(n_phrases=200, words_per_phrase=7)
         bloc = _make_bloc(text, target_sec=2700)
+        tts = Mock(return_value=_mp3_chunk("VOICE"))
 
         with patch(
             "services.basic_tts_service.convert_to_speech_basic",
-            return_value=_mp3_chunk("VOICE"),
+            tts,
         ), patch.object(
             cgs, "_mp3_duration_seconds_no_ffprobe", return_value=1500.0,
         ), patch.object(
-            cgs, "_synthesize_short_conclusion_audio",
-            return_value=(_mp3_chunk("CONCL"), 5.0),
-        ), patch.object(
             cgs, "_edge_muted_padding_audio",
-            return_value=(_mp3_chunk("PAD"), 80.0),
+            return_value=(_mp3_chunk("PAD"), 1200.0),
         ):
             (
                 audio_bytes, voice_duration, fit_method,
@@ -81,17 +78,12 @@ class RuntimeFitStopsBeforeOverflowTest(unittest.TestCase):
                 conclusion_margin_sec=90,
             )
 
-        self.assertEqual(fit_method, "slide_sync_edge_runtime_fit")
-        self.assertLessEqual(
-            voice_duration,
-            cgs._course_speech_deadline_sec(2700) + cgs._TOLERANCE_OVERFLOW_SEC,
-        )
-        # On a forcément stoppé avant la fin → surplus non consommé.
-        self.assertGreater(
-            len(unconsumed), 0,
-            "Le runtime fit doit reporter le surplus quand on dépasse",
-        )
-        self.assertGreater(len(consumed), 0)
+        self.assertEqual(fit_method, "slide_sync_edge_no_padding")
+        self.assertEqual(voice_duration, 1500.0)
+        self.assertEqual(unconsumed, [])
+        self.assertEqual(consumed, [])
+        tts.assert_called_once()
+        self.assertEqual(tts.call_args.args[0], text)
 
 
 class FishAudioWordBudgetCalibrationTest(unittest.TestCase):
@@ -240,7 +232,7 @@ class FishAudioWordBudgetCalibrationTest(unittest.TestCase):
         self.assertEqual(result["fallback"], "llm_only_over_budget_kept_untrimmed")
 
     def test_45_minute_budget_uses_single_canonical_block_budget(self):
-        # 192 mots/min, 17s de silence initial.
+        # 192 mots/min, 17s de silence initial et la marge finale courante.
         # Plus de réserve conclusion runtime : budget principal = budget total.
         with patch.object(cgs, "_course_words_per_minute", return_value=192.0), patch.object(
             cgs, "_course_preflight_safety", return_value=1.0
@@ -248,7 +240,7 @@ class FishAudioWordBudgetCalibrationTest(unittest.TestCase):
             main_budget = cgs._estimated_main_words_budget_for_course(2700, api_speed=0.95)
             total_budget = cgs._estimated_words_budget_for_course(2700, api_speed=0.95)
 
-        expected = int(((2700 - 60 - 17) / 60) * 192)
+        expected = int(((2700 - cgs._course_final_silence_sec() - 17) / 60) * 192)
         self.assertEqual(main_budget, expected)
         self.assertEqual(total_budget, expected)
 
@@ -270,37 +262,7 @@ class FishAudioWordBudgetCalibrationTest(unittest.TestCase):
         self.assertEqual(len(budget["course_items"]), 1)
 
     def test_final_day_word_budget_guard_rejects_overflow(self):
-        tmp = tempfile.NamedTemporaryFile(delete=False)
-        tmp.close()
-        conn = sqlite3.connect(tmp.name)
-        conn.execute(
-            """
-            CREATE TABLE content_generation_segments (
-                id INTEGER PRIMARY KEY,
-                job_id INTEGER NOT NULL,
-                sub_part_index INTEGER NOT NULL,
-                passe INTEGER NOT NULL,
-                status TEXT NOT NULL,
-                text_content TEXT,
-                word_count INTEGER
-            )
-            """
-        )
         text = " ".join(["mot"] * 112)
-        conn.execute(
-            """
-            INSERT INTO content_generation_segments
-                (id, job_id, sub_part_index, passe, status, text_content, word_count)
-            VALUES (1, 20, 0, 1, 'completed', ?, ?)
-            """,
-            (text, len(text.split())),
-        )
-        conn.commit()
-        conn.close()
-
-        def connect():
-            return sqlite3.connect(tmp.name)
-
         small_budget = {
             "target_words": 100,
             "min_words": 90,
@@ -313,22 +275,30 @@ class FishAudioWordBudgetCalibrationTest(unittest.TestCase):
             "course_items": [],
         }
 
-        try:
-            with patch.object(cgs, "get_db_connection", side_effect=connect), patch.object(
-                cgs, "get_job_from_db", return_value={"id": 20, "carryover_in_text": ""}
-            ), patch.object(
-                cgs, "get_course_day_word_budget", return_value=small_budget
-            ):
-                audit = cgs.compute_course_day_word_budget_audit(
-                    10,
-                    job={"id": 20, "carryover_in_text": ""},
-                )
-                self.assertFalse(audit["ok"])
-                self.assertEqual(audit["status"], "over_budget")
-                with self.assertRaisesRegex(ValueError, "dépasse"):
-                    cgs.assert_course_day_word_budget(10, context="test")
-        finally:
-            os.unlink(tmp.name)
+        completed_rows = [{
+            "id": 1,
+            "sub_part_index": 0,
+            "sub_part_name": "Intro",
+            "passe": 1,
+            "text_content": text,
+            "word_count": len(text.split()),
+            "dirty": 0,
+        }]
+        with patch.object(
+            cgs, "list_completed_content_segment_rows", return_value=completed_rows
+        ), patch.object(
+            cgs, "get_job_from_db", return_value={"id": 20, "carryover_in_text": ""}
+        ), patch.object(
+            cgs, "get_course_day_word_budget", return_value=small_budget
+        ):
+            audit = cgs.compute_course_day_word_budget_audit(
+                10,
+                job={"id": 20, "carryover_in_text": ""},
+            )
+            self.assertFalse(audit["ok"])
+            self.assertEqual(audit["status"], "over_budget")
+            with self.assertRaisesRegex(ValueError, "dépasse"):
+                cgs.assert_course_day_word_budget(10, context="test")
 
 
 class CourseSpeechDeadlineTest(unittest.TestCase):
@@ -373,14 +343,15 @@ class CourseSpeechDeadlineTest(unittest.TestCase):
 class HumanizationReviewRulesTest(unittest.TestCase):
     def test_review_includes_humanization_rule_group(self):
         group = next(
-            (g for g in cgs._HUMANIZATION_REVIEW_RULE_GROUPS if g["id"] == "humanisation_rythme"),
+            (g for g in cgs._HUMANIZATION_REVIEW_RULE_GROUPS if g["id"] == "humanisation_polish"),
             None,
         )
         self.assertIsNotNone(group)
         self.assertIn(101, group["rules"])
         self.assertIn(111, group["rules"])
-        self.assertIn("RÈGLE #101", cgs._HUMANIZATION_REVIEW_RULES)
-        self.assertIn("RÈGLE #111", cgs._HUMANIZATION_REVIEW_RULES)
+        rules_text = cgs._load_review_rules()
+        self.assertIn("RÈGLE #101", rules_text)
+        self.assertIn("RÈGLE #111", rules_text)
 
     def test_each_review_group_extracts_rules(self):
         rules_text = cgs._load_review_rules()
@@ -390,15 +361,19 @@ class HumanizationReviewRulesTest(unittest.TestCase):
                 self.assertIn(f"RÈGLE #{group['rules'][0]}", extracted)
 
     def test_humanization_prompt_can_propose_rhythm_corrections(self):
+        rules_text = cgs._extract_rules_for_group(
+            cgs._load_review_rules(),
+            [101, 102, 103],
+        )
         prompt = cgs._build_review_prompt_focused(
             "Bonjour à tous. On entre maintenant dans le vif du sujet.",
-            cgs._HUMANIZATION_REVIEW_RULES,
+            rules_text,
             "Humanisation et rythme pédagogique",
             "Intros plus douces, respirations et transitions",
             [101, 102, 103],
         )
 
-        self.assertIn("comptent comme des non-conformités", prompt)
+        self.assertIn("finition orale légère", prompt)
         self.assertIn("micro-interaction", prompt)
         self.assertIn("Pas de réécriture complète", prompt)
 
@@ -484,9 +459,11 @@ class ContentReviewSignatureSelectionTest(unittest.TestCase):
             return current_text, [], [], None, 0
 
         with patch.object(cgs, "get_job_from_db", return_value={"id": 1, "formation_job_id": 9}), patch.object(
-            cgs, "get_db_connection", side_effect=connect
+            pipeline_repo, "get_db_connection", side_effect=connect
         ), patch.object(cgs, "_load_review_rules", return_value=rules_text), patch.object(
-            cgs, "_ensure_review_signature_column"
+            cgs, "_ensure_review_state_columns"
+        ), patch.object(
+            cgs, "_save_reviewed_scripts_artifact"
         ), patch.object(cgs, "_review_group_chunks", side_effect=fake_group_review):
             result = cgs.run_content_review(123)
 
@@ -512,7 +489,11 @@ class ContentReviewSignatureSelectionTest(unittest.TestCase):
 
     def test_current_review_signature_skips_segment(self):
         rules_text = "RÈGLE #1 — test"
-        current_signature = cgs._review_rules_signature(rules_text)
+        current_signature = cgs._review_rules_signature(
+            rules_text + cgs._ethical_lexical_signature_text(),
+            groups=cgs._compliance_review_groups_for_final_pass(),
+            version=cgs._REVIEW_RULESET_VERSION,
+        )
         db_path = self._make_db(current_signature)
         try:
             result, calls = self._run_review_on_db(db_path, rules_text)
@@ -558,9 +539,11 @@ class ContentReviewSignatureSelectionTest(unittest.TestCase):
                 )
 
             with patch.object(cgs, "get_job_from_db", return_value={"id": 1, "formation_job_id": 9}), patch.object(
-                cgs, "get_db_connection", side_effect=connect
+                pipeline_repo, "get_db_connection", side_effect=connect
             ), patch.object(cgs, "_load_review_rules", return_value=rules_text), patch.object(
                 cgs, "_ensure_review_state_columns"
+            ), patch.object(
+                cgs, "_save_reviewed_scripts_artifact"
             ), patch.object(cgs, "_review_group_chunks", side_effect=fake_group_review):
                 result = cgs.run_humanization_review(123)
 
@@ -631,7 +614,7 @@ class ConclusionAppendedAfterStopTest(unittest.TestCase):
 
 
 class PrependedChunksConsumedFirstTest(unittest.TestCase):
-    def test_prepended_text_is_synthesized_before_bloc_text(self):
+    def test_disabled_runtime_fit_ignores_legacy_prepended_chunks(self):
         bloc = _make_bloc("phrase du bloc principal.", target_sec=2700)
         prepended = [{
             "slide_id": "from-previous",
@@ -640,7 +623,7 @@ class PrependedChunksConsumedFirstTest(unittest.TestCase):
             "text": "carryover du bloc précédent.",
         }]
 
-        # On enregistre l'ordre des appels TTS pour vérifier qui passe en 1er.
+        # Un ancien carryover ne doit plus altérer le texte canonique du bloc.
         seen_texts = []
 
         def fake_tts(text, **kwargs):
@@ -653,8 +636,8 @@ class PrependedChunksConsumedFirstTest(unittest.TestCase):
         ), patch.object(
             cgs, "_mp3_duration_seconds_no_ffprobe", return_value=10.0,
         ), patch.object(
-            cgs, "_synthesize_short_conclusion_audio",
-            return_value=(_mp3_chunk("END"), 1.0),
+            cgs, "_edge_muted_padding_audio",
+            return_value=(_mp3_chunk("PAD"), 2690.0),
         ):
             cgs._synthesize_course_audio_synced_to_slides(
                 bloc, [], "cours.mp3",
@@ -664,10 +647,9 @@ class PrependedChunksConsumedFirstTest(unittest.TestCase):
                 conclusion_margin_sec=90,
             )
 
-        self.assertGreaterEqual(len(seen_texts), 2)
-        self.assertIn("carryover", seen_texts[0])
-        # Le texte du bloc principal vient après.
-        self.assertIn("bloc principal", seen_texts[1])
+        self.assertEqual(len(seen_texts), 1)
+        self.assertNotIn("carryover", seen_texts[0])
+        self.assertIn("bloc principal", seen_texts[0])
 
 
 class NoRuntimeFitReturnsEmptyUnconsumedTest(unittest.TestCase):
@@ -729,7 +711,7 @@ class ConcatMp3BytesUsedSingleId3Test(unittest.TestCase):
 
 
 class RuntimeFitRejectsMeasuredOverflowTest(unittest.TestCase):
-    def test_measured_overflow_without_prior_audio_raises(self):
+    def test_runtime_fit_flag_does_not_drop_overlong_text(self):
         text = " ".join(["mot"] * 100) + "."
         bloc = _make_bloc(text, target_sec=150)
 
@@ -745,13 +727,17 @@ class RuntimeFitRejectsMeasuredOverflowTest(unittest.TestCase):
             cgs, "_edge_muted_padding_audio",
             return_value=(_mp3_chunk("PAD"), 80.0),
         ):
-            with self.assertRaisesRegex(ValueError, "aucun audio généré"):
-                cgs._synthesize_course_audio_synced_to_slides(
-                    bloc, [], "cours.mp3",
-                    mock=False, basic_tts=True,
-                    runtime_fit=True,
-                    conclusion_margin_sec=90,
-                )
+            result = cgs._synthesize_course_audio_synced_to_slides(
+                bloc, [], "cours.mp3",
+                mock=False, basic_tts=True,
+                runtime_fit=True,
+                conclusion_margin_sec=90,
+            )
+
+        self.assertEqual(result[1], 140.0)
+        self.assertEqual(result[2], "slide_sync_edge_no_padding")
+        self.assertEqual(result[5], [])
+        self.assertEqual(result[6], [])
 
 
 class RuntimeFitConclusionFallbackTest(unittest.TestCase):
@@ -794,7 +780,7 @@ class RuntimeFitConclusionFallbackTest(unittest.TestCase):
 
 
 class RuntimeFitMicroChunkRefinementTest(unittest.TestCase):
-    def test_measured_overflow_is_split_smaller_before_stopping(self):
+    def test_runtime_fit_flag_does_not_split_canonical_chunk(self):
         sentence = " ".join(["mot"] * 20) + "."
         text = " ".join([sentence, sentence, sentence])
         bloc = _make_bloc(text, target_sec=170)
@@ -812,10 +798,7 @@ class RuntimeFitMicroChunkRefinementTest(unittest.TestCase):
             return_value=_mp3_chunk("VOICE"),
         ), patch.object(
             cgs, "_mp3_duration_seconds_no_ffprobe",
-            side_effect=[120.0, 40.0, 40.0],
-        ), patch.object(
-            cgs, "_synthesize_short_conclusion_audio",
-            return_value=(_mp3_chunk("CONCL"), 20.0),
+            return_value=120.0,
         ), patch.object(
             cgs, "_edge_muted_padding_audio",
             return_value=(_mp3_chunk("PAD"), 90.0),
@@ -831,14 +814,12 @@ class RuntimeFitMicroChunkRefinementTest(unittest.TestCase):
             )
 
         kinds = [a["kind"] for a in attempts]
-        self.assertIn("gtts_split_after_measured_overflow", kinds)
+        self.assertEqual(kinds.count("gtts"), 1)
+        self.assertNotIn("gtts_split_after_measured_overflow", kinds)
         self.assertNotIn("conclusion", kinds)
-        self.assertGreaterEqual(len(consumed), 1)
+        self.assertEqual(consumed, [])
         self.assertEqual(unconsumed, [])
-        self.assertLessEqual(
-            voice_duration,
-            cgs._course_speech_deadline_sec(250) + cgs._TOLERANCE_OVERFLOW_SEC,
-        )
+        self.assertEqual(voice_duration, 120.0)
 
 
 class RuntimeFitFinalizeSafetyTest(unittest.TestCase):
@@ -862,15 +843,7 @@ class RuntimeFitFinalizeSafetyTest(unittest.TestCase):
 
 
 class ContextualBreakUsesConsumedTextTest(unittest.TestCase):
-    def test_contextual_break_prefers_runtime_consumed_text(self):
-        captured = {}
-
-        def fake_build_break_transition_texts(**kwargs):
-            get_bloc_text = kwargs["get_bloc_text"]
-            captured["prev"] = get_bloc_text(1)
-            captured["next"] = get_bloc_text(2)
-            return "intro", "outro"
-
+    def test_fixed_break_ignores_legacy_runtime_consumed_text(self):
         blocs_by_number = {
             1: {
                 "text": "texte complet avec partie reportee",
@@ -884,7 +857,7 @@ class ContextualBreakUsesConsumedTextTest(unittest.TestCase):
 
         with patch(
             "services.break_transition_service.build_break_transition_texts",
-            side_effect=fake_build_break_transition_texts,
+            side_effect=AssertionError("un script fixe ne doit pas appeler le LLM"),
         ), patch(
             "services.playlist_tts_service._build_pause_audio",
             return_value=b"AUDIO",
@@ -907,9 +880,7 @@ class ContextualBreakUsesConsumedTextTest(unittest.TestCase):
             )
 
         self.assertEqual(audio_bytes, b"AUDIO")
-        self.assertEqual(mode, "contextual_fish")
-        self.assertEqual(captured["prev"], "texte reellement enseigne")
-        self.assertEqual(captured["next"], "prochain texte consomme")
+        self.assertEqual(mode, "fixed_fish")
 
 
 class BreakTransitionOwnershipTest(unittest.TestCase):
@@ -938,7 +909,7 @@ class BreakTransitionOwnershipTest(unittest.TestCase):
 
         self.assertEqual(intro, "")
         self.assertIn("questions", outro)
-        self.assertIn("quelques minutes de pause", outro)
+        self.assertIn("dix minutes de pause", outro)
 
     def test_pause_after_course_has_no_intro_when_previous_file_owns_transition(self):
         playlist_items = [
@@ -1074,7 +1045,7 @@ class BreakTransitionOwnershipTest(unittest.TestCase):
 
 
 class BasicTTSBreaksUseEdgeVoiceTest(unittest.TestCase):
-    def test_basic_tts_generic_break_does_not_recycle_fish_audio(self):
+    def test_basic_tts_fixed_break_does_not_recycle_fish_audio(self):
         seen_texts = []
         seen_volumes = []
 
@@ -1109,18 +1080,18 @@ class BasicTTSBreaksUseEdgeVoiceTest(unittest.TestCase):
                 basic_tts=True,
             )
 
-        self.assertEqual(mode, "generic_edge_timed")
+        self.assertEqual(mode, "fixed_edge_timed")
         self.assertEqual(len(seen_texts), 3)
-        self.assertEqual(seen_volumes, ["-100%", "+0%", "-100%"])
-        self.assertIn("clôt", seen_texts[1].lower())
-        self.assertIn("pause", seen_texts[1].lower())
+        self.assertEqual(seen_volumes, ["+0%", "-100%", "-100%"])
+        self.assertIn("clôt", seen_texts[0].lower())
+        self.assertIn("pause", seen_texts[0].lower())
         self.assertNotIn("c'est le moment", " ".join(seen_texts).lower())
         self.assertEqual(audio_bytes.count(b"ID3"), 1)
         self.assertIn(b"EDGE1", audio_bytes)
         self.assertIn(b"EDGE2", audio_bytes)
         self.assertIn(b"EDGE3", audio_bytes)
+        self.assertLess(audio_bytes.index(b"EDGE2"), audio_bytes.index(b"EDGE1"))
         self.assertLess(audio_bytes.index(b"EDGE1"), audio_bytes.index(b"EDGE3"))
-        self.assertLess(audio_bytes.index(b"EDGE3"), audio_bytes.rindex(b"EDGE2"))
 
 
 class CourseOpeningRewriteTest(unittest.TestCase):
@@ -1136,6 +1107,10 @@ class CourseOpeningRewriteTest(unittest.TestCase):
         )
 
         with patch.object(
+            cgs,
+            "_course_opening_transitions_enabled",
+            return_value=True,
+        ), patch.object(
             cgs,
             "_llm_post",
             return_value=(
@@ -1230,7 +1205,7 @@ class RuntimeConclusionTextTest(unittest.TestCase):
             next_playlist_item=("pause_11h00_11h05.mp3", 300, "pause", 1),
         )
 
-        self.assertIn("quelques minutes de pause", conclusion)
+        self.assertIn("pause de cinq minutes", conclusion)
 
 
 class BasicTTSParallelWorkersTest(unittest.TestCase):
@@ -1255,7 +1230,7 @@ class BasicTTSParallelWorkersTest(unittest.TestCase):
 
 
 class FastTTSModeIsolationTest(unittest.TestCase):
-    def test_fast_runtime_fit_uses_parallel_workers_and_exact_cache(self):
+    def test_fast_flag_is_ignored_when_runtime_fit_is_disabled(self):
         cgs._clear_edge_tts_fast_cache_for_tests()
         text = "Une phrase courte pour le cache rapide."
         bloc = _make_bloc(text, target_sec=2700)
@@ -1295,30 +1270,13 @@ class FastTTSModeIsolationTest(unittest.TestCase):
         finally:
             cgs._clear_edge_tts_fast_cache_for_tests()
 
-        self.assertEqual(first[2], "slide_sync_edge_runtime_fit_fast")
-        self.assertEqual(second[2], "slide_sync_edge_runtime_fit_fast")
-        self.assertEqual(len(seen_workers), 1, "Le deuxième appel doit venir du cache exact")
-        self.assertGreater(seen_workers[0], 1)
+        self.assertEqual(first[2], "slide_sync_edge_no_padding")
+        self.assertEqual(second[2], "slide_sync_edge_no_padding")
+        self.assertEqual(len(seen_workers), 2)
+        self.assertEqual(seen_workers, [1, 1])
 
 
 class BasicTTSNoSlidesPipelineRuntimeFitTest(unittest.TestCase):
-    def _fake_conn(self):
-        class Cursor:
-            def execute(self, *_args, **_kwargs):
-                return None
-
-            def fetchall(self):
-                return [(0, 1, "texte source", 2, 1)]
-
-        class Conn:
-            def cursor(self):
-                return Cursor()
-
-            def close(self):
-                return None
-
-        return Conn()
-
     def _patch_common(self, synth_result, uploaded):
         bloc = {
             "bloc_number": 1,
@@ -1347,7 +1305,19 @@ class BasicTTSNoSlidesPipelineRuntimeFitTest(unittest.TestCase):
                     "formation_job_id": 99,
                 },
             ),
-            patch.object(cgs, "get_db_connection", side_effect=self._fake_conn),
+            patch.object(
+                cgs,
+                "list_completed_content_segment_rows",
+                return_value=[{
+                    "id": 1,
+                    "sub_part_index": 0,
+                    "sub_part_name": "Intro",
+                    "passe": 1,
+                    "text_content": "texte source",
+                    "word_count": 2,
+                    "dirty": 1,
+                }],
+            ),
             patch.object(
                 cgs,
                 "_build_course_blocs_from_segments",
@@ -1371,15 +1341,17 @@ class BasicTTSNoSlidesPipelineRuntimeFitTest(unittest.TestCase):
             patch.object(cgs, "_finalize_runtime_fit_carryover_and_clean", return_value=""),
             patch.object(cgs, "_save_course_script_plan"),
             patch.object(cgs, "assert_course_day_word_budget", return_value={"ok": True}),
+            patch.object(cgs, "_save_content_artifact"),
+            patch.object(cgs, "_load_saved_course_script_plan", return_value={}),
         ]
         return patches
 
-    def test_basic_tts_without_slide_sync_uses_runtime_fit_before_upload(self):
+    def test_basic_tts_without_slide_sync_keeps_runtime_fit_disabled(self):
         uploaded = []
         synth_result = (
             _mp3_chunk("OK"),
             2500.0,
-            "slide_sync_edge_runtime_fit",
+            "slide_sync_edge_no_padding",
             [{"kind": "gtts", "duration": 2500.0}],
             [],
             [],
@@ -1387,7 +1359,7 @@ class BasicTTSNoSlidesPipelineRuntimeFitTest(unittest.TestCase):
         )
         patches = self._patch_common(synth_result, uploaded)
 
-        with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5] as synth, patches[6], patches[7], patches[8], patches[9], patch.object(cgs, "_mp3_duration_seconds_no_ffprobe", return_value=2700.0):
+        with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5] as synth, patches[6], patches[7], patches[8], patches[9], patches[10], patches[11], patch.object(cgs, "_mp3_duration_seconds_no_ffprobe", return_value=2700.0):
             result = cgs.generate_audio_from_script(
                 123,
                 force_all=True,
@@ -1401,7 +1373,7 @@ class BasicTTSNoSlidesPipelineRuntimeFitTest(unittest.TestCase):
         self.assertEqual(result["generated"], 1)
         self.assertEqual(len(uploaded), 1)
         synth.assert_called_once()
-        self.assertEqual(synth.call_args.kwargs["runtime_fit"], True)
+        self.assertEqual(synth.call_args.kwargs["runtime_fit"], False)
         self.assertEqual(synth.call_args.args[1], [], "Le mode non-sync doit utiliser des chunks sans slides")
 
     def test_pre_upload_guard_rejects_overlong_basic_tts_audio(self):
@@ -1409,7 +1381,7 @@ class BasicTTSNoSlidesPipelineRuntimeFitTest(unittest.TestCase):
         synth_result = (
             _mp3_chunk("TOO_LONG"),
             3095.0,
-            "slide_sync_edge_runtime_fit",
+            "slide_sync_edge_no_padding",
             [{"kind": "gtts", "duration": 3095.0}],
             [],
             [],
@@ -1417,8 +1389,10 @@ class BasicTTSNoSlidesPipelineRuntimeFitTest(unittest.TestCase):
         )
         patches = self._patch_common(synth_result, uploaded)
 
-        with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6], patches[7], patches[8], patches[9]:
-            with self.assertRaisesRegex(ValueError, "limite de parole"):
+        with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6], patches[7], patches[8], patches[9], patches[10], patches[11], patch.object(
+            cgs, "_mp3_duration_seconds_no_ffprobe", return_value=3095.0
+        ):
+            with self.assertRaisesRegex(ValueError, "dépasse la durée autorisée"):
                 cgs.generate_audio_from_script(
                     123,
                     force_all=True,

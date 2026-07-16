@@ -4,10 +4,13 @@ import unittest
 from unittest.mock import patch
 
 from services.pipeline_queue.contracts import WorkItem
-from services.pipeline_queue.handlers import handle_auto_pilot_work_item
+from services.pipeline_queue.handlers import (
+    handle_auto_pilot_work_item,
+    mark_auto_pilot_dead_letter,
+)
 
 
-def _item():
+def _item(payload=None):
     return WorkItem(
         id="11111111-1111-1111-1111-111111111111",
         pipeline_job_id=42,
@@ -17,7 +20,7 @@ def _item():
         task_type="auto_pilot_tick",
         scope_key="pipeline",
         dedupe_key="run-42:auto:reac",
-        payload={"expected_step": "reac"},
+        payload=dict(payload or {"expected_step": "reac"}),
         status="running",
         priority=0,
         attempt_count=1,
@@ -100,6 +103,30 @@ class PipelineQueueHandlerTest(unittest.TestCase):
             self.assertEqual(kwargs["data"]["fence"], 3)
         self.assertTrue(any(update[1].get("auto_pilot_step") == "done" for update in updates))
 
+    def test_paid_order_is_completed_only_at_terminal_text_step(self):
+        routes_package, observability, _events, _updates = self._modules()
+        completed = []
+        fulfillment = types.ModuleType("services.teacher_order_fulfillment_service")
+        fulfillment.complete_teacher_order_pipeline = (
+            lambda item, job: completed.append((item, job))
+        )
+        item = _item({"expected_step": "reac", "teacher_order_id": 73})
+
+        with patch.dict(
+            sys.modules,
+            {
+                "routes": routes_package,
+                "services.formation_observability_service": observability,
+                "services.teacher_order_fulfillment_service": fulfillment,
+            },
+        ):
+            result = handle_auto_pilot_work_item(item, _Lease())
+
+        self.assertEqual(result.result["status"], "done")
+        self.assertEqual(len(completed), 1)
+        self.assertEqual(completed[0][0], item)
+        self.assertEqual(completed[0][1]["id"], 42)
+
     def test_failure_preserves_step_failed_event_and_reraises(self):
         routes_package, observability, events, _updates = self._modules(
             execute_error=RuntimeError("LLM timeout"),
@@ -152,6 +179,58 @@ class PipelineQueueHandlerTest(unittest.TestCase):
         self.assertTrue(
             any(update[1].get("auto_pilot_step") == "global" for update in updates)
         )
+
+    def test_teacher_order_id_survives_normal_and_reconciled_chains(self):
+        routes_package, observability, _events, _updates = self._modules(
+            next_steps=("reac", "global"),
+        )
+        item = _item({"expected_step": "reac", "teacher_order_id": 73})
+        with patch.dict(
+            sys.modules,
+            {
+                "routes": routes_package,
+                "services.formation_observability_service": observability,
+            },
+        ):
+            result = handle_auto_pilot_work_item(item, _Lease())
+        self.assertEqual(result.next_items[0].payload["teacher_order_id"], 73)
+
+        routes_package, observability, _events, _updates = self._modules(
+            next_steps=("global",),
+        )
+        with patch.dict(
+            sys.modules,
+            {
+                "routes": routes_package,
+                "services.formation_observability_service": observability,
+            },
+        ):
+            result = handle_auto_pilot_work_item(item, _Lease())
+        self.assertEqual(result.next_items[0].payload["teacher_order_id"], 73)
+
+    def test_terminal_auto_pilot_failure_marks_paid_order_retryable(self):
+        calls = []
+        pipeline = types.ModuleType("services.formation_pipeline_service")
+        pipeline.update_job = lambda job_id, **fields: calls.append(
+            ("job", job_id, fields)
+        )
+        fulfillment = types.ModuleType("services.teacher_order_fulfillment_service")
+        fulfillment.fail_teacher_order_pipeline = lambda item, error: calls.append(
+            ("order", item.payload["teacher_order_id"], error)
+        )
+        item = _item({"expected_step": "content", "teacher_order_id": 73})
+
+        with patch.dict(
+            sys.modules,
+            {
+                "services.formation_pipeline_service": pipeline,
+                "services.teacher_order_fulfillment_service": fulfillment,
+            },
+        ):
+            mark_auto_pilot_dead_letter(item, "attempts exhausted")
+
+        self.assertEqual(calls[0][0], "job")
+        self.assertEqual(calls[1], ("order", 73, "attempts exhausted"))
 
 
 if __name__ == "__main__":

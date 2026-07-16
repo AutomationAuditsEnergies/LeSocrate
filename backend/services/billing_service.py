@@ -6,9 +6,10 @@ import hashlib
 import json
 import os
 import re
-from datetime import date, datetime, timezone
+from datetime import datetime, time, timedelta, timezone
 from typing import Any
 
+from config import FRANCE_TZ
 from repositories.billing_repository import (
     apply_stripe_webhook_event,
     attach_checkout_session,
@@ -18,6 +19,7 @@ from repositories.billing_repository import (
     get_order,
     get_reusable_module,
     record_webhook_failure,
+    retry_order_fulfillment,
 )
 
 
@@ -43,6 +45,13 @@ PRODUCTS = {
 }
 
 SERVER_EXEMPT_CENTER_EMAILS = frozenset({"newpiprod@gmail.com"})
+WEEKDAY_IDS = {
+    "lundi": 0,
+    "mardi": 1,
+    "mercredi": 2,
+    "jeudi": 3,
+    "vendredi": 4,
+}
 
 
 def _center_is_exempt(center: dict[str, Any]) -> bool:
@@ -138,6 +147,66 @@ def billing_context(center_account_id: int) -> dict[str, Any]:
     }
 
 
+def _billing_now():
+    return datetime.now(FRANCE_TZ)
+
+
+def _scheduled_audio_preparation_window_hours() -> tuple[float, float, float]:
+    legacy_ready = os.getenv("SCHEDULED_AUDIO_HORIZON_HOURS", "24")
+    try:
+        ready_hours = float(
+            os.getenv("SCHEDULED_AUDIO_READY_HOURS_BEFORE", legacy_ready)
+        )
+        build_buffer_hours = float(
+            os.getenv("SCHEDULED_AUDIO_BUILD_BUFFER_HOURS", "2")
+        )
+    except (TypeError, ValueError) as exc:
+        raise BillingError(
+            "Le délai de préparation audio est invalide.",
+            status_code=503,
+        ) from exc
+    if ready_hours <= 0 or build_buffer_hours < 0:
+        raise BillingError(
+            "La cible de disponibilité audio doit être positive et sa marge ne peut pas être négative.",
+            status_code=503,
+        )
+    return ready_hours, build_buffer_hours, ready_hours + build_buffer_hours
+
+
+def _first_schedule_occurrence_at_nine(start_date, weekdays):
+    selected = {WEEKDAY_IDS[day] for day in weekdays}
+    cursor_date = start_date
+    for day_offset in range(7):
+        candidate = cursor_date + timedelta(days=day_offset)
+        if candidate.weekday() in selected:
+            return FRANCE_TZ.localize(datetime.combine(candidate, time(9, 0)))
+    raise BillingError("Aucun premier jour de formation n'a pu être calculé.")
+
+
+def _assert_schedule_has_audio_preparation_horizon(start_date, weekdays):
+    first_occurrence = _first_schedule_occurrence_at_nine(start_date, weekdays)
+    ready_hours, build_buffer_hours, minimum_hours = (
+        _scheduled_audio_preparation_window_hours()
+    )
+    now = _billing_now()
+    if first_occurrence <= now + timedelta(hours=minimum_hours):
+        label = first_occurrence.strftime("%d/%m/%Y à %H:%M")
+        ready_label = int(ready_hours) if ready_hours.is_integer() else ready_hours
+        buffer_label = (
+            int(build_buffer_hours)
+            if build_buffer_hours.is_integer()
+            else build_buffer_hours
+        )
+        minimum_label = (
+            int(minimum_hours) if minimum_hours.is_integer() else minimum_hours
+        )
+        raise BillingError(
+            f"Planning impossible à préparer : la première journée tomberait le {label}. "
+            f"Elle doit être à plus de {minimum_label}h : audio disponible H-{ready_label} "
+            f"avec {buffer_label}h de marge de fabrication."
+        )
+
+
 def _normalize_schedule(schedule: Any, *, total_training_days: int) -> dict[str, Any]:
     if not isinstance(schedule, dict):
         raise BillingError("Le planning de la formation est requis.")
@@ -160,11 +229,24 @@ def _normalize_schedule(schedule: Any, *, total_training_days: int) -> dict[str,
         parsed_date = datetime.strptime(start_date, "%Y-%m-%d").date()
     except ValueError as exc:
         raise BillingError("La date de début est invalide.") from exc
-    if parsed_date < date.today():
+    if parsed_date < _billing_now().date():
         raise BillingError("La date de début ne peut pas être passée.")
     start_time = str(schedule.get("start_time") or "").strip()
     if not re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", start_time):
         raise BillingError("L’heure des cours est invalide.")
+    start_time_policy = str(
+        os.getenv("COURSE_START_TIME_POLICY") or "fixed_09"
+    ).strip().lower()
+    if start_time_policy not in {"fixed_09", "configured"}:
+        raise BillingError(
+            "La politique d’heure de cours est invalide.",
+            status_code=503,
+        )
+    if start_time_policy == "fixed_09" and start_time != "09:00":
+        raise BillingError(
+            "Les journées de formation commencent obligatoirement à 09:00."
+        )
+    _assert_schedule_has_audio_preparation_horizon(parsed_date, weekdays)
     return {
         "total_training_days": int(total_training_days),
         "weekly_course_count": weekly_count,
@@ -377,3 +459,23 @@ def get_center_order(public_id: str, center_account_id: int) -> dict[str, Any]:
     if not order:
         raise BillingError("Commande introuvable.", status_code=404)
     return order
+
+
+def retry_center_order(public_id: str, center_account_id: int) -> dict[str, Any]:
+    """Requeue a paid failed fulfillment without creating a second charge."""
+    order = get_center_order(public_id, center_account_id)
+    if order.get("payment_status") not in {"paid", "not_required"}:
+        raise BillingError("Cette commande n’est pas autorisée au paiement.", status_code=409)
+    if order.get("fulfillment_status") == "fulfilled":
+        return order
+    if order.get("fulfillment_status") in {"queued", "running"}:
+        return order
+    if order.get("fulfillment_status") != "failed":
+        raise BillingError("Cette commande ne peut pas être relancée.", status_code=409)
+
+    retried = retry_order_fulfillment(int(order["id"]), int(center_account_id))
+    if not retried:
+        raise BillingError("Commande introuvable.", status_code=404)
+    if retried.get("fulfillment_status") not in {"queued", "running", "fulfilled"}:
+        raise BillingError("La préparation n’a pas pu être remise en file.", status_code=409)
+    return retried

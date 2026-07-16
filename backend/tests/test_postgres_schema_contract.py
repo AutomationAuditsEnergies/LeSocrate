@@ -88,6 +88,14 @@ class PostgresSchemaContractTest(unittest.TestCase):
         self.assertIn("ON cours_folders(formation_job_id, name)", schema)
         self.assertIn("WHERE formation_job_id IS NOT NULL", schema)
 
+    def test_reminder_delivery_join_has_a_covering_lookup_index(self):
+        schema = (BACKEND_DIR / "database" / "postgres_schema.sql").read_text(encoding="utf-8")
+        self.assertIn("idx_course_reminder_deliveries_lookup", PIPELINE_REQUIRED_INDEXES)
+        self.assertIn(
+            "ON course_reminder_deliveries(session_id, rule_id, recipient_id)",
+            schema,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

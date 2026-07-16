@@ -158,6 +158,7 @@ def init_database(_recovered_from_corruption: bool = False):
                 audio_generation_next_retry_at TEXT,
                 audio_job_id INTEGER,
                 audio_folder_id INTEGER,
+                audio_storage_prefix TEXT,
                 postponed_from TEXT,
                 postponed_at TEXT,
                 postponement_count INTEGER NOT NULL DEFAULT 0,
@@ -188,6 +189,7 @@ def init_database(_recovered_from_corruption: bool = False):
             "audio_generation_next_retry_at": "TEXT",
             "audio_job_id": "INTEGER",
             "audio_folder_id": "INTEGER",
+            "audio_storage_prefix": "TEXT",
             "postponed_from": "TEXT",
             "postponed_at": "TEXT",
             "postponement_count": "INTEGER NOT NULL DEFAULT 0",
@@ -240,7 +242,78 @@ def init_database(_recovered_from_corruption: bool = False):
         cursor.execute(
             "CREATE INDEX IF NOT EXISTS idx_course_reminder_recipients_platform ON course_reminder_recipients(platform_id)"
         )
-        logger.info("✅ Table course_reminder_recipients créée/vérifiée")
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS course_reminder_rules (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                platform_id INTEGER NOT NULL,
+                system_key TEXT,
+                name TEXT NOT NULL,
+                trigger_mode TEXT NOT NULL,
+                days_before INTEGER,
+                minutes_before INTEGER,
+                local_time TEXT,
+                subject_template TEXT NOT NULL,
+                content_template TEXT NOT NULL,
+                recipient_scope TEXT NOT NULL DEFAULT 'all',
+                is_active INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(platform_id, system_key)
+            )
+            """
+        )
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS course_reminder_rule_recipients (
+                rule_id INTEGER NOT NULL,
+                recipient_id INTEGER NOT NULL,
+                PRIMARY KEY(rule_id, recipient_id),
+                FOREIGN KEY(rule_id) REFERENCES course_reminder_rules(id) ON DELETE CASCADE,
+                FOREIGN KEY(recipient_id) REFERENCES course_reminder_recipients(id) ON DELETE CASCADE
+            )
+            """
+        )
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS course_reminder_deliveries (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                platform_id INTEGER NOT NULL,
+                session_id INTEGER NOT NULL,
+                rule_id INTEGER NOT NULL,
+                recipient_id INTEGER NOT NULL,
+                recipient_hash TEXT NOT NULL,
+                due_at TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                claimed_at TEXT,
+                lease_expires_at TEXT,
+                sent_at TEXT,
+                attempts INTEGER NOT NULL DEFAULT 0,
+                max_attempts INTEGER NOT NULL DEFAULT 5,
+                next_retry_at TEXT,
+                last_error TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(session_id, rule_id, recipient_hash),
+                FOREIGN KEY(session_id) REFERENCES course_sessions(id) ON DELETE CASCADE,
+                FOREIGN KEY(rule_id) REFERENCES course_reminder_rules(id) ON DELETE CASCADE,
+                FOREIGN KEY(recipient_id) REFERENCES course_reminder_recipients(id) ON DELETE CASCADE
+            )
+            """
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_course_reminder_rules_platform "
+            "ON course_reminder_rules(platform_id, is_active)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_course_reminder_deliveries_due "
+            "ON course_reminder_deliveries(status, due_at, claimed_at)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_course_reminder_deliveries_lookup "
+            "ON course_reminder_deliveries(session_id, rule_id, recipient_id)"
+        )
+        logger.info("✅ Tables de rappels de cours créées/vérifiées")
 
         # Insérer une heure par défaut si la table est vide
         cursor.execute("SELECT COUNT(*) FROM cours_config")

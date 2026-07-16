@@ -11,9 +11,11 @@ from services.billing_service import (
     create_teacher_order,
     get_center_order,
     process_stripe_webhook,
+    retry_center_order,
     serialize_order,
 )
 from utils.logger import get_logger
+from services.pipeline_worker_health import get_pipeline_worker_health
 
 
 logger = get_logger(__name__)
@@ -44,6 +46,14 @@ def get_billing_catalog():
         return jsonify({"success": True, **billing_context(center_id)}), 200
     except BillingError as exc:
         return _error(exc)
+
+
+@billing_bp.get("/api/hr/system/worker-health")
+def get_worker_health():
+    if not _center_id():
+        return jsonify({"success": False, "error": "Compte centre requis"}), 403
+    health = get_pipeline_worker_health()
+    return jsonify({"success": True, "worker": health}), (200 if health["healthy"] else 503)
 
 
 @billing_bp.post("/api/hr/teacher-orders")
@@ -78,6 +88,31 @@ def get_teacher_order(public_id):
         return jsonify({"success": True, "order": serialize_order(order, include_project=True)}), 200
     except BillingError as exc:
         return _error(exc)
+
+
+@billing_bp.post("/api/hr/teacher-orders/<uuid:public_id>/retry")
+def retry_teacher_order(public_id):
+    center_id = _center_id()
+    if not center_id:
+        return jsonify({"success": False, "error": "Compte centre requis"}), 403
+    if not postgres_enabled():
+        return jsonify({"success": False, "error": "PostgreSQL requis"}), 503
+    try:
+        order = retry_center_order(str(public_id), center_id)
+        return jsonify({
+            "success": True,
+            "order": serialize_order(order, include_project=True),
+            "next_action": "track",
+        }), 202
+    except BillingError as exc:
+        return _error(exc)
+    except Exception:
+        logger.exception(
+            "AI_TEACHER_ORDER_RETRY_FAILED center_id=%s order_id=%s",
+            center_id,
+            public_id,
+        )
+        return jsonify({"success": False, "error": "Impossible de relancer la préparation."}), 500
 
 
 @billing_bp.post("/api/billing/stripe/webhook")

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
-import { apiFetch, getPlatformId, setPlatformId } from '../api'
+import { apiFetch, getPlatformId, getStudentLoginPath, setPlatformId } from '../api'
 
 export default function Attente() {
   const navigate = useNavigate()
@@ -29,14 +29,21 @@ export default function Attente() {
 
     const fetchStatus = async () => {
       try {
-        const res = await apiFetch('/api/cours-status')
+        const res = await apiFetch('/api/video/status')
         const data = await res.json()
+        if (!res.ok || !data.authenticated) {
+          navigate(getStudentLoginPath(), { replace: true })
+          return
+        }
         if (data.status === 'waiting' && data.temps_restant > 0) {
           setTimeLeft(Math.ceil(data.temps_restant))
         } else if (data.status === 'playing') {
           const platformId = pParam || getPlatformId()
           navigate(platformId && platformId !== '1' ? `/video?p=${platformId}` : '/video', { replace: true })
           return
+        } else if (data.status === 'finished') {
+          const platformId = pParam || getPlatformId()
+          navigate(platformId && platformId !== '1' ? `/video?p=${platformId}` : '/video', { replace: true })
         } else {
           setTimeLeft(0)
         }

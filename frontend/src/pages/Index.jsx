@@ -6,6 +6,7 @@ export default function Index({ preloadCourseRoutes, preloadAttenteRoute, preloa
   const navigate = useNavigate()
   const location = useLocation()
   const [searchParams] = useSearchParams()
+  const invitationToken = searchParams.get('invite') || ''
   const [submitting, setSubmitting] = useState(false)
   const [formMessage, setFormMessage] = useState(null)
 
@@ -57,8 +58,13 @@ export default function Index({ preloadCourseRoutes, preloadAttenteRoute, preloa
     const prenom = String(formData.get('prenom') || '').trim()
 
     try {
-      if (!nom || !prenom || !password) {
-        setFormMessage({ type: 'error', text: 'Nom, prénom et mot de passe sont requis.' })
+      if (!nom || !prenom || (!invitationToken && !password)) {
+        setFormMessage({
+          type: 'error',
+          text: invitationToken
+            ? 'Votre nom et votre prénom sont requis.'
+            : 'Nom, prénom et code secret sont requis.',
+        })
         return
       }
 
@@ -70,6 +76,7 @@ export default function Index({ preloadCourseRoutes, preloadAttenteRoute, preloa
           nom,
           prenom,
           password,
+          ...(invitationToken ? { invitation_token: invitationToken } : {}),
           platform_id: parseInt(localStorage.getItem('platform_id') || '1'),
         }),
       })
@@ -134,7 +141,9 @@ export default function Index({ preloadCourseRoutes, preloadAttenteRoute, preloa
                 Connexion
               </h2>
               <p className="mt-3 text-sm leading-6 text-slate-600">
-                Identifiez-vous avec le mot de passe reçu par email pour accéder au cours.
+                {invitationToken
+                  ? 'Votre lien d’invitation est reconnu. Indiquez simplement votre nom et votre prénom.'
+                  : 'Indiquez votre nom, votre prénom et le code secret reçu par e-mail.'}
               </p>
             </div>
 
@@ -181,19 +190,21 @@ export default function Index({ preloadCourseRoutes, preloadAttenteRoute, preloa
                 </div>
               </div>
 
-              <div>
-                <label className="mb-1.5 block text-sm font-medium text-slate-800" htmlFor="password">
-                  Mot de passe
-                </label>
-                <input
-                  id="password"
-                  name="password"
-                  type="password"
-                  autoComplete="current-password"
-                  placeholder="Mot de passe reçu par email"
-                  className="h-12 w-full rounded-lg border border-slate-300 bg-white px-4 text-sm text-slate-950 outline-none transition placeholder:text-slate-500 focus:border-violet-500 focus:ring-2 focus:ring-violet-500/25"
-                />
-              </div>
+              {!invitationToken && (
+                <div>
+                  <label className="mb-1.5 block text-sm font-medium text-slate-800" htmlFor="password">
+                    Code secret de la séance
+                  </label>
+                  <input
+                    id="password"
+                    name="password"
+                    type="password"
+                    autoComplete="current-password"
+                    placeholder="Code reçu par e-mail"
+                    className="h-12 w-full rounded-lg border border-slate-300 bg-white px-4 text-sm text-slate-950 outline-none transition placeholder:text-slate-500 focus:border-violet-500 focus:ring-2 focus:ring-violet-500/25"
+                  />
+                </div>
+              )}
 
               <button
                 type="submit"

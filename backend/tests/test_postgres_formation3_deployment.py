@@ -29,12 +29,37 @@ class Formation3PurePostgresDeploymentTest(unittest.TestCase):
     def test_formation3_runs_the_durable_course_scheduler(self):
         for setting in (
             "COURSE_SCHEDULER_ENABLED=1",
-            "COURSE_SCHEDULER_INTERVAL_SECONDS=300",
+            "COURSE_SCHEDULER_INTERVAL_SECONDS=30",
+            "COURSE_REMINDER_DELIVERY_BATCH_SIZE=100",
+            "COURSE_REMINDER_MAX_BATCHES_PER_TICK=20",
+            "COURSE_REMINDER_MAX_ATTEMPTS=5",
+            "REMINDER_WEBHOOK_MAX_CONCURRENCY=16",
+            "COURSE_REMINDER_SMTP_TIMEOUT_SECONDS=25",
+            "COURSE_REMINDER_IMAP_TIMEOUT_SECONDS=25",
+            "COURSE_SESSION_PASSWORD_EARLY_HOURS=8784",
+            "COURSE_SESSION_PASSWORD_LENGTH=8",
+            "COURSE_INVITATION_TOKEN_MAX_AGE_SECONDS=32000000",
             "COURSE_SCHEDULE_CHANGE_CUTOFF_HOURS=72",
+            "COURSE_START_TIME_POLICY=fixed_09",
             "SCHEDULED_AUDIO_HORIZON_HOURS=24",
+            "SCHEDULED_AUDIO_READY_HOURS_BEFORE=24",
+            "SCHEDULED_AUDIO_BUILD_BUFFER_HOURS=2",
+            "SCHEDULED_AUDIO_BATCH_SIZE=50",
+            "SCHEDULED_AUDIO_MAX_CONCURRENCY=1",
             "SCHEDULED_AUDIO_MAX_AUTO_ATTEMPTS=4",
+            "ALLOW_LEGACY_BULK_AUDIO=0",
+            "TEACHER_ASSET_GENERATOR_VERSION=pipeline-v1",
+            "STUDENT_AUDIO_DELIVERY_MODE=redirect_sas",
         ):
             self.assertIn(setting, self.workflow)
+
+    def test_deployment_requires_a_real_reminder_transport(self):
+        self.assertIn("REMINDER_DELIVERY_READY", self.workflow)
+        self.assertIn("REMINDER_DELIVERY_MISSING", self.workflow)
+        self.assertIn(
+            "REMINDER_WEBHOOK_URL+REMINDER_WEBHOOK_KEY|EMAIL_USERNAME+EMAIL_PASSWORD",
+            self.workflow,
+        )
 
     def test_deployment_waits_for_scm_after_configuration_restart(self):
         configure_index = self.workflow.index("- name: Configure SaaS Postgres copy")
@@ -43,6 +68,16 @@ class Formation3PurePostgresDeploymentTest(unittest.TestCase):
         self.assertLess(configure_index, wait_index)
         self.assertLess(wait_index, deploy_index)
         self.assertIn("sleep 45", self.workflow[wait_index:deploy_index])
+
+    def test_deployment_fails_when_the_deployed_app_never_becomes_ready(self):
+        deploy_index = self.workflow.index("- name: Deploy to Azure Web App")
+        readiness_index = self.workflow.index(
+            "- name: Verify deployed application readiness"
+        )
+        self.assertLess(deploy_index, readiness_index)
+        readiness = self.workflow[readiness_index:]
+        self.assertIn('"https://${app_host}/readyz"', readiness)
+        self.assertIn("DEPLOYMENT_NOT_READY", readiness)
 
 
 if __name__ == "__main__":

@@ -94,9 +94,68 @@ def _job(**overrides):
 class PipelineOrderTest(unittest.TestCase):
     def test_scheduled_audio_is_not_completed_after_partial_publication(self):
         source = inspect.getsource(fr.start_folder_audio_generation)
-        publication_guard = source.index("if publish_errors or not published_files")
+        publication_guard = source.index("if publish_errors or missing_files")
         completion = source.index("complete_audio_generation_session")
         self.assertLess(publication_guard, completion)
+
+    def test_reused_schedule_publishes_source_audio_to_target_platform(self):
+        source = inspect.getsource(fr.start_folder_audio_generation)
+        self.assertIn("publish_platform_id", source)
+        self.assertIn('source_platform_id=int(job["platform_id"])', source)
+
+    def test_scheduled_capacity_is_bounded_per_process(self):
+        previous_capacity = fr._SCHEDULED_AUDIO_CAPACITY
+        previous_limit = fr._SCHEDULED_AUDIO_CAPACITY_LIMIT
+        try:
+            fr._SCHEDULED_AUDIO_CAPACITY = None
+            fr._SCHEDULED_AUDIO_CAPACITY_LIMIT = None
+            with patch.dict(os.environ, {"SCHEDULED_AUDIO_MAX_CONCURRENCY": "1"}):
+                self.assertTrue(fr._try_acquire_scheduled_audio_capacity())
+                self.assertFalse(fr._try_acquire_scheduled_audio_capacity())
+                fr._release_scheduled_audio_capacity()
+                self.assertTrue(fr._try_acquire_scheduled_audio_capacity())
+                fr._release_scheduled_audio_capacity()
+        finally:
+            fr._SCHEDULED_AUDIO_CAPACITY = previous_capacity
+            fr._SCHEDULED_AUDIO_CAPACITY_LIMIT = previous_limit
+
+    def test_scheduled_module_is_validated_only_when_all_days_are_complete(self):
+        pending = {
+            "ready": False,
+            "required_session_count": 2,
+            "session_count": 2,
+            "completed_count": 1,
+        }
+        with (
+            patch.object(fr, "get_job", return_value={"platform_id": 12, "nb_days": 2}),
+            patch(
+                "repositories.course_schedule_repository.get_scheduled_audio_completion_readiness",
+                return_value=pending,
+            ),
+            patch.object(fr, "_finalize_audio_ready_state") as finalize,
+            patch.object(fr, "update_job") as update,
+        ):
+            result = fr._finalize_scheduled_audio_module_if_ready(99, "fish_audio")
+
+        self.assertFalse(result["finalized"])
+        finalize.assert_not_called()
+        update.assert_not_called()
+
+        ready = {**pending, "ready": True, "completed_count": 2}
+        with (
+            patch.object(fr, "get_job", return_value={"platform_id": 12, "nb_days": 2}),
+            patch(
+                "repositories.course_schedule_repository.get_scheduled_audio_completion_readiness",
+                return_value=ready,
+            ),
+            patch.object(fr, "_finalize_audio_ready_state", return_value={"module_status": "validated"}) as finalize,
+            patch.object(fr, "update_job") as update,
+        ):
+            result = fr._finalize_scheduled_audio_module_if_ready(99, "fish_audio")
+
+        self.assertTrue(result["finalized"])
+        finalize.assert_called_once_with(99, "fish_audio")
+        update.assert_called_once_with(99, status="audio_completed", error_message=None)
 
     def test_scheduled_audio_progress_fails_closed_when_claim_is_lost(self):
         state = {"error": None}
@@ -291,6 +350,47 @@ class PipelineOrderTest(unittest.TestCase):
         self.assertIsNone(next_step)
         finalize.assert_called_once_with(99)
         update.assert_called_once_with(99, status="text_ready", error_message=None)
+
+    def test_text_finalization_failure_is_retried_instead_of_reporting_ready(self):
+        job = _job(
+            platform_id=1,
+            status="tts_launched",
+            auto_pilot_post_review_docs_done=1,
+        )
+        with patch.object(fr, "get_job", return_value=job), patch.object(
+            fps,
+            "get_expected_course_folders",
+            return_value={"folder_ids": [10]},
+        ), patch(
+            "repositories.pipeline_repository.list_content_completion_rows_for_folders",
+            return_value=[{
+                "folder_id": 10,
+                "status": "completed",
+                "total_words": 5000,
+                "completed_segments": 7,
+            }],
+        ), patch(
+            "repositories.pipeline_repository.count_segments_pending_review_for_folders",
+            return_value=0,
+        ), patch(
+            "repositories.pipeline_repository.list_completed_content_jobs_for_folders",
+            return_value=[{"folder_id": 10, "content_job_id": 20}],
+        ), patch(
+            "repositories.pipeline_repository.get_latest_script_slide_deck_row",
+            return_value={"slides_json": '[{"title": "Introduction"}]'},
+        ), patch.object(
+            cgs,
+            "_current_compliance_review_signature",
+            return_value="review-sig",
+        ), patch.object(
+            fr,
+            "_finalize_text_ready_state",
+            side_effect=RuntimeError("module envelope unavailable"),
+        ), patch.object(fr, "update_job") as update:
+            with self.assertRaisesRegex(RuntimeError, "module envelope"):
+                fr._determine_next_ap_step(99)
+
+        update.assert_not_called()
 
     def test_audio_gate_requires_local_compliance(self):
         db_path = _make_review_db(humanized=True, reviewed=False)

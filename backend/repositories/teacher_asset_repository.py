@@ -10,6 +10,28 @@ from database.postgres import get_postgres_connection
 
 _POSTGRES_BACKENDS = {"postgres", "postgresql", "supabase"}
 
+CANONICAL_AUDIO_PLAYLIST_PATHS = frozenset({
+    "playlist/cours_9h00_9h45.mp3",
+    "playlist/qa_9h45_9h55.mp3",
+    "playlist/pause_9h55_10h05.mp3",
+    "playlist/cours_10h05_10h50.mp3",
+    "playlist/qa_10h50_11h00.mp3",
+    "playlist/pause_11h00_11h05.mp3",
+    "playlist/cours_11h05_12h00.mp3",
+    "playlist/qa_12h00_12h10.mp3",
+    "playlist/pause_12h10_12h20.mp3",
+    "playlist/pause_midi_13h15_14h45.mp3",
+    "playlist/cours_12h20_13h05.mp3",
+    "playlist/qa_13h05_13h15.mp3",
+    "playlist/cours_14h45_15h45.mp3",
+    "playlist/qa_15h45_16h00.mp3",
+    "playlist/cours_16h00_17h00.mp3",
+    "playlist/qa_17h00_17h15.mp3",
+    "playlist/pause_17h15_17h25.mp3",
+    "playlist/cours_17h25_18h15.mp3",
+    "playlist/qa_18h15_18h30.mp3",
+})
+
 
 def _uses_postgres() -> bool:
     return str(PIPELINE_DATABASE_BACKEND or "").strip().lower() in _POSTGRES_BACKENDS
@@ -122,6 +144,93 @@ def module_asset_count(module_id: int) -> int:
             )
             row = cur.fetchone()
             return int(row["total"] or 0)
+
+
+def canonical_audio_manifest_complete(
+    audio_assets: Iterable[dict[str, Any]],
+    required_folder_count: int,
+) -> bool:
+    """Require the exact 19-file runtime playlist for every training day."""
+    covered_by_folder: dict[int, set[str]] = {}
+    for asset in audio_assets or ():
+        source_folder_id = asset.get("source_folder_id")
+        logical_key = str(asset.get("logical_key") or "")
+        if source_folder_id is None or not logical_key:
+            continue
+        relative_path = logical_key.split(":", 3)[-1].lstrip("/")
+        if relative_path not in CANONICAL_AUDIO_PLAYLIST_PATHS:
+            continue
+        covered_by_folder.setdefault(int(source_folder_id), set()).add(relative_path)
+    complete_folders = sum(
+        1
+        for paths in covered_by_folder.values()
+        if CANONICAL_AUDIO_PLAYLIST_PATHS.issubset(paths)
+    )
+    return complete_folders >= max(1, int(required_folder_count or 1))
+
+
+def find_canonical_reusable_module(canonical_fingerprint: str) -> dict[str, Any] | None:
+    """Resolve one globally shareable asset set without exposing its tenant.
+
+    This repository method is backend-internal. Its projection deliberately
+    omits ``center_account_id`` and all source-centre presentation data. Only a
+    validated, explicitly shareable module with a ready audio manifest can be
+    selected.
+    """
+    fingerprint = str(canonical_fingerprint or "").strip().lower()
+    if not _uses_postgres() or not fingerprint:
+        return None
+    with get_postgres_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT m.id AS module_id,
+                       m.canonical_fingerprint,
+                       m.canonical_generator_version,
+                       m.voice_type,
+                       m.version,
+                       j.nb_days,
+                       (
+                           SELECT COUNT(*)
+                           FROM formation_module_assets ready_asset
+                           WHERE ready_asset.module_id = m.id
+                             AND ready_asset.status = 'ready'
+                       ) AS asset_count,
+                       (
+                           SELECT COALESCE(
+                               jsonb_agg(jsonb_build_object(
+                                   'source_folder_id', audio_asset.source_folder_id,
+                                   'logical_key', audio_asset.logical_key
+                               )),
+                               '[]'::jsonb
+                           )
+                           FROM formation_module_assets audio_asset
+                           WHERE audio_asset.module_id = m.id
+                             AND audio_asset.status = 'ready'
+                             AND audio_asset.asset_kind = 'audio'
+                       ) AS audio_assets
+                FROM formation_modules m
+                JOIN formation_pipeline_jobs j ON j.id = m.source_pipeline_job_id
+                WHERE m.canonical_fingerprint = %s
+                  AND m.canonical_reuse_allowed = TRUE
+                  AND m.status = 'validated'
+                  AND m.archived_at IS NULL
+                  AND m.voice_type != 'mock'
+                ORDER BY m.validated_at ASC NULLS LAST, m.id ASC
+                LIMIT 20
+                """,
+                (fingerprint,),
+            )
+            for raw_row in cur.fetchall():
+                row = dict(raw_row)
+                if not canonical_audio_manifest_complete(
+                    row.pop("audio_assets", []) or [],
+                    int(row.get("nb_days") or 1),
+                ):
+                    continue
+                row.pop("nb_days", None)
+                return row
+            return None
 
 
 def resolve_folder_asset_origin(folder_id: int) -> dict[str, Any] | None:

@@ -453,6 +453,7 @@ def list_course_sessions(platform_id: int, *, limit: int = 50) -> list[dict[str,
         audio_generation_status, audio_generation_started_at,
         audio_generation_completed_at, audio_generation_attempts,
         audio_generation_next_retry_at, audio_job_id, audio_folder_id,
+        audio_storage_prefix,
         postponed_from, postponed_at, postponement_count,
         created_at, updated_at
     """
@@ -498,6 +499,7 @@ def get_audio_generation_session(platform_id: int, session_id: int) -> dict[str,
                cs.status, cs.audio_generation_status,
                cs.audio_generation_started_at, cs.audio_generation_completed_at,
                cs.audio_generation_attempts, cs.audio_generation_next_retry_at,
+               cs.audio_storage_prefix,
                pc.name,
                COALESCE(
                    pc.source_formation_id,
@@ -526,6 +528,84 @@ def get_audio_generation_session(platform_id: int, session_id: int) -> dict[str,
         return dict(row) if row else None
     finally:
         conn.close()
+
+
+def get_scheduled_audio_completion_readiness(
+    platform_id: int,
+    formation_job_id: int,
+    *,
+    required_session_count: int,
+    completing_session_id: int | None = None,
+) -> dict[str, Any]:
+    """Return whether every required occurrence owns a completed audio asset.
+
+    Course-session status is deliberately not restricted to ``planned`` and
+    ``active``: the room lifecycle can mark an occurrence ``completed`` after
+    the course while its immutable audio bookkeeping must still count. A
+    cancelled occurrence is the sole exclusion.
+    """
+    postgres = schedule_store_is_postgres()
+    ph = "%s" if postgres else "?"
+    completing_sql = ""
+    params: list[Any] = [int(formation_job_id)]
+    if completing_session_id is not None:
+        completing_sql = f"""
+                    OR (
+                        id = {ph}
+                        AND audio_generation_status IN ('running', 'processing')
+                        AND audio_job_id = {ph}
+                        AND audio_folder_id IS NOT NULL
+                    )
+        """
+        params.extend([int(completing_session_id), int(formation_job_id)])
+    query = f"""
+        SELECT
+            COUNT(*) AS session_count,
+            COALESCE(SUM(
+                CASE
+                    WHEN (
+                        audio_generation_status = 'completed'
+                        AND audio_generation_completed_at IS NOT NULL
+                        AND audio_job_id = {ph}
+                        AND audio_folder_id IS NOT NULL
+                    )
+                    {completing_sql}
+                    THEN 1 ELSE 0
+                END
+            ), 0) AS completed_count
+        FROM course_sessions
+        WHERE platform_id = {ph}
+          AND status != 'cancelled'
+    """
+    params.append(int(platform_id))
+    if postgres:
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, tuple(params))
+                row = dict(cur.fetchone())
+    else:
+        conn = get_db_connection()
+        try:
+            conn.row_factory = __import__("sqlite3").Row
+            cursor = conn.cursor()
+            cursor.execute(query, tuple(params))
+            row = dict(cursor.fetchone())
+        finally:
+            conn.close()
+
+    required = max(1, int(required_session_count or 1))
+    session_count = int(row.get("session_count") or 0)
+    completed_count = int(row.get("completed_count") or 0)
+    ready = session_count >= required and completed_count >= required
+    return {
+        "ready": ready,
+        "platform_id": int(platform_id),
+        "formation_job_id": int(formation_job_id),
+        "required_session_count": required,
+        "session_count": session_count,
+        "completed_count": completed_count,
+        "remaining_count": max(0, required - completed_count),
+    }
 
 
 def get_course_session_postponement_by_key(platform_id: int, idempotency_key: str | None) -> dict[str, Any] | None:
@@ -666,6 +746,10 @@ def apply_course_session_postponement(
                     if cur.rowcount != 1:
                         raise ValueError("Le planning a changé. Rechargez-le avant de confirmer")
                 cur.execute(
+                    "DELETE FROM course_reminder_deliveries WHERE session_id = ANY(%s)",
+                    ([int(item["id"]) for item in normalized_changes],),
+                )
+                cur.execute(
                     """
                     SELECT scheduled_at
                     FROM course_sessions
@@ -723,6 +807,7 @@ def apply_course_session_postponement(
     try:
         cursor = conn.cursor()
         cursor.execute("BEGIN IMMEDIATE")
+        _ensure_sqlite_reminder_tables(cursor)
         if clean_key:
             cursor.execute(
                 """
@@ -775,6 +860,11 @@ def apply_course_session_postponement(
             )
             if cursor.rowcount != 1:
                 raise ValueError("Le planning a changé. Rechargez-le avant de confirmer")
+        placeholders = ",".join("?" for _ in normalized_changes)
+        cursor.execute(
+            f"DELETE FROM course_reminder_deliveries WHERE session_id IN ({placeholders})",
+            [int(item["id"]) for item in normalized_changes],
+        )
         target_change = normalized_changes[0]
         cursor.execute(
             """
@@ -1307,6 +1397,81 @@ def _ensure_sqlite_reminder_recipient_table(cursor) -> None:
     )
 
 
+def _ensure_sqlite_reminder_tables(cursor) -> None:
+    _ensure_sqlite_reminder_recipient_table(cursor)
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS course_reminder_rules (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            platform_id INTEGER NOT NULL,
+            system_key TEXT,
+            name TEXT NOT NULL,
+            trigger_mode TEXT NOT NULL,
+            days_before INTEGER,
+            minutes_before INTEGER,
+            local_time TEXT,
+            subject_template TEXT NOT NULL,
+            content_template TEXT NOT NULL,
+            recipient_scope TEXT NOT NULL DEFAULT 'all',
+            is_active INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(platform_id, system_key)
+        )
+        """
+    )
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS course_reminder_rule_recipients (
+            rule_id INTEGER NOT NULL,
+            recipient_id INTEGER NOT NULL,
+            PRIMARY KEY(rule_id, recipient_id),
+            FOREIGN KEY(rule_id) REFERENCES course_reminder_rules(id) ON DELETE CASCADE,
+            FOREIGN KEY(recipient_id) REFERENCES course_reminder_recipients(id) ON DELETE CASCADE
+        )
+        """
+    )
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS course_reminder_deliveries (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            platform_id INTEGER NOT NULL,
+            session_id INTEGER NOT NULL,
+            rule_id INTEGER NOT NULL,
+            recipient_id INTEGER NOT NULL,
+            recipient_hash TEXT NOT NULL,
+            due_at TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending',
+            claimed_at TEXT,
+            lease_expires_at TEXT,
+            sent_at TEXT,
+            attempts INTEGER NOT NULL DEFAULT 0,
+            max_attempts INTEGER NOT NULL DEFAULT 5,
+            next_retry_at TEXT,
+            last_error TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(session_id, rule_id, recipient_hash),
+            FOREIGN KEY(session_id) REFERENCES course_sessions(id) ON DELETE CASCADE,
+            FOREIGN KEY(rule_id) REFERENCES course_reminder_rules(id) ON DELETE CASCADE,
+            FOREIGN KEY(recipient_id) REFERENCES course_reminder_recipients(id) ON DELETE CASCADE
+        )
+        """
+    )
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_course_reminder_rules_platform "
+        "ON course_reminder_rules(platform_id, is_active)"
+    )
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_course_reminder_deliveries_due "
+        "ON course_reminder_deliveries(status, due_at, claimed_at)"
+    )
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_course_reminder_deliveries_lookup "
+        "ON course_reminder_deliveries(session_id, rule_id, recipient_id)"
+    )
+
+
 def list_explicit_course_reminder_recipients(platform_id: int) -> list[dict[str, Any]]:
     if schedule_store_is_postgres():
         with get_postgres_connection() as conn:
@@ -1356,6 +1521,8 @@ def add_explicit_course_reminder_recipients(
     *,
     created_at,
 ) -> list[dict[str, Any]]:
+    if len(emails or []) > 1000:
+        raise ValueError("1000 emails maximum par lot")
     normalized = sorted({str(email or "").strip().lower() for email in emails if email})
     if schedule_store_is_postgres():
         with get_postgres_connection() as conn:
@@ -1406,7 +1573,16 @@ def delete_explicit_course_reminder_recipient(platform_id: int, recipient_id: in
     conn = get_db_connection()
     try:
         cursor = conn.cursor()
-        _ensure_sqlite_reminder_recipient_table(cursor)
+        _ensure_sqlite_reminder_tables(cursor)
+        cursor.execute("BEGIN IMMEDIATE")
+        cursor.execute(
+            "DELETE FROM course_reminder_deliveries WHERE recipient_id = ? AND platform_id = ?",
+            (int(recipient_id), int(platform_id)),
+        )
+        cursor.execute(
+            "DELETE FROM course_reminder_rule_recipients WHERE recipient_id = ?",
+            (int(recipient_id),),
+        )
         cursor.execute(
             "DELETE FROM course_reminder_recipients WHERE id = ? AND platform_id = ?",
             (int(recipient_id), int(platform_id)),
@@ -1414,6 +1590,903 @@ def delete_explicit_course_reminder_recipient(platform_id: int, recipient_id: in
         changed = cursor.rowcount == 1
         conn.commit()
         return changed
+    finally:
+        conn.close()
+
+
+DEFAULT_COURSE_REMINDER_RULES = (
+    {
+        "system_key": "previous_evening",
+        "name": "La veille au soir",
+        "trigger_mode": "local_day_time",
+        "days_before": 1,
+        "minutes_before": None,
+        "subject_template": "Votre formation commence demain",
+        "content_template": (
+            "Votre prochaine journée de formation aura lieu le {date} à {time}. "
+            "Utilisez le bouton ci-dessous pour rejoindre la classe."
+        ),
+    },
+    {
+        "system_key": "five_minutes_before",
+        "name": "5 minutes avant",
+        "trigger_mode": "relative_minutes",
+        "days_before": None,
+        "minutes_before": 5,
+        "subject_template": "Le cours commence dans 5 minutes !",
+        "content_template": (
+            "Votre cours démarre à {time}. Connectez-vous maintenant pour ne rien manquer."
+        ),
+    },
+)
+
+
+def ensure_default_course_reminder_rules(
+    platform_id: int,
+    *,
+    previous_evening_hour: int = 18,
+    now=None,
+) -> None:
+    """Seed the two historical reminders without overwriting center edits."""
+    now = now or datetime.now(FRANCE_TZ)
+    local_time = f"{max(0, min(int(previous_evening_hour), 23)):02d}:00"
+    rows = []
+    for rule in DEFAULT_COURSE_REMINDER_RULES:
+        rows.append(
+            (
+                int(platform_id),
+                rule["system_key"],
+                rule["name"],
+                rule["trigger_mode"],
+                rule["days_before"],
+                rule["minutes_before"],
+                local_time if rule["trigger_mode"] == "local_day_time" else None,
+                rule["subject_template"],
+                rule["content_template"],
+                "all",
+                now,
+                now,
+            )
+        )
+    if schedule_store_is_postgres():
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                cur.executemany(
+                    """
+                    INSERT INTO course_reminder_rules (
+                        platform_id, system_key, name, trigger_mode, days_before,
+                        minutes_before, local_time, subject_template, content_template,
+                        recipient_scope, is_active, created_at, updated_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, TRUE, %s, %s)
+                    ON CONFLICT (platform_id, system_key) WHERE system_key IS NOT NULL
+                    DO NOTHING
+                    """,
+                    rows,
+                )
+        return
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        _ensure_sqlite_reminder_tables(cursor)
+        cursor.executemany(
+            """
+            INSERT OR IGNORE INTO course_reminder_rules (
+                platform_id, system_key, name, trigger_mode, days_before,
+                minutes_before, local_time, subject_template, content_template,
+                recipient_scope, is_active, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+            """,
+            [
+                (*row[:-2], _sqlite_datetime(row[-2]), _sqlite_datetime(row[-1]))
+                for row in rows
+            ],
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def ensure_default_course_reminder_rules_for_schedules(
+    *,
+    previous_evening_hour: int = 18,
+    now=None,
+    sqlite_cursor=None,
+) -> None:
+    """Bulk-seed defaults for every scheduled platform in constant queries."""
+    now = now or datetime.now(FRANCE_TZ)
+    local_time = f"{max(0, min(int(previous_evening_hour), 23)):02d}:00"
+    if schedule_store_is_postgres():
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                for rule in DEFAULT_COURSE_REMINDER_RULES:
+                    cur.execute(
+                        """
+                        INSERT INTO course_reminder_rules (
+                            platform_id, system_key, name, trigger_mode, days_before,
+                            minutes_before, local_time, subject_template, content_template,
+                            recipient_scope, is_active, created_at, updated_at
+                        )
+                        SELECT scheduled.platform_id, %s, %s, %s, %s, %s, %s,
+                               %s, %s, 'all', TRUE, %s, %s
+                        FROM (
+                            SELECT DISTINCT platform_id
+                            FROM course_sessions
+                            WHERE status IN ('planned', 'active')
+                        ) scheduled
+                        WHERE TRUE
+                        ON CONFLICT (platform_id, system_key) WHERE system_key IS NOT NULL
+                        DO NOTHING
+                        """,
+                        (
+                            rule["system_key"], rule["name"], rule["trigger_mode"],
+                            rule["days_before"], rule["minutes_before"],
+                            local_time if rule["trigger_mode"] == "local_day_time" else None,
+                            rule["subject_template"], rule["content_template"], now, now,
+                        ),
+                    )
+        return
+
+    own_connection = sqlite_cursor is None
+    conn = get_db_connection() if own_connection else None
+    cursor = conn.cursor() if conn is not None else sqlite_cursor
+    try:
+        _ensure_sqlite_reminder_tables(cursor)
+        for rule in DEFAULT_COURSE_REMINDER_RULES:
+            cursor.execute(
+                """
+                INSERT OR IGNORE INTO course_reminder_rules (
+                    platform_id, system_key, name, trigger_mode, days_before,
+                    minutes_before, local_time, subject_template, content_template,
+                    recipient_scope, is_active, created_at, updated_at
+                )
+                SELECT scheduled.platform_id, ?, ?, ?, ?, ?, ?, ?, ?, 'all', 1, ?, ?
+                FROM (
+                    SELECT DISTINCT platform_id
+                    FROM course_sessions
+                    WHERE status IN ('planned', 'active')
+                ) scheduled
+                """,
+                (
+                    rule["system_key"], rule["name"], rule["trigger_mode"],
+                    rule["days_before"], rule["minutes_before"],
+                    local_time if rule["trigger_mode"] == "local_day_time" else None,
+                    rule["subject_template"], rule["content_template"],
+                    _sqlite_datetime(now), _sqlite_datetime(now),
+                ),
+            )
+        if conn is not None:
+            conn.commit()
+    finally:
+        if conn is not None:
+            conn.close()
+
+
+def _normalize_rule_row(row: dict[str, Any]) -> dict[str, Any]:
+    result = dict(row)
+    result["id"] = int(result["id"])
+    result["platform_id"] = int(result["platform_id"])
+    result["is_active"] = bool(result.get("is_active"))
+    local_time = result.get("local_time")
+    if local_time is not None and hasattr(local_time, "strftime"):
+        result["local_time"] = local_time.strftime("%H:%M")
+    elif local_time:
+        result["local_time"] = str(local_time)[:5]
+    result["created_at"] = format_schedule_datetime(result.get("created_at"))
+    result["updated_at"] = format_schedule_datetime(result.get("updated_at"))
+    result["recipient_ids"] = []
+    return result
+
+
+def list_course_reminder_rules(platform_id: int) -> list[dict[str, Any]]:
+    columns = (
+        "id, platform_id, system_key, name, trigger_mode, days_before, minutes_before, "
+        "local_time, subject_template, content_template, recipient_scope, is_active, "
+        "created_at, updated_at"
+    )
+    if schedule_store_is_postgres():
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"SELECT {columns} FROM course_reminder_rules "
+                    "WHERE platform_id = %s ORDER BY created_at, id",
+                    (int(platform_id),),
+                )
+                rules = [_normalize_rule_row(dict(row)) for row in cur.fetchall()]
+                if rules:
+                    by_id = {rule["id"]: rule for rule in rules}
+                    cur.execute(
+                        """
+                        SELECT rr.rule_id, rr.recipient_id
+                        FROM course_reminder_rule_recipients rr
+                        JOIN course_reminder_rules r ON r.id = rr.rule_id
+                        WHERE r.platform_id = %s
+                        ORDER BY rr.recipient_id
+                        """,
+                        (int(platform_id),),
+                    )
+                    for row in cur.fetchall():
+                        if int(row["rule_id"]) in by_id:
+                            by_id[int(row["rule_id"])]["recipient_ids"].append(int(row["recipient_id"]))
+                return rules
+    conn = get_db_connection()
+    try:
+        conn.row_factory = __import__("sqlite3").Row
+        cursor = conn.cursor()
+        _ensure_sqlite_reminder_tables(cursor)
+        cursor.execute(
+            f"SELECT {columns} FROM course_reminder_rules "
+            "WHERE platform_id = ? ORDER BY created_at, id",
+            (int(platform_id),),
+        )
+        rules = [_normalize_rule_row(dict(row)) for row in cursor.fetchall()]
+        by_id = {rule["id"]: rule for rule in rules}
+        if rules:
+            cursor.execute(
+                """
+                SELECT rr.rule_id, rr.recipient_id
+                FROM course_reminder_rule_recipients rr
+                JOIN course_reminder_rules r ON r.id = rr.rule_id
+                WHERE r.platform_id = ? ORDER BY rr.recipient_id
+                """,
+                (int(platform_id),),
+            )
+            for row in cursor.fetchall():
+                if int(row[0]) in by_id:
+                    by_id[int(row[0])]["recipient_ids"].append(int(row[1]))
+        return rules
+    finally:
+        conn.close()
+
+
+def save_course_reminder_rule(
+    platform_id: int,
+    *,
+    rule_id: int | None,
+    name: str,
+    trigger_mode: str,
+    days_before: int | None,
+    minutes_before: int | None,
+    local_time: str | None,
+    subject_template: str,
+    content_template: str,
+    recipient_scope: str,
+    recipient_ids: list[int],
+    is_active: bool,
+    now,
+) -> dict[str, Any] | None:
+    """Create/update one rule and atomically replace its explicit audience."""
+    normalized_ids = sorted({int(value) for value in recipient_ids or []})
+    values = (
+        str(name), str(trigger_mode), days_before, minutes_before, local_time,
+        str(subject_template), str(content_template), str(recipient_scope), bool(is_active), now,
+    )
+    if schedule_store_is_postgres():
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                if normalized_ids:
+                    cur.execute(
+                        "SELECT id FROM course_reminder_recipients WHERE platform_id = %s AND id = ANY(%s)",
+                        (int(platform_id), normalized_ids),
+                    )
+                    if {int(row["id"]) for row in cur.fetchall()} != set(normalized_ids):
+                        raise ValueError("Un destinataire sélectionné n'appartient pas à cette plateforme")
+                if rule_id is None:
+                    cur.execute(
+                        """
+                        INSERT INTO course_reminder_rules (
+                            platform_id, name, trigger_mode, days_before, minutes_before,
+                            local_time, subject_template, content_template, recipient_scope,
+                            is_active, created_at, updated_at
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        RETURNING id
+                        """,
+                        (int(platform_id), *values[:-1], now, now),
+                    )
+                else:
+                    cur.execute(
+                        """
+                        UPDATE course_reminder_rules
+                        SET name = %s, trigger_mode = %s, days_before = %s,
+                            minutes_before = %s, local_time = %s, subject_template = %s,
+                            content_template = %s, recipient_scope = %s, is_active = %s,
+                            updated_at = %s
+                        WHERE id = %s AND platform_id = %s
+                        RETURNING id
+                        """,
+                        (*values, int(rule_id), int(platform_id)),
+                    )
+                saved = cur.fetchone()
+                if not saved:
+                    return None
+                saved_id = int(saved["id"])
+                cur.execute("DELETE FROM course_reminder_rule_recipients WHERE rule_id = %s", (saved_id,))
+                if recipient_scope == "selected_explicit" and normalized_ids:
+                    cur.executemany(
+                        "INSERT INTO course_reminder_rule_recipients (rule_id, recipient_id) VALUES (%s, %s)",
+                        [(saved_id, recipient_id) for recipient_id in normalized_ids],
+                    )
+                # A changed unsent occurrence must be recalculated from the
+                # new trigger/audience/template on the next scheduler tick.
+                cur.execute(
+                    "DELETE FROM course_reminder_deliveries WHERE rule_id = %s AND status != 'sent'",
+                    (saved_id,),
+                )
+        return next((rule for rule in list_course_reminder_rules(platform_id) if rule["id"] == saved_id), None)
+
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        _ensure_sqlite_reminder_tables(cursor)
+        cursor.execute("BEGIN IMMEDIATE")
+        if normalized_ids:
+            placeholders = ",".join("?" for _ in normalized_ids)
+            cursor.execute(
+                f"SELECT id FROM course_reminder_recipients WHERE platform_id = ? AND id IN ({placeholders})",
+                (int(platform_id), *normalized_ids),
+            )
+            if {int(row[0]) for row in cursor.fetchall()} != set(normalized_ids):
+                raise ValueError("Un destinataire sélectionné n'appartient pas à cette plateforme")
+        sqlite_values = (*values[:8], int(bool(is_active)), _sqlite_datetime(now))
+        if rule_id is None:
+            cursor.execute(
+                """
+                INSERT INTO course_reminder_rules (
+                    platform_id, name, trigger_mode, days_before, minutes_before,
+                    local_time, subject_template, content_template, recipient_scope,
+                    is_active, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (int(platform_id), *sqlite_values[:-1], _sqlite_datetime(now), _sqlite_datetime(now)),
+            )
+            saved_id = int(cursor.lastrowid)
+        else:
+            cursor.execute(
+                """
+                UPDATE course_reminder_rules
+                SET name = ?, trigger_mode = ?, days_before = ?, minutes_before = ?,
+                    local_time = ?, subject_template = ?, content_template = ?,
+                    recipient_scope = ?, is_active = ?, updated_at = ?
+                WHERE id = ? AND platform_id = ?
+                """,
+                (*sqlite_values, int(rule_id), int(platform_id)),
+            )
+            if cursor.rowcount != 1:
+                conn.rollback()
+                return None
+            saved_id = int(rule_id)
+        cursor.execute("DELETE FROM course_reminder_rule_recipients WHERE rule_id = ?", (saved_id,))
+        if recipient_scope == "selected_explicit" and normalized_ids:
+            cursor.executemany(
+                "INSERT INTO course_reminder_rule_recipients (rule_id, recipient_id) VALUES (?, ?)",
+                [(saved_id, recipient_id) for recipient_id in normalized_ids],
+            )
+        cursor.execute(
+            "DELETE FROM course_reminder_deliveries WHERE rule_id = ? AND status != 'sent'",
+            (saved_id,),
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+    return next((rule for rule in list_course_reminder_rules(platform_id) if rule["id"] == saved_id), None)
+
+
+def delete_course_reminder_rule(platform_id: int, rule_id: int) -> bool:
+    """Delete custom rules; built-in defaults can instead be deactivated."""
+    if schedule_store_is_postgres():
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "DELETE FROM course_reminder_rules WHERE id = %s AND platform_id = %s AND system_key IS NULL",
+                    (int(rule_id), int(platform_id)),
+                )
+                return cur.rowcount == 1
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        _ensure_sqlite_reminder_tables(cursor)
+        cursor.execute("BEGIN IMMEDIATE")
+        cursor.execute(
+            "SELECT id FROM course_reminder_rules WHERE id = ? AND platform_id = ? AND system_key IS NULL",
+            (int(rule_id), int(platform_id)),
+        )
+        exists = cursor.fetchone() is not None
+        if exists:
+            cursor.execute("DELETE FROM course_reminder_deliveries WHERE rule_id = ?", (int(rule_id),))
+            cursor.execute("DELETE FROM course_reminder_rule_recipients WHERE rule_id = ?", (int(rule_id),))
+            cursor.execute("DELETE FROM course_reminder_rules WHERE id = ?", (int(rule_id),))
+        changed = exists
+        conn.commit()
+        return changed
+    finally:
+        conn.close()
+
+
+def list_due_reminder_delivery_candidates(
+    *,
+    now,
+    active_hours: float = 12.0,
+    limit: int = 100,
+    sqlite_cursor=None,
+) -> list[dict[str, Any]]:
+    """Return only claimable recipient deliveries ordered by their real due_at.
+
+    Computing the rule occurrence in SQL avoids starving a far-away course
+    whose J-365 reminder is due behind many nearer courses with J-1 rules.
+    Sent, dead-lettered, backoff and live-lease rows never consume the batch.
+    """
+    safe_limit = max(1, min(int(limit or 100), 1000))
+    if schedule_store_is_postgres():
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    WITH occurrences AS (
+                        SELECT
+                            cs.id AS session_id,
+                            cs.platform_id,
+                            cs.session_index,
+                            cs.scheduled_at,
+                            cs.session_password,
+                            r.id AS rule_id,
+                            r.system_key,
+                            r.name AS rule_name,
+                            r.trigger_mode,
+                            r.days_before,
+                            r.minutes_before,
+                            r.local_time,
+                            r.subject_template,
+                            r.content_template,
+                            r.recipient_scope,
+                            CASE
+                                WHEN r.trigger_mode = 'relative_minutes' THEN
+                                    cs.scheduled_at - make_interval(mins => COALESCE(r.minutes_before, 0))
+                                ELSE
+                                    (
+                                        (
+                                            (cs.scheduled_at AT TIME ZONE 'Europe/Paris')::date
+                                            - COALESCE(r.days_before, 0)
+                                        ) + COALESCE(r.local_time, TIME '18:00')
+                                    ) AT TIME ZONE 'Europe/Paris'
+                            END AS due_at
+                        FROM course_sessions cs
+                        JOIN course_reminder_rules r
+                          ON r.platform_id = cs.platform_id AND r.is_active = TRUE
+                        WHERE cs.status IN ('planned', 'active')
+                          AND cs.scheduled_at + (%(active_hours)s * INTERVAL '1 hour') >= %(now)s
+                          AND (
+                            COALESCE(r.system_key, '') != 'previous_evening'
+                            OR cs.reminder_previous_evening_sent_at IS NULL
+                          )
+                          AND (
+                            COALESCE(r.system_key, '') != 'five_minutes_before'
+                            OR cs.reminder_5min_sent_at IS NULL
+                          )
+                    ),
+                    due_occurrences AS MATERIALIZED (
+                        SELECT *
+                        FROM occurrences
+                        WHERE due_at <= %(now)s
+                          AND %(now)s < scheduled_at
+                    ),
+                    candidates AS (
+                        SELECT
+                            occurrence.*,
+                            rec.id AS recipient_id,
+                            rec.email,
+                            d.id AS existing_delivery_id,
+                            d.status AS delivery_status,
+                            d.attempts AS delivery_attempts,
+                            d.max_attempts AS delivery_max_attempts,
+                            d.next_retry_at,
+                            d.lease_expires_at
+                        FROM due_occurrences occurrence
+                        JOIN course_reminder_recipients rec
+                          ON rec.platform_id = occurrence.platform_id
+                        LEFT JOIN course_reminder_rule_recipients selected
+                          ON selected.rule_id = occurrence.rule_id
+                         AND selected.recipient_id = rec.id
+                        LEFT JOIN course_reminder_deliveries d
+                          ON d.session_id = occurrence.session_id
+                         AND d.rule_id = occurrence.rule_id
+                         AND d.recipient_id = rec.id
+                        WHERE (
+                            occurrence.recipient_scope = 'all'
+                            OR selected.recipient_id IS NOT NULL
+                        )
+                    )
+                    SELECT *
+                    FROM candidates
+                    WHERE (
+                        existing_delivery_id IS NULL
+                        OR (
+                          COALESCE(delivery_attempts, 0) < COALESCE(delivery_max_attempts, 5)
+                          AND (
+                            (delivery_status IN ('pending', 'retry_scheduled')
+                             AND (next_retry_at IS NULL OR next_retry_at <= %(now)s))
+                            OR
+                            (delivery_status = 'claimed'
+                             AND (lease_expires_at IS NULL OR lease_expires_at <= %(now)s))
+                          )
+                        )
+                      )
+                    ORDER BY due_at ASC, session_id ASC, rule_id ASC, recipient_id ASC
+                    LIMIT %(limit)s
+                    """,
+                    {
+                        "now": now,
+                        "active_hours": float(active_hours),
+                        "limit": safe_limit,
+                    },
+                )
+                return [dict(row) for row in cur.fetchall()]
+
+    own_connection = sqlite_cursor is None
+    conn = get_db_connection() if own_connection else None
+    cursor = conn.cursor() if conn is not None else sqlite_cursor
+    try:
+        if own_connection:
+            _ensure_sqlite_reminder_tables(cursor)
+        now_value = _sqlite_datetime(now)
+        cursor.execute(
+            """
+            WITH occurrences AS (
+                SELECT
+                    cs.id AS session_id,
+                    cs.platform_id,
+                    cs.session_index,
+                    cs.scheduled_at,
+                    cs.session_password,
+                    r.id AS rule_id,
+                    r.system_key,
+                    r.name AS rule_name,
+                    r.trigger_mode,
+                    r.days_before,
+                    r.minutes_before,
+                    r.local_time,
+                    r.subject_template,
+                    r.content_template,
+                    r.recipient_scope,
+                    CASE
+                        WHEN r.trigger_mode = 'relative_minutes' THEN
+                            datetime(cs.scheduled_at, printf('-%d minutes', COALESCE(r.minutes_before, 0)))
+                        ELSE
+                            datetime(
+                                date(cs.scheduled_at, printf('-%d days', COALESCE(r.days_before, 0)))
+                                || ' ' || COALESCE(substr(r.local_time, 1, 5), '18:00')
+                            )
+                    END AS due_at
+                FROM course_sessions cs
+                JOIN course_reminder_rules r
+                  ON r.platform_id = cs.platform_id AND r.is_active = 1
+                WHERE cs.status IN ('planned', 'active')
+                  AND datetime(cs.scheduled_at, printf('+%f hours', ?)) >= ?
+                  AND (
+                    COALESCE(r.system_key, '') != 'previous_evening'
+                    OR cs.reminder_previous_evening_sent_at IS NULL
+                  )
+                  AND (
+                    COALESCE(r.system_key, '') != 'five_minutes_before'
+                    OR cs.reminder_5min_sent_at IS NULL
+                  )
+            ),
+            due_occurrences AS MATERIALIZED (
+                SELECT *
+                FROM occurrences
+                WHERE due_at <= ?
+                  AND ? < scheduled_at
+            ),
+            candidates AS (
+                SELECT
+                    occurrence.*,
+                    rec.id AS recipient_id,
+                    rec.email,
+                    d.id AS existing_delivery_id,
+                    d.status AS delivery_status,
+                    d.attempts AS delivery_attempts,
+                    d.max_attempts AS delivery_max_attempts,
+                    d.next_retry_at,
+                    d.lease_expires_at
+                FROM due_occurrences occurrence
+                JOIN course_reminder_recipients rec
+                  ON rec.platform_id = occurrence.platform_id
+                LEFT JOIN course_reminder_rule_recipients selected
+                  ON selected.rule_id = occurrence.rule_id
+                 AND selected.recipient_id = rec.id
+                LEFT JOIN course_reminder_deliveries d
+                  ON d.session_id = occurrence.session_id
+                 AND d.rule_id = occurrence.rule_id
+                 AND d.recipient_id = rec.id
+                WHERE (
+                    occurrence.recipient_scope = 'all'
+                    OR selected.recipient_id IS NOT NULL
+                )
+            )
+            SELECT *
+            FROM candidates
+            WHERE (
+                existing_delivery_id IS NULL
+                OR (
+                  COALESCE(delivery_attempts, 0) < COALESCE(delivery_max_attempts, 5)
+                  AND (
+                    (delivery_status IN ('pending', 'retry_scheduled')
+                     AND (next_retry_at IS NULL OR next_retry_at <= ?))
+                    OR
+                    (delivery_status = 'claimed'
+                     AND (lease_expires_at IS NULL OR lease_expires_at <= ?))
+                  )
+                )
+              )
+            ORDER BY due_at ASC, session_id ASC, rule_id ASC, recipient_id ASC
+            LIMIT ?
+            """,
+            (
+                float(active_hours), now_value, now_value, now_value,
+                now_value, now_value, safe_limit,
+            ),
+        )
+        columns = [description[0] for description in cursor.description]
+        return [dict(zip(columns, row)) for row in cursor.fetchall()]
+    finally:
+        if conn is not None:
+            conn.close()
+
+
+def claim_course_reminder_delivery(
+    *,
+    platform_id: int,
+    session_id: int,
+    rule_id: int,
+    recipient_id: int,
+    recipient_hash: str,
+    due_at,
+    claimed_at,
+    lease_seconds: int = 900,
+    max_attempts: int = 5,
+) -> int | None:
+    lease_expires_at = claimed_at + timedelta(seconds=max(60, int(lease_seconds)))
+    max_attempts = max(1, min(int(max_attempts), 20))
+    if schedule_store_is_postgres():
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO course_reminder_deliveries (
+                        platform_id, session_id, rule_id, recipient_id, recipient_hash, due_at,
+                        status, claimed_at, lease_expires_at, attempts, max_attempts,
+                        created_at, updated_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s, 'claimed', %s, %s, 1, %s, %s, %s)
+                    ON CONFLICT (session_id, rule_id, recipient_hash) DO NOTHING
+                    RETURNING id
+                    """,
+                    (
+                        int(platform_id), int(session_id), int(rule_id), int(recipient_id),
+                        recipient_hash, due_at, claimed_at, lease_expires_at, max_attempts,
+                        claimed_at, claimed_at,
+                    ),
+                )
+                inserted = cur.fetchone()
+                if inserted:
+                    return int(inserted["id"])
+                cur.execute(
+                    """
+                    UPDATE course_reminder_deliveries
+                    SET status = 'claimed', claimed_at = %s, lease_expires_at = %s,
+                        recipient_id = %s, due_at = %s, attempts = attempts + 1,
+                        last_error = NULL, next_retry_at = NULL, updated_at = %s
+                    WHERE session_id = %s AND rule_id = %s AND recipient_hash = %s
+                      AND status IN ('pending', 'retry_scheduled', 'claimed')
+                      AND attempts < max_attempts
+                      AND (next_retry_at IS NULL OR next_retry_at <= %s)
+                      AND (status != 'claimed' OR lease_expires_at IS NULL OR lease_expires_at <= %s)
+                    RETURNING id
+                    """,
+                    (
+                        claimed_at, lease_expires_at, int(recipient_id), due_at, claimed_at,
+                        int(session_id), int(rule_id), recipient_hash, claimed_at, claimed_at,
+                    ),
+                )
+                row = cur.fetchone()
+                return int(row["id"]) if row else None
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        _ensure_sqlite_reminder_tables(cursor)
+        cursor.execute("BEGIN IMMEDIATE")
+        cursor.execute(
+            """
+            SELECT id, status, lease_expires_at, next_retry_at, attempts, max_attempts
+            FROM course_reminder_deliveries
+            WHERE session_id = ? AND rule_id = ? AND recipient_hash = ?
+            """,
+            (int(session_id), int(rule_id), recipient_hash),
+        )
+        row = cursor.fetchone()
+        claimed_value = _sqlite_datetime(claimed_at)
+        if not row:
+            cursor.execute(
+                """
+                INSERT INTO course_reminder_deliveries (
+                    platform_id, session_id, rule_id, recipient_id, recipient_hash, due_at,
+                    status, claimed_at, lease_expires_at, attempts, max_attempts,
+                    created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, 'claimed', ?, ?, 1, ?, ?, ?)
+                """,
+                (
+                    int(platform_id), int(session_id), int(rule_id), int(recipient_id),
+                    recipient_hash, _sqlite_datetime(due_at), claimed_value,
+                    _sqlite_datetime(lease_expires_at), max_attempts, claimed_value, claimed_value,
+                ),
+            )
+            delivery_id = int(cursor.lastrowid)
+        elif (
+            row[1] in {"sent", "dead_lettered"}
+            or int(row[4] or 0) >= int(row[5] or max_attempts)
+            or (row[1] == "claimed" and row[2] and row[2] > claimed_value)
+            or (row[3] and row[3] > claimed_value)
+        ):
+            conn.commit()
+            return None
+        else:
+            delivery_id = int(row[0])
+            cursor.execute(
+                """
+                UPDATE course_reminder_deliveries
+                SET status = 'claimed', claimed_at = ?, lease_expires_at = ?,
+                    recipient_id = ?, due_at = ?, attempts = attempts + 1,
+                    last_error = NULL, next_retry_at = NULL, updated_at = ? WHERE id = ?
+                """,
+                (
+                    claimed_value, _sqlite_datetime(lease_expires_at), int(recipient_id),
+                    _sqlite_datetime(due_at), claimed_value, delivery_id,
+                ),
+            )
+        conn.commit()
+        return delivery_id
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def complete_course_reminder_delivery(delivery_id: int, *, claimed_at, sent_at) -> bool:
+    if schedule_store_is_postgres():
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE course_reminder_deliveries
+                    SET status = 'sent', sent_at = %s, claimed_at = NULL,
+                        lease_expires_at = NULL, next_retry_at = NULL,
+                        last_error = NULL, updated_at = %s
+                    WHERE id = %s AND status = 'claimed' AND claimed_at = %s
+                    """,
+                    (sent_at, sent_at, int(delivery_id), claimed_at),
+                )
+                return cur.rowcount == 1
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        sent_value = _sqlite_datetime(sent_at)
+        cursor.execute(
+            """
+            UPDATE course_reminder_deliveries
+            SET status = 'sent', sent_at = ?, claimed_at = NULL,
+                lease_expires_at = NULL, next_retry_at = NULL,
+                last_error = NULL, updated_at = ?
+            WHERE id = ? AND status = 'claimed' AND claimed_at = ?
+            """,
+            (sent_value, sent_value, int(delivery_id), _sqlite_datetime(claimed_at)),
+        )
+        changed = cursor.rowcount == 1
+        conn.commit()
+        return changed
+    finally:
+        conn.close()
+
+
+def release_course_reminder_delivery(delivery_id: int, *, claimed_at, error: str | None) -> bool:
+    clean_error = str(error or "Erreur d'envoi")[:1000]
+    now = datetime.now(FRANCE_TZ)
+    try:
+        retry_base = max(10, int(os.getenv("COURSE_REMINDER_RETRY_BASE_SECONDS", "60")))
+    except (TypeError, ValueError):
+        retry_base = 60
+    if schedule_store_is_postgres():
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT attempts, max_attempts
+                    FROM course_reminder_deliveries
+                    WHERE id = %s AND status = 'claimed' AND claimed_at = %s
+                    FOR UPDATE
+                    """,
+                    (int(delivery_id), claimed_at),
+                )
+                row = cur.fetchone()
+                if not row:
+                    return False
+                attempts = int(row["attempts"] or 0)
+                terminal = attempts >= int(row["max_attempts"] or 5)
+                delay = min(3600, retry_base * (2 ** max(0, attempts - 1)))
+                next_retry_at = None if terminal else now + timedelta(seconds=delay)
+                cur.execute(
+                    """
+                    UPDATE course_reminder_deliveries
+                    SET status = %s, claimed_at = NULL, lease_expires_at = NULL,
+                        next_retry_at = %s, last_error = %s, updated_at = %s
+                    WHERE id = %s AND status = 'claimed' AND claimed_at = %s
+                    """,
+                    (
+                        "dead_lettered" if terminal else "retry_scheduled",
+                        next_retry_at, clean_error, now, int(delivery_id), claimed_at,
+                    ),
+                )
+                return cur.rowcount == 1
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT attempts, max_attempts FROM course_reminder_deliveries
+            WHERE id = ? AND status = 'claimed' AND claimed_at = ?
+            """,
+            (int(delivery_id), _sqlite_datetime(claimed_at)),
+        )
+        row = cursor.fetchone()
+        if not row:
+            return False
+        attempts = int(row[0] or 0)
+        terminal = attempts >= int(row[1] or 5)
+        delay = min(3600, retry_base * (2 ** max(0, attempts - 1)))
+        next_retry_at = None if terminal else now + timedelta(seconds=delay)
+        cursor.execute(
+            """
+            UPDATE course_reminder_deliveries
+            SET status = ?, claimed_at = NULL, lease_expires_at = NULL,
+                next_retry_at = ?, last_error = ?, updated_at = ?
+            WHERE id = ? AND status = 'claimed' AND claimed_at = ?
+            """,
+            (
+                "dead_lettered" if terminal else "retry_scheduled",
+                _sqlite_datetime(next_retry_at) if next_retry_at else None,
+                clean_error, _sqlite_datetime(now), int(delivery_id), _sqlite_datetime(claimed_at),
+            ),
+        )
+        changed = cursor.rowcount == 1
+        conn.commit()
+        return changed
+    finally:
+        conn.close()
+
+
+def get_course_reminder_delivery_recipient(delivery_id: int) -> dict[str, Any] | None:
+    """Resolve a persisted delivery to its recipient in one indexed lookup."""
+    query = """
+        SELECT d.id, d.platform_id, d.session_id, d.rule_id, d.status,
+               d.attempts, d.max_attempts, r.id AS recipient_id, r.email
+        FROM course_reminder_deliveries d
+        JOIN course_reminder_recipients r ON r.id = d.recipient_id
+        WHERE d.id = {placeholder}
+    """
+    if schedule_store_is_postgres():
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query.format(placeholder="%s"), (int(delivery_id),))
+                row = cur.fetchone()
+                return dict(row) if row else None
+    conn = get_db_connection()
+    try:
+        conn.row_factory = __import__("sqlite3").Row
+        cursor = conn.cursor()
+        _ensure_sqlite_reminder_tables(cursor)
+        cursor.execute(query.format(placeholder="?"), (int(delivery_id),))
+        row = cursor.fetchone()
+        return dict(row) if row else None
     finally:
         conn.close()
 
@@ -1505,6 +2578,68 @@ def list_session_passwords_for_window(
             ),
         )
         return [str(row[0]) for row in cursor.fetchall() if row[0]]
+    finally:
+        if conn is not None:
+            conn.close()
+
+
+def list_course_session_credentials_for_window(
+    platform_id: int,
+    *,
+    lower_bound,
+    upper_bound,
+    sqlite_cursor=None,
+) -> list[dict[str, Any]]:
+    """Return occurrence-scoped credentials so auth can bind a student token."""
+    columns = "id, platform_id, scheduled_at, status, session_password"
+    if schedule_store_is_postgres():
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    SELECT {columns}
+                    FROM course_sessions
+                    WHERE platform_id = %s
+                      AND status IN ('planned', 'active')
+                      AND scheduled_at BETWEEN %s AND %s
+                      AND session_password IS NOT NULL
+                      AND session_password != ''
+                    ORDER BY scheduled_at ASC, id ASC
+                    """,
+                    (int(platform_id), lower_bound, upper_bound),
+                )
+                return [dict(row) for row in cur.fetchall()]
+    own_connection = sqlite_cursor is None
+    conn = get_db_connection() if own_connection else None
+    cursor = conn.cursor() if conn is not None else sqlite_cursor
+    try:
+        cursor.execute(
+            f"""
+            SELECT {columns}
+            FROM course_sessions
+            WHERE platform_id = ?
+              AND status IN ('planned', 'active')
+              AND scheduled_at BETWEEN ? AND ?
+              AND session_password IS NOT NULL
+              AND session_password != ''
+            ORDER BY scheduled_at ASC, id ASC
+            """,
+            (
+                int(platform_id),
+                _sqlite_datetime(lower_bound),
+                _sqlite_datetime(upper_bound),
+            ),
+        )
+        return [
+            {
+                "id": int(row[0]),
+                "platform_id": int(row[1]),
+                "scheduled_at": row[2],
+                "status": row[3],
+                "session_password": row[4],
+            }
+            for row in cursor.fetchall()
+        ]
     finally:
         if conn is not None:
             conn.close()
@@ -1684,9 +2819,17 @@ def claim_audio_generation_session(
     started_at,
     stale_started_before=None,
 ) -> bool:
+    storage_prefix = f"course-sessions/{int(session_id)}"
     if schedule_store_is_postgres():
         stale_sql = ""
-        params: list[Any] = [started_at, job_id, folder_id, started_at, session_id]
+        params: list[Any] = [
+            started_at,
+            job_id,
+            folder_id,
+            storage_prefix,
+            started_at,
+            session_id,
+        ]
         if stale_started_before is not None:
             stale_sql = """
                 OR (
@@ -1720,6 +2863,7 @@ def claim_audio_generation_session(
                         audio_generation_next_retry_at = NULL,
                         audio_job_id = %s,
                         audio_folder_id = %s,
+                        audio_storage_prefix = %s,
                         updated_at = %s
                     WHERE id = %s
                       AND status IN ('planned', 'active')
@@ -1739,7 +2883,14 @@ def claim_audio_generation_session(
 
     stale_sql = ""
     started_value = _sqlite_datetime(started_at)
-    params = [started_value, job_id, folder_id, started_value, session_id]
+    params = [
+        started_value,
+        job_id,
+        folder_id,
+        storage_prefix,
+        started_value,
+        session_id,
+    ]
     if stale_started_before is not None:
         stale_sql = """
             OR (
@@ -1763,6 +2914,7 @@ def claim_audio_generation_session(
                 audio_generation_next_retry_at = NULL,
                 audio_job_id = ?,
                 audio_folder_id = ?,
+                audio_storage_prefix = ?,
                 updated_at = ?
             WHERE id = ?
               AND status IN ('planned', 'active')

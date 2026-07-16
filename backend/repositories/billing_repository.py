@@ -17,10 +17,54 @@ def _enqueue_fulfillment_in_transaction(cur, order: dict[str, Any]) -> dict[str,
     """Persist the fulfillment job and its order state in the caller transaction."""
     if order.get("fulfillment_status") in {"queued", "running", "fulfilled"}:
         return order
-    work_id = str(uuid.uuid4())
+
     public_id = str(order["public_id"])
     resource_key = f"ai-teacher-order:{order['id']}"
-    dedupe_key = f"ai-teacher-order:{order['id']}:fulfill"
+    base_dedupe_key = f"ai-teacher-order:{order['id']}:fulfill"
+
+    # A handler failure can be scheduled for an automatic queue retry before the
+    # order row is refreshed. Reattach to that active item instead of creating a
+    # competing fulfillment for the same paid order.
+    cur.execute(
+        """
+        SELECT id, status
+        FROM pipeline_work_items
+        WHERE resource_key = %s
+          AND scope_key = 'fulfillment'
+          AND task_type = 'ai_teacher_fulfillment'
+          AND status IN ('queued', 'retry_scheduled', 'running')
+        ORDER BY created_at DESC
+        LIMIT 1
+        FOR UPDATE
+        """,
+        (resource_key,),
+    )
+    active = cur.fetchone()
+    if active:
+        fulfillment_status = "running" if active["status"] == "running" else "queued"
+        status = "fulfilling" if fulfillment_status == "running" else "fulfillment_queued"
+        cur.execute(
+            """
+            UPDATE ai_teacher_orders
+            SET status = %s, fulfillment_status = %s,
+                fulfillment_work_item_id = %s, last_error = NULL, updated_at = NOW()
+            WHERE id = %s
+              AND fulfillment_status != 'fulfilled'
+            RETURNING *
+            """,
+            (status, fulfillment_status, active["id"], int(order["id"])),
+        )
+        return cur.fetchone() or order
+
+    # Keep the initial key stable for webhook idempotence. A manual retry gets a
+    # fresh immutable work item so the dead-letter history is retained instead
+    # of silently resetting attempts on the original row. The order lock makes
+    # the transition idempotent: a repeated HTTP request sees `queued` above.
+    if order.get("fulfillment_status") == "failed":
+        dedupe_key = f"{base_dedupe_key}:retry:{uuid.uuid4()}"
+    else:
+        dedupe_key = base_dedupe_key
+    work_id = str(uuid.uuid4())
     cur.execute(
         """
         INSERT INTO pipeline_work_items (
@@ -70,6 +114,33 @@ def _enqueue_fulfillment_in_transaction(cur, order: dict[str, Any]) -> dict[str,
         (work_item_id, int(order["id"])),
     )
     return cur.fetchone() or order
+
+
+def retry_order_fulfillment(
+    order_id: int,
+    center_account_id: int,
+) -> dict[str, Any] | None:
+    """Idempotently requeue one authorized, failed order for its owning centre."""
+    with get_postgres_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT * FROM ai_teacher_orders
+                WHERE id = %s AND center_account_id = %s
+                FOR UPDATE
+                """,
+                (int(order_id), int(center_account_id)),
+            )
+            order = cur.fetchone()
+            if not order:
+                return None
+            if order.get("payment_status") not in {"paid", "not_required"}:
+                return order
+            if order.get("fulfillment_status") in {"queued", "running", "fulfilled"}:
+                return order
+            if order.get("fulfillment_status") != "failed":
+                return order
+            return _enqueue_fulfillment_in_transaction(cur, order)
 
 
 def _claim_webhook_event(cur, event: dict[str, Any]) -> bool:
@@ -262,6 +333,88 @@ def update_order_state(order_id: int, **fields) -> dict[str, Any] | None:
             cur.execute(
                 f"UPDATE ai_teacher_orders SET {assignments}, updated_at = NOW() WHERE id = %s RETURNING *",
                 (*values.values(), int(order_id)),
+            )
+            return cur.fetchone()
+
+
+def complete_order_pipeline_fulfillment(
+    order_id: int,
+    *,
+    pipeline_job_id: int,
+    platform_id: int,
+) -> dict[str, Any] | None:
+    """Atomically complete a paid order bound to the finishing text pipeline.
+
+    Auto-pilot ticks are durable and can be replayed.  The pipeline binding in
+    the predicate prevents a late tick from completing an order now attached
+    to another pipeline, while the fulfilled guard makes duplicate terminal
+    ticks harmless.
+    """
+    with get_postgres_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE ai_teacher_orders
+                SET status = 'fulfilled', fulfillment_status = 'fulfilled',
+                    platform_id = %s, pipeline_job_id = %s,
+                    fulfilled_at = COALESCE(fulfilled_at, NOW()),
+                    last_error = NULL, updated_at = NOW()
+                WHERE id = %s
+                  AND payment_status IN ('paid', 'not_required')
+                  AND fulfillment_status != 'fulfilled'
+                  AND (pipeline_job_id IS NULL OR pipeline_job_id = %s)
+                RETURNING *
+                """,
+                (
+                    int(platform_id),
+                    int(pipeline_job_id),
+                    int(order_id),
+                    int(pipeline_job_id),
+                ),
+            )
+            row = cur.fetchone()
+            if row:
+                return row
+            cur.execute(
+                "SELECT * FROM ai_teacher_orders WHERE id = %s",
+                (int(order_id),),
+            )
+            return cur.fetchone()
+
+
+def fail_order_pipeline_fulfillment(
+    order_id: int,
+    *,
+    pipeline_job_id: int,
+    error: str,
+) -> dict[str, Any] | None:
+    """Make a terminally failed paid pipeline order eligible for retry.
+
+    A completion that won the race is never downgraded.  Retrying this failed
+    order reuses its original payment authorization and creates a fresh durable
+    work item via :func:`retry_order_fulfillment`.
+    """
+    with get_postgres_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE ai_teacher_orders
+                SET status = 'fulfillment_failed', fulfillment_status = 'failed',
+                    last_error = %s, updated_at = NOW()
+                WHERE id = %s
+                  AND payment_status IN ('paid', 'not_required')
+                  AND fulfillment_status != 'fulfilled'
+                  AND (pipeline_job_id IS NULL OR pipeline_job_id = %s)
+                RETURNING *
+                """,
+                (str(error)[:500], int(order_id), int(pipeline_job_id)),
+            )
+            row = cur.fetchone()
+            if row:
+                return row
+            cur.execute(
+                "SELECT * FROM ai_teacher_orders WHERE id = %s",
+                (int(order_id),),
             )
             return cur.fetchone()
 

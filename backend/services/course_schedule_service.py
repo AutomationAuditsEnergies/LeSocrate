@@ -1,13 +1,16 @@
 import json
+import html
 import os
 import secrets
 import smtplib
 import imaplib
 import time as time_module
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, time, timedelta
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.utils import make_msgid
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import requests as http_requests
 from pytz.exceptions import AmbiguousTimeError, NonExistentTimeError
@@ -15,6 +18,10 @@ from pytz.exceptions import AmbiguousTimeError, NonExistentTimeError
 from config import FRANCE_TZ
 from database.db import get_db_connection
 from repositories import course_schedule_repository as schedule_repo
+from utils.auth_tokens import (
+    course_invitation_recipient_hash,
+    issue_course_invitation_token,
+)
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -75,6 +82,7 @@ def ensure_course_schedule_tables(cursor):
             audio_generation_next_retry_at TEXT,
             audio_job_id INTEGER,
             audio_folder_id INTEGER,
+            audio_storage_prefix TEXT,
             postponed_from TEXT,
             postponed_at TEXT,
             postponement_count INTEGER NOT NULL DEFAULT 0,
@@ -105,6 +113,7 @@ def ensure_course_schedule_tables(cursor):
         "audio_generation_next_retry_at": "TEXT",
         "audio_job_id": "INTEGER",
         "audio_folder_id": "INTEGER",
+        "audio_storage_prefix": "TEXT",
         "postponed_from": "TEXT",
         "postponed_at": "TEXT",
         "postponement_count": "INTEGER NOT NULL DEFAULT 0",
@@ -138,6 +147,88 @@ def ensure_course_schedule_tables(cursor):
     cursor.execute(
         "CREATE INDEX IF NOT EXISTS idx_course_session_postponements_session "
         "ON course_session_postponements(platform_id, session_id, created_at)"
+    )
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS course_reminder_recipients (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            platform_id INTEGER NOT NULL,
+            email TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            UNIQUE(platform_id, email)
+        )
+        """
+    )
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS course_reminder_rules (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            platform_id INTEGER NOT NULL,
+            system_key TEXT,
+            name TEXT NOT NULL,
+            trigger_mode TEXT NOT NULL,
+            days_before INTEGER,
+            minutes_before INTEGER,
+            local_time TEXT,
+            subject_template TEXT NOT NULL,
+            content_template TEXT NOT NULL,
+            recipient_scope TEXT NOT NULL DEFAULT 'all',
+            is_active INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(platform_id, system_key)
+        )
+        """
+    )
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS course_reminder_rule_recipients (
+            rule_id INTEGER NOT NULL,
+            recipient_id INTEGER NOT NULL,
+            PRIMARY KEY(rule_id, recipient_id),
+            FOREIGN KEY(rule_id) REFERENCES course_reminder_rules(id) ON DELETE CASCADE,
+            FOREIGN KEY(recipient_id) REFERENCES course_reminder_recipients(id) ON DELETE CASCADE
+        )
+        """
+    )
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS course_reminder_deliveries (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            platform_id INTEGER NOT NULL,
+            session_id INTEGER NOT NULL,
+            rule_id INTEGER NOT NULL,
+            recipient_id INTEGER NOT NULL,
+            recipient_hash TEXT NOT NULL,
+            due_at TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending',
+            claimed_at TEXT,
+            lease_expires_at TEXT,
+            sent_at TEXT,
+            attempts INTEGER NOT NULL DEFAULT 0,
+            max_attempts INTEGER NOT NULL DEFAULT 5,
+            next_retry_at TEXT,
+            last_error TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(session_id, rule_id, recipient_hash),
+            FOREIGN KEY(session_id) REFERENCES course_sessions(id) ON DELETE CASCADE,
+            FOREIGN KEY(rule_id) REFERENCES course_reminder_rules(id) ON DELETE CASCADE,
+            FOREIGN KEY(recipient_id) REFERENCES course_reminder_recipients(id) ON DELETE CASCADE
+        )
+        """
+    )
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_course_reminder_rules_platform "
+        "ON course_reminder_rules(platform_id, is_active)"
+    )
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_course_reminder_deliveries_due "
+        "ON course_reminder_deliveries(status, due_at, claimed_at)"
+    )
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_course_reminder_deliveries_lookup "
+        "ON course_reminder_deliveries(session_id, rule_id, recipient_id)"
     )
 
 
@@ -189,6 +280,25 @@ def _parse_start_time(value):
         return time(int(hour), int(minute[:2]))
     except Exception:
         raise ValueError("start_time invalide, format attendu HH:MM")
+
+
+def course_start_time_policy():
+    configured = str(os.environ.get("COURSE_START_TIME_POLICY") or "").strip().lower()
+    if not configured:
+        configured = "fixed_09" if schedule_repo.schedule_store_is_postgres() else "configured"
+    if configured not in {"fixed_09", "configured"}:
+        raise ValueError("COURSE_START_TIME_POLICY doit valoir fixed_09 ou configured")
+    return configured
+
+
+def _validated_course_write_start_time(value):
+    parsed = _parse_start_time(value)
+    if course_start_time_policy() == "fixed_09" and parsed != time(9, 0):
+        raise ValueError(
+            "Les journées Formation3 commencent obligatoirement à 09:00 "
+            "et suivent la playlist pédagogique jusqu'à 18:30."
+        )
+    return parsed.strftime("%H:%M")
 
 
 def _normalize_weekdays(weekdays, weekly_course_count=None):
@@ -377,7 +487,7 @@ def save_course_schedule(cursor, platform_id, schedule):
     total_training_days = int(schedule.get("total_training_days") or 0)
     weekly_course_count = int(schedule.get("weekly_course_count") or 0)
     weekdays = _normalize_weekdays(schedule.get("weekdays"), weekly_course_count)
-    start_time = str(schedule.get("start_time") or "09:00").strip()
+    start_time = _validated_course_write_start_time(schedule.get("start_time") or "09:00")
     start_date = schedule.get("start_date") or None
     replace_after = schedule.get("_replace_after")
     not_before = schedule.get("_not_before") or replace_after
@@ -460,7 +570,7 @@ def create_missing_course_schedule(
     else:
         return None
 
-    requested_start_time = str(start_time or "09:00").strip()
+    requested_start_time = _validated_course_write_start_time(start_time or "09:00")
     requested_sessions = _generate_session_datetimes(
         total_training_days=total,
         weekdays=requested_weekdays,
@@ -723,16 +833,21 @@ def _build_course_session_postponement_plan(
 
     if normalized_mode == "next_occurrence":
         last_date = old_dates[-1]
+        write_start_time = (
+            "09:00" if course_start_time_policy() == "fixed_09"
+            else summary.get("start_time") or "09:00"
+        )
         appended = _generate_session_datetimes(
             total_training_days=1,
             weekdays=weekdays,
-            start_time=summary.get("start_time") or "09:00",
+            start_time=write_start_time,
             start_date=last_date.strftime("%Y-%m-%d"),
             not_before=last_date,
         )[0]
         new_dates = old_dates[1:] + [appended]
     else:
         requested = _parse_postponement_datetime(scheduled_at)
+        _validated_course_write_start_time(requested.strftime("%H:%M"))
         if requested <= now:
             raise ValueError("La nouvelle date doit être dans le futur")
         if requested <= target_at:
@@ -742,7 +857,10 @@ def _build_course_session_postponement_plan(
             later_dates = _generate_session_datetimes(
                 total_training_days=len(future_rows) - 1,
                 weekdays=weekdays,
-                start_time=summary.get("start_time") or "09:00",
+                start_time=(
+                    "09:00" if course_start_time_policy() == "fixed_09"
+                    else summary.get("start_time") or "09:00"
+                ),
                 start_date=requested.strftime("%Y-%m-%d"),
                 not_before=requested,
             )
@@ -917,7 +1035,11 @@ def update_course_schedule(
     if not summary:
         return None
 
-    requested_start_time = str(start_time or summary["start_time"] or "09:00").strip()
+    if start_time is None and course_start_time_policy() == "fixed_09":
+        requested_start_time = "09:00"
+    else:
+        requested_start_time = str(start_time or summary["start_time"] or "09:00").strip()
+    requested_start_time = _validated_course_write_start_time(requested_start_time)
     requested_weekdays = (
         _normalize_weekdays(weekdays, summary["weekly_course_count"])
         if weekdays is not None
@@ -1150,74 +1272,14 @@ def _platform_class_url(cursor, platform_id, base_url=None):
     return f"{str(base_url).rstrip('/')}{path}" if base_url else path
 
 
-def _student_recipients(cursor, platform_id):
-    if schedule_repo.schedule_store_is_postgres():
-        return schedule_repo.list_course_reminder_recipients(int(platform_id))
-
-    recipients = {}
-    try:
-        ensure_course_schedule_tables(cursor)
-        cursor.execute(
-            """
-            CREATE TABLE IF NOT EXISTS course_reminder_recipients (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                platform_id INTEGER NOT NULL,
-                email TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                UNIQUE(platform_id, email)
-            )
-            """
-        )
-        cursor.execute(
-            """
-            SELECT email
-            FROM course_reminder_recipients
-            WHERE platform_id = ?
-            ORDER BY email COLLATE NOCASE
-            """,
-            (platform_id,),
-        )
-        for (email,) in cursor.fetchall():
-            email = str(email or "").strip().lower()
-            if email:
-                recipients[email] = {"email": email, "nom": "", "prenom": ""}
-    except Exception as exc:
-        logger.warning("⚠️ Lecture course_reminder_recipients impossible: %s", exc)
-
-    cursor.execute(
-        """
-        SELECT email, nom, prenom
-        FROM student_profiles
-        WHERE platform_id = ? AND COALESCE(is_active, 1) = 1 AND email IS NOT NULL
-        """,
-        (platform_id,),
-    )
-    for email, nom, prenom in cursor.fetchall():
-        email = str(email or "").strip().lower()
-        if email:
-            recipients[email] = {"email": email, "nom": nom or "", "prenom": prenom or ""}
-
-    cursor.execute(
-        """
-        SELECT username, nom, prenom
-        FROM student_accounts
-        WHERE platform_id = ? AND COALESCE(is_active, 1) = 1 AND username LIKE '%@%'
-        """,
-        (platform_id,),
-    )
-    for email, nom, prenom in cursor.fetchall():
-        email = str(email or "").strip().lower()
-        if email and email not in recipients:
-            recipients[email] = {"email": email, "nom": nom or "", "prenom": prenom or ""}
-    return list(recipients.values())
-
-
 def _post_reminder_webhook(payload):
     webhook_url = os.environ.get("REMINDER_WEBHOOK_URL")
     if not webhook_url:
         return False, "REMINDER_WEBHOOK_URL non configuré"
 
     headers = {"Content-Type": "application/json"}
+    if payload.get("delivery_id") is not None:
+        headers["Idempotency-Key"] = f"course-reminder-{int(payload['delivery_id'])}"
     webhook_key = os.environ.get("REMINDER_WEBHOOK_KEY")
     if webhook_key:
         headers["X-Reminder-Key"] = webhook_key
@@ -1232,49 +1294,53 @@ def _email_configured():
     return bool(os.environ.get("EMAIL_USERNAME") and os.environ.get("EMAIL_PASSWORD"))
 
 
-def _reminder_subject(reminder_type):
-    if reminder_type == "five_minutes_before":
-        return "Le cours commence dans 5 minutes !"
-    return "Votre formation commence demain"
+def _bounded_network_timeout(env_name, default=25.0):
+    try:
+        value = float(os.environ.get(env_name, str(default)))
+    except (TypeError, ValueError):
+        value = float(default)
+    return max(1.0, min(value, 60.0))
 
 
-def _reminder_html(payload):
-    reminder_type = payload.get("type")
-    class_url = payload.get("class_url") or "#"
-    scheduled_at = payload.get("scheduled_at") or ""
-    session_password = str(
-        payload.get("session_password") or os.environ.get("COURSE_SESSION_PASSWORD", "")
-    ).strip()
-    password_line = (
-        f'<div class="meta">Mot de passe de session : <strong>{session_password}</strong></div>'
-        if session_password
+def _class_invitation_url(class_url, invitation_token):
+    parts = urlsplit(str(class_url or ""))
+    query = dict(parse_qsl(parts.query, keep_blank_values=True))
+    query["invite"] = invitation_token
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment))
+
+
+class _ReminderTemplateValues(dict):
+    def __missing__(self, key):
+        return "{" + str(key) + "}"
+
+
+def _format_reminder_template(template, values):
+    try:
+        return str(template or "").format_map(_ReminderTemplateValues(values))
+    except (ValueError, KeyError):
+        return str(template or "")
+
+
+def _build_reminder_html(payload):
+    scheduled = _parse_local_datetime(payload.get("scheduled_at"))
+    values = {
+        "date": scheduled.strftime("%d/%m/%Y"),
+        "time": scheduled.strftime("%H:%M"),
+        "session_code": str(payload.get("session_password") or ""),
+        "class_url": str(payload.get("class_url") or ""),
+    }
+    content = html.escape(
+        payload.get("content")
+        or _format_reminder_template(payload.get("content_template"), values)
+    ).replace("\n", "<br>")
+    class_url = html.escape(values["class_url"], quote=True)
+    session_code = html.escape(values["session_code"])
+    code_block = (
+        f'<div class="meta">Code secret (si vous saisissez l’adresse manuellement) : '
+        f"<strong>{session_code}</strong></div>"
+        if session_code
         else ""
     )
-    try:
-        scheduled = _parse_local_datetime(scheduled_at)
-        date_label = scheduled.strftime("%d/%m/%Y")
-        time_label = scheduled.strftime("%H:%M")
-    except Exception:
-        date_label = "demain"
-        time_label = "09:00"
-
-    if reminder_type == "five_minutes_before":
-        headline = "C'est parti !"
-        body = (
-            f"Votre cours démarre dans 5 minutes, à {time_label}. "
-            "Connectez-vous maintenant à la plateforme pour ne rien manquer."
-        )
-        button = "Se connecter maintenant"
-        closing = "On vous attend !"
-    else:
-        headline = "Votre formation commence demain"
-        body = (
-            f"Votre prochaine journée de formation aura lieu le {date_label} à {time_label}. "
-            "Connectez-vous quelques minutes avant le début avec le lien ci-dessous."
-        )
-        button = "Accéder à la formation"
-        closing = "À demain et bonne soirée."
-
     return f"""<!doctype html>
 <html>
 <head>
@@ -1289,7 +1355,7 @@ def _reminder_html(payload):
     h1 {{ font-size:30px; line-height:1.15; margin:0 0 20px; color:#111827; }}
     p {{ font-size:16px; line-height:1.65; margin:0 0 22px; color:#334155; }}
     .cta {{ display:inline-block; background:#8b5cf6; color:#fff !important; text-decoration:none; padding:15px 24px; border-radius:12px; font-weight:700; }}
-    .meta {{ margin-top:26px; padding:14px 16px; background:#f8fafc; border:1px solid #e2e8f0; border-radius:12px; font-size:14px; color:#64748b; }}
+    .meta {{ margin-top:18px; padding:14px 16px; background:#f8fafc; border:1px solid #e2e8f0; border-radius:12px; font-size:14px; color:#64748b; }}
     .footer {{ text-align:center; color:#94a3b8; font-size:12px; margin-top:18px; }}
   </style>
 </head>
@@ -1297,28 +1363,29 @@ def _reminder_html(payload):
   <div class="wrap">
     <div class="header"><p class="brand">Le Socrate</p></div>
     <div class="card">
-      <h1>{headline}</h1>
+      <h1>{html.escape(str(payload.get("subject") or "Rappel de formation"))}</h1>
       <p>Bonjour,</p>
-      <p>{body}</p>
-      <p><a class="cta" href="{class_url}" target="_blank">{button}</a></p>
-      <div class="meta">Horaire prévu : {date_label} à {time_label}</div>
-      {password_line}
-      <p style="margin-top:26px;">{closing}</p>
-      <p>L'équipe Le Socrate</p>
+      <p>{content}</p>
+      <p><a class="cta" href="{class_url}" target="_blank">Accéder à la formation</a></p>
+      <div class="meta">Horaire prévu : {values["date"]} à {values["time"]}</div>
+      {code_block}
+      <p style="margin-top:26px;">L'équipe Le Socrate</p>
     </div>
-    <div class="footer">Email automatique de rappel de formation.</div>
+    <div class="footer">E-mail automatique de rappel de formation.</div>
   </div>
 </body>
 </html>"""
 
 
-def _send_reminder_emails(payload):
+def _send_reminder_email_batch(payloads):
+    """Send a bounded batch over one SMTP and, optionally, one IMAP session."""
+    if not payloads:
+        return {}
     if not _email_configured():
-        return False, "EMAIL_USERNAME/EMAIL_PASSWORD non configurés"
-
-    recipients = payload.get("recipients") or []
-    if not recipients:
-        return True, None
+        return {
+            int(payload["delivery_id"]): (False, "EMAIL_USERNAME/EMAIL_PASSWORD non configurés")
+            for payload in payloads
+        }
 
     smtp_server = os.environ.get("SMTP_SERVER", "mail.infomaniak.com")
     smtp_port = int(os.environ.get("SMTP_PORT", "465"))
@@ -1328,179 +1395,574 @@ def _send_reminder_emails(payload):
     password = os.environ.get("EMAIL_PASSWORD")
     sender = os.environ.get("EMAIL_FROM") or username
     sender_name = os.environ.get("EMAIL_FROM_NAME", "Le Socrate")
-    subject = _reminder_subject(payload.get("type"))
-    html = _reminder_html(payload)
+    smtp_timeout = _bounded_network_timeout("COURSE_REMINDER_SMTP_TIMEOUT_SECONDS")
+    imap_timeout = _bounded_network_timeout("COURSE_REMINDER_IMAP_TIMEOUT_SECONDS")
+    results = {}
 
-    errors = []
-    for recipient in recipients:
-        receiver = (recipient.get("email") if isinstance(recipient, dict) else recipient) or ""
-        receiver = str(receiver).strip()
-        if not receiver:
+    try:
+        smtp = smtplib.SMTP_SSL(smtp_server, smtp_port, timeout=smtp_timeout)
+        smtp.login(username, password)
+    except Exception as exc:
+        logger.error("❌ Connexion SMTP rappels impossible: %s", exc)
+        return {int(payload["delivery_id"]): (False, str(exc)) for payload in payloads}
+
+    imap = None
+    if os.environ.get("EMAIL_COPY_TO_SENT", "1") != "0":
+        try:
+            imap = imaplib.IMAP4_SSL(imap_server, imap_port, timeout=imap_timeout)
+            imap.login(username, password)
+        except Exception as exc:
+            logger.warning("⚠️ Copie IMAP des rappels désactivée pour ce lot: %s", exc)
+            imap = None
+
+    try:
+        for payload in payloads:
+            delivery_id = int(payload["delivery_id"])
+            receiver = str(payload.get("recipient", {}).get("email") or "").strip()
+            try:
+                msg = MIMEMultipart("alternative")
+                msg["Message-ID"] = make_msgid()
+                msg["Subject"] = str(payload.get("subject") or "Rappel de formation")
+                msg["From"] = f"{sender_name} <{sender}>"
+                msg["To"] = receiver
+                msg.attach(MIMEText(_build_reminder_html(payload), "html", "utf-8"))
+                raw_message = msg.as_string()
+                smtp.sendmail(sender, receiver, raw_message)
+                results[delivery_id] = (True, None)
+                if imap is not None:
+                    try:
+                        imap.append(
+                            '"Sent"',
+                            "",
+                            imaplib.Time2Internaldate(time_module.time()),
+                            raw_message.encode("utf8"),
+                        )
+                    except Exception as exc:
+                        logger.warning("⚠️ Copie IMAP du rappel %s impossible: %s", delivery_id, exc)
+                pause = max(0.0, float(os.environ.get("EMAIL_SEND_PAUSE_SECONDS", "0")))
+                if pause:
+                    time_module.sleep(pause)
+            except Exception as exc:
+                logger.error("❌ Rappel email non envoyé (delivery=%s): %s", delivery_id, exc)
+                results[delivery_id] = (False, str(exc))
+    finally:
+        try:
+            smtp.quit()
+        except Exception:
+            pass
+        if imap is not None:
+            try:
+                imap.logout()
+            except Exception:
+                pass
+    return results
+
+
+def _dispatch_reminder_batch(payloads):
+    if os.environ.get("REMINDER_WEBHOOK_URL"):
+        try:
+            workers = max(1, min(16, int(os.environ.get("REMINDER_WEBHOOK_MAX_CONCURRENCY", "8"))))
+        except (TypeError, ValueError):
+            workers = 8
+        results = {}
+        with ThreadPoolExecutor(max_workers=min(workers, max(1, len(payloads)))) as executor:
+            futures = {
+                executor.submit(_post_reminder_webhook, payload): int(payload["delivery_id"])
+                for payload in payloads
+            }
+            for future in as_completed(futures):
+                delivery_id = futures[future]
+                try:
+                    results[delivery_id] = future.result()
+                except Exception as exc:
+                    results[delivery_id] = (False, str(exc))
+        return results
+    return _send_reminder_email_batch(payloads)
+
+
+def _sqlite_claim_reminder_delivery(
+    cursor,
+    *,
+    platform_id,
+    session_id,
+    rule_id,
+    recipient_id,
+    recipient_hash,
+    due_at,
+    claimed_at,
+    lease_seconds,
+    max_attempts,
+):
+    claimed_value = claimed_at.strftime("%Y-%m-%d %H:%M:%S.%f%z")
+    lease_value = (claimed_at + timedelta(seconds=lease_seconds)).strftime("%Y-%m-%d %H:%M:%S.%f%z")
+    cursor.execute(
+        """
+        SELECT id, status, lease_expires_at, next_retry_at, attempts, max_attempts
+        FROM course_reminder_deliveries
+        WHERE session_id = ? AND rule_id = ? AND recipient_hash = ?
+        """,
+        (session_id, rule_id, recipient_hash),
+    )
+    row = cursor.fetchone()
+    if not row:
+        cursor.execute(
+            """
+            INSERT INTO course_reminder_deliveries (
+                platform_id, session_id, rule_id, recipient_id, recipient_hash, due_at,
+                status, claimed_at, lease_expires_at, attempts, max_attempts,
+                created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, 'claimed', ?, ?, 1, ?, ?, ?)
+            """,
+            (
+                platform_id, session_id, rule_id, recipient_id, recipient_hash,
+                due_at.strftime("%Y-%m-%d %H:%M:%S%z"), claimed_value, lease_value,
+                max_attempts, claimed_value, claimed_value,
+            ),
+        )
+        return int(cursor.lastrowid)
+    if (
+        row[1] in {"sent", "dead_lettered"}
+        or int(row[4] or 0) >= int(row[5] or max_attempts)
+        or (row[1] == "claimed" and row[2] and row[2] > claimed_value)
+        or (row[3] and row[3] > claimed_value)
+    ):
+        return None
+    cursor.execute(
+        """
+        UPDATE course_reminder_deliveries
+        SET status = 'claimed', claimed_at = ?, lease_expires_at = ?, recipient_id = ?,
+            due_at = ?, attempts = attempts + 1, next_retry_at = NULL,
+            last_error = NULL, updated_at = ? WHERE id = ?
+        """,
+        (
+            claimed_value, lease_value, recipient_id,
+            due_at.strftime("%Y-%m-%d %H:%M:%S%z"), claimed_value, int(row[0]),
+        ),
+    )
+    return int(row[0])
+
+
+def _sqlite_finish_reminder_delivery(cursor, delivery_id, *, claimed_at, success, error=None):
+    claimed_value = claimed_at.strftime("%Y-%m-%d %H:%M:%S.%f%z")
+    now = datetime.now(FRANCE_TZ)
+    now_value = now.strftime("%Y-%m-%d %H:%M:%S.%f%z")
+    if success:
+        cursor.execute(
+            """
+            UPDATE course_reminder_deliveries
+            SET status = 'sent', sent_at = ?, claimed_at = NULL, lease_expires_at = NULL,
+                next_retry_at = NULL, last_error = NULL, updated_at = ?
+            WHERE id = ? AND status = 'claimed' AND claimed_at = ?
+            """,
+            (now_value, now_value, delivery_id, claimed_value),
+        )
+        return cursor.rowcount == 1
+    cursor.execute(
+        "SELECT attempts, max_attempts FROM course_reminder_deliveries WHERE id = ?",
+        (delivery_id,),
+    )
+    row = cursor.fetchone()
+    if not row:
+        return False
+    attempts = int(row[0] or 0)
+    terminal = attempts >= int(row[1] or 5)
+    retry_base = max(10, int(os.environ.get("COURSE_REMINDER_RETRY_BASE_SECONDS", "60")))
+    retry_at = None if terminal else now + timedelta(seconds=min(3600, retry_base * (2 ** max(0, attempts - 1))))
+    cursor.execute(
+        """
+        UPDATE course_reminder_deliveries
+        SET status = ?, claimed_at = NULL, lease_expires_at = NULL,
+            next_retry_at = ?, last_error = ?, updated_at = ?
+        WHERE id = ? AND status = 'claimed' AND claimed_at = ?
+        """,
+        (
+            "dead_lettered" if terminal else "retry_scheduled",
+            retry_at.strftime("%Y-%m-%d %H:%M:%S.%f%z") if retry_at else None,
+            str(error or "Erreur d'envoi")[:1000], now_value, delivery_id, claimed_value,
+        ),
+    )
+    return cursor.rowcount == 1
+
+
+def _process_due_delivery_candidates(
+    *,
+    postgres_store,
+    conn,
+    cursor,
+    now,
+    base_url,
+    dry_run,
+    previous_evening_hour,
+    active_hours,
+    batch_size,
+    lease_seconds,
+    max_attempts,
+):
+    """Process the DB-ranked due queue without scanning unrelated sessions."""
+    schedule_repo.ensure_default_course_reminder_rules_for_schedules(
+        previous_evening_hour=previous_evening_hour,
+        now=now,
+        sqlite_cursor=cursor,
+    )
+    if not postgres_store:
+        conn.commit()
+
+    candidates = schedule_repo.list_due_reminder_delivery_candidates(
+        now=now,
+        active_hours=active_hours,
+        limit=min(1000, max(batch_size, batch_size * 2)),
+        sqlite_cursor=cursor,
+    )
+    claimed_payloads = []
+    results = []
+    base_url_by_platform = {}
+    password_by_session = {}
+
+    for candidate in candidates:
+        if len(claimed_payloads) >= batch_size:
+            break
+        session_id = int(candidate["session_id"])
+        platform_id = int(candidate["platform_id"])
+        rule_id = int(candidate["rule_id"])
+        recipient = {
+            "id": int(candidate["recipient_id"]),
+            "email": str(candidate.get("email") or "").strip().lower(),
+        }
+        if not recipient["email"]:
+            continue
+        scheduled_at = _parse_local_datetime(candidate["scheduled_at"])
+        due_at = _parse_local_datetime(candidate["due_at"])
+
+        if platform_id not in base_url_by_platform:
+            base_url_by_platform[platform_id] = _platform_class_url(cursor, platform_id, base_url)
+        if session_id not in password_by_session:
+            session_password = candidate.get("session_password")
+            if not session_password and not dry_run:
+                if postgres_store:
+                    session_password = schedule_repo.ensure_session_password(
+                        session_id,
+                        password=_generate_session_password(),
+                        generated_at=now,
+                    )
+                else:
+                    session_password = _ensure_session_password(
+                        cursor,
+                        session_id,
+                        now.strftime("%Y-%m-%d %H:%M:%S"),
+                    )
+                    conn.commit()
+            password_by_session[session_id] = session_password
+        session_password = password_by_session[session_id]
+        recipient_hash = course_invitation_recipient_hash(recipient["email"])
+
+        if dry_run:
+            delivery_id = -len(results) - 1
+        elif postgres_store:
+            delivery_id = schedule_repo.claim_course_reminder_delivery(
+                platform_id=platform_id,
+                session_id=session_id,
+                rule_id=rule_id,
+                recipient_id=recipient["id"],
+                recipient_hash=recipient_hash,
+                due_at=due_at,
+                claimed_at=now,
+                lease_seconds=lease_seconds,
+                max_attempts=max_attempts,
+            )
+        else:
+            delivery_id = _sqlite_claim_reminder_delivery(
+                cursor,
+                platform_id=platform_id,
+                session_id=session_id,
+                rule_id=rule_id,
+                recipient_id=recipient["id"],
+                recipient_hash=recipient_hash,
+                due_at=due_at,
+                claimed_at=now,
+                lease_seconds=lease_seconds,
+                max_attempts=max_attempts,
+            )
+            conn.commit()
+        if delivery_id is None:
             continue
 
-        try:
-            msg = MIMEMultipart("alternative")
-            msg["Message-ID"] = make_msgid()
-            msg["Subject"] = subject
-            msg["From"] = f"{sender_name} <{sender}>"
-            msg["To"] = receiver
-            msg.attach(MIMEText(html, "html", "utf-8"))
-            raw_message = msg.as_string()
+        invitation_token = issue_course_invitation_token(
+            platform_id=platform_id,
+            session_id=session_id,
+            scheduled_at=scheduled_at,
+            recipient_email=recipient["email"],
+            expires_at=scheduled_at + timedelta(hours=active_hours),
+        )
+        invitation_url = _class_invitation_url(
+            base_url_by_platform[platform_id], invitation_token
+        )
+        values = {
+            "date": scheduled_at.strftime("%d/%m/%Y"),
+            "time": scheduled_at.strftime("%H:%M"),
+            "session_code": str(session_password or ""),
+            "class_url": invitation_url,
+        }
+        system_key = candidate.get("system_key")
+        payload = {
+            "delivery_id": delivery_id,
+            "type": system_key or f"rule_{rule_id}",
+            "rule_id": rule_id,
+            "platform_id": platform_id,
+            "session_id": session_id,
+            "session_index": candidate.get("session_index"),
+            "scheduled_at": schedule_repo.format_schedule_datetime(scheduled_at),
+            "class_url": invitation_url,
+            "session_password": session_password,
+            "subject": _format_reminder_template(candidate.get("subject_template"), values),
+            "content_template": candidate.get("content_template"),
+            "content": _format_reminder_template(candidate.get("content_template"), values),
+            "recipient": recipient,
+            "recipients": [recipient],
+        }
+        if dry_run:
+            results.append({
+                **payload,
+                "class_url": base_url_by_platform[platform_id],
+                "success": True,
+                "dry_run": True,
+            })
+        else:
+            claimed_payloads.append(payload)
 
-            with smtplib.SMTP_SSL(smtp_server, smtp_port) as smtp:
-                smtp.login(username, password)
-                smtp.sendmail(sender, receiver, raw_message)
+    if dry_run:
+        return results
 
-            if os.environ.get("EMAIL_COPY_TO_SENT", "1") != "0":
-                with imaplib.IMAP4_SSL(imap_server, imap_port) as imap:
-                    imap.login(username, password)
-                    imap.append(
-                        '"Sent"',
-                        "",
-                        imaplib.Time2Internaldate(time_module.time()),
-                        raw_message.encode("utf8"),
-                    )
-            time_module.sleep(float(os.environ.get("EMAIL_SEND_PAUSE_SECONDS", "0.5")))
-        except Exception as exc:
-            logger.error("❌ Rappel email non envoyé à %s: %s", receiver, exc)
-            errors.append(f"{receiver}: {exc}")
-
-    if errors:
-        return False, "; ".join(errors[:3])
-    return True, None
-
-
-def _dispatch_reminder(payload):
-    if os.environ.get("REMINDER_WEBHOOK_URL"):
-        return _post_reminder_webhook(payload)
-    return _send_reminder_emails(payload)
+    delivery_results = _dispatch_reminder_batch(claimed_payloads)
+    for payload in claimed_payloads:
+        delivery_id = int(payload["delivery_id"])
+        ok, error = delivery_results.get(delivery_id, (False, "Résultat de livraison absent"))
+        if postgres_store:
+            if ok:
+                ok = schedule_repo.complete_course_reminder_delivery(
+                    delivery_id,
+                    claimed_at=now,
+                    sent_at=datetime.now(FRANCE_TZ),
+                )
+                if not ok:
+                    error = "Le lease du rappel a expiré avant confirmation"
+            else:
+                schedule_repo.release_course_reminder_delivery(
+                    delivery_id,
+                    claimed_at=now,
+                    error=error,
+                )
+        else:
+            completed = _sqlite_finish_reminder_delivery(
+                cursor,
+                delivery_id,
+                claimed_at=now,
+                success=ok,
+                error=error,
+            )
+            conn.commit()
+            if ok and not completed:
+                ok = False
+                error = "Le lease du rappel a expiré avant confirmation"
+        results.append({
+            **payload,
+            "class_url": base_url_by_platform[int(payload["platform_id"])],
+            "success": bool(ok),
+            "error": error,
+        })
+    return results
 
 
 def process_due_reminders(base_url=None, dry_run=False):
+    """Materialize, claim and drain bounded reminder delivery batches.
+
+    One scheduler tick may need to notify thousands of recipients at the same
+    requested minute. Draining several independently leased batches avoids a
+    five-minute delay per hundred students while preserving a hard per-tick
+    cap for provider and database backpressure.
+    """
+    base_url = (
+        base_url
+        or os.environ.get("FRONTEND_PUBLIC_URL")
+        or os.environ.get("FRONTEND_URL")
+        or os.environ.get("PLATFORM_1_FRONTEND_URL")
+    )
+    if os.environ.get("WEBSITE_SITE_NAME"):
+        parsed_base = urlsplit(str(base_url or ""))
+        if parsed_base.scheme not in {"http", "https"} or not parsed_base.netloc:
+            raise RuntimeError(
+                "FRONTEND_PUBLIC_URL ou PLATFORM_1_FRONTEND_URL absolue requise pour les invitations"
+            )
     postgres_store = schedule_repo.schedule_store_is_postgres()
     conn = None if postgres_store else get_db_connection()
+    cursor = None if conn is None else conn.cursor()
     try:
-        cursor = None if postgres_store else conn.cursor()
         if cursor is not None:
             ensure_course_schedule_tables(cursor)
         now = datetime.now(FRANCE_TZ)
-        now_str = now.strftime("%Y-%m-%d %H:%M:%S")
-        evening_hour = int(os.environ.get("REMINDER_PREVIOUS_EVENING_HOUR", "18"))
-        active_hours = float(os.environ.get("COURSE_SESSION_ACTIVE_HOURS", "12"))
-        active_until = now + timedelta(hours=active_hours)
-
-        if postgres_store:
-            session_rows = schedule_repo.list_due_reminder_sessions(active_until=active_until)
-        else:
-            cursor.execute(
-                """
-                SELECT id, platform_id, session_index, scheduled_at,
-                       reminder_previous_evening_sent_at, reminder_5min_sent_at,
-                       session_password
-                FROM course_sessions
-                WHERE status IN ('planned', 'active')
-                  AND scheduled_at <= ?
-                ORDER BY scheduled_at ASC
-                """,
-                (active_until.strftime("%Y-%m-%d %H:%M:%S"),),
+        try:
+            previous_evening_hour = max(0, min(23, int(os.environ.get("REMINDER_PREVIOUS_EVENING_HOUR", "18"))))
+        except (TypeError, ValueError):
+            previous_evening_hour = 18
+        try:
+            active_hours = max(1.0, float(os.environ.get("COURSE_SESSION_ACTIVE_HOURS", "12")))
+        except (TypeError, ValueError):
+            active_hours = 12.0
+        try:
+            batch_size = max(1, min(500, int(os.environ.get("COURSE_REMINDER_DELIVERY_BATCH_SIZE", "100"))))
+        except (TypeError, ValueError):
+            batch_size = 100
+        try:
+            lease_seconds = max(60, int(os.environ.get("COURSE_REMINDER_CLAIM_LEASE_SECONDS", "900")))
+        except (TypeError, ValueError):
+            lease_seconds = 900
+        try:
+            max_attempts = max(1, min(20, int(os.environ.get("COURSE_REMINDER_MAX_ATTEMPTS", "5"))))
+        except (TypeError, ValueError):
+            max_attempts = 5
+        try:
+            max_batches = max(
+                1,
+                min(
+                    100,
+                    int(os.environ.get("COURSE_REMINDER_MAX_BATCHES_PER_TICK", "20")),
+                ),
             )
-            session_rows = [
-                {
-                    "id": row[0],
-                    "platform_id": row[1],
-                    "session_index": row[2],
-                    "scheduled_at": row[3],
-                    "reminder_previous_evening_sent_at": row[4],
-                    "reminder_5min_sent_at": row[5],
-                    "session_password": row[6],
-                }
-                for row in cursor.fetchall()
-            ]
+        except (TypeError, ValueError):
+            max_batches = 20
+        if not os.environ.get("REMINDER_WEBHOOK_URL"):
+            try:
+                smtp_max_batches = max(
+                    1,
+                    min(
+                        10,
+                        int(
+                            os.environ.get(
+                                "COURSE_REMINDER_SMTP_MAX_BATCHES_PER_TICK",
+                                "2",
+                            )
+                        ),
+                    ),
+                )
+            except (TypeError, ValueError):
+                smtp_max_batches = 2
+            max_batches = min(max_batches, smtp_max_batches)
 
         results = []
-        for session_row in session_rows:
-            session_id = int(session_row["id"])
-            platform_id = int(session_row["platform_id"])
-            session_index = session_row["session_index"]
-            scheduled_at_value = session_row["scheduled_at"]
-            scheduled_at_str = (
-                schedule_repo.format_schedule_datetime(scheduled_at_value)
-                if postgres_store
-                else scheduled_at_value
+        # A dry run does not persist claims, so repeating it would return the
+        # same recipients. Keep previews to one representative batch.
+        batch_limit = 1 if dry_run else max_batches
+        for _batch_number in range(batch_limit):
+            batch_results = _process_due_delivery_candidates(
+                postgres_store=postgres_store,
+                conn=conn,
+                cursor=cursor,
+                now=now,
+                base_url=base_url,
+                dry_run=dry_run,
+                previous_evening_hour=previous_evening_hour,
+                active_hours=active_hours,
+                batch_size=batch_size,
+                lease_seconds=lease_seconds,
+                max_attempts=max_attempts,
             )
-            previous_sent = session_row.get("reminder_previous_evening_sent_at")
-            five_sent = session_row.get("reminder_5min_sent_at")
-            session_password = session_row.get("session_password")
-            scheduled_at = _parse_local_datetime(scheduled_at_value)
-            due_types = []
-            previous_evening_at = FRANCE_TZ.localize(
-                datetime.combine((scheduled_at - timedelta(days=1)).date(), time(evening_hour, 0))
-            )
-            if not previous_sent and now >= previous_evening_at and now < scheduled_at:
-                due_types.append(("previous_evening", "reminder_previous_evening_sent_at"))
-
-            five_min_at = scheduled_at - timedelta(minutes=5)
-            if not five_sent and now >= five_min_at and now <= scheduled_at + timedelta(hours=active_hours):
-                due_types.append(("five_minutes_before", "reminder_5min_sent_at"))
-
-            if not due_types:
-                continue
-
-            recipients = _student_recipients(cursor, platform_id)
-            class_url = _platform_class_url(cursor, platform_id, base_url)
-            for reminder_type, sent_column in due_types:
-                password_for_email = session_password
-                if not password_for_email and not dry_run:
-                    password_for_email = _ensure_session_password(cursor, session_id, now_str)
-                payload = {
-                    "type": reminder_type,
-                    "platform_id": platform_id,
-                    "session_id": session_id,
-                    "session_index": session_index,
-                    "scheduled_at": scheduled_at_str,
-                    "class_url": class_url,
-                    "session_password": password_for_email,
-                    "recipients": recipients,
-                }
-                if dry_run:
-                    results.append({**payload, "success": True, "dry_run": True})
-                    continue
-
-                claimed_at = now if postgres_store else None
-                if postgres_store and not schedule_repo.claim_course_reminder(
-                    session_id,
-                    reminder_type,
-                    claimed_at=claimed_at,
-                ):
-                    # A second worker already owns or sent this reminder.
-                    continue
-                ok, error = _dispatch_reminder(payload)
-                if ok and postgres_store:
-                    if not schedule_repo.complete_course_reminder(
-                        session_id,
-                        reminder_type,
-                        claimed_at=claimed_at,
-                        sent_at=now,
-                    ):
-                        ok = False
-                        error = "Le lease du rappel a expiré avant confirmation"
-                elif ok:
-                    cursor.execute(
-                        f"UPDATE course_sessions SET {sent_column} = ?, updated_at = ? WHERE id = ?",
-                        (now_str, now_str, session_id),
-                    )
-                elif not ok and postgres_store:
-                    # Failed delivery remains retryable by the next timer tick.
-                    schedule_repo.release_course_reminder_claim(
-                        session_id,
-                        reminder_type,
-                        claimed_at=claimed_at,
-                    )
-                results.append({**payload, "success": ok, "error": error})
-
-        if conn is not None:
-            conn.commit()
+            results.extend(batch_results)
+            if len(batch_results) < batch_size:
+                break
         return results
     finally:
         if conn is not None:
             conn.close()
+
+
+def _validated_reminder_rule(data):
+    payload = dict(data or {})
+    name = str(payload.get("name") or "").strip()
+    if not name or len(name) > 120:
+        raise ValueError("Le nom du rappel est requis (120 caractères maximum)")
+    trigger_mode = str(payload.get("trigger_mode") or "relative_minutes").strip()
+    if trigger_mode not in {"local_day_time", "relative_minutes"}:
+        raise ValueError("Mode de déclenchement invalide")
+
+    days_before = None
+    minutes_before = None
+    local_time = None
+    if trigger_mode == "local_day_time":
+        try:
+            days_before = int(payload.get("days_before", 1))
+        except (TypeError, ValueError):
+            raise ValueError("Le nombre de jours avant doit être un entier")
+        if days_before < 0 or days_before > 365:
+            raise ValueError("Le nombre de jours avant doit être compris entre 0 et 365")
+        parsed_time = _parse_start_time(payload.get("local_time") or "18:00")
+        if days_before == 0 and parsed_time >= time(9, 0):
+            raise ValueError(
+                "Le jour même, le rappel doit être programmé avant le cours fixe de 09:00"
+            )
+        local_time = parsed_time.strftime("%H:%M")
+    else:
+        try:
+            minutes_before = int(payload.get("minutes_before", 5))
+        except (TypeError, ValueError):
+            raise ValueError("Le délai avant la séance doit être un entier")
+        if minutes_before < 1 or minutes_before > 525600:
+            raise ValueError("Le délai doit être compris entre 1 et 525600 minutes")
+
+    subject_template = str(payload.get("subject_template") or "").strip()
+    content_template = str(payload.get("content_template") or "").strip()
+    if not subject_template or len(subject_template) > 200:
+        raise ValueError("L'objet du mail est requis (200 caractères maximum)")
+    if "\r" in subject_template or "\n" in subject_template:
+        raise ValueError("L'objet du mail ne peut pas contenir de saut de ligne")
+    if not content_template or len(content_template) > 5000:
+        raise ValueError("Le contenu du mail est requis (5000 caractères maximum)")
+    recipient_scope = str(payload.get("recipient_scope") or "all")
+    if recipient_scope not in {"all", "selected_explicit"}:
+        raise ValueError("Audience du rappel invalide")
+    raw_ids = payload.get("recipient_ids") or []
+    if not isinstance(raw_ids, list):
+        raise ValueError("recipient_ids doit être une liste")
+    try:
+        recipient_ids = sorted({int(value) for value in raw_ids})
+    except (TypeError, ValueError):
+        raise ValueError("Un destinataire sélectionné est invalide")
+    if recipient_scope == "selected_explicit" and not recipient_ids:
+        raise ValueError("Sélectionnez au moins un destinataire")
+    return {
+        "name": name,
+        "trigger_mode": trigger_mode,
+        "days_before": days_before,
+        "minutes_before": minutes_before,
+        "local_time": local_time,
+        "subject_template": subject_template,
+        "content_template": content_template,
+        "recipient_scope": recipient_scope,
+        "recipient_ids": recipient_ids,
+        "is_active": bool(payload.get("is_active", True)),
+    }
+
+
+def get_course_reminder_rules(platform_id):
+    try:
+        evening_hour = int(os.environ.get("REMINDER_PREVIOUS_EVENING_HOUR", "18"))
+    except (TypeError, ValueError):
+        evening_hour = 18
+    schedule_repo.ensure_default_course_reminder_rules(
+        int(platform_id),
+        previous_evening_hour=evening_hour,
+        now=datetime.now(FRANCE_TZ),
+    )
+    return schedule_repo.list_course_reminder_rules(int(platform_id))
+
+
+def save_course_reminder_rule(platform_id, data, *, rule_id=None):
+    values = _validated_reminder_rule(data)
+    return schedule_repo.save_course_reminder_rule(
+        int(platform_id),
+        rule_id=int(rule_id) if rule_id is not None else None,
+        now=datetime.now(FRANCE_TZ),
+        **values,
+    )
+
+
+def delete_course_reminder_rule(platform_id, rule_id):
+    return schedule_repo.delete_course_reminder_rule(int(platform_id), int(rule_id))

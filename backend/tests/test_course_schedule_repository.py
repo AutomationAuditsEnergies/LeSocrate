@@ -37,6 +37,7 @@ def _make_schedule_db():
             audio_generation_next_retry_at TEXT,
             audio_job_id INTEGER,
             audio_folder_id INTEGER,
+            audio_storage_prefix TEXT,
             postponed_from TEXT,
             postponed_at TEXT,
             postponement_count INTEGER NOT NULL DEFAULT 0,
@@ -181,6 +182,158 @@ class CourseScheduleRepositoryTest(unittest.TestCase):
             self.assertEqual(rows[1][2:], ("planned", "NEW123"))
         finally:
             os.unlink(db_path)
+
+    def test_materialized_delivery_resolves_recipient_and_is_not_reclaimed_after_success(self):
+        db_path = _make_schedule_db()
+        try:
+            now = datetime.now(FRANCE_TZ)
+            with (
+                patch.object(repo, "schedule_store_is_postgres", lambda: False),
+                patch.object(repo, "get_db_connection", side_effect=lambda: sqlite3.connect(db_path)),
+            ):
+                recipients = repo.add_explicit_course_reminder_recipients(
+                    12,
+                    ["eleve@example.test"],
+                    created_at=now,
+                )
+                repo.ensure_default_course_reminder_rules(12, now=now)
+                rule = repo.list_course_reminder_rules(12)[0]
+                delivery_id = repo.claim_course_reminder_delivery(
+                    platform_id=12,
+                    session_id=9,
+                    rule_id=rule["id"],
+                    recipient_id=recipients[0]["id"],
+                    recipient_hash="a" * 64,
+                    due_at=now,
+                    claimed_at=now,
+                    lease_seconds=900,
+                    max_attempts=3,
+                )
+
+                self.assertIsNotNone(delivery_id)
+                resolved = repo.get_course_reminder_delivery_recipient(delivery_id)
+                self.assertEqual(resolved["email"], "eleve@example.test")
+                self.assertTrue(repo.complete_course_reminder_delivery(
+                    delivery_id,
+                    claimed_at=now,
+                    sent_at=now + timedelta(seconds=1),
+                ))
+                self.assertIsNone(repo.claim_course_reminder_delivery(
+                    platform_id=12,
+                    session_id=9,
+                    rule_id=rule["id"],
+                    recipient_id=recipients[0]["id"],
+                    recipient_hash="a" * 64,
+                    due_at=now,
+                    claimed_at=now + timedelta(hours=1),
+                    lease_seconds=900,
+                    max_attempts=3,
+                ))
+        finally:
+            os.unlink(db_path)
+
+    def test_repository_rejects_oversized_recipient_batch_before_database_access(self):
+        with patch.object(
+            repo,
+            "get_db_connection",
+            side_effect=AssertionError("database must not be opened"),
+        ), self.assertRaisesRegex(ValueError, "1000 emails maximum"):
+            repo.add_explicit_course_reminder_recipients(
+                12,
+                [f"eleve{index}@example.test" for index in range(1001)],
+                created_at=datetime.now(FRANCE_TZ),
+            )
+
+    def test_due_delivery_query_does_not_starve_j365_behind_500_nearer_sessions(self):
+        conn = sqlite3.connect(":memory:")
+        cursor = conn.cursor()
+        service.ensure_course_schedule_tables(cursor)
+        now = FRANCE_TZ.localize(datetime(2026, 1, 1, 12, 0))
+        created = now.strftime("%Y-%m-%d %H:%M:%S")
+        near_at = (now + timedelta(days=2)).strftime("%Y-%m-%d %H:%M:%S")
+        far_at = (now + timedelta(days=300)).strftime("%Y-%m-%d %H:%M:%S")
+        cursor.executemany(
+            """
+            INSERT INTO course_sessions (
+                platform_id, session_index, scheduled_at, status, session_password,
+                created_at, updated_at
+            ) VALUES (?, ?, ?, 'planned', 'CODE1234', ?, ?)
+            """,
+            [(1, index, near_at, created, created) for index in range(1, 501)]
+            + [(2, 1, far_at, created, created)],
+        )
+        cursor.executemany(
+            "INSERT INTO course_reminder_recipients (platform_id, email, created_at) VALUES (?, ?, ?)",
+            [(1, "near@example.test", created), (2, "far@example.test", created)],
+        )
+        cursor.executemany(
+            """
+            INSERT INTO course_reminder_rules (
+                platform_id, name, trigger_mode, days_before, local_time,
+                subject_template, content_template, recipient_scope,
+                is_active, created_at, updated_at
+            ) VALUES (?, ?, 'local_day_time', ?, '09:00', 'Rappel', 'Cours {date}', 'all', 1, ?, ?)
+            """,
+            [
+                (1, "J-1", 1, created, created),
+                (2, "J-365", 365, created, created),
+            ],
+        )
+
+        with patch.object(repo, "schedule_store_is_postgres", lambda: False):
+            rows = repo.list_due_reminder_delivery_candidates(
+                now=now,
+                active_hours=12,
+                limit=10,
+                sqlite_cursor=cursor,
+            )
+
+        conn.close()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["platform_id"], 2)
+        self.assertEqual(rows[0]["rule_name"], "J-365")
+
+    def test_relative_reminder_is_never_candidate_after_course_has_started(self):
+        conn = sqlite3.connect(":memory:")
+        cursor = conn.cursor()
+        service.ensure_course_schedule_tables(cursor)
+        now = FRANCE_TZ.localize(datetime(2026, 1, 1, 9, 2))
+        scheduled_at = (now - timedelta(minutes=2)).strftime("%Y-%m-%d %H:%M:%S")
+        created = now.strftime("%Y-%m-%d %H:%M:%S")
+        cursor.execute(
+            """
+            INSERT INTO course_sessions (
+                platform_id, session_index, scheduled_at, status, session_password,
+                created_at, updated_at
+            ) VALUES (1, 1, ?, 'active', 'CODE1234', ?, ?)
+            """,
+            (scheduled_at, created, created),
+        )
+        cursor.execute(
+            "INSERT INTO course_reminder_recipients (platform_id, email, created_at) VALUES (1, 'late@example.test', ?)",
+            (created,),
+        )
+        cursor.execute(
+            """
+            INSERT INTO course_reminder_rules (
+                platform_id, name, trigger_mode, minutes_before,
+                subject_template, content_template, recipient_scope,
+                is_active, created_at, updated_at
+            ) VALUES (1, '5 minutes', 'relative_minutes', 5, 'Rappel', 'Cours', 'all', 1, ?, ?)
+            """,
+            (created, created),
+        )
+
+        with patch.object(repo, "schedule_store_is_postgres", lambda: False):
+            rows = repo.list_due_reminder_delivery_candidates(
+                now=now,
+                active_hours=12,
+                limit=10,
+                sqlite_cursor=cursor,
+            )
+
+        conn.close()
+        self.assertEqual(rows, [])
 
     def test_schedule_backend_follows_pipeline_postgres_in_hybrid_mode(self):
         with patch.object(repo, "DATABASE_BACKEND", "hybrid"), patch.object(
@@ -373,6 +526,7 @@ class CourseScheduleRepositoryTest(unittest.TestCase):
             row = conn.execute(
                 """
                 SELECT audio_generation_status, audio_job_id, audio_folder_id,
+                       audio_storage_prefix,
                        audio_generation_completed_at, audio_generation_error
                 FROM course_sessions WHERE id = 9
                 """
@@ -380,8 +534,9 @@ class CourseScheduleRepositoryTest(unittest.TestCase):
             conn.close()
             self.assertEqual(row[0], "completed")
             self.assertEqual(row[1:3], (41, 55))
-            self.assertIsNotNone(row[3])
-            self.assertIsNone(row[4])
+            self.assertEqual(row[3], "course-sessions/9")
+            self.assertIsNotNone(row[4])
+            self.assertIsNone(row[5])
         finally:
             os.unlink(db_path)
 
@@ -420,6 +575,88 @@ class CourseScheduleRepositoryTest(unittest.TestCase):
                 retry_at,
                 (started + timedelta(minutes=6)).strftime("%Y-%m-%d %H:%M:%S"),
             )
+        finally:
+            os.unlink(db_path)
+
+    def test_scheduled_audio_readiness_requires_every_non_cancelled_day(self):
+        db_path = _make_schedule_db()
+        try:
+            conn = sqlite3.connect(db_path)
+            conn.execute(
+                """
+                UPDATE course_sessions
+                SET audio_generation_status = 'completed',
+                    audio_generation_completed_at = '2026-07-10 08:30:00',
+                    audio_job_id = 41, audio_folder_id = 55
+                WHERE id = 9
+                """
+            )
+            conn.execute(
+                """
+                INSERT INTO course_sessions (
+                    id, platform_id, session_index, scheduled_at, status,
+                    created_at, updated_at
+                ) VALUES (10, 12, 2, '2026-07-18 09:00:00', 'planned',
+                          '2026-07-10 09:00:00', '2026-07-10 09:00:00')
+                """
+            )
+            conn.commit()
+            conn.close()
+
+            with (
+                patch.object(repo, "schedule_store_is_postgres", lambda: False),
+                patch.object(repo, "get_db_connection", side_effect=lambda: sqlite3.connect(db_path)),
+            ):
+                pending = repo.get_scheduled_audio_completion_readiness(
+                    12, 41, required_session_count=2
+                )
+
+            self.assertFalse(pending["ready"])
+            self.assertEqual(pending["completed_count"], 1)
+
+            conn = sqlite3.connect(db_path)
+            conn.execute(
+                """
+                UPDATE course_sessions
+                SET audio_generation_status = 'running',
+                    audio_generation_started_at = '2026-07-17 08:00:00',
+                    audio_job_id = 41, audio_folder_id = 56
+                WHERE id = 10
+                """
+            )
+            conn.commit()
+            conn.close()
+            with (
+                patch.object(repo, "schedule_store_is_postgres", lambda: False),
+                patch.object(repo, "get_db_connection", side_effect=lambda: sqlite3.connect(db_path)),
+            ):
+                completing = repo.get_scheduled_audio_completion_readiness(
+                    12, 41, required_session_count=2, completing_session_id=10
+                )
+            self.assertTrue(completing["ready"])
+
+            conn = sqlite3.connect(db_path)
+            conn.execute(
+                """
+                UPDATE course_sessions
+                SET audio_generation_status = 'completed',
+                    audio_generation_completed_at = '2026-07-17 08:30:00',
+                    audio_job_id = 41, audio_folder_id = 56
+                WHERE id = 10
+                """
+            )
+            conn.commit()
+            conn.close()
+            with (
+                patch.object(repo, "schedule_store_is_postgres", lambda: False),
+                patch.object(repo, "get_db_connection", side_effect=lambda: sqlite3.connect(db_path)),
+            ):
+                ready = repo.get_scheduled_audio_completion_readiness(
+                    12, 41, required_session_count=2
+                )
+
+            self.assertTrue(ready["ready"])
+            self.assertEqual(ready["remaining_count"], 0)
         finally:
             os.unlink(db_path)
 
@@ -715,7 +952,7 @@ class CourseScheduleRepositoryTest(unittest.TestCase):
                     "total_training_days": 2,
                     "weekly_course_count": 1,
                     "weekdays": [first_day.weekday()],
-                    "start_time": "10:00",
+                    "start_time": "09:00",
                     "start_date": first_day.strftime("%Y-%m-%d"),
                 },
             )
@@ -730,55 +967,198 @@ class CourseScheduleRepositoryTest(unittest.TestCase):
         scheduled_at = datetime.now(FRANCE_TZ) + timedelta(minutes=2)
         claims = []
         dispatched = []
+        dispatched_payloads = []
 
-        def claim(session_id, reminder_type, *, claimed_at):
-            claims.append((session_id, reminder_type, claimed_at))
-            return True
+        def claim(**kwargs):
+            claims.append(kwargs)
+            return len(claims)
 
-        def dispatch(payload):
-            dispatched.append(payload["type"])
-            return True, None
+        def dispatch(payloads):
+            dispatched_payloads.extend(payloads)
+            dispatched.extend(payload["type"] for payload in payloads)
+            return {int(payload["delivery_id"]): (True, None) for payload in payloads}
+
+        rules = [
+            {
+                "id": 1,
+                "platform_id": 12,
+                "system_key": "previous_evening",
+                "name": "La veille",
+                "trigger_mode": "local_day_time",
+                "days_before": 1,
+                "minutes_before": None,
+                "local_time": "18:00",
+                "subject_template": "Demain",
+                "content_template": "Cours le {date} à {time}",
+                "recipient_scope": "all",
+                "recipient_ids": [],
+                "is_active": True,
+            },
+            {
+                "id": 2,
+                "platform_id": 12,
+                "system_key": "five_minutes_before",
+                "name": "5 minutes",
+                "trigger_mode": "relative_minutes",
+                "days_before": None,
+                "minutes_before": 5,
+                "local_time": None,
+                "subject_template": "Dans 5 minutes",
+                "content_template": "Cours à {time}",
+                "recipient_scope": "all",
+                "recipient_ids": [],
+                "is_active": True,
+            },
+        ]
 
         with (
+            patch.dict("os.environ", {
+                "WEBSITE_SITE_NAME": "Formation3",
+                "PLATFORM_1_FRONTEND_URL": "https://example.test",
+            }),
             patch.object(service.schedule_repo, "schedule_store_is_postgres", lambda: True),
             patch.object(
                 service.schedule_repo,
-                "list_due_reminder_sessions",
-                return_value=[{
-                    "id": 9,
-                    "platform_id": 12,
-                    "session_index": 1,
-                    "scheduled_at": scheduled_at,
-                    "reminder_previous_evening_sent_at": None,
-                    "reminder_5min_sent_at": None,
-                    "session_password": "ABC123",
-                }],
-            ),
+                "ensure_default_course_reminder_rules_for_schedules",
+            ) as seed_default_rules,
             patch.object(
                 service.schedule_repo,
-                "list_course_reminder_recipients",
-                return_value=[{"email": "eleve@example.com", "nom": "", "prenom": ""}],
+                "list_due_reminder_delivery_candidates",
+                return_value=[
+                    {
+                        "session_id": 9,
+                        "platform_id": 12,
+                        "session_index": 1,
+                        "scheduled_at": scheduled_at,
+                        "session_password": "ABC123",
+                        "rule_id": rule["id"],
+                        "system_key": rule["system_key"],
+                        "subject_template": rule["subject_template"],
+                        "content_template": rule["content_template"],
+                        "recipient_id": 4,
+                        "email": "eleve@example.com",
+                        "due_at": scheduled_at - (
+                            timedelta(days=1)
+                            if rule["system_key"] == "previous_evening"
+                            else timedelta(minutes=5)
+                        ),
+                    }
+                    for rule in rules
+                ],
             ),
             patch.object(
                 service.schedule_repo,
                 "get_platform_class_identity",
                 return_value={"platform_slug": "classe-test", "center_slug": "centre-test"},
             ),
-            patch.object(service.schedule_repo, "claim_course_reminder", side_effect=claim),
-            patch.object(service.schedule_repo, "complete_course_reminder", return_value=True),
-            patch.object(service, "_dispatch_reminder", side_effect=dispatch),
+            patch.object(service.schedule_repo, "claim_course_reminder_delivery", side_effect=claim),
+            patch.object(service.schedule_repo, "complete_course_reminder_delivery", return_value=True),
+            patch.object(service, "_dispatch_reminder_batch", side_effect=dispatch),
             patch.object(
                 service,
                 "get_db_connection",
                 side_effect=AssertionError("SQLite must not be opened"),
             ),
         ):
-            results = service.process_due_reminders(base_url="https://example.test")
+            results = service.process_due_reminders()
 
         self.assertEqual({item["type"] for item in results}, {"previous_evening", "five_minutes_before"})
         self.assertEqual(set(dispatched), {"previous_evening", "five_minutes_before"})
-        self.assertEqual({item[1] for item in claims}, {"previous_evening", "five_minutes_before"})
-        self.assertTrue(all(item[2].tzinfo is not None for item in claims))
+        self.assertEqual({item["rule_id"] for item in claims}, {1, 2})
+        self.assertTrue(all(item["claimed_at"].tzinfo is not None for item in claims))
+        self.assertTrue(all(item["recipient_id"] == 4 for item in claims))
+        self.assertTrue(all(item["class_url"].startswith("https://example.test/classe/") for item in results))
+        self.assertTrue(all(item["class_url"].startswith("https://example.test/classe/") for item in dispatched_payloads))
+        self.assertTrue(all("invite=" in item["class_url"] for item in dispatched_payloads))
+        self.assertTrue(all("{time}" not in item["content"] for item in dispatched_payloads))
+        self.assertTrue(all(scheduled_at.strftime("%H:%M") in item["content"] for item in dispatched_payloads))
+        seed_default_rules.assert_called_once()
+
+    def test_partial_reminder_batch_does_not_resend_successful_recipient(self):
+        scheduled_at = datetime.now(FRANCE_TZ) + timedelta(minutes=2)
+        base_candidate = {
+            "session_id": 9,
+            "platform_id": 12,
+            "session_index": 1,
+            "scheduled_at": scheduled_at,
+            "session_password": "ABC123",
+            "rule_id": 2,
+            "system_key": "five_minutes_before",
+            "subject_template": "Dans 5 minutes",
+            "content_template": "Cours à {time}",
+            "due_at": scheduled_at - timedelta(minutes=5),
+        }
+        candidates = [
+            {**base_candidate, "recipient_id": 4, "email": "ok@example.test"},
+            {**base_candidate, "recipient_id": 5, "email": "retry@example.test"},
+        ]
+        dispatched_recipient_batches = []
+
+        def dispatch(payloads):
+            dispatched_recipient_batches.append([
+                payload["recipient"]["email"] for payload in payloads
+            ])
+            if len(dispatched_recipient_batches) == 1:
+                return {101: (True, None), 102: (False, "temporaire")}
+            return {102: (True, None)}
+
+        with (
+            patch.dict("os.environ", {
+                "WEBSITE_SITE_NAME": "Formation3",
+                "PLATFORM_1_FRONTEND_URL": "https://example.test",
+            }),
+            patch.object(service.schedule_repo, "schedule_store_is_postgres", lambda: True),
+            patch.object(
+                service.schedule_repo,
+                "ensure_default_course_reminder_rules_for_schedules",
+            ),
+            patch.object(
+                service.schedule_repo,
+                "list_due_reminder_delivery_candidates",
+                side_effect=[candidates, [candidates[1]]],
+            ),
+            patch.object(
+                service.schedule_repo,
+                "get_platform_class_identity",
+                return_value={"platform_slug": "classe-test", "center_slug": "centre-test"},
+            ),
+            patch.object(
+                service.schedule_repo,
+                "claim_course_reminder_delivery",
+                side_effect=lambda **kwargs: {4: 101, 5: 102}[kwargs["recipient_id"]],
+            ),
+            patch.object(
+                service.schedule_repo,
+                "complete_course_reminder_delivery",
+                return_value=True,
+            ) as complete_delivery,
+            patch.object(
+                service.schedule_repo,
+                "release_course_reminder_delivery",
+                return_value=True,
+            ) as release_delivery,
+            patch.object(service, "_dispatch_reminder_batch", side_effect=dispatch),
+            patch.object(
+                service,
+                "get_db_connection",
+                side_effect=AssertionError("SQLite must not be opened"),
+            ),
+        ):
+            first_results = service.process_due_reminders()
+            second_results = service.process_due_reminders()
+
+        self.assertEqual(
+            dispatched_recipient_batches,
+            [["ok@example.test", "retry@example.test"], ["retry@example.test"]],
+        )
+        self.assertEqual([item["success"] for item in first_results], [True, False])
+        self.assertEqual([item["success"] for item in second_results], [True])
+        self.assertEqual(
+            [call.args[0] for call in complete_delivery.call_args_list],
+            [101, 102],
+        )
+        release_delivery.assert_called_once()
+        self.assertEqual(release_delivery.call_args.args[0], 102)
 
     def test_reminder_claim_is_a_lease_and_sent_timestamp_is_written_after_success(self):
         db_path = _make_schedule_db()
