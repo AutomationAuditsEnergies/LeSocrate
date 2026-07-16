@@ -59,7 +59,9 @@ def archive_public_platform_audios(platform_id, *, reason="auto-publish", blob_s
     archive_cc = bsc.get_container_client(archive_container)
 
     try:
-        archive_cc.create_container(public_access="blob")
+        # Archives de séance et versions précédentes restent privées. Seul le
+        # cache de diffusion courant peut être exposé derrière Front Door.
+        archive_cc.create_container()
     except ResourceExistsError:
         pass
 

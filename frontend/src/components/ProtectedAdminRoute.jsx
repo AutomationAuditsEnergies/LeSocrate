@@ -39,6 +39,7 @@ export default function ProtectedAdminRoute({ children, loginPath = '/connexion-
           }
         }
       } catch (error) {
+        if (error?.name === 'AbortError' || !isMounted) return
         console.error('Erreur vérification auth admin:', error)
         if (isMounted) {
           setIsAuthenticated(false)

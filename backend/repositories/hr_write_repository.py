@@ -409,7 +409,7 @@ def create_postgres_manual_formation_module(
             )
             cur.execute(
                 """
-                SELECT id
+                SELECT id, teacher_name, teacher_color
                 FROM platform_config
                 WHERE id = %s
                   AND center_account_id IS NOT DISTINCT FROM %s
@@ -417,7 +417,8 @@ def create_postgres_manual_formation_module(
                 """,
                 (platform_id, center_account_id),
             )
-            if cur.fetchone() is None:
+            platform_row = cur.fetchone()
+            if platform_row is None:
                 raise CloneSourceNotFound("Plateforme du module manuel introuvable")
 
             cur.execute(
@@ -454,13 +455,29 @@ def create_postgres_manual_formation_module(
                 """
                 INSERT INTO formation_modules (
                     center_account_id, rncp_code, tp_name, version, status,
-                    source_pipeline_job_id, source_platform_id, validated_at
+                    source_pipeline_job_id, source_platform_id, teacher_name,
+                    teacher_color, asset_namespace, immutable, validated_at
                 )
-                VALUES (%s, NULL, %s, %s, 'validated', NULL, %s, NOW())
+                VALUES (
+                    %s, NULL, %s, %s, 'validated', NULL, %s, %s, %s,
+                    'centres/' || COALESCE(%s, 0)::text || '/modules/manual-' || %s::text
+                        || '/versions/' || %s,
+                    TRUE, NOW()
+                )
                 RETURNING id, rncp_code, tp_name, version, status,
                           source_pipeline_job_id, source_platform_id,
                           center_account_id, validated_at
                 """,
-                (center_account_id, module_name, version, platform_id),
+                (
+                    center_account_id,
+                    module_name,
+                    version,
+                    platform_id,
+                    platform_row.get("teacher_name"),
+                    platform_row.get("teacher_color"),
+                    center_account_id,
+                    platform_id,
+                    version,
+                ),
             )
             return dict(cur.fetchone())

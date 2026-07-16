@@ -189,7 +189,7 @@ def _normalize_project(data: dict[str, Any], center_account_id: int) -> tuple[st
     project["teacher_color"] = str(project.get("teacher_color") or "violet").strip().lower()
     if not project["name"] or not project["teacher_name"]:
         raise BillingError("Le nom du professeur et celui du projet sont requis.")
-    if project["teacher_color"] not in {"violet", "blue", "pink", "amber"}:
+    if project["teacher_color"] not in {"violet", "blue", "pink", "green", "amber"}:
         raise BillingError("Couleur de professeur invalide.")
 
     if operation_type == "new_teacher":

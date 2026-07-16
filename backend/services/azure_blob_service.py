@@ -1,4 +1,5 @@
 import os
+import hashlib
 from functools import lru_cache
 from azure.storage.blob import BlobServiceClient, ContentSettings
 from azure.core.exceptions import ResourceExistsError
@@ -32,7 +33,22 @@ def _content_settings_for_blob(blob_path):
 
 @lru_cache(maxsize=1)
 def _get_blob_service_client():
-    """Reuse the SDK transport/pool instead of rebuilding it for every segment."""
+    """Reuse the SDK transport/pool and prefer Azure Managed Identity.
+
+    A connection string remains a local/legacy fallback. Production can set
+    ``AZURE_TTS_STORAGE_ACCOUNT_URL`` and optionally
+    ``AZURE_MANAGED_IDENTITY_CLIENT_ID`` without storing an account key.
+    """
+    account_url = (
+        os.getenv("AZURE_TTS_STORAGE_ACCOUNT_URL")
+        or os.getenv("AZURE_STORAGE_ACCOUNT_URL")
+    )
+    if account_url:
+        from azure.identity import DefaultAzureCredential
+
+        client_id = (os.getenv("AZURE_MANAGED_IDENTITY_CLIENT_ID") or "").strip() or None
+        credential = DefaultAzureCredential(managed_identity_client_id=client_id)
+        return BlobServiceClient(account_url=account_url.rstrip("/"), credential=credential)
     conn_str = (
         os.getenv("AZURE_TTS_STORAGE_CONNECTION_STRING")
         or os.getenv("AZURE_STORAGE_CONNECTION_STRING")
@@ -65,10 +81,14 @@ def upload_blob(container_name, blob_path, data):
     """Upload des bytes ou un file-like vers Azure Blob Storage"""
     client = _get_blob_service_client()
     blob_client = client.get_blob_client(container=container_name, blob=blob_path)
+    metadata = None
+    if isinstance(data, (bytes, bytearray, memoryview)):
+        metadata = {"sha256": hashlib.sha256(bytes(data)).hexdigest()}
     blob_client.upload_blob(
         data,
         overwrite=True,
         content_settings=_content_settings_for_blob(blob_path),
+        metadata=metadata,
     )
     logger.info(f"✅ Blob uploadé: {container_name}/{blob_path}")
     return blob_path

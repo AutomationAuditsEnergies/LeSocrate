@@ -4,6 +4,12 @@ import CoursFoldersModal from '../components/CoursFolders'
 import SlideToConfirm, { BackupPipeline } from '../components/SlideToConfirm'
 import { getHiddenPipelineProgress, getTeacherPreparation } from '../teacherPreparation'
 import { getAudioStatusMeta, getNextCourseSession, scheduleSelectionIsValid } from '../courseSchedule'
+import {
+  CENTER_ONBOARDING_VERSION,
+  getActiveTeachers,
+  getReusableTeacherDefaults,
+  shouldShowCenterOnboarding,
+} from '../centerWorkspace'
 
 // ─── Material Icon Component ─────────────────────────────────────────────────
 const Icon = ({ name, className = '' }) => (
@@ -144,6 +150,10 @@ export default function HRDashboard() {
   const [billingLoading, setBillingLoading] = useState(true)
   const [activeTeacherOrderId, setActiveTeacherOrderId] = useState(null)
   const [orderNotice, setOrderNotice] = useState(null)
+  const [showOnboarding, setShowOnboarding] = useState(false)
+  const [onboardingStep, setOnboardingStep] = useState(0)
+  const [onboardingSaving, setOnboardingSaving] = useState(false)
+  const [archivingPlatformId, setArchivingPlatformId] = useState(null)
   const CARDS_PER_PAGE = 3
 
   const handleLogout = async () => {
@@ -308,6 +318,20 @@ export default function HRDashboard() {
 
   useEffect(() => {
     fetchPlatforms()
+  }, [])
+
+  useEffect(() => {
+    let cancelled = false
+    apiFetch('/api/hr/onboarding')
+      .then(async (response) => ({ response, data: await response.json().catch(() => ({})) }))
+      .then(({ response, data }) => {
+        if (!cancelled && response.ok && shouldShowCenterOnboarding(data)) {
+          setOnboardingStep(0)
+          setShowOnboarding(true)
+        }
+      })
+      .catch((error) => console.error('Chargement onboarding centre impossible:', error))
+    return () => { cancelled = true }
   }, [])
 
   useEffect(() => {
@@ -573,6 +597,67 @@ export default function HRDashboard() {
     })
   }
 
+  const handleArchivePlatform = async (platformId) => {
+    if (archivingPlatformId) return
+    setArchivingPlatformId(platformId)
+    try {
+      const resp = await apiFetch(`/api/hr/platforms/${platformId}/lifecycle`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ lifecycle_status: 'archived' }),
+      })
+      const data = await resp.json().catch(() => ({}))
+      if (!resp.ok || !data.success) throw new Error(data.error || 'Archivage impossible')
+      setPlatforms((current) => current.map((platform) => (
+        platform.id === platformId
+          ? { ...platform, ...(data.platform || {}), lifecycle_status: 'archived' }
+          : platform
+      )))
+      setExpandedPlatform((current) => (current === platformId ? null : current))
+      setOrderNotice({
+        tone: 'success',
+        title: 'Professeur archivé',
+        message: 'Il quitte l’espace actif, mais son identité, ses cours et ses audios restent disponibles pour une réutilisation future.',
+      })
+      await fetchModules()
+    } catch (error) {
+      console.error('Archivage professeur impossible:', error)
+      setOrderNotice({
+        tone: 'error',
+        title: 'Archivage impossible',
+        message: error.message || 'Le professeur n’a pas été modifié.',
+      })
+    } finally {
+      setArchivingPlatformId(null)
+    }
+  }
+
+  const completeOnboarding = async () => {
+    if (onboardingSaving) return
+    setOnboardingSaving(true)
+    try {
+      const response = await apiFetch('/api/hr/onboarding/complete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ version: CENTER_ONBOARDING_VERSION }),
+      })
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok || !data.success) throw new Error(data.error || 'Enregistrement impossible')
+      setShowOnboarding(false)
+      setOnboardingStep(0)
+    } catch (error) {
+      console.error('Enregistrement onboarding impossible:', error)
+      setOrderNotice({
+        tone: 'error',
+        title: 'Guide non enregistré',
+        message: 'Vous pouvez continuer à utiliser la plateforme et relancer le guide avec le bouton d’aide.',
+      })
+      setShowOnboarding(false)
+    } finally {
+      setOnboardingSaving(false)
+    }
+  }
+
   const handlePlayAudio = (audio) => {
     if (playingAudio?.name === audio.name) {
       setPlayingAudio(null)
@@ -810,6 +895,8 @@ export default function HRDashboard() {
       return String(b.created_at || '').localeCompare(String(a.created_at || ''))
     })
   }, [modules, moduleSearchQuery])
+
+  const activeTeachers = useMemo(() => getActiveTeachers(platforms), [platforms])
 
   const closeModulesModal = () => {
     setShowModulesModal(false)
@@ -1089,9 +1176,37 @@ export default function HRDashboard() {
             backdropFilter: 'blur(8px)'
           }}
         >
-          <div className="mx-auto max-w-7xl px-6 pt-4">
-            <div className="flex items-center justify-end gap-4">
+          <div className="mx-auto max-w-7xl px-4 pt-4 sm:px-6">
+            <div className="flex items-center justify-between gap-4">
+              <div className="min-w-0">
+                <p className="text-[10px] font-semibold uppercase tracking-[0.18em]" style={{ color: colors.textMuted }}>
+                  Espace centre
+                </p>
+                <h1 className="truncate text-lg font-semibold tracking-tight" style={{ color: colors.text }}>
+                  Le Socrate
+                </h1>
+              </div>
               <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setDarkMode((current) => !current)}
+                  className="flex h-10 w-10 items-center justify-center rounded-lg transition-colors hover:bg-black/5 dark:hover:bg-white/5"
+                  style={{ color: colors.textMuted, border: `1px solid ${colors.border}` }}
+                  title={darkMode ? 'Utiliser le thème clair' : 'Utiliser le thème sombre'}
+                  aria-label={darkMode ? 'Utiliser le thème clair' : 'Utiliser le thème sombre'}
+                >
+                  <Icon name={darkMode ? 'light_mode' : 'dark_mode'} className="text-lg" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => { setOnboardingStep(0); setShowOnboarding(true) }}
+                  className="flex h-10 w-10 items-center justify-center rounded-lg transition-colors hover:bg-black/5 dark:hover:bg-white/5"
+                  style={{ color: colors.textMuted, border: `1px solid ${colors.border}` }}
+                  title="Revoir le guide de l’espace centre"
+                  aria-label="Revoir le guide de l’espace centre"
+                >
+                  <Icon name="help_outline" className="text-lg" />
+                </button>
                 <button
                   type="button"
                   onClick={handleLogout}
@@ -1101,12 +1216,12 @@ export default function HRDashboard() {
                   title="Se déconnecter de l’espace centre"
                 >
                   <Icon name="logout" className="text-base" />
-                  <span>{loggingOut ? 'Déconnexion…' : 'Se déconnecter'}</span>
+                  <span className="hidden sm:inline">{loggingOut ? 'Déconnexion…' : 'Se déconnecter'}</span>
                 </button>
               </div>
             </div>
 
-            <nav className="mt-5 flex items-end gap-10" aria-label="Navigation dashboard formations">
+            <nav className="mt-5 flex items-end gap-8 overflow-x-auto" aria-label="Navigation dashboard formations">
               <SkoolTab
                 active={!showModulesModal && !showCreateModal}
                 onClick={showDashboardView}
@@ -1213,10 +1328,13 @@ export default function HRDashboard() {
               onModuleSearchChange={setModuleSearchQuery}
               onBack={closeModulesModal}
               onCreateModule={openCreateModuleFlow}
-              onUseModule={(moduleId) => {
+              onUseModule={(module) => {
+                const defaults = getReusableTeacherDefaults(module)
                 openCreateModal()
                 setFormationMode('existing')
-                setSelectedModuleId(String(moduleId))
+                setSelectedModuleId(String(module.id))
+                setTeacherFirstName(defaults.teacherName)
+                setTeacherColor(defaults.teacherColor)
               }}
               onDeleteModule={handleDeleteModule}
             />
@@ -1263,7 +1381,7 @@ export default function HRDashboard() {
             />
           ) : (
             <PlatformCardsView
-              platforms={platforms}
+              platforms={activeTeachers}
               cardPage={cardPage}
               setCardPage={setCardPage}
               cardsPerPage={CARDS_PER_PAGE}
@@ -1317,6 +1435,8 @@ export default function HRDashboard() {
               onPdfUpload={handlePdfUpload}
               onDeletePdf={handleDeletePdf}
               onDeletePlatform={handleDeletePlatform}
+              onArchivePlatform={handleArchivePlatform}
+              archivingPlatformId={archivingPlatformId}
               newlyCreatedPlatformId={newlyCreatedPlatformId}
               retryingPlatformId={retryingPlatformId}
               onRetryPreparation={handleRetryTeacherPreparation}
@@ -1778,6 +1898,142 @@ export default function HRDashboard() {
         )
       })()}
 
+      {showOnboarding && (
+        <CenterOnboarding
+          colors={colors}
+          darkMode={darkMode}
+          step={onboardingStep}
+          onStepChange={setOnboardingStep}
+          onClose={() => setShowOnboarding(false)}
+          onComplete={completeOnboarding}
+          saving={onboardingSaving}
+        />
+      )}
+
+    </div>
+  )
+}
+
+const CENTER_ONBOARDING_STEPS = [
+  {
+    icon: 'school',
+    eyebrow: 'Votre espace actif',
+    title: 'Suivez vos professeurs IA en cours',
+    description: 'Mes professeurs IA regroupe les professeurs en préparation et les promotions actives. La préparation continue en arrière-plan : vous pouvez quitter la page sans l’interrompre.',
+    detail: 'Chaque carte donne accès au planning, aux cours, aux audios, aux élèves et aux présences.',
+  },
+  {
+    icon: 'person_add',
+    eyebrow: 'Création',
+    title: 'Créez un nouveau professeur IA',
+    description: 'Renseignez son identité, sa formation et son calendrier. Après le paiement Stripe confirmé par le serveur, la plateforme prépare ses cours de manière durable.',
+    detail: 'Le prix est calculé selon le nombre de journées avant l’ouverture du paiement hébergé.',
+  },
+  {
+    icon: 'content_copy',
+    eyebrow: 'Réutilisation optimisée',
+    title: 'Réutilisez un professeur sans dupliquer ses ressources',
+    description: 'La bibliothèque conserve l’identité, les cours et les audios du professeur. Une nouvelle promotion partage le module Azure d’origine, avec une copie uniquement si vous modifiez un fichier.',
+    detail: 'Cette architecture réduit le stockage, accélère la remise en service et reste adaptée à un grand nombre de centres.',
+  },
+  {
+    icon: 'event_available',
+    eyebrow: 'Exploitation',
+    title: 'Planifiez, générez à J-1, puis archivez',
+    description: 'Le planning pilote les séances et la génération audio à J-1. À la fin d’une promotion, archivez le professeur : il quitte l’espace actif sans perdre son module réutilisable.',
+    detail: 'L’archivage n’efface ni l’historique PostgreSQL, ni les ressources Azure.',
+  },
+]
+
+function CenterOnboarding({ colors, darkMode, step, onStepChange, onClose, onComplete, saving }) {
+  const current = CENTER_ONBOARDING_STEPS[step] || CENTER_ONBOARDING_STEPS[0]
+  const isLast = step === CENTER_ONBOARDING_STEPS.length - 1
+
+  return (
+    <div
+      className="fixed inset-0 z-[80] flex items-center justify-center p-4"
+      style={{ backgroundColor: 'rgba(15, 23, 42, 0.66)' }}
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="center-onboarding-title"
+    >
+      <div
+        className="w-full max-w-xl overflow-hidden rounded-2xl shadow-2xl"
+        style={{ backgroundColor: colors.cardBg, border: `1px solid ${colors.border}` }}
+      >
+        <div className="flex items-center justify-between gap-4 px-5 py-4 sm:px-6" style={{ borderBottom: `1px solid ${colors.border}` }}>
+          <div>
+            <p className="text-[10px] font-semibold uppercase tracking-[0.18em]" style={{ color: colors.textMuted }}>
+              Guide de l’espace centre
+            </p>
+            <p className="mt-1 text-xs tabular-nums" style={{ color: colors.textSecondary }}>
+              Étape {step + 1} sur {CENTER_ONBOARDING_STEPS.length}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="flex h-9 w-9 items-center justify-center rounded-lg transition-colors hover:bg-black/5 dark:hover:bg-white/5"
+            style={{ color: colors.textMuted }}
+            aria-label="Fermer le guide"
+          >
+            <Icon name="close" className="text-lg" />
+          </button>
+        </div>
+
+        <div className="px-5 py-6 sm:px-8 sm:py-8">
+          <div className="mb-6 flex gap-2" aria-hidden="true">
+            {CENTER_ONBOARDING_STEPS.map((_, index) => (
+              <span
+                key={index}
+                className="h-1.5 flex-1 rounded-full"
+                style={{ backgroundColor: index <= step ? '#8B5CF6' : colors.border }}
+              />
+            ))}
+          </div>
+          <div
+            className="flex h-12 w-12 items-center justify-center rounded-xl"
+            style={{ backgroundColor: darkMode ? 'rgba(139, 92, 246, 0.15)' : '#f5f3ff', color: darkMode ? '#c4b5fd' : '#7c3aed' }}
+          >
+            <Icon name={current.icon} className="text-2xl" />
+          </div>
+          <p className="mt-5 text-[10px] font-semibold uppercase tracking-[0.16em]" style={{ color: '#8B5CF6' }}>
+            {current.eyebrow}
+          </p>
+          <h2 id="center-onboarding-title" className="mt-2 text-2xl font-semibold tracking-tight" style={{ color: colors.text }}>
+            {current.title}
+          </h2>
+          <p className="mt-4 text-sm leading-6" style={{ color: colors.textSecondary }}>
+            {current.description}
+          </p>
+          <div className="mt-5 flex items-start gap-3 rounded-xl px-4 py-3" style={{ backgroundColor: colors.innerBg, border: `1px solid ${colors.border}` }}>
+            <Icon name="info_outline" className="mt-0.5 text-base" style={{ color: colors.textMuted }} />
+            <p className="text-xs leading-5" style={{ color: colors.textMuted }}>{current.detail}</p>
+          </div>
+        </div>
+
+        <div className="flex items-center justify-between gap-3 px-5 py-4 sm:px-6" style={{ borderTop: `1px solid ${colors.border}` }}>
+          <button
+            type="button"
+            onClick={() => onStepChange(Math.max(0, step - 1))}
+            disabled={step === 0 || saving}
+            className="rounded-lg px-3.5 py-2 text-sm font-medium transition-colors disabled:opacity-0"
+            style={{ color: colors.textSecondary, border: `1px solid ${colors.border}` }}
+          >
+            Précédent
+          </button>
+          <button
+            type="button"
+            onClick={() => (isLast ? onComplete() : onStepChange(step + 1))}
+            disabled={saving}
+            className="inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold text-white transition-colors disabled:cursor-wait disabled:opacity-60"
+            style={{ backgroundColor: '#8B5CF6' }}
+          >
+            {saving ? 'Enregistrement…' : isLast ? 'Terminer le guide' : 'Continuer'}
+            {!saving && <Icon name={isLast ? 'check' : 'arrow_forward'} className="text-base" />}
+          </button>
+        </div>
+      </div>
     </div>
   )
 }
@@ -1787,7 +2043,7 @@ function SkoolTab({ active, onClick, label, colors }) {
     <button
       type="button"
       onClick={onClick}
-      className="relative pb-4 text-base font-semibold transition-colors"
+      className="relative whitespace-nowrap pb-4 text-sm font-semibold transition-colors sm:text-base"
       style={{ color: active ? colors.text : '#8A8A8A' }}
     >
       {label}
@@ -1844,22 +2100,25 @@ function PlatformCardsView({
   onPdfUpload,
   onDeletePdf,
   onDeletePlatform,
+  onArchivePlatform,
+  archivingPlatformId,
   newlyCreatedPlatformId,
   retryingPlatformId,
   onRetryPreparation,
 }) {
   const totalPages = Math.ceil(platforms.length / cardsPerPage)
+  const safeCardPage = Math.min(cardPage, Math.max(0, totalPages - 1))
 
   return (
     <>
       {platforms.length > cardsPerPage && (
         <div className="mb-6 flex items-center justify-center gap-3">
           <span className="text-sm" style={{ color: colors.textMuted, fontVariantNumeric: 'tabular-nums' }}>
-            Page <span className="font-semibold" style={{ color: colors.text }}>{cardPage + 1}</span> / {totalPages}
+            Page <span className="font-semibold" style={{ color: colors.text }}>{safeCardPage + 1}</span> / {totalPages}
           </span>
           <button
             onClick={() => setCardPage(p => Math.max(0, p - 1))}
-            disabled={cardPage === 0}
+            disabled={safeCardPage === 0}
             aria-label="Page précédente"
             className="flex h-10 w-10 items-center justify-center rounded-xl transition-colors hover:bg-black/5 dark:hover:bg-white/5 disabled:cursor-not-allowed disabled:opacity-30"
             style={{ border: `1px solid ${colors.border}`, color: colors.textSecondary }}
@@ -1868,7 +2127,7 @@ function PlatformCardsView({
           </button>
           <button
             onClick={() => setCardPage(p => Math.min(totalPages - 1, p + 1))}
-            disabled={cardPage >= totalPages - 1}
+            disabled={safeCardPage >= totalPages - 1}
             aria-label="Page suivante"
             className="flex h-10 w-10 items-center justify-center rounded-xl transition-colors hover:bg-black/5 dark:hover:bg-white/5 disabled:cursor-not-allowed disabled:opacity-30"
             style={{ border: `1px solid ${colors.border}`, color: colors.textSecondary }}
@@ -1878,8 +2137,27 @@ function PlatformCardsView({
         </div>
       )}
 
+      {platforms.length === 0 ? (
+        <div
+          className="rounded-2xl border px-6 py-14 text-center"
+          style={{ backgroundColor: colors.cardBg, borderColor: colors.border }}
+        >
+          <div
+            className="mx-auto flex h-12 w-12 items-center justify-center rounded-xl"
+            style={{ backgroundColor: colors.innerBg, color: colors.textMuted }}
+          >
+            <Icon name="school" className="text-2xl" />
+          </div>
+          <h2 className="mt-4 text-base font-semibold" style={{ color: colors.text }}>
+            Aucun professeur IA actif
+          </h2>
+          <p className="mx-auto mt-2 max-w-md text-sm leading-6" style={{ color: colors.textMuted }}>
+            Créez un nouveau professeur IA ou réutilisez un professeur durable. Les professeurs terminés restent conservés dans la bibliothèque.
+          </p>
+        </div>
+      ) : (
       <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
-        {platforms.slice(cardPage * cardsPerPage, (cardPage + 1) * cardsPerPage).map((p) => (
+        {platforms.slice(safeCardPage * cardsPerPage, (safeCardPage + 1) * cardsPerPage).map((p) => (
           <PlatformCard
             key={p.id}
             platform={p}
@@ -1921,12 +2199,15 @@ function PlatformCardsView({
             onPdfUpload={(file) => onPdfUpload(p.id, file)}
             onDeletePdf={() => onDeletePdf(p.id)}
             onDeletePlatform={() => onDeletePlatform(p.id)}
+            onArchivePlatform={() => onArchivePlatform(p.id)}
+            archiving={archivingPlatformId === p.id}
             newlyCreated={newlyCreatedPlatformId === p.id}
             retryingPreparation={retryingPlatformId === p.id}
             onRetryPreparation={() => onRetryPreparation(p)}
           />
         ))}
       </div>
+      )}
     </>
   )
 }
@@ -2566,6 +2847,7 @@ function ModuleDeleteButton({ onClick, colors, label }) {
 const MODULE_WEEKDAY_LABELS = ['Lun.', 'Mar.', 'Mer.', 'Jeu.', 'Ven.', 'Sam.', 'Dim.']
 
 function inferTeacherName(module = {}) {
+  if (module.teacher_name) return module.teacher_name
   const source = module.source_platform_name || ''
   if (source.includes('·')) return source.split('·')[0].trim()
   if (source && source !== module.tp_name) return source
@@ -2680,7 +2962,7 @@ function ModulesCatalogueView({
           </div>
         ) : (
           <ul className="space-y-3">
-            {modules.map((m, idx) => (
+            {modules.map((m) => (
               <li
                 key={m.id}
                 className="flex items-center gap-4 rounded-2xl px-4 py-3"
@@ -2693,10 +2975,10 @@ function ModulesCatalogueView({
                 <div className="relative flex h-20 w-20 flex-shrink-0 items-center justify-center">
                   <div
                     className="absolute inset-2 rounded-full blur-xl"
-                    style={{ backgroundColor: getRobotTheme(m.source_platform_id || m.id).glow, opacity: 0.22 }}
+                    style={{ backgroundColor: getRobotTheme(m.source_platform_id || m.id, m.teacher_color).glow, opacity: 0.22 }}
                   />
                   <img
-                    src={getRobotTheme(m.source_platform_id || m.id).src}
+                    src={getRobotTheme(m.source_platform_id || m.id, m.teacher_color).src}
                     alt=""
                     className="relative h-20 w-20 object-contain"
                     draggable={false}
@@ -2720,6 +3002,15 @@ function ModulesCatalogueView({
                         Réutilisable
                       </span>
                     )}
+                    {m.storage_mode === 'shared' && (
+                      <span
+                        className="flex-shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium"
+                        style={{ backgroundColor: colors.innerBg, color: colors.textMuted, border: `1px solid ${colors.border}` }}
+                        title="Cours et audios conservés une seule fois dans Azure, puis partagés entre les promotions"
+                      >
+                        Ressources partagées
+                      </span>
+                    )}
                     {m.status === 'draft' && (
                       <span
                         className="flex-shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium uppercase"
@@ -2741,6 +3032,7 @@ function ModulesCatalogueView({
                     style={{ color: colors.textMuted, fontVariantNumeric: 'tabular-nums' }}
                   >
                     RNCP {m.rncp_code || '—'} · {formatModuleCadence(m)}
+                    {m.asset_count > 0 && ` · ${m.asset_count} ressource${m.asset_count > 1 ? 's' : ''}`}
                     {m.created_at && (
                       <>
                         {' · créé le '}
@@ -2753,7 +3045,7 @@ function ModulesCatalogueView({
                 <div className="flex flex-shrink-0 items-center gap-2">
                   {m.reusable ? (
                     <button
-                      onClick={() => onUseModule(m.id)}
+                      onClick={() => onUseModule(m)}
                       className="flex items-center gap-1.5 rounded-lg px-3.5 py-2 text-xs font-semibold text-white transition-colors"
                       style={{ backgroundColor: '#8B5CF6' }}
                       onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = '#7c3aed' }}
@@ -2822,6 +3114,7 @@ function CreatePlatformView({
     { id: 'violet', label: 'Violet', swatch: '#8B5CF6', image: '/robot-violet.png' },
     { id: 'blue', label: 'Bleu', swatch: '#3B82F6', image: '/robot-blue.png' },
     { id: 'pink', label: 'Rose', swatch: '#EC4899', image: '/robot-pink.png' },
+    { id: 'green', label: 'Vert', swatch: '#10B981', image: '/robot-green.png' },
     { id: 'amber', label: 'Ambre', swatch: '#F59E0B', image: '/robot-amber.png' },
   ]
   const weekDays = [
@@ -2945,7 +3238,7 @@ function CreatePlatformView({
           <label className="mb-2 block text-sm font-medium" style={{ color: darkMode ? '#94a3b8' : '#64748b' }}>
             Couleur du professeur IA
           </label>
-          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
             {teacherColors.map((color) => {
               const selected = teacherColor === color.id
               return (
@@ -2953,6 +3246,7 @@ function CreatePlatformView({
                   key={color.id}
                   type="button"
                   onClick={() => setTeacherColor(color.id)}
+                  aria-pressed={selected}
                   className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition-all"
                   style={{
                     color: selected ? colors.text : colors.textSecondary,
@@ -3671,7 +3965,7 @@ function PlatformCard({
   onAttendanceDateChange, onRefreshAttendance, onUpdateAttendanceDraft, onSaveAttendance,
   onExportAttendance, onOpenPdfModal, onOpenCourseTimeModal,
   onDeleteAudio, onPlayAudio, onPdfUpload, onDeletePdf, onOpenCoursFolders, onDeletePlatform,
-  newlyCreated = false, retryingPreparation = false, onRetryPreparation,
+  onArchivePlatform, archiving = false, newlyCreated = false, retryingPreparation = false, onRetryPreparation,
 }) {
   const pdfInputId = `pdf-input-${p.id}`
   const platformThumbnail = getPlatformThumbnail(p)
@@ -3852,10 +4146,31 @@ function PlatformCard({
             pointerEvents: flipped ? 'auto' : 'none',
           }}
         >
-      {/* Bouton supprimer plateforme — z-30 pour rester au-dessus des
-          overlays inactif/pending/error (z-20). Slate muted au repos avec
-          backdrop-blur (visible par-dessus le thumbnail), tinte rose au hover. */}
-      {onDeletePlatform && (
+      {/* L’archivage retire la promo de l’espace actif sans effacer le module
+          durable ni ses ressources Azure. La suppression définitive reste un
+          outil superadmin de dernier recours. */}
+      {onArchivePlatform ? (
+        <button
+          type="button"
+          aria-label={`Archiver le professeur ${p.teacher_name || p.name}`}
+          title="Archiver sans supprimer les cours ni les audios"
+          onClick={(e) => {
+            e.stopPropagation()
+            onArchivePlatform()
+          }}
+          disabled={archiving}
+          className="absolute right-3 top-3 z-30 flex h-9 items-center justify-center gap-1.5 rounded-lg px-2.5 text-xs font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-400/40 disabled:cursor-wait disabled:opacity-60"
+          style={{
+            backgroundColor: darkMode ? 'rgba(15, 23, 42, 0.7)' : 'rgba(255, 255, 255, 0.9)',
+            color: colors.textSecondary,
+            border: `1px solid ${colors.border}`,
+            backdropFilter: 'blur(4px)',
+          }}
+        >
+          <Icon name={archiving ? 'hourglass_top' : 'archive'} className="text-base" />
+          <span>{archiving ? 'Archivage…' : 'Archiver'}</span>
+        </button>
+      ) : onDeletePlatform ? (
         <button
           type="button"
           aria-label={`Supprimer la plateforme ${p.name}`}
@@ -3876,7 +4191,7 @@ function PlatformCard({
         >
           <Icon name="delete_outline" className="text-base" />
         </button>
-      )}
+      ) : null}
 
       {/* Inactive overlay */}
       {!p.active && (

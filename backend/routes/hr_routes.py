@@ -38,6 +38,13 @@ from repositories.hr_write_repository import (
     resolve_postgres_module_clone_source,
     set_postgres_platform_status,
 )
+from repositories.center_workspace_repository import (
+    complete_center_onboarding,
+    get_center_onboarding_state,
+    set_platform_asset_binding_mode,
+    set_platform_lifecycle,
+)
+from repositories.teacher_asset_repository import resolve_folder_asset_origin
 from repositories.pipeline_repository import (
     allocate_platform_id_from_postgres,
     get_course_folder_identity,
@@ -66,6 +73,7 @@ from services.scheduled_audio_service import (
     retry_scheduled_audio_generation,
 )
 from services.teacher_preparation_service import build_teacher_preparation_state
+from services.teacher_asset_service import resolve_folder_blob_path
 from services.audio_publish_service import archive_public_platform_audios, publish_playlist_audio_to_platform
 from utils.logger import get_logger
 from utils.slug import slugify, unique_slug
@@ -85,6 +93,7 @@ HR_DASHBOARD_REPAIR_ON_LOAD = os.environ.get("HR_DASHBOARD_REPAIR_ON_LOAD", "fal
     "yes",
     "on",
 }
+CENTER_ONBOARDING_VERSION = 1
 
 _POSTGRES_PIPELINE_BACKENDS = {"postgres", "postgresql", "supabase"}
 _HR_SUPERADMIN_ACCOUNT_TYPES = {"legacy_admin", "superadmin"}
@@ -229,6 +238,62 @@ def create_hr_blueprint(socketio):
     @hr_bp.route("/api/hr/enabled")
     def get_hr_enabled():
         return jsonify({"enabled": HR_ENABLED})
+
+    @hr_bp.route("/api/hr/onboarding", methods=["GET"])
+    def get_hr_onboarding():
+        """Return the durable SPEC-01 onboarding state for the signed-in centre."""
+        denied = _require_admin()
+        if denied:
+            return denied
+        if _admin_account_type() in _HR_SUPERADMIN_ACCOUNT_TYPES:
+            return jsonify({
+                "success": True,
+                "current_version": CENTER_ONBOARDING_VERSION,
+                "onboarding_version": CENTER_ONBOARDING_VERSION,
+                "completed": True,
+            }), 200
+
+        center_account_id = _training_center_account_id()
+        if _admin_account_type() != "training_center" or center_account_id is None:
+            return _tenant_resource_not_found()
+        onboarding = get_center_onboarding_state(center_account_id)
+        if not onboarding:
+            return _tenant_resource_not_found()
+        onboarding_version = int(onboarding.get("onboarding_version") or 0)
+        return jsonify({
+            "success": True,
+            "current_version": CENTER_ONBOARDING_VERSION,
+            "onboarding_version": onboarding_version,
+            "completed_at": onboarding.get("onboarding_completed_at"),
+            "completed": onboarding_version >= CENTER_ONBOARDING_VERSION,
+        }), 200
+
+    @hr_bp.route("/api/hr/onboarding/complete", methods=["POST"])
+    def complete_hr_onboarding():
+        """Persist completion so onboarding follows the centre across devices."""
+        denied = _require_admin()
+        if denied:
+            return denied
+        center_account_id = _training_center_account_id()
+        if _admin_account_type() != "training_center" or center_account_id is None:
+            return jsonify({"success": False, "error": "Compte centre requis"}), 403
+
+        data = request.get_json(silent=True) or {}
+        requested_version = data.get("version", CENTER_ONBOARDING_VERSION)
+        try:
+            requested_version = min(CENTER_ONBOARDING_VERSION, max(1, int(requested_version)))
+        except (TypeError, ValueError):
+            return jsonify({"success": False, "error": "Version d’onboarding invalide"}), 400
+        onboarding = complete_center_onboarding(center_account_id, requested_version)
+        if not onboarding:
+            return _tenant_resource_not_found()
+        return jsonify({
+            "success": True,
+            "current_version": CENTER_ONBOARDING_VERSION,
+            "onboarding_version": int(onboarding.get("onboarding_version") or 0),
+            "completed_at": onboarding.get("onboarding_completed_at"),
+            "completed": int(onboarding.get("onboarding_version") or 0) >= CENTER_ONBOARDING_VERSION,
+        }), 200
 
     @hr_bp.before_request
     def check_hr_enabled():
@@ -535,6 +600,14 @@ def create_hr_blueprint(socketio):
                     "source_platform_name": row.get("source_platform_name"),
                     "voice_type": row.get("voice_type"),
                     "voice_updated_at": row.get("voice_updated_at"),
+                    "teacher_name": row.get("teacher_name") or "",
+                    "teacher_color": row.get("teacher_color") or "violet",
+                    "asset_namespace": row.get("asset_namespace") or "",
+                    "immutable": bool(row.get("immutable")),
+                    "asset_count": int(row.get("asset_count") or 0),
+                    "active_use_count": int(row.get("active_use_count") or 0),
+                    "completed_use_count": int(row.get("completed_use_count") or 0),
+                    "storage_mode": "shared",
                     "schedule": row.get("schedule"),
                     "reusable": (
                         row.get("status") == "validated"
@@ -552,7 +625,23 @@ def create_hr_blueprint(socketio):
                        m.source_pipeline_job_id, m.source_platform_id, m.created_at,
                        (SELECT COUNT(*) FROM cours_folders WHERE platform_id = m.source_platform_id) AS nb_folders,
                        pc.name AS source_platform_name,
-                       m.voice_type, m.voice_updated_at
+                       m.voice_type, m.voice_updated_at,
+                       m.teacher_name, m.teacher_color, m.asset_namespace,
+                       COALESCE(m.immutable, 0),
+                       (
+                           SELECT COUNT(*) FROM formation_module_assets asset
+                           WHERE asset.module_id = m.id AND asset.status = 'ready'
+                       ) AS asset_count,
+                       (
+                           SELECT COUNT(*) FROM platform_config usage_platform
+                           WHERE (usage_platform.source_module_id = m.id OR usage_platform.id = m.source_platform_id)
+                             AND usage_platform.lifecycle_status = 'active'
+                       ) AS active_use_count,
+                       (
+                           SELECT COUNT(*) FROM platform_config usage_platform
+                           WHERE (usage_platform.source_module_id = m.id OR usage_platform.id = m.source_platform_id)
+                             AND usage_platform.lifecycle_status IN ('completed', 'archived')
+                       ) AS completed_use_count
                 FROM formation_modules m
                 LEFT JOIN platform_config pc ON pc.id = m.source_platform_id
                 WHERE m.status != 'archived'
@@ -599,6 +688,14 @@ def create_hr_blueprint(socketio):
                 "source_platform_name": r[9],
                 "voice_type": r[10],
                 "voice_updated_at": r[11],
+                "teacher_name": r[12] or "",
+                "teacher_color": r[13] or "violet",
+                "asset_namespace": r[14] or "",
+                "immutable": bool(r[15]),
+                "asset_count": int(r[16] or 0),
+                "active_use_count": int(r[17] or 0),
+                "completed_use_count": int(r[18] or 0),
+                "storage_mode": "shared",
                 "schedule": schedules_by_platform.get(r[6]),
                 "reusable": r[4] == "validated" and r[8] > 0 and r[10] != "mock",
             } for r in rows]
@@ -856,6 +953,36 @@ def create_hr_blueprint(socketio):
                     platform_where = "WHERE pc.center_account_id = ?"
                     platform_params.append(session.get("admin_account_id"))
 
+                cursor.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'course_sessions'"
+                )
+                sqlite_has_course_sessions = cursor.fetchone() is not None
+                cursor.execute("PRAGMA table_info(platform_config)")
+                sqlite_platform_columns = {row[1] for row in cursor.fetchall()}
+                lifecycle_status_sql = (
+                    "pc.lifecycle_status" if "lifecycle_status" in sqlite_platform_columns else "'active'"
+                )
+                completed_at_sql = (
+                    "pc.completed_at" if "completed_at" in sqlite_platform_columns else "NULL"
+                )
+                archived_at_sql = (
+                    "pc.archived_at" if "archived_at" in sqlite_platform_columns else "NULL"
+                )
+                asset_binding_mode_sql = (
+                    "pc.asset_binding_mode" if "asset_binding_mode" in sqlite_platform_columns else "'canonical'"
+                )
+                total_session_sql = (
+                    "(SELECT COUNT(*) FROM course_sessions cs WHERE cs.platform_id = pc.id)"
+                    if sqlite_has_course_sessions else "0"
+                )
+                remaining_session_sql = (
+                    """(SELECT COUNT(*) FROM course_sessions cs
+                         WHERE cs.platform_id = pc.id
+                           AND cs.status IN ('planned', 'active')
+                           AND cs.scheduled_at >= CURRENT_TIMESTAMP)"""
+                    if sqlite_has_course_sessions else "0"
+                )
+
                 cursor.execute(f"""
                     SELECT
                         pc.id,
@@ -878,7 +1005,13 @@ def create_hr_blueprint(socketio):
                         fpj.status AS pipeline_status,
                         fpj.auto_pilot_step AS pipeline_auto_pilot_step,
                         fpj.auto_pilot_error AS pipeline_auto_pilot_error,
-                        fpj.auto_pilot_enabled AS pipeline_auto_pilot_enabled
+                        fpj.auto_pilot_enabled AS pipeline_auto_pilot_enabled,
+                        {lifecycle_status_sql} AS lifecycle_status,
+                        {completed_at_sql} AS completed_at,
+                        {archived_at_sql} AS archived_at,
+                        {asset_binding_mode_sql} AS asset_binding_mode,
+                        {total_session_sql} AS total_session_count,
+                        {remaining_session_sql} AS remaining_session_count
                     FROM platform_config pc
                     LEFT JOIN training_center_accounts tca ON tca.id = pc.center_account_id
                     LEFT JOIN formation_modules fm ON fm.id = pc.source_module_id
@@ -915,6 +1048,12 @@ def create_hr_blueprint(socketio):
                     row.get("pipeline_auto_pilot_step"),
                     row.get("pipeline_auto_pilot_error"),
                     row.get("pipeline_auto_pilot_enabled"),
+                    row.get("lifecycle_status"),
+                    row.get("completed_at"),
+                    row.get("archived_at"),
+                    row.get("asset_binding_mode"),
+                    row.get("total_session_count"),
+                    row.get("remaining_session_count"),
                 ) for row in postgres_dashboard_rows]
                 pending_counts = {
                     row["id"]: row.get("pending_deletion_count", 0)
@@ -967,6 +1106,12 @@ def create_hr_blueprint(socketio):
                     p_pipeline_auto_pilot_step,
                     p_pipeline_auto_pilot_error,
                     p_pipeline_auto_pilot_enabled,
+                    p_lifecycle_status,
+                    p_completed_at,
+                    p_archived_at,
+                    p_asset_binding_mode,
+                    p_total_session_count,
+                    p_remaining_session_count,
                 ) = row
                 pinfo = _get_platform_info(pid)
                 schedule_row = schedule_dashboard_states.get(int(pid))
@@ -1081,6 +1226,17 @@ def create_hr_blueprint(socketio):
                         except Exception:
                             pass
 
+                total_session_count = int(p_total_session_count or 0)
+                remaining_session_count = int(p_remaining_session_count or 0)
+                effective_lifecycle = p_lifecycle_status or "active"
+                if (
+                    effective_lifecycle == "active"
+                    and effective_status == "ready"
+                    and total_session_count > 0
+                    and remaining_session_count == 0
+                ):
+                    effective_lifecycle = "completed"
+
                 platforms.append({
                     "id": pid,
                     "name": name,
@@ -1111,6 +1267,12 @@ def create_hr_blueprint(socketio):
                     "pipeline_auto_pilot_step": p_pipeline_auto_pilot_step or "",
                     "pipeline_auto_pilot_error": p_pipeline_auto_pilot_error or "",
                     "pipeline_auto_pilot_enabled": bool(p_pipeline_auto_pilot_enabled),
+                    "lifecycle_status": effective_lifecycle,
+                    "completed_at": p_completed_at,
+                    "archived_at": p_archived_at,
+                    "asset_binding_mode": p_asset_binding_mode or "canonical",
+                    "total_session_count": total_session_count,
+                    "remaining_session_count": remaining_session_count,
                     "teacher_preparation": build_teacher_preparation_state(
                         platform_status=effective_status,
                         pipeline_status=p_pipeline_status,
@@ -1164,11 +1326,11 @@ def create_hr_blueprint(socketio):
         center_account_id=None,
         scope_to_center=False,
     ):
-        """Clone les cours_folders + cours_documents + blobs Azure d'une plateforme
-        source vers une cible. Lancé en thread de fond : la plateforme cible reste
-        en status 'pending' jusqu'à la fin, puis passe à 'ready'.
+        """Bind a target promotion to a reusable course structure.
 
-        Les blobs sont copiés en server-side copy (rapide, pas de download local).
+        PostgreSQL module reuses share one immutable Azure manifest. The older
+        formation/SQLite compatibility path still copies blobs because it has
+        no durable clone mapping/asset registry.
         """
         from services.azure_blob_service import (
             copy_blobs_by_prefix, CONTAINER_DOCUMENTS, CONTAINER_AUDIOS,
@@ -1221,22 +1383,32 @@ def create_hr_blueprint(socketio):
                 conn.commit()
                 conn.close()
 
-            # 3. Copier les blobs Azure (server-side) pour chaque folder source → cible
             total_copied = 0
-            for src_fid, new_fid in folder_id_map.items():
-                src_prefix_docs = f"platform-{source_platform_id}/folder-{src_fid}/"
-                dst_prefix_docs = f"platform-{target_platform_id}/folder-{new_fid}/"
-                try:
-                    total_copied += copy_blobs_by_prefix(CONTAINER_DOCUMENTS, src_prefix_docs, dst_prefix_docs)
-                    total_copied += copy_blobs_by_prefix(CONTAINER_AUDIOS, src_prefix_docs, dst_prefix_docs)
-                except Exception as e:
-                    if postgres_clone:
-                        # Ne jamais publier "ready" dans la source de vérité si
-                        # les artefacts associés n'ont pas pu être copiés.
-                        raise RuntimeError(
-                            f"Copie Blob incomplète pour le dossier {src_fid}→{new_fid}: {e}"
-                        ) from e
-                    logger.warning(f"⚠️ Copie blobs folder {src_fid}→{new_fid} : {e}")
+            shared_asset_count = 0
+            if postgres_clone and source_module_id and center_account_id is not None:
+                manifest = ensure_module_asset_manifest(
+                    module_id=source_module_id,
+                    center_account_id=center_account_id,
+                    source_platform_id=source_platform_id,
+                    source_folder_ids=folder_id_map.keys(),
+                )
+                shared_asset_count = int(manifest.get("registered") or 0)
+                set_platform_asset_binding_mode(target_platform_id, "shared")
+            else:
+                # Compatibility for non-module clones without a durable asset
+                # registry. New centre flows never take this path.
+                for src_fid, new_fid in folder_id_map.items():
+                    src_prefix_docs = f"platform-{source_platform_id}/folder-{src_fid}/"
+                    dst_prefix_docs = f"platform-{target_platform_id}/folder-{new_fid}/"
+                    try:
+                        total_copied += copy_blobs_by_prefix(CONTAINER_DOCUMENTS, src_prefix_docs, dst_prefix_docs)
+                        total_copied += copy_blobs_by_prefix(CONTAINER_AUDIOS, src_prefix_docs, dst_prefix_docs)
+                    except Exception as e:
+                        if postgres_clone:
+                            raise RuntimeError(
+                                f"Copie Blob incomplète pour le dossier {src_fid}→{new_fid}: {e}"
+                            ) from e
+                        logger.warning(f"⚠️ Copie blobs folder {src_fid}→{new_fid} : {e}")
 
             # 4. Marquer la source de vérité puis seulement son miroir local.
             if postgres_clone:
@@ -1258,7 +1430,8 @@ def create_hr_blueprint(socketio):
                 conn.close()
             logger.info(
                 f"✅ Clone formation {source_formation_id} : P{source_platform_id}→P{target_platform_id} "
-                f"— {len(folder_id_map)} folders, {total_copied} blobs copiés"
+                f"— {len(folder_id_map)} folders, {shared_asset_count} ressources partagées, "
+                f"{total_copied} blobs de compatibilité copiés"
             )
         except Exception as e:
             logger.error(f"❌ Clone formation {source_formation_id} P{source_platform_id}→P{target_platform_id} : {e}")
@@ -1285,9 +1458,8 @@ def create_hr_blueprint(socketio):
         """Crée une nouvelle plateforme. 4 modes exclusifs :
 
         1. {name} — plateforme vide, pas de cours (comportement historique)
-        2. {name, module_id} — crée une promo liée à un module maître (nouveau).
-           Clone les cours+blobs depuis la plateforme source du module. Statut
-           'pending' jusqu'à fin de copie.
+        2. {name, module_id} — crée une promo liée à un module maître. Clone la
+           structure en base et partage le manifeste Azure immuable du module.
         3. {name, formation_id} — legacy : clone depuis une formation pipeline
            (équivalent à module_id mais pointe vers le job au lieu du module).
            Gardé pour compat, la modale utilise maintenant module_id.
@@ -1310,7 +1482,7 @@ def create_hr_blueprint(socketio):
 
         if not name:
             return jsonify({"success": False, "error": "Le nom est requis"}), 400
-        if teacher_color and teacher_color not in {"violet", "blue", "pink", "amber"}:
+        if teacher_color and teacher_color not in {"violet", "blue", "pink", "green", "amber"}:
             return jsonify({"success": False, "error": "Couleur de professeur invalide"}), 400
         if creation_request_id and not re.fullmatch(r"[A-Za-z0-9_-]{16,80}", creation_request_id):
             return jsonify({"success": False, "error": "Identifiant de création invalide"}), 400
@@ -1912,6 +2084,35 @@ def create_hr_blueprint(socketio):
             logger.error(f"❌ Erreur toggle lock: {e}")
             return jsonify({"success": False, "error": str(e)}), 500
 
+    # ─── PATCH /api/hr/platforms/<id>/lifecycle ───────────────────────────
+    @hr_bp.route("/api/hr/platforms/<int:platform_id>/lifecycle", methods=["PATCH"])
+    def update_platform_lifecycle(platform_id):
+        """Archive or restore a teacher without deleting its durable module/assets."""
+        denied = _require_admin()
+        if denied:
+            return denied
+        center_account_id = _training_center_account_id()
+        if _admin_account_type() != "training_center" or center_account_id is None:
+            return jsonify({"success": False, "error": "Compte centre requis"}), 403
+
+        data = request.get_json(silent=True) or {}
+        lifecycle_status = str(data.get("lifecycle_status") or "").strip().lower()
+        try:
+            lifecycle = set_platform_lifecycle(platform_id, center_account_id, lifecycle_status)
+        except ValueError as exc:
+            return jsonify({"success": False, "error": str(exc)}), 400
+        if not lifecycle:
+            return _tenant_resource_not_found()
+        return jsonify({
+            "success": True,
+            "platform": lifecycle,
+            "message": (
+                "Professeur archivé. Son identité, ses cours et ses audios restent réutilisables."
+                if lifecycle_status == "archived"
+                else "Cycle de vie du professeur mis à jour."
+            ),
+        }), 200
+
     # ─── DELETE /api/hr/platforms/<id> ────────────────────────────────────
     # Suppression définitive d'une plateforme. Cascade DB :
     #   - content_generation_segments → content_generation_jobs (FK)
@@ -1930,6 +2131,12 @@ def create_hr_blueprint(socketio):
         denied = _require_admin()
         if denied:
             return denied
+        if _admin_account_type() == "training_center":
+            return jsonify({
+                "success": False,
+                "error": "La suppression définitive est désactivée pour les centres. Archivez le professeur afin de préserver ses cours et ses audios réutilisables.",
+                "code": "archive_required",
+            }), 409
         try:
             conn = get_db_connection()
             cursor = conn.cursor()
@@ -2491,10 +2698,10 @@ def create_hr_blueprint(socketio):
             account_name = blob_service_client.account_name
             account_key = blob_service_client.credential.account_key
 
-            # Créer le container d'archive s'il n'existe pas
+            # Créer le container d'archive privé s'il n'existe pas.
             archive_client = blob_service_client.get_container_client(archive_container)
             try:
-                archive_client.create_container(public_access="blob")
+                archive_client.create_container()
             except ResourceExistsError:
                 pass
 
@@ -5059,7 +5266,12 @@ def create_hr_blueprint(socketio):
             from services.azure_blob_service import download_blob, CONTAINER_AUDIOS
             import json as _json
 
-            blob_path = f"platform-{platform_id}/folder-{folder_id}/playlist/script.json"
+            blob_path = resolve_folder_blob_path(
+                folder_id,
+                CONTAINER_AUDIOS,
+                "playlist/script.json",
+                fallback_platform_id=platform_id,
+            )
             script_bytes = download_blob(CONTAINER_AUDIOS, blob_path)
             script_data = _json.loads(script_bytes.decode("utf-8"))
 
@@ -5133,7 +5345,10 @@ def create_hr_blueprint(socketio):
             if not tts_conn:
                 return jsonify({"success": True, "audios": []}), 200
 
-            prefix = f"platform-{platform_id}/folder-{folder_id}/playlist/"
+            origin = resolve_folder_asset_origin(folder_id) or {}
+            source_platform_id = int(origin.get("source_platform_id") or platform_id)
+            source_folder_id = int(origin.get("source_folder_id") or folder_id)
+            prefix = f"platform-{source_platform_id}/folder-{source_folder_id}/playlist/"
             from azure.storage.blob import BlobServiceClient as _BSC
             bsc = _BSC.from_connection_string(tts_conn)
             cc = bsc.get_container_client("audiostts")
@@ -5174,7 +5389,17 @@ def create_hr_blueprint(socketio):
 
             deleted = []
             errors = []
-            blob_path = _get_audio_blob_path(platform_id, folder_id, safe_filename)
+            blob_path = _get_audio_blob_path(platform_id, folder_id, safe_filename, for_write=True)
+            resolved_read_path = _get_audio_blob_path(platform_id, folder_id, safe_filename)
+            if resolved_read_path != blob_path:
+                return jsonify({
+                    "success": False,
+                    "error": (
+                        "Cet audio appartient à la version partagée du professeur IA. "
+                        "Créez une personnalisation pour cette promotion avant de le supprimer."
+                    ),
+                    "code": "shared_asset_immutable",
+                }), 409
 
             try:
                 tts_bsc = BlobServiceClient.from_connection_string(tts_conn)
@@ -5224,8 +5449,16 @@ def create_hr_blueprint(socketio):
 
     _audio_previews = {}  # {preview_id: bytes} — stockage temporaire des TTS preview
 
-    def _get_audio_blob_path(platform_id, folder_id, filename):
-        return f"platform-{platform_id}/folder-{folder_id}/playlist/{filename}"
+    def _get_audio_blob_path(platform_id, folder_id, filename, *, for_write=False):
+        relative_path = f"playlist/{os.path.basename(str(filename).split('?', 1)[0])}"
+        if for_write:
+            return f"platform-{platform_id}/folder-{folder_id}/{relative_path}"
+        return resolve_folder_blob_path(
+            folder_id,
+            CONTAINER_AUDIOS,
+            relative_path,
+            fallback_platform_id=platform_id,
+        )
 
     def _get_platform_id_for_folder(folder_id):
         folder = get_course_folder_identity(folder_id)
@@ -5418,8 +5651,9 @@ def create_hr_blueprint(socketio):
                 try:
                     with open(full_path, "rb") as f:
                         audio_bytes = f.read()
-                    blob_path = _get_audio_blob_path(platform_id, folder_id, name)
+                    blob_path = _get_audio_blob_path(platform_id, folder_id, name, for_write=True)
                     upload_blob(CONTAINER_AUDIOS, blob_path, audio_bytes)
+                    set_platform_asset_binding_mode(platform_id, "copy_on_write")
                     size_mb = round(len(audio_bytes) / (1024 * 1024), 2)
                     uploaded.append({"filename": name, "size_mb": size_mb})
                     logger.info(f"🧪 Mock local upload: {name} ({size_mb} Mo) → {blob_path}")
@@ -5463,11 +5697,12 @@ def create_hr_blueprint(socketio):
                 return jsonify({"success": False, "error": "Seuls les .mp3 sont acceptés"}), 400
 
             platform_id = _get_platform_id_for_folder(folder_id)
-            blob_path = _get_audio_blob_path(platform_id, folder_id, target_filename)
+            blob_path = _get_audio_blob_path(platform_id, folder_id, target_filename, for_write=True)
 
             from services.azure_blob_service import upload_blob, CONTAINER_AUDIOS
             audio_bytes = file.read()
             upload_blob(CONTAINER_AUDIOS, blob_path, audio_bytes)
+            set_platform_asset_binding_mode(platform_id, "copy_on_write")
 
             size_mb = round(len(audio_bytes) / (1024 * 1024), 2)
             logger.info(f"🧪 Mock upload: {target_filename} ({size_mb} Mo) → {blob_path}")
@@ -5497,13 +5732,14 @@ def create_hr_blueprint(socketio):
                 return jsonify({"success": False, "error": "end_ms doit être > start_ms"}), 400
 
             platform_id = _get_platform_id_for_folder(folder_id)
-            blob_path = _get_audio_blob_path(platform_id, folder_id, filename)
+            source_blob_path = _get_audio_blob_path(platform_id, folder_id, filename)
+            target_blob_path = _get_audio_blob_path(platform_id, folder_id, filename, for_write=True)
 
             from services.azure_blob_service import download_blob, upload_blob, CONTAINER_AUDIOS
             from pydub import AudioSegment
             import io
 
-            audio_bytes = download_blob(CONTAINER_AUDIOS, blob_path)
+            audio_bytes = download_blob(CONTAINER_AUDIOS, source_blob_path)
             audio = AudioSegment.from_file(io.BytesIO(audio_bytes), format="mp3")
 
             result = audio[:start_ms] + audio[end_ms:]
@@ -5512,8 +5748,16 @@ def create_hr_blueprint(socketio):
             result.export(buf, format="mp3", bitrate="128k")
             result_bytes = buf.getvalue()
 
-            upload_blob(CONTAINER_AUDIOS, blob_path, result_bytes)
-            logger.info(f"✂️ Cut {filename}: [{start_ms}ms-{end_ms}ms] supprimé → {len(result_bytes)} bytes uploadé")
+            upload_blob(CONTAINER_AUDIOS, target_blob_path, result_bytes)
+            set_platform_asset_binding_mode(platform_id, "copy_on_write")
+            logger.info(
+                "✂️ Cut %s: [%sms-%sms] supprimé → %s bytes uploadé en surcharge %s",
+                filename,
+                start_ms,
+                end_ms,
+                len(result_bytes),
+                target_blob_path,
+            )
 
             return jsonify({
                 "success": True,
@@ -5574,14 +5818,15 @@ def create_hr_blueprint(socketio):
                 return jsonify({"success": False, "error": "end_ms doit être > start_ms"}), 400
 
             platform_id = _get_platform_id_for_folder(folder_id)
-            blob_path = _get_audio_blob_path(platform_id, folder_id, filename)
+            source_blob_path = _get_audio_blob_path(platform_id, folder_id, filename)
+            target_blob_path = _get_audio_blob_path(platform_id, folder_id, filename, for_write=True)
 
             from services.azure_blob_service import download_blob, upload_blob, CONTAINER_AUDIOS
             from pydub import AudioSegment
             import io
 
             preview_bytes = _audio_previews.pop(preview_id)  # consommer le preview
-            original_bytes = download_blob(CONTAINER_AUDIOS, blob_path)
+            original_bytes = download_blob(CONTAINER_AUDIOS, source_blob_path)
 
             original = AudioSegment.from_file(io.BytesIO(original_bytes), format="mp3")
             new_segment = AudioSegment.from_file(io.BytesIO(preview_bytes), format="mp3")
@@ -5592,7 +5837,8 @@ def create_hr_blueprint(socketio):
             result.export(buf, format="mp3", bitrate="128k")
             result_bytes = buf.getvalue()
 
-            upload_blob(CONTAINER_AUDIOS, blob_path, result_bytes)
+            upload_blob(CONTAINER_AUDIOS, target_blob_path, result_bytes)
+            set_platform_asset_binding_mode(platform_id, "copy_on_write")
             logger.info(f"🔄 Replace {filename}: [{start_ms}ms-{end_ms}ms] → {len(new_segment)}ms de nouveau TTS")
 
             return jsonify({
@@ -5816,7 +6062,9 @@ def create_hr_blueprint(socketio):
 
             if not folder_row:
                 return jsonify({"success": False, "error": "Dossier introuvable pour cette plateforme"}), 404
-            source_platform_id = folder_row[1]
+            origin = resolve_folder_asset_origin(folder_id) or {}
+            source_platform_id = int(origin.get("source_platform_id") or folder_row[1])
+            source_folder_id = int(origin.get("source_folder_id") or folder_id)
 
             tts_conn = os.environ.get("AZURE_TTS_STORAGE_CONNECTION_STRING")
             audio_conn = os.environ.get("AZURE_AUDIO_STORAGE_CONNECTION_STRING")
@@ -5835,7 +6083,7 @@ def create_hr_blueprint(socketio):
             qa_pause_cc = audio_bsc.get_container_client("audioqapause")
             playlist_cc = tts_bsc.get_container_client("audiostts")
 
-            playlist_prefix = f"platform-{source_platform_id}/folder-{folder_id}/playlist/"
+            playlist_prefix = f"platform-{source_platform_id}/folder-{source_folder_id}/playlist/"
 
             # Lister tous les MP3 générés dans le dossier. Les pipelines récentes
             # produisent aussi les Q&A/pauses contextuels dans ce préfixe.

@@ -17,6 +17,8 @@ CREATE TABLE IF NOT EXISTS training_center_accounts (
     billing_exempt_reason TEXT,
     billing_exempt_at TIMESTAMPTZ,
     billing_exempt_updated_by TEXT,
+    onboarding_version INTEGER NOT NULL DEFAULT 0,
+    onboarding_completed_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -31,6 +33,10 @@ ALTER TABLE training_center_accounts
     ADD COLUMN IF NOT EXISTS billing_exempt_at TIMESTAMPTZ;
 ALTER TABLE training_center_accounts
     ADD COLUMN IF NOT EXISTS billing_exempt_updated_by TEXT;
+ALTER TABLE training_center_accounts
+    ADD COLUMN IF NOT EXISTS onboarding_version INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE training_center_accounts
+    ADD COLUMN IF NOT EXISTS onboarding_completed_at TIMESTAMPTZ;
 
 CREATE TABLE IF NOT EXISTS platform_config (
     id BIGSERIAL PRIMARY KEY,
@@ -53,6 +59,10 @@ CREATE TABLE IF NOT EXISTS platform_config (
     teacher_name TEXT,
     teacher_color TEXT,
     creation_request_id TEXT,
+    lifecycle_status TEXT NOT NULL DEFAULT 'active',
+    completed_at TIMESTAMPTZ,
+    archived_at TIMESTAMPTZ,
+    asset_binding_mode TEXT NOT NULL DEFAULT 'canonical',
     UNIQUE(center_account_id, slug)
 );
 
@@ -62,6 +72,14 @@ ALTER TABLE platform_config
     ADD COLUMN IF NOT EXISTS teacher_color TEXT;
 ALTER TABLE platform_config
     ADD COLUMN IF NOT EXISTS creation_request_id TEXT;
+ALTER TABLE platform_config
+    ADD COLUMN IF NOT EXISTS lifecycle_status TEXT NOT NULL DEFAULT 'active';
+ALTER TABLE platform_config
+    ADD COLUMN IF NOT EXISTS completed_at TIMESTAMPTZ;
+ALTER TABLE platform_config
+    ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ;
+ALTER TABLE platform_config
+    ADD COLUMN IF NOT EXISTS asset_binding_mode TEXT NOT NULL DEFAULT 'canonical';
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_platform_config_global_slug
     ON platform_config(slug)
@@ -541,9 +559,68 @@ CREATE TABLE IF NOT EXISTS formation_modules (
     source_platform_id BIGINT REFERENCES platform_config(id) ON DELETE SET NULL,
     voice_type TEXT,
     voice_updated_at TIMESTAMPTZ,
+    teacher_name TEXT,
+    teacher_color TEXT,
+    asset_namespace TEXT,
+    immutable BOOLEAN NOT NULL DEFAULT TRUE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     validated_at TIMESTAMPTZ,
     archived_at TIMESTAMPTZ
+);
+
+ALTER TABLE formation_modules
+    ADD COLUMN IF NOT EXISTS teacher_name TEXT;
+ALTER TABLE formation_modules
+    ADD COLUMN IF NOT EXISTS teacher_color TEXT;
+ALTER TABLE formation_modules
+    ADD COLUMN IF NOT EXISTS asset_namespace TEXT;
+ALTER TABLE formation_modules
+    ADD COLUMN IF NOT EXISTS immutable BOOLEAN NOT NULL DEFAULT TRUE;
+
+UPDATE formation_modules AS m
+SET teacher_name = COALESCE(m.teacher_name, pc.teacher_name),
+    teacher_color = COALESCE(m.teacher_color, pc.teacher_color),
+    asset_namespace = COALESCE(
+        m.asset_namespace,
+        'centres/' || COALESCE(m.center_account_id, 0)::text
+            || '/modules/' || m.id::text
+            || '/versions/' || m.version
+    )
+FROM platform_config AS pc
+WHERE pc.id = m.source_platform_id
+  AND (
+      m.teacher_name IS NULL
+      OR m.teacher_color IS NULL
+      OR m.asset_namespace IS NULL
+  );
+
+-- Registre des ressources canoniques d'une version de professeur IA. Les
+-- promotions pointent vers formation_modules et course_clone_folder_map : elles
+-- ne recopient jamais ces blobs. Les chemins legacy platform-X/folder-Y restent
+-- valides pendant la migration et sont enregistrés ici comme origine durable.
+CREATE TABLE IF NOT EXISTS formation_module_assets (
+    id BIGSERIAL PRIMARY KEY,
+    module_id BIGINT NOT NULL REFERENCES formation_modules(id) ON DELETE RESTRICT,
+    center_account_id BIGINT NOT NULL REFERENCES training_center_accounts(id) ON DELETE CASCADE,
+    source_folder_id BIGINT REFERENCES cours_folders(id) ON DELETE SET NULL,
+    asset_kind TEXT NOT NULL,
+    logical_key TEXT NOT NULL,
+    container_name TEXT NOT NULL,
+    blob_path TEXT NOT NULL,
+    content_sha256 TEXT,
+    byte_size BIGINT,
+    mime_type TEXT,
+    language TEXT,
+    voice_profile TEXT,
+    generator_version TEXT,
+    generation_params_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+    status TEXT NOT NULL DEFAULT 'ready',
+    storage_tier TEXT NOT NULL DEFAULT 'Hot',
+    immutable BOOLEAN NOT NULL DEFAULT TRUE,
+    last_verified_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(module_id, logical_key)
 );
 
 CREATE TABLE IF NOT EXISTS script_slide_decks (
@@ -566,6 +643,8 @@ CREATE TABLE IF NOT EXISTS script_slide_decks (
 );
 
 CREATE INDEX IF NOT EXISTS idx_platform_config_center ON platform_config(center_account_id);
+CREATE INDEX IF NOT EXISTS idx_platform_config_center_lifecycle
+    ON platform_config(center_account_id, lifecycle_status, updated_at DESC);
 CREATE UNIQUE INDEX IF NOT EXISTS uq_platform_config_creation_request
     ON platform_config(creation_request_id)
     WHERE creation_request_id IS NOT NULL;
@@ -627,6 +706,15 @@ CREATE INDEX IF NOT EXISTS idx_formation_pipeline_events_folder ON formation_pip
     WHERE folder_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_formation_modules_center_rncp ON formation_modules(center_account_id, rncp_code);
 CREATE INDEX IF NOT EXISTS idx_formation_modules_source_platform ON formation_modules(source_platform_id);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_formation_modules_asset_namespace
+    ON formation_modules(asset_namespace)
+    WHERE asset_namespace IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_formation_module_assets_module_kind
+    ON formation_module_assets(module_id, asset_kind, status);
+CREATE INDEX IF NOT EXISTS idx_formation_module_assets_center
+    ON formation_module_assets(center_account_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_formation_module_assets_blob
+    ON formation_module_assets(container_name, blob_path);
 CREATE INDEX IF NOT EXISTS idx_script_slide_decks_folder ON script_slide_decks(folder_id, content_job_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_script_slide_decks_content_job ON script_slide_decks(content_job_id);
 CREATE INDEX IF NOT EXISTS idx_script_slide_decks_formation_job ON script_slide_decks(formation_job_id)
@@ -669,6 +757,7 @@ ALTER TABLE content_script_rules ENABLE ROW LEVEL SECURITY;
 ALTER TABLE content_review_reports ENABLE ROW LEVEL SECURITY;
 ALTER TABLE formation_pipeline_events ENABLE ROW LEVEL SECURITY;
 ALTER TABLE formation_modules ENABLE ROW LEVEL SECURITY;
+ALTER TABLE formation_module_assets ENABLE ROW LEVEL SECURITY;
 ALTER TABLE script_slide_decks ENABLE ROW LEVEL SECURITY;
 
 -- Durable pipeline work queue. PostgreSQL is authoritative; Azure Service Bus

@@ -381,6 +381,14 @@ def init_database(_recovered_from_corruption: bool = False):
         if "password_debug_plaintext" not in center_columns:
             cursor.execute("ALTER TABLE training_center_accounts ADD COLUMN password_debug_plaintext TEXT")
             logger.info("✅ Colonne password_debug_plaintext ajoutée à training_center_accounts")
+        if "onboarding_version" not in center_columns:
+            cursor.execute(
+                "ALTER TABLE training_center_accounts ADD COLUMN onboarding_version INTEGER NOT NULL DEFAULT 0"
+            )
+            logger.info("✅ Colonne onboarding_version ajoutée à training_center_accounts")
+        if "onboarding_completed_at" not in center_columns:
+            cursor.execute("ALTER TABLE training_center_accounts ADD COLUMN onboarding_completed_at TEXT")
+            logger.info("✅ Colonne onboarding_completed_at ajoutée à training_center_accounts")
         # Never retain reversible credentials. The compatibility column stays
         # temporarily so old binaries/migrations don't fail, but is always NULL.
         cursor.execute(
@@ -495,6 +503,22 @@ def init_database(_recovered_from_corruption: bool = False):
         if "creation_request_id" not in pc_columns:
             cursor.execute("ALTER TABLE platform_config ADD COLUMN creation_request_id TEXT")
             logger.info("✅ Colonne creation_request_id ajoutée à platform_config")
+        if "lifecycle_status" not in pc_columns:
+            cursor.execute(
+                "ALTER TABLE platform_config ADD COLUMN lifecycle_status TEXT NOT NULL DEFAULT 'active'"
+            )
+            logger.info("✅ Colonne lifecycle_status ajoutée à platform_config")
+        if "completed_at" not in pc_columns:
+            cursor.execute("ALTER TABLE platform_config ADD COLUMN completed_at TEXT")
+            logger.info("✅ Colonne completed_at ajoutée à platform_config")
+        if "archived_at" not in pc_columns:
+            cursor.execute("ALTER TABLE platform_config ADD COLUMN archived_at TEXT")
+            logger.info("✅ Colonne archived_at ajoutée à platform_config")
+        if "asset_binding_mode" not in pc_columns:
+            cursor.execute(
+                "ALTER TABLE platform_config ADD COLUMN asset_binding_mode TEXT NOT NULL DEFAULT 'canonical'"
+            )
+            logger.info("✅ Colonne asset_binding_mode ajoutée à platform_config")
         cursor.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS uq_platform_config_creation_request "
             "ON platform_config(creation_request_id) WHERE creation_request_id IS NOT NULL"
@@ -936,6 +960,20 @@ def init_database(_recovered_from_corruption: bool = False):
         if "center_account_id" not in fm_cols:
             cursor.execute("ALTER TABLE formation_modules ADD COLUMN center_account_id INTEGER")
             logger.info("✅ Colonne center_account_id ajoutée à formation_modules")
+        if "teacher_name" not in fm_cols:
+            cursor.execute("ALTER TABLE formation_modules ADD COLUMN teacher_name TEXT")
+            logger.info("✅ Colonne teacher_name ajoutée à formation_modules")
+        if "teacher_color" not in fm_cols:
+            cursor.execute("ALTER TABLE formation_modules ADD COLUMN teacher_color TEXT")
+            logger.info("✅ Colonne teacher_color ajoutée à formation_modules")
+        if "asset_namespace" not in fm_cols:
+            cursor.execute("ALTER TABLE formation_modules ADD COLUMN asset_namespace TEXT")
+            logger.info("✅ Colonne asset_namespace ajoutée à formation_modules")
+        if "immutable" not in fm_cols:
+            cursor.execute(
+                "ALTER TABLE formation_modules ADD COLUMN immutable INTEGER NOT NULL DEFAULT 1"
+            )
+            logger.info("✅ Colonne immutable ajoutée à formation_modules")
         cursor.execute("""
             UPDATE formation_modules
             SET center_account_id = (
@@ -952,6 +990,54 @@ def init_database(_recovered_from_corruption: bool = False):
                   AND pc.center_account_id IS NOT NULL
               )
         """)
+
+        cursor.execute("""
+            UPDATE formation_modules
+            SET teacher_name = COALESCE(
+                    teacher_name,
+                    (SELECT pc.teacher_name FROM platform_config pc WHERE pc.id = formation_modules.source_platform_id)
+                ),
+                teacher_color = COALESCE(
+                    teacher_color,
+                    (SELECT pc.teacher_color FROM platform_config pc WHERE pc.id = formation_modules.source_platform_id)
+                ),
+                asset_namespace = COALESCE(
+                    asset_namespace,
+                    'centres/' || COALESCE(center_account_id, 0) || '/modules/' || id || '/versions/' || version
+                )
+            WHERE source_platform_id IS NOT NULL
+        """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS formation_module_assets (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                module_id INTEGER NOT NULL,
+                center_account_id INTEGER NOT NULL,
+                source_folder_id INTEGER,
+                asset_kind TEXT NOT NULL,
+                logical_key TEXT NOT NULL,
+                container_name TEXT NOT NULL,
+                blob_path TEXT NOT NULL,
+                content_sha256 TEXT,
+                byte_size INTEGER,
+                mime_type TEXT,
+                language TEXT,
+                voice_profile TEXT,
+                generator_version TEXT,
+                generation_params_json TEXT NOT NULL DEFAULT '{}',
+                status TEXT NOT NULL DEFAULT 'ready',
+                storage_tier TEXT NOT NULL DEFAULT 'Hot',
+                immutable INTEGER NOT NULL DEFAULT 1,
+                last_verified_at TEXT,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(module_id, logical_key),
+                FOREIGN KEY (module_id) REFERENCES formation_modules(id)
+            )
+        """)
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_formation_module_assets_module_kind "
+            "ON formation_module_assets(module_id, asset_kind, status)"
+        )
 
         # ─── Observabilité pipeline : rapports conformité + événements ───────
         # Les rapports de conformité ne peuvent pas dépendre uniquement du

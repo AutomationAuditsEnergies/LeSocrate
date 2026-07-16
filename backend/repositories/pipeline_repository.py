@@ -2567,6 +2567,7 @@ def list_due_audio_generation_sessions(
             pc.name,
             COALESCE(
                 pc.source_formation_id,
+                fm.source_pipeline_job_id,
                 (
                     SELECT j.id
                     FROM formation_pipeline_jobs j
@@ -2577,6 +2578,7 @@ def list_due_audio_generation_sessions(
             ) AS formation_job_id
         FROM course_sessions cs
         JOIN platform_config pc ON pc.id = cs.platform_id
+        LEFT JOIN formation_modules fm ON fm.id = pc.source_module_id
         WHERE cs.status IN ('planned', 'active')
           AND cs.scheduled_at >= {ph}
           AND cs.scheduled_at <= {ph}
@@ -3449,13 +3451,16 @@ def finalize_pipeline_module(
         with get_postgres_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    "SELECT center_account_id FROM platform_config WHERE id = %s FOR UPDATE",
+                    "SELECT center_account_id, teacher_name, teacher_color "
+                    "FROM platform_config WHERE id = %s FOR UPDATE",
                     (platform_id,),
                 )
                 platform_row = cur.fetchone()
                 if not platform_row:
                     raise ValueError(f"Plateforme Postgres introuvable: {platform_id}")
                 center_account_id = platform_row["center_account_id"]
+                teacher_name = platform_row.get("teacher_name")
+                teacher_color = platform_row.get("teacher_color")
                 cur.execute(
                     "UPDATE platform_config SET status = 'ready', updated_at = NOW() WHERE id = %s",
                     (platform_id,),
@@ -3565,6 +3570,23 @@ def finalize_pipeline_module(
                     module_status = inserted["status"]
                     module_created = bool(inserted["created"])
 
+                cur.execute(
+                    """
+                    UPDATE formation_modules
+                    SET teacher_name = COALESCE(teacher_name, %s),
+                        teacher_color = COALESCE(teacher_color, %s),
+                        asset_namespace = COALESCE(
+                            asset_namespace,
+                            'centres/' || COALESCE(center_account_id, 0)::text
+                                || '/modules/' || id::text
+                                || '/versions/' || version
+                        ),
+                        immutable = TRUE
+                    WHERE id = %s
+                    """,
+                    (teacher_name, teacher_color, module_id),
+                )
+
                 result = {
                     "platform_id": platform_id,
                     "platform_ready_updated": platform_ready_updated,
@@ -3598,11 +3620,16 @@ def finalize_pipeline_module(
     conn = get_db_connection()
     try:
         cursor = conn.cursor()
-        cursor.execute("SELECT center_account_id FROM platform_config WHERE id = ?", (platform_id,))
+        cursor.execute(
+            "SELECT center_account_id, teacher_name, teacher_color FROM platform_config WHERE id = ?",
+            (platform_id,),
+        )
         platform_row = cursor.fetchone()
         if not platform_row:
             raise ValueError(f"Plateforme SQLite introuvable: {platform_id}")
         center_account_id = platform_row[0]
+        teacher_name = platform_row[1] if len(platform_row) > 1 else None
+        teacher_color = platform_row[2] if len(platform_row) > 2 else None
         cursor.execute("UPDATE platform_config SET status = 'ready' WHERE id = ?", (platform_id,))
         platform_ready_updated = int(cursor.rowcount or 0)
         cursor.execute(
@@ -3679,6 +3706,21 @@ def finalize_pipeline_module(
             module_id = int(cursor.lastrowid)
             module_status = desired_status
             module_created = True
+        cursor.execute(
+            """
+            UPDATE formation_modules
+            SET teacher_name = COALESCE(teacher_name, ?),
+                teacher_color = COALESCE(teacher_color, ?),
+                asset_namespace = COALESCE(
+                    asset_namespace,
+                    'centres/' || COALESCE(center_account_id, 0)
+                        || '/modules/' || id || '/versions/' || version
+                ),
+                immutable = 1
+            WHERE id = ?
+            """,
+            (teacher_name, teacher_color, module_id),
+        )
         conn.commit()
         return {
             "platform_id": platform_id,

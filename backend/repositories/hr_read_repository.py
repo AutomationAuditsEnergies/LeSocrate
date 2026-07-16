@@ -54,7 +54,32 @@ def list_formation_modules(
                            WHERE cf.platform_id = m.source_platform_id
                        ) AS nb_folders,
                        pc.name AS source_platform_name,
-                       m.voice_type, m.voice_updated_at
+                       m.voice_type, m.voice_updated_at,
+                       m.teacher_name, m.teacher_color, m.asset_namespace,
+                       m.immutable,
+                       (
+                           SELECT COUNT(*)
+                           FROM formation_module_assets asset
+                           WHERE asset.module_id = m.id AND asset.status = 'ready'
+                       ) AS asset_count,
+                       (
+                           SELECT COUNT(*)
+                           FROM platform_config usage_platform
+                           WHERE (
+                               usage_platform.source_module_id = m.id
+                               OR usage_platform.id = m.source_platform_id
+                           )
+                             AND usage_platform.lifecycle_status = 'active'
+                       ) AS active_use_count,
+                       (
+                           SELECT COUNT(*)
+                           FROM platform_config usage_platform
+                           WHERE (
+                               usage_platform.source_module_id = m.id
+                               OR usage_platform.id = m.source_platform_id
+                           )
+                             AND usage_platform.lifecycle_status IN ('completed', 'archived')
+                       ) AS completed_use_count
                 FROM formation_modules m
                 LEFT JOIN platform_config pc ON pc.id = m.source_platform_id
                 LEFT JOIN formation_pipeline_jobs j ON j.id = m.source_pipeline_job_id
@@ -164,6 +189,20 @@ def list_platforms(
                     fpj.auto_pilot_step AS pipeline_auto_pilot_step,
                     fpj.auto_pilot_error AS pipeline_auto_pilot_error,
                     fpj.auto_pilot_enabled AS pipeline_auto_pilot_enabled,
+                    pc.lifecycle_status,
+                    pc.completed_at,
+                    pc.archived_at,
+                    pc.asset_binding_mode,
+                    (
+                        SELECT COUNT(*) FROM course_sessions cs
+                        WHERE cs.platform_id = pc.id
+                    ) AS total_session_count,
+                    (
+                        SELECT COUNT(*) FROM course_sessions cs
+                        WHERE cs.platform_id = pc.id
+                          AND cs.status IN ('planned', 'active')
+                          AND cs.scheduled_at >= NOW()
+                    ) AS remaining_session_count,
                     (
                         SELECT COUNT(*)
                         FROM deletion_requests dr

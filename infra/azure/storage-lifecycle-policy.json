@@ -1,0 +1,84 @@
+{
+  "rules": [
+    {
+      "enabled": true,
+      "name": "teacher-canonical-assets",
+      "type": "Lifecycle",
+      "definition": {
+        "actions": {
+          "baseBlob": {
+            "tierToCool": {
+              "daysAfterModificationGreaterThan": 30
+            }
+          },
+          "version": {
+            "delete": {
+              "daysAfterCreationGreaterThan": 90
+            }
+          }
+        },
+        "filters": {
+          "blobTypes": ["blockBlob"],
+          "prefixMatch": ["audiostts/", "documenttts/"]
+        }
+      }
+    },
+    {
+      "enabled": true,
+      "name": "ephemeral-pipeline-artifacts",
+      "type": "Lifecycle",
+      "definition": {
+        "actions": {
+          "baseBlob": {
+            "tierToCool": {
+              "daysAfterModificationGreaterThan": 7
+            },
+            "delete": {
+              "daysAfterModificationGreaterThan": 45
+            }
+          },
+          "version": {
+            "delete": {
+              "daysAfterCreationGreaterThan": 30
+            }
+          }
+        },
+        "filters": {
+          "blobTypes": ["blockBlob"],
+          "prefixMatch": ["pipeline-artifacts/"]
+        }
+      }
+    },
+    {
+      "enabled": true,
+      "name": "published-audio-archives",
+      "type": "Lifecycle",
+      "definition": {
+        "actions": {
+          "baseBlob": {
+            "tierToCool": {
+              "daysAfterModificationGreaterThan": 30
+            },
+            "tierToArchive": {
+              "daysAfterModificationGreaterThan": 180
+            }
+          },
+          "version": {
+            "delete": {
+              "daysAfterCreationGreaterThan": 90
+            }
+          }
+        },
+        "filters": {
+          "blobTypes": ["blockBlob"],
+          "prefixMatch": [
+            "formationaudio-archives/",
+            "formationaudio-archives-p2/",
+            "formationaudio-p3-archives/",
+            "formationaudio-p4-archives/"
+          ]
+        }
+      }
+    }
+  ]
+}

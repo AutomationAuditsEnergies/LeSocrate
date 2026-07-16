@@ -17,20 +17,8 @@ from repositories.hr_write_repository import (
 )
 from services.course_schedule_service import create_course_schedule
 from services.formation_pipeline_service import update_job
-
-
-def _copy_reused_teacher_artifacts(source_platform_id: int, target_platform_id: int, folder_map: dict) -> None:
-    from services.azure_blob_service import (
-        CONTAINER_AUDIOS,
-        CONTAINER_DOCUMENTS,
-        copy_blobs_by_prefix,
-    )
-
-    for source_folder_id, target_folder_id in folder_map.items():
-        source_prefix = f"platform-{source_platform_id}/folder-{source_folder_id}/"
-        target_prefix = f"platform-{target_platform_id}/folder-{target_folder_id}/"
-        copy_blobs_by_prefix(CONTAINER_DOCUMENTS, source_prefix, target_prefix)
-        copy_blobs_by_prefix(CONTAINER_AUDIOS, source_prefix, target_prefix)
+from repositories.center_workspace_repository import set_platform_asset_binding_mode
+from services.teacher_asset_service import ensure_module_asset_manifest
 
 
 def fulfill_teacher_order(item, lease) -> WorkResult:
@@ -139,11 +127,17 @@ def fulfill_teacher_order(item, lease) -> WorkResult:
             scope_to_center=True,
         )
         lease.checkpoint()
-        _copy_reused_teacher_artifacts(
-            int(clone["source_platform_id"]),
-            platform_id,
-            clone["folder_id_map"],
+        # A reuse creates a lightweight promotion binding. The module's
+        # documents, slides and audio stay immutable in Azure and are referenced
+        # through course_clone_folder_map + formation_module_assets. This keeps
+        # storage proportional to unique teacher versions, not promotion count.
+        manifest = ensure_module_asset_manifest(
+            module_id=module_id,
+            center_account_id=center_id,
+            source_platform_id=int(clone["source_platform_id"]),
+            source_folder_ids=clone["folder_id_map"].keys(),
         )
+        set_platform_asset_binding_mode(platform_id, "shared")
         schedule = payload.get("schedule")
         if schedule:
             create_course_schedule(platform_id, schedule)
@@ -155,7 +149,12 @@ def fulfill_teacher_order(item, lease) -> WorkResult:
             platform_id=platform_id,
             last_error=None,
         )
-        return WorkResult(result={"status": "fulfilled", "platform_id": platform_id})
+        return WorkResult(result={
+            "status": "fulfilled",
+            "platform_id": platform_id,
+            "asset_binding_mode": "shared",
+            "module_asset_count": manifest.get("registered", 0),
+        })
     except PermanentWorkError:
         raise
     except Exception as exc:
