@@ -369,8 +369,33 @@ def _insert_pipeline_platform_postgres(
     *,
     platform_name: str,
     center_account_id: int | None,
+    teacher_name: str | None = None,
+    teacher_color: str | None = None,
+    creation_request_id: str | None = None,
+    source_module_id: int | None = None,
 ) -> dict[str, Any]:
     """Insert a platform using the caller's transaction."""
+    if creation_request_id:
+        cur.execute(
+            "SELECT pg_advisory_xact_lock(hashtext(%s))",
+            (f"pipeline-platform-request:{creation_request_id}",),
+        )
+        cur.execute(
+            """
+            SELECT id, center_account_id, name, slug, upload_locked,
+                   public_access_enabled, updated_at, playlist_mode, status,
+                   source_formation_id, source_module_id, teacher_name,
+                   teacher_color, creation_request_id, audio_container,
+                   pdf_container, archive_container, audio_base_url
+            FROM platform_config
+            WHERE creation_request_id = %s
+              AND center_account_id IS NOT DISTINCT FROM %s
+            """,
+            (creation_request_id, center_account_id),
+        )
+        existing = cur.fetchone()
+        if existing:
+            return {**dict(existing), "deduplicated": True}
     sqlite_max_id = _sqlite_platform_max_id() if _sqlite_pipeline_mirror_required() else 0
     allocated_id = _allocate_platform_id_postgres(cur, sqlite_max_id=sqlite_max_id)
     base_slug = slugify(platform_name, fallback="formation")[:48]
@@ -399,14 +424,19 @@ def _insert_pipeline_platform_postgres(
         """
         INSERT INTO platform_config (
             id, center_account_id, name, slug, upload_locked,
-            public_access_enabled, updated_at, status, audio_base_url
+            public_access_enabled, updated_at, status, audio_base_url,
+            teacher_name, teacher_color, creation_request_id, source_module_id
         )
-        VALUES (%s, %s, %s, %s, TRUE, TRUE, NOW(), 'pending', '')
+        VALUES (%s, %s, %s, %s, TRUE, TRUE, NOW(), 'pending', '', %s, %s, %s, %s)
         RETURNING id, center_account_id, name, slug, upload_locked,
                   public_access_enabled, updated_at, playlist_mode,
-                  status, source_formation_id, source_module_id
+                  status, source_formation_id, source_module_id, teacher_name,
+                  teacher_color, creation_request_id
         """,
-        (allocated_id, center_account_id, platform_name, candidate),
+        (
+            allocated_id, center_account_id, platform_name, candidate,
+            teacher_name, teacher_color, creation_request_id, source_module_id,
+        ),
     )
     platform = dict(cur.fetchone())
     platform_id = int(platform["id"])
@@ -440,6 +470,10 @@ def create_pipeline_platform(
     *,
     name: str,
     center_account_id: int | None = None,
+    teacher_name: str | None = None,
+    teacher_color: str | None = None,
+    creation_request_id: str | None = None,
+    source_module_id: int | None = None,
 ) -> dict[str, Any]:
     """Create the platform in the same authoritative store as its pipeline.
 
@@ -460,6 +494,10 @@ def create_pipeline_platform(
                         cur,
                         platform_name=platform_name,
                         center_account_id=center_account_id,
+                        teacher_name=teacher_name,
+                        teacher_color=teacher_color,
+                        creation_request_id=creation_request_id,
+                        source_module_id=source_module_id,
                     )
 
         platform = _run_postgres_with_retry("create_pipeline_platform", _postgres_operation)
@@ -543,6 +581,9 @@ def create_postgres_pipeline_aggregate(
     total_hours: int,
     nb_days: int,
     model: str | None = None,
+    teacher_name: str | None = None,
+    teacher_color: str | None = None,
+    creation_request_id: str | None = None,
 ) -> dict[str, Any]:
     """Atomically create the Postgres platform, pipeline job, and their link.
 
@@ -567,7 +608,22 @@ def create_postgres_pipeline_aggregate(
                     cur,
                     platform_name=platform_name,
                     center_account_id=center_account_id,
+                    teacher_name=teacher_name,
+                    teacher_color=teacher_color,
+                    creation_request_id=creation_request_id,
                 )
+                if platform.get("deduplicated"):
+                    job_id = platform.get("source_formation_id")
+                    if not job_id:
+                        cur.execute(
+                            "SELECT id FROM formation_pipeline_jobs WHERE platform_id = %s ORDER BY id LIMIT 1",
+                            (int(platform["id"]),),
+                        )
+                        row = cur.fetchone()
+                        job_id = row and row["id"]
+                    if not job_id:
+                        raise RuntimeError("Plateforme idempotente sans pipeline associée")
+                    return {"platform": platform, "job_id": int(job_id), "deduplicated": True}
                 cur.execute(
                     """
                     INSERT INTO formation_pipeline_jobs

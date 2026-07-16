@@ -20,7 +20,7 @@ from database import db_safety
 from database.postgres import postgres_enabled
 from repositories.core_repository import (
     DuplicateTrainingCenterUsername,
-    create_ai_teacher_order,
+    create_ai_teacher_order,  # compatibility symbol retained for legacy tests; POST returns 410
     create_training_center,
     get_training_center_by_username,
     list_ai_teacher_orders,
@@ -1370,50 +1370,11 @@ def create_admin_blueprint(socketio):
 
     @admin_bp.route("/api/admin/ai-teacher-orders", methods=["POST"])
     def create_order():
-        """Crée une commande d'agent IA en brouillon côté SaaS core."""
-        if not session.get("is_admin") or session.get("admin_account_type") != "training_center":
-            return jsonify({"success": False, "error": "Accès refusé"}), 403
-        if not postgres_enabled():
-            return jsonify({"success": False, "error": "Postgres non activé"}), 503
-
-        data = request.get_json(silent=True) or {}
-        training_title = str(data.get("training_title") or "").strip()
-        rncp_code = str(data.get("rncp_code") or "").strip() or None
-        raw_platform_id = data.get("platform_id")
-        platform_id = (
-            _authorize_platform_id(raw_platform_id)
-            if raw_platform_id is not None
-            else None
-        )
-        quoted_amount_cents = data.get("quoted_amount_cents")
-        try:
-            total_hours = int(data.get("total_hours") or 0)
-        except (TypeError, ValueError):
-            total_hours = 0
-
-        if not training_title or total_hours <= 0:
-            return jsonify({
-                "success": False,
-                "error": "training_title et total_hours sont requis",
-            }), 400
-
-        try:
-            order = create_ai_teacher_order({
-                "center_account_id": session.get("admin_account_id"),
-                "platform_id": platform_id,
-                "status": "draft",
-                "training_title": training_title,
-                "rncp_code": rncp_code,
-                "total_hours": total_hours,
-                "quoted_amount_cents": int(quoted_amount_cents) if quoted_amount_cents else None,
-                "currency": "eur",
-                "stripe_checkout_session_id": None,
-                "stripe_payment_intent_id": None,
-            })
-            return jsonify({"success": True, "order": order}), 201
-        except Exception:
-            logger.exception("❌ Erreur création commande IA")
-            return jsonify({"success": False, "error": "Erreur serveur"}), 500
+        """Retiré: le navigateur ne peut plus fournir lui-même un prix."""
+        return jsonify({
+            "success": False,
+            "error": "Utilisez /api/hr/teacher-orders pour une commande tarifée côté serveur.",
+        }), 410
 
     @admin_bp.route("/api/admin/logout", methods=["POST"])
     def logout_admin():

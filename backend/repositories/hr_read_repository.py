@@ -47,6 +47,7 @@ def list_formation_modules(
                 f"""
                 SELECT m.id, m.rncp_code, m.tp_name, m.version, m.status,
                        m.source_pipeline_job_id, m.source_platform_id, m.created_at,
+                       j.total_hours,
                        (
                            SELECT COUNT(*)
                            FROM cours_folders cf
@@ -56,6 +57,7 @@ def list_formation_modules(
                        m.voice_type, m.voice_updated_at
                 FROM formation_modules m
                 LEFT JOIN platform_config pc ON pc.id = m.source_platform_id
+                LEFT JOIN formation_pipeline_jobs j ON j.id = m.source_pipeline_job_id
                 WHERE m.status != 'archived'
                 {scope_sql}
                 ORDER BY m.created_at DESC

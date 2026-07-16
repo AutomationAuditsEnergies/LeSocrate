@@ -20,6 +20,10 @@ def handle_pipeline_work_item(item: WorkItem, lease) -> WorkResult:
         from services.hr_playlist_pipeline_service import handle_hr_playlist_work_item
 
         return handle_hr_playlist_work_item(item, lease)
+    if item.task_type == "ai_teacher_fulfillment":
+        from services.teacher_order_fulfillment_service import fulfill_teacher_order
+
+        return fulfill_teacher_order(item, lease)
     raise PermanentWorkError(f"task_type inconnu: {item.task_type}")
 
 
@@ -234,3 +238,8 @@ def mark_pipeline_dead_letter(item: WorkItem, error: str) -> None:
             error=error[:500],
             data={"folder_id": item.folder_id, "task_type": item.task_type},
         )
+        return
+    if item.task_type == "ai_teacher_fulfillment":
+        from services.teacher_order_fulfillment_service import mark_teacher_order_dead_letter
+
+        mark_teacher_order_dead_letter(item, error)

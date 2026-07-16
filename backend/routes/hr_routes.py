@@ -530,6 +530,7 @@ def create_hr_blueprint(socketio):
                     "source_pipeline_job_id": row.get("source_pipeline_job_id"),
                     "source_platform_id": row.get("source_platform_id"),
                     "created_at": row.get("created_at"),
+                    "total_hours": row.get("total_hours"),
                     "nb_folders": row.get("nb_folders", 0),
                     "source_platform_name": row.get("source_platform_name"),
                     "voice_type": row.get("voice_type"),
@@ -1437,6 +1438,18 @@ def create_hr_blueprint(socketio):
                     "success": False,
                     "error": "Source de clonage PostgreSQL indisponible",
                 }), 503
+
+        # Tenant ownership and source validity are deliberately checked first
+        # so this billing boundary never reveals another centre's resources.
+        if (
+            _admin_account_type() == "training_center"
+            and (module_id is not None or formation_id is not None or new_formation is not None)
+        ):
+            return jsonify({
+                "success": False,
+                "error": "Passez par la commande sécurisée avant de créer ou réutiliser un professeur IA.",
+                "code": "teacher_order_required",
+            }), 402
 
         try:
             conn = get_db_connection()

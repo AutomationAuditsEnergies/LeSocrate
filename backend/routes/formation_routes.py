@@ -352,6 +352,8 @@ def init_formation():
     """
     if not _require_admin():
         return jsonify({"error": "Non autorisé"}), 403
+    if _admin_account_type() not in _PIPELINE_SUPERADMIN_ACCOUNT_TYPES:
+        return jsonify({"error": "Cette création doit passer par une commande professeur IA."}), 403
 
     data = request.get_json() or {}
     platform_name = (data.get("platform_name") or "").strip()
@@ -461,6 +463,8 @@ def init_test_pipeline():
     """
     if not _require_admin():
         return jsonify({"error": "Non autorisé"}), 403
+    if _admin_account_type() not in _PIPELINE_SUPERADMIN_ACCOUNT_TYPES:
+        return jsonify({"error": "Le mode test est réservé à l’administration technique."}), 403
 
     platform_name = (request.form.get("platform_name") or "").strip()
     tp_name = (request.form.get("tp_name") or "").strip()

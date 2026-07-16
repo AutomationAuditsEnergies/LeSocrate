@@ -12,9 +12,25 @@ CREATE TABLE IF NOT EXISTS training_center_accounts (
     center_name TEXT NOT NULL,
     slug TEXT NOT NULL UNIQUE,
     is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    stripe_customer_id TEXT,
+    billing_mode TEXT NOT NULL DEFAULT 'stripe_required',
+    billing_exempt_reason TEXT,
+    billing_exempt_at TIMESTAMPTZ,
+    billing_exempt_updated_by TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+ALTER TABLE training_center_accounts
+    ADD COLUMN IF NOT EXISTS stripe_customer_id TEXT;
+ALTER TABLE training_center_accounts
+    ADD COLUMN IF NOT EXISTS billing_mode TEXT NOT NULL DEFAULT 'stripe_required';
+ALTER TABLE training_center_accounts
+    ADD COLUMN IF NOT EXISTS billing_exempt_reason TEXT;
+ALTER TABLE training_center_accounts
+    ADD COLUMN IF NOT EXISTS billing_exempt_at TIMESTAMPTZ;
+ALTER TABLE training_center_accounts
+    ADD COLUMN IF NOT EXISTS billing_exempt_updated_by TEXT;
 
 CREATE TABLE IF NOT EXISTS platform_config (
     id BIGSERIAL PRIMARY KEY,
@@ -230,16 +246,87 @@ CREATE TABLE IF NOT EXISTS student_attendance_records (
 
 CREATE TABLE IF NOT EXISTS ai_teacher_orders (
     id BIGSERIAL PRIMARY KEY,
+    public_id UUID NOT NULL DEFAULT gen_random_uuid(),
     center_account_id BIGINT NOT NULL REFERENCES training_center_accounts(id) ON DELETE CASCADE,
     platform_id BIGINT REFERENCES platform_config(id) ON DELETE SET NULL,
-    status TEXT NOT NULL DEFAULT 'draft',
+    pipeline_job_id BIGINT,
+    operation_type TEXT NOT NULL DEFAULT 'new_teacher',
+    source_module_id BIGINT,
+    status TEXT NOT NULL DEFAULT 'awaiting_payment',
+    payment_status TEXT NOT NULL DEFAULT 'awaiting_payment',
+    fulfillment_status TEXT NOT NULL DEFAULT 'not_started',
     training_title TEXT NOT NULL,
     rncp_code TEXT,
     total_hours INTEGER NOT NULL,
+    request_payload_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+    creation_request_id TEXT NOT NULL DEFAULT gen_random_uuid()::text,
+    request_fingerprint TEXT NOT NULL DEFAULT gen_random_uuid()::text,
+    pricing_key TEXT NOT NULL DEFAULT 'new_teacher',
+    stripe_price_id TEXT,
     quoted_amount_cents INTEGER,
+    catalog_amount_cents INTEGER,
+    charged_amount_cents INTEGER,
     currency TEXT NOT NULL DEFAULT 'eur',
+    authorization_kind TEXT NOT NULL DEFAULT 'stripe',
     stripe_checkout_session_id TEXT,
+    checkout_attempt_count INTEGER NOT NULL DEFAULT 0,
     stripe_payment_intent_id TEXT,
+    checkout_expires_at TIMESTAMPTZ,
+    authorized_at TIMESTAMPTZ,
+    paid_at TIMESTAMPTZ,
+    refunded_at TIMESTAMPTZ,
+    fulfilled_at TIMESTAMPTZ,
+    fulfillment_work_item_id UUID,
+    last_error TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+ALTER TABLE ai_teacher_orders ADD COLUMN IF NOT EXISTS public_id UUID DEFAULT gen_random_uuid();
+UPDATE ai_teacher_orders SET public_id = gen_random_uuid() WHERE public_id IS NULL;
+ALTER TABLE ai_teacher_orders ALTER COLUMN public_id SET NOT NULL;
+ALTER TABLE ai_teacher_orders ADD COLUMN IF NOT EXISTS pipeline_job_id BIGINT;
+ALTER TABLE ai_teacher_orders ADD COLUMN IF NOT EXISTS operation_type TEXT NOT NULL DEFAULT 'new_teacher';
+ALTER TABLE ai_teacher_orders ADD COLUMN IF NOT EXISTS source_module_id BIGINT;
+ALTER TABLE ai_teacher_orders ADD COLUMN IF NOT EXISTS payment_status TEXT NOT NULL DEFAULT 'awaiting_payment';
+ALTER TABLE ai_teacher_orders ADD COLUMN IF NOT EXISTS fulfillment_status TEXT NOT NULL DEFAULT 'not_started';
+ALTER TABLE ai_teacher_orders ADD COLUMN IF NOT EXISTS request_payload_json JSONB NOT NULL DEFAULT '{}'::jsonb;
+ALTER TABLE ai_teacher_orders ADD COLUMN IF NOT EXISTS creation_request_id TEXT;
+ALTER TABLE ai_teacher_orders ADD COLUMN IF NOT EXISTS request_fingerprint TEXT;
+ALTER TABLE ai_teacher_orders ADD COLUMN IF NOT EXISTS pricing_key TEXT;
+ALTER TABLE ai_teacher_orders ADD COLUMN IF NOT EXISTS stripe_price_id TEXT;
+ALTER TABLE ai_teacher_orders ADD COLUMN IF NOT EXISTS catalog_amount_cents INTEGER;
+ALTER TABLE ai_teacher_orders ADD COLUMN IF NOT EXISTS charged_amount_cents INTEGER;
+ALTER TABLE ai_teacher_orders ADD COLUMN IF NOT EXISTS authorization_kind TEXT NOT NULL DEFAULT 'stripe';
+ALTER TABLE ai_teacher_orders ADD COLUMN IF NOT EXISTS checkout_expires_at TIMESTAMPTZ;
+ALTER TABLE ai_teacher_orders ADD COLUMN IF NOT EXISTS authorized_at TIMESTAMPTZ;
+ALTER TABLE ai_teacher_orders ADD COLUMN IF NOT EXISTS paid_at TIMESTAMPTZ;
+ALTER TABLE ai_teacher_orders ADD COLUMN IF NOT EXISTS refunded_at TIMESTAMPTZ;
+ALTER TABLE ai_teacher_orders ADD COLUMN IF NOT EXISTS fulfilled_at TIMESTAMPTZ;
+ALTER TABLE ai_teacher_orders ADD COLUMN IF NOT EXISTS fulfillment_work_item_id UUID;
+ALTER TABLE ai_teacher_orders ADD COLUMN IF NOT EXISTS last_error TEXT;
+ALTER TABLE ai_teacher_orders ADD COLUMN IF NOT EXISTS checkout_attempt_count INTEGER NOT NULL DEFAULT 0;
+UPDATE ai_teacher_orders
+SET creation_request_id = COALESCE(creation_request_id, 'legacy-' || id::text),
+    request_fingerprint = COALESCE(request_fingerprint, 'legacy-' || id::text),
+    pricing_key = COALESCE(pricing_key, operation_type)
+WHERE creation_request_id IS NULL OR request_fingerprint IS NULL OR pricing_key IS NULL;
+ALTER TABLE ai_teacher_orders ALTER COLUMN creation_request_id SET NOT NULL;
+ALTER TABLE ai_teacher_orders ALTER COLUMN request_fingerprint SET NOT NULL;
+ALTER TABLE ai_teacher_orders ALTER COLUMN pricing_key SET NOT NULL;
+ALTER TABLE ai_teacher_orders ALTER COLUMN creation_request_id SET DEFAULT gen_random_uuid()::text;
+ALTER TABLE ai_teacher_orders ALTER COLUMN request_fingerprint SET DEFAULT gen_random_uuid()::text;
+ALTER TABLE ai_teacher_orders ALTER COLUMN pricing_key SET DEFAULT 'new_teacher';
+
+CREATE TABLE IF NOT EXISTS stripe_webhook_events (
+    event_id TEXT PRIMARY KEY,
+    event_type TEXT NOT NULL,
+    livemode BOOLEAN NOT NULL DEFAULT FALSE,
+    payload_json JSONB NOT NULL,
+    status TEXT NOT NULL DEFAULT 'received',
+    attempt_count INTEGER NOT NULL DEFAULT 0,
+    last_error TEXT,
+    processed_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -499,6 +586,17 @@ CREATE INDEX IF NOT EXISTS idx_student_attendance_platform_date ON student_atten
 CREATE INDEX IF NOT EXISTS idx_student_attendance_student ON student_attendance_records(student_profile_id);
 CREATE INDEX IF NOT EXISTS idx_ai_teacher_orders_center ON ai_teacher_orders(center_account_id);
 CREATE INDEX IF NOT EXISTS idx_ai_teacher_orders_platform ON ai_teacher_orders(platform_id);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_ai_teacher_orders_public_id ON ai_teacher_orders(public_id);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_ai_teacher_orders_creation_request
+    ON ai_teacher_orders(center_account_id, creation_request_id);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_ai_teacher_orders_checkout_session
+    ON ai_teacher_orders(stripe_checkout_session_id)
+    WHERE stripe_checkout_session_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_ai_teacher_orders_payment_intent
+    ON ai_teacher_orders(stripe_payment_intent_id)
+    WHERE stripe_payment_intent_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_ai_teacher_orders_fulfillment
+    ON ai_teacher_orders(fulfillment_status, updated_at);
 CREATE INDEX IF NOT EXISTS idx_formation_pipeline_jobs_platform_created ON formation_pipeline_jobs(platform_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_formation_pipeline_jobs_status ON formation_pipeline_jobs(status);
 CREATE INDEX IF NOT EXISTS idx_formation_knowledge_base_job ON formation_knowledge_base(job_id);
@@ -558,6 +656,7 @@ ALTER TABLE student_accounts ENABLE ROW LEVEL SECURITY;
 ALTER TABLE student_profiles ENABLE ROW LEVEL SECURITY;
 ALTER TABLE student_attendance_records ENABLE ROW LEVEL SECURITY;
 ALTER TABLE ai_teacher_orders ENABLE ROW LEVEL SECURITY;
+ALTER TABLE stripe_webhook_events ENABLE ROW LEVEL SECURITY;
 ALTER TABLE formation_pipeline_jobs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE formation_knowledge_base ENABLE ROW LEVEL SECURITY;
 ALTER TABLE cours_folders ENABLE ROW LEVEL SECURITY;

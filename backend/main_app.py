@@ -27,6 +27,7 @@ from routes.slides_routes import slides_bp
 from routes.chat_routes import chat_bp
 from routes.hr_routes import create_hr_blueprint
 from routes.formation_routes import formation_bp, start_auto_pilot_watchdog
+from routes.billing_routes import billing_bp
 
 # SocketIO handlers
 from socketio_handlers.handlers import register_socketio_handlers
@@ -106,6 +107,7 @@ app.register_blueprint(slides_bp)
 app.register_blueprint(chat_bp)
 app.register_blueprint(hr_bp)
 app.register_blueprint(formation_bp)
+app.register_blueprint(billing_bp)
 
 logger.info("✅ Tous les blueprints enregistrés")
 

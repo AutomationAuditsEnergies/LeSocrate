@@ -70,6 +70,8 @@ jobs:
       FISH_AUDIO_VOICE_ID: ${{ secrets.SAAS_FISH_AUDIO_VOICE_ID || secrets.FISH_AUDIO_VOICE_ID }}
       AZURE_AUDIO_STORAGE_CONNECTION_STRING: ${{ secrets.SAAS_AZURE_AUDIO_STORAGE_CONNECTION_STRING || secrets.AZURE_AUDIO_STORAGE_CONNECTION_STRING }}
       AZURE_STORAGE_CONNECTION_STRING: ${{ secrets.SAAS_AZURE_STORAGE_CONNECTION_STRING || secrets.AZURE_STORAGE_CONNECTION_STRING }}
+      STRIPE_SECRET_KEY: ${{ secrets.SAAS_STRIPE_SECRET_KEY || secrets.STRIPE_SECRET_KEY }}
+      STRIPE_WEBHOOK_SECRET: ${{ secrets.SAAS_STRIPE_WEBHOOK_SECRET || secrets.STRIPE_WEBHOOK_SECRET }}
 
     steps:
       - name: Download artifact from build job
@@ -98,7 +100,7 @@ jobs:
         shell: bash
         run: |
           missing=()
-          for key in DATABASE_URL SUPABASE_URL SUPABASE_ANON_KEY SUPABASE_SERVICE_ROLE_KEY SECRET_KEY AUTO_LOGOUT_WEBHOOK_SECRET; do
+          for key in DATABASE_URL SUPABASE_URL SUPABASE_ANON_KEY SUPABASE_SERVICE_ROLE_KEY SECRET_KEY AUTO_LOGOUT_WEBHOOK_SECRET STRIPE_SECRET_KEY STRIPE_WEBHOOK_SECRET; do
             value="${!key:-}"
             existing="$(az webapp config appsettings list \
               --resource-group "${RESOURCE_GROUP}" \
@@ -206,6 +208,7 @@ jobs:
               SCHEDULED_AUDIO_MAX_AUTO_ATTEMPTS=4 \
               SCHEDULED_AUDIO_RETRY_BASE_MINUTES=5 \
               SCHEDULED_AUDIO_RETRY_MAX_MINUTES=60 \
+              AI_TEACHER_COST_PER_DAY_CENTS=1500 \
               PIPELINE_ARTIFACTS_REQUIRED=1 \
               PIPELINE_BLOB_MAX_ATTEMPTS=3 \
               AZURE_PIPELINE_ARTIFACT_CONTAINER=pipeline-artifacts \
@@ -253,6 +256,8 @@ jobs:
           [ -n "${FISH_AUDIO_VOICE_ID:-}" ] && secret_settings+=("FISH_AUDIO_VOICE_ID=${FISH_AUDIO_VOICE_ID}")
           [ -n "${AZURE_AUDIO_STORAGE_CONNECTION_STRING:-}" ] && secret_settings+=("AZURE_AUDIO_STORAGE_CONNECTION_STRING=${AZURE_AUDIO_STORAGE_CONNECTION_STRING}")
           [ -n "${AZURE_STORAGE_CONNECTION_STRING:-}" ] && secret_settings+=("AZURE_STORAGE_CONNECTION_STRING=${AZURE_STORAGE_CONNECTION_STRING}")
+          [ -n "${STRIPE_SECRET_KEY:-}" ] && secret_settings+=("STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY}")
+          [ -n "${STRIPE_WEBHOOK_SECRET:-}" ] && secret_settings+=("STRIPE_WEBHOOK_SECRET=${STRIPE_WEBHOOK_SECRET}")
 
           if [ "${#secret_settings[@]}" -gt 0 ]; then
             az webapp config appsettings set \

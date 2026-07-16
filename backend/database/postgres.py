@@ -23,6 +23,12 @@ except ImportError:  # pragma: no cover - SQLite-only/local bootstrap.
 POSTGRES_BACKENDS = {"postgres", "postgresql", "postgres_core", "hybrid", "supabase"}
 
 PIPELINE_REQUIRED_SCHEMA = {
+    "training_center_accounts": {
+        "id",
+        "username",
+        "billing_mode",
+        "stripe_customer_id",
+    },
     "platform_config": {"id", "center_account_id", "status", "source_formation_id", "source_module_id"},
     "formation_pipeline_jobs": {
         "id",
@@ -76,6 +82,17 @@ PIPELINE_REQUIRED_SCHEMA = {
         "impact_json",
     },
     "course_reminder_recipients": {"id", "platform_id", "email"},
+    "ai_teacher_orders": {
+        "id",
+        "public_id",
+        "center_account_id",
+        "operation_type",
+        "creation_request_id",
+        "payment_status",
+        "fulfillment_status",
+        "request_payload_json",
+    },
+    "stripe_webhook_events": {"event_id", "event_type", "status", "payload_json"},
     "content_generation_jobs": {"id", "folder_id", "status", "module_contents"},
     "content_generation_segments": {
         "id",
@@ -112,6 +129,8 @@ PIPELINE_REQUIRED_SCHEMA = {
 
 PIPELINE_REQUIRED_INDEXES = {
     "uq_cours_folders_job_name",
+    "uq_ai_teacher_orders_creation_request",
+    "uq_ai_teacher_orders_public_id",
     "uq_pipeline_work_items_active_scope",
     "uq_pipeline_work_items_active_resource_scope",
 }

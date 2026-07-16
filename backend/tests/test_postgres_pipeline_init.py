@@ -15,8 +15,7 @@ class PostgresPipelineInitRouteTest(unittest.TestCase):
         self.client = app.test_client()
         with self.client.session_transaction() as session:
             session["is_admin"] = True
-            session["admin_account_type"] = "training_center"
-            session["admin_account_id"] = 42
+            session["admin_account_type"] = "legacy_admin"
 
     def test_init_creates_platform_in_pipeline_store_before_job(self):
         call_order = []
@@ -57,7 +56,7 @@ class PostgresPipelineInitRouteTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 201)
         self.assertEqual([entry[0] for entry in call_order], ["platform", "job", "link"])
-        self.assertEqual(call_order[0][1]["center_account_id"], 42)
+        self.assertIsNone(call_order[0][1]["center_account_id"])
         self.assertEqual(call_order[1][1]["platform_id"], 123)
         self.assertEqual(call_order[2][1], {"platform_id": 123, "job_id": 456})
         self.assertEqual(response.get_json()["job_id"], 456)
@@ -91,7 +90,7 @@ class PostgresPipelineInitRouteTest(unittest.TestCase):
         legacy_create_job.assert_not_called()
         create_aggregate.assert_called_once_with(
             platform_name="TP Vente 2026",
-            center_account_id=42,
+            center_account_id=None,
             tp_name="TP Vente",
             rncp_code="RNCP12345",
             total_hours=14,
@@ -127,6 +126,21 @@ class PostgresPipelineInitRouteTest(unittest.TestCase):
         create_aggregate.assert_not_called()
         create_platform.assert_not_called()
         create_job.assert_not_called()
+
+    def test_training_center_cannot_bypass_teacher_order(self):
+        with self.client.session_transaction() as session:
+            session["admin_account_type"] = "training_center"
+            session["admin_account_id"] = 42
+        response = self.client.post(
+            "/api/formation/init",
+            json={
+                "platform_name": "Contournement",
+                "tp_name": "TP Vente",
+                "rncp_code": "RNCP12345",
+                "total_hours": 14,
+            },
+        )
+        self.assertEqual(response.status_code, 403)
 
 
 if __name__ == "__main__":

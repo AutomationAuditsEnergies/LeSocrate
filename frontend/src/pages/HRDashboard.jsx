@@ -46,6 +46,11 @@ const todayDateInput = () => {
   const offset = now.getTimezoneOffset() * 60000
   return new Date(now.getTime() - offset).toISOString().slice(0, 10)
 }
+const formatPrice = (amountCents, currency = 'eur') => (
+  typeof amountCents === 'number'
+    ? new Intl.NumberFormat('fr-FR', { style: 'currency', currency: currency.toUpperCase() }).format(amountCents / 100)
+    : 'Tarif indisponible'
+)
 
 const PLATFORM_LOAD_TIMEOUT_MS = 30000
 
@@ -135,6 +140,10 @@ export default function HRDashboard() {
   const [attendanceError, setAttendanceError] = useState('')
   const [attendanceSavingStudentId, setAttendanceSavingStudentId] = useState(null)
   const [loggingOut, setLoggingOut] = useState(false)
+  const [billing, setBilling] = useState(null)
+  const [billingLoading, setBillingLoading] = useState(true)
+  const [activeTeacherOrderId, setActiveTeacherOrderId] = useState(null)
+  const [orderNotice, setOrderNotice] = useState(null)
   const CARDS_PER_PAGE = 3
 
   const handleLogout = async () => {
@@ -300,6 +309,107 @@ export default function HRDashboard() {
   useEffect(() => {
     fetchPlatforms()
   }, [])
+
+  useEffect(() => {
+    let cancelled = false
+    apiFetch('/api/hr/billing/catalog')
+      .then(async (response) => ({ response, data: await response.json().catch(() => ({})) }))
+      .then(({ response, data }) => {
+        if (!cancelled && response.ok && data.success) setBilling(data)
+      })
+      .catch((error) => console.error('Chargement facturation impossible:', error))
+      .finally(() => { if (!cancelled) setBillingLoading(false) })
+    return () => { cancelled = true }
+  }, [])
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const checkout = params.get('checkout')
+    const orderId = params.get('order')
+    if (!checkout || !orderId) return
+    // State is intentionally initialized from the external Checkout redirect.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setActiveTeacherOrderId(orderId)
+    if (checkout === 'success') {
+      setOrderNotice({
+        tone: 'info',
+        title: 'Vérification du paiement',
+        message: 'Ce retour ne vaut pas confirmation. Nous attendons le webhook Stripe signé avant de lancer la préparation de votre professeur IA.',
+      })
+      setShowCreateModal(false)
+      setShowModulesModal(false)
+    } else if (checkout === 'cancelled') {
+      setOrderNotice({
+        tone: 'warning',
+        title: 'Paiement interrompu',
+        message: 'Rien n’a été créé. Votre projet est conservé et vous pouvez reprendre le paiement.',
+      })
+      apiFetch(`/api/hr/teacher-orders/${orderId}`)
+        .then((response) => response.json())
+        .then((data) => {
+          const project = data.order?.project
+          if (!project) return
+          setFormationMode(data.order.operation_type === 'reuse_teacher' ? 'existing' : 'new')
+          setTeacherFirstName(project.teacher_name || '')
+          setTeacherColor(project.teacher_color || 'violet')
+          setNewPlatformName(project.name || '')
+          if (project.module_id) setSelectedModuleId(String(project.module_id))
+          if (project.new_formation) {
+            setNewFormTpName(project.new_formation.tp_name || '')
+            setNewFormRncp(project.new_formation.rncp_code || '')
+            setNewFormHours(String(Math.ceil(Number(project.new_formation.total_hours || 0) / 7)))
+          }
+          const schedule = project.new_formation?.schedule || project.schedule
+          if (schedule) {
+            setWeeklyCourseCount(String(schedule.weekly_course_count || 2))
+            setTeachingDays(schedule.weekdays || [])
+            setScheduleStartDate(schedule.start_date || todayDateInput())
+            setScheduleStartTime(schedule.start_time || '09:00')
+          }
+          creationRequestRef.current = { fingerprint: '', id: data.order.creation_request_id || '' }
+          setShowCreateModal(true)
+        })
+        .catch((error) => console.error('Restauration commande impossible:', error))
+    }
+    window.history.replaceState({}, '', window.location.pathname)
+  }, [])
+
+  useEffect(() => {
+    if (!activeTeacherOrderId) return undefined
+    let stopped = false
+    const pollOrder = async () => {
+      try {
+        const response = await apiFetch(`/api/hr/teacher-orders/${activeTeacherOrderId}`)
+        const data = await response.json()
+        if (!response.ok || !data.success || stopped) return
+        const order = data.order
+        if (order.fulfillment_status === 'fulfilled') {
+          setNewlyCreatedPlatformId(order.platform_id || null)
+          setOrderNotice({
+            tone: 'success',
+            title: 'Votre professeur IA se prépare',
+            message: 'Il apparaît maintenant dans Mes professeurs IA. Les cours sont produits en arrière-plan.',
+          })
+          setActiveTeacherOrderId(null)
+          setShowCreateModal(false)
+          setShowModulesModal(false)
+          await fetchPlatforms()
+        } else if (order.fulfillment_status === 'failed') {
+          setOrderNotice({
+            tone: 'error',
+            title: 'Préparation à relancer',
+            message: 'Votre paiement est conservé. Notre système n’effectuera aucun second prélèvement.',
+          })
+          setActiveTeacherOrderId(null)
+        }
+      } catch (error) {
+        console.error('Suivi commande impossible:', error)
+      }
+    }
+    pollOrder()
+    const interval = window.setInterval(pollOrder, 3000)
+    return () => { stopped = true; window.clearInterval(interval) }
+  }, [activeTeacherOrderId])
 
   useEffect(() => {
     if (platforms.length > 0 && !attendancePlatformId) {
@@ -768,94 +878,58 @@ export default function HRDashboard() {
   const handleCreatePlatform = async () => {
     if (creatingRef.current) return
     const teacherName = teacherFirstName.trim()
-    const trainingTitle = newFormTpName.trim()
+    const selectedModule = modules.find((module) => String(module.id) === String(selectedModuleId))
+    const trainingTitle = formationMode === 'existing'
+      ? String(selectedModule?.tp_name || '').trim()
+      : newFormTpName.trim()
     const platformName = newPlatformName.trim() || (teacherName && trainingTitle ? `${teacherName} · ${trainingTitle}` : '')
-    if (!platformName) return
+    if (!platformName || !teacherName) return
 
-    // ─── Branche TEST : bypass /api/hr/platforms, envoie multipart à /init-test ─
-    // Crée plateforme + job + folders + segments depuis les DOCX, lance auto-pilot
-    // qui skippera KB/global/daily/content. Test ~5 min pipeline en aval.
-    if (formationMode === 'new' && autoPilot && autoPilotMode === 'test') {
-      const tpName = newFormTpName.trim()
-      const rncp = newFormRncp.trim()
-      const trainingDaysCount = parseInt(newFormHours, 10)
-      if (!tpName || !rncp || !trainingDaysCount || trainingDaysCount <= 0) {
-        alert('Nom du TP, code RNCP et nombre de journées requis')
-        return
-      }
-      const totalHours = trainingDaysCount * 7
-      const expectedDocs = trainingDaysCount
-      if (testDocs.length !== expectedDocs) {
-        alert(`Tu dois fournir exactement ${expectedDocs} fichier(s) (1 par journée de 7h). Reçu : ${testDocs.length}`)
-        return
-      }
-
-      setCreating(true)
-      try {
-        const fd = new FormData()
-        fd.append('platform_name', newPlatformName.trim())
-        fd.append('tp_name', tpName)
-        fd.append('rncp_code', rncp)
-        fd.append('total_hours', String(totalHours))
-        fd.append('tts_mode', 'mock')  // forcé en test
-        fd.append('auto_pilot', 'true')
-        testDocs.forEach((f) => fd.append('docs', f))
-
-        const resp = await apiFetch('/api/formation/init-test', {
-          method: 'POST',
-          body: fd,
-        })
-        const data = await resp.json()
-        if (resp.status === 202 && data.ok) {
-          setShowCreateModal(false)
-          resetCreateForm()
-          setTestDocs([])
-          fetchPlatforms()
-          window.open(`/formation-pipeline?job=${data.job_id}`, '_blank')
-        } else {
-          alert(`Erreur init-test : ${data.error || 'inconnue'}`)
-        }
-      } catch (e) {
-        console.error('init-test failed:', e)
-        alert('Impossible de lancer le test : ' + e.message)
-      } finally {
-        setCreating(false)
-      }
+    let project = {
+      name: platformName,
+      teacher_name: teacherName,
+      teacher_color: teacherColor || 'violet',
+    }
+    let operationType = 'new_teacher'
+    const weeklyCount = parseInt(weeklyCourseCount, 10)
+    if (!weeklyCount || weeklyCount <= 0 || teachingDays.length === 0 || weeklyCount !== teachingDays.length) {
+      alert('Choisissez autant de jours que de cours par semaine.')
       return
     }
-
-    // ─── Flow normal (API ou Claude Code) ─────────────────────────────────────
-    // Validation selon le mode
-    let body = { name: platformName }
+    if (!scheduleStartDate || !scheduleStartTime) {
+      alert('Indiquez la date de début et l’heure des journées.')
+      return
+    }
     if (formationMode === 'existing') {
       if (!selectedModuleId) {
-        alert('Sélectionne un module ou bascule sur "Nouvelle formation"')
+        alert('Sélectionnez un ancien professeur IA.')
         return
       }
-      body.module_id = parseInt(selectedModuleId, 10)
-    } else if (formationMode === 'new') {
-      const tpName = trainingTitle
+      operationType = 'reuse_teacher'
+      const totalDays = Math.max(
+        1,
+        Number(selectedModule?.schedule?.total_training_days || Math.ceil(Number(selectedModule?.total_hours || 7) / 7)),
+      )
+      project = {
+        ...project,
+        module_id: parseInt(selectedModuleId, 10),
+        schedule: {
+          total_training_days: totalDays,
+          weekly_course_count: weeklyCount,
+          weekdays: teachingDays,
+          start_date: scheduleStartDate,
+          start_time: scheduleStartTime,
+        },
+      }
+    } else {
       const rncp = newFormRncp.trim()
       const trainingDaysCount = parseInt(newFormHours, 10)
-      const weeklyCount = parseInt(weeklyCourseCount, 10)
-      if (!teacherName || !tpName || !rncp || !trainingDaysCount || trainingDaysCount <= 0) {
-        alert('Prénom du professeur IA, nom de formation, code RNCP et nombre de journées requis')
+      if (!trainingTitle || !rncp || !trainingDaysCount || trainingDaysCount <= 0) {
+        alert('Nom de formation, code RNCP et nombre de journées requis.')
         return
       }
-      if (!weeklyCount || weeklyCount <= 0 || teachingDays.length === 0) {
-        alert('Indique la fréquence de cours et au moins un jour')
-        return
-      }
-      if (weeklyCount !== teachingDays.length) {
-        alert('Le nombre de cours par semaine doit correspondre aux jours sélectionnés')
-        return
-      }
-      if (!scheduleStartDate || !scheduleStartTime) {
-        alert('Indique la date de début et l’heure des journées')
-        return
-      }
-      body.new_formation = {
-        tp_name: tpName,
+      project.new_formation = {
+        tp_name: trainingTitle,
         rncp_code: rncp,
         total_hours: trainingDaysCount * 7,
         schedule: {
@@ -867,71 +941,52 @@ export default function HRDashboard() {
         },
       }
     }
-    // formationMode === 'none' → body reste {name} (plateforme vide, comportement historique)
 
     setCreating(true)
     creatingRef.current = true
     try {
-      body.teacher_name = teacherName || null
-      body.teacher_color = teacherColor || 'violet'
-      const requestFingerprint = JSON.stringify(body)
-      if (creationRequestRef.current.fingerprint !== requestFingerprint) {
+      const requestFingerprint = JSON.stringify({ operation_type: operationType, project })
+      if (
+        !creationRequestRef.current.id
+        || (creationRequestRef.current.fingerprint && creationRequestRef.current.fingerprint !== requestFingerprint)
+      ) {
         creationRequestRef.current = {
           fingerprint: requestFingerprint,
           id: window.crypto?.randomUUID?.() || `${Date.now()}_${Math.random().toString(36).slice(2)}`,
         }
+      } else {
+        creationRequestRef.current.fingerprint = requestFingerprint
       }
-      body.creation_request_id = creationRequestRef.current.id
-      const resp = await apiFetch('/api/hr/platforms', {
+      const resp = await apiFetch('/api/hr/teacher-orders', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
+        body: JSON.stringify({
+          operation_type: operationType,
+          creation_request_id: creationRequestRef.current.id,
+          project,
+        }),
       })
       const data = await resp.json()
-      if (data.success) {
-        const pipelineJobId = data.platform?.pipeline_job_id
-        // Si une pipeline a été lancée et que l'auto-pilot est demandé, on
-        // déclenche l'enchaînement automatique avant de fermer la modale.
-        if (pipelineJobId && formationMode === 'new' && autoPilot) {
-          try {
-            const autoResp = await apiFetch(
-              `/api/formation/${pipelineJobId}/run-auto`,
-              {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                  tts_mode: 'fish_audio',
-                  use_claude_code: false,
-                  model: 'pro',
-                  generate_audio: false,
-                }),
-              },
-            )
-            const autoData = await autoResp.json()
-            if (![200, 202, 409].includes(autoResp.status) && autoData.error) {
-              alert(`Auto-pilot non démarré : ${autoData.error}`)
-            }
-          } catch (e) {
-            console.error('Auto-pilot start failed:', e)
-            alert('Plateforme créée, mais l\'auto-pilot n\'a pas pu démarrer.')
-          }
+      if (resp.ok && data.success) {
+        if (data.next_action === 'redirect' && data.checkout_url) {
+          window.location.assign(data.checkout_url)
+          return
         }
+        setActiveTeacherOrderId(data.order.id)
+        setOrderNotice({
+          tone: 'info',
+          title: billing?.payment_required === false ? 'Préparation lancée' : 'Paiement confirmé',
+          message: 'Votre professeur IA va apparaître dans Mes professeurs IA et se préparer en arrière-plan.',
+        })
         setShowCreateModal(false)
         resetCreateForm()
         setShowModulesModal(false)
-        setCardPage(Math.floor(platforms.length / CARDS_PER_PAGE))
-        setNewlyCreatedPlatformId(data.platform?.id || null)
-        await fetchPlatforms()
-        if (data.platform?.schedule?.audio_generation_immediate) {
-          setPlatformsErrorTone('warning')
-          setPlatformsError('La première séance est prévue dans moins de 24 h. Son audio va être préparé immédiatement.')
-        }
       } else {
-        alert(data.error || 'Erreur lors de la création')
+        alert(data.error || 'Impossible de lancer la commande.')
       }
     } catch (e) {
-      console.error('Erreur création plateforme:', e)
-      alert('Impossible de créer la plateforme')
+      console.error('Erreur commande professeur IA:', e)
+      alert('Impossible de lancer la commande.')
     } finally {
       creatingRef.current = false
       setCreating(false)
@@ -1089,6 +1144,25 @@ export default function HRDashboard() {
         )}
 
         <div className="relative z-10 mx-auto max-w-7xl px-6 py-8">
+          {orderNotice && (
+            <div
+              className="mb-6 flex items-start gap-3 rounded-xl border px-4 py-3.5 text-sm"
+              style={{
+                backgroundColor: orderNotice.tone === 'success' ? (darkMode ? 'rgba(6,78,59,.24)' : '#ecfdf5') : orderNotice.tone === 'error' ? (darkMode ? 'rgba(127,29,29,.2)' : '#fef2f2') : (darkMode ? 'rgba(76,29,149,.18)' : '#f5f3ff'),
+                borderColor: orderNotice.tone === 'success' ? '#a7f3d0' : orderNotice.tone === 'error' ? '#fecaca' : '#ddd6fe',
+                color: colors.text,
+              }}
+            >
+              <Icon name={orderNotice.tone === 'success' ? 'check_circle' : orderNotice.tone === 'error' ? 'error_outline' : 'hourglass_top'} className="mt-0.5 text-lg" />
+              <div className="min-w-0 flex-1">
+                <p className="font-semibold">{orderNotice.title}</p>
+                <p className="mt-0.5 leading-5" style={{ color: colors.textSecondary }}>{orderNotice.message}</p>
+              </div>
+              <button type="button" onClick={() => setOrderNotice(null)} className="rounded p-1" aria-label="Fermer">
+                <Icon name="close" className="text-base" />
+              </button>
+            </div>
+          )}
           {platformsError && (
             <div
               className="mb-6 flex flex-col gap-3 rounded-lg border px-4 py-3 text-sm sm:flex-row sm:items-center sm:justify-between"
@@ -1182,6 +1256,8 @@ export default function HRDashboard() {
               testDocs={testDocs}
               setTestDocs={setTestDocs}
               creating={creating}
+              billing={billing}
+              billingLoading={billingLoading}
               onCreate={handleCreatePlatform}
               onCancel={() => { setShowCreateModal(false); resetCreateForm() }}
             />
@@ -2715,6 +2791,9 @@ function ModulesCatalogueView({
 function CreatePlatformView({
   colors,
   darkMode,
+  modules,
+  formationMode,
+  selectedModuleId,
   teacherFirstName,
   setTeacherFirstName,
   teacherColor,
@@ -2734,6 +2813,8 @@ function CreatePlatformView({
   newFormHours,
   setNewFormHours,
   creating,
+  billing,
+  billingLoading,
   onCreate,
   onCancel,
 }) {
@@ -2751,15 +2832,26 @@ function CreatePlatformView({
     { id: 'vendredi', label: 'Ven.' },
   ]
   const selectedColor = teacherColors.find((color) => color.id === teacherColor) || teacherColors[0]
+  const selectedModule = modules.find((module) => String(module.id) === String(selectedModuleId))
+  const operationType = formationMode === 'existing' ? 'reuse_teacher' : 'new_teacher'
+  const product = billing?.products?.[operationType]
+  const trainingDays = formationMode === 'existing'
+    ? Math.max(1, Number(selectedModule?.schedule?.total_training_days || Math.ceil(Number(selectedModule?.total_hours || 7) / 7)))
+    : Math.max(0, Number(newFormHours) || 0)
+  const estimatedAmountCents = typeof product?.unit_amount_cents === 'number'
+    ? product.unit_amount_cents * trainingDays
+    : null
+  const paymentRequired = billing?.payment_required !== false
+  const billingReady = Boolean(billing && (!paymentRequired || product?.configured))
   const canCreateTeacher = (
     teacherFirstName.trim()
-    && newFormTpName.trim()
-    && newFormRncp.trim()
-    && Number(newFormHours) > 0
+    && (formationMode === 'existing' ? selectedModule : (newFormTpName.trim() && newFormRncp.trim() && Number(newFormHours) > 0))
     && Number(weeklyCourseCount) > 0
+    && Number(weeklyCourseCount) === teachingDays.length
     && teachingDays.length > 0
     && scheduleStartDate
     && scheduleStartTime
+    && billingReady
   )
   const inputStyle = {
     backgroundColor: darkMode ? '#0f172a' : '#F8F7F5',
@@ -2789,7 +2881,7 @@ function CreatePlatformView({
             Création
           </span>
           <h2 className="mt-1 text-xl font-semibold tracking-tight" style={{ color: colors.text }}>
-            Nouveau professeur IA
+            {formationMode === 'existing' ? 'Réutiliser un professeur IA' : 'Nouveau professeur IA'}
           </h2>
         </div>
       </header>
@@ -2812,19 +2904,33 @@ function CreatePlatformView({
               />
             </div>
 
-            <div>
-              <label className="mb-2 block text-sm font-medium" style={{ color: darkMode ? '#94a3b8' : '#64748b' }}>
-                Nom de la formation
-              </label>
-              <input
-                type="text"
-                value={newFormTpName}
-                onChange={(e) => setNewFormTpName(e.target.value)}
-                placeholder="Ex: TP CRCD"
-                className="w-full rounded-lg px-4 py-3 text-sm outline-none transition-all"
-                style={inputStyle}
-              />
-            </div>
+            {formationMode === 'existing' ? (
+              <div>
+                <label className="mb-2 block text-sm font-medium" style={{ color: darkMode ? '#94a3b8' : '#64748b' }}>
+                  Professeur à réutiliser
+                </label>
+                <div className="rounded-lg px-4 py-3" style={inputStyle}>
+                  <p className="text-sm font-semibold">{selectedModule?.tp_name || 'Professeur introuvable'}</p>
+                  <p className="mt-1 text-xs" style={{ color: colors.textMuted }}>
+                    {selectedModule?.rncp_code ? `RNCP ${selectedModule.rncp_code}` : 'Formation archivée'}
+                  </p>
+                </div>
+              </div>
+            ) : (
+              <div>
+                <label className="mb-2 block text-sm font-medium" style={{ color: darkMode ? '#94a3b8' : '#64748b' }}>
+                  Nom de la formation
+                </label>
+                <input
+                  type="text"
+                  value={newFormTpName}
+                  onChange={(e) => setNewFormTpName(e.target.value)}
+                  placeholder="Ex: TP CRCD"
+                  className="w-full rounded-lg px-4 py-3 text-sm outline-none transition-all"
+                  style={inputStyle}
+                />
+              </div>
+            )}
           </div>
 
           <div
@@ -2862,7 +2968,7 @@ function CreatePlatformView({
           </div>
         </div>
 
-        <div className="mt-5 grid gap-4 md:grid-cols-2">
+        {formationMode !== 'existing' && <div className="mt-5 grid gap-4 md:grid-cols-2">
           <div>
             <label className="mb-2 block text-sm font-medium" style={{ color: darkMode ? '#94a3b8' : '#64748b' }}>
               Code RNCP
@@ -2906,7 +3012,7 @@ function CreatePlatformView({
               style={inputStyle}
             />
           </div>
-        </div>
+        </div>}
 
         <div className="mt-5 grid gap-4 md:grid-cols-[180px_1fr]">
           <div>
@@ -2981,6 +3087,46 @@ function CreatePlatformView({
           </div>
         </div>
 
+        <div
+          className="mt-7 rounded-xl border p-5"
+          style={{ backgroundColor: darkMode ? 'rgba(15,23,42,.72)' : '#ffffff', borderColor: colors.border }}
+        >
+          <div className="flex items-start justify-between gap-5">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.16em]" style={{ color: colors.textMuted }}>
+                Récapitulatif
+              </p>
+              <h3 className="mt-1.5 text-base font-semibold" style={{ color: colors.text }}>
+                {teacherFirstName.trim() || 'Votre professeur'} · {formationMode === 'existing' ? (selectedModule?.tp_name || 'Formation') : (newFormTpName.trim() || 'Formation')}
+              </h3>
+              <p className="mt-2 text-sm leading-6" style={{ color: colors.textSecondary }}>
+                {teachingDays.length ? teachingDays.join(', ') : 'Jours à choisir'} à {scheduleStartTime || '—'} · début le {scheduleStartDate || '—'}
+              </p>
+            </div>
+            <div className="text-right">
+              <p className="text-xs" style={{ color: colors.textMuted }}>
+                {paymentRequired ? 'Paiement unique' : 'Compte interne'}
+              </p>
+              <p className="mt-1 text-lg font-semibold" style={{ color: colors.text }}>
+                {paymentRequired ? formatPrice(estimatedAmountCents, product?.currency) : 'Paiement non requis'}
+              </p>
+              {paymentRequired && product?.unit_amount_cents && trainingDays > 0 && (
+                <p className="mt-1 text-xs" style={{ color: colors.textMuted }}>
+                  {formatPrice(product.unit_amount_cents, product.currency)} × {trainingDays} journée{trainingDays > 1 ? 's' : ''}
+                </p>
+              )}
+            </div>
+          </div>
+          <div className="mt-4 flex items-start gap-2 border-t pt-4 text-xs leading-5" style={{ color: colors.textMuted, borderColor: colors.border }}>
+            <Icon name="verified_user" className="mt-0.5 text-sm" />
+            <span>
+              {paymentRequired
+                ? 'Paiement sécurisé par Stripe. La préparation démarre uniquement après confirmation du paiement.'
+                : (billing?.exemption_label || 'Ce compte est autorisé à lancer la préparation sans paiement.')}
+            </span>
+          </div>
+        </div>
+
         <div className="mt-6 flex justify-end gap-3">
           <button
             onClick={onCancel}
@@ -2999,7 +3145,15 @@ function CreatePlatformView({
               opacity: creating || !canCreateTeacher ? 0.6 : 1,
             }}
           >
-            {creating ? 'Création...' : 'Créer le professeur IA'}
+            {creating
+              ? 'Préparation de la commande...'
+              : billingLoading
+                ? 'Chargement du tarif...'
+                : paymentRequired
+                  ? billing
+                    ? `Payer ${formatPrice(estimatedAmountCents, product?.currency)} et lancer`
+                    : 'Paiement temporairement indisponible'
+                  : formationMode === 'existing' ? 'Réutiliser ce professeur' : 'Lancer la préparation'}
           </button>
         </div>
       </div>
