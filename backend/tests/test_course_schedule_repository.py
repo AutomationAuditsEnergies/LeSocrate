@@ -37,6 +37,9 @@ def _make_schedule_db():
             audio_generation_next_retry_at TEXT,
             audio_job_id INTEGER,
             audio_folder_id INTEGER,
+            postponed_from TEXT,
+            postponed_at TEXT,
+            postponement_count INTEGER NOT NULL DEFAULT 0,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
             UNIQUE(platform_id, session_index)
@@ -50,6 +53,22 @@ def _make_schedule_db():
             timezone TEXT NOT NULL,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
+        );
+        CREATE TABLE course_session_postponements (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            platform_id INTEGER NOT NULL,
+            session_id INTEGER NOT NULL,
+            session_index INTEGER NOT NULL,
+            previous_scheduled_at TEXT NOT NULL,
+            new_scheduled_at TEXT NOT NULL,
+            mode TEXT NOT NULL,
+            reason TEXT,
+            affected_session_count INTEGER NOT NULL DEFAULT 1,
+            idempotency_key TEXT,
+            actor_account_id INTEGER,
+            impact_json TEXT NOT NULL DEFAULT '[]',
+            created_at TEXT NOT NULL,
+            UNIQUE(platform_id, idempotency_key)
         );
         INSERT INTO course_sessions (
             id, platform_id, session_index, scheduled_at, status, created_at, updated_at
@@ -404,24 +423,92 @@ class CourseScheduleRepositoryTest(unittest.TestCase):
         finally:
             os.unlink(db_path)
 
-    def test_cancel_is_atomic_with_audio_claim(self):
+    def test_postponement_keeps_lesson_audio_and_is_idempotent(self):
         db_path = _make_schedule_db()
         try:
+            conn = sqlite3.connect(db_path)
+            conn.execute(
+                """
+                UPDATE course_sessions
+                SET audio_generation_status = 'completed',
+                    audio_generation_started_at = '2026-07-10 08:00:00',
+                    audio_generation_completed_at = '2026-07-10 08:30:00',
+                    audio_job_id = 41, audio_folder_id = 55,
+                    reminder_previous_evening_sent_at = '2026-07-10 18:00:00'
+                WHERE id = 9
+                """
+            )
+            conn.execute(
+                """
+                INSERT INTO course_sessions (
+                    id, platform_id, session_index, scheduled_at, status,
+                    created_at, updated_at
+                ) VALUES (10, 12, 2, '2026-07-18 09:00:00', 'planned',
+                          '2026-07-10 09:00:00', '2026-07-10 09:00:00')
+                """
+            )
+            conn.commit()
+            conn.close()
+            now = FRANCE_TZ.localize(datetime(2026, 7, 10, 12, 0))
+            changes = [
+                {
+                    "id": 9,
+                    "session_index": 1,
+                    "expected_scheduled_at": FRANCE_TZ.localize(datetime(2026, 7, 11, 9, 0)),
+                    "new_scheduled_at": FRANCE_TZ.localize(datetime(2026, 7, 18, 9, 0)),
+                },
+                {
+                    "id": 10,
+                    "session_index": 2,
+                    "expected_scheduled_at": FRANCE_TZ.localize(datetime(2026, 7, 18, 9, 0)),
+                    "new_scheduled_at": FRANCE_TZ.localize(datetime(2026, 7, 25, 9, 0)),
+                },
+            ]
             with (
                 patch.object(repo, "schedule_store_is_postgres", lambda: False),
                 patch.object(repo, "get_db_connection", side_effect=lambda: sqlite3.connect(db_path)),
             ):
-                self.assertTrue(repo.cancel_course_session(
+                first = repo.apply_course_session_postponement(
                     12,
                     9,
-                    cancelled_at=datetime.now(FRANCE_TZ),
-                ))
-                self.assertFalse(repo.claim_audio_generation_session(
-                    session_id=9,
-                    job_id=41,
-                    folder_id=55,
-                    started_at=datetime.now(FRANCE_TZ),
-                ))
+                    changes=changes,
+                    mode="next_occurrence",
+                    reason="Formateur indisponible",
+                    idempotency_key="report-unique-1",
+                    actor_account_id=3,
+                    postponed_at=now,
+                )
+                second = repo.apply_course_session_postponement(
+                    12,
+                    9,
+                    changes=changes,
+                    mode="next_occurrence",
+                    reason="Formateur indisponible",
+                    idempotency_key="report-unique-1",
+                    actor_account_id=3,
+                    postponed_at=now,
+                )
+
+            conn = sqlite3.connect(db_path)
+            rows = conn.execute(
+                """
+                SELECT session_index, scheduled_at, status, audio_generation_status,
+                       audio_job_id, audio_folder_id, reminder_previous_evening_sent_at,
+                       postponement_count
+                FROM course_sessions WHERE platform_id = 12 ORDER BY session_index
+                """
+            ).fetchall()
+            audit_count = conn.execute("SELECT COUNT(*) FROM course_session_postponements").fetchone()[0]
+            conn.close()
+
+            self.assertFalse(first["idempotent"])
+            self.assertTrue(second["idempotent"])
+            self.assertEqual(audit_count, 1)
+            self.assertEqual(rows[0][0:3], (1, "2026-07-18 09:00:00", "planned"))
+            self.assertEqual(rows[0][3:6], ("completed", 41, 55))
+            self.assertIsNone(rows[0][6])
+            self.assertEqual(rows[0][7], 1)
+            self.assertEqual(rows[1][0:3], (2, "2026-07-25 09:00:00", "planned"))
         finally:
             os.unlink(db_path)
 
@@ -478,6 +565,83 @@ class CourseScheduleRepositoryTest(unittest.TestCase):
         self.assertIn("RETURNING id", executed["query"])
         self.assertIn("COALESCE(updated_at, audio_generation_started_at) <= %s", executed["query"])
         self.assertEqual(executed["params"][1:3], [41, 55])
+
+    def test_postgres_postponement_is_locked_and_preserves_audio_columns(self):
+        executed = []
+        old_j2 = FRANCE_TZ.localize(datetime(2026, 7, 20, 9, 0))
+        old_j3 = FRANCE_TZ.localize(datetime(2026, 7, 23, 9, 0))
+        new_j2 = old_j3
+        new_j3 = FRANCE_TZ.localize(datetime(2026, 7, 27, 9, 0))
+
+        class FakeCursor:
+            rowcount = 0
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def execute(self, query, params=None):
+                self.query = query
+                self.params = params
+                executed.append((query, params))
+                self.rowcount = 1 if "UPDATE course_sessions" in query else 0
+
+            def fetchone(self):
+                if "idempotency_key = %s" in self.query:
+                    return None
+                if "ORDER BY scheduled_at ASC" in self.query:
+                    return {"scheduled_at": new_j2}
+                if "RETURNING id" in self.query:
+                    return {"id": 77}
+                return None
+
+            def fetchall(self):
+                if "id = ANY" in self.query:
+                    return [
+                        {"id": 22, "session_index": 2, "scheduled_at": old_j2, "status": "planned"},
+                        {"id": 23, "session_index": 3, "scheduled_at": old_j3, "status": "planned"},
+                    ]
+                return []
+
+        class FakeConnection:
+            def cursor(self):
+                return FakeCursor()
+
+        class FakeContext:
+            def __enter__(self):
+                return FakeConnection()
+
+            def __exit__(self, *_args):
+                return False
+
+        with (
+            patch.object(repo, "schedule_store_is_postgres", lambda: True),
+            patch.object(repo, "get_postgres_connection", lambda: FakeContext()),
+            patch.object(repo, "get_db_connection", side_effect=AssertionError("SQLite must not be opened")),
+        ):
+            result = repo.apply_course_session_postponement(
+                12,
+                22,
+                changes=[
+                    {"id": 22, "session_index": 2, "expected_scheduled_at": old_j2, "new_scheduled_at": new_j2},
+                    {"id": 23, "session_index": 3, "expected_scheduled_at": old_j3, "new_scheduled_at": new_j3},
+                ],
+                mode="next_occurrence",
+                reason=None,
+                idempotency_key="pg-report",
+                actor_account_id=42,
+                postponed_at=FRANCE_TZ.localize(datetime(2026, 7, 16, 10, 0)),
+            )
+
+        update_sql = [query for query, _params in executed if "UPDATE course_sessions" in query]
+        self.assertEqual(len(update_sql), 2)
+        self.assertTrue(any("pg_advisory_xact_lock" in query for query, _params in executed))
+        self.assertTrue(all("audio_generation" not in query for query in update_sql))
+        self.assertTrue(all("reminder_previous_evening_sent_at = NULL" in query for query in update_sql))
+        self.assertEqual(result["audit_id"], 77)
+        self.assertFalse(result["idempotent"])
 
     def test_missing_postgres_course_start_never_falls_back_to_platform_one_or_sqlite(self):
         queries = []

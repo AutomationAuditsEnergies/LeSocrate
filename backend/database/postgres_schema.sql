@@ -101,6 +101,9 @@ CREATE TABLE IF NOT EXISTS course_sessions (
     audio_generation_next_retry_at TIMESTAMPTZ,
     audio_job_id BIGINT,
     audio_folder_id BIGINT,
+    postponed_from TIMESTAMPTZ,
+    postponed_at TIMESTAMPTZ,
+    postponement_count INTEGER NOT NULL DEFAULT 0,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE(platform_id, session_index)
@@ -132,6 +135,34 @@ ALTER TABLE course_sessions
     ADD COLUMN IF NOT EXISTS audio_job_id BIGINT;
 ALTER TABLE course_sessions
     ADD COLUMN IF NOT EXISTS audio_folder_id BIGINT;
+ALTER TABLE course_sessions
+    ADD COLUMN IF NOT EXISTS postponed_from TIMESTAMPTZ;
+ALTER TABLE course_sessions
+    ADD COLUMN IF NOT EXISTS postponed_at TIMESTAMPTZ;
+ALTER TABLE course_sessions
+    ADD COLUMN IF NOT EXISTS postponement_count INTEGER NOT NULL DEFAULT 0;
+
+CREATE TABLE IF NOT EXISTS course_session_postponements (
+    id BIGSERIAL PRIMARY KEY,
+    platform_id BIGINT NOT NULL REFERENCES platform_config(id) ON DELETE CASCADE,
+    session_id BIGINT NOT NULL REFERENCES course_sessions(id) ON DELETE CASCADE,
+    session_index INTEGER NOT NULL,
+    previous_scheduled_at TIMESTAMPTZ NOT NULL,
+    new_scheduled_at TIMESTAMPTZ NOT NULL,
+    mode TEXT NOT NULL,
+    reason TEXT,
+    affected_session_count INTEGER NOT NULL DEFAULT 1,
+    idempotency_key TEXT,
+    actor_account_id BIGINT,
+    impact_json TEXT NOT NULL DEFAULT '[]',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_course_session_postponements_idempotency
+    ON course_session_postponements(platform_id, idempotency_key)
+    WHERE idempotency_key IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_course_session_postponements_session
+    ON course_session_postponements(platform_id, session_id, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS course_reminder_recipients (
     id BIGSERIAL PRIMARY KEY,
@@ -519,6 +550,7 @@ ALTER TABLE deletion_requests ENABLE ROW LEVEL SECURITY;
 ALTER TABLE cours_config ENABLE ROW LEVEL SECURITY;
 ALTER TABLE course_schedule_config ENABLE ROW LEVEL SECURITY;
 ALTER TABLE course_sessions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE course_session_postponements ENABLE ROW LEVEL SECURITY;
 ALTER TABLE course_reminder_recipients ENABLE ROW LEVEL SECURITY;
 ALTER TABLE logs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE video_visits ENABLE ROW LEVEL SECURITY;

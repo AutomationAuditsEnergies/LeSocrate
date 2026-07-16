@@ -257,27 +257,72 @@ class HrPostgresReadRoutesTest(unittest.TestCase):
             allow_imminent=False,
         )
 
-    def test_training_center_can_retry_and_cancel_owned_course_session(self):
+    def test_training_center_can_retry_and_postpone_owned_course_session(self):
+        preview = {"lesson_number": 2, "new_scheduled_at": "2026-07-20T09:00:00+02:00"}
+        postponed = {**preview, "affected_session_count": 3, "idempotent": False}
         with patch("routes.hr_routes.HR_ENABLED", True), patch(
             "routes.hr_routes.hr_resource_belongs_to_center", return_value=True
         ), patch(
             "routes.hr_routes.retry_scheduled_audio_generation",
             return_value=({"success": True, "status": 202}, 202),
         ) as retry, patch(
-            "routes.hr_routes.cancel_course_session",
-            return_value=True,
-        ) as cancel:
+            "routes.hr_routes.preview_course_session_postponement",
+            return_value=preview,
+        ) as preview_call, patch(
+            "routes.hr_routes.postpone_course_session",
+            return_value=postponed,
+        ) as postpone, patch(
+            "routes.hr_routes.get_course_schedule_details_for_platform",
+            return_value={"sessions": []},
+        ):
             retry_response = self.client.post(
                 "/api/hr/platforms/12/sessions/91/audio/retry"
             )
-            cancel_response = self.client.delete(
-                "/api/hr/platforms/12/sessions/92"
+            preview_response = self.client.post(
+                "/api/hr/platforms/12/sessions/92/postpone/preview",
+                json={"mode": "next_occurrence"},
+            )
+            postpone_response = self.client.post(
+                "/api/hr/platforms/12/sessions/92/postpone",
+                json={"mode": "next_occurrence", "reason": "Indisponibilité"},
+                headers={"Idempotency-Key": "report-92"},
             )
 
         self.assertEqual(retry_response.status_code, 202)
-        self.assertEqual(cancel_response.status_code, 200)
+        self.assertEqual(preview_response.status_code, 200)
+        self.assertEqual(postpone_response.status_code, 200)
         retry.assert_called_once_with(12, 91)
-        cancel.assert_called_once_with(12, 92)
+        preview_call.assert_called_once_with(12, 92, mode="next_occurrence", scheduled_at=None)
+        postpone.assert_called_once_with(
+            12,
+            92,
+            mode="next_occurrence",
+            scheduled_at=None,
+            reason="Indisponibilité",
+            idempotency_key="report-92",
+            actor_account_id=42,
+        )
+
+    def test_deleting_a_session_is_replaced_by_user_friendly_postponement(self):
+        with patch("routes.hr_routes.HR_ENABLED", True), patch(
+            "routes.hr_routes.hr_resource_belongs_to_center", return_value=True
+        ):
+            response = self.client.delete("/api/hr/platforms/12/sessions/92")
+
+        self.assertEqual(response.status_code, 410)
+        self.assertIn("Reporter cette séance", response.get_json()["error"])
+
+    def test_postponement_requires_an_idempotency_key(self):
+        with patch("routes.hr_routes.HR_ENABLED", True), patch(
+            "routes.hr_routes.hr_resource_belongs_to_center", return_value=True
+        ), patch("routes.hr_routes.postpone_course_session") as postpone:
+            response = self.client.post(
+                "/api/hr/platforms/12/sessions/92/postpone",
+                json={"mode": "next_occurrence"},
+            )
+
+        self.assertEqual(response.status_code, 400)
+        postpone.assert_not_called()
 
     def test_explicit_reminder_recipients_use_repository_without_sqlite(self):
         recipients = [{"id": 4, "email": "eleve@example.com", "created_at": "2026-07-10 10:00:00"}]

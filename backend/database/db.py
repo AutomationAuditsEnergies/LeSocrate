@@ -158,6 +158,9 @@ def init_database(_recovered_from_corruption: bool = False):
                 audio_generation_next_retry_at TEXT,
                 audio_job_id INTEGER,
                 audio_folder_id INTEGER,
+                postponed_from TEXT,
+                postponed_at TEXT,
+                postponement_count INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 UNIQUE(platform_id, session_index)
@@ -185,6 +188,9 @@ def init_database(_recovered_from_corruption: bool = False):
             "audio_generation_next_retry_at": "TEXT",
             "audio_job_id": "INTEGER",
             "audio_folder_id": "INTEGER",
+            "postponed_from": "TEXT",
+            "postponed_at": "TEXT",
+            "postponement_count": "INTEGER NOT NULL DEFAULT 0",
         }
         for col, col_type in _course_session_audio_cols.items():
             if col not in course_session_columns:
@@ -193,6 +199,30 @@ def init_database(_recovered_from_corruption: bool = False):
         cursor.execute(
             "CREATE INDEX IF NOT EXISTS idx_course_sessions_audio_due "
             "ON course_sessions(audio_generation_status, audio_generation_next_retry_at, scheduled_at)"
+        )
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS course_session_postponements (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                platform_id INTEGER NOT NULL,
+                session_id INTEGER NOT NULL,
+                session_index INTEGER NOT NULL,
+                previous_scheduled_at TEXT NOT NULL,
+                new_scheduled_at TEXT NOT NULL,
+                mode TEXT NOT NULL,
+                reason TEXT,
+                affected_session_count INTEGER NOT NULL DEFAULT 1,
+                idempotency_key TEXT,
+                actor_account_id INTEGER,
+                impact_json TEXT NOT NULL DEFAULT '[]',
+                created_at TEXT NOT NULL,
+                UNIQUE(platform_id, idempotency_key)
+            )
+            """
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_course_session_postponements_session "
+            "ON course_session_postponements(platform_id, session_id, created_at)"
         )
         logger.info("✅ Tables course_schedule_config/course_sessions créées/vérifiées")
 

@@ -536,13 +536,37 @@ export default function HRDashboard() {
     return data
   }
 
-  const handleCancelSession = async (sessionId) => {
+  const handlePreviewSessionPostponement = async (sessionId, payload) => {
     const resp = await apiFetch(
-      `/api/hr/platforms/${courseTimePlatformId}/sessions/${sessionId}`,
-      { method: 'DELETE' },
+      `/api/hr/platforms/${courseTimePlatformId}/sessions/${sessionId}/postpone/preview`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      },
     )
     const data = await resp.json()
-    if (!resp.ok) throw new Error(data.error || 'Annulation impossible')
+    if (!resp.ok) throw new Error(data.error || 'Impossible de préparer ce report')
+    return data.preview
+  }
+
+  const handlePostponeSession = async (sessionId, payload, idempotencyKey) => {
+    const resp = await apiFetch(
+      `/api/hr/platforms/${courseTimePlatformId}/sessions/${sessionId}/postpone`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Idempotency-Key': idempotencyKey,
+        },
+        body: JSON.stringify(payload),
+      },
+    )
+    const data = await resp.json()
+    if (!resp.ok) throw new Error(data.error || 'Le report n’a pas pu être enregistré')
+    if (data.schedule) {
+      setCurrentCourseTime((current) => ({ ...(current || {}), success: true, schedule: data.schedule }))
+    }
     const refreshed = await apiFetch(`/api/hr/platforms/${courseTimePlatformId}/course-time`)
     const refreshedData = await refreshed.json()
     if (refreshed.ok && refreshedData.success) setCurrentCourseTime(refreshedData)
@@ -1266,7 +1290,8 @@ export default function HRDashboard() {
           initialHeure={currentCourseTime?.heure_cours}
           schedule={currentCourseTime?.schedule}
           onRetryAudio={handleRetrySessionAudio}
-          onCancelSession={handleCancelSession}
+          onPreviewPostponement={handlePreviewSessionPostponement}
+          onPostponeSession={handlePostponeSession}
         />
       )}
 
@@ -4251,6 +4276,31 @@ function formatScheduleDateTime(value) {
   })
 }
 
+function formatPostponementDay(value) {
+  if (!value) return 'la nouvelle date'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return 'la nouvelle date'
+  return date.toLocaleDateString('fr-FR', {
+    weekday: 'long',
+    day: 'numeric',
+    month: 'long',
+  })
+}
+
+function formatPostponementButtonDate(value) {
+  if (!value) return 'Choisir une date'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return 'Choisir une date'
+  return date.toLocaleDateString('fr-FR', { day: 'numeric', month: 'long' })
+}
+
+function toLocalDateTimeInput(value) {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return ''
+  const pad = (number) => String(number).padStart(2, '0')
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`
+}
+
 function AudioStatusBadge({ status, darkMode = false }) {
   const meta = getAudioStatusMeta(status)
   return (
@@ -4266,8 +4316,287 @@ function AudioStatusBadge({ status, darkMode = false }) {
   )
 }
 
+function PostponeSessionDialog({ session, onClose, onPreview, onConfirm }) {
+  const [mode, setMode] = useState('next_occurrence')
+  const [customDate, setCustomDate] = useState('')
+  const [reason, setReason] = useState('')
+  const [preview, setPreview] = useState(null)
+  const [previewLoading, setPreviewLoading] = useState(true)
+  const [confirming, setConfirming] = useState(false)
+  const [error, setError] = useState('')
+  const [success, setSuccess] = useState(false)
+  const idempotencyKey = useRef(
+    globalThis.crypto?.randomUUID?.() || `postpone-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+  )
+
+  useEffect(() => {
+    const handleEscape = (event) => {
+      if (event.key === 'Escape' && !confirming) onClose()
+    }
+    window.addEventListener('keydown', handleEscape)
+    return () => window.removeEventListener('keydown', handleEscape)
+  }, [confirming, onClose])
+
+  useEffect(() => {
+    if (success) return undefined
+    if (mode === 'specific_date' && !customDate) {
+      setPreview(null)
+      setPreviewLoading(false)
+      return undefined
+    }
+    let active = true
+    const timer = window.setTimeout(async () => {
+      setPreviewLoading(true)
+      setError('')
+      try {
+        const result = await onPreview(session.id, {
+          mode,
+          scheduled_at: mode === 'specific_date' ? customDate : undefined,
+        })
+        if (active) setPreview(result)
+      } catch (requestError) {
+        if (active) {
+          setPreview(null)
+          setError(requestError.message || 'Impossible de calculer l’impact de ce report')
+        }
+      } finally {
+        if (active) setPreviewLoading(false)
+      }
+    }, mode === 'specific_date' ? 250 : 0)
+    return () => {
+      active = false
+      window.clearTimeout(timer)
+    }
+  }, [customDate, mode, onPreview, session.id, success])
+
+  const confirmPostponement = async () => {
+    if (!preview || confirming) return
+    setConfirming(true)
+    setError('')
+    try {
+      await onConfirm(
+        session.id,
+        {
+          mode,
+          scheduled_at: mode === 'specific_date' ? customDate : undefined,
+          reason: reason.trim() || undefined,
+        },
+        idempotencyKey.current,
+      )
+      setSuccess(true)
+      window.setTimeout(onClose, 900)
+    } catch (requestError) {
+      setError(requestError.message || 'Le report n’a pas pu être enregistré')
+    } finally {
+      setConfirming(false)
+    }
+  }
+
+  const audioCopy = {
+    ready: 'L’audio déjà prêt sera conservé pour cette nouvelle date.',
+    preparing: 'La préparation audio continue et restera liée à ce cours.',
+    scheduled: 'L’audio sera préparé automatiquement 24 h avant la nouvelle date.',
+  }
+
+  return (
+    <div
+      className="postpone-dialog-backdrop fixed inset-0 z-[70] flex items-end justify-center sm:items-center sm:p-5"
+      role="presentation"
+      onClick={(event) => event.stopPropagation()}
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget && !confirming) onClose()
+      }}
+    >
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="postpone-session-title"
+        className="postpone-dialog-sheet w-full overflow-hidden rounded-t-2xl bg-white sm:max-w-[620px] sm:rounded-2xl"
+      >
+        {success ? (
+          <div className="flex min-h-[330px] flex-col items-center justify-center px-8 py-12 text-center" aria-live="polite">
+            <span className="mb-5 flex h-14 w-14 items-center justify-center rounded-full" style={{ backgroundColor: '#ecfdf5', color: '#059669' }}>
+              <Icon name="check" className="text-3xl" />
+            </span>
+            <h3 className="text-lg font-semibold" style={{ color: '#0f172a' }}>Le cours {session.session_index} est reporté</h3>
+            <p className="mt-2 max-w-sm text-sm leading-6" style={{ color: '#64748b' }}>
+              Aucun cours n’a été perdu. Le planning et les rappels ont été mis à jour.
+            </p>
+          </div>
+        ) : (
+          <>
+            <header className="flex items-start justify-between gap-4 border-b px-5 py-5 sm:px-6" style={{ borderColor: '#e2e8f0' }}>
+              <div className="flex min-w-0 items-start gap-3">
+                <span className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl" style={{ backgroundColor: '#f3f0ff', color: '#7c3aed' }}>
+                  <Icon name="event_repeat" className="text-xl" />
+                </span>
+                <div>
+                  <h3 id="postpone-session-title" className="text-base font-semibold" style={{ color: '#0f172a' }}>
+                    Reporter le cours {session.session_index}
+                  </h3>
+                  <p className="mt-1 text-sm" style={{ color: '#64748b' }}>
+                    Prévu {formatPostponementDay(session.scheduled_at)} à {new Date(session.scheduled_at).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={onClose}
+                disabled={confirming}
+                aria-label="Fermer sans reporter"
+                className="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-lg transition-colors hover:bg-slate-100 disabled:opacity-50"
+                style={{ color: '#64748b' }}
+              >
+                <Icon name="close" className="text-xl" />
+              </button>
+            </header>
+
+            <div className="max-h-[68vh] space-y-5 overflow-y-auto px-5 py-5 sm:px-6">
+              <fieldset>
+                <legend className="mb-3 text-sm font-semibold" style={{ color: '#334155' }}>Quand souhaitez-vous le reporter ?</legend>
+                <div className="space-y-2.5">
+                  <button
+                    type="button"
+                    autoFocus
+                    onClick={() => setMode('next_occurrence')}
+                    className="flex min-h-[72px] w-full items-start gap-3 rounded-xl border p-4 text-left outline-none transition-colors focus-visible:ring-2 focus-visible:ring-violet-200"
+                    style={{ borderColor: mode === 'next_occurrence' ? '#8b5cf6' : '#e2e8f0', backgroundColor: mode === 'next_occurrence' ? '#faf8ff' : '#fff' }}
+                  >
+                    <span className="mt-0.5 flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full border" style={{ borderColor: mode === 'next_occurrence' ? '#8b5cf6' : '#cbd5e1' }}>
+                      {mode === 'next_occurrence' && <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: '#8b5cf6' }} />}
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="flex flex-wrap items-center gap-2">
+                        <span className="text-sm font-semibold" style={{ color: '#0f172a' }}>Au prochain créneau prévu</span>
+                        <span className="rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide" style={{ color: '#6d28d9', backgroundColor: '#ede9fe' }}>Recommandé</span>
+                      </span>
+                      <span className="mt-1 block text-xs leading-5" style={{ color: '#64748b' }}>Le cours suivant prend sa place et toute la suite se décale naturellement.</span>
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setMode('specific_date')}
+                    className="flex min-h-[68px] w-full items-start gap-3 rounded-xl border p-4 text-left outline-none transition-colors focus-visible:ring-2 focus-visible:ring-violet-200"
+                    style={{ borderColor: mode === 'specific_date' ? '#8b5cf6' : '#e2e8f0', backgroundColor: mode === 'specific_date' ? '#faf8ff' : '#fff' }}
+                  >
+                    <span className="mt-0.5 flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full border" style={{ borderColor: mode === 'specific_date' ? '#8b5cf6' : '#cbd5e1' }}>
+                      {mode === 'specific_date' && <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: '#8b5cf6' }} />}
+                    </span>
+                    <span>
+                      <span className="text-sm font-semibold" style={{ color: '#0f172a' }}>Choisir une nouvelle date</span>
+                      <span className="mt-1 block text-xs leading-5" style={{ color: '#64748b' }}>Les cours suivants seront décalés si nécessaire.</span>
+                    </span>
+                  </button>
+                </div>
+              </fieldset>
+
+              {mode === 'specific_date' && (
+                <div>
+                  <label htmlFor="postpone-specific-date" className="mb-1.5 block text-xs font-semibold" style={{ color: '#334155' }}>Nouvelle date et heure</label>
+                  <input
+                    id="postpone-specific-date"
+                    type="datetime-local"
+                    value={customDate}
+                    min={toLocalDateTimeInput(new Date(new Date(session.scheduled_at).getTime() + 60000))}
+                    onChange={(event) => setCustomDate(event.target.value)}
+                    className="h-11 w-full rounded-lg border px-3 text-sm outline-none focus:ring-2"
+                    style={{ borderColor: '#cbd5e1', color: '#0f172a', '--tw-ring-color': '#ddd6fe' }}
+                  />
+                </div>
+              )}
+
+              <div className="rounded-xl border p-4" style={{ borderColor: '#ddd6fe', backgroundColor: '#faf8ff' }} aria-live="polite">
+                {previewLoading ? (
+                  <div className="flex items-center gap-3 text-sm" style={{ color: '#64748b' }}>
+                    <span className="h-4 w-4 animate-spin rounded-full border-2 border-violet-200 border-t-violet-600" />
+                    Calcul de l’impact sur le planning…
+                  </div>
+                ) : preview ? (
+                  <div className="space-y-3">
+                    <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-3">
+                      <div>
+                        <p className="text-[10px] font-semibold uppercase tracking-wide" style={{ color: '#94a3b8' }}>Date actuelle</p>
+                        <p className="mt-1 text-sm font-semibold capitalize" style={{ color: '#475569' }}>{formatPostponementDay(preview.previous_scheduled_at)}</p>
+                      </div>
+                      <Icon name="arrow_forward" className="text-lg" style={{ color: '#8b5cf6' }} />
+                      <div>
+                        <p className="text-[10px] font-semibold uppercase tracking-wide" style={{ color: '#7c3aed' }}>Nouvelle date</p>
+                        <p className="mt-1 text-sm font-semibold capitalize" style={{ color: '#5b21b6' }}>{formatPostponementDay(preview.new_scheduled_at)}</p>
+                      </div>
+                    </div>
+                    <div className="flex items-start gap-2 border-t pt-3 text-xs leading-5" style={{ borderColor: '#e9e2ff', color: '#475569' }}>
+                      <Icon name="verified" className="mt-0.5 text-base" style={{ color: '#7c3aed' }} />
+                      <p><strong style={{ color: '#334155' }}>Aucun cours ne sera perdu.</strong> {preview.affected_session_count > 1 ? `Les ${preview.affected_session_count - 1} cours suivants seront décalés d’un créneau.` : 'Seule cette date sera déplacée.'}</p>
+                    </div>
+                    <div className="flex items-start gap-2 text-xs leading-5" style={{ color: '#475569' }}>
+                      <Icon name="graphic_eq" className="mt-0.5 text-base" style={{ color: '#7c3aed' }} />
+                      <p>{audioCopy[preview.audio_preservation]}</p>
+                    </div>
+                  </div>
+                ) : (
+                  <p className="text-sm" style={{ color: '#64748b' }}>Choisissez une date pour afficher son impact.</p>
+                )}
+              </div>
+
+              {preview?.warning_imminent && (
+                <div className="flex items-start gap-2.5 rounded-lg border px-3 py-2.5 text-xs leading-5" style={{ color: '#92400e', backgroundColor: '#fffbeb', borderColor: '#fde68a' }}>
+                  <Icon name="schedule" className="mt-0.5 text-base" />
+                  <p>Cette séance est proche. Le report reste possible et l’audio déjà préparé sera conservé.</p>
+                </div>
+              )}
+
+              <div>
+                <label htmlFor="postpone-reason" className="mb-1.5 block text-xs font-semibold" style={{ color: '#334155' }}>Motif du report <span className="font-normal" style={{ color: '#94a3b8' }}>(facultatif)</span></label>
+                <input
+                  id="postpone-reason"
+                  type="text"
+                  maxLength={500}
+                  value={reason}
+                  onChange={(event) => setReason(event.target.value)}
+                  placeholder="Ex. indisponibilité du formateur"
+                  className="h-11 w-full rounded-lg border px-3 text-sm outline-none focus:ring-2"
+                  style={{ borderColor: '#cbd5e1', color: '#0f172a', '--tw-ring-color': '#ddd6fe' }}
+                />
+              </div>
+
+              {error && (
+                <div className="flex items-start gap-2 rounded-lg px-3 py-2.5 text-xs" role="alert" style={{ color: '#991b1b', backgroundColor: '#fef2f2' }}>
+                  <Icon name="error_outline" className="text-base" />
+                  <span>{error}</span>
+                </div>
+              )}
+            </div>
+
+            <footer className="flex flex-col-reverse gap-2.5 border-t px-5 py-4 sm:flex-row sm:justify-end sm:px-6" style={{ borderColor: '#e2e8f0', backgroundColor: '#fff' }}>
+              <button
+                type="button"
+                onClick={onClose}
+                disabled={confirming}
+                className="min-h-11 rounded-lg border px-4 text-sm font-semibold transition-colors hover:bg-slate-50 disabled:opacity-50"
+                style={{ color: '#475569', borderColor: '#cbd5e1' }}
+              >
+                Garder la date actuelle
+              </button>
+              <button
+                type="button"
+                onClick={confirmPostponement}
+                disabled={!preview || previewLoading || confirming}
+                className="flex min-h-11 items-center justify-center gap-2 rounded-lg px-5 text-sm font-semibold text-white transition-opacity disabled:cursor-not-allowed disabled:opacity-50"
+                style={{ backgroundColor: '#8b5cf6' }}
+              >
+                {confirming && <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/30 border-t-white" />}
+                {confirming ? 'Mise à jour…' : preview ? `Reporter au ${formatPostponementButtonDate(preview.new_scheduled_at)}` : 'Choisir une date'}
+              </button>
+            </footer>
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
+
 // ─── Course Time Modal ───────────────────────────────────────────────────────
-function CourseTimeModal({ onClose, onSubmit, initialDate, initialHeure, schedule, onRetryAudio, onCancelSession }) {
+function CourseTimeModal({ onClose, onSubmit, initialDate, initialHeure, schedule, onRetryAudio, onPreviewPostponement, onPostponeSession }) {
   const today = new Date().toISOString().split('T')[0]
   const hasSchedule = !!schedule
   const [date, setDate] = useState(initialDate || today)
@@ -4282,6 +4611,7 @@ function CourseTimeModal({ onClose, onSubmit, initialDate, initialHeure, schedul
   const [result, setResult] = useState(null)
   const [busySessionId, setBusySessionId] = useState(null)
   const [actionError, setActionError] = useState('')
+  const [sessionToPostpone, setSessionToPostpone] = useState(null)
   const expectedWeekdayCount = Number(schedule?.weekly_course_count || selectedWeekdays.length || 0)
   const weekdaySelectionError = hasSchedule && !scheduleSelectionIsValid({ selectedWeekdays, expectedWeekdayCount })
     ? `Sélectionnez ${expectedWeekdayCount} jour${expectedWeekdayCount > 1 ? 's' : ''}.`
@@ -4305,17 +4635,11 @@ function CourseTimeModal({ onClose, onSubmit, initialDate, initialHeure, schedul
     setLoading(false)
   }
 
-  const runSessionAction = async (session, action) => {
+  const runSessionAction = async (session) => {
     setBusySessionId(session.id)
     setActionError('')
     try {
-      if (action === 'cancel') {
-        const confirmed = window.confirm(`Annuler la journée ${session.session_index} ?`)
-        if (!confirmed) return
-        await onCancelSession(session.id)
-      } else {
-        await onRetryAudio(session.id)
-      }
+      await onRetryAudio(session.id)
     } catch (error) {
       setActionError(error.message || 'Action impossible')
     } finally {
@@ -4512,7 +4836,13 @@ function CourseTimeModal({ onClose, onSubmit, initialDate, initialHeure, schedul
                         {formatScheduleDateTime(session.scheduled_at)}
                       </p>
                       <p className="mt-0.5 text-[11px]" style={{ color: '#64748b' }}>
-                        {session.is_locked ? 'Date verrouillée' : `Modifiable jusqu’au ${formatScheduleDateTime(session.change_cutoff_at)}`}
+                        {session.status === 'completed'
+                          ? 'Cours terminé'
+                          : session.was_postponed
+                          ? `Reportée depuis le ${formatScheduleDateTime(session.postponed_from)}`
+                          : session.is_locked
+                            ? 'Séance proche : report exceptionnel possible'
+                            : `Modifiable jusqu’au ${formatScheduleDateTime(session.change_cutoff_at)}`}
                       </p>
                     </div>
                     <AudioStatusBadge status={session.audio_status} />
@@ -4520,22 +4850,22 @@ function CourseTimeModal({ onClose, onSubmit, initialDate, initialHeure, schedul
                       <button
                         type="button"
                         disabled={busySessionId === session.id}
-                        onClick={() => runSessionAction(session, 'retry')}
+                        onClick={() => runSessionAction(session)}
                         className="rounded-lg px-3 py-2 text-xs font-semibold text-white transition-opacity disabled:opacity-50"
                         style={{ backgroundColor: '#8B5CF6' }}
                       >
                         {busySessionId === session.id ? 'Relance…' : 'Relancer l’audio'}
                       </button>
                     )}
-                    {session.can_cancel && (
+                    {session.can_postpone && (
                       <button
                         type="button"
                         disabled={busySessionId === session.id}
-                        onClick={() => runSessionAction(session, 'cancel')}
-                        className="rounded-lg px-3 py-2 text-xs font-medium transition-colors disabled:opacity-50"
-                        style={{ color: '#b91c1c', backgroundColor: '#fff1f2' }}
+                        onClick={() => setSessionToPostpone(session)}
+                        className="min-h-10 rounded-lg px-3 py-2 text-xs font-semibold transition-colors disabled:opacity-50"
+                        style={{ color: '#6d28d9', backgroundColor: '#f5f3ff' }}
                       >
-                        Annuler la séance
+                        Reporter cette séance
                       </button>
                     )}
                   </div>
@@ -4545,6 +4875,14 @@ function CourseTimeModal({ onClose, onSubmit, initialDate, initialHeure, schedul
           )}
         </div>
       </div>
+      {sessionToPostpone && (
+        <PostponeSessionDialog
+          session={sessionToPostpone}
+          onClose={() => setSessionToPostpone(null)}
+          onPreview={onPreviewPostponement}
+          onConfirm={onPostponeSession}
+        />
+      )}
     </div>
   )
 }

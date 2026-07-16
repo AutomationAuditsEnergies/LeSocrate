@@ -9,6 +9,7 @@ boundary: scheduling follows either authoritative PostgreSQL domain, so a
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+import json
 import os
 from typing import Any
 
@@ -446,12 +447,13 @@ def get_course_schedule_summary(platform_id: int, *, sqlite_connection=None) -> 
 
 def list_course_sessions(platform_id: int, *, limit: int = 50) -> list[dict[str, Any]]:
     """Return the product-facing session state for one owned platform."""
-    safe_limit = max(1, min(int(limit or 50), 200))
+    safe_limit = max(1, min(int(limit or 50), 1000))
     columns = """
         id, platform_id, session_index, scheduled_at, status,
         audio_generation_status, audio_generation_started_at,
         audio_generation_completed_at, audio_generation_attempts,
         audio_generation_next_retry_at, audio_job_id, audio_folder_id,
+        postponed_from, postponed_at, postponement_count,
         created_at, updated_at
     """
     if schedule_store_is_postgres():
@@ -526,8 +528,76 @@ def get_audio_generation_session(platform_id: int, session_id: int) -> dict[str,
         conn.close()
 
 
-def cancel_course_session(platform_id: int, session_id: int, *, cancelled_at) -> bool:
-    """Cancel an occurrence only while no audio worker has claimed it."""
+def get_course_session_postponement_by_key(platform_id: int, idempotency_key: str | None) -> dict[str, Any] | None:
+    """Return a prior report so retries remain stable even after the course ends."""
+    clean_key = str(idempotency_key or "").strip()[:120]
+    if not clean_key:
+        return None
+    columns = """
+        id, platform_id, session_id, session_index, previous_scheduled_at,
+        new_scheduled_at, mode, affected_session_count, idempotency_key,
+        impact_json, created_at
+    """
+    if schedule_store_is_postgres():
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"SELECT {columns} FROM course_session_postponements "
+                    "WHERE platform_id = %s AND idempotency_key = %s",
+                    (platform_id, clean_key),
+                )
+                row = cur.fetchone()
+                return dict(row) if row else None
+    conn = get_db_connection()
+    try:
+        conn.row_factory = __import__("sqlite3").Row
+        cursor = conn.cursor()
+        cursor.execute(
+            f"SELECT {columns} FROM course_session_postponements "
+            "WHERE platform_id = ? AND idempotency_key = ?",
+            (platform_id, clean_key),
+        )
+        row = cursor.fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def apply_course_session_postponement(
+    platform_id: int,
+    session_id: int,
+    *,
+    changes: list[dict[str, Any]],
+    mode: str,
+    reason: str | None,
+    idempotency_key: str | None,
+    actor_account_id: int | None,
+    postponed_at,
+) -> dict[str, Any]:
+    """Move one pedagogical lesson and its successors as one durable operation.
+
+    Audio ownership is deliberately untouched: every row keeps its stable id,
+    session_index and audio fields. Reminder claims are cleared because their
+    former delivery dates are no longer valid.
+    """
+    normalized_changes = [dict(item) for item in changes]
+    if not normalized_changes or int(normalized_changes[0]["id"]) != int(session_id):
+        raise ValueError("Le report ne contient aucune séance valide")
+    impact_json = json.dumps(
+        [
+            {
+                "id": int(item["id"]),
+                "session_index": int(item["session_index"]),
+                "previous_scheduled_at": format_schedule_datetime(item["expected_scheduled_at"]),
+                "new_scheduled_at": format_schedule_datetime(item["new_scheduled_at"]),
+            }
+            for item in normalized_changes
+        ],
+        ensure_ascii=False,
+    )
+    clean_reason = str(reason or "").strip()[:500] or None
+    clean_key = str(idempotency_key or "").strip()[:120] or None
+
     if schedule_store_is_postgres():
         with get_postgres_connection() as conn:
             with conn.cursor() as cur:
@@ -535,36 +605,207 @@ def cancel_course_session(platform_id: int, session_id: int, *, cancelled_at) ->
                     "SELECT pg_advisory_xact_lock(hashtext(%s))",
                     (f"course-schedule:{int(platform_id)}",),
                 )
+                if clean_key:
+                    cur.execute(
+                        """
+                        SELECT id, session_id, impact_json
+                        FROM course_session_postponements
+                        WHERE platform_id = %s AND idempotency_key = %s
+                        """,
+                        (platform_id, clean_key),
+                    )
+                    existing = cur.fetchone()
+                    if existing:
+                        if int(existing["session_id"]) != int(session_id):
+                            raise ValueError("Cette demande de report a déjà été utilisée")
+                        return {
+                            "audit_id": int(existing["id"]),
+                            "idempotent": True,
+                            "changes": json.loads(existing.get("impact_json") or "[]"),
+                        }
                 cur.execute(
                     """
-                    UPDATE course_sessions
-                    SET status = 'cancelled', updated_at = %s
-                    WHERE id = %s AND platform_id = %s
-                      AND status = 'planned'
-                      AND audio_generation_started_at IS NULL
-                      AND audio_generation_completed_at IS NULL
+                    SELECT id, session_index, scheduled_at, status
+                    FROM course_sessions
+                    WHERE platform_id = %s AND id = ANY(%s)
+                    FOR UPDATE
                     """,
-                    (cancelled_at, session_id, platform_id),
+                    (platform_id, [int(item["id"]) for item in normalized_changes]),
                 )
-                return cur.rowcount == 1
+                locked = {int(row["id"]): dict(row) for row in cur.fetchall()}
+                target = locked.get(int(session_id))
+                if not target or target.get("status") != "planned":
+                    raise ValueError("Ce cours ne peut plus être reporté")
+                if len(locked) != len(normalized_changes):
+                    raise ValueError("Le planning a changé. Rechargez-le avant de confirmer")
+                for item in normalized_changes:
+                    cur.execute(
+                        """
+                        UPDATE course_sessions
+                        SET scheduled_at = %s,
+                            postponed_from = scheduled_at,
+                            postponed_at = %s,
+                            postponement_count = COALESCE(postponement_count, 0) + 1,
+                            reminder_previous_evening_sent_at = NULL,
+                            reminder_5min_sent_at = NULL,
+                            reminder_previous_evening_claimed_at = NULL,
+                            reminder_5min_claimed_at = NULL,
+                            updated_at = %s
+                        WHERE id = %s AND platform_id = %s
+                          AND status = 'planned' AND scheduled_at = %s
+                        """,
+                        (
+                            item["new_scheduled_at"],
+                            postponed_at,
+                            postponed_at,
+                            int(item["id"]),
+                            platform_id,
+                            item["expected_scheduled_at"],
+                        ),
+                    )
+                    if cur.rowcount != 1:
+                        raise ValueError("Le planning a changé. Rechargez-le avant de confirmer")
+                cur.execute(
+                    """
+                    SELECT scheduled_at
+                    FROM course_sessions
+                    WHERE platform_id = %s AND status IN ('planned', 'active')
+                    ORDER BY scheduled_at ASC
+                    LIMIT 1
+                    """,
+                    (platform_id,),
+                )
+                next_session = cur.fetchone()
+                if next_session:
+                    cur.execute(
+                        """
+                        INSERT INTO cours_config (id, platform_id, heure_debut)
+                        VALUES (%s, %s, %s)
+                        ON CONFLICT (id) DO UPDATE SET
+                            platform_id = EXCLUDED.platform_id,
+                            heure_debut = EXCLUDED.heure_debut
+                        """,
+                        (platform_id, platform_id, next_session["scheduled_at"]),
+                    )
+                target_change = normalized_changes[0]
+                cur.execute(
+                    """
+                    INSERT INTO course_session_postponements (
+                        platform_id, session_id, session_index,
+                        previous_scheduled_at, new_scheduled_at, mode, reason,
+                        affected_session_count, idempotency_key, actor_account_id,
+                        impact_json, created_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    RETURNING id
+                    """,
+                    (
+                        platform_id,
+                        session_id,
+                        int(target_change["session_index"]),
+                        target_change["expected_scheduled_at"],
+                        target_change["new_scheduled_at"],
+                        mode,
+                        clean_reason,
+                        len(normalized_changes),
+                        clean_key,
+                        actor_account_id,
+                        impact_json,
+                        postponed_at,
+                    ),
+                )
+                audit = cur.fetchone()
+                return {
+                    "audit_id": int(audit["id"]),
+                    "idempotent": False,
+                    "changes": json.loads(impact_json),
+                }
     conn = get_db_connection()
     try:
         cursor = conn.cursor()
-        value = _sqlite_datetime(cancelled_at)
+        cursor.execute("BEGIN IMMEDIATE")
+        if clean_key:
+            cursor.execute(
+                """
+                SELECT id, session_id, impact_json
+                FROM course_session_postponements
+                WHERE platform_id = ? AND idempotency_key = ?
+                """,
+                (platform_id, clean_key),
+            )
+            existing = cursor.fetchone()
+            if existing:
+                if int(existing[1]) != int(session_id):
+                    raise ValueError("Cette demande de report a déjà été utilisée")
+                conn.commit()
+                return {
+                    "audit_id": int(existing[0]),
+                    "idempotent": True,
+                    "changes": json.loads(existing[2] or "[]"),
+                }
+        cursor.execute(
+            "SELECT status FROM course_sessions WHERE id = ? AND platform_id = ?",
+            (session_id, platform_id),
+        )
+        target = cursor.fetchone()
+        if not target or target[0] != "planned":
+            raise ValueError("Ce cours ne peut plus être reporté")
+        postponed_value = _sqlite_datetime(postponed_at)
+        for item in normalized_changes:
+            cursor.execute(
+                """
+                UPDATE course_sessions
+                SET scheduled_at = ?, postponed_from = scheduled_at,
+                    postponed_at = ?, postponement_count = COALESCE(postponement_count, 0) + 1,
+                    reminder_previous_evening_sent_at = NULL,
+                    reminder_5min_sent_at = NULL,
+                    reminder_previous_evening_claimed_at = NULL,
+                    reminder_5min_claimed_at = NULL,
+                    updated_at = ?
+                WHERE id = ? AND platform_id = ?
+                  AND status = 'planned' AND scheduled_at = ?
+                """,
+                (
+                    _sqlite_datetime(item["new_scheduled_at"]),
+                    postponed_value,
+                    postponed_value,
+                    int(item["id"]),
+                    platform_id,
+                    _sqlite_datetime(item["expected_scheduled_at"]),
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise ValueError("Le planning a changé. Rechargez-le avant de confirmer")
+        target_change = normalized_changes[0]
         cursor.execute(
             """
-            UPDATE course_sessions
-            SET status = 'cancelled', updated_at = ?
-            WHERE id = ? AND platform_id = ?
-              AND status = 'planned'
-              AND audio_generation_started_at IS NULL
-              AND audio_generation_completed_at IS NULL
+            INSERT INTO course_session_postponements (
+                platform_id, session_id, session_index,
+                previous_scheduled_at, new_scheduled_at, mode, reason,
+                affected_session_count, idempotency_key, actor_account_id,
+                impact_json, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (value, session_id, platform_id),
+            (
+                platform_id,
+                session_id,
+                int(target_change["session_index"]),
+                _sqlite_datetime(target_change["expected_scheduled_at"]),
+                _sqlite_datetime(target_change["new_scheduled_at"]),
+                mode,
+                clean_reason,
+                len(normalized_changes),
+                clean_key,
+                actor_account_id,
+                impact_json,
+                postponed_value,
+            ),
         )
-        changed = cursor.rowcount == 1
+        audit_id = int(cursor.lastrowid)
         conn.commit()
-        return changed
+        return {"audit_id": audit_id, "idempotent": False, "changes": json.loads(impact_json)}
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         conn.close()
 

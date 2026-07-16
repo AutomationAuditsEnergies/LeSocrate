@@ -48,12 +48,14 @@ from repositories.pipeline_repository import (
 )
 from services.course_schedule_service import (
     build_course_session_state,
-    cancel_course_session,
     create_missing_course_schedule,
     ensure_course_schedule_tables,
     get_course_schedule_summary,
     get_course_schedule_details,
+    get_course_schedule_details_for_platform,
     process_due_reminders,
+    postpone_course_session,
+    preview_course_session_postponement,
     run_scheduler_tick,
     save_course_schedule,
     update_course_schedule,
@@ -3303,6 +3305,75 @@ def create_hr_blueprint(socketio):
             return jsonify({"success": False, "error": "La reprise audio n'a pas pu démarrer"}), 500
 
     @hr_bp.route(
+        "/api/hr/platforms/<int:platform_id>/sessions/<int:session_id>/postpone/preview",
+        methods=["POST"],
+    )
+    def preview_platform_session_postponement(platform_id, session_id):
+        denied = _require_admin()
+        if denied:
+            return denied
+        try:
+            data = request.get_json(silent=True) or {}
+            preview = preview_course_session_postponement(
+                platform_id,
+                session_id,
+                mode=data.get("mode") or "next_occurrence",
+                scheduled_at=data.get("scheduled_at"),
+            )
+            return jsonify({"success": True, "preview": preview}), 200
+        except ValueError as exc:
+            return jsonify({"success": False, "error": str(exc)}), 409
+        except Exception:
+            logger.exception(
+                "COURSE_SESSION_POSTPONEMENT_PREVIEW_FAILED platform_id=%s session_id=%s",
+                platform_id,
+                session_id,
+            )
+            return jsonify({"success": False, "error": "Le report ne peut pas être préparé"}), 500
+
+    @hr_bp.route(
+        "/api/hr/platforms/<int:platform_id>/sessions/<int:session_id>/postpone",
+        methods=["POST"],
+    )
+    def postpone_platform_session(platform_id, session_id):
+        denied = _require_admin()
+        if denied:
+            return denied
+        try:
+            data = request.get_json(silent=True) or {}
+            idempotency_key = request.headers.get("Idempotency-Key") or data.get("idempotency_key")
+            if not str(idempotency_key or "").strip():
+                return jsonify({
+                    "success": False,
+                    "error": "La demande de report est incomplète. Rechargez la page puis réessayez.",
+                }), 400
+            result = postpone_course_session(
+                platform_id,
+                session_id,
+                mode=data.get("mode") or "next_occurrence",
+                scheduled_at=data.get("scheduled_at"),
+                reason=data.get("reason"),
+                idempotency_key=idempotency_key,
+                actor_account_id=session.get("admin_account_id"),
+            )
+            schedule = get_course_schedule_details_for_platform(platform_id)
+            return jsonify({
+                "success": True,
+                "message": f"Le cours {result['lesson_number']} a bien été reporté",
+                "postponement": result,
+                "schedule": schedule,
+            }), 200
+        except ValueError as exc:
+            return jsonify({"success": False, "error": str(exc)}), 409
+        except Exception:
+            logger.exception(
+                "COURSE_SESSION_POSTPONEMENT_FAILED platform_id=%s session_id=%s",
+                platform_id,
+                session_id,
+            )
+            return jsonify({"success": False, "error": "Le cours n'a pas pu être reporté"}), 500
+
+    @hr_bp.route(
         "/api/hr/platforms/<int:platform_id>/sessions/<int:session_id>",
         methods=["DELETE"],
     )
@@ -3310,18 +3381,10 @@ def create_hr_blueprint(socketio):
         denied = _require_admin()
         if denied:
             return denied
-        try:
-            cancel_course_session(platform_id, session_id)
-            return jsonify({"success": True, "message": "Séance annulée"}), 200
-        except ValueError as exc:
-            return jsonify({"success": False, "error": str(exc)}), 409
-        except Exception:
-            logger.exception(
-                "COURSE_SESSION_CANCEL_FAILED platform_id=%s session_id=%s",
-                platform_id,
-                session_id,
-            )
-            return jsonify({"success": False, "error": "La séance n'a pas pu être annulée"}), 500
+        return jsonify({
+            "success": False,
+            "error": "Une séance ne se supprime plus : utilisez « Reporter cette séance ».",
+        }), 410
 
     # ─── POST /api/internal/auto-schedule ────────────────────────────────
     @hr_bp.route("/api/internal/auto-schedule", methods=["POST"])

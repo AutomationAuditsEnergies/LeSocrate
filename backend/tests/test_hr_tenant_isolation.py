@@ -86,6 +86,20 @@ class HrTenantIsolationRouteTest(unittest.TestCase):
                 "platform",
                 2,
             ),
+            (
+                "post",
+                "/api/hr/platforms/2/sessions/91/postpone/preview",
+                {"json": {"mode": "next_occurrence"}},
+                "platform",
+                2,
+            ),
+            (
+                "post",
+                "/api/hr/platforms/2/sessions/91/postpone",
+                {"json": {"mode": "next_occurrence"}},
+                "platform",
+                2,
+            ),
         )
         for method, path, kwargs, resource_type, resource_id in cases:
             with self.subTest(path=path):

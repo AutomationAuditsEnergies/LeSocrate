@@ -30,6 +30,9 @@ class PostgresSchemaContractTest(unittest.TestCase):
             "audio_generation_next_retry_at",
             "audio_job_id",
             "audio_folder_id",
+            "postponed_from",
+            "postponed_at",
+            "postponement_count",
         ):
             self.assertIn(f"ADD COLUMN IF NOT EXISTS {column}", schema)
 

@@ -75,6 +75,9 @@ def ensure_course_schedule_tables(cursor):
             audio_generation_next_retry_at TEXT,
             audio_job_id INTEGER,
             audio_folder_id INTEGER,
+            postponed_from TEXT,
+            postponed_at TEXT,
+            postponement_count INTEGER NOT NULL DEFAULT 0,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
             UNIQUE(platform_id, session_index)
@@ -102,12 +105,39 @@ def ensure_course_schedule_tables(cursor):
         "audio_generation_next_retry_at": "TEXT",
         "audio_job_id": "INTEGER",
         "audio_folder_id": "INTEGER",
+        "postponed_from": "TEXT",
+        "postponed_at": "TEXT",
+        "postponement_count": "INTEGER NOT NULL DEFAULT 0",
     }.items():
         if col not in columns:
             cursor.execute(f"ALTER TABLE course_sessions ADD COLUMN {col} {col_type}")
     cursor.execute(
         "CREATE INDEX IF NOT EXISTS idx_course_sessions_audio_due "
         "ON course_sessions(audio_generation_status, audio_generation_next_retry_at, scheduled_at)"
+    )
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS course_session_postponements (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            platform_id INTEGER NOT NULL,
+            session_id INTEGER NOT NULL,
+            session_index INTEGER NOT NULL,
+            previous_scheduled_at TEXT NOT NULL,
+            new_scheduled_at TEXT NOT NULL,
+            mode TEXT NOT NULL,
+            reason TEXT,
+            affected_session_count INTEGER NOT NULL DEFAULT 1,
+            idempotency_key TEXT,
+            actor_account_id INTEGER,
+            impact_json TEXT NOT NULL DEFAULT '[]',
+            created_at TEXT NOT NULL,
+            UNIQUE(platform_id, idempotency_key)
+        )
+        """
+    )
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_course_session_postponements_session "
+        "ON course_session_postponements(platform_id, session_id, created_at)"
     )
 
 
@@ -574,6 +604,7 @@ def build_course_session_state(row, *, now=None):
     trigger_at = scheduled_at - timedelta(hours=horizon)
     audio_started = bool(row.get("audio_generation_started_at"))
     audio_completed = bool(row.get("audio_generation_completed_at"))
+    postponement_count = int(row.get("postponement_count") or 0)
     return {
         "id": int(row["id"]),
         "session_index": int(row.get("session_index") or 0),
@@ -584,7 +615,11 @@ def build_course_session_state(row, *, now=None):
         "change_cutoff_at": change_cutoff_at.isoformat(),
         "is_locked": now >= change_cutoff_at or audio_started,
         "can_retry_audio": audio_status == "error" and raw_status in {"planned", "active"},
-        "can_cancel": raw_status == "planned" and not audio_started and not audio_completed,
+        "can_postpone": raw_status == "planned" and scheduled_at > now,
+        "was_postponed": postponement_count > 0,
+        "postponement_count": postponement_count,
+        "postponed_from": _schedule_datetime_iso(row.get("postponed_from")),
+        "postponed_at": _schedule_datetime_iso(row.get("postponed_at")),
         "audio_attempts": int(row.get("audio_generation_attempts") or 0),
         "audio_next_retry_at": _schedule_datetime_iso(row.get("audio_generation_next_retry_at")),
     }
@@ -594,7 +629,7 @@ def get_course_schedule_details(cursor, platform_id):
     summary = get_course_schedule_summary(cursor, platform_id)
     if not summary:
         return None
-    sessions = schedule_repo.list_course_sessions(int(platform_id))
+    sessions = schedule_repo.list_course_sessions(int(platform_id), limit=1000)
     public_sessions = [build_course_session_state(row) for row in sessions]
     next_session = next(
         (item for item in public_sessions if item["status"] in {"planned", "active"}),
@@ -610,15 +645,260 @@ def get_course_schedule_details(cursor, platform_id):
     }
 
 
-def cancel_course_session(platform_id, session_id):
-    changed = schedule_repo.cancel_course_session(
+def get_course_schedule_details_for_platform(platform_id):
+    """Load product schedule details without leaking backend-specific cursors."""
+    if schedule_repo.schedule_store_is_postgres():
+        return get_course_schedule_details(None, int(platform_id))
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        ensure_course_schedule_tables(cursor)
+        conn.commit()
+        return get_course_schedule_details(cursor, int(platform_id))
+    finally:
+        conn.close()
+
+
+def _parse_postponement_datetime(value):
+    raw = str(value or "").strip()
+    if not raw:
+        raise ValueError("Choisissez une nouvelle date")
+    try:
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError("La nouvelle date est invalide") from exc
+    if parsed.tzinfo is not None:
+        return parsed.astimezone(FRANCE_TZ)
+    try:
+        return FRANCE_TZ.localize(parsed, is_dst=None)
+    except NonExistentTimeError as exc:
+        raise ValueError("Cette heure n’existe pas le jour du changement d’heure") from exc
+    except AmbiguousTimeError as exc:
+        raise ValueError("Cette heure est ambiguë le jour du changement d’heure") from exc
+
+
+def _build_course_session_postponement_plan(
+    platform_id,
+    session_id,
+    *,
+    mode,
+    scheduled_at=None,
+    now=None,
+):
+    """Build a deterministic preview while preserving pedagogical indexes."""
+    now = now or datetime.now(FRANCE_TZ)
+    normalized_mode = str(mode or "next_occurrence").strip().lower()
+    if normalized_mode not in {"next_occurrence", "specific_date"}:
+        raise ValueError("Choisissez une option de report valide")
+    if schedule_repo.schedule_store_is_postgres():
+        summary = get_course_schedule_summary(None, int(platform_id))
+    else:
+        conn = get_db_connection()
+        try:
+            cursor = conn.cursor()
+            ensure_course_schedule_tables(cursor)
+            conn.commit()
+            summary = get_course_schedule_summary(cursor, int(platform_id))
+        finally:
+            conn.close()
+    if not summary:
+        raise ValueError("Le planning de cette formation est introuvable")
+    rows = schedule_repo.list_course_sessions(int(platform_id), limit=1000)
+    target_position = next(
+        (index for index, row in enumerate(rows) if int(row.get("id") or 0) == int(session_id)),
+        None,
+    )
+    if target_position is None:
+        raise ValueError("Ce cours est introuvable")
+    target = rows[target_position]
+    target_at = _parse_local_datetime(target.get("scheduled_at"))
+    if str(target.get("status") or "") != "planned" or target_at <= now:
+        raise ValueError("Ce cours a déjà commencé et ne peut plus être reporté")
+
+    future_rows = rows[target_position:]
+    if any(str(row.get("status") or "") != "planned" for row in future_rows):
+        raise ValueError("Le planning a changé. Rechargez-le avant de reporter ce cours")
+    old_dates = [_parse_local_datetime(row.get("scheduled_at")) for row in future_rows]
+    weekdays = _normalize_weekdays(summary.get("weekdays"), summary.get("weekly_course_count"))
+
+    if normalized_mode == "next_occurrence":
+        last_date = old_dates[-1]
+        appended = _generate_session_datetimes(
+            total_training_days=1,
+            weekdays=weekdays,
+            start_time=summary.get("start_time") or "09:00",
+            start_date=last_date.strftime("%Y-%m-%d"),
+            not_before=last_date,
+        )[0]
+        new_dates = old_dates[1:] + [appended]
+    else:
+        requested = _parse_postponement_datetime(scheduled_at)
+        if requested <= now:
+            raise ValueError("La nouvelle date doit être dans le futur")
+        if requested <= target_at:
+            raise ValueError("La nouvelle date doit être après la date actuelle du cours")
+        later_dates = []
+        if len(future_rows) > 1:
+            later_dates = _generate_session_datetimes(
+                total_training_days=len(future_rows) - 1,
+                weekdays=weekdays,
+                start_time=summary.get("start_time") or "09:00",
+                start_date=requested.strftime("%Y-%m-%d"),
+                not_before=requested,
+            )
+        new_dates = [requested] + later_dates
+
+    changes = [
+        {
+            "id": int(row["id"]),
+            "session_index": int(row.get("session_index") or 0),
+            "expected_scheduled_at": old_date,
+            "new_scheduled_at": new_date,
+        }
+        for row, old_date, new_date in zip(future_rows, old_dates, new_dates)
+        if old_date != new_date
+    ]
+    public_changes = [
+        {
+            "session_id": item["id"],
+            "lesson_number": item["session_index"],
+            "previous_scheduled_at": item["expected_scheduled_at"].isoformat(),
+            "new_scheduled_at": item["new_scheduled_at"].isoformat(),
+        }
+        for item in changes
+    ]
+    raw_audio = str(target.get("audio_generation_status") or "pending").lower()
+    if target.get("audio_generation_completed_at") or raw_audio == "completed":
+        audio_preservation = "ready"
+    elif target.get("audio_generation_started_at") or raw_audio in {"queued", "running", "processing"}:
+        audio_preservation = "preparing"
+    else:
+        audio_preservation = "scheduled"
+    return {
+        "platform_id": int(platform_id),
+        "session_id": int(session_id),
+        "lesson_number": int(target.get("session_index") or 0),
+        "mode": normalized_mode,
+        "previous_scheduled_at": target_at.isoformat(),
+        "new_scheduled_at": new_dates[0].isoformat(),
+        "affected_session_count": len(changes),
+        "changes": public_changes,
+        "audio_preservation": audio_preservation,
+        "warning_imminent": now >= target_at - timedelta(hours=schedule_change_cutoff_hours()),
+        "_storage_changes": changes,
+    }
+
+
+def preview_course_session_postponement(platform_id, session_id, *, mode, scheduled_at=None):
+    plan = _build_course_session_postponement_plan(
+        platform_id,
+        session_id,
+        mode=mode,
+        scheduled_at=scheduled_at,
+    )
+    return {key: value for key, value in plan.items() if not key.startswith("_")}
+
+
+def postpone_course_session(
+    platform_id,
+    session_id,
+    *,
+    mode,
+    scheduled_at=None,
+    reason=None,
+    idempotency_key=None,
+    actor_account_id=None,
+):
+    clean_key = str(idempotency_key or "").strip()[:120] or None
+    if clean_key:
+        if not schedule_repo.schedule_store_is_postgres():
+            conn = get_db_connection()
+            try:
+                cursor = conn.cursor()
+                ensure_course_schedule_tables(cursor)
+                conn.commit()
+            finally:
+                conn.close()
+        prior = schedule_repo.get_course_session_postponement_by_key(int(platform_id), clean_key)
+        if prior:
+            if int(prior.get("session_id") or 0) != int(session_id):
+                raise ValueError("Cette demande de report a déjà été utilisée")
+            stored_changes = json.loads(prior.get("impact_json") or "[]")
+            public_changes = [
+                {
+                    "session_id": int(item["id"]),
+                    "lesson_number": int(item["session_index"]),
+                    "previous_scheduled_at": _parse_local_datetime(item["previous_scheduled_at"]).isoformat(),
+                    "new_scheduled_at": _parse_local_datetime(item["new_scheduled_at"]).isoformat(),
+                }
+                for item in stored_changes
+            ]
+            return {
+                "platform_id": int(platform_id),
+                "session_id": int(session_id),
+                "lesson_number": int(prior.get("session_index") or 0),
+                "mode": prior.get("mode") or str(mode or "next_occurrence"),
+                "previous_scheduled_at": _parse_local_datetime(prior.get("previous_scheduled_at")).isoformat(),
+                "new_scheduled_at": _parse_local_datetime(prior.get("new_scheduled_at")).isoformat(),
+                "affected_session_count": int(prior.get("affected_session_count") or len(public_changes)),
+                "changes": public_changes,
+                "audio_preservation": "scheduled",
+                "warning_imminent": False,
+                "audit_id": int(prior["id"]),
+                "idempotent": True,
+            }
+    now = datetime.now(FRANCE_TZ)
+    plan = _build_course_session_postponement_plan(
+        platform_id,
+        session_id,
+        mode=mode,
+        scheduled_at=scheduled_at,
+        now=now,
+    )
+    storage_result = schedule_repo.apply_course_session_postponement(
         int(platform_id),
         int(session_id),
-        cancelled_at=datetime.now(FRANCE_TZ),
+        changes=plan["_storage_changes"],
+        mode=plan["mode"],
+        reason=reason,
+        idempotency_key=clean_key,
+        actor_account_id=actor_account_id,
+        postponed_at=now,
     )
-    if not changed:
-        raise ValueError("Cette séance ne peut plus être annulée car son audio a déjà démarré")
-    return True
+    logger.info(
+        "COURSE_SESSION_POSTPONED platform_id=%s session_id=%s lesson=%s affected=%s mode=%s idempotent=%s",
+        platform_id,
+        session_id,
+        plan["lesson_number"],
+        plan["affected_session_count"],
+        plan["mode"],
+        storage_result.get("idempotent"),
+    )
+    if storage_result.get("idempotent"):
+        stored_changes = storage_result.get("changes") or []
+        public_changes = [
+            {
+                "session_id": int(item["id"]),
+                "lesson_number": int(item["session_index"]),
+                "previous_scheduled_at": _parse_local_datetime(item["previous_scheduled_at"]).isoformat(),
+                "new_scheduled_at": _parse_local_datetime(item["new_scheduled_at"]).isoformat(),
+            }
+            for item in stored_changes
+        ]
+        if public_changes:
+            plan = {
+                **plan,
+                "lesson_number": public_changes[0]["lesson_number"],
+                "previous_scheduled_at": public_changes[0]["previous_scheduled_at"],
+                "new_scheduled_at": public_changes[0]["new_scheduled_at"],
+                "affected_session_count": len(public_changes),
+                "changes": public_changes,
+            }
+    return {
+        **{key: value for key, value in plan.items() if not key.startswith("_")},
+        "audit_id": storage_result.get("audit_id"),
+        "idempotent": bool(storage_result.get("idempotent")),
+    }
 
 
 def update_course_schedule_start_time(cursor, platform_id, start_time):

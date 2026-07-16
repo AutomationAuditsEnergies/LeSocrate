@@ -107,6 +107,127 @@ def _seed_schedule(cursor, platform_id=12):
 
 
 class CourseScheduleServiceTest(unittest.TestCase):
+    def test_postponing_j2_to_next_slot_keeps_j2_and_shifts_following_lessons(self):
+        now = FRANCE_TZ.localize(datetime(2026, 7, 16, 8, 0))
+        rows = [
+            {
+                "id": 22,
+                "session_index": 2,
+                "scheduled_at": FRANCE_TZ.localize(datetime(2026, 7, 16, 9, 0)),
+                "status": "planned",
+                "audio_generation_status": "completed",
+                "audio_generation_completed_at": now - timedelta(hours=1),
+            },
+            {
+                "id": 23,
+                "session_index": 3,
+                "scheduled_at": FRANCE_TZ.localize(datetime(2026, 7, 20, 9, 0)),
+                "status": "planned",
+                "audio_generation_status": "pending",
+            },
+            {
+                "id": 24,
+                "session_index": 4,
+                "scheduled_at": FRANCE_TZ.localize(datetime(2026, 7, 23, 9, 0)),
+                "status": "planned",
+                "audio_generation_status": "pending",
+            },
+        ]
+        summary = {
+            "weekly_course_count": 2,
+            "weekdays": [0, 3],
+            "start_time": "09:00",
+        }
+        with (
+            patch.object(css.schedule_repo, "schedule_store_is_postgres", lambda: True),
+            patch.object(css, "get_course_schedule_summary", return_value=summary),
+            patch.object(css.schedule_repo, "list_course_sessions", return_value=rows),
+        ):
+            plan = css._build_course_session_postponement_plan(
+                12,
+                22,
+                mode="next_occurrence",
+                now=now,
+            )
+
+        self.assertEqual(plan["lesson_number"], 2)
+        self.assertEqual(plan["audio_preservation"], "ready")
+        self.assertEqual(
+            [item["lesson_number"] for item in plan["changes"]],
+            [2, 3, 4],
+        )
+        self.assertTrue(plan["changes"][0]["new_scheduled_at"].startswith("2026-07-20T09:00"))
+        self.assertTrue(plan["changes"][1]["new_scheduled_at"].startswith("2026-07-23T09:00"))
+        self.assertTrue(plan["changes"][2]["new_scheduled_at"].startswith("2026-07-27T09:00"))
+
+    def test_custom_postponement_accepts_exception_date_then_resumes_recurrence(self):
+        now = FRANCE_TZ.localize(datetime(2026, 7, 16, 8, 0))
+        rows = [
+            {"id": 22, "session_index": 2, "scheduled_at": "2026-07-16 09:00:00", "status": "planned"},
+            {"id": 23, "session_index": 3, "scheduled_at": "2026-07-20 09:00:00", "status": "planned"},
+        ]
+        with (
+            patch.object(css.schedule_repo, "schedule_store_is_postgres", lambda: True),
+            patch.object(css, "get_course_schedule_summary", return_value={
+                "weekly_course_count": 2,
+                "weekdays": [0, 3],
+                "start_time": "09:00",
+            }),
+            patch.object(css.schedule_repo, "list_course_sessions", return_value=rows),
+        ):
+            plan = css._build_course_session_postponement_plan(
+                12,
+                22,
+                mode="specific_date",
+                scheduled_at="2026-07-17T14:30",
+                now=now,
+            )
+
+        self.assertTrue(plan["changes"][0]["new_scheduled_at"].startswith("2026-07-17T14:30"))
+        self.assertEqual(len(plan["changes"]), 1)
+
+    def test_idempotent_retry_returns_original_report_without_shifting_again(self):
+        prior = {
+            "id": 7,
+            "session_id": 22,
+            "session_index": 2,
+            "previous_scheduled_at": "2026-07-20 09:00:00",
+            "new_scheduled_at": "2026-07-23 09:00:00",
+            "mode": "next_occurrence",
+            "affected_session_count": 2,
+            "impact_json": json.dumps([
+                {
+                    "id": 22,
+                    "session_index": 2,
+                    "previous_scheduled_at": "2026-07-20 09:00:00",
+                    "new_scheduled_at": "2026-07-23 09:00:00",
+                },
+                {
+                    "id": 23,
+                    "session_index": 3,
+                    "previous_scheduled_at": "2026-07-23 09:00:00",
+                    "new_scheduled_at": "2026-07-27 09:00:00",
+                },
+            ]),
+        }
+        with (
+            patch.object(css.schedule_repo, "schedule_store_is_postgres", lambda: True),
+            patch.object(css.schedule_repo, "get_course_session_postponement_by_key", return_value=prior),
+            patch.object(css, "_build_course_session_postponement_plan") as build_plan,
+        ):
+            result = css.postpone_course_session(
+                12,
+                22,
+                mode="next_occurrence",
+                idempotency_key="same-request",
+            )
+
+        self.assertTrue(result["idempotent"])
+        self.assertEqual(result["lesson_number"], 2)
+        self.assertEqual(result["affected_session_count"], 2)
+        self.assertTrue(result["new_scheduled_at"].startswith("2026-07-23T09:00"))
+        build_plan.assert_not_called()
+
     def test_public_session_state_exposes_cutoffs_without_internal_error(self):
         now = FRANCE_TZ.localize(datetime(2026, 7, 15, 9, 0))
         scheduled = now + timedelta(days=4)
@@ -125,6 +246,7 @@ class CourseScheduleServiceTest(unittest.TestCase):
 
         self.assertEqual(state["audio_status"], "error")
         self.assertTrue(state["can_retry_audio"])
+        self.assertTrue(state["can_postpone"])
         self.assertTrue(state["is_locked"])
         self.assertEqual(state["audio_attempts"], 2)
         self.assertNotIn("secret", json.dumps(state))
