@@ -56,6 +56,8 @@ class Formation3PurePostgresDeploymentTest(unittest.TestCase):
     def test_deployment_requires_a_real_reminder_transport(self):
         self.assertIn("REMINDER_DELIVERY_READY", self.workflow)
         self.assertIn("REMINDER_DELIVERY_MISSING", self.workflow)
+        self.assertIn("REMINDER_DELIVERY_REQUIRED", self.workflow)
+        self.assertIn("REMINDER_DELIVERY_OPTIONAL", self.workflow)
         self.assertIn(
             "REMINDER_WEBHOOK_URL+REMINDER_WEBHOOK_KEY|EMAIL_USERNAME+EMAIL_PASSWORD",
             self.workflow,

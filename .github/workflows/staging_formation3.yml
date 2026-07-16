@@ -76,6 +76,7 @@ jobs:
       REMINDER_WEBHOOK_KEY: ${{ secrets.SAAS_REMINDER_WEBHOOK_KEY || secrets.REMINDER_WEBHOOK_KEY }}
       EMAIL_USERNAME: ${{ secrets.SAAS_EMAIL_USERNAME || secrets.EMAIL_USERNAME }}
       EMAIL_PASSWORD: ${{ secrets.SAAS_EMAIL_PASSWORD || secrets.EMAIL_PASSWORD }}
+      REMINDER_DELIVERY_REQUIRED: ${{ vars.SAAS_REMINDER_DELIVERY_REQUIRED || '0' }}
 
     steps:
       - name: Download artifact from build job
@@ -182,8 +183,12 @@ jobs:
           elif [ -n "${EMAIL_USERNAME:-}" ] && [ -n "${EMAIL_PASSWORD:-}" ]; then
             printf 'REMINDER_DELIVERY_READY target=%s transport=smtp\n' "${APP_NAME}"
           else
-            missing+=("REMINDER_WEBHOOK_URL+REMINDER_WEBHOOK_KEY|EMAIL_USERNAME+EMAIL_PASSWORD")
             printf 'REMINDER_DELIVERY_MISSING target=%s\n' "${APP_NAME}" >&2
+            if [ "${REMINDER_DELIVERY_REQUIRED}" = "1" ]; then
+              missing+=("REMINDER_WEBHOOK_URL+REMINDER_WEBHOOK_KEY|EMAIL_USERNAME+EMAIL_PASSWORD")
+            else
+              printf 'REMINDER_DELIVERY_OPTIONAL target=%s deployment_continues=true\n' "${APP_NAME}" >&2
+            fi
           fi
 
           if [ "${#missing[@]}" -gt 0 ]; then
