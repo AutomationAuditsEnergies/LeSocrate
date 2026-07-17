@@ -4331,7 +4331,7 @@ function PlatformCard({
             qui flotte sur le fond du dashboard ; la carte n'apparaît qu'au
             survol via le flip vers le verso) ═══ */}
         <div
-          className={`${flipped ? 'absolute inset-x-0 top-0' : 'relative'} flex flex-col items-center justify-center transition-transform duration-300 ease-out motion-reduce:transition-none`}
+          className={`${flipped ? 'absolute inset-x-0 top-0' : 'relative'} flex flex-col items-center justify-center transition-transform duration-[420ms] ease-out motion-reduce:transition-none`}
           style={{
             backfaceVisibility: 'hidden',
             WebkitBackfaceVisibility: 'hidden',
@@ -4468,7 +4468,7 @@ function PlatformCard({
 
         {/* ═══ VERSO — la fiche formation (inchangée) ═══ */}
         <div
-          className={`${flipped ? 'relative' : 'absolute inset-x-0 top-0'} overflow-hidden rounded-2xl transition-transform duration-300 ease-out motion-reduce:transition-none`}
+          className={`${flipped ? 'relative' : 'absolute inset-x-0 top-0'} overflow-hidden rounded-2xl transition-transform duration-[420ms] ease-out motion-reduce:transition-none`}
           style={{
             ...faceStyle,
             backfaceVisibility: 'hidden',
