@@ -227,23 +227,28 @@ export default function HRDashboard() {
     }
   }
 
+  const closeCardPanels = () => {
+    setExpandedPlatform(null)
+    setExpandedStudentsPlatform(null)
+    setExpandedAttendancePlatform(null)
+  }
+
   const handleToggleStudentEmails = (platformId) => {
-    setExpandedStudentsPlatform(prev => {
-      const next = prev === platformId ? null : platformId
-      if (next && !studentEmailsByPlatform[platformId]) fetchStudentEmails(platformId)
-      return next
-    })
+    const next = expandedStudentsPlatform === platformId ? null : platformId
+    setExpandedPlatform(null)
+    setExpandedAttendancePlatform(null)
+    setExpandedStudentsPlatform(next)
+    if (next && !studentEmailsByPlatform[platformId]) fetchStudentEmails(platformId)
   }
 
   const handleToggleAttendance = (platformId) => {
-    setExpandedAttendancePlatform(prev => {
-      const next = prev === platformId ? null : platformId
-      if (next) {
-        setAttendancePlatformId(String(platformId))
-        fetchAttendance(platformId, attendanceDate)
-      }
-      return next
-    })
+    const next = expandedAttendancePlatform === platformId ? null : platformId
+    setExpandedPlatform(null)
+    setExpandedStudentsPlatform(null)
+    setExpandedAttendancePlatform(next)
+    if (next) {
+      setAttendancePlatformId(String(platformId))
+    }
   }
 
   const handleStudentEmailDraftChange = (platformId, value) => {
@@ -469,6 +474,7 @@ export default function HRDashboard() {
 
   // ─── Actions ─────────────────────────────────────────────────────────
   const handleExpandPlatform = (platformId) => {
+    closeCardPanels()
     setSelectedPlatformId(platformId)
     setShowAudiosModal(true)
     if (!platformAudios[platformId]) fetchAudios(platformId)
@@ -746,6 +752,7 @@ export default function HRDashboard() {
   }
 
   const handleOpenCoursFolders = (platform) => {
+    closeCardPanels()
     setSelectedCoursPlatform(platform)
     setShowCoursFoldersModal(true)
   }
@@ -1398,10 +1405,12 @@ export default function HRDashboard() {
               onSaveAttendance={(student, platformId) => handleSaveAttendance(student, platformId, attendanceDate)}
               onExportAttendance={(week, platformId) => handleExportAttendance(week, platformId)}
               onOpenPdfModal={(platform) => {
+                closeCardPanels()
                 setSelectedPlatform(platform)
                 setShowPdfModal(true)
               }}
               onOpenCourseTimeModal={async (platform) => {
+                closeCardPanels()
                 setCourseTimePlatformId(platform.id)
                 try {
                   const resp = await apiFetch(`/api/hr/platforms/${platform.id}/course-time`)
@@ -1418,6 +1427,7 @@ export default function HRDashboard() {
               onDeletePdf={handleDeletePdf}
               onDeletePlatform={handleDeletePlatform}
               onArchivePlatform={handleArchivePlatform}
+              onCloseCardPanels={closeCardPanels}
               archivingPlatformId={archivingPlatformId}
               newlyCreatedPlatformId={newlyCreatedPlatformId}
               retryingPlatformId={retryingPlatformId}
@@ -2073,6 +2083,7 @@ function PlatformCardsView({
   onDeletePdf,
   onDeletePlatform,
   onArchivePlatform,
+  onCloseCardPanels,
   archivingPlatformId,
   newlyCreatedPlatformId,
   retryingPlatformId,
@@ -2128,7 +2139,7 @@ function PlatformCardsView({
           </p>
         </div>
       ) : (
-      <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
+      <div className="grid items-start gap-6 md:grid-cols-2 lg:grid-cols-3">
         {platforms.slice(safeCardPage * cardsPerPage, (safeCardPage + 1) * cardsPerPage).map((p) => (
           <PlatformCard
             key={p.id}
@@ -2172,6 +2183,7 @@ function PlatformCardsView({
             onDeletePdf={() => onDeletePdf(p.id)}
             onDeletePlatform={() => onDeletePlatform(p.id)}
             onArchivePlatform={() => onArchivePlatform(p.id)}
+            onBeforeFlip={onCloseCardPanels}
             archiving={archivingPlatformId === p.id}
             newlyCreated={newlyCreatedPlatformId === p.id}
             retryingPreparation={retryingPlatformId === p.id}
@@ -2550,49 +2562,47 @@ function AttendanceCardPanel({
 
   return (
     <div
-      className="mb-3 rounded-xl p-3"
+      className="mb-4 rounded-xl p-4"
       style={{ backgroundColor: colors.innerBg, border: `1px solid ${colors.border}` }}
     >
-      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+      <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
         <div>
-          <span className="text-sm font-semibold" style={{ color: colors.text }}>
-            Présence
-          </span>
-          <p className="mt-0.5 text-xs" style={{ color: colors.textMuted }}>
-            {students.length} participant{students.length > 1 ? 's' : ''} · suivi automatique de la salle
+          <h4 className="text-sm font-semibold" style={{ color: colors.text }}>Présence de la journée</h4>
+          <p className="mt-1 text-xs leading-5" style={{ color: colors.textMuted }}>
+            {students.length} participant{students.length > 1 ? 's' : ''}. Les entrées et sorties sont enregistrées automatiquement.
           </p>
         </div>
-        <button
-          type="button"
-          onClick={() => onExport(selectedExport || null)}
-          disabled={!selectedExport}
-          className="inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-semibold text-white transition-colors disabled:cursor-not-allowed disabled:opacity-45"
-          style={{ backgroundColor: '#8B5CF6' }}
-          title={selectedExport ? 'Télécharger le relevé de cette journée' : 'Disponible automatiquement le lendemain matin'}
+        <span
+          className="flex-shrink-0 rounded-full px-2 py-1 text-[11px] font-semibold"
+          style={{ backgroundColor: colors.cardBg, color: colors.textSecondary, border: `1px solid ${colors.border}` }}
         >
-          <Icon name="download" className="text-sm" />
-          Excel du jour
-        </button>
+          Suivi automatique
+        </span>
       </div>
 
-      <div className="mb-3 flex flex-wrap items-center gap-2">
-        <input
-          type="date"
-          value={courseDate}
-          onChange={(e) => onCourseDateChange(e.target.value)}
-          className="min-w-0 flex-1 rounded-lg px-3 py-2 text-sm outline-none transition-shadow focus:ring-2 focus:ring-violet-500/30"
-          style={inputStyle}
-        />
-        <button
-          type="button"
-          onClick={onRefresh}
-          className="flex h-10 w-10 items-center justify-center rounded-lg transition-colors hover:bg-black/5 dark:hover:bg-white/5"
-          style={{ color: colors.textMuted, border: `1px solid ${colors.border}` }}
-          title="Actualiser les présences"
-          aria-label="Actualiser les présences"
-        >
-          <Icon name="refresh" className="text-base" />
-        </button>
+      <div className="mb-4">
+        <label className="block text-xs font-semibold" style={{ color: colors.textSecondary }}>
+          Journée consultée
+          <span className="mt-2 flex items-center gap-2">
+            <input
+              type="date"
+              value={courseDate}
+              onChange={(e) => onCourseDateChange(e.target.value)}
+              className="min-w-0 flex-1 rounded-lg px-3 py-2 text-sm font-normal outline-none transition-shadow focus:ring-2 focus:ring-violet-500/30"
+              style={inputStyle}
+            />
+            <button
+              type="button"
+              onClick={onRefresh}
+              className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-lg transition-colors hover:bg-black/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40 dark:hover:bg-white/5"
+              style={{ color: colors.textMuted, border: `1px solid ${colors.border}` }}
+              title="Actualiser les présences"
+              aria-label="Actualiser les présences"
+            >
+              <Icon name="refresh" className="text-base" />
+            </button>
+          </span>
+        </label>
       </div>
 
       {error && (
@@ -2609,17 +2619,29 @@ function AttendanceCardPanel({
         </div>
       )}
 
-      <div className="mb-3 rounded-lg p-2" style={{ backgroundColor: colors.cardBg, border: `1px solid ${colors.border}` }}>
-        <div className="mb-2 flex items-center justify-between gap-2">
-          <span className="text-xs font-semibold" style={{ color: colors.text }}>
+      <section className="mb-4 border-t pt-4" style={{ borderColor: colors.border }}>
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+          <span className="text-sm font-semibold" style={{ color: colors.text }}>
             Fichiers Excel par journée
           </span>
-          <span className="text-[10px] tabular-nums" style={{ color: colors.textMuted }}>
-            {readyExports.length}
-          </span>
+          <button
+            type="button"
+            onClick={() => onExport(selectedExport || null)}
+            disabled={!selectedExport}
+            className="inline-flex min-h-10 items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40 disabled:cursor-not-allowed disabled:opacity-50"
+            style={{
+              backgroundColor: selectedExport ? '#8B5CF6' : colors.cardBg,
+              color: selectedExport ? 'white' : colors.textMuted,
+              border: selectedExport ? '1px solid #8B5CF6' : `1px solid ${colors.border}`,
+            }}
+            title={selectedExport ? 'Télécharger le relevé de cette journée' : 'Disponible automatiquement le lendemain matin'}
+          >
+            <Icon name="download" className="text-sm" />
+            Télécharger l’Excel
+          </button>
         </div>
         {dailyExports.length === 0 ? (
-          <p className="py-2 text-xs" style={{ color: colors.textMuted }}>
+          <p className="text-xs leading-5" style={{ color: colors.textMuted }}>
             Le premier fichier apparaîtra ici le lendemain d’une journée de formation, à partir de 6 h.
           </p>
         ) : (
@@ -2647,7 +2669,7 @@ function AttendanceCardPanel({
             ))}
           </div>
         )}
-      </div>
+      </section>
 
       {loading ? (
         <div className="flex items-center justify-center py-5">
@@ -3899,7 +3921,7 @@ const newReminderRule = () => ({
   is_active: true,
 })
 
-function ReminderRulesPanel({ platformId, recipients, colors }) {
+function ReminderRulesPanel({ platformId, recipients, colors, darkMode }) {
   const [rules, setRules] = useState([])
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -4025,7 +4047,7 @@ function ReminderRulesPanel({ platformId, recipients, colors }) {
 
   return (
     <section className="mt-4 border-t pt-4" style={{ borderColor: colors.border }} aria-label="Rappels automatiques">
-      <div className="mb-3 flex items-center justify-between gap-3">
+      <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
         <div>
           <h4 className="text-sm font-semibold" style={{ color: colors.text }}>Rappels automatiques</h4>
           <p className="mt-0.5 text-xs" style={{ color: colors.textMuted }}>Chaque élève reçoit son propre lien d’accès.</p>
@@ -4034,10 +4056,10 @@ function ReminderRulesPanel({ platformId, recipients, colors }) {
           <button
             type="button"
             onClick={() => setEditingId('new')}
-            className="inline-flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-xs font-semibold transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet-500"
-            style={{ backgroundColor: '#8B5CF6', color: 'white' }}
+            className="inline-flex min-h-10 items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-semibold transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet-500"
+            style={{ backgroundColor: colors.cardBg, color: darkMode ? '#c4b5fd' : '#7c3aed', border: `1px solid ${colors.border}` }}
           >
-            <Icon name="add" className="text-sm" /> Ajouter un rappel
+            <Icon name="add" className="text-sm" /> Créer un rappel
           </button>
         )}
       </div>
@@ -4181,6 +4203,7 @@ function PlatformCard({
   onExportAttendance, onOpenPdfModal, onOpenCourseTimeModal,
   onDeleteAudio, onPlayAudio, onPdfUpload, onDeletePdf, onOpenCoursFolders, onDeletePlatform,
   onArchivePlatform, archiving = false, newlyCreated = false, retryingPreparation = false, onRetryPreparation,
+  onBeforeFlip,
 }) {
   const pdfInputId = `pdf-input-${p.id}`
   const [deleteHover, setDeleteHover] = useState(false)
@@ -4196,29 +4219,37 @@ function PlatformCard({
     border: p.active ? '1px solid #E4E4E4' : `1px solid ${colors.border}`,
     boxShadow: darkMode ? 'none' : '0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px -1px rgba(0, 0, 0, 0.1)',
   }
+  const actionItems = [
+    { key: 'pdf', label: 'PDF', icon: 'picture_as_pdf', onClick: onOpenPdfModal },
+    ...(p.active ? [
+      { key: 'planning', label: 'Planning', icon: 'schedule', onClick: onOpenCourseTimeModal },
+      { key: 'audios', label: 'Audios', icon: 'audiotrack', onClick: onExpand, active: expanded },
+      { key: 'courses', label: 'Cours', icon: 'folder_special', onClick: onOpenCoursFolders },
+      { key: 'students', label: 'Élèves', icon: 'group', onClick: onToggleStudentEmails, active: studentsExpanded, expandable: true },
+      { key: 'attendance', label: 'Présence', icon: 'fact_check', onClick: onToggleAttendance, active: attendanceExpanded, expandable: true },
+    ] : []),
+  ]
 
   return (
-    // Carte robot prof IA : recto = robot coloré, au survol pivote (rotateY)
-    // pour révéler au verso la fiche formation (inchangée). Les deux faces se
-    // superposent dans la même cellule grid → la cellule prend la hauteur de
-    // la plus grande (la fiche).
-    <div className={`flex flex-col ${newlyCreated ? 'teacher-card-enter' : ''}`}>
-      <div className="group [perspective:1600px]">
+    // Chaque face pilote sa propre hauteur. La face cachée est positionnée en
+    // absolu afin qu'un robot très haut ne crée jamais de vide sous la fiche.
+    <div className={`w-full self-start ${newlyCreated ? 'teacher-card-enter' : ''}`}>
+      <div className="group relative [perspective:1600px]">
       <div
-        className="relative grid transition-transform duration-700 ease-out"
+        className="relative"
         style={{
           transformStyle: 'preserve-3d',
-          transform: flipped ? 'rotateY(180deg)' : 'rotateY(0deg)',
         }}
       >
         {/* ═══ RECTO — le professeur IA (aucun chrome de carte : juste le robot
             qui flotte sur le fond du dashboard ; la carte n'apparaît qu'au
             survol via le flip vers le verso) ═══ */}
         <div
-          className="[grid-area:1/1] relative flex flex-col items-center justify-center"
+          className={`${flipped ? 'absolute inset-x-0 top-0' : 'relative'} flex flex-col items-center justify-center transition-transform duration-300 ease-out motion-reduce:transition-none`}
           style={{
             backfaceVisibility: 'hidden',
             WebkitBackfaceVisibility: 'hidden',
+            transform: flipped ? 'rotateY(-180deg)' : 'rotateY(0deg)',
             pointerEvents: flipped ? 'none' : 'auto',
           }}
         >
@@ -4351,12 +4382,12 @@ function PlatformCard({
 
         {/* ═══ VERSO — la fiche formation (inchangée) ═══ */}
         <div
-          className="[grid-area:1/1] relative overflow-hidden rounded-2xl transition-all duration-300"
+          className={`${flipped ? 'relative' : 'absolute inset-x-0 top-0'} overflow-hidden rounded-2xl transition-transform duration-300 ease-out motion-reduce:transition-none`}
           style={{
             ...faceStyle,
             backfaceVisibility: 'hidden',
             WebkitBackfaceVisibility: 'hidden',
-            transform: 'rotateY(180deg)',
+            transform: flipped ? 'rotateY(0deg)' : 'rotateY(180deg)',
             pointerEvents: flipped ? 'auto' : 'none',
           }}
         >
@@ -4519,135 +4550,46 @@ function PlatformCard({
             l'action lock/unlock cohabite désormais avec la vue où on voit
             les audios (modale "Cours"). Le card reste épuré. */}
 
-        {/* === Group A : tuiles d'actions internes en grille 2×2 ===
-            Layout horizontal compact (icône à gauche, label à droite). Les
-            icônes restent slate au rest pour préserver "The One Voice Rule"
-            de DESIGN.md — le seul signal violet du card body est l'état
-            actif de la tuile Audios quand son panel est déplié. */}
-        <div className="mb-3 grid grid-cols-2 gap-2">
-          {/* PDF — toujours visible (l'overlay couvre le card si !p.active) */}
-          <button
-            onClick={onOpenPdfModal}
-            className="group flex items-center gap-2.5 rounded-lg px-3 py-2.5 text-sm font-medium tracking-tight transition-colors hover:bg-black/5 dark:hover:bg-white/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40"
-            style={{
-              border: `1px solid ${colors.border}`,
-              color: colors.textSecondary,
-            }}
-          >
-            <Icon name="picture_as_pdf" className="text-lg" style={{ color: colors.textMuted }} />
-            <span>PDF</span>
-          </button>
-
-          {/* Heure du cours */}
-          {p.active && (
-            <button
-              onClick={onOpenCourseTimeModal}
-              className="group flex items-center gap-2.5 rounded-lg px-3 py-2.5 text-sm font-medium tracking-tight transition-colors hover:bg-black/5 dark:hover:bg-white/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40"
-              style={{
-                border: `1px solid ${colors.border}`,
-                color: colors.textSecondary,
-              }}
-            >
-              <Icon name="schedule" className="text-lg" style={{ color: colors.textMuted }} />
-              <span>Planning</span>
-            </button>
-          )}
-
-          {/* Audios — l'unique tuile à état actif violet (signal "panel ouvert sous la grille") */}
-          {p.active && (
-            <button
-              onClick={onExpand}
-              className="group flex items-center gap-2.5 rounded-lg px-3 py-2.5 text-sm font-medium tracking-tight transition-colors hover:bg-black/5 dark:hover:bg-white/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40"
-              style={
-                expanded
-                  ? {
-                      backgroundColor: 'rgba(139, 92, 246, 0.10)',
-                      border: '1px solid rgba(139, 92, 246, 0.35)',
-                      color: darkMode ? '#c4b5fd' : '#7c3aed',
-                    }
-                  : {
-                      border: `1px solid ${colors.border}`,
-                      color: colors.textSecondary,
-                    }
-              }
-            >
-              <Icon
-                name="audiotrack"
-                className="text-lg"
-                style={{ color: expanded ? (darkMode ? '#c4b5fd' : '#7c3aed') : colors.textMuted }}
-              />
-              <span>Audios</span>
-            </button>
-          )}
-
-          {/* Gérer les cours */}
-          {p.active && (
-            <button
-              onClick={onOpenCoursFolders}
-              className="group flex items-center gap-2.5 rounded-lg px-3 py-2.5 text-sm font-medium tracking-tight transition-colors hover:bg-black/5 dark:hover:bg-white/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40"
-              style={{
-                border: `1px solid ${colors.border}`,
-                color: colors.textSecondary,
-              }}
-            >
-              <Icon name="folder_special" className="text-lg" style={{ color: colors.textMuted }} />
-              <span>Cours</span>
-            </button>
-          )}
-
-          {/* Élèves — emails utilisés pour les rappels automatiques */}
-          {p.active && (
-            <button
-              onClick={onToggleStudentEmails}
-              className="group flex items-center gap-2.5 rounded-lg px-3 py-2.5 text-sm font-medium tracking-tight transition-colors hover:bg-black/5 dark:hover:bg-white/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40"
-              style={
-                studentsExpanded
-                  ? {
-                      backgroundColor: 'rgba(139, 92, 246, 0.10)',
-                      border: '1px solid rgba(139, 92, 246, 0.35)',
-                      color: darkMode ? '#c4b5fd' : '#7c3aed',
-                    }
-                  : {
-                      border: `1px solid ${colors.border}`,
-                      color: colors.textSecondary,
-                    }
-              }
-            >
-              <Icon
-                name="group"
-                className="text-lg"
-                style={{ color: studentsExpanded ? (darkMode ? '#c4b5fd' : '#7c3aed') : colors.textMuted }}
-              />
-              <span>Élèves</span>
-            </button>
-          )}
-
-          {/* Présence — relevés automatiques et un export Excel par journée */}
-          {p.active && (
-            <button
-              onClick={onToggleAttendance}
-              className="group flex items-center gap-2.5 rounded-lg px-3 py-2.5 text-sm font-medium tracking-tight transition-colors hover:bg-black/5 dark:hover:bg-white/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40"
-              style={
-                attendanceExpanded
-                  ? {
-                      backgroundColor: 'rgba(139, 92, 246, 0.10)',
-                      border: '1px solid rgba(139, 92, 246, 0.35)',
-                      color: darkMode ? '#c4b5fd' : '#7c3aed',
-                    }
-                  : {
-                      border: `1px solid ${colors.border}`,
-                      color: colors.textSecondary,
-                    }
-              }
-            >
-              <Icon
-                name="fact_check"
-                className="text-lg"
-                style={{ color: attendanceExpanded ? (darkMode ? '#c4b5fd' : '#7c3aed') : colors.textMuted }}
-              />
-              <span>Présence</span>
-            </button>
-          )}
+        {/* Barre d'outils de la formation. Les commandes partagent un même
+            cadre afin de former une seule zone fonctionnelle, et non six
+            boutons flottants sans hiérarchie. */}
+        <div
+          className="mb-4 grid grid-cols-2 overflow-hidden rounded-xl"
+          style={{ border: `1px solid ${colors.border}`, backgroundColor: colors.cardBg }}
+        >
+          {actionItems.map((action, index) => {
+            const isActive = Boolean(action.active)
+            return (
+              <button
+                key={action.key}
+                type="button"
+                onClick={action.onClick}
+                aria-pressed={action.expandable ? isActive : undefined}
+                aria-expanded={action.expandable ? isActive : undefined}
+                className="flex min-h-12 items-center gap-2.5 px-3 py-2.5 text-left text-sm font-medium tracking-tight transition-colors hover:bg-black/5 focus-visible:z-10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-violet-500/50 dark:hover:bg-white/5"
+                style={{
+                  backgroundColor: isActive ? 'rgba(139, 92, 246, 0.10)' : 'transparent',
+                  borderTop: index >= 2 ? `1px solid ${colors.border}` : 'none',
+                  borderLeft: index % 2 === 1 ? `1px solid ${colors.border}` : 'none',
+                  color: isActive ? (darkMode ? '#c4b5fd' : '#7c3aed') : colors.textSecondary,
+                }}
+              >
+                <Icon
+                  name={action.icon}
+                  className="text-lg"
+                  style={{ color: isActive ? (darkMode ? '#c4b5fd' : '#7c3aed') : colors.textMuted }}
+                />
+                <span className="min-w-0 flex-1 truncate">{action.label}</span>
+                {action.expandable && (
+                  <Icon
+                    name="expand_more"
+                    className="text-base transition-transform duration-200 motion-reduce:transition-none"
+                    style={{ color: colors.textMuted, transform: isActive ? 'rotate(180deg)' : 'none' }}
+                  />
+                )}
+              </button>
+            )
+          })}
         </div>
 
         {/* Audio list — dépliée pleine largeur sous la grille quand la tuile Audios est active */}
@@ -4722,55 +4664,66 @@ function PlatformCard({
         {/* Emails élèves — liste de destinataires des rappels de cours */}
         {studentsExpanded && p.active && (
           <div
-            className="mb-3 rounded-xl p-3"
+            className="mb-4 rounded-xl p-4"
             style={{ backgroundColor: colors.innerBg, border: `1px solid ${colors.border}` }}
           >
-            <div className="mb-3 flex items-center justify-between gap-3">
-              <span className="text-sm font-semibold" style={{ color: colors.text }}>
-                Emails élèves
-              </span>
-              <span className="text-xs tabular-nums" style={{ color: colors.textMuted }}>
+            <div className="mb-4 flex items-start justify-between gap-4">
+              <div>
+                <h4 className="text-sm font-semibold" style={{ color: colors.text }}>Élèves et invitations</h4>
+                <p className="mt-1 text-xs leading-5" style={{ color: colors.textMuted }}>
+                  Ajoutez uniquement les adresses qui recevront le lien d’accès et les rappels.
+                </p>
+              </div>
+              <span
+                className="flex-shrink-0 rounded-full px-2 py-1 text-[11px] font-semibold tabular-nums"
+                style={{ backgroundColor: colors.cardBg, color: colors.textSecondary, border: `1px solid ${colors.border}` }}
+              >
                 {studentEmails.length}
               </span>
             </div>
 
-            <textarea
-              value={studentEmailDraft}
-              onChange={(e) => onStudentEmailDraftChange(e.target.value)}
-              rows={3}
-              placeholder="prenom@exemple.com, autre@exemple.com"
-              className="mb-2 w-full resize-none rounded-lg px-3 py-2 text-sm outline-none transition-shadow focus:ring-2 focus:ring-violet-500/30"
-              style={{
-                backgroundColor: colors.cardBg,
-                border: `1px solid ${colors.border}`,
-                color: colors.text,
-              }}
-            />
-            <p className="mb-2 text-[11px]" style={{ color: colors.textMuted }}>
-              Jusqu’à 1000 adresses par lot. Vous pouvez ajouter plusieurs lots.
-            </p>
-            <button
-              type="button"
-              onClick={onAddStudentEmails}
-              disabled={!studentEmailDraft.trim() || studentEmailsSaving}
-              className="mb-3 inline-flex items-center gap-2 rounded-lg px-3 py-2 text-xs font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-50"
-              style={{ backgroundColor: '#8B5CF6', color: 'white' }}
-            >
-              {studentEmailsSaving ? (
-                <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-white/40 border-t-white" />
-              ) : (
-                <Icon name="add" className="text-sm" />
-              )}
-              Ajouter
-            </button>
+            <label className="block text-xs font-semibold" style={{ color: colors.textSecondary }}>
+              Adresses e-mail
+              <textarea
+                value={studentEmailDraft}
+                onChange={(e) => onStudentEmailDraftChange(e.target.value)}
+                rows={2}
+                placeholder="prenom@exemple.com, autre@exemple.com"
+                className="mt-2 w-full resize-none rounded-lg px-3 py-2.5 text-sm outline-none transition-shadow placeholder:text-slate-500 focus:ring-2 focus:ring-violet-500/30"
+                style={{
+                  backgroundColor: colors.cardBg,
+                  border: `1px solid ${colors.border}`,
+                  color: colors.text,
+                }}
+              />
+            </label>
+            <div className="mb-4 mt-2 flex flex-wrap items-center justify-between gap-3">
+              <p className="text-[11px] leading-4" style={{ color: colors.textMuted }}>
+                1 000 adresses maximum par ajout.
+              </p>
+              <button
+                type="button"
+                onClick={onAddStudentEmails}
+                disabled={!studentEmailDraft.trim() || studentEmailsSaving}
+                className="inline-flex min-h-10 items-center gap-2 rounded-lg px-3 py-2 text-xs font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40 disabled:cursor-not-allowed disabled:opacity-50"
+                style={{ backgroundColor: '#8B5CF6', color: 'white' }}
+              >
+                {studentEmailsSaving ? (
+                  <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-white/40 border-t-white" />
+                ) : (
+                  <Icon name="person_add" className="text-sm" />
+                )}
+                Ajouter les adresses
+              </button>
+            </div>
 
             {studentEmailsLoading ? (
               <div className="flex items-center justify-center py-4">
                 <div className="h-5 w-5 animate-spin rounded-full border-2" style={{ borderColor: colors.border, borderTopColor: '#8B5CF6' }} />
               </div>
             ) : studentEmails.length === 0 ? (
-              <p className="py-3 text-xs" style={{ color: colors.textMuted }}>
-                Aucun email élève ajouté.
+              <p className="py-2 text-xs" style={{ color: colors.textMuted }}>
+                Aucune adresse ajoutée pour le moment.
               </p>
             ) : (
               <div className="max-h-36 space-y-1 overflow-y-auto pr-1">
@@ -4801,6 +4754,7 @@ function PlatformCard({
               platformId={p.id}
               recipients={studentEmails}
               colors={colors}
+              darkMode={darkMode}
             />
           </div>
         )}
@@ -4856,9 +4810,12 @@ function PlatformCard({
           re-clic remet le robot. Hors du flip pour rester visible des 2 côtés. */}
       <button
         type="button"
-        onClick={() => setFlipped((f) => !f)}
+        onClick={() => {
+          onBeforeFlip?.()
+          window.requestAnimationFrame(() => setFlipped((current) => !current))
+        }}
         aria-label={flipped ? 'Revenir au robot' : 'Voir la fiche formation'}
-        className="mx-auto mt-3 flex items-center gap-1.5 rounded-full px-3.5 py-1.5 text-xs font-medium transition-colors hover:bg-black/5 dark:hover:bg-white/5"
+        className="mx-auto mt-3 flex min-h-11 items-center gap-1.5 rounded-full px-4 py-2 text-xs font-medium transition-colors hover:bg-black/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40 dark:hover:bg-white/5"
         style={{ color: colors.textMuted, border: `1px solid ${colors.border}` }}
       >
         <span>{flipped ? 'Voir le robot' : 'Voir la fiche'}</span>
