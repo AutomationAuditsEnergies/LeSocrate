@@ -814,29 +814,29 @@ export default function HRDashboard() {
     }
   }
 
-  const handleExportAttendance = async (week = null, platformId = attendancePlatformId) => {
+  const handleExportAttendance = async (dailyExport = null, platformId = attendancePlatformId) => {
     if (!platformId) return
+    setAttendanceError('')
     try {
-      const params = week?.week_start
-        ? `?week_start=${encodeURIComponent(week.week_start)}&week_end=${encodeURIComponent(week.week_end || week.week_start)}`
-        : ''
-      const resp = await apiFetch(`/api/hr/platforms/${platformId}/attendance/export${params}`)
+      const endpoint = dailyExport?.id
+        ? `/api/hr/platforms/${platformId}/attendance/exports/${dailyExport.id}`
+        : `/api/hr/platforms/${platformId}/attendance/export?course_date=${encodeURIComponent(attendanceDate)}`
+      const resp = await apiFetch(endpoint)
       if (!resp.ok) {
-        setAttendanceError('Impossible de générer l’export Excel')
+        const payload = await resp.json().catch(() => ({}))
+        setAttendanceError(payload.error || 'Le fichier de cette journée n’est pas encore disponible')
         return
       }
       const blob = await resp.blob()
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
       a.href = url
-      a.download = week?.week_start
-        ? `presences-${platformId}-semaine-${week.week_start}.xlsx`
-        : `presences-${platformId}.xlsx`
+      a.download = dailyExport?.filename || `presences-${platformId}-${attendanceDate}.xlsx`
       a.click()
       URL.revokeObjectURL(url)
     } catch (e) {
       console.error('Erreur export présences:', e)
-      setAttendanceError('Impossible de générer l’export Excel')
+      setAttendanceError('Impossible de télécharger le fichier de présence')
     }
   }
 
@@ -2288,7 +2288,7 @@ function AttendanceRegisterView({
             Présences élèves
           </h2>
           <p className="mt-1 text-xs" style={{ color: colors.textMuted }}>
-            Relevé journalier par élève, consolidé sur toute la durée de la formation.
+            Entrées et sorties relevées automatiquement depuis la salle de cours.
           </p>
         </div>
 
@@ -2351,8 +2351,8 @@ function AttendanceRegisterView({
 
       <div className="mb-4 grid gap-3 sm:grid-cols-3">
         {[
-          ['Élèves', data?.students?.length || 0],
-          ['Relevés enregistrés', totals.saved],
+          ['Participants', data?.students?.length || 0],
+          ['Relevés automatiques', data?.students?.length || 0],
           ['Temps total du jour', formatAttendanceMinutes(totals.minutes)],
         ].map(([label, value]) => (
           <div
@@ -2393,7 +2393,7 @@ function AttendanceRegisterView({
             ) : (data?.students || []).length === 0 ? (
               <tr>
                 <td colSpan={6} className="px-4 py-10 text-center text-sm" style={{ color: colors.textMuted }}>
-                  Aucun compte élève n’est rattaché à cette formation.
+                  Aucune entrée dans la salle n’a été enregistrée pour cette journée.
                 </td>
               </tr>
             ) : (
@@ -2418,7 +2418,7 @@ function AttendanceRegisterView({
                             <input
                               type="time"
                               value={slot.start || ''}
-                              onChange={(e) => updateSlot(student.id, index, 'start', e.target.value)}
+                              readOnly
                               className="w-28 rounded-lg px-2 py-1.5 text-sm outline-none"
                               style={inputStyle}
                             />
@@ -2426,7 +2426,7 @@ function AttendanceRegisterView({
                             <input
                               type="time"
                               value={slot.end || ''}
-                              onChange={(e) => updateSlot(student.id, index, 'end', e.target.value)}
+                              readOnly
                               className="w-28 rounded-lg px-2 py-1.5 text-sm outline-none"
                               style={inputStyle}
                             />
@@ -2434,7 +2434,7 @@ function AttendanceRegisterView({
                               type="button"
                               onClick={() => removeSlot(student.id, index)}
                               aria-label="Retirer le créneau"
-                              className="flex h-8 w-8 items-center justify-center rounded-lg transition-colors hover:bg-rose-500/10"
+                              className="hidden"
                               style={{ color: colors.textMuted, border: `1px solid ${colors.border}` }}
                             >
                               <Icon name="close" className="text-base" />
@@ -2444,7 +2444,7 @@ function AttendanceRegisterView({
                         <button
                           type="button"
                           onClick={() => addSlot(student.id)}
-                          className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition-colors hover:bg-black/5 dark:hover:bg-white/5"
+                          className="hidden"
                           style={{ color: colors.textSecondary, border: `1px solid ${colors.border}` }}
                         >
                           <Icon name="add" className="text-sm" />
@@ -2460,7 +2460,7 @@ function AttendanceRegisterView({
                     <td className="border-b px-4 py-4" style={{ borderColor: colors.border }}>
                       <select
                         value={attendance.status || 'absent'}
-                        onChange={(e) => onUpdateDraft(student.id, { ...attendance, status: e.target.value })}
+                        disabled
                         className="rounded-lg px-3 py-2 text-sm outline-none"
                         style={inputStyle}
                       >
@@ -2475,9 +2475,8 @@ function AttendanceRegisterView({
                     <td className="border-b px-4 py-4" style={{ borderColor: colors.border }}>
                       <input
                         type="text"
-                        value={attendance.notes || ''}
-                        onChange={(e) => onUpdateDraft(student.id, { ...attendance, notes: e.target.value })}
-                        placeholder="Retard, départ anticipé..."
+                        value="Relevé depuis la salle"
+                        readOnly
                         className="w-full rounded-lg px-3 py-2 text-sm outline-none"
                         style={inputStyle}
                       />
@@ -2487,7 +2486,7 @@ function AttendanceRegisterView({
                         type="button"
                         onClick={() => onSaveStudent(student)}
                         disabled={savingStudentId === student.id}
-                        className="rounded-lg px-3.5 py-2 text-xs font-semibold text-white transition-colors disabled:cursor-not-allowed disabled:opacity-60"
+                        className="hidden"
                         style={{ backgroundColor: '#8B5CF6' }}
                       >
                         {savingStudentId === student.id ? 'Enregistrement...' : 'Enregistrer'}
@@ -2530,11 +2529,8 @@ function AttendanceCardPanel({
   data,
   loading,
   error,
-  savingStudentId,
   onCourseDateChange,
   onRefresh,
-  onUpdateDraft,
-  onSaveStudent,
   onExport,
 }) {
   const inputStyle = {
@@ -2543,46 +2539,13 @@ function AttendanceCardPanel({
     border: `1px solid ${colors.border}`,
   }
   const students = data?.students || []
-  const weeks = data?.recent_weeks || []
-  const totals = students.reduce((acc, student) => {
-    acc.minutes += Number(student.attendance?.total_minutes || 0)
-    acc.saved += student.attendance?.source === 'saved' ? 1 : 0
-    return acc
-  }, { minutes: 0, saved: 0 })
+  const dailyExports = data?.daily_exports || []
+  const readyExports = dailyExports.filter((item) => item.status === 'ready')
+  const selectedExport = readyExports.find((item) => item.course_date === courseDate)
 
   const formatDate = (value) => {
     if (!value) return ''
     return new Date(`${value}T00:00:00`).toLocaleDateString('fr-FR')
-  }
-
-  const updateSlot = (studentId, index, field, value) => {
-    onUpdateDraft(studentId, (attendance = {}) => {
-      const slots = [...(attendance.slots || [])]
-      slots[index] = { ...(slots[index] || {}), [field]: value }
-      const total = attendanceMinutes(slots)
-      const nextStatus = total > 0 && attendance.status === 'absent' ? 'present' : attendance.status
-      return { ...attendance, slots, total_minutes: total, status: nextStatus || (total > 0 ? 'present' : 'absent') }
-    })
-  }
-
-  const addSlot = (studentId) => {
-    onUpdateDraft(studentId, (attendance = {}) => ({
-      ...attendance,
-      slots: [...(attendance.slots || []), { start: '09:00', end: '12:00' }],
-    }))
-  }
-
-  const removeSlot = (studentId, index) => {
-    onUpdateDraft(studentId, (attendance = {}) => {
-      const slots = (attendance.slots || []).filter((_, slotIndex) => slotIndex !== index)
-      const total = attendanceMinutes(slots)
-      return {
-        ...attendance,
-        slots,
-        total_minutes: total,
-        status: total > 0 ? (attendance.status || 'present') : 'absent',
-      }
-    })
   }
 
   return (
@@ -2596,17 +2559,19 @@ function AttendanceCardPanel({
             Présence
           </span>
           <p className="mt-0.5 text-xs" style={{ color: colors.textMuted }}>
-            {students.length} élève{students.length > 1 ? 's' : ''} · {totals.saved} relevé{totals.saved > 1 ? 's' : ''} enregistré{totals.saved > 1 ? 's' : ''}
+            {students.length} participant{students.length > 1 ? 's' : ''} · suivi automatique de la salle
           </p>
         </div>
         <button
           type="button"
-          onClick={() => onExport(null)}
-          className="inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-semibold text-white transition-colors"
+          onClick={() => onExport(selectedExport || null)}
+          disabled={!selectedExport}
+          className="inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-semibold text-white transition-colors disabled:cursor-not-allowed disabled:opacity-45"
           style={{ backgroundColor: '#8B5CF6' }}
+          title={selectedExport ? 'Télécharger le relevé de cette journée' : 'Disponible automatiquement le lendemain matin'}
         >
           <Icon name="download" className="text-sm" />
-          Excel complet
+          Excel du jour
         </button>
       </div>
 
@@ -2647,31 +2612,37 @@ function AttendanceCardPanel({
       <div className="mb-3 rounded-lg p-2" style={{ backgroundColor: colors.cardBg, border: `1px solid ${colors.border}` }}>
         <div className="mb-2 flex items-center justify-between gap-2">
           <span className="text-xs font-semibold" style={{ color: colors.text }}>
-            Fichiers Excel par semaine
+            Fichiers Excel par journée
           </span>
           <span className="text-[10px] tabular-nums" style={{ color: colors.textMuted }}>
-            {weeks.length}
+            {readyExports.length}
           </span>
         </div>
-        {weeks.length === 0 ? (
+        {dailyExports.length === 0 ? (
           <p className="py-2 text-xs" style={{ color: colors.textMuted }}>
-            Aucune semaine exportable pour le moment.
+            Le premier fichier apparaîtra ici le lendemain d’une journée de formation, à partir de 6 h.
           </p>
         ) : (
           <div className="max-h-32 space-y-1 overflow-y-auto pr-1">
-            {weeks.map((week) => (
+            {dailyExports.map((dailyExport) => (
               <button
-                key={week.week_start}
+                key={dailyExport.id}
                 type="button"
-                onClick={() => onExport(week)}
-                className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left transition-colors hover:bg-black/5 dark:hover:bg-white/5"
+                onClick={() => dailyExport.status === 'ready' && onExport(dailyExport)}
+                disabled={dailyExport.status !== 'ready'}
+                className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left transition-colors hover:bg-black/5 disabled:cursor-default disabled:opacity-60 dark:hover:bg-white/5"
                 style={{ color: colors.textSecondary, border: `1px solid ${colors.border}` }}
               >
                 <Icon name="table_chart" className="text-sm" style={{ color: colors.textMuted }} />
-                <span className="min-w-0 flex-1 truncate text-xs">
-                  Semaine du {formatDate(week.week_start)} au {formatDate(week.week_end)}
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-xs">Journée du {formatDate(dailyExport.course_date)}</span>
+                  <span className="block text-[10px]" style={{ color: colors.textMuted }}>
+                    {dailyExport.status === 'ready'
+                      ? `${dailyExport.participant_count} participant${dailyExport.participant_count > 1 ? 's' : ''}`
+                      : 'Préparation automatique en attente'}
+                  </span>
                 </span>
-                <Icon name="download" className="text-sm" style={{ color: colors.textMuted }} />
+                <Icon name={dailyExport.status === 'ready' ? 'download' : 'schedule'} className="text-sm" style={{ color: colors.textMuted }} />
               </button>
             ))}
           </div>
@@ -2684,7 +2655,7 @@ function AttendanceCardPanel({
         </div>
       ) : students.length === 0 ? (
         <p className="py-3 text-xs" style={{ color: colors.textMuted }}>
-          Aucun compte élève n’est rattaché à cette formation.
+          Aucune entrée dans la salle n’a été enregistrée pour cette journée.
         </p>
       ) : (
         <div className="max-h-[420px] space-y-2 overflow-y-auto pr-1">
@@ -2711,76 +2682,22 @@ function AttendanceCardPanel({
                   </span>
                 </div>
 
-                <div className="space-y-2">
+                <div className="space-y-1.5">
                   {slots.map((slot, index) => (
-                    <div key={`${student.id}-${index}`} className="flex items-center gap-1.5">
-                      <input
-                        type="time"
-                        value={slot.start || ''}
-                        onChange={(e) => updateSlot(student.id, index, 'start', e.target.value)}
-                        className="min-w-0 flex-1 rounded-lg px-2 py-1.5 text-xs outline-none"
-                        style={inputStyle}
-                      />
-                      <span className="text-xs" style={{ color: colors.textMuted }}>à</span>
-                      <input
-                        type="time"
-                        value={slot.end || ''}
-                        onChange={(e) => updateSlot(student.id, index, 'end', e.target.value)}
-                        className="min-w-0 flex-1 rounded-lg px-2 py-1.5 text-xs outline-none"
-                        style={inputStyle}
-                      />
-                      <button
-                        type="button"
-                        onClick={() => removeSlot(student.id, index)}
-                        className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg transition-colors hover:bg-rose-500/10"
-                        style={{ color: colors.textMuted, border: `1px solid ${colors.border}` }}
-                        aria-label="Retirer le créneau"
-                      >
-                        <Icon name="close" className="text-sm" />
-                      </button>
+                    <div
+                      key={`${student.id}-${index}`}
+                      className="flex items-center gap-2 rounded-md px-2 py-1.5 text-xs tabular-nums"
+                      style={{ backgroundColor: colors.innerBg, color: colors.textSecondary }}
+                    >
+                      <Icon name="login" className="text-sm" style={{ color: colors.textMuted }} />
+                      <span>{slot.start || '—'}</span>
+                      <span style={{ color: colors.textMuted }}>→</span>
+                      <span>{slot.end || '—'}</span>
                     </div>
                   ))}
-
-                  <div className="flex flex-wrap items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => addSlot(student.id)}
-                      className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium transition-colors hover:bg-black/5 dark:hover:bg-white/5"
-                      style={{ color: colors.textSecondary, border: `1px solid ${colors.border}` }}
-                    >
-                      <Icon name="add" className="text-sm" />
-                      Créneau
-                    </button>
-                    <select
-                      value={attendance.status || 'absent'}
-                      onChange={(e) => onUpdateDraft(student.id, { ...attendance, status: e.target.value })}
-                      className="min-w-0 flex-1 rounded-lg px-2.5 py-1.5 text-xs outline-none"
-                      style={inputStyle}
-                    >
-                      {Object.entries(ATTENDANCE_STATUS_LABELS).map(([value, label]) => (
-                        <option key={value} value={value}>{label}</option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <input
-                    type="text"
-                    value={attendance.notes || ''}
-                    onChange={(e) => onUpdateDraft(student.id, { ...attendance, notes: e.target.value })}
-                    placeholder="Retard, départ anticipé..."
-                    className="w-full rounded-lg px-2.5 py-1.5 text-xs outline-none"
-                    style={inputStyle}
-                  />
-
-                  <button
-                    type="button"
-                    onClick={() => onSaveStudent(student)}
-                    disabled={savingStudentId === student.id}
-                    className="w-full rounded-lg px-3 py-2 text-xs font-semibold text-white transition-colors disabled:cursor-not-allowed disabled:opacity-60"
-                    style={{ backgroundColor: '#8B5CF6' }}
-                  >
-                    {savingStudentId === student.id ? 'Enregistrement...' : 'Enregistrer la présence'}
-                  </button>
+                  {slots.length === 0 && (
+                    <p className="text-xs" style={{ color: colors.textMuted }}>Aucun intervalle terminé.</p>
+                  )}
                 </div>
               </div>
             )
@@ -4705,7 +4622,7 @@ function PlatformCard({
             </button>
           )}
 
-          {/* Présence — relevés journaliers et exports Excel hebdomadaires */}
+          {/* Présence — relevés automatiques et un export Excel par journée */}
           {p.active && (
             <button
               onClick={onToggleAttendance}
@@ -4896,11 +4813,8 @@ function PlatformCard({
             data={attendanceData}
             loading={attendanceLoading}
             error={attendanceError}
-            savingStudentId={attendanceSavingStudentId}
             onCourseDateChange={onAttendanceDateChange}
             onRefresh={onRefreshAttendance}
-            onUpdateDraft={onUpdateAttendanceDraft}
-            onSaveStudent={onSaveAttendance}
             onExport={onExportAttendance}
           />
         )}

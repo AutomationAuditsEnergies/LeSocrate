@@ -27,6 +27,7 @@ from services.course_schedule_service import (  # noqa: E402
     run_scheduler_tick as advance_course_schedules,
 )
 from services.scheduled_audio_service import process_due_audio_generations  # noqa: E402
+from services.attendance_service import process_due_attendance_exports  # noqa: E402
 from utils.logger import configure_logging, get_logger  # noqa: E402
 
 
@@ -65,6 +66,7 @@ def run_scheduler_tick_once(*, wait_for_audio: bool = False) -> dict[str, Any]:
             ),
         ),
         ("reminders", process_due_reminders),
+        ("attendance_exports", process_due_attendance_exports),
     )
 
     for name, callback in callbacks:
@@ -101,13 +103,14 @@ def run_scheduler_tick_once(*, wait_for_audio: bool = False) -> dict[str, Any]:
     log = logger.info if healthy else logger.warning
     log(
         "COURSE_SCHEDULER_HEARTBEAT healthy=%s started_at=%s duration_seconds=%s "
-        "schedule=%s audio_j_minus_1=%s reminders=%s",
+        "schedule=%s audio_j_minus_1=%s reminders=%s attendance_exports=%s",
         healthy,
         started_at.isoformat(),
         duration,
         totals.get("schedule", 0),
         totals.get("audio_j_minus_1", 0),
         totals.get("reminders", 0),
+        totals.get("attendance_exports", 0),
     )
     return {
         "healthy": healthy,

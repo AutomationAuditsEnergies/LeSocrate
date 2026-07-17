@@ -89,6 +89,42 @@ export default function Video() {
   }, [])
 
   useEffect(() => {
+    let stopped = false
+    const signalPresence = async ({ keepalive = false } = {}) => {
+      try {
+        const response = await apiFetch('/api/auth/heartbeat', {
+          method: 'POST',
+          keepalive,
+          timeoutMs: keepalive ? 0 : 10000,
+        })
+        const payload = await response.json().catch(() => ({}))
+        if (!stopped && response.ok && payload.token) {
+          localStorage.setItem('auth_token', payload.token)
+        }
+      } catch (error) {
+        if (!stopped && !keepalive) {
+          console.warn('Signal de présence momentanément indisponible', error)
+        }
+      }
+    }
+
+    signalPresence()
+    const interval = window.setInterval(signalPresence, 30000)
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') signalPresence()
+    }
+    const handlePageHide = () => signalPresence({ keepalive: true })
+    document.addEventListener('visibilitychange', handleVisibility)
+    window.addEventListener('pagehide', handlePageHide)
+    return () => {
+      stopped = true
+      window.clearInterval(interval)
+      document.removeEventListener('visibilitychange', handleVisibility)
+      window.removeEventListener('pagehide', handlePageHide)
+    }
+  }, [])
+
+  useEffect(() => {
     if (audioRef.current) {
       audioRef.current.muted = muted
     }

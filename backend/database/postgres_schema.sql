@@ -266,10 +266,57 @@ CREATE TABLE IF NOT EXISTS course_reminder_deliveries (
 CREATE TABLE IF NOT EXISTS logs (
     id BIGSERIAL PRIMARY KEY,
     platform_id BIGINT REFERENCES platform_config(id) ON DELETE SET NULL,
+    course_session_id BIGINT REFERENCES course_sessions(id) ON DELETE SET NULL,
+    recipient_hash TEXT,
     nom TEXT,
     prenom TEXT,
     arrivee TIMESTAMPTZ,
-    depart TIMESTAMPTZ
+    attendance_started_at TIMESTAMPTZ,
+    last_seen_at TIMESTAMPTZ,
+    depart TIMESTAMPTZ,
+    closed_reason TEXT
+);
+
+ALTER TABLE logs ADD COLUMN IF NOT EXISTS course_session_id BIGINT;
+ALTER TABLE logs ADD COLUMN IF NOT EXISTS recipient_hash TEXT;
+ALTER TABLE logs ADD COLUMN IF NOT EXISTS attendance_started_at TIMESTAMPTZ;
+ALTER TABLE logs ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMPTZ;
+ALTER TABLE logs ADD COLUMN IF NOT EXISTS closed_reason TEXT;
+DO $$
+BEGIN
+    ALTER TABLE logs
+        ADD CONSTRAINT logs_course_session_id_fkey
+        FOREIGN KEY (course_session_id) REFERENCES course_sessions(id) ON DELETE SET NULL;
+EXCEPTION
+    WHEN duplicate_object THEN NULL;
+END $$;
+
+CREATE TABLE IF NOT EXISTS attendance_daily_exports (
+    id BIGSERIAL PRIMARY KEY,
+    platform_id BIGINT NOT NULL REFERENCES platform_config(id) ON DELETE CASCADE,
+    course_session_id BIGINT NOT NULL REFERENCES course_sessions(id) ON DELETE CASCADE,
+    course_date DATE NOT NULL,
+    available_at TIMESTAMPTZ NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    claimed_at TIMESTAMPTZ,
+    lease_expires_at TIMESTAMPTZ,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    max_attempts INTEGER NOT NULL DEFAULT 5,
+    next_retry_at TIMESTAMPTZ,
+    container_name TEXT,
+    blob_key TEXT,
+    filename TEXT,
+    size_bytes BIGINT,
+    sha256 TEXT,
+    participant_count INTEGER NOT NULL DEFAULT 0,
+    generated_at TIMESTAMPTZ,
+    last_error TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(course_session_id),
+    CHECK (status IN ('pending', 'claimed', 'retry_scheduled', 'ready', 'dead_lettered')),
+    CHECK (attempts >= 0),
+    CHECK (max_attempts > 0)
 );
 
 CREATE TABLE IF NOT EXISTS video_visits (
@@ -738,6 +785,15 @@ CREATE INDEX IF NOT EXISTS idx_course_reminder_deliveries_recipient
 CREATE INDEX IF NOT EXISTS idx_course_reminder_deliveries_lookup
     ON course_reminder_deliveries(session_id, rule_id, recipient_id);
 CREATE INDEX IF NOT EXISTS idx_logs_platform_arrivee ON logs(platform_id, arrivee);
+CREATE INDEX IF NOT EXISTS idx_logs_session_attendance
+    ON logs(course_session_id, attendance_started_at);
+CREATE INDEX IF NOT EXISTS idx_logs_open_presence
+    ON logs(last_seen_at)
+    WHERE attendance_started_at IS NOT NULL AND depart IS NULL;
+CREATE INDEX IF NOT EXISTS idx_attendance_daily_exports_due
+    ON attendance_daily_exports(status, available_at, next_retry_at, lease_expires_at);
+CREATE INDEX IF NOT EXISTS idx_attendance_daily_exports_platform_date
+    ON attendance_daily_exports(platform_id, course_date DESC);
 CREATE INDEX IF NOT EXISTS idx_video_visits_platform ON video_visits(platform_id);
 CREATE INDEX IF NOT EXISTS idx_video_visits_log ON video_visits(log_id);
 CREATE INDEX IF NOT EXISTS idx_student_profiles_platform ON student_profiles(platform_id);
@@ -828,6 +884,7 @@ ALTER TABLE course_reminder_rules ENABLE ROW LEVEL SECURITY;
 ALTER TABLE course_reminder_rule_recipients ENABLE ROW LEVEL SECURITY;
 ALTER TABLE course_reminder_deliveries ENABLE ROW LEVEL SECURITY;
 ALTER TABLE logs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE attendance_daily_exports ENABLE ROW LEVEL SECURITY;
 ALTER TABLE video_visits ENABLE ROW LEVEL SECURITY;
 ALTER TABLE student_accounts ENABLE ROW LEVEL SECURITY;
 ALTER TABLE student_profiles ENABLE ROW LEVEL SECURITY;

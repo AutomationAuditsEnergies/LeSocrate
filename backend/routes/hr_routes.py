@@ -1,5 +1,6 @@
 # hr_routes.py - Routes du Dashboard RH (centre de contrôle multi-plateformes)
 import json
+import io
 import os
 import re
 import time
@@ -40,6 +41,7 @@ from repositories.hr_write_repository import (
     resolve_postgres_module_clone_source,
     set_postgres_platform_status,
 )
+from repositories import attendance_repository as attendance_repo
 from repositories.center_workspace_repository import (
     complete_center_onboarding,
     get_center_onboarding_state,
@@ -76,6 +78,10 @@ from services.course_schedule_service import (
     update_course_schedule,
 )
 from services.export_service import generate_attendance_excel_export
+from services.attendance_service import (
+    download_daily_attendance_excel,
+    get_attendance_dashboard,
+)
 from services.scheduled_audio_service import (
     process_due_audio_generations,
     retry_scheduled_audio_generation,
@@ -2888,6 +2894,17 @@ def create_hr_blueprint(socketio):
             return denied
         try:
             course_date = _parse_course_date(request.args.get("course_date"))
+            if schedule_store_is_postgres():
+                center_account_id = (
+                    session.get("admin_account_id")
+                    if session.get("admin_account_type") == "training_center"
+                    else None
+                )
+                return jsonify(get_attendance_dashboard(
+                    platform_id,
+                    course_date,
+                    center_account_id=center_account_id,
+                )), 200
             conn = get_db_connection()
             cursor = conn.cursor()
             _ensure_student_attendance_records(cursor)
@@ -3046,6 +3063,8 @@ def create_hr_blueprint(socketio):
                 "recent_dates": recent_dates,
                 "recent_weeks": recent_weeks,
             }), 200
+        except LookupError as exc:
+            return jsonify({"success": False, "error": str(exc)}), 404
         except ValueError as exc:
             return jsonify({"success": False, "error": str(exc)}), 400
         except Exception as e:
@@ -3057,6 +3076,11 @@ def create_hr_blueprint(socketio):
         denied = _require_admin()
         if denied:
             return denied
+        if schedule_store_is_postgres():
+            return jsonify({
+                "success": False,
+                "error": "Les présences sont enregistrées automatiquement depuis la salle de cours.",
+            }), 405
         try:
             data = request.get_json(silent=True) or {}
             course_date = _parse_course_date(data.get("course_date"))
@@ -3135,6 +3159,28 @@ def create_hr_blueprint(socketio):
         if denied:
             return denied
         try:
+            if schedule_store_is_postgres():
+                center_account_id = (
+                    session.get("admin_account_id")
+                    if session.get("admin_account_type") == "training_center"
+                    else None
+                )
+                if not attendance_repo.get_accessible_platform(platform_id, center_account_id):
+                    return jsonify({"success": False, "error": "Plateforme introuvable"}), 404
+                course_date = _parse_course_date(request.args.get("course_date"))
+                export_row = attendance_repo.get_ready_daily_export_for_date(platform_id, course_date)
+                if not export_row:
+                    return jsonify({
+                        "success": False,
+                        "error": "Le fichier de cette journée sera disponible le lendemain matin.",
+                    }), 404
+                excel_bytes = download_daily_attendance_excel(export_row)
+                return send_file(
+                    io.BytesIO(excel_bytes),
+                    as_attachment=True,
+                    download_name=export_row["filename"],
+                    mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                )
             conn = get_db_connection()
             cursor = conn.cursor()
             _ensure_student_attendance_records(cursor)
@@ -3194,6 +3240,37 @@ def create_hr_blueprint(socketio):
         except Exception as e:
             logger.error(f"❌ Erreur export attendance P{platform_id}: {e}")
             return jsonify({"success": False, "error": str(e)}), 500
+
+    @hr_bp.route("/api/hr/platforms/<int:platform_id>/attendance/exports/<int:export_id>", methods=["GET"])
+    def download_platform_attendance_export(platform_id, export_id):
+        denied = _require_admin()
+        if denied:
+            return denied
+        try:
+            center_account_id = (
+                session.get("admin_account_id")
+                if session.get("admin_account_type") == "training_center"
+                else None
+            )
+            if not attendance_repo.get_accessible_platform(platform_id, center_account_id):
+                return jsonify({"success": False, "error": "Plateforme introuvable"}), 404
+            export_row = attendance_repo.get_daily_export(export_id, platform_id=platform_id)
+            if not export_row or export_row.get("status") != "ready":
+                return jsonify({"success": False, "error": "Fichier de présence indisponible"}), 404
+            excel_bytes = download_daily_attendance_excel(export_row)
+            return send_file(
+                io.BytesIO(excel_bytes),
+                as_attachment=True,
+                download_name=export_row["filename"],
+                mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+        except Exception:
+            logger.exception(
+                "❌ Téléchargement présence impossible P%s export=%s",
+                platform_id,
+                export_id,
+            )
+            return jsonify({"success": False, "error": "Téléchargement momentanément indisponible"}), 500
 
     @hr_bp.route("/api/hr/platforms/<int:platform_id>/student-emails", methods=["GET"])
     def get_platform_student_emails(platform_id):

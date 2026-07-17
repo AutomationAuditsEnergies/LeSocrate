@@ -340,6 +340,33 @@ class AuthPostgresRuntimeTest(unittest.TestCase):
         close_all.assert_called_once()
         self.socketio.emit.assert_called_once()
 
+    def test_room_heartbeat_starts_presence_and_reissues_token_after_reconnect(self):
+        recipient_hash = "c" * 64
+        with self.client.session_transaction() as student_session:
+            student_session.update({
+                "nom": "Dupuis",
+                "prenom": "Thomas",
+                "log_id": 94,
+                "platform_id": 5,
+                "course_session_id": 42,
+                "recipient_hash": recipient_hash,
+            })
+
+        with patch.object(
+            auth_routes,
+            "record_attendance_heartbeat",
+            return_value={"log_id": 105, "reopened": True},
+        ) as heartbeat:
+            response = self.client.post("/api/auth/heartbeat")
+
+        self.assertEqual(response.status_code, 200, response.get_json())
+        self.assertTrue(response.get_json()["reopened"])
+        heartbeat.assert_called_once()
+        replacement = verify_auth_token("student", response.get_json()["token"])
+        self.assertEqual(replacement["log_id"], 105)
+        self.assertEqual(replacement["course_session_id"], 42)
+        self.assertEqual(replacement["recipient_hash"], recipient_hash)
+
 
 if __name__ == "__main__":
     unittest.main()

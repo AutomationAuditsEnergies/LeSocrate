@@ -591,20 +591,41 @@ def upsert_student_profile_with_id(profile):
 
 
 def upsert_log(log_row):
+    normalized = {
+        "course_session_id": None,
+        "recipient_hash": None,
+        "attendance_started_at": None,
+        "last_seen_at": None,
+        "closed_reason": None,
+        **dict(log_row),
+    }
     with get_postgres_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                INSERT INTO logs (id, platform_id, nom, prenom, arrivee, depart)
-                VALUES (%(id)s, %(platform_id)s, %(nom)s, %(prenom)s, %(arrivee)s, %(depart)s)
+                INSERT INTO logs (
+                    id, platform_id, course_session_id, recipient_hash,
+                    nom, prenom, arrivee, attendance_started_at,
+                    last_seen_at, depart, closed_reason
+                )
+                VALUES (
+                    %(id)s, %(platform_id)s, %(course_session_id)s, %(recipient_hash)s,
+                    %(nom)s, %(prenom)s, %(arrivee)s, %(attendance_started_at)s,
+                    %(last_seen_at)s, %(depart)s, %(closed_reason)s
+                )
                 ON CONFLICT (id) DO UPDATE SET
                     platform_id = EXCLUDED.platform_id,
+                    course_session_id = EXCLUDED.course_session_id,
+                    recipient_hash = EXCLUDED.recipient_hash,
                     nom = EXCLUDED.nom,
                     prenom = EXCLUDED.prenom,
                     arrivee = EXCLUDED.arrivee,
-                    depart = EXCLUDED.depart
+                    attendance_started_at = EXCLUDED.attendance_started_at,
+                    last_seen_at = EXCLUDED.last_seen_at,
+                    depart = EXCLUDED.depart,
+                    closed_reason = EXCLUDED.closed_reason
                 """,
-                log_row,
+                normalized,
             )
 
 
@@ -615,15 +636,31 @@ def create_log(log_row):
     Postgres allocate the identifier.  That avoids coupling a production log
     id to a process-local SQLite sequence.
     """
+    normalized = {
+        "course_session_id": None,
+        "recipient_hash": None,
+        "attendance_started_at": None,
+        "last_seen_at": None,
+        "closed_reason": None,
+        **dict(log_row),
+    }
     with get_postgres_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                INSERT INTO logs (platform_id, nom, prenom, arrivee, depart)
-                VALUES (%(platform_id)s, %(nom)s, %(prenom)s, %(arrivee)s, %(depart)s)
+                INSERT INTO logs (
+                    platform_id, course_session_id, recipient_hash,
+                    nom, prenom, arrivee, attendance_started_at,
+                    last_seen_at, depart, closed_reason
+                )
+                VALUES (
+                    %(platform_id)s, %(course_session_id)s, %(recipient_hash)s,
+                    %(nom)s, %(prenom)s, %(arrivee)s, %(attendance_started_at)s,
+                    %(last_seen_at)s, %(depart)s, %(closed_reason)s
+                )
                 RETURNING id
                 """,
-                log_row,
+                normalized,
             )
             row = cur.fetchone()
             if not row:
@@ -636,8 +673,83 @@ def update_log_depart(log_id, depart):
         return False
     with get_postgres_connection() as conn:
         with conn.cursor() as cur:
-            cur.execute("UPDATE logs SET depart = %s WHERE id = %s", (depart, log_id))
+            cur.execute(
+                """
+                UPDATE logs
+                SET depart = %s,
+                    last_seen_at = COALESCE(last_seen_at, %s),
+                    closed_reason = COALESCE(closed_reason, 'explicit_logout')
+                WHERE id = %s
+                """,
+                (depart, depart, log_id),
+            )
             return cur.rowcount > 0
+
+
+def record_attendance_heartbeat(log_id, observed_at):
+    """Start/touch room presence, reopening as a new interval after a timeout."""
+    if not log_id:
+        return None
+    with get_postgres_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, platform_id, course_session_id, recipient_hash, nom, prenom, depart
+                FROM logs
+                WHERE id = %s
+                FOR UPDATE
+                """,
+                (int(log_id),),
+            )
+            row = cur.fetchone()
+            if not row:
+                return None
+            if row.get("depart") is None:
+                cur.execute(
+                    """
+                    UPDATE logs
+                    SET attendance_started_at = COALESCE(attendance_started_at, %s),
+                        last_seen_at = %s
+                    WHERE id = %s
+                    RETURNING id, attendance_started_at, last_seen_at
+                    """,
+                    (observed_at, observed_at, int(log_id)),
+                )
+                touched = cur.fetchone()
+                return {
+                    "log_id": int(touched["id"]),
+                    "attendance_started_at": touched["attendance_started_at"],
+                    "last_seen_at": touched["last_seen_at"],
+                    "reopened": False,
+                }
+
+            cur.execute(
+                """
+                INSERT INTO logs (
+                    platform_id, course_session_id, recipient_hash, nom, prenom,
+                    arrivee, attendance_started_at, last_seen_at
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                RETURNING id, attendance_started_at, last_seen_at
+                """,
+                (
+                    row.get("platform_id"),
+                    row.get("course_session_id"),
+                    row.get("recipient_hash"),
+                    row.get("nom"),
+                    row.get("prenom"),
+                    observed_at,
+                    observed_at,
+                    observed_at,
+                ),
+            )
+            reopened = cur.fetchone()
+            return {
+                "log_id": int(reopened["id"]),
+                "attendance_started_at": reopened["attendance_started_at"],
+                "last_seen_at": reopened["last_seen_at"],
+                "reopened": True,
+            }
 
 
 def close_open_logs(depart):

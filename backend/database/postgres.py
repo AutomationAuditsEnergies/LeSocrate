@@ -121,6 +121,29 @@ PIPELINE_REQUIRED_SCHEMA = {
         "max_attempts",
         "next_retry_at",
     },
+    "logs": {
+        "id",
+        "platform_id",
+        "course_session_id",
+        "recipient_hash",
+        "attendance_started_at",
+        "last_seen_at",
+        "depart",
+        "closed_reason",
+    },
+    "attendance_daily_exports": {
+        "id",
+        "platform_id",
+        "course_session_id",
+        "course_date",
+        "available_at",
+        "status",
+        "lease_expires_at",
+        "attempts",
+        "blob_key",
+        "participant_count",
+        "generated_at",
+    },
     "ai_teacher_orders": {
         "id",
         "public_id",
@@ -201,6 +224,8 @@ PIPELINE_REQUIRED_INDEXES = {
     "uq_pipeline_work_items_active_resource_scope",
     "uq_course_reminder_rules_system_key",
     "idx_course_reminder_deliveries_lookup",
+    "idx_logs_open_presence",
+    "idx_attendance_daily_exports_due",
     "idx_formation_modules_canonical_reuse",
 }
 

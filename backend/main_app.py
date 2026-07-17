@@ -226,6 +226,8 @@ def populate_session_from_token():
             session["platform_id"] = user.get("platform_id", 1)
             if user.get("course_session_id") is not None:
                 session["course_session_id"] = int(user["course_session_id"])
+            if user.get("recipient_hash"):
+                session["recipient_hash"] = str(user["recipient_hash"])
 
     # Injecter platform_id depuis le header si absent de la session
     if "platform_id" not in session:
@@ -412,6 +414,7 @@ def _embedded_course_scheduler_loop():
     """Run the durable occurrence/audio scheduler on every instance safely."""
     from services.course_schedule_service import process_due_reminders, run_scheduler_tick
     from services.scheduled_audio_service import process_due_audio_generations
+    from services.attendance_service import process_due_attendance_exports
 
     interval = max(30.0, float(os.getenv("COURSE_SCHEDULER_INTERVAL_SECONDS", "300")))
     _COURSE_SCHEDULER_STATE["started"] = True
@@ -425,13 +428,15 @@ def _embedded_course_scheduler_loop():
                     or os.getenv("PLATFORM_1_FRONTEND_URL")
                 )
             )
+            attendance_results = process_due_attendance_exports()
             _COURSE_SCHEDULER_STATE["last_success_monotonic"] = time.monotonic()
             _COURSE_SCHEDULER_STATE["last_error"] = None
             logger.info(
-                "COURSE_SCHEDULER_TICK_COMPLETED schedules=%s audio_candidates=%s reminders=%s",
+                "COURSE_SCHEDULER_TICK_COMPLETED schedules=%s audio_candidates=%s reminders=%s attendance_exports=%s",
                 len(schedule_results or []),
                 len(audio_results or []),
                 len(reminder_results or []),
+                len(attendance_results or []),
             )
         except Exception as exc:
             _COURSE_SCHEDULER_STATE["last_error"] = str(exc)[:300]

@@ -20,6 +20,7 @@ from repositories.core_repository import (
     create_log,
     get_student_account,
     get_student_profile,
+    record_attendance_heartbeat,
     update_log_depart,
     upsert_log,
     upsert_student_profile,
@@ -52,6 +53,7 @@ def _create_student_session(
     platform_id,
     *,
     course_session_id=None,
+    recipient_hash=None,
 ):
     session["nom"] = nom
     session["prenom"] = prenom
@@ -61,11 +63,17 @@ def _create_student_session(
         session["course_session_id"] = course_session_id
     else:
         session.pop("course_session_id", None)
+    if recipient_hash:
+        session["recipient_hash"] = str(recipient_hash)
+    else:
+        session.pop("recipient_hash", None)
     arrivee_time = datetime.now(FRANCE_TZ).strftime("%Y-%m-%d %H:%M:%S")
     session["arrivee"] = arrivee_time
 
     log_row = {
         "platform_id": platform_id,
+        "course_session_id": course_session_id,
+        "recipient_hash": str(recipient_hash) if recipient_hash else None,
         "nom": nom,
         "prenom": prenom,
         "arrivee": arrivee_time,
@@ -91,6 +99,8 @@ def _create_student_session(
     }
     if course_session_id is not None:
         token_payload["course_session_id"] = course_session_id
+    if recipient_hash:
+        token_payload["recipient_hash"] = str(recipient_hash)
     token = issue_auth_token("student", token_payload)
     if not _postgres_only_runtime() and postgres_enabled():
         try:
@@ -223,7 +233,12 @@ def _resolve_course_invitation(platform_id, token):
         active_hours = max(1.0, float(os.environ.get("COURSE_SESSION_ACTIVE_HOURS", "12")))
     except (TypeError, ValueError):
         active_hours = 12.0
-    return course_session if now <= scheduled_at + timedelta(hours=active_hours) else None
+    if now > scheduled_at + timedelta(hours=active_hours):
+        return None
+    return {
+        **course_session,
+        "invitation_recipient_hash": payload["recipient"],
+    }
 
 
 def _course_invitation_valid(platform_id, token):
@@ -441,12 +456,18 @@ def create_auth_blueprint(socketio):
                 if authenticated_course_session and authenticated_course_session.get("id") is not None
                 else None
             )
+            recipient_hash = (
+                authenticated_course_session.get("invitation_recipient_hash")
+                if authenticated_course_session
+                else None
+            )
             log_id, token = _create_student_session(
                 cursor,
                 nom,
                 prenom,
                 platform_id,
                 course_session_id=course_session_id,
+                recipient_hash=recipient_hash,
             )
             if conn is not None:
                 conn.commit()
@@ -626,6 +647,44 @@ def create_auth_blueprint(socketio):
                 jsonify({"success": False, "error": "Erreur lors de la déconnexion"}),
                 500,
             )
+
+    @auth_bp.route("/api/auth/heartbeat", methods=["POST"])
+    def attendance_heartbeat():
+        """Record actual room presence independently from the login form."""
+        try:
+            log_id = session.get("log_id")
+            if not log_id or not session.get("nom"):
+                return jsonify({"success": False, "error": "Session élève requise"}), 401
+            observed_at = datetime.now(FRANCE_TZ)
+            heartbeat = record_attendance_heartbeat(log_id, observed_at)
+            if not heartbeat:
+                return jsonify({"success": False, "error": "Session de présence introuvable"}), 404
+
+            replacement_token = None
+            if int(heartbeat["log_id"]) != int(log_id):
+                session["log_id"] = int(heartbeat["log_id"])
+                token_payload = {
+                    "nom": session["nom"],
+                    "prenom": session.get("prenom", ""),
+                    "log_id": int(heartbeat["log_id"]),
+                    "platform_id": int(session.get("platform_id", 1)),
+                }
+                if session.get("course_session_id") is not None:
+                    token_payload["course_session_id"] = int(session["course_session_id"])
+                if session.get("recipient_hash"):
+                    token_payload["recipient_hash"] = session["recipient_hash"]
+                replacement_token = issue_auth_token("student", token_payload)
+
+            return jsonify({
+                "success": True,
+                "log_id": int(heartbeat["log_id"]),
+                "reopened": bool(heartbeat.get("reopened")),
+                "token": replacement_token,
+                "observed_at": observed_at.isoformat(),
+            }), 200
+        except Exception:
+            logger.exception("❌ Signal de présence impossible")
+            return jsonify({"success": False, "error": "Présence momentanément indisponible"}), 500
 
     @auth_bp.route("/deconnexion-auto", methods=["POST"])
     def deconnexion_auto():
