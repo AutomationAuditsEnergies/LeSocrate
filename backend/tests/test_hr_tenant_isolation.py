@@ -80,6 +80,13 @@ class HrTenantIsolationRouteTest(unittest.TestCase):
                 2,
             ),
             (
+                "get",
+                "/api/hr/platforms/2/course-materials",
+                {},
+                "platform",
+                2,
+            ),
+            (
                 "delete",
                 "/api/hr/platforms/2/sessions/91",
                 {},

@@ -16,21 +16,6 @@ const Icon = ({ name, className = '' }) => (
   <span className={`material-icons ${className}`}>{name}</span>
 )
 
-const hasCrCdTitle = (title = '') => /\bCRCD\b/i.test(title)
-const hasEcTitle = (title = '') => /\bEC\b/i.test(title)
-const normalizeRncpCode = (value = '') => String(value).trim().replace(/^RNCP\s*/i, '')
-const getPlatformThumbnail = (platform = {}) => {
-  const title = platform.name || ''
-  const sourceTitle = platform.source_tp_name || ''
-  const rncpCode = normalizeRncpCode(platform.source_rncp_code || platform.rncp_code)
-
-  if (rncpCode === '35304' || hasCrCdTitle(title) || hasCrCdTitle(sourceTitle)) {
-    return { src: '/tp-crcd-thumbnail.svg', alt: 'TP CRCD' }
-  }
-  if (hasEcTitle(title) || hasEcTitle(sourceTitle)) return { src: '/tp-ec-thumbnail.svg', alt: 'TP EC' }
-  return null
-}
-
 // Chaque plateforme a son robot prof IA attitré : un PNG transparent pré-coloré
 // (variantes de teinte cuites depuis l'asset rose détouré) + une couleur de halo
 // assortie. Déterministe sur platform_id → P1 garde toujours le même robot.
@@ -3795,6 +3780,26 @@ function PDFModal({ platform, onClose, onUpload, onDelete, darkMode, uploading }
   const [iframeKey, setIframeKey] = useState(0)
   const fileInputRef = useRef(null)
   const prevUploading = useRef(uploading)
+  const [courseMaterials, setCourseMaterials] = useState([])
+  const [courseMaterialsLoading, setCourseMaterialsLoading] = useState(true)
+  const [courseMaterialsError, setCourseMaterialsError] = useState('')
+
+  useEffect(() => {
+    let cancelled = false
+    apiFetch(`/api/hr/platforms/${platform.id}/course-materials`)
+      .then(async (response) => {
+        const data = await response.json()
+        if (!response.ok || !data.success) throw new Error(data.error || 'Chargement impossible')
+        if (!cancelled) setCourseMaterials(Array.isArray(data.materials) ? data.materials : [])
+      })
+      .catch((error) => {
+        if (!cancelled) setCourseMaterialsError(error.message || 'Chargement impossible')
+      })
+      .finally(() => {
+        if (!cancelled) setCourseMaterialsLoading(false)
+      })
+    return () => { cancelled = true }
+  }, [platform.id])
 
   useEffect(() => {
     if (prevUploading.current && !uploading) {
@@ -3847,6 +3852,49 @@ function PDFModal({ platform, onClose, onUpload, onDelete, darkMode, uploading }
 
         {/* Modal Body */}
         <div className="p-6 overflow-y-auto" style={{ maxHeight: 'calc(90vh - 80px)' }}>
+          <section className="mb-6 rounded-xl border p-4" style={{ borderColor: '#e2e8f0', backgroundColor: '#F8F7F5' }}>
+            <div className="mb-3 flex items-start justify-between gap-4">
+              <div>
+                <h4 className="text-sm font-semibold" style={{ color: '#111418' }}>Supports de cours générés</h4>
+                <p className="mt-1 text-xs leading-5" style={{ color: '#64748b' }}>
+                  Un PDF sans balises techniques est créé avec les audios de chaque journée lors de la préparation H-24.
+                </p>
+              </div>
+              {!courseMaterialsLoading && (
+                <span className="flex-shrink-0 text-xs tabular-nums" style={{ color: '#64748b' }}>
+                  {courseMaterials.length} document{courseMaterials.length > 1 ? 's' : ''}
+                </span>
+              )}
+            </div>
+            {courseMaterialsLoading ? (
+              <p className="py-3 text-sm" style={{ color: '#64748b' }}>Chargement des supports…</p>
+            ) : courseMaterialsError ? (
+              <p className="py-3 text-sm" style={{ color: '#b91c1c' }}>{courseMaterialsError}</p>
+            ) : courseMaterials.length === 0 ? (
+              <p className="py-3 text-sm" style={{ color: '#64748b' }}>Aucun support généré pour le moment.</p>
+            ) : (
+              <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                {courseMaterials.map((material) => (
+                  <a
+                    key={material.session_id}
+                    href={material.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex items-center justify-between gap-3 rounded-lg bg-white px-3 py-2.5 text-sm transition-colors hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40"
+                    style={{ border: '1px solid #e2e8f0', color: '#334155', textDecoration: 'none' }}
+                  >
+                    <span className="min-w-0">
+                      <span className="block truncate font-medium">Journée {material.session_index}</span>
+                      <span className="block truncate text-xs" style={{ color: '#64748b' }}>
+                        {material.scheduled_at ? new Date(material.scheduled_at).toLocaleDateString('fr-FR') : 'Date non renseignée'}
+                      </span>
+                    </span>
+                    <Icon name="open_in_new" className="flex-shrink-0 text-base" style={{ color: '#64748b' }} />
+                  </a>
+                ))}
+              </div>
+            )}
+          </section>
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             {/* PDF Viewer */}
             <div className="flex flex-col">
@@ -4292,7 +4340,6 @@ function PlatformCard({
   onArchivePlatform, archiving = false, newlyCreated = false, retryingPreparation = false, onRetryPreparation,
 }) {
   const pdfInputId = `pdf-input-${p.id}`
-  const platformThumbnail = getPlatformThumbnail(p)
   const [deleteHover, setDeleteHover] = useState(false)
   const [flipped, setFlipped] = useState(false)
   const theme = getRobotTheme(p.id, p.teacher_color)
@@ -4582,24 +4629,6 @@ function PlatformCard({
       )}
 
       <div className="p-6">
-        {platformThumbnail && (
-          <div
-            className="mb-5 overflow-hidden rounded-xl"
-            style={{
-              aspectRatio: '16 / 7.2',
-              border: '1px solid #E4E4E4',
-              backgroundColor: '#F8F7F5',
-            }}
-          >
-            <img
-              src={platformThumbnail.src}
-              alt={platformThumbnail.alt}
-              className="h-full w-full object-cover"
-              draggable={false}
-            />
-          </div>
-        )}
-
         {/* Header — SKU chip + name + status pill, optional meta line below */}
         <div className="mb-5 space-y-2">
           <div className="flex min-w-0 items-center gap-2">
@@ -4619,14 +4648,12 @@ function PlatformCard({
               {p.name}
             </h3>
           </div>
-          {p.active && (
+          {p.active && p.audio_count != null && (
             <p
               className="text-xs"
               style={{ color: colors.textMuted, fontVariantNumeric: 'tabular-nums' }}
             >
-              {p.audio_count == null ? (
-                <span>Audios consultables dans Cours</span>
-              ) : (p.audio_count || 0) > 0 ? (
+              {(p.audio_count || 0) > 0 ? (
                 <>
                   <span className="font-semibold" style={{ color: colors.textSecondary }}>
                     {p.audio_count}
@@ -4976,23 +5003,6 @@ function PlatformCard({
             }}
           >
             <span>Accéder au cours</span>
-            <Icon name="open_in_new" className="text-base" style={{ color: colors.textMuted }} />
-          </a>
-        )}
-
-        {/* Accès au dashboard centre sur le domaine de la plateforme. */}
-        {p.active && (
-          <a
-            href={`${p.frontend_url || window.location.origin}/dashboard-centre?p=${p.id}`}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="flex w-full items-center justify-between rounded-md px-3 py-2 text-sm transition-colors hover:bg-black/5 dark:hover:bg-white/5"
-            style={{
-              color: colors.textSecondary,
-              textDecoration: 'none',
-            }}
-          >
-            <span>Dashboard centre</span>
             <Icon name="open_in_new" className="text-base" style={{ color: colors.textMuted }} />
           </a>
         )}

@@ -22,6 +22,7 @@ from repositories.course_schedule_repository import (
     add_explicit_course_reminder_recipients,
     delete_explicit_course_reminder_recipient,
     list_course_schedule_dashboard_states,
+    list_course_sessions,
     list_explicit_course_reminder_recipients,
     schedule_store_is_postgres,
 )
@@ -3648,6 +3649,36 @@ def create_hr_blueprint(socketio):
                 session_id,
             )
             return jsonify({"success": False, "error": "La reprise audio n'a pas pu démarrer"}), 500
+
+    @hr_bp.route(
+        "/api/hr/platforms/<int:platform_id>/course-materials",
+        methods=["GET"],
+    )
+    def list_platform_course_materials(platform_id):
+        """List H-24 PDF supports generated for this platform's occurrences."""
+        denied = _require_admin()
+        if denied:
+            return denied
+        try:
+            from services.daily_course_pdf_service import (
+                list_daily_course_pdf_materials,
+            )
+
+            sessions = list_course_sessions(int(platform_id), limit=1000)
+            materials = list_daily_course_pdf_materials(
+                int(platform_id),
+                sessions,
+            )
+            return jsonify({"success": True, "materials": materials}), 200
+        except Exception:
+            logger.exception(
+                "COURSE_PDF_LIST_FAILED platform_id=%s",
+                platform_id,
+            )
+            return jsonify({
+                "success": False,
+                "error": "Les supports PDF ne peuvent pas être chargés",
+            }), 500
 
     @hr_bp.route(
         "/api/hr/platforms/<int:platform_id>/sessions/<int:session_id>/postpone/preview",
