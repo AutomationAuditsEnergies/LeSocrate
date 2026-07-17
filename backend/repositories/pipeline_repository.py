@@ -3424,7 +3424,7 @@ def get_content_job_docx_state(content_job_id: int) -> dict[str, Any] | None:
 def get_formation_module_for_pipeline_job(job_id: int) -> dict[str, Any] | None:
     ph = _placeholder()
     query = f"""
-        SELECT id, version, status
+        SELECT id, version, status, center_account_id, source_platform_id
         FROM formation_modules
         WHERE source_pipeline_job_id = {ph}
     """

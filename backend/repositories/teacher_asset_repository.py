@@ -50,7 +50,7 @@ def get_module_asset_identity(module_id: int, center_account_id: int) -> dict[st
                 FROM formation_modules m
                 WHERE m.id = %s
                   AND m.center_account_id = %s
-                  AND m.status = 'validated'
+                  AND m.status IN ('draft', 'validated')
                 """,
                 (int(module_id), int(center_account_id)),
             )
@@ -77,7 +77,9 @@ def register_module_assets(
             cur.execute(
                 """
                 SELECT 1 FROM formation_modules
-                WHERE id = %s AND center_account_id = %s AND status = 'validated'
+                WHERE id = %s
+                  AND center_account_id = %s
+                  AND status IN ('draft', 'validated')
                 FOR UPDATE
                 """,
                 (module_id, center_id),

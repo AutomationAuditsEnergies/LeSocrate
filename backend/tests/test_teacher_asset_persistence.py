@@ -60,16 +60,20 @@ class _BlobService:
 
 class TeacherAssetPersistenceTest(unittest.TestCase):
     def test_audio_is_snapshotted_once_under_the_teacher_namespace(self):
-        source_path = "platform-12/folder-91/playlist/cours_9h00_9h45.mp3"
+        source_paths = [
+            f"platform-12/folder-91/{relative_path}"
+            for relative_path in sorted(service.CANONICAL_AUDIO_PLAYLIST_PATHS)
+        ]
         audio_store = {
-            source_path: SimpleNamespace(
-                name=source_path,
+            path: SimpleNamespace(
+                name=path,
                 size=12,
                 metadata={"sha256": "source-sha"},
                 content_settings=SimpleNamespace(content_type="audio/mpeg"),
                 etag="source-etag",
                 blob_tier="Hot",
             )
+            for path in source_paths
         }
         blob_service = _BlobService(_Container({}), _Container(audio_store))
         registered = []
@@ -107,8 +111,9 @@ class TeacherAssetPersistenceTest(unittest.TestCase):
         )
         self.assertTrue(result["audio_ready"])
         self.assertIn(canonical_path, audio_store)
-        self.assertEqual(registered[0]["blob_path"], canonical_path)
-        self.assertEqual(registered[0]["logical_key"], f"audiostts:folder:91:playlist/cours_9h00_9h45.mp3")
+        registered_by_key = {asset["logical_key"]: asset for asset in registered}
+        logical_key = "audiostts:folder:91:playlist/cours_9h00_9h45.mp3"
+        self.assertEqual(registered_by_key[logical_key]["blob_path"], canonical_path)
         self.assertEqual(audio_store[canonical_path].size, len(b"first-second"))
         self.assertEqual(audio_store[canonical_path].metadata["canonical"], "true")
 
@@ -154,6 +159,32 @@ class TeacherAssetPersistenceTest(unittest.TestCase):
         ):
             with self.assertRaisesRegex(RuntimeError, "manifeste audio incomplet"):
                 formation_routes._finalize_audio_ready_state(9, "fish_audio")
+
+    def test_each_scheduled_day_is_persisted_before_global_validation(self):
+        module = {
+            "id": 44,
+            "status": "draft",
+            "center_account_id": 7,
+            "source_platform_id": 12,
+        }
+        with patch(
+            "repositories.pipeline_repository.get_formation_module_for_pipeline_job",
+            return_value=module,
+        ), patch(
+            "services.teacher_asset_service.ensure_module_asset_manifest",
+            return_value={"registered": 19, "folder_audio_ready": True, "audio_ready": False},
+        ) as ensure_manifest:
+            result = formation_routes._persist_daily_teacher_audio_assets(9, 91)
+
+        self.assertTrue(result["persisted"])
+        self.assertFalse(result["audio_ready"])
+        ensure_manifest.assert_called_once_with(
+            module_id=44,
+            center_account_id=7,
+            source_platform_id=12,
+            source_folder_ids=[91],
+            force=True,
+        )
 
 
 if __name__ == "__main__":

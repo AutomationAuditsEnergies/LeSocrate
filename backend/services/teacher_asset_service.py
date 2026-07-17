@@ -11,6 +11,7 @@ from typing import Any, Iterable
 from azure.core.exceptions import ResourceExistsError
 
 from repositories.teacher_asset_repository import (
+    CANONICAL_AUDIO_PLAYLIST_PATHS,
     get_module_asset_identity,
     get_module_audio_manifest_readiness,
     module_asset_count,
@@ -137,7 +138,8 @@ def ensure_module_asset_manifest(
     if not asset_namespace:
         raise ValueError("Namespace durable du professeur IA absent")
 
-    for source_folder_id in sorted({int(folder_id) for folder_id in source_folder_ids}):
+    requested_folder_ids = sorted({int(folder_id) for folder_id in source_folder_ids})
+    for source_folder_id in requested_folder_ids:
         prefix = f"platform-{source_platform_id}/folder-{source_folder_id}/"
         for container_name in (CONTAINER_DOCUMENTS, CONTAINER_AUDIOS):
             container = blob_service.get_container_client(container_name)
@@ -178,6 +180,29 @@ def ensure_module_asset_manifest(
                     "storage_tier": str(getattr(manifest_blob, "blob_tier", None) or "Hot"),
                 })
 
+    playlist_paths_by_folder: dict[int, set[str]] = {}
+    for asset in manifest:
+        if asset.get("asset_kind") != "audio":
+            continue
+        logical_key = str(asset.get("logical_key") or "")
+        relative_path = logical_key.split(":", 3)[-1].lstrip("/")
+        if relative_path in CANONICAL_AUDIO_PLAYLIST_PATHS:
+            playlist_paths_by_folder.setdefault(int(asset["source_folder_id"]), set()).add(
+                relative_path
+            )
+    incomplete_folders = [
+        folder_id
+        for folder_id in requested_folder_ids
+        if not CANONICAL_AUDIO_PLAYLIST_PATHS.issubset(
+            playlist_paths_by_folder.get(folder_id, set())
+        )
+    ]
+    if incomplete_folders:
+        raise RuntimeError(
+            "Snapshot audio professeur incomplet pour le(s) dossier(s) : "
+            + ", ".join(str(folder_id) for folder_id in incomplete_folders)
+        )
+
     registered = register_module_assets(module_id, center_id, manifest)
     logger.info(
         "TEACHER_ASSET_MANIFEST_READY module_id=%s center_id=%s assets=%s",
@@ -190,6 +215,7 @@ def ensure_module_asset_manifest(
         "module_id": module_id,
         "registered": registered,
         "reused_manifest": False,
+        "folder_audio_ready": True,
         "audio_ready": bool(readiness.get("ready")),
         "audio_asset_count": int(readiness.get("audio_asset_count") or 0),
         "required_folder_count": int(readiness.get("required_folder_count") or 0),

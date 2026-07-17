@@ -2751,6 +2751,27 @@ def _finalize_text_ready_state(job_id: int) -> dict:
     return result
 
 
+def _persist_daily_teacher_audio_assets(job_id: int, folder_id: int) -> dict:
+    """Snapshot one J-1 playlist as soon as that training day is complete."""
+    from repositories.pipeline_repository import get_formation_module_for_pipeline_job
+    from services.teacher_asset_service import ensure_module_asset_manifest
+
+    module = get_formation_module_for_pipeline_job(int(job_id))
+    if not module or module.get("center_account_id") is None:
+        return {"persisted": False, "reason": "module_centre_absent"}
+    source_platform_id = int(module.get("source_platform_id") or 0)
+    if source_platform_id <= 0:
+        raise RuntimeError("Plateforme source absente du professeur IA durable")
+    manifest = ensure_module_asset_manifest(
+        module_id=int(module["id"]),
+        center_account_id=int(module["center_account_id"]),
+        source_platform_id=source_platform_id,
+        source_folder_ids=[int(folder_id)],
+        force=True,
+    )
+    return {"persisted": True, **manifest}
+
+
 def _finalize_scheduled_audio_module_if_ready(
     job_id: int,
     voice_type: str,
@@ -3085,6 +3106,7 @@ def start_folder_audio_generation(
             n_dirty = _count_dirty_segments_for_job(job_id)
             finalize_result = None
             scheduled_readiness = None
+            daily_asset_manifest = None
             if schedule_session_id:
                 from repositories.course_schedule_repository import (
                     complete_audio_generation_session,
@@ -3097,6 +3119,13 @@ def start_folder_audio_generation(
                     int(schedule_session_id),
                     schedule_claim_started_at,
                     ownership_state=ownership_state,
+                )
+                # The day's 19 MP3 files become durable before the occurrence
+                # can be marked complete. A storage/manifest failure therefore
+                # follows the normal retry path without regenerating valid MP3.
+                daily_asset_manifest = _persist_daily_teacher_audio_assets(
+                    int(job_id),
+                    int(folder_id),
                 )
                 scheduled_readiness = _finalize_scheduled_audio_module_if_ready(
                     int(job_id),
@@ -3141,6 +3170,7 @@ def start_folder_audio_generation(
                         else finalize_result
                     ),
                     "scheduled_readiness": scheduled_readiness,
+                    "daily_asset_manifest": daily_asset_manifest,
                     "generated": result_audio.get("generated") if isinstance(result_audio, dict) else None,
                     "skipped": result_audio.get("skipped") if isinstance(result_audio, dict) else None,
                     "publish": publish_result,
