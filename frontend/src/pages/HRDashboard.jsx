@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useMemo } from 'react'
+import { createPortal } from 'react-dom'
 import { apiFetch } from '../api'
 import CoursFoldersModal from '../components/CoursFolders'
 import { getHiddenPipelineProgress, getTeacherPreparation } from '../teacherPreparation'
@@ -2562,8 +2563,7 @@ function AttendanceCardPanel({
 
   return (
     <div
-      className="mb-4 rounded-xl p-4"
-      style={{ backgroundColor: colors.innerBg, border: `1px solid ${colors.border}` }}
+      className="p-1 sm:p-2"
     >
       <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
         <div>
@@ -2727,6 +2727,92 @@ function AttendanceCardPanel({
         </div>
       )}
     </div>
+  )
+}
+
+function CardToolModal({
+  dialogId,
+  title,
+  subtitle,
+  icon,
+  onClose,
+  colors,
+  darkMode,
+  widthClass = 'max-w-3xl',
+  children,
+}) {
+  const onCloseRef = useRef(onClose)
+
+  useEffect(() => {
+    onCloseRef.current = onClose
+  }, [onClose])
+
+  useEffect(() => {
+    const previousOverflow = document.body.style.overflow
+    const previousActiveElement = document.activeElement
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape') onCloseRef.current()
+    }
+    document.body.style.overflow = 'hidden'
+    window.addEventListener('keydown', handleKeyDown)
+    return () => {
+      document.body.style.overflow = previousOverflow
+      window.removeEventListener('keydown', handleKeyDown)
+      previousActiveElement?.focus?.()
+    }
+  }, [])
+
+  return createPortal(
+    <div
+      className="postpone-dialog-backdrop fixed inset-0 z-[80] flex items-end justify-center bg-slate-950/50 sm:items-center sm:p-5"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) onClose()
+      }}
+    >
+      <section
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={`${dialogId}-title`}
+        className={`postpone-dialog-sheet flex max-h-[92vh] w-full ${widthClass} flex-col overflow-hidden rounded-t-2xl sm:rounded-2xl`}
+        style={{
+          backgroundColor: colors.cardBg,
+          border: `1px solid ${colors.border}`,
+          boxShadow: darkMode ? '0 20px 60px rgba(0, 0, 0, 0.45)' : '0 20px 60px rgba(15, 23, 42, 0.18)',
+        }}
+      >
+        <header className="flex items-start justify-between gap-4 border-b px-5 py-4 sm:px-6" style={{ borderColor: colors.border }}>
+          <div className="flex min-w-0 items-start gap-3">
+            <span
+              className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl"
+              style={{ backgroundColor: colors.innerBg, color: darkMode ? '#c4b5fd' : '#7c3aed' }}
+              aria-hidden="true"
+            >
+              <Icon name={icon} className="text-xl" />
+            </span>
+            <div className="min-w-0">
+              <h2 id={`${dialogId}-title`} className="text-lg font-semibold tracking-tight" style={{ color: colors.text }}>
+                {title}
+              </h2>
+              <p className="mt-1 truncate text-xs" style={{ color: colors.textMuted }}>{subtitle}</p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            autoFocus
+            aria-label={`Fermer ${title}`}
+            className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-lg transition-colors hover:bg-black/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40 dark:hover:bg-white/5"
+            style={{ color: colors.textMuted }}
+          >
+            <Icon name="close" className="text-xl" />
+          </button>
+        </header>
+        <div className="min-h-0 flex-1 overflow-y-auto px-5 py-5 sm:px-6">
+          {children}
+        </div>
+      </section>
+    </div>,
+    document.body,
   )
 }
 
@@ -4225,8 +4311,8 @@ function PlatformCard({
       { key: 'planning', label: 'Planning', icon: 'schedule', onClick: onOpenCourseTimeModal },
       { key: 'audios', label: 'Audios', icon: 'audiotrack', onClick: onExpand, active: expanded },
       { key: 'courses', label: 'Cours', icon: 'folder_special', onClick: onOpenCoursFolders },
-      { key: 'students', label: 'Élèves', icon: 'group', onClick: onToggleStudentEmails, active: studentsExpanded, expandable: true },
-      { key: 'attendance', label: 'Présence', icon: 'fact_check', onClick: onToggleAttendance, active: attendanceExpanded, expandable: true },
+      { key: 'students', label: 'Élèves', icon: 'group', onClick: onToggleStudentEmails, active: studentsExpanded, opensDialog: true },
+      { key: 'attendance', label: 'Présence', icon: 'fact_check', onClick: onToggleAttendance, active: attendanceExpanded, opensDialog: true },
     ] : []),
   ]
 
@@ -4564,8 +4650,7 @@ function PlatformCard({
                 key={action.key}
                 type="button"
                 onClick={action.onClick}
-                aria-pressed={action.expandable ? isActive : undefined}
-                aria-expanded={action.expandable ? isActive : undefined}
+                aria-haspopup={action.opensDialog ? 'dialog' : undefined}
                 className="flex min-h-12 items-center gap-2.5 px-3 py-2.5 text-left text-sm font-medium tracking-tight transition-colors hover:bg-black/5 focus-visible:z-10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-violet-500/50 dark:hover:bg-white/5"
                 style={{
                   backgroundColor: isActive ? 'rgba(139, 92, 246, 0.10)' : 'transparent',
@@ -4580,11 +4665,11 @@ function PlatformCard({
                   style={{ color: isActive ? (darkMode ? '#c4b5fd' : '#7c3aed') : colors.textMuted }}
                 />
                 <span className="min-w-0 flex-1 truncate">{action.label}</span>
-                {action.expandable && (
+                {action.opensDialog && (
                   <Icon
-                    name="expand_more"
-                    className="text-base transition-transform duration-200 motion-reduce:transition-none"
-                    style={{ color: colors.textMuted, transform: isActive ? 'rotate(180deg)' : 'none' }}
+                    name="chevron_right"
+                    className="text-base"
+                    style={{ color: colors.textMuted }}
                   />
                 )}
               </button>
@@ -4663,10 +4748,16 @@ function PlatformCard({
 
         {/* Emails élèves — liste de destinataires des rappels de cours */}
         {studentsExpanded && p.active && (
-          <div
-            className="mb-4 rounded-xl p-4"
-            style={{ backgroundColor: colors.innerBg, border: `1px solid ${colors.border}` }}
+          <CardToolModal
+            dialogId={`students-modal-${p.id}`}
+            title="Élèves et rappels"
+            subtitle={`${p.teacher_name || p.name} · Plateforme ${p.center_platform_number || p.id}`}
+            icon="group"
+            onClose={onToggleStudentEmails}
+            colors={colors}
+            darkMode={darkMode}
           >
+          <div className="p-1 sm:p-2">
             <div className="mb-4 flex items-start justify-between gap-4">
               <div>
                 <h4 className="text-sm font-semibold" style={{ color: colors.text }}>Élèves et invitations</h4>
@@ -4757,20 +4848,32 @@ function PlatformCard({
               darkMode={darkMode}
             />
           </div>
+          </CardToolModal>
         )}
 
         {attendanceExpanded && p.active && (
-          <AttendanceCardPanel
+          <CardToolModal
+            dialogId={`attendance-modal-${p.id}`}
+            title="Présence et relevés"
+            subtitle={`${p.teacher_name || p.name} · Plateforme ${p.center_platform_number || p.id}`}
+            icon="fact_check"
+            onClose={onToggleAttendance}
             colors={colors}
             darkMode={darkMode}
-            courseDate={attendanceDate}
-            data={attendanceData}
-            loading={attendanceLoading}
-            error={attendanceError}
-            onCourseDateChange={onAttendanceDateChange}
-            onRefresh={onRefreshAttendance}
-            onExport={onExportAttendance}
-          />
+            widthClass="max-w-4xl"
+          >
+            <AttendanceCardPanel
+              colors={colors}
+              darkMode={darkMode}
+              courseDate={attendanceDate}
+              data={attendanceData}
+              loading={attendanceLoading}
+              error={attendanceError}
+              onCourseDateChange={onAttendanceDateChange}
+              onRefresh={onRefreshAttendance}
+              onExport={onExportAttendance}
+            />
+          </CardToolModal>
         )}
 
         {/* === Divider entre groupes A (boxed) et B (linky externes) === */}
