@@ -8,8 +8,11 @@ import os
 from pathlib import PurePosixPath
 from typing import Any, Iterable
 
+from azure.core.exceptions import ResourceExistsError
+
 from repositories.teacher_asset_repository import (
     get_module_asset_identity,
+    get_module_audio_manifest_readiness,
     module_asset_count,
     register_module_assets,
     resolve_registered_blob_path,
@@ -24,6 +27,38 @@ from utils.logger import get_logger
 
 
 logger = get_logger(__name__)
+
+
+def _snapshot_blob_once(container: Any, source_path: str, destination_path: str) -> Any:
+    """Stream one private blob into its immutable teacher namespace once.
+
+    The stream stays chunked, so a long training day never has to fit in worker
+    memory. ``overwrite=False`` also protects the first validated version when
+    a retry races with another worker.
+    """
+    source = container.get_blob_client(source_path)
+    destination = container.get_blob_client(destination_path)
+    if destination.exists():
+        return destination.get_blob_properties()
+
+    source_props = source.get_blob_properties()
+    metadata = dict(getattr(source_props, "metadata", None) or {})
+    metadata.update({"canonical": "true", "source_layout": "platform-folder-v1"})
+    downloader = source.download_blob(max_concurrency=2)
+    try:
+        destination.upload_blob(
+            downloader.chunks(),
+            overwrite=False,
+            length=int(getattr(source_props, "size", 0) or 0) or None,
+            content_settings=getattr(source_props, "content_settings", None),
+            metadata=metadata,
+            max_concurrency=2,
+        )
+    except ResourceExistsError:
+        # Idempotent concurrent finalization: the winning writer owns the
+        # immutable copy and this worker simply inventories it.
+        pass
+    return destination.get_blob_properties()
 
 
 def _asset_kind(container_name: str, relative_path: str) -> str:
@@ -63,11 +98,11 @@ def ensure_module_asset_manifest(
     source_folder_ids: Iterable[int],
     force: bool = False,
 ) -> dict[str, Any]:
-    """Record the canonical source blobs once, without copying them per reuse.
+    """Snapshot and register the immutable assets owned by one AI teacher.
 
-    The first version deliberately supports existing ``platform-X/folder-Y``
-    blobs. New readers resolve through this manifest, so paths can later move to
-    the module namespace without changing promotions or course schedules.
+    Audio is copied once from the mutable pipeline layout into the module's
+    durable namespace. Every future promotion or centre resolves that same
+    canonical blob through the manifest; no new TTS generation is required.
     """
     module_id = int(module_id)
     center_id = int(center_account_id)
@@ -78,12 +113,29 @@ def ensure_module_asset_manifest(
 
     existing_count = module_asset_count(module_id)
     if existing_count and not force:
-        return {"module_id": module_id, "registered": existing_count, "reused_manifest": True}
+        readiness = get_module_audio_manifest_readiness(module_id)
+        if readiness.get("ready"):
+            return {
+                "module_id": module_id,
+                "registered": existing_count,
+                "reused_manifest": True,
+                "audio_ready": True,
+                "audio_asset_count": int(readiness.get("audio_asset_count") or 0),
+                "required_folder_count": int(readiness.get("required_folder_count") or 0),
+            }
+        logger.warning(
+            "TEACHER_ASSET_MANIFEST_REPAIR module_id=%s assets=%s",
+            module_id,
+            existing_count,
+        )
 
     blob_service = _get_blob_service_client()
     manifest: list[dict[str, Any]] = []
     voice_profile = identity.get("voice_type")
     generator_version = os.getenv("TEACHER_ASSET_GENERATOR_VERSION", "pipeline-v1")
+    asset_namespace = str(identity.get("asset_namespace") or "").strip().strip("/")
+    if not asset_namespace:
+        raise ValueError("Namespace durable du professeur IA absent")
 
     for source_folder_id in sorted({int(folder_id) for folder_id in source_folder_ids}):
         prefix = f"platform-{source_platform_id}/folder-{source_folder_id}/"
@@ -93,23 +145,37 @@ def ensure_module_asset_manifest(
                 relative_path = str(blob.name)[len(prefix):]
                 if not relative_path:
                     continue
+                manifest_blob = blob
+                blob_path = str(blob.name)
+                source_layout = "platform-folder-v1"
+                if container_name == CONTAINER_AUDIOS:
+                    blob_path = (
+                        f"{asset_namespace}/folders/{source_folder_id}/{relative_path}"
+                    )
+                    manifest_blob = _snapshot_blob_once(
+                        container,
+                        str(blob.name),
+                        blob_path,
+                    )
+                    source_layout = "teacher-module-v1"
                 manifest.append({
                     "source_folder_id": source_folder_id,
                     "asset_kind": _asset_kind(container_name, relative_path),
                     "logical_key": f"{container_name}:folder:{source_folder_id}:{relative_path}",
                     "container_name": container_name,
-                    "blob_path": str(blob.name),
-                    "content_sha256": _blob_sha256(blob),
-                    "byte_size": int(getattr(blob, "size", 0) or 0),
-                    "mime_type": _content_type(blob, relative_path),
+                    "blob_path": blob_path,
+                    "content_sha256": _blob_sha256(manifest_blob),
+                    "byte_size": int(getattr(manifest_blob, "size", 0) or 0),
+                    "mime_type": _content_type(manifest_blob, relative_path),
                     "language": "fr-FR",
                     "voice_profile": voice_profile if container_name == CONTAINER_AUDIOS else None,
                     "generator_version": generator_version,
                     "generation_params_json": json.dumps({
-                        "etag": str(getattr(blob, "etag", "") or ""),
-                        "source_layout": "platform-folder-v1",
+                        "etag": str(getattr(manifest_blob, "etag", "") or ""),
+                        "source_layout": source_layout,
+                        "source_blob_path": str(blob.name),
                     }),
-                    "storage_tier": str(getattr(blob, "blob_tier", None) or "Hot"),
+                    "storage_tier": str(getattr(manifest_blob, "blob_tier", None) or "Hot"),
                 })
 
     registered = register_module_assets(module_id, center_id, manifest)
@@ -119,7 +185,15 @@ def ensure_module_asset_manifest(
         center_id,
         registered,
     )
-    return {"module_id": module_id, "registered": registered, "reused_manifest": False}
+    readiness = get_module_audio_manifest_readiness(module_id)
+    return {
+        "module_id": module_id,
+        "registered": registered,
+        "reused_manifest": False,
+        "audio_ready": bool(readiness.get("ready")),
+        "audio_asset_count": int(readiness.get("audio_asset_count") or 0),
+        "required_folder_count": int(readiness.get("required_folder_count") or 0),
+    }
 
 
 def resolve_folder_blob_path(

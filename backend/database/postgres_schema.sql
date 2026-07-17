@@ -663,10 +663,10 @@ WHERE pc.id = m.source_platform_id
       OR m.asset_namespace IS NULL
   );
 
--- Registre des ressources canoniques d'une version de professeur IA. Les
--- promotions pointent vers formation_modules et course_clone_folder_map : elles
--- ne recopient jamais ces blobs. Les chemins legacy platform-X/folder-Y restent
--- valides pendant la migration et sont enregistrés ici comme origine durable.
+-- Registre des ressources canoniques d'une version de professeur IA. Les MP3
+-- validés sont copiés une seule fois dans asset_namespace, puis les promotions
+-- pointent vers formation_modules et course_clone_folder_map sans les recopier.
+-- Les documents historiques peuvent rester référencés par leur chemin source.
 CREATE TABLE IF NOT EXISTS formation_module_assets (
     id BIGSERIAL PRIMARY KEY,
     module_id BIGINT NOT NULL REFERENCES formation_modules(id) ON DELETE RESTRICT,

@@ -332,6 +332,15 @@ class HrTenantIsolationRouteTest(unittest.TestCase):
                 self.assertEqual(response.status_code, 200)
                 belongs.assert_not_called()
 
+    def test_retired_backup_unlock_route_has_no_storage_side_effect(self):
+        self._login(account_type="superadmin", account_id=None)
+        with patch("routes.hr_routes.HR_ENABLED", True):
+            response = self.client.post("/api/hr/platforms/1/backup-and-unlock")
+
+        self.assertEqual(response.status_code, 410)
+        self.assertFalse(response.get_json()["success"])
+        self.assertEqual(self.socketio.started, [])
+
     def test_shared_tts_prompt_is_superadmin_only(self):
         self._login()
         with patch("routes.hr_routes.HR_ENABLED", True), patch(

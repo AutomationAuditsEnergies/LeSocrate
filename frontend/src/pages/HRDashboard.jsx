@@ -1,7 +1,6 @@
 import { useState, useEffect, useRef, useMemo } from 'react'
 import { apiFetch } from '../api'
 import CoursFoldersModal from '../components/CoursFolders'
-import SlideToConfirm, { BackupPipeline } from '../components/SlideToConfirm'
 import { getHiddenPipelineProgress, getTeacherPreparation } from '../teacherPreparation'
 import { getAudioStatusMeta, getNextCourseSession, scheduleSelectionIsValid } from '../courseSchedule'
 import {
@@ -61,7 +60,6 @@ export default function HRDashboard() {
   const [playingAudio, setPlayingAudio] = useState(null)
   const [pdfUploading, setPdfUploading] = useState(null)
   const [audiosLoading, setAudiosLoading] = useState(null)
-  const [backupJobs, setBackupJobs] = useState({})
   const [darkMode, setDarkMode] = useState(false)
   const [showAudiosModal, setShowAudiosModal] = useState(false)
   const [selectedPlatformId, setSelectedPlatformId] = useState(null)
@@ -117,7 +115,6 @@ export default function HRDashboard() {
   //                    Permet de valider les étapes en aval en ~5 min au lieu de 30-60.
   const [autoPilotMode, setAutoPilotMode] = useState('api')  // 'api' | 'api_deepseek' | 'claude_code' | 'test'
   const [testDocs, setTestDocs] = useState([])  // File[] uploadés pour le mode test
-  const backupPollingRef = useRef({})
   const creatingRef = useRef(false)
   const creationRequestRef = useRef({ fingerprint: '', id: '' })
   const audioRef = useRef(null)
@@ -471,51 +468,6 @@ export default function HRDashboard() {
   }, [darkMode])
 
   // ─── Actions ─────────────────────────────────────────────────────────
-  const handleLock = async (platformId) => {
-    try {
-      const resp = await apiFetch(`/api/hr/platforms/${platformId}/toggle-lock`, {
-        method: 'POST',
-      })
-      const data = await resp.json()
-      if (data.success) fetchPlatforms()
-    } catch (e) {
-      console.error('Erreur lock:', e)
-    }
-  }
-
-  const handleBackupAndUnlock = async (platformId) => {
-    try {
-      const resp = await apiFetch(`/api/hr/platforms/${platformId}/backup-and-unlock`, {
-        method: 'POST',
-      })
-      const data = await resp.json()
-      if (!data.success) {
-        setBackupJobs(prev => ({ ...prev, [platformId]: { step_status: 'error', error: data.error } }))
-        return
-      }
-      setBackupJobs(prev => ({ ...prev, [platformId]: { step: 1, step_status: 'running', progress: 0, total: 0 } }))
-      startBackupPolling(platformId)
-    } catch (e) {
-      console.error('Erreur backup-and-unlock:', e)
-    }
-  }
-
-  const startBackupPolling = (platformId) => {
-    if (backupPollingRef.current[platformId]) clearInterval(backupPollingRef.current[platformId])
-    backupPollingRef.current[platformId] = setInterval(async () => {
-      try {
-        const resp = await apiFetch(`/api/hr/platforms/${platformId}/backup-status`)
-        const data = await resp.json()
-        if (!data.success) return
-        setBackupJobs(prev => ({ ...prev, [platformId]: data }))
-        if (data.step_status === 'done' || data.step_status === 'error') {
-          clearInterval(backupPollingRef.current[platformId])
-          if (data.step_status === 'done') fetchPlatforms()
-        }
-      } catch { /* silencieux */ }
-    }, 1500)
-  }
-
   const handleExpandPlatform = (platformId) => {
     setSelectedPlatformId(platformId)
     setShowAudiosModal(true)
@@ -1476,24 +1428,15 @@ export default function HRDashboard() {
       </div>
 
       {/* Modal Audios */}
-      {showAudiosModal && selectedPlatformId && (() => {
-        const audiosPlatform = platforms.find(p => p.id === selectedPlatformId)
-        return (
-          <AudiosModal
-            platformId={selectedPlatformId}
-            audios={platformAudios[selectedPlatformId] || []}
-            loading={audiosLoading === selectedPlatformId}
-            onClose={() => setShowAudiosModal(false)}
-            darkMode={darkMode}
-            recorderUrl={`${(audiosPlatform?.frontend_url || window.location.origin)}/recorder?p=${selectedPlatformId}`}
-            onRefreshAudios={() => fetchAudios(selectedPlatformId)}
-            uploadLocked={!!audiosPlatform?.upload_locked}
-            backupJob={backupJobs[selectedPlatformId] || null}
-            onLock={() => handleLock(selectedPlatformId)}
-            onBackupAndUnlock={() => handleBackupAndUnlock(selectedPlatformId)}
-          />
-        )
-      })()}
+      {showAudiosModal && selectedPlatformId && (
+        <AudiosModal
+          platformId={selectedPlatformId}
+          audios={platformAudios[selectedPlatformId] || []}
+          loading={audiosLoading === selectedPlatformId}
+          onClose={() => setShowAudiosModal(false)}
+          onRefreshAudios={() => fetchAudios(selectedPlatformId)}
+        />
+      )}
 
       {/* Modal PDF */}
       {showPdfModal && selectedPlatform && (
@@ -3486,22 +3429,8 @@ function AudiosModal({
   audios,
   loading,
   onClose,
-  darkMode,
-  recorderUrl,
   onRefreshAudios,
-  uploadLocked = false,
-  backupJob = null,
-  onLock = () => {},
-  onBackupAndUnlock = () => {},
 }) {
-  // État dérivé du backup job pour BackupPipeline.
-  const isBackupRunning = backupJob && backupJob.step_status === 'running'
-  const isBackupDone = backupJob && backupJob.step_status === 'done'
-  const isBackupError = backupJob && backupJob.step_status === 'error'
-  // Mini colors object pour BackupPipeline (qui en attend une forme précise).
-  const pipelineColors = darkMode
-    ? { innerBg: '#0f172a', border: '#334155', cardBg: '#1e293b', text: '#f1f5f9', textMuted: '#64748b' }
-    : { innerBg: '#F8F7F5', border: '#e2e8f0', cardBg: '#ffffff', text: '#0f172a', textMuted: '#64748b' }
   const EXPECTED_AUDIOS = [
     'cours_9h00_9h45.mp3',
     'qa_9h45_9h55.mp3',
@@ -3593,50 +3522,28 @@ function AudiosModal({
         onClick={(e) => e.stopPropagation()}
       >
         {/* Modal Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b" style={{ borderColor: '#e2e8f0', backgroundColor: '#137fec' }}>
-          <div className="flex items-center gap-3 text-white">
-            <Icon name="audiotrack" className="text-2xl" />
-            <h3 className="text-lg font-bold">AUDIOS FORMATION</h3>
+        <div className="flex items-center justify-between gap-4 border-b border-slate-200 bg-white px-6 py-4">
+          <div className="flex items-center gap-3">
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-violet-600 text-white">
+              <Icon name="audiotrack" className="text-xl" />
+            </div>
+            <div>
+              <h3 className="text-lg font-semibold text-slate-900">Audios de la formation</h3>
+              <p className="text-sm text-slate-500">Playlist diffusée pendant la journée de cours</p>
+            </div>
           </div>
           <div className="flex items-center gap-2">
-            <div style={{ width: 190 }}>
-              <SlideToConfirm
-                compact
-                locked={uploadLocked}
-                onConfirm={uploadLocked ? onBackupAndUnlock : onLock}
-                disabled={isBackupRunning}
-                onDark
-              />
-            </div>
             <button
               onClick={handleOpenFillModal}
-              className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium transition-colors"
-              style={{ backgroundColor: 'rgba(255,255,255,0.2)', color: 'white' }}
-              onMouseEnter={e => e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.3)'}
-              onMouseLeave={e => e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.2)'}
+              className="flex min-h-10 items-center gap-2 rounded-lg bg-violet-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-violet-700"
             >
               <Icon name="drive_folder_upload" className="text-base" />
               <span>Remplir avec les audios</span>
             </button>
-            <a
-              href={recorderUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium transition-colors"
-              style={{ backgroundColor: 'rgba(255,255,255,0.2)', color: 'white' }}
-              onMouseEnter={e => e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.3)'}
-              onMouseLeave={e => e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.2)'}
-            >
-              <Icon name="upload" className="text-base" />
-              <span>Uploader</span>
-            </a>
             <button
               onClick={onClose}
               aria-label="Fermer"
-              className="flex h-9 w-9 items-center justify-center rounded-lg text-white transition-colors active:scale-[0.98]"
-              style={{ backgroundColor: 'transparent' }}
-              onMouseEnter={e => e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.16)'}
-              onMouseLeave={e => e.currentTarget.style.backgroundColor = 'transparent'}
+              className="flex h-10 w-10 items-center justify-center rounded-lg text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-900 active:scale-[0.98]"
             >
               <Icon name="close" className="text-xl" />
             </button>
@@ -3655,7 +3562,7 @@ function AudiosModal({
                 onClick={e => e.stopPropagation()}
               >
                 <div className="flex items-center gap-3 mb-5">
-                  <div className="flex h-10 w-10 items-center justify-center rounded-xl" style={{ backgroundColor: '#137fec' }}>
+                  <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-violet-600">
                     <Icon name="drive_folder_upload" className="text-white text-xl" />
                   </div>
                   <h4 className="text-base font-bold text-slate-800">Remplir avec les audios</h4>
@@ -3667,7 +3574,7 @@ function AudiosModal({
 
                 {loadingFolders ? (
                   <div className="flex justify-center py-4">
-                    <div className="h-6 w-6 animate-spin rounded-full border-2 border-gray-300 border-t-blue-500" />
+                    <div className="h-6 w-6 animate-spin rounded-full border-2 border-gray-300 border-t-violet-500" />
                   </div>
                 ) : (
                   <select
@@ -3710,7 +3617,7 @@ function AudiosModal({
                       onClick={handleFill}
                       disabled={!selectedFillFolderId || filling}
                       className="rounded-lg px-5 py-2 text-sm font-medium text-white transition-all disabled:opacity-50"
-                      style={{ backgroundColor: filling || !selectedFillFolderId ? '#93c5fd' : '#137fec' }}
+                      style={{ backgroundColor: filling || !selectedFillFolderId ? '#c4b5fd' : '#7c3aed' }}
                     >
                       {filling ? 'Copie en cours...' : 'Remplir'}
                     </button>
@@ -3721,18 +3628,11 @@ function AudiosModal({
           )}
         </div>
 
-        {/* Backup pipeline — affiché en bandeau sous le header quand le job est actif */}
-        {(isBackupRunning || isBackupDone || isBackupError) && (
-          <div className="px-6 pt-4">
-            <BackupPipeline job={backupJob} colors={pipelineColors} darkMode={darkMode} />
-          </div>
-        )}
-
         {/* Modal Body */}
         <div className="p-6 overflow-y-auto" style={{ maxHeight: 'calc(90vh - 80px)' }}>
           {loading ? (
             <div className="flex items-center justify-center py-12">
-              <div className="h-8 w-8 animate-spin rounded-full border-2 border-gray-300 border-t-blue-500" />
+              <div className="h-8 w-8 animate-spin rounded-full border-2 border-gray-300 border-t-violet-500" />
             </div>
           ) : (
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -5066,10 +4966,6 @@ function formatRelativeTime(dateStr) {
   const years = Math.floor(diffDay / 365)
   return `il y a ${years} an${years > 1 ? 's' : ''}`
 }
-
-// SlideToConfirm + BackupPipeline ont été déplacés vers
-// `components/SlideToConfirm.jsx` pour être partagés avec CoursFoldersModal,
-// qui héberge maintenant l'action lock/unlock + le pipeline de backup.
 
 const COURSE_WEEKDAY_LABELS = ['Lun.', 'Mar.', 'Mer.', 'Jeu.', 'Ven.', 'Sam.', 'Dim.']
 

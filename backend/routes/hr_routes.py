@@ -46,7 +46,10 @@ from repositories.center_workspace_repository import (
     set_platform_asset_binding_mode,
     set_platform_lifecycle,
 )
-from repositories.teacher_asset_repository import resolve_folder_asset_origin
+from repositories.teacher_asset_repository import (
+    CANONICAL_AUDIO_PLAYLIST_PATHS,
+    resolve_folder_asset_origin,
+)
 from repositories.pipeline_repository import (
     allocate_platform_id_from_postgres,
     get_course_folder_identity,
@@ -2696,180 +2699,19 @@ def create_hr_blueprint(socketio):
     # ─── POST /api/hr/platforms/<id>/backup-and-unlock ───────────────────
     @hr_bp.route("/api/hr/platforms/<int:platform_id>/backup-and-unlock", methods=["POST"])
     def backup_and_unlock(platform_id):
-        """Lance le backup en arrière-plan puis déverrouille l'upload"""
+        """Reject the retired destructive audio backup/unlock workflow."""
         denied = _require_admin()
         if denied:
             return denied
 
-        # Refuser si un job est déjà en cours pour cette plateforme
-        job = state.backup_jobs.get(platform_id, {})
-        if job.get("step_status") == "running":
-            return jsonify({"success": False, "error": "Un backup est déjà en cours"}), 409
+        return jsonify({
+            "success": False,
+            "error": (
+                "Cette action a été retirée : les audios sont désormais "
+                "conservés automatiquement avec le professeur IA."
+            ),
+        }), 410
 
-        pinfo = _get_platform_info(platform_id)
-        connection_string = os.environ.get("AZURE_AUDIO_STORAGE_CONNECTION_STRING")
-        archive_container = pinfo["audio_archive_container"]
-        source_container = pinfo["audio_container"]
-
-        if not connection_string:
-            return jsonify({"success": False, "error": "Configuration Azure manquante"}), 500
-
-        state.reset_backup_job(platform_id)
-
-        socketio.start_background_task(
-            _run_backup_and_unlock,
-            platform_id, connection_string, source_container, archive_container
-        )
-
-        return jsonify({"success": True, "message": "Backup lancé"}), 202
-
-    def _run_backup_and_unlock(platform_id, connection_string, source_container, archive_container):
-        """Tâche de fond : backup vérifié + suppression + déverrouillage"""
-        job = state.backup_jobs[platform_id]
-
-        try:
-            blob_service_client = BlobServiceClient.from_connection_string(connection_string)
-            source_client = blob_service_client.get_container_client(source_container)
-            account_name = blob_service_client.account_name
-            account_key = blob_service_client.credential.account_key
-
-            # Créer le container d'archive privé s'il n'existe pas.
-            archive_client = blob_service_client.get_container_client(archive_container)
-            try:
-                archive_client.create_container()
-            except ResourceExistsError:
-                pass
-
-            # Lister les blobs sources
-            source_blobs = list(source_client.list_blobs())
-            if not source_blobs:
-                # Rien à sauvegarder, on déverrouille directement
-                _unlock_platform(platform_id)
-                job["step"] = 3
-                job["step_status"] = "done"
-                return
-
-            # Dossier d'archive horodaté
-            archive_folder = datetime.now(FRANCE_TZ).strftime("%Y-%m-%d_%Hh%M") + f"/plateforme-{platform_id}"
-            job["archive_folder"] = archive_folder
-            job["total"] = len(source_blobs)
-
-            # ── ÉTAPE 1 : Copie vers l'archive ──────────────────────────
-            job["step"] = 1
-            job["step_status"] = "running"
-            logger.info(f"📦 Backup P{platform_id} : {len(source_blobs)} fichiers → {archive_folder}")
-
-            expiry = datetime.now(timezone.utc) + timedelta(hours=2)
-            copied_names = []
-
-            for idx, blob in enumerate(source_blobs):
-                job["progress"] = idx + 1
-
-                # Générer une URL SAS pour la source (copie server-side)
-                sas_token = generate_blob_sas(
-                    account_name=account_name,
-                    container_name=source_container,
-                    blob_name=blob.name,
-                    account_key=account_key,
-                    permission=BlobSasPermissions(read=True),
-                    expiry=expiry,
-                )
-                source_url = f"https://{account_name}.blob.core.windows.net/{source_container}/{blob.name}?{sas_token}"
-
-                dest_name = f"{archive_folder}/{blob.name}"
-                dest_blob = archive_client.get_blob_client(dest_name)
-                dest_blob.start_copy_from_url(source_url)
-
-                # Attendre la fin de la copie
-                for _ in range(60):  # max 30 secondes par fichier
-                    props = dest_blob.get_blob_properties()
-                    if props.copy.status == "success":
-                        break
-                    elif props.copy.status == "failed":
-                        raise Exception(f"Copie échouée pour {blob.name} : {props.copy.status_description}")
-                    time.sleep(0.5)
-                else:
-                    raise Exception(f"Timeout lors de la copie de {blob.name}")
-
-                copied_names.append(blob.name)
-                logger.info(f"  ✅ Archivé : {blob.name}")
-
-            # ── VÉRIFICATION : on ne supprime rien sans confirmation ─────
-            logger.info("🔍 Vérification de l'archive...")
-            archive_blobs = {
-                b.name.replace(f"{archive_folder}/", "")
-                for b in archive_client.list_blobs(name_starts_with=archive_folder + "/")
-            }
-            source_names = {b.name for b in source_blobs}
-
-            missing = source_names - archive_blobs
-            if missing:
-                error_msg = f"Vérification échouée — {len(missing)} fichier(s) manquant(s) dans l'archive. Aucune suppression effectuée."
-                logger.error(f"❌ {error_msg} : {missing}")
-                job["step_status"] = "error"
-                job["error"] = error_msg
-                return
-
-            logger.info(f"✅ Vérification OK — {len(archive_blobs)} fichiers confirmés dans l'archive")
-
-            # ── ÉTAPE 2 : Suppression des sources (vérification OK) ──────
-            job["step"] = 2
-            job["step_status"] = "running"
-            job["progress"] = 0
-
-            for idx, blob in enumerate(source_blobs):
-                source_client.delete_blob(blob.name)
-                job["progress"] = idx + 1
-                logger.info(f"  🗑️ Supprimé : {blob.name}")
-
-            # Second passage : si un blob apparaît après le listing initial, ou
-            # si Azure renvoie une page incomplète pendant le backup, on vide le
-            # container avant de rouvrir les uploads.
-            remaining_deleted = 0
-            while True:
-                remaining_blobs = list(source_client.list_blobs())
-                if not remaining_blobs:
-                    break
-                for blob in remaining_blobs:
-                    source_client.delete_blob(blob.name)
-                    remaining_deleted += 1
-                    logger.info(f"  🗑️ Supprimé après vérification : {blob.name}")
-
-            if remaining_deleted:
-                job["remaining_deleted"] = remaining_deleted
-                logger.info(
-                    f"🧹 Backup P{platform_id} : {remaining_deleted} fichier(s) restant(s) supprimé(s)"
-                )
-
-            # ── ÉTAPE 3 : Déverrouillage ─────────────────────────────────
-            job["step"] = 3
-            job["step_status"] = "running"
-            _unlock_platform(platform_id)
-            logger.info(f"🔓 Plateforme {platform_id} déverrouillée")
-
-            job["step_status"] = "done"
-
-        except Exception as e:
-            logger.error(f"❌ Erreur backup P{platform_id}: {e}")
-            job["step_status"] = "error"
-            job["error"] = str(e)
-
-    def _unlock_platform(platform_id):
-        """Met upload_locked = 0 en base et propage vers le backend distant (P2/P3)"""
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute(
-            "UPDATE platform_config SET upload_locked = 0, updated_at = ? WHERE id = ?",
-            (_now_str(), platform_id),
-        )
-        conn.commit()
-        conn.close()
-        if not _is_local_platform(platform_id):
-            _call_platform(
-                platform_id,
-                "/api/internal/set-lock",
-                json_data={"locked": False, "platform_id": platform_id},
-            )
 
     # ─── POST /api/hr/platforms/<id>/upload-pdf-rag ──────────────────────
     @hr_bp.route("/api/hr/platforms/<int:platform_id>/upload-pdf-rag", methods=["POST"])
@@ -6220,7 +6062,6 @@ def create_hr_blueprint(socketio):
                 return jsonify({"success": False, "error": "Dossier introuvable pour cette plateforme"}), 404
             origin = resolve_folder_asset_origin(folder_id) or {}
             source_platform_id = int(origin.get("source_platform_id") or folder_row[1])
-            source_folder_id = int(origin.get("source_folder_id") or folder_id)
 
             tts_conn = os.environ.get("AZURE_TTS_STORAGE_CONNECTION_STRING")
             audio_conn = os.environ.get("AZURE_AUDIO_STORAGE_CONNECTION_STRING")
@@ -6239,15 +6080,23 @@ def create_hr_blueprint(socketio):
             qa_pause_cc = audio_bsc.get_container_client("audioqapause")
             playlist_cc = tts_bsc.get_container_client("audiostts")
 
-            playlist_prefix = f"platform-{source_platform_id}/folder-{source_folder_id}/playlist/"
-
-            # Lister tous les MP3 générés dans le dossier. Les pipelines récentes
-            # produisent aussi les Q&A/pauses contextuels dans ce préfixe.
-            playlist_blobs = [
-                b for b in playlist_cc.list_blobs(name_starts_with=playlist_prefix)
-                if b.name.endswith(".mp3")
+            # Résoudre chaque fichier via le manifeste du professeur. Un clone
+            # inter-centres lit ainsi la copie canonique immuable et ne dépend
+            # plus du chemin historique de la plateforme qui l'a générée.
+            playlist_blob_paths = []
+            for relative_path in sorted(CANONICAL_AUDIO_PLAYLIST_PATHS):
+                blob_path = resolve_folder_blob_path(
+                    folder_id,
+                    CONTAINER_AUDIOS,
+                    relative_path,
+                    fallback_platform_id=source_platform_id,
+                )
+                if playlist_cc.get_blob_client(blob_path).exists():
+                    playlist_blob_paths.append(blob_path)
+            cours_blobs = [
+                path for path in playlist_blob_paths
+                if path.split("/")[-1].startswith("cours_")
             ]
-            cours_blobs = [b for b in playlist_blobs if b.name.split("/")[-1].startswith("cours_")]
 
             if not cours_blobs:
                 return jsonify({"success": False, "error": "Aucun fichier cours généré dans ce dossier. Lancez d'abord la pipeline."}), 404
@@ -6261,10 +6110,10 @@ def create_hr_blueprint(socketio):
             )
 
             # Copier les fichiers générés du dossier (cours + Q&A/pauses contextuels)
-            for blob in playlist_blobs:
-                filename = blob.name.split("/")[-1]
+            for blob_path in playlist_blob_paths:
+                filename = blob_path.split("/")[-1]
                 try:
-                    audio_bytes = playlist_cc.get_blob_client(blob.name).download_blob().readall()
+                    audio_bytes = playlist_cc.get_blob_client(blob_path).download_blob().readall()
                     dest_cc.get_blob_client(filename).upload_blob(audio_bytes, overwrite=True)
                     copied_files.append(filename)
                     copied_names.add(filename)

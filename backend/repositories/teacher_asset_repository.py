@@ -63,7 +63,7 @@ def register_module_assets(
     center_account_id: int,
     assets: Iterable[dict[str, Any]],
 ) -> int:
-    """Upsert one immutable manifest without changing the referenced blobs."""
+    """Upsert one immutable manifest for an already materialized asset set."""
     if not _uses_postgres():
         return 0
     values = list(assets)
@@ -167,6 +167,61 @@ def canonical_audio_manifest_complete(
         if CANONICAL_AUDIO_PLAYLIST_PATHS.issubset(paths)
     )
     return complete_folders >= max(1, int(required_folder_count or 1))
+
+
+def get_module_audio_manifest_readiness(module_id: int) -> dict[str, Any]:
+    """Return the durable playlist coverage for one teacher module.
+
+    A module is reusable only when every expected training day owns the exact
+    runtime playlist. Keeping this check in the repository makes finalization
+    and later cross-centre matching enforce the same contract.
+    """
+    if not _uses_postgres():
+        return {
+            "module_id": int(module_id),
+            "ready": False,
+            "required_folder_count": 0,
+            "audio_asset_count": 0,
+        }
+    with get_postgres_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT j.nb_days,
+                       COALESCE(
+                           jsonb_agg(jsonb_build_object(
+                               'source_folder_id', a.source_folder_id,
+                               'logical_key', a.logical_key
+                           )) FILTER (WHERE a.id IS NOT NULL),
+                           '[]'::jsonb
+                       ) AS audio_assets
+                FROM formation_modules m
+                JOIN formation_pipeline_jobs j ON j.id = m.source_pipeline_job_id
+                LEFT JOIN formation_module_assets a
+                  ON a.module_id = m.id
+                 AND a.status = 'ready'
+                 AND a.asset_kind = 'audio'
+                WHERE m.id = %s
+                GROUP BY j.nb_days
+                """,
+                (int(module_id),),
+            )
+            row = cur.fetchone()
+    if not row:
+        return {
+            "module_id": int(module_id),
+            "ready": False,
+            "required_folder_count": 0,
+            "audio_asset_count": 0,
+        }
+    audio_assets = list(row.get("audio_assets") or [])
+    required_folder_count = max(1, int(row.get("nb_days") or 1))
+    return {
+        "module_id": int(module_id),
+        "ready": canonical_audio_manifest_complete(audio_assets, required_folder_count),
+        "required_folder_count": required_folder_count,
+        "audio_asset_count": len(audio_assets),
+    }
 
 
 def find_canonical_reusable_module(canonical_fingerprint: str) -> dict[str, Any] | None:

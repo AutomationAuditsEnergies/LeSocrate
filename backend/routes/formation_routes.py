@@ -2687,29 +2687,24 @@ def _finalize_audio_ready_state(job_id: int, voice_type: str) -> dict:
         canonical_generator_version=canonical_signature["generator_version"],
     )
     if result.get("canonical_reuse_allowed") and result.get("center_account_id") is not None:
-        try:
-            from services.formation_pipeline_service import get_expected_course_folders
-            from services.teacher_asset_service import ensure_module_asset_manifest
+        from services.formation_pipeline_service import get_expected_course_folders
+        from services.teacher_asset_service import ensure_module_asset_manifest
 
-            folder_ids = get_expected_course_folders(job_id).get("folder_ids") or []
-            result["asset_manifest"] = ensure_module_asset_manifest(
-                module_id=int(result["module_id"]),
-                center_account_id=int(result["center_account_id"]),
-                source_platform_id=int(job["platform_id"]),
-                source_folder_ids=folder_ids,
-                force=True,
+        folder_ids = get_expected_course_folders(job_id).get("folder_ids") or []
+        manifest = ensure_module_asset_manifest(
+            module_id=int(result["module_id"]),
+            center_account_id=int(result["center_account_id"]),
+            source_platform_id=int(job["platform_id"]),
+            source_folder_ids=folder_ids,
+            force=True,
+        )
+        if not manifest.get("audio_ready"):
+            raise RuntimeError(
+                "Le professeur IA ne peut pas être finalisé : "
+                f"manifeste audio incomplet ({manifest.get('audio_asset_count', 0)} fichier(s), "
+                f"{manifest.get('required_folder_count', 0)} jour(s) attendu(s))"
             )
-        except Exception as exc:
-            # Module validation remains correct because every session asset was
-            # published. Global matching requires a ready manifest, so a failed
-            # inventory cannot be selected and will be retried on explicit reuse.
-            logger.warning(
-                "PIPELINE_CANONICAL_MANIFEST_DEFERRED job=%s module=%s error=%s",
-                job_id,
-                result.get("module_id"),
-                str(exc)[:300],
-            )
-            result["asset_manifest_error"] = str(exc)[:300]
+        result["asset_manifest"] = manifest
     logger.info(
         "PIPELINE_AUDIO_FINALIZED formation_job_id=%s platform_id=%s "
         "module_id=%s module_created=%s voice_type=%s ready_updated=%s",
