@@ -113,7 +113,7 @@ BEGIN
             OR (center_account_id IS NOT NULL AND center_platform_number > 0)
         ) NOT VALID;
 EXCEPTION
-    WHEN duplicate_object THEN NULL;
+    WHEN duplicate_object OR duplicate_table THEN NULL;
 END $$;
 
 CREATE OR REPLACE FUNCTION assign_center_platform_number()
@@ -180,7 +180,7 @@ BEGIN
         ADD CONSTRAINT uq_platform_config_owner_identity
         UNIQUE (id, center_account_id, center_platform_number);
 EXCEPTION
-    WHEN duplicate_object THEN NULL;
+    WHEN duplicate_object OR duplicate_table THEN NULL;
 END $$;
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_platform_config_global_slug
@@ -252,7 +252,7 @@ BEGIN
         ADD CONSTRAINT uq_course_sessions_platform_identity
         UNIQUE (id, platform_id);
 EXCEPTION
-    WHEN duplicate_object THEN NULL;
+    WHEN duplicate_object OR duplicate_table THEN NULL;
 END $$;
 
 -- CREATE TABLE IF NOT EXISTS does not evolve an already provisioned Supabase
