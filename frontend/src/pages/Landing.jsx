@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   ArrowRight,
+  Bot,
   CalendarClock,
   Check,
   Clock3,
@@ -21,6 +22,8 @@ import {
 } from 'lucide-react'
 import CadrenzaLogo from '../components/CadrenzaLogo.jsx'
 import './Landing.css'
+
+const DEFAULT_TRAINING_BRIEF = "Crée-moi une formation où un professeur IA va dispenser les cours du titre professionnel Conseiller relation client à distance (RNCP42431). Cette formation s'étend sur deux mois, à raison de deux jours par semaine, le lundi et le jeudi."
 
 const AGENTS = [
   {
@@ -181,6 +184,7 @@ export default function Landing() {
   const [mobileOpen, setMobileOpen] = useState(false)
   const [scrolled, setScrolled] = useState(false)
   const [activeAgent, setActiveAgent] = useState(AGENTS[0])
+  const [trainingBrief, setTrainingBrief] = useState(DEFAULT_TRAINING_BRIEF)
 
   const handleAgentKeyDown = (event, agentId) => {
     const currentIndex = AGENTS.findIndex((agent) => agent.id === agentId)
@@ -218,6 +222,12 @@ export default function Landing() {
   }, [mobileOpen])
 
   const closeMenu = () => setMobileOpen(false)
+
+  const handleTrainingBriefSubmit = (event) => {
+    event.preventDefault()
+    window.sessionStorage.setItem('cadrenza-training-brief', trainingBrief.trim())
+    navigate('/connexion-centre?mode=signup')
+  }
 
   return (
     <div className="cadrenza-site">
@@ -277,7 +287,63 @@ export default function Landing() {
       </header>
 
       <main id="contenu">
-        <section className="hero" id="accueil">
+        <section className="command-hero" id="accueil">
+          <div className="command-hero__mesh" aria-hidden="true" />
+          <div className="command-hero__inner">
+            <div className="command-hero__signal">
+              <span><Bot size={15} /> Professeurs logiciels spécialisés</span>
+              <i />
+              <span>Cadre RNCP conservé</span>
+            </div>
+
+            <h1>
+              Des professeurs IA{' '}
+              <span className="command-hero__robot" aria-hidden="true">
+                <img src="/robot-blue.png" alt="" width="96" height="96" />
+              </span>{' '}
+              autonomes pour délivrer vos formations.
+            </h1>
+            <p className="command-hero__lead">
+              Décrivez le titre professionnel, le rythme et la durée. Cadrenza prépare le parcours, ses cours et son calendrier.
+            </p>
+
+            <form className="brief-composer" onSubmit={handleTrainingBriefSubmit}>
+              <label className="brief-composer__label" htmlFor="training-brief">
+                Décrivez la formation à créer
+              </label>
+              <div className="brief-composer__field">
+                <FileStack size={20} aria-hidden="true" />
+                <textarea
+                  id="training-brief"
+                  value={trainingBrief}
+                  onChange={(event) => setTrainingBrief(event.target.value)}
+                  rows={4}
+                  spellCheck="true"
+                />
+              </div>
+              <div className="brief-composer__footer">
+                <div className="brief-composer__teacher">
+                  <span><Bot size={17} /> Professeur IA</span>
+                  <small>Référentiel, cours, audio et planning</small>
+                </div>
+                <div className="brief-composer__actions">
+                  <a className="button button--composer-secondary" href="#demo">Voir une démo</a>
+                  <button className="button button--signal" type="submit" disabled={!trainingBrief.trim()}>
+                    Créer cette formation <ArrowRight size={17} />
+                  </button>
+                </div>
+              </div>
+            </form>
+
+            <div className="command-hero__details" aria-label="Éléments générés par Cadrenza">
+              <span><Check size={15} /> Référentiel RNCP</span>
+              <span><Check size={15} /> Cours et audio</span>
+              <span><Check size={15} /> Calendrier synchrone</span>
+            </div>
+          </div>
+        </section>
+
+        <section className="hero hero--fleet" id="professeurs">
           <div className="hero__grid" aria-hidden="true" />
           <img
             className="hero__art"
@@ -285,15 +351,15 @@ export default function Landing() {
             alt="Quatre robots logiciels coordonnent la préparation et la diffusion d'un module de formation"
             width="1536"
             height="1024"
-            fetchPriority="high"
+            loading="lazy"
           />
           <div className="hero__veil" aria-hidden="true" />
 
           <div className="hero__content">
-            <h1>
+            <h2>
               <span className="hero__line">Déployez une armée</span>{' '}
               <span className="hero__line">de professeurs <span className="hero__accent">IA</span></span>
-            </h1>
+            </h2>
             <p className="hero__lead">
               Cadrenza structure le référentiel, produit le cours et son audio, puis ouvre la classe aux apprenants à l'heure prévue.
             </p>
