@@ -193,6 +193,57 @@ class RealPostgresIntegrationTest(unittest.TestCase):
             sqlite_conn.close()
             os.unlink(path)
 
+    def test_platform_numbers_restart_per_center_and_exports_reject_cross_tenant_identity(self):
+        with psycopg.connect(self.database_url) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO training_center_accounts
+                        (id, username, password_hash, center_name, slug)
+                    VALUES
+                        (501, 'centre-a@example.test', 'hash', 'Centre A', 'centre-a'),
+                        (502, 'centre-b@example.test', 'hash', 'Centre B', 'centre-b')
+                    """
+                )
+                cur.execute(
+                    """
+                    INSERT INTO platform_config (center_account_id, name, slug)
+                    VALUES
+                        (501, 'A1', 'a1'),
+                        (501, 'A2', 'a2'),
+                        (502, 'B1', 'b1')
+                    RETURNING id, center_account_id, center_platform_number
+                    """
+                )
+                platforms = cur.fetchall()
+                center_a = [row for row in platforms if row[1] == 501]
+                center_b = [row for row in platforms if row[1] == 502]
+                self.assertEqual([row[2] for row in center_a], [1, 2])
+                self.assertEqual([row[2] for row in center_b], [1])
+
+                platform_a_id = center_a[0][0]
+                cur.execute(
+                    """
+                    INSERT INTO course_sessions
+                        (platform_id, session_index, scheduled_at, status)
+                    VALUES (%s, 1, '2026-07-17 07:00:00+00', 'completed')
+                    RETURNING id
+                    """,
+                    (platform_a_id,),
+                )
+                session_id = cur.fetchone()[0]
+                with self.assertRaises(psycopg.errors.ForeignKeyViolation):
+                    with conn.transaction():
+                        cur.execute(
+                            """
+                            INSERT INTO attendance_daily_exports
+                                (center_account_id, platform_id, center_platform_number,
+                                 course_session_id, course_date, available_at)
+                            VALUES (502, %s, 1, %s, '2026-07-17', '2026-07-18 04:00:00+00')
+                            """,
+                            (platform_a_id, session_id),
+                        )
+
     def test_pipeline_migration_treats_sqlite_current_timestamp_as_utc(self):
         with psycopg.connect(self.database_url) as conn:
             with conn.cursor() as cur:

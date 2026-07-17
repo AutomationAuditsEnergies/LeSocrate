@@ -123,7 +123,13 @@ def _duration_label(seconds: int) -> str:
 
 def build_daily_attendance_workbook(
     *,
+    center_name: str = "",
+    center_account_id: int | None = None,
     platform_name: str,
+    platform_id: int | None = None,
+    center_platform_number: int | None = None,
+    course_session_id: int | None = None,
+    teacher_module_id: int | None = None,
     course_date,
     session_index: int,
     participants: list[dict[str, Any]],
@@ -136,6 +142,17 @@ def build_daily_attendance_workbook(
     workbook.properties.title = f"Présences {platform_name} {course_date}"
     workbook.properties.subject = "Relevé quotidien des présences"
     workbook.properties.creator = "Le Socrate"
+    workbook.properties.keywords = ";".join(
+        f"{key}={value}"
+        for key, value in (
+            ("center_account_id", center_account_id),
+            ("center_platform_number", center_platform_number),
+            ("platform_id", platform_id),
+            ("course_session_id", course_session_id),
+            ("teacher_module_id", teacher_module_id),
+        )
+        if value is not None
+    )
 
     violet = "7C3AED"
     ink = "172033"
@@ -164,7 +181,16 @@ def build_daily_attendance_workbook(
     summary["A1"].alignment = Alignment(vertical="center")
     summary.row_dimensions[1].height = 30
     summary.merge_cells(start_row=2, start_column=1, end_row=2, end_column=len(summary_headers))
-    summary["A2"] = f"Journée {int(session_index or 0)} · {course_date.strftime('%d/%m/%Y')} · {len(participants)} participant(s)"
+    owner_label = str(center_name or "Centre de formation").strip()
+    local_platform_label = (
+        f"Plateforme {int(center_platform_number)}"
+        if center_platform_number is not None
+        else "Plateforme"
+    )
+    summary["A2"] = (
+        f"{owner_label} · {local_platform_label} · Journée {int(session_index or 0)}"
+        f" · {course_date.strftime('%d/%m/%Y')} · {len(participants)} participant(s)"
+    )
     summary["A2"].font = Font(name="Aptos", size=10, color=slate)
     summary["A2"].alignment = Alignment(vertical="center")
 
@@ -268,7 +294,10 @@ def build_daily_attendance_workbook(
     details["A1"] = f"Détail des connexions · {platform_name}"
     details["A1"].font = Font(name="Aptos Display", size=16, bold=True, color=ink)
     details.merge_cells("A2:H2")
-    details["A2"] = f"Journée du {course_date.strftime('%d/%m/%Y')} · horaires Europe/Paris"
+    details["A2"] = (
+        f"{owner_label} · {local_platform_label} · Journée du "
+        f"{course_date.strftime('%d/%m/%Y')} · horaires Europe/Paris"
+    )
     details["A2"].font = Font(name="Aptos", size=10, color=slate)
     for col, title in enumerate(detail_headers, start=1):
         cell = details.cell(row=4, column=col, value=title)
@@ -317,13 +346,25 @@ def build_daily_attendance_workbook(
 
 def generate_daily_attendance_excel(
     *,
+    center_name: str = "",
+    center_account_id: int | None = None,
     platform_name: str,
+    platform_id: int | None = None,
+    center_platform_number: int | None = None,
+    course_session_id: int | None = None,
+    teacher_module_id: int | None = None,
     course_date,
     session_index: int,
     participants: list[dict[str, Any]],
 ) -> bytes:
     workbook = build_daily_attendance_workbook(
+        center_name=center_name,
+        center_account_id=center_account_id,
         platform_name=platform_name,
+        platform_id=platform_id,
+        center_platform_number=center_platform_number,
+        course_session_id=course_session_id,
+        teacher_module_id=teacher_module_id,
         course_date=course_date,
         session_index=session_index,
         participants=participants,
@@ -347,12 +388,25 @@ def attendance_container() -> str:
     return value
 
 
-def attendance_blob_key(platform_id: int, session_id: int, filename: str) -> str:
-    return f"platform-{int(platform_id)}/course-sessions/{int(session_id)}/{filename}"
+def attendance_blob_key(
+    center_account_id: int,
+    center_platform_number: int,
+    platform_id: int,
+    session_id: int,
+    filename: str,
+) -> str:
+    """Return the immutable tenant-owned location of one attendance file."""
+    return (
+        f"centres/{int(center_account_id)}/"
+        f"plateformes/{int(center_platform_number)}/"
+        f"id-{int(platform_id)}/seances/{int(session_id)}/presences/{filename}"
+    )
 
 
 def publish_daily_attendance_excel(
     *,
+    center_account_id: int,
+    center_platform_number: int,
     platform_id: int,
     session_id: int,
     filename: str,
@@ -366,7 +420,13 @@ def publish_daily_attendance_excel(
         container.create_container()
     except ResourceExistsError:
         pass
-    blob_key = attendance_blob_key(platform_id, session_id, filename)
+    blob_key = attendance_blob_key(
+        center_account_id,
+        center_platform_number,
+        platform_id,
+        session_id,
+        filename,
+    )
     container.get_blob_client(blob_key).upload_blob(
         excel_bytes,
         overwrite=True,
@@ -424,12 +484,24 @@ def process_due_attendance_exports(*, now: datetime | None = None, max_exports: 
                 f"-{course_date.isoformat()}.xlsx"
             )
             excel_bytes = generate_daily_attendance_excel(
+                center_name=session.get("center_name") or "",
+                center_account_id=int(session["center_account_id"]),
                 platform_name=session["platform_name"],
+                platform_id=int(session["platform_id"]),
+                center_platform_number=int(session["center_platform_number"]),
+                course_session_id=int(session["id"]),
+                teacher_module_id=(
+                    int(session["teacher_module_id"])
+                    if session.get("teacher_module_id") is not None
+                    else None
+                ),
                 course_date=course_date,
                 session_index=int(session.get("session_index") or 0),
                 participants=participants,
             )
             published = publish_daily_attendance_excel(
+                center_account_id=int(session["center_account_id"]),
+                center_platform_number=int(session["center_platform_number"]),
                 platform_id=int(session["platform_id"]),
                 session_id=int(session["id"]),
                 filename=filename,
@@ -501,10 +573,20 @@ def get_attendance_dashboard(platform_id: int, course_date: str, *, center_accou
             },
         })
     exports = []
-    for item in attendance_repo.list_daily_exports(platform_id):
+    for item in attendance_repo.list_daily_exports(
+        platform_id,
+        center_account_id=center_account_id,
+    ):
         exports.append({
             "id": int(item["id"]),
+            "center_account_id": int(item["center_account_id"]),
+            "center_platform_number": int(item["center_platform_number"]),
             "course_session_id": int(item["course_session_id"]),
+            "teacher_module_id": (
+                int(item["teacher_module_id"])
+                if item.get("teacher_module_id") is not None
+                else None
+            ),
             "course_date": item["course_date"].isoformat(),
             "status": item["status"],
             "filename": item.get("filename"),
@@ -515,7 +597,17 @@ def get_attendance_dashboard(platform_id: int, course_date: str, *, center_accou
         })
     return {
         "success": True,
-        "platform": {"id": int(platform["id"]), "name": platform["name"]},
+        "platform": {
+            "id": int(platform["id"]),
+            "number": int(platform["center_platform_number"]),
+            "name": platform["name"],
+            "center_account_id": int(platform["center_account_id"]),
+            "teacher_module_id": (
+                int(platform["source_module_id"])
+                if platform.get("source_module_id") is not None
+                else None
+            ),
+        },
         "course_date": course_date,
         "course_session": ({
             "id": int(course_session["id"]),

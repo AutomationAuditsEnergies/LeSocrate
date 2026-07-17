@@ -116,6 +116,7 @@ class HrPostgresReadRoutesTest(unittest.TestCase):
             "source_formation_id": None,
             "source_module_id": None,
             "center_account_id": 42,
+            "center_platform_number": 1,
             "center_slug": "centre-test",
             "source_rncp_code": None,
             "source_tp_name": None,
@@ -162,6 +163,7 @@ class HrPostgresReadRoutesTest(unittest.TestCase):
         self.assertEqual(platform["status"], "pending")
         self.assertEqual(platform["teacher_name"], "Camille")
         self.assertEqual(platform["teacher_color"], "violet")
+        self.assertEqual(platform["center_platform_number"], 1)
         self.assertEqual(platform["teacher_preparation"]["status"], "preparing")
         self.assertEqual(platform["course_schedule"]["next_session"]["audio_status"], "scheduled")
         self.assertIn("2 demande(s) de suppression", platform["alerts"])

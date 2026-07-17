@@ -1015,6 +1015,21 @@ def create_hr_blueprint(socketio):
                 asset_binding_mode_sql = (
                     "pc.asset_binding_mode" if "asset_binding_mode" in sqlite_platform_columns else "'canonical'"
                 )
+                center_platform_number_sql = (
+                    "pc.center_platform_number"
+                    if "center_platform_number" in sqlite_platform_columns
+                    else """
+                        CASE
+                            WHEN pc.center_account_id IS NULL THEN pc.id
+                            ELSE (
+                                SELECT COUNT(*)
+                                FROM platform_config numbered_pc
+                                WHERE numbered_pc.center_account_id = pc.center_account_id
+                                  AND numbered_pc.id <= pc.id
+                            )
+                        END
+                    """
+                )
                 total_session_sql = (
                     "(SELECT COUNT(*) FROM course_sessions cs WHERE cs.platform_id = pc.id)"
                     if sqlite_has_course_sessions else "0"
@@ -1043,6 +1058,7 @@ def create_hr_blueprint(socketio):
                         pc.source_formation_id,
                         pc.source_module_id,
                         pc.center_account_id,
+                        {center_platform_number_sql} AS center_platform_number,
                         COALESCE(tca.slug, 'le-socrate') AS center_slug,
                         COALESCE(fm.rncp_code, fpj.rncp_code) AS source_rncp_code,
                         COALESCE(fm.tp_name, fpj.tp_name) AS source_tp_name,
@@ -1085,6 +1101,7 @@ def create_hr_blueprint(socketio):
                     row.get("source_formation_id"),
                     row.get("source_module_id"),
                     row.get("center_account_id"),
+                    row.get("center_platform_number"),
                     row.get("center_slug") or "le-socrate",
                     row.get("source_rncp_code"),
                     row.get("source_tp_name"),
@@ -1143,6 +1160,7 @@ def create_hr_blueprint(socketio):
                     p_source_formation_id,
                     p_source_module_id,
                     p_center_account_id,
+                    p_center_platform_number,
                     p_center_slug,
                     p_source_rncp_code,
                     p_source_tp_name,
@@ -1289,6 +1307,7 @@ def create_hr_blueprint(socketio):
                     "creation_request_id": creation_request_id or "",
                     "slug": slug,
                     "center_account_id": p_center_account_id,
+                    "center_platform_number": int(p_center_platform_number or pid),
                     "center_slug": p_center_slug,
                     "active": active,
                     "upload_locked": bool(upload_locked),
@@ -1555,6 +1574,9 @@ def create_hr_blueprint(socketio):
                     "deduplicated": True,
                     "platform": {
                         "id": existing_id,
+                        "center_platform_number": int(
+                            existing.get("center_platform_number") or existing_id
+                        ),
                         "name": existing.get("name"),
                         "slug": existing.get("slug"),
                         "center_slug": center_slug,
@@ -1831,6 +1853,25 @@ def create_hr_blueprint(socketio):
                 )
                 new_id = cursor.lastrowid
 
+            cursor.execute("PRAGMA table_info(platform_config)")
+            creation_platform_columns = {column[1] for column in cursor.fetchall()}
+            center_platform_number = None
+            if "center_platform_number" in creation_platform_columns:
+                cursor.execute(
+                    "SELECT center_platform_number FROM platform_config WHERE id = ?",
+                    (new_id,),
+                )
+                number_row = cursor.fetchone()
+                center_platform_number = number_row[0] if number_row else None
+            if center_platform_number is None and center_account_id is not None:
+                cursor.execute(
+                    "SELECT COUNT(*) FROM platform_config WHERE center_account_id = ? AND id <= ?",
+                    (center_account_id, new_id),
+                )
+                center_platform_number = int(cursor.fetchone()[0])
+            if center_platform_number is None:
+                center_platform_number = new_id
+
             # Noms des containers
             audio_container = f"formationaudio-p{new_id}"
             pdf_container = f"formationpdf-p{new_id}"
@@ -2057,6 +2098,7 @@ def create_hr_blueprint(socketio):
                 "success": True,
                 "platform": {
                     "id": new_id,
+                    "center_platform_number": center_platform_number,
                     "name": name,
                     "slug": slug,
                     "center_slug": center_slug,
@@ -3168,7 +3210,11 @@ def create_hr_blueprint(socketio):
                 if not attendance_repo.get_accessible_platform(platform_id, center_account_id):
                     return jsonify({"success": False, "error": "Plateforme introuvable"}), 404
                 course_date = _parse_course_date(request.args.get("course_date"))
-                export_row = attendance_repo.get_ready_daily_export_for_date(platform_id, course_date)
+                export_row = attendance_repo.get_ready_daily_export_for_date(
+                    platform_id,
+                    course_date,
+                    center_account_id=center_account_id,
+                )
                 if not export_row:
                     return jsonify({
                         "success": False,
@@ -3254,7 +3300,11 @@ def create_hr_blueprint(socketio):
             )
             if not attendance_repo.get_accessible_platform(platform_id, center_account_id):
                 return jsonify({"success": False, "error": "Plateforme introuvable"}), 404
-            export_row = attendance_repo.get_daily_export(export_id, platform_id=platform_id)
+            export_row = attendance_repo.get_daily_export(
+                export_id,
+                platform_id=platform_id,
+                center_account_id=center_account_id,
+            )
             if not export_row or export_row.get("status") != "ready":
                 return jsonify({"success": False, "error": "Fichier de présence indisponible"}), 404
             excel_bytes = download_daily_attendance_excel(export_row)

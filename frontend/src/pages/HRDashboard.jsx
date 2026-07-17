@@ -4245,7 +4245,7 @@ function PlatformCard({
               className="text-xs font-semibold tabular-nums"
               style={{ color: colors.textMuted, letterSpacing: '0.08em' }}
             >
-              P{p.id}
+              P{p.center_platform_number || p.id}
             </span>
             <div className="min-w-0">
               <h3 className="truncate text-base font-semibold tracking-tight" style={{ color: colors.text }}>
@@ -4485,7 +4485,7 @@ function PlatformCard({
                 fontVariantNumeric: 'tabular-nums',
               }}
             >
-              P{p.id}
+              P{p.center_platform_number || p.id}
             </span>
             <h3 className="truncate text-lg font-semibold leading-tight tracking-tight" style={{ color: colors.text }}>
               {p.name}

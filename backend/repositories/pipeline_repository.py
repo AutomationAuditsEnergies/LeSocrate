@@ -386,7 +386,8 @@ def _insert_pipeline_platform_postgres(
                    public_access_enabled, updated_at, playlist_mode, status,
                    source_formation_id, source_module_id, teacher_name,
                    teacher_color, creation_request_id, audio_container,
-                   pdf_container, archive_container, audio_base_url
+                   pdf_container, archive_container, audio_base_url,
+                   center_platform_number
             FROM platform_config
             WHERE creation_request_id = %s
               AND center_account_id IS NOT DISTINCT FROM %s
@@ -431,7 +432,7 @@ def _insert_pipeline_platform_postgres(
         RETURNING id, center_account_id, name, slug, upload_locked,
                   public_access_enabled, updated_at, playlist_mode,
                   status, source_formation_id, source_module_id, teacher_name,
-                  teacher_color, creation_request_id
+                  teacher_color, creation_request_id, center_platform_number
         """,
         (
             allocated_id, center_account_id, platform_name, candidate,

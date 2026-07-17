@@ -9,7 +9,10 @@ from database.postgres import get_postgres_connection
 
 
 def get_accessible_platform(platform_id: int, center_account_id: int | None = None):
-    where = "pc.id = %s"
+    where = (
+        "pc.id = %s AND pc.center_account_id IS NOT NULL "
+        "AND pc.center_platform_number IS NOT NULL"
+    )
     params: list[Any] = [int(platform_id)]
     if center_account_id is not None:
         where += " AND pc.center_account_id = %s"
@@ -17,7 +20,12 @@ def get_accessible_platform(platform_id: int, center_account_id: int | None = No
     with get_postgres_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                f"SELECT pc.id, pc.name, pc.center_account_id FROM platform_config pc WHERE {where}",
+                f"""
+                SELECT pc.id, pc.name, pc.center_account_id,
+                       pc.center_platform_number, pc.source_module_id
+                FROM platform_config pc
+                WHERE {where}
+                """,
                 params,
             )
             return cur.fetchone()
@@ -48,12 +56,16 @@ def materialize_daily_export_candidates(*, now: datetime) -> int:
             cur.execute(
                 """
                 INSERT INTO attendance_daily_exports (
-                    platform_id, course_session_id, course_date, available_at,
+                    center_account_id, platform_id, center_platform_number,
+                    course_session_id, teacher_module_id, course_date, available_at,
                     status, created_at, updated_at
                 )
                 SELECT
+                    pc.center_account_id,
                     cs.platform_id,
+                    pc.center_platform_number,
                     cs.id,
+                    module.id,
                     (cs.scheduled_at AT TIME ZONE COALESCE(csc.timezone, 'Europe/Paris'))::date,
                     (
                         (
@@ -65,8 +77,12 @@ def materialize_daily_export_candidates(*, now: datetime) -> int:
                     %s,
                     %s
                 FROM course_sessions cs
+                JOIN platform_config pc ON pc.id = cs.platform_id
+                LEFT JOIN formation_modules module ON module.id = pc.source_module_id
                 LEFT JOIN course_schedule_config csc ON csc.platform_id = cs.platform_id
                 WHERE cs.status = 'completed'
+                  AND pc.center_account_id IS NOT NULL
+                  AND pc.center_platform_number IS NOT NULL
                   AND (
                         (
                             (cs.scheduled_at AT TIME ZONE COALESCE(csc.timezone, 'Europe/Paris'))::date
@@ -213,9 +229,14 @@ def get_course_session(session_id: int):
                 """
                 SELECT cs.id, cs.platform_id, cs.session_index, cs.scheduled_at,
                        cs.completed_at, pc.name AS platform_name,
+                       pc.center_account_id, pc.center_platform_number,
+                       module.id AS teacher_module_id,
+                       tca.center_name,
                        COALESCE(csc.timezone, 'Europe/Paris') AS timezone
                 FROM course_sessions cs
                 JOIN platform_config pc ON pc.id = cs.platform_id
+                JOIN training_center_accounts tca ON tca.id = pc.center_account_id
+                LEFT JOIN formation_modules module ON module.id = pc.source_module_id
                 LEFT JOIN course_schedule_config csc ON csc.platform_id = cs.platform_id
                 WHERE cs.id = %s
                 """,
@@ -273,47 +294,77 @@ def list_presence_logs_for_session(platform_id: int, session_id: int) -> list[di
             return list(cur.fetchall())
 
 
-def list_daily_exports(platform_id: int, *, limit: int = 120) -> list[dict[str, Any]]:
+def list_daily_exports(
+    platform_id: int,
+    *,
+    center_account_id: int | None = None,
+    limit: int = 120,
+) -> list[dict[str, Any]]:
+    where = "platform_id = %s"
+    params: list[Any] = [int(platform_id)]
+    if center_account_id is not None:
+        where += " AND center_account_id = %s"
+        params.append(int(center_account_id))
+    params.append(max(1, min(500, int(limit))))
     with get_postgres_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                """
-                SELECT id, platform_id, course_session_id, course_date, available_at,
+                f"""
+                SELECT id, center_account_id, platform_id, center_platform_number,
+                       course_session_id, teacher_module_id, course_date, available_at,
                        status, filename, size_bytes, participant_count, generated_at,
                        attempts, last_error
                 FROM attendance_daily_exports
-                WHERE platform_id = %s
+                WHERE {where}
                 ORDER BY course_date DESC, id DESC
                 LIMIT %s
                 """,
-                (int(platform_id), max(1, min(500, int(limit)))),
+                params,
             )
             return list(cur.fetchall())
 
 
-def get_daily_export(export_id: int, *, platform_id: int | None = None):
+def get_daily_export(
+    export_id: int,
+    *,
+    platform_id: int | None = None,
+    center_account_id: int | None = None,
+):
     where = "id = %s"
     params: list[Any] = [int(export_id)]
     if platform_id is not None:
         where += " AND platform_id = %s"
         params.append(int(platform_id))
+    if center_account_id is not None:
+        where += " AND center_account_id = %s"
+        params.append(int(center_account_id))
     with get_postgres_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(f"SELECT * FROM attendance_daily_exports WHERE {where}", params)
             return cur.fetchone()
 
 
-def get_ready_daily_export_for_date(platform_id: int, course_date: str):
+def get_ready_daily_export_for_date(
+    platform_id: int,
+    course_date: str,
+    *,
+    center_account_id: int | None = None,
+):
+    where = "platform_id = %s AND course_date = %s::date AND status = 'ready'"
+    params: list[Any] = [int(platform_id), course_date]
+    if center_account_id is not None:
+        where += " AND center_account_id = %s"
+        params.append(int(center_account_id))
     with get_postgres_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                """
+                f"""
                 SELECT *
                 FROM attendance_daily_exports
-                WHERE platform_id = %s AND course_date = %s::date AND status = 'ready'
+                WHERE {where}
                 ORDER BY id DESC
                 LIMIT 1
                 """,
-                (int(platform_id), course_date),
+                params,
             )
             return cur.fetchone()

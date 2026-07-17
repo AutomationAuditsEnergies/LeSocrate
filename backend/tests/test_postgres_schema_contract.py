@@ -96,6 +96,18 @@ class PostgresSchemaContractTest(unittest.TestCase):
             schema,
         )
 
+    def test_attendance_exports_have_explicit_tenant_and_session_identity(self):
+        schema = (BACKEND_DIR / "database" / "postgres_schema.sql").read_text(encoding="utf-8")
+        self.assertIn("uq_platform_config_center_number", schema)
+        self.assertIn("assign_center_platform_number", schema)
+        self.assertIn("attendance_daily_exports_owner_required", schema)
+        self.assertIn("attendance_daily_exports_platform_owner_fkey", schema)
+        self.assertIn("attendance_daily_exports_session_platform_fkey", schema)
+        self.assertIn(
+            "ON attendance_daily_exports(center_account_id, center_platform_number, course_date DESC)",
+            schema,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

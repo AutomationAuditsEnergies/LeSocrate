@@ -70,7 +70,13 @@ class AttendanceConsolidationTest(unittest.TestCase):
         }]
 
         payload = attendance_service.generate_daily_attendance_excel(
+            center_name="Centre Horizon",
+            center_account_id=9,
             platform_name="TP CRCD",
+            platform_id=42,
+            center_platform_number=1,
+            course_session_id=103,
+            teacher_module_id=77,
             course_date=date(2026, 7, 17),
             session_index=3,
             participants=participants,
@@ -78,10 +84,13 @@ class AttendanceConsolidationTest(unittest.TestCase):
         workbook = load_workbook(io.BytesIO(payload), data_only=False)
 
         self.assertEqual(workbook.sheetnames, ["Synthèse", "Détail connexions"])
+        self.assertIn("center_account_id=9", workbook.properties.keywords)
+        self.assertIn("course_session_id=103", workbook.properties.keywords)
         summary = workbook["Synthèse"]
         details = workbook["Détail connexions"]
         self.assertEqual(summary["B5"].value, "Dupuis")
         self.assertEqual(summary["C5"].value, "Thomas")
+        self.assertIn("Centre Horizon · Plateforme 1", summary["A2"].value)
         self.assertIn("SUMIF", summary["G5"].value)
         self.assertEqual(details["B5"].value, "Dupuis")
         self.assertEqual(details["H5"].value, "=F5-E5")
@@ -100,6 +109,10 @@ class AttendanceSchedulerTest(unittest.TestCase):
         session = {
             "id": 42,
             "platform_id": 3,
+            "center_account_id": 9,
+            "center_platform_number": 1,
+            "center_name": "Centre Horizon",
+            "teacher_module_id": 77,
             "session_index": 2,
             "scheduled_at": datetime(2026, 7, 17, 7, 0, tzinfo=timezone.utc),
             "platform_name": "TP CRCD",
@@ -125,8 +138,24 @@ class AttendanceSchedulerTest(unittest.TestCase):
 
         self.assertEqual(results, [{"success": True, "export_id": 17, "participant_count": 0}])
         publish.assert_called_once()
+        self.assertEqual(publish.call_args.kwargs["center_account_id"], 9)
+        self.assertEqual(publish.call_args.kwargs["center_platform_number"], 1)
         complete.assert_called_once()
         self.assertEqual(complete.call_args.args[0], 17)
+
+    def test_blob_key_is_scoped_by_center_and_local_platform_number(self):
+        key = attendance_service.attendance_blob_key(
+            9,
+            1,
+            42,
+            103,
+            "presences-2026-07-17.xlsx",
+        )
+
+        self.assertEqual(
+            key,
+            "centres/9/plateformes/1/id-42/seances/103/presences/presences-2026-07-17.xlsx",
+        )
 
 
 if __name__ == "__main__":

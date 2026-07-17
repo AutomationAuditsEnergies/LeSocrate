@@ -41,6 +41,7 @@ ALTER TABLE training_center_accounts
 CREATE TABLE IF NOT EXISTS platform_config (
     id BIGSERIAL PRIMARY KEY,
     center_account_id BIGINT REFERENCES training_center_accounts(id) ON DELETE CASCADE,
+    center_platform_number INTEGER,
     name TEXT NOT NULL,
     slug TEXT NOT NULL,
     upload_locked BOOLEAN NOT NULL DEFAULT TRUE,
@@ -80,6 +81,107 @@ ALTER TABLE platform_config
     ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ;
 ALTER TABLE platform_config
     ADD COLUMN IF NOT EXISTS asset_binding_mode TEXT NOT NULL DEFAULT 'canonical';
+ALTER TABLE platform_config
+    ADD COLUMN IF NOT EXISTS center_platform_number INTEGER;
+
+-- L'identifiant global reste la cle technique. Ce numero est l'identifiant
+-- lisible du professeur dans son centre et recommence donc a 1 pour chaque
+-- nouveau centre. Les numeros existants ne sont jamais reutilises.
+WITH numbered_platforms AS (
+    SELECT
+        id,
+        ROW_NUMBER() OVER (PARTITION BY center_account_id ORDER BY id) AS local_number
+    FROM platform_config
+    WHERE center_account_id IS NOT NULL
+)
+UPDATE platform_config pc
+SET center_platform_number = numbered.local_number
+FROM numbered_platforms numbered
+WHERE pc.id = numbered.id
+  AND pc.center_platform_number IS NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_platform_config_center_number
+    ON platform_config(center_account_id, center_platform_number)
+    WHERE center_account_id IS NOT NULL;
+
+DO $$
+BEGIN
+    ALTER TABLE platform_config
+        ADD CONSTRAINT platform_config_center_number_check
+        CHECK (
+            (center_account_id IS NULL AND center_platform_number IS NULL)
+            OR (center_account_id IS NOT NULL AND center_platform_number > 0)
+        ) NOT VALID;
+EXCEPTION
+    WHEN duplicate_object THEN NULL;
+END $$;
+
+CREATE OR REPLACE FUNCTION assign_center_platform_number()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF NEW.center_account_id IS NULL THEN
+        NEW.center_platform_number := NULL;
+        RETURN NEW;
+    END IF;
+
+    IF TG_OP = 'UPDATE'
+       AND OLD.center_account_id IS NOT NULL
+       AND NEW.center_account_id IS DISTINCT FROM OLD.center_account_id THEN
+        RAISE EXCEPTION 'Le centre proprietaire d une plateforme est immuable';
+    END IF;
+
+    IF TG_OP = 'UPDATE'
+       AND OLD.center_platform_number IS NOT NULL
+       AND NEW.center_platform_number IS DISTINCT FROM OLD.center_platform_number THEN
+        RAISE EXCEPTION 'Le numero de plateforme dans le centre est immuable';
+    END IF;
+
+    IF NEW.center_platform_number IS NULL THEN
+        -- La creation d'une plateforme est rare par rapport aux lectures. Un
+        -- verrou par centre rend MAX + 1 atomique sans bloquer les autres
+        -- centres qui creent une plateforme au meme moment.
+        PERFORM pg_advisory_xact_lock(
+            hashtextextended('center-platform-number:' || NEW.center_account_id::text, 0)
+        );
+        SELECT COALESCE(MAX(pc.center_platform_number), 0) + 1
+        INTO NEW.center_platform_number
+        FROM platform_config pc
+        WHERE pc.center_account_id = NEW.center_account_id;
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_assign_center_platform_number ON platform_config;
+CREATE TRIGGER trg_assign_center_platform_number
+    BEFORE INSERT OR UPDATE OF center_account_id, center_platform_number
+    ON platform_config
+    FOR EACH ROW
+    EXECUTE FUNCTION assign_center_platform_number();
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM platform_config
+        WHERE (center_account_id IS NULL AND center_platform_number IS NOT NULL)
+           OR (
+                center_account_id IS NOT NULL
+                AND (center_platform_number IS NULL OR center_platform_number <= 0)
+              )
+    ) THEN
+        ALTER TABLE platform_config
+            VALIDATE CONSTRAINT platform_config_center_number_check;
+    END IF;
+END $$;
+
+DO $$
+BEGIN
+    ALTER TABLE platform_config
+        ADD CONSTRAINT uq_platform_config_owner_identity
+        UNIQUE (id, center_account_id, center_platform_number);
+EXCEPTION
+    WHEN duplicate_object THEN NULL;
+END $$;
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_platform_config_global_slug
     ON platform_config(slug)
@@ -143,6 +245,15 @@ CREATE TABLE IF NOT EXISTS course_sessions (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE(platform_id, session_index)
 );
+
+DO $$
+BEGIN
+    ALTER TABLE course_sessions
+        ADD CONSTRAINT uq_course_sessions_platform_identity
+        UNIQUE (id, platform_id);
+EXCEPTION
+    WHEN duplicate_object THEN NULL;
+END $$;
 
 -- CREATE TABLE IF NOT EXISTS does not evolve an already provisioned Supabase
 -- table. Keep additive runtime migrations explicit and idempotent here.
@@ -293,8 +404,11 @@ END $$;
 
 CREATE TABLE IF NOT EXISTS attendance_daily_exports (
     id BIGSERIAL PRIMARY KEY,
+    center_account_id BIGINT NOT NULL REFERENCES training_center_accounts(id) ON DELETE CASCADE,
     platform_id BIGINT NOT NULL REFERENCES platform_config(id) ON DELETE CASCADE,
+    center_platform_number INTEGER NOT NULL,
     course_session_id BIGINT NOT NULL REFERENCES course_sessions(id) ON DELETE CASCADE,
+    teacher_module_id BIGINT,
     course_date DATE NOT NULL,
     available_at TIMESTAMPTZ NOT NULL,
     status TEXT NOT NULL DEFAULT 'pending',
@@ -318,6 +432,74 @@ CREATE TABLE IF NOT EXISTS attendance_daily_exports (
     CHECK (attempts >= 0),
     CHECK (max_attempts > 0)
 );
+
+ALTER TABLE attendance_daily_exports
+    ADD COLUMN IF NOT EXISTS center_account_id BIGINT;
+ALTER TABLE attendance_daily_exports
+    ADD COLUMN IF NOT EXISTS center_platform_number INTEGER;
+ALTER TABLE attendance_daily_exports
+    ADD COLUMN IF NOT EXISTS teacher_module_id BIGINT;
+
+UPDATE attendance_daily_exports export
+SET center_account_id = pc.center_account_id,
+    center_platform_number = pc.center_platform_number
+FROM platform_config pc
+WHERE pc.id = export.platform_id
+  AND (
+      export.center_account_id IS DISTINCT FROM pc.center_account_id
+      OR export.center_platform_number IS DISTINCT FROM pc.center_platform_number
+  );
+
+DO $$
+BEGIN
+    ALTER TABLE attendance_daily_exports
+        ADD CONSTRAINT attendance_daily_exports_owner_required
+        CHECK (center_account_id IS NOT NULL AND center_platform_number IS NOT NULL) NOT VALID;
+EXCEPTION
+    WHEN duplicate_object THEN NULL;
+END $$;
+
+DO $$
+BEGIN
+    ALTER TABLE attendance_daily_exports
+        ADD CONSTRAINT attendance_daily_exports_center_fkey
+        FOREIGN KEY (center_account_id)
+        REFERENCES training_center_accounts(id) ON DELETE CASCADE;
+EXCEPTION
+    WHEN duplicate_object THEN NULL;
+END $$;
+
+DO $$
+BEGIN
+    ALTER TABLE attendance_daily_exports
+        ADD CONSTRAINT attendance_daily_exports_platform_owner_fkey
+        FOREIGN KEY (platform_id, center_account_id, center_platform_number)
+        REFERENCES platform_config(id, center_account_id, center_platform_number)
+        ON DELETE CASCADE;
+EXCEPTION
+    WHEN duplicate_object THEN NULL;
+END $$;
+
+DO $$
+BEGIN
+    ALTER TABLE attendance_daily_exports
+        ADD CONSTRAINT attendance_daily_exports_session_platform_fkey
+        FOREIGN KEY (course_session_id, platform_id)
+        REFERENCES course_sessions(id, platform_id) ON DELETE CASCADE;
+EXCEPTION
+    WHEN duplicate_object THEN NULL;
+END $$;
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM attendance_daily_exports
+        WHERE center_account_id IS NULL OR center_platform_number IS NULL
+    ) THEN
+        ALTER TABLE attendance_daily_exports
+            VALIDATE CONSTRAINT attendance_daily_exports_owner_required;
+    END IF;
+END $$;
 
 CREATE TABLE IF NOT EXISTS video_visits (
     id BIGSERIAL PRIMARY KEY,
@@ -693,6 +875,23 @@ ALTER TABLE formation_modules
 ALTER TABLE formation_modules
     ADD COLUMN IF NOT EXISTS canonical_reuse_allowed BOOLEAN NOT NULL DEFAULT FALSE;
 
+UPDATE attendance_daily_exports export
+SET teacher_module_id = module.id
+FROM platform_config pc
+JOIN formation_modules module ON module.id = pc.source_module_id
+WHERE pc.id = export.platform_id
+  AND export.teacher_module_id IS NULL;
+
+DO $$
+BEGIN
+    ALTER TABLE attendance_daily_exports
+        ADD CONSTRAINT attendance_daily_exports_teacher_module_fkey
+        FOREIGN KEY (teacher_module_id)
+        REFERENCES formation_modules(id) ON DELETE SET NULL;
+EXCEPTION
+    WHEN duplicate_object THEN NULL;
+END $$;
+
 UPDATE formation_modules AS m
 SET teacher_name = COALESCE(m.teacher_name, pc.teacher_name),
     teacher_color = COALESCE(m.teacher_color, pc.teacher_color),
@@ -794,6 +993,8 @@ CREATE INDEX IF NOT EXISTS idx_attendance_daily_exports_due
     ON attendance_daily_exports(status, available_at, next_retry_at, lease_expires_at);
 CREATE INDEX IF NOT EXISTS idx_attendance_daily_exports_platform_date
     ON attendance_daily_exports(platform_id, course_date DESC);
+CREATE INDEX IF NOT EXISTS idx_attendance_daily_exports_center_platform_date
+    ON attendance_daily_exports(center_account_id, center_platform_number, course_date DESC);
 CREATE INDEX IF NOT EXISTS idx_video_visits_platform ON video_visits(platform_id);
 CREATE INDEX IF NOT EXISTS idx_video_visits_log ON video_visits(log_id);
 CREATE INDEX IF NOT EXISTS idx_student_profiles_platform ON student_profiles(platform_id);

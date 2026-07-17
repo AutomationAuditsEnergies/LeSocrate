@@ -340,6 +340,7 @@ def init_database(_recovered_from_corruption: bool = False):
             CREATE TABLE IF NOT EXISTS platform_config (
                 id INTEGER PRIMARY KEY,
                 name TEXT NOT NULL,
+                center_platform_number INTEGER,
                 upload_locked INTEGER DEFAULT 1,
                 pdf_filename TEXT,
                 pdf_uploaded_at TEXT,
@@ -563,6 +564,9 @@ def init_database(_recovered_from_corruption: bool = False):
         if "center_account_id" not in pc_columns:
             cursor.execute("ALTER TABLE platform_config ADD COLUMN center_account_id INTEGER")
             logger.info("✅ Colonne center_account_id ajoutée à platform_config")
+        if "center_platform_number" not in pc_columns:
+            cursor.execute("ALTER TABLE platform_config ADD COLUMN center_platform_number INTEGER")
+            logger.info("✅ Colonne center_platform_number ajoutée à platform_config")
         if "public_access_enabled" not in pc_columns:
             cursor.execute("ALTER TABLE platform_config ADD COLUMN public_access_enabled INTEGER DEFAULT 1")
             cursor.execute("UPDATE platform_config SET public_access_enabled = 1 WHERE public_access_enabled IS NULL")
@@ -592,6 +596,41 @@ def init_database(_recovered_from_corruption: bool = False):
                 "ALTER TABLE platform_config ADD COLUMN asset_binding_mode TEXT NOT NULL DEFAULT 'canonical'"
             )
             logger.info("✅ Colonne asset_binding_mode ajoutée à platform_config")
+        cursor.execute(
+            "SELECT id, center_account_id FROM platform_config "
+            "WHERE center_account_id IS NOT NULL "
+            "ORDER BY center_account_id, id"
+        )
+        next_number_by_center = {}
+        for platform_id, owner_center_id in cursor.fetchall():
+            next_number_by_center[owner_center_id] = next_number_by_center.get(owner_center_id, 0) + 1
+            cursor.execute(
+                "UPDATE platform_config SET center_platform_number = ? "
+                "WHERE id = ? AND center_platform_number IS NULL",
+                (next_number_by_center[owner_center_id], platform_id),
+            )
+        cursor.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_platform_config_center_number "
+            "ON platform_config(center_account_id, center_platform_number) "
+            "WHERE center_account_id IS NOT NULL"
+        )
+        cursor.execute(
+            """
+            CREATE TRIGGER IF NOT EXISTS trg_assign_center_platform_number
+            AFTER INSERT ON platform_config
+            WHEN NEW.center_account_id IS NOT NULL AND NEW.center_platform_number IS NULL
+            BEGIN
+                UPDATE platform_config
+                SET center_platform_number = (
+                    SELECT COALESCE(MAX(existing.center_platform_number), 0) + 1
+                    FROM platform_config existing
+                    WHERE existing.center_account_id = NEW.center_account_id
+                      AND existing.id <> NEW.id
+                )
+                WHERE id = NEW.id;
+            END
+            """
+        )
         cursor.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS uq_platform_config_creation_request "
             "ON platform_config(creation_request_id) WHERE creation_request_id IS NOT NULL"

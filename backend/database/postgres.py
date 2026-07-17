@@ -34,6 +34,7 @@ PIPELINE_REQUIRED_SCHEMA = {
     "platform_config": {
         "id",
         "center_account_id",
+        "center_platform_number",
         "status",
         "source_formation_id",
         "source_module_id",
@@ -133,8 +134,11 @@ PIPELINE_REQUIRED_SCHEMA = {
     },
     "attendance_daily_exports": {
         "id",
+        "center_account_id",
         "platform_id",
+        "center_platform_number",
         "course_session_id",
+        "teacher_module_id",
         "course_date",
         "available_at",
         "status",
@@ -226,6 +230,7 @@ PIPELINE_REQUIRED_INDEXES = {
     "idx_course_reminder_deliveries_lookup",
     "idx_logs_open_presence",
     "idx_attendance_daily_exports_due",
+    "idx_attendance_daily_exports_center_platform_date",
     "idx_formation_modules_canonical_reuse",
 }
 

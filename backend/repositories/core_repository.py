@@ -468,7 +468,8 @@ def get_platform_by_creation_request_id(creation_request_id, center_account_id):
             cur.execute(
                 """
                 SELECT id, name, slug, status, source_formation_id, source_module_id,
-                       teacher_name, teacher_color, creation_request_id
+                       teacher_name, teacher_color, creation_request_id,
+                       center_platform_number
                 FROM platform_config
                 WHERE creation_request_id = %s
                   AND center_account_id = %s

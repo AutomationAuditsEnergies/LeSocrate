@@ -182,6 +182,7 @@ def list_platforms(
                     pc.source_formation_id,
                     pc.source_module_id,
                     pc.center_account_id,
+                    pc.center_platform_number,
                     COALESCE(tca.slug, 'le-socrate') AS center_slug,
                     COALESCE(fm.rncp_code, fpj.rncp_code) AS source_rncp_code,
                     COALESCE(fm.tp_name, fpj.tp_name) AS source_tp_name,
