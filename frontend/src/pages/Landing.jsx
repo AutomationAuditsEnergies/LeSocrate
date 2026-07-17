@@ -2,7 +2,6 @@ import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   ArrowRight,
-  Bot,
   CalendarClock,
   Check,
   Clock3,
@@ -291,8 +290,10 @@ export default function Landing() {
           <div className="hero__veil" aria-hidden="true" />
 
           <div className="hero__content">
-            <p className="hero__kicker"><span /> Du REAC à la classe synchrone</p>
-            <h1>Un parcours produit une fois. Chaque promotion au bon rythme.</h1>
+            <h1>
+              <span className="hero__line">Déployez une armée</span>{' '}
+              <span className="hero__line">de professeurs <span className="hero__accent">IA</span></span>
+            </h1>
             <p className="hero__lead">
               Cadrenza structure le référentiel, produit le cours et son audio, puis ouvre la classe aux apprenants à l'heure prévue.
             </p>
@@ -310,30 +311,6 @@ export default function Landing() {
               <span><Check size={15} /> Promotions séparées</span>
             </div>
           </div>
-
-          <div className="hero__command">
-            <div className="hero__command-head">
-              <Bot size={18} />
-              <span>Mission en cours</span>
-              <i />
-            </div>
-            <p>Prépare le TP Employé commercial pour la promotion de septembre.</p>
-            <div className="hero__command-status">
-              <span>Référentiel analysé</span>
-              <span>Module produit</span>
-              <strong>Classe planifiée</strong>
-            </div>
-          </div>
-        </section>
-
-        <section className="proof-strip" aria-label="Principes de la plateforme">
-          <span>REAC comme source</span>
-          <i />
-          <span>Contenus versionnés</span>
-          <i />
-          <span>Audio horodaté</span>
-          <i />
-          <span>Réemploi multi-promotion</span>
         </section>
 
         <section className="video-section section-shell" id="demo">
