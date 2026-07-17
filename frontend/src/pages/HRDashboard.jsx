@@ -2140,7 +2140,7 @@ function PlatformCardsView({
           </p>
         </div>
       ) : (
-      <div className="grid items-start gap-6 md:grid-cols-2 lg:grid-cols-3">
+      <div className="grid min-h-[calc(100dvh-11rem)] content-center items-start gap-6 md:grid-cols-2 lg:grid-cols-3">
         {platforms.slice(safeCardPage * cardsPerPage, (safeCardPage + 1) * cardsPerPage).map((p) => (
           <PlatformCard
             key={p.id}
@@ -4343,7 +4343,7 @@ function PlatformCard({
               carte). PNG transparent → aucun blend nécessaire, le robot flotte
               proprement sur n'importe quel fond (clair ou sombre). */}
           <div
-            className="pointer-events-none absolute left-1/2 top-[46%] h-56 w-56 -translate-x-1/2 -translate-y-1/2 rounded-full blur-3xl"
+            className="pointer-events-none absolute left-1/2 top-[46%] h-48 w-48 -translate-x-1/2 -translate-y-1/2 rounded-full blur-3xl"
             style={{ backgroundColor: theme.glow, opacity: 0.3 }}
           />
 
@@ -4352,8 +4352,8 @@ function PlatformCard({
             src={theme.src}
             alt={`Professeur IA ${p.teacher_name || p.name}`}
             draggable={false}
-            className="relative z-10 w-full max-w-[88%] object-contain transition-transform duration-500 ease-out group-hover:-translate-y-2 group-hover:scale-[1.05]"
-            style={{ minHeight: '290px' }}
+            className="relative z-10 w-full max-w-[78%] object-contain transition-transform duration-500 ease-out group-hover:-translate-y-1 group-hover:scale-[1.03]"
+            style={{ minHeight: '250px' }}
           />
 
           {/* Nom plateforme sous le robot — texte seul, pas de carte */}
