@@ -197,14 +197,51 @@ jobs:
             exit 1
           fi
 
-      - name: Apply idempotent Postgres schema
+      - name: Apply idempotent Postgres schema with application quiesced
         shell: bash
         run: |
           python -m pip install "psycopg[binary]>=3.2.0"
           mkdir -p "${RUNNER_TEMP}/socrate-backend"
           unzip -q python-app.zip -d "${RUNNER_TEMP}/socrate-backend"
+
+          restart_app() {
+            az webapp start \
+              --resource-group "${RESOURCE_GROUP}" \
+              --name "${APP_NAME}" \
+              >/dev/null || true
+          }
+          trap restart_app EXIT
+
+          # The previous single-process runtime can be stuck in a long audio
+          # task while retaining a PostgreSQL transaction. Quiescing it makes
+          # DDL lock acquisition deterministic instead of waiting for the
+          # database statement timeout.
+          az webapp stop \
+            --resource-group "${RESOURCE_GROUP}" \
+            --name "${APP_NAME}" \
+            >/dev/null
+          for attempt in {1..30}; do
+            app_state="$(az webapp show \
+              --resource-group "${RESOURCE_GROUP}" \
+              --name "${APP_NAME}" \
+              --query state \
+              -o tsv)"
+            if [ "${app_state}" = "Stopped" ]; then
+              printf 'APPLICATION_QUIESCED target=%s attempt=%s\n' "${APP_NAME}" "${attempt}"
+              break
+            fi
+            if [ "${attempt}" -eq 30 ]; then
+              printf 'APPLICATION_QUIESCE_FAILED target=%s state=%s\n' \
+                "${APP_NAME}" "${app_state:-unknown}" >&2
+              exit 1
+            fi
+            sleep 2
+          done
+
           python "${RUNNER_TEMP}/socrate-backend/tools/database/apply_postgres_schema.py" \
             --database-url "${DATABASE_URL}"
+          restart_app
+          trap - EXIT
 
       - name: Configure SaaS Postgres copy
         shell: bash

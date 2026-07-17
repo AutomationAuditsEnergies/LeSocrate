@@ -26,6 +26,17 @@ class Formation3PurePostgresDeploymentTest(unittest.TestCase):
         self.assertIn("PURE_POSTGRES_CONFIGURATION_FAILED", self.workflow)
         self.assertIn("PURE_POSTGRES_CONFIGURATION_OK", self.workflow)
 
+    def test_schema_migration_quiesces_and_always_restarts_existing_app(self):
+        schema_index = self.workflow.index(
+            "- name: Apply idempotent Postgres schema with application quiesced"
+        )
+        configure_index = self.workflow.index("- name: Configure SaaS Postgres copy")
+        schema_step = self.workflow[schema_index:configure_index]
+        self.assertIn("az webapp stop", schema_step)
+        self.assertIn("trap restart_app EXIT", schema_step)
+        self.assertIn("APPLICATION_QUIESCED", schema_step)
+        self.assertIn("az webapp start", schema_step)
+
     def test_formation3_runs_the_durable_course_scheduler(self):
         for setting in (
             "COURSE_SCHEDULER_ENABLED=1",
