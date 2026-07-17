@@ -3683,9 +3683,12 @@ function PDFModal({ platform, onClose, onUpload, onDelete, darkMode, uploading }
   const [courseMaterials, setCourseMaterials] = useState([])
   const [courseMaterialsLoading, setCourseMaterialsLoading] = useState(true)
   const [courseMaterialsError, setCourseMaterialsError] = useState('')
+  const [courseMaterialsReloadKey, setCourseMaterialsReloadKey] = useState(0)
 
   useEffect(() => {
     let cancelled = false
+    setCourseMaterialsLoading(true)
+    setCourseMaterialsError('')
     apiFetch(`/api/hr/platforms/${platform.id}/course-materials`)
       .then(async (response) => {
         const data = await response.json()
@@ -3693,13 +3696,20 @@ function PDFModal({ platform, onClose, onUpload, onDelete, darkMode, uploading }
         if (!cancelled) setCourseMaterials(Array.isArray(data.materials) ? data.materials : [])
       })
       .catch((error) => {
-        if (!cancelled) setCourseMaterialsError(error.message || 'Chargement impossible')
+        if (!cancelled) {
+          const unavailable = error instanceof TypeError || error?.message === 'Failed to fetch'
+          setCourseMaterialsError(
+            unavailable
+              ? 'Le service des supports est momentanément indisponible.'
+              : (error.message || 'Impossible de charger les supports de cours.'),
+          )
+        }
       })
       .finally(() => {
         if (!cancelled) setCourseMaterialsLoading(false)
-      })
+    })
     return () => { cancelled = true }
-  }, [platform.id])
+  }, [platform.id, courseMaterialsReloadKey])
 
   useEffect(() => {
     if (prevUploading.current && !uploading) {
@@ -3769,7 +3779,23 @@ function PDFModal({ platform, onClose, onUpload, onDelete, darkMode, uploading }
             {courseMaterialsLoading ? (
               <p className="py-3 text-sm" style={{ color: '#64748b' }}>Chargement des supports…</p>
             ) : courseMaterialsError ? (
-              <p className="py-3 text-sm" style={{ color: '#b91c1c' }}>{courseMaterialsError}</p>
+              <div
+                className="flex flex-wrap items-center justify-between gap-3 rounded-lg bg-red-50 px-3 py-3"
+                role="alert"
+              >
+                <div className="flex items-center gap-2 text-sm" style={{ color: '#991b1b' }}>
+                  <Icon name="error_outline" className="text-lg" />
+                  <span>{courseMaterialsError} Réessayez dans quelques instants.</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setCourseMaterialsReloadKey((key) => key + 1)}
+                  className="flex min-h-9 items-center gap-1.5 rounded-lg bg-white px-3 py-1.5 text-sm font-medium text-violet-700 transition-colors hover:bg-violet-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40"
+                >
+                  <Icon name="refresh" className="text-base" />
+                  <span>Réessayer</span>
+                </button>
+              </div>
             ) : courseMaterials.length === 0 ? (
               <p className="py-3 text-sm" style={{ color: '#64748b' }}>Aucun support généré pour le moment.</p>
             ) : (

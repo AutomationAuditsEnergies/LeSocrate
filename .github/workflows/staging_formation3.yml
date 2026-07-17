@@ -8,9 +8,39 @@ on:
 
 concurrency:
   group: formation3-saas-postgres-copy
-  cancel-in-progress: true
+  # A deployment may temporarily stop Formation3 while applying PostgreSQL
+  # schema changes. Queue later pushes instead of cancelling a run inside that
+  # critical section, otherwise Azure can remain stopped.
+  cancel-in-progress: false
 
 jobs:
+  recover-app:
+    name: Recover Formation3 immediately
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - name: Login to Azure Formation3
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZUREAPPSERVICE_CLIENTID_27CAD6565966460DAF8B1817C6400475 }}
+          tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_49A11822A72A4BAA8989303BCB6DFECD }}
+          subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_F503B1C3D33E465EBB0C2A66B05DE8B9 }}
+
+      - name: Start Formation3 if it was left stopped
+        shell: bash
+        run: |
+          resource_group="$(az webapp list --query "[?name=='Formation3'].resourceGroup | [0]" -o tsv)"
+          if [ -z "${resource_group}" ] || [ "${resource_group}" = "null" ]; then
+            echo "Unable to resolve resource group for Formation3" >&2
+            exit 1
+          fi
+          az webapp start \
+            --resource-group "${resource_group}" \
+            --name Formation3 \
+            >/dev/null
+
   postgres-integration:
     uses: ./.github/workflows/postgres-ci.yml
 
@@ -48,7 +78,7 @@ jobs:
 
   deploy:
     runs-on: ubuntu-latest
-    needs: build
+    needs: [build, recover-app]
     permissions:
       id-token: write
       contents: read
@@ -100,6 +130,15 @@ jobs:
             exit 1
           fi
           echo "RESOURCE_GROUP=${RESOURCE_GROUP}" >> "${GITHUB_ENV}"
+
+      - name: Recover Formation3 before deployment
+        shell: bash
+        run: |
+          # Self-heal a previous interrupted deployment before running checks.
+          az webapp start \
+            --resource-group "${RESOURCE_GROUP}" \
+            --name "${APP_NAME}" \
+            >/dev/null
 
       - name: Validate required SaaS settings
         shell: bash
@@ -242,6 +281,19 @@ jobs:
             --database-url "${DATABASE_URL}"
           restart_app
           trap - EXIT
+
+      - name: Always restart Formation3 after schema migration
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          # This separate cleanup step is intentionally outside the migration
+          # shell. It also runs when that step fails or is cancelled cleanly.
+          if [ -n "${RESOURCE_GROUP:-}" ]; then
+            az webapp start \
+              --resource-group "${RESOURCE_GROUP}" \
+              --name "${APP_NAME}" \
+              >/dev/null
+          fi
 
       - name: Configure SaaS Postgres copy
         shell: bash
