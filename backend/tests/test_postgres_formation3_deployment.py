@@ -53,6 +53,11 @@ class Formation3PurePostgresDeploymentTest(unittest.TestCase):
         ):
             self.assertIn(setting, self.workflow)
 
+    def test_web_api_and_background_workers_use_isolated_processes(self):
+        self.assertIn("STARTUP_COMMAND: python run_saas.py", self.workflow)
+        self.assertIn("PIPELINE_EMBEDDED_WORKER=0", self.workflow)
+        self.assertIn("PIPELINE_DEDICATED_WORKER=1", self.workflow)
+
     def test_deployment_requires_a_real_reminder_transport(self):
         self.assertIn("REMINDER_DELIVERY_READY", self.workflow)
         self.assertIn("REMINDER_DELIVERY_MISSING", self.workflow)

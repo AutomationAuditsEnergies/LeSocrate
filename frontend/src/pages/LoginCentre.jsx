@@ -3,6 +3,8 @@ import { Link, useNavigate } from 'react-router-dom'
 import { apiFetch } from '../api'
 import { getSupabaseClient } from '../supabaseClient'
 
+const AUTH_REQUEST_TIMEOUT_MS = 20_000
+
 function getSupabaseErrorMessage(error, fallback) {
   const message = String(error?.message || '').toLowerCase()
 
@@ -117,6 +119,7 @@ export default function LoginCentre({ preloadAdminRoute, preloadDashboardRoute }
       const response = await apiFetch(authMode === 'signup' ? '/api/admin/register' : '/api/admin/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        timeoutMs: AUTH_REQUEST_TIMEOUT_MS,
         body: JSON.stringify({
           center_name: centerName.trim(),
           username: username.trim(),
@@ -140,7 +143,11 @@ export default function LoginCentre({ preloadAdminRoute, preloadDashboardRoute }
       setError(data.error || `Erreur serveur (${response.status})`)
     } catch (err) {
       console.error('Erreur login centre:', err)
-      setError('Erreur de connexion au serveur')
+      if (err?.name === 'TimeoutError' || err?.name === 'AbortError') {
+        setError('Le serveur met trop de temps à répondre. Réessayez dans quelques instants.')
+      } else {
+        setError('Erreur de connexion au serveur')
+      }
     } finally {
       setLoading(false)
     }
@@ -164,6 +171,7 @@ export default function LoginCentre({ preloadAdminRoute, preloadDashboardRoute }
       const response = await apiFetch('/api/admin/forgot-password', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        timeoutMs: AUTH_REQUEST_TIMEOUT_MS,
         body: JSON.stringify({ username: email }),
       })
       const data = await response.json().catch(() => ({}))

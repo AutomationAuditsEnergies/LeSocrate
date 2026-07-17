@@ -13,6 +13,10 @@
     ".ttf": "font/ttf"
   },
   "globalHeaders": {
-    "Access-Control-Allow-Origin": "*"
+    "Content-Security-Policy": "object-src 'none'; base-uri 'self'; frame-ancestors 'self'",
+    "Permissions-Policy": "camera=(), geolocation=(), microphone=(self), payment=(self)",
+    "Referrer-Policy": "strict-origin-when-cross-origin",
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "SAMEORIGIN"
   }
 }

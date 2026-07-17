@@ -50,10 +50,36 @@ export function apiRequestHeaders(path = '', headers = {}) {
  * Wrapper autour de fetch qui ajoute automatiquement credentials: 'include',
  * le token X-Auth-Token et le header X-Platform-Id
  */
-export function apiFetch(path, options = {}) {
-  return fetch(apiUrl(path), {
-    ...options,
-    headers: apiRequestHeaders(path, options.headers || {}),
-    credentials: 'include',
-  })
+export async function apiFetch(path, options = {}) {
+  const {
+    timeoutMs = 0,
+    signal: callerSignal,
+    ...fetchOptions
+  } = options
+  const controller = timeoutMs > 0 ? new AbortController() : null
+  const abortFromCaller = () => controller?.abort(callerSignal?.reason)
+
+  if (controller && callerSignal) {
+    if (callerSignal.aborted) abortFromCaller()
+    else callerSignal.addEventListener('abort', abortFromCaller, { once: true })
+  }
+
+  const timeoutId = controller
+    ? window.setTimeout(
+        () => controller.abort(new DOMException('Délai de réponse dépassé', 'TimeoutError')),
+        timeoutMs,
+      )
+    : null
+
+  try {
+    return await fetch(apiUrl(path), {
+      ...fetchOptions,
+      headers: apiRequestHeaders(path, fetchOptions.headers || {}),
+      credentials: 'include',
+      ...(controller ? { signal: controller.signal } : (callerSignal ? { signal: callerSignal } : {})),
+    })
+  } finally {
+    if (timeoutId !== null) window.clearTimeout(timeoutId)
+    callerSignal?.removeEventListener?.('abort', abortFromCaller)
+  }
 }
