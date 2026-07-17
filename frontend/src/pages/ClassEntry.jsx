@@ -2,14 +2,17 @@ import { useEffect, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import { apiUrl, setPlatformId, setPlatformName, setStudentLoginPath } from '../api'
 import Index from './Index.jsx'
+import CadrenzaLogo from '../components/CadrenzaLogo.jsx'
+import './Auth.css'
 
 function ClassEntryFallback({ title, message }) {
   return (
-    <main className="flex min-h-screen items-center justify-center bg-slate-50 px-6 text-slate-950" style={{ fontFamily: 'Inter, system-ui, sans-serif' }}>
-      <section className="w-full max-w-md rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
-        <p className="text-sm font-semibold text-violet-700">Le Socrate</p>
-        <h1 className="mt-2 text-2xl font-bold tracking-tight">{title}</h1>
-        {message && <p className="mt-3 text-sm leading-6 text-slate-600">{message}</p>}
+    <main className="cadrenza-auth auth-fallback">
+      <section className="auth-fallback__card" aria-live="polite">
+        <CadrenzaLogo />
+        <h1>{title}</h1>
+        {message && <p>{message}</p>}
+        {title.startsWith('Chargement') && <div className="auth-loader" aria-hidden="true" />}
       </section>
     </main>
   )

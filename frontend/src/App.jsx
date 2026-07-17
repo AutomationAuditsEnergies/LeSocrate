@@ -52,14 +52,14 @@ function RouteFallback() {
       style={{
         position: 'fixed',
         inset: 0,
-        background: 'linear-gradient(160deg, #0f172a 0%, #1e1b4b 55%, #312e81 100%)',
+        background: '#0b1424',
         display: 'flex',
         flexDirection: 'column',
         gap: 16,
         alignItems: 'center',
         justifyContent: 'center',
         color: '#e5e7eb',
-        fontFamily: 'Inter, system-ui, sans-serif',
+        fontFamily: 'Archivo, Inter, system-ui, sans-serif',
       }}
     >
       <div
@@ -67,13 +67,13 @@ function RouteFallback() {
           width: 52,
           height: 52,
           borderRadius: '50%',
-          border: '3px solid rgba(255, 255, 255, 0.2)',
-          borderTopColor: '#ffffff',
-          animation: 'socrate-spin 0.8s linear infinite',
+          border: '3px solid rgba(242, 138, 75, 0.25)',
+          borderTopColor: '#f28a4b',
+          animation: 'cadrenza-spin 0.8s linear infinite',
         }}
       />
       <div style={{ fontSize: 13, fontWeight: 700, letterSpacing: '0.28em', textTransform: 'uppercase' }}>
-        Chargement
+        Cadrenza
       </div>
     </div>
   )
@@ -251,11 +251,11 @@ function NotFound() {
   return (
     <main className="flex min-h-screen items-center justify-center bg-slate-950 px-6 text-white">
       <div className="max-w-md">
-        <p className="text-sm font-semibold text-violet-300">Page introuvable</p>
+        <p className="text-sm font-semibold text-orange-300">Cadrenza · Page introuvable</p>
         <h1 className="mt-3 text-3xl font-bold">Cette adresse n'existe pas.</h1>
         <a
           href="/connexion-centre"
-          className="mt-8 inline-flex h-11 items-center justify-center rounded-lg bg-violet-500 px-5 text-sm font-semibold text-white transition hover:bg-violet-400"
+          className="mt-8 inline-flex h-11 items-center justify-center rounded-lg bg-orange-400 px-5 text-sm font-semibold text-slate-950 transition hover:bg-orange-300"
         >
           Aller à la connexion
         </a>

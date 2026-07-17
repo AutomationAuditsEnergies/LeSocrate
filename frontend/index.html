@@ -2,80 +2,83 @@
 <html lang="fr">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <link rel="icon" type="image/svg+xml" href="/cadrenza-mark.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Le Socrate</title>
-    <!-- Preconnect for Google Fonts -->
+    <meta name="theme-color" content="#0b1424" />
+    <meta
+      name="description"
+      content="Cadrenza transforme un référentiel RNCP en parcours synchrone, réutilisable et pilotable promotion après promotion."
+    />
+    <meta property="og:title" content="Cadrenza — Parcours RNCP synchrones" />
+    <meta
+      property="og:description"
+      content="Produisez un parcours une fois, puis orchestrez chaque promotion au bon rythme."
+    />
+    <meta property="og:type" content="website" />
+    <title>Cadrenza — Parcours RNCP synchrones</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <!-- Inter Font -->
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-    <!-- Plus Jakarta Sans + Space Grotesk (Landing page) -->
-    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=Space+Grotesk:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link
+      href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700;800&family=Inter:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    >
     <!-- Material Icons Round + Symbols Rounded : self-hostés via index.css
          (plus de dépendance Google Fonts → icônes fiables sur la landing) -->
-    <!-- Fond de la page de login : téléchargé dès le HTML, avant même le JS -->
-    <link rel="preload" as="image" href="/static/images/rocket.jpg" fetchpriority="high">
-    <!-- Wallpaper hero de la landing : préchargé pour un affichage instantané -->
-    <link rel="preload" as="image" href="/fond-hero2.webp" fetchpriority="high">
+    <link rel="preload" as="image" href="/cadrenza-robot-fleet.webp" type="image/webp" fetchpriority="high">
     <style>
-      /* Splash affiché pendant le téléchargement du bundle JS — remplacé dès
-         que React monte (#root:empty ne matche plus). Évite l'écran noir. */
+      /* État de chargement avant le montage de React. */
       #root:empty {
         position: fixed;
         inset: 0;
-        background-color: #1e1b4b;
-        background-image: url("/static/images/rocket.jpg"), linear-gradient(160deg, #0f172a 0%, #1e1b4b 55%, #312e81 100%);
-        background-size: cover;
-        background-position: center;
+        background: #f7f8fb;
       }
       #root:empty::before {
         content: "";
         position: absolute;
-        top: calc(50% - 26px);
-        left: calc(50% - 26px);
-        width: 52px;
-        height: 52px;
-        border-radius: 50%;
-        border: 3px solid rgba(139, 92, 246, 0.25);
-        border-top-color: #8B5CF6;
-        animation: socrate-spin 0.8s linear infinite;
+        top: calc(50% - 32px);
+        left: calc(50% - 28px);
+        width: 56px;
+        height: 56px;
+        background: url("/cadrenza-mark.svg") center / contain no-repeat;
+        animation: cadrenza-pulse 1.2s ease-in-out infinite;
       }
       #root:empty::after {
-        content: "LE SOCRATE";
+        content: "CADRENZA";
         position: absolute;
-        top: calc(50% + 44px);
+        top: calc(50% + 40px);
         left: 0;
         right: 0;
         text-align: center;
-        font-family: "Poppins", system-ui, sans-serif;
+        font-family: "Archivo", "Inter", system-ui, sans-serif;
         font-size: 13px;
-        font-weight: 600;
-        letter-spacing: 0.35em;
-        color: rgba(226, 232, 240, 0.85);
+        font-weight: 700;
+        letter-spacing: 0.28em;
+        color: #0b1424;
       }
-      @keyframes socrate-spin {
+      @keyframes cadrenza-spin {
         to { transform: rotate(360deg); }
       }
-
-      /* Sur la landing : pas de splash "plateformes de cours" ni de spinner.
-         On affiche directement le wallpaper de la landing (préchargé) pour une
-         transition invisible vers la page. Classe posée par le script ci-dessous. */
-      html.landing-boot #root:empty {
-        background-color: #03093d;
-        background-image: url("/fond-hero2.webp");
-        background-size: cover;
-        background-position: center 15%;
+      @keyframes cadrenza-pulse {
+        0%, 100% { opacity: 0.72; transform: scale(0.96); }
+        50% { opacity: 1; transform: scale(1); }
       }
-      html.landing-boot #root:empty::before,
+
+      /* La landing amorce directement son univers sombre et son visuel robotique. */
+      html.landing-boot #root:empty {
+        background-color: #0b1424;
+        background-image:
+          linear-gradient(90deg, rgba(11, 20, 36, 0.98) 0%, rgba(11, 20, 36, 0.82) 45%, rgba(11, 20, 36, 0.32) 100%),
+          url("/cadrenza-robot-fleet.webp");
+        background-size: cover;
+        background-position: center;
+      }
       html.landing-boot #root:empty::after {
-        content: none;
-        display: none;
+        color: #f7f8fb;
       }
     </style>
     <script>
-      // Détecte la route AVANT le rendu pour adapter le splash (cf. CSS ci-dessus).
-      if (window.location.pathname === '/landing') {
+      // Détecte la landing avant le rendu pour adapter le splash.
+      if (window.location.pathname === '/' || window.location.pathname === '/landing') {
         document.documentElement.classList.add('landing-boot');
       }
     </script>
