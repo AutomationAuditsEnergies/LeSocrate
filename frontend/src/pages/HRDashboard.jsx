@@ -1162,7 +1162,7 @@ export default function HRDashboard() {
                   Espace centre
                 </p>
                 <h1 className="truncate text-lg font-semibold tracking-tight" style={{ color: colors.text }}>
-                  Le Socrate
+                  Cadrenza
                 </h1>
               </div>
               <div className="flex items-center gap-2">

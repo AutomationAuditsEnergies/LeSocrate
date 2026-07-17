@@ -1,6 +1,8 @@
-import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
+import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import { useState, useEffect } from 'react'
-import { apiFetch, apiUrl, getStudentLoginPath, setPlatformId, setPlatformName, setStudentLoginPath } from '../api'
+import { apiFetch, apiUrl, getPlatformName, getStudentLoginPath, setPlatformId, setPlatformName, setStudentLoginPath } from '../api'
+import CadrenzaLogo from '../components/CadrenzaLogo.jsx'
+import './Auth.css'
 
 export default function Index({ preloadCourseRoutes, preloadAttenteRoute, preloadVideoRoute }) {
   const navigate = useNavigate()
@@ -9,10 +11,10 @@ export default function Index({ preloadCourseRoutes, preloadAttenteRoute, preloa
   const invitationToken = searchParams.get('invite') || ''
   const [submitting, setSubmitting] = useState(false)
   const [formMessage, setFormMessage] = useState(null)
+  const [showPassword, setShowPassword] = useState(false)
+  const [platformLabel, setPlatformLabel] = useState(() => getPlatformName())
 
   useEffect(() => {
-    document.body.style.overflow = 'hidden'
-
     const pParam = searchParams.get('p')
     if (pParam) {
       setPlatformId(pParam)
@@ -22,6 +24,7 @@ export default function Index({ preloadCourseRoutes, preloadAttenteRoute, preloa
         .then(data => {
           if (data.name) {
             setPlatformName(data.name)
+            setPlatformLabel(data.name)
           }
         })
         .catch(() => {})
@@ -29,9 +32,6 @@ export default function Index({ preloadCourseRoutes, preloadAttenteRoute, preloa
       setStudentLoginPath('/')
     }
 
-    return () => {
-      document.body.style.overflow = ''
-    }
   }, [location.pathname, searchParams])
 
   useEffect(() => {
@@ -122,100 +122,117 @@ export default function Index({ preloadCourseRoutes, preloadAttenteRoute, preloa
   }
 
   return (
-    <main className="min-h-screen bg-[#f8fafc] text-slate-950" style={{ fontFamily: 'Inter, system-ui, sans-serif' }}>
-      <div className="grid min-h-screen grid-cols-1 lg:grid-cols-[minmax(0,1fr)_520px]">
-        <section
-          className="relative hidden overflow-hidden bg-[#03093d] lg:flex"
-          style={{
-            backgroundImage: 'url(/student-login-wallpaper.png)',
-            backgroundSize: 'cover',
-            backgroundPosition: 'center',
-          }}
-        />
+    <main className="cadrenza-auth">
+      <a className="auth-skip-link" href="#auth-main">Aller au formulaire</a>
+      <div className="auth-layout">
+        <aside className="auth-visual" aria-label="Accès apprenant Cadrenza">
+          <Link to="/" className="auth-home-link" aria-label="Cadrenza, retour à l'accueil">
+            <CadrenzaLogo />
+          </Link>
 
-        <section className="flex min-h-screen items-center justify-center px-6 py-10 sm:px-10 lg:px-12">
-          <div className="w-full max-w-[420px]">
-            <div className="mb-8">
-              <p className="mb-3 text-sm font-semibold text-violet-700">Formation</p>
-              <h2 className="text-3xl font-bold text-slate-950">
-                Connexion
-              </h2>
-              <p className="mt-3 text-sm leading-6 text-slate-600">
-                {invitationToken
-                  ? 'Votre lien d’invitation est reconnu. Indiquez simplement votre nom et votre prénom.'
-                  : 'Indiquez votre nom, votre prénom et le code secret reçu par e-mail.'}
-              </p>
+          <div className="auth-visual__content">
+            <p className="auth-eyebrow">Espace apprenant</p>
+            <h1>Votre cours commence ici.</h1>
+            <p className="auth-visual__lead">
+              Rejoignez votre promotion et suivez la séance au rythme défini par votre formateur.
+            </p>
+            <div className="auth-robot-stage auth-robot-stage--single" aria-hidden="true">
+              <img src="/robot-violet.png" alt="" draggable={false} />
             </div>
+          </div>
+
+          <div className="auth-visual__meta" aria-label="Fonctions de l'espace apprenant">
+            <span>Cours synchronisé</span>
+            <span>Progression lisible</span>
+            <span>Accès sécurisé</span>
+          </div>
+        </aside>
+
+        <section className="auth-panel" id="auth-main">
+          <div className="auth-panel__inner">
+            <Link to="/" className="auth-mobile-logo" aria-label="Cadrenza, retour à l'accueil">
+              <CadrenzaLogo />
+            </Link>
+
+            <header className="auth-heading">
+              <p className="auth-heading__kicker">{platformLabel}</p>
+              <h2>Rejoindre le cours</h2>
+              <p>
+                {invitationToken
+                  ? 'Votre invitation est reconnue. Renseignez votre identité pour rejoindre la classe.'
+                  : 'Renseignez votre identité et le code secret transmis par votre centre de formation.'}
+              </p>
+            </header>
 
             {formMessage && (
               <div
-                className={`mb-6 rounded-lg border px-4 py-3 text-sm font-medium ${
-                  formMessage.type === 'success'
-                    ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
-                    : 'border-red-200 bg-red-50 text-red-700'
-                }`}
+                className={`auth-alert ${formMessage.type === 'success' ? 'auth-alert--success' : 'auth-alert--error'}`}
                 role={formMessage.type === 'error' ? 'alert' : 'status'}
+                aria-live={formMessage.type === 'error' ? 'assertive' : 'polite'}
               >
                 {formMessage.text}
               </div>
             )}
 
-            <form className="space-y-5" onSubmit={handleFormSubmit}>
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                <div>
-                  <label className="mb-1.5 block text-sm font-medium text-slate-800" htmlFor="prenom">
-                    Prénom
-                  </label>
+            <form className="auth-form" onSubmit={handleFormSubmit}>
+              <div className="auth-form__row">
+                <div className="auth-field">
+                  <label htmlFor="prenom">Prénom</label>
                   <input
                     id="prenom"
                     name="prenom"
                     type="text"
                     autoComplete="given-name"
                     placeholder="Votre prénom"
-                    className="h-12 w-full rounded-lg border border-slate-300 bg-white px-4 text-sm text-slate-950 outline-none transition placeholder:text-slate-500 focus:border-violet-500 focus:ring-2 focus:ring-violet-500/25"
+                    required
                   />
                 </div>
-                <div>
-                  <label className="mb-1.5 block text-sm font-medium text-slate-800" htmlFor="nom">
-                    Nom
-                  </label>
+                <div className="auth-field">
+                  <label htmlFor="nom">Nom</label>
                   <input
                     id="nom"
                     name="nom"
                     type="text"
                     autoComplete="family-name"
                     placeholder="Votre nom"
-                    className="h-12 w-full rounded-lg border border-slate-300 bg-white px-4 text-sm text-slate-950 outline-none transition placeholder:text-slate-500 focus:border-violet-500 focus:ring-2 focus:ring-violet-500/25"
+                    required
                   />
                 </div>
               </div>
 
               {!invitationToken && (
-                <div>
-                  <label className="mb-1.5 block text-sm font-medium text-slate-800" htmlFor="password">
-                    Code secret de la séance
-                  </label>
-                  <input
-                    id="password"
-                    name="password"
-                    type="password"
-                    autoComplete="current-password"
-                    placeholder="Code reçu par e-mail"
-                    className="h-12 w-full rounded-lg border border-slate-300 bg-white px-4 text-sm text-slate-950 outline-none transition placeholder:text-slate-500 focus:border-violet-500 focus:ring-2 focus:ring-violet-500/25"
-                  />
+                <div className="auth-field">
+                  <label htmlFor="password">Code secret de la séance</label>
+                  <div className="auth-password-wrap">
+                    <input
+                      id="password"
+                      name="password"
+                      type={showPassword ? 'text' : 'password'}
+                      autoComplete="current-password"
+                      placeholder="Code reçu par e-mail"
+                      required
+                    />
+                    <button
+                      type="button"
+                      className="auth-password-toggle"
+                      onClick={() => setShowPassword((visible) => !visible)}
+                      aria-label={showPassword ? 'Masquer le code secret' : 'Afficher le code secret'}
+                      aria-pressed={showPassword}
+                    >
+                      {showPassword ? 'Masquer' : 'Afficher'}
+                    </button>
+                  </div>
                 </div>
               )}
 
-              <button
-                type="submit"
-                disabled={submitting}
-                className="mt-2 inline-flex h-12 w-full items-center justify-center rounded-lg bg-[#8B5CF6] px-5 text-sm font-semibold text-white transition hover:bg-[#7c3aed] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet-500 disabled:cursor-not-allowed disabled:bg-[#a78bfa]"
-              >
-                {submitting
-                  ? 'Connexion...'
-                  : 'Entrer au cours'}
+              <button type="submit" disabled={submitting} className="auth-submit">
+                {submitting ? 'Connexion…' : 'Entrer dans la classe'}
               </button>
             </form>
+
+            <p className="auth-assurance">
+              {invitationToken ? 'Invitation vérifiée' : 'Accès réservé aux apprenants inscrits'}
+            </p>
           </div>
         </section>
       </div>

@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { apiFetch } from '../api'
 import { getSupabaseClient } from '../supabaseClient'
+import CadrenzaLogo from '../components/CadrenzaLogo.jsx'
+import './Auth.css'
 
 const AUTH_REQUEST_TIMEOUT_MS = 20_000
 
@@ -13,7 +15,7 @@ function getSupabaseErrorMessage(error, fallback) {
   }
 
   if (message.includes('password should be at least')) {
-    return 'Le mot de passe doit contenir au moins 6 caractères.'
+    return 'Le mot de passe doit contenir au moins 8 caractères.'
   }
 
   if (message.includes('invalid login credentials')) {
@@ -32,7 +34,11 @@ export default function LoginCentre({ preloadAdminRoute, preloadDashboardRoute }
       || hashParams.get('type') === 'recovery'
       || (hashParams.has('access_token') && hashParams.has('refresh_token'))
   })()
-  const [authMode, setAuthMode] = useState('login')
+  const initialAuthMode = (() => {
+    if (typeof window === 'undefined' || initialPasswordRecoveryMode) return 'login'
+    return new URLSearchParams(window.location.search).get('mode') === 'signup' ? 'signup' : 'login'
+  })()
+  const [authMode, setAuthMode] = useState(initialAuthMode)
   const [centerName, setCenterName] = useState('')
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
@@ -42,6 +48,8 @@ export default function LoginCentre({ preloadAdminRoute, preloadDashboardRoute }
   const [loading, setLoading] = useState(false)
   const [resetLoading, setResetLoading] = useState(false)
   const [passwordRecoveryMode, setPasswordRecoveryMode] = useState(initialPasswordRecoveryMode)
+  const [showPassword, setShowPassword] = useState(false)
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false)
   const navigate = useNavigate()
 
   useEffect(() => {
@@ -83,6 +91,11 @@ export default function LoginCentre({ preloadAdminRoute, preloadDashboardRoute }
 
     if (authMode === 'signup' && password !== confirmPassword) {
       setError('Les deux mots de passe ne correspondent pas')
+      return
+    }
+
+    if ((authMode === 'signup' || passwordRecoveryMode) && password.length < 8) {
+      setError('Le mot de passe doit contenir au moins 8 caractères.')
       return
     }
 
@@ -198,90 +211,89 @@ export default function LoginCentre({ preloadAdminRoute, preloadDashboardRoute }
   }
 
   return (
-    <main className="min-h-screen bg-[#f8fafc] text-slate-950" style={{ fontFamily: 'Inter, system-ui, sans-serif' }}>
-      <div className="grid min-h-screen grid-cols-1 lg:grid-cols-[minmax(0,1fr)_520px]">
-        <section
-          className="relative hidden overflow-hidden bg-[#03093d] lg:flex"
-          style={{
-            backgroundImage: 'url(/wallpaper-centre.webp)',
-            backgroundSize: 'cover',
-            backgroundPosition: 'center',
-          }}
-        >
-          <div className="relative z-10 flex w-full items-center justify-center p-12">
-            <img
-              src="/robot-blue.png"
-              alt="Professeur IA"
-              draggable={false}
-              className="w-full max-w-[420px] object-contain drop-shadow-2xl"
-            />
-          </div>
-        </section>
+    <main className="cadrenza-auth">
+      <a className="auth-skip-link" href="#auth-main">Aller au formulaire</a>
+      <div className="auth-layout">
+        <aside className="auth-visual" aria-label="Cadrenza pour les centres de formation">
+          <Link to="/" className="auth-home-link" aria-label="Cadrenza, retour à l'accueil">
+            <CadrenzaLogo />
+          </Link>
 
-        <section className="flex min-h-screen items-center justify-center px-6 py-10 sm:px-10 lg:px-12">
-          <div className="w-full max-w-[420px]">
-            <Link to="/" className="mb-10 inline-flex items-center gap-3 text-slate-950 lg:hidden">
-              <span className="h-3 w-3 rounded-full bg-[#8B5CF6]" />
-              <span className="text-sm font-semibold uppercase">Le Socrate</span>
+          <div className="auth-visual__content">
+            <p className="auth-eyebrow">Espace centre</p>
+            <h1>Pilotez le parcours. Gardez le rythme.</h1>
+            <p className="auth-visual__lead">
+              Cadrenza réunit vos modules, vos promotions et vos preuves RNCP dans un même poste de pilotage.
+            </p>
+            <div className="auth-robot-stage" aria-hidden="true">
+              <img src="/cadrenza-robot-fleet.webp" alt="" draggable={false} />
+            </div>
+          </div>
+
+          <div className="auth-visual__meta" aria-label="Fonctions de l'espace centre">
+            <span>Modules durables</span>
+            <span>Promotions synchronisées</span>
+            <span>Suivi centralisé</span>
+          </div>
+        </aside>
+
+        <section className="auth-panel" id="auth-main">
+          <div className="auth-panel__inner">
+            <Link to="/" className="auth-mobile-logo" aria-label="Cadrenza, retour à l'accueil">
+              <CadrenzaLogo />
             </Link>
 
-            <div className="mb-8">
-              <p className="mb-3 text-sm font-semibold text-violet-700">Centre de formation</p>
-              <h2 className="text-3xl font-bold text-slate-950">
-                {passwordRecoveryMode ? 'Nouveau mot de passe' : (authMode === 'signup' ? 'Inscription' : 'Connexion')}
+            <header className="auth-heading">
+              <p className="auth-heading__kicker">Centre de formation</p>
+              <h2>
+                {passwordRecoveryMode ? 'Nouveau mot de passe' : (authMode === 'signup' ? 'Créer votre espace' : 'Bon retour parmi nous')}
               </h2>
-              <p className="mt-3 text-sm leading-6 text-slate-600">
+              <p>
                 {passwordRecoveryMode
-                  ? 'Saisissez votre nouveau mot de passe pour reprendre accès au tableau de bord.'
+                  ? 'Définissez un nouveau mot de passe pour retrouver votre tableau de bord.'
                   : authMode === 'signup'
-                  ? 'Créez votre accès pour gérer vos plateformes de formation.'
-                  : 'Identifiez-vous pour accéder au tableau de bord de pilotage.'}
+                    ? 'Créez l’accès administrateur qui vous permettra de structurer vos parcours.'
+                    : 'Connectez-vous pour reprendre le pilotage de vos formations.'}
               </p>
-            </div>
+            </header>
 
             {!passwordRecoveryMode && (
-            <div className="mb-7 grid h-11 grid-cols-2 rounded-lg bg-slate-200 p-1">
-              {[
-                ['login', 'Connexion'],
-                ['signup', 'Inscription'],
-              ].map(([mode, label]) => (
-                <button
-                  key={mode}
-                  type="button"
-                  onClick={() => {
-                    setAuthMode(mode)
-                    setError('')
-                    setNotice('')
-                  }}
-                  className={`rounded-md text-sm font-semibold transition ${
-                    authMode === mode
-                      ? 'bg-white text-violet-700 shadow-sm'
-                      : 'text-slate-600 hover:text-slate-950'
-                  }`}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
+              <div className="auth-mode-switch" role="group" aria-label="Mode d'authentification">
+                {[
+                  ['login', 'Connexion'],
+                  ['signup', 'Créer un compte'],
+                ].map(([mode, label]) => (
+                  <button
+                    key={mode}
+                    type="button"
+                    aria-pressed={authMode === mode}
+                    onClick={() => {
+                      setAuthMode(mode)
+                      setError('')
+                      setNotice('')
+                    }}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
             )}
 
             {error && (
-              <div className="mb-6 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-700">
+              <div className="auth-alert auth-alert--error" role="alert" aria-live="assertive">
                 {error}
               </div>
             )}
             {notice && (
-              <div className="mb-6 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-800">
+              <div className="auth-alert auth-alert--success" role="status" aria-live="polite">
                 {notice}
               </div>
             )}
 
-            <form className="space-y-5" onSubmit={handleSubmit}>
-              {authMode === 'signup' && (
-                <div>
-                  <label htmlFor="centre-name" className="mb-1.5 block text-sm font-medium text-slate-800">
-                    Nom du centre
-                  </label>
+            <form className="auth-form" onSubmit={handleSubmit}>
+              {authMode === 'signup' && !passwordRecoveryMode && (
+                <div className="auth-field">
+                  <label htmlFor="centre-name">Nom du centre</label>
                   <input
                     id="centre-name"
                     name="center_name"
@@ -291,33 +303,31 @@ export default function LoginCentre({ preloadAdminRoute, preloadDashboardRoute }
                     onChange={(event) => setCenterName(event.target.value)}
                     required
                     placeholder="Votre centre de formation"
-                    className="h-12 w-full rounded-lg border border-slate-300 bg-white px-4 text-sm text-slate-950 outline-none transition placeholder:text-slate-500 focus:border-violet-500 focus:ring-2 focus:ring-violet-500/25"
                   />
                 </div>
               )}
 
               {!passwordRecoveryMode && (
-              <div>
-                <label htmlFor="centre-username" className="mb-1.5 block text-sm font-medium text-slate-800">
-                  {authMode === 'signup' ? 'Email ou identifiant' : 'Identifiant'}
-                </label>
-                <input
-                  id="centre-username"
-                  name="username"
-                  type="text"
-                  autoComplete={authMode === 'signup' ? 'email' : 'username'}
-                  value={username}
-                  onChange={(event) => setUsername(event.target.value)}
-                  required
-                  placeholder={authMode === 'signup' ? 'contact@centre.fr' : 'Votre identifiant'}
-                  className="h-12 w-full rounded-lg border border-slate-300 bg-white px-4 text-sm text-slate-950 outline-none transition placeholder:text-slate-500 focus:border-violet-500 focus:ring-2 focus:ring-violet-500/25"
-                />
-              </div>
+                <div className="auth-field">
+                  <label htmlFor="centre-username">
+                    {authMode === 'signup' ? 'Email ou identifiant' : 'Identifiant'}
+                  </label>
+                  <input
+                    id="centre-username"
+                    name="username"
+                    type="text"
+                    autoComplete={authMode === 'signup' ? 'email' : 'username'}
+                    value={username}
+                    onChange={(event) => setUsername(event.target.value)}
+                    required
+                    placeholder={authMode === 'signup' ? 'contact@centre.fr' : 'Votre identifiant'}
+                  />
+                </div>
               )}
 
-              <div>
-                <div className="mb-1.5 flex items-center justify-between gap-3">
-                  <label htmlFor="centre-password" className="block text-sm font-medium text-slate-800">
+              <div className="auth-field">
+                <div className="auth-field__head">
+                  <label htmlFor="centre-password">
                     {passwordRecoveryMode ? 'Nouveau mot de passe' : 'Mot de passe'}
                   </label>
                   {authMode === 'login' && !passwordRecoveryMode && (
@@ -325,54 +335,78 @@ export default function LoginCentre({ preloadAdminRoute, preloadDashboardRoute }
                       type="button"
                       onClick={handleForgotPassword}
                       disabled={resetLoading}
-                      className="text-sm font-semibold text-violet-700 transition hover:text-violet-900 disabled:cursor-not-allowed disabled:text-slate-400"
+                      className="auth-text-button"
                     >
-                      {resetLoading ? 'Envoi...' : 'Mot de passe oublié ?'}
+                      {resetLoading ? 'Envoi en cours…' : 'Mot de passe oublié ?'}
                     </button>
                   )}
                 </div>
-                <input
-                  id="centre-password"
-                  name="password"
-                  type="password"
-                  autoComplete={authMode === 'signup' || passwordRecoveryMode ? 'new-password' : 'current-password'}
-                  value={password}
-                  onChange={(event) => setPassword(event.target.value)}
-                  required
-                  placeholder={passwordRecoveryMode ? 'Nouveau mot de passe' : 'Votre mot de passe'}
-                  className="h-12 w-full rounded-lg border border-slate-300 bg-white px-4 text-sm text-slate-950 outline-none transition placeholder:text-slate-500 focus:border-violet-500 focus:ring-2 focus:ring-violet-500/25"
-                />
+                <div className="auth-password-wrap">
+                  <input
+                    id="centre-password"
+                    name="password"
+                    type={showPassword ? 'text' : 'password'}
+                    autoComplete={authMode === 'signup' || passwordRecoveryMode ? 'new-password' : 'current-password'}
+                    value={password}
+                    onChange={(event) => setPassword(event.target.value)}
+                    required
+                    minLength={authMode === 'signup' || passwordRecoveryMode ? 8 : undefined}
+                    aria-describedby={authMode === 'signup' || passwordRecoveryMode ? 'centre-password-hint' : undefined}
+                    placeholder={passwordRecoveryMode ? 'Nouveau mot de passe' : 'Votre mot de passe'}
+                  />
+                  <button
+                    type="button"
+                    className="auth-password-toggle"
+                    onClick={() => setShowPassword((visible) => !visible)}
+                    aria-label={showPassword ? 'Masquer le mot de passe' : 'Afficher le mot de passe'}
+                    aria-pressed={showPassword}
+                  >
+                    {showPassword ? 'Masquer' : 'Afficher'}
+                  </button>
+                </div>
+                {(authMode === 'signup' || passwordRecoveryMode) && (
+                  <p className="auth-field__hint" id="centre-password-hint">8 caractères minimum.</p>
+                )}
               </div>
 
               {(authMode === 'signup' || passwordRecoveryMode) && (
-                <div>
-                  <label htmlFor="centre-confirm-password" className="mb-1.5 block text-sm font-medium text-slate-800">
+                <div className="auth-field">
+                  <label htmlFor="centre-confirm-password">
                     {passwordRecoveryMode ? 'Confirmer le nouveau mot de passe' : 'Confirmer le mot de passe'}
                   </label>
-                  <input
-                    id="centre-confirm-password"
-                    name="confirm_password"
-                    type="password"
-                    autoComplete="new-password"
-                    value={confirmPassword}
-                    onChange={(event) => setConfirmPassword(event.target.value)}
-                    required
-                    placeholder={passwordRecoveryMode ? 'Confirmez le nouveau mot de passe' : 'Confirmez votre mot de passe'}
-                    className="h-12 w-full rounded-lg border border-slate-300 bg-white px-4 text-sm text-slate-950 outline-none transition placeholder:text-slate-500 focus:border-violet-500 focus:ring-2 focus:ring-violet-500/25"
-                  />
+                  <div className="auth-password-wrap">
+                    <input
+                      id="centre-confirm-password"
+                      name="confirm_password"
+                      type={showConfirmPassword ? 'text' : 'password'}
+                      autoComplete="new-password"
+                      value={confirmPassword}
+                      onChange={(event) => setConfirmPassword(event.target.value)}
+                      required
+                      minLength={8}
+                      placeholder="Saisissez-le une seconde fois"
+                    />
+                    <button
+                      type="button"
+                      className="auth-password-toggle"
+                      onClick={() => setShowConfirmPassword((visible) => !visible)}
+                      aria-label={showConfirmPassword ? 'Masquer la confirmation' : 'Afficher la confirmation'}
+                      aria-pressed={showConfirmPassword}
+                    >
+                      {showConfirmPassword ? 'Masquer' : 'Afficher'}
+                    </button>
+                  </div>
                 </div>
               )}
 
-              <button
-                type="submit"
-                disabled={loading}
-                className="mt-2 inline-flex h-12 w-full items-center justify-center rounded-lg bg-[#8B5CF6] px-5 text-sm font-semibold text-white transition hover:bg-[#7c3aed] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet-500 disabled:cursor-not-allowed disabled:bg-[#a78bfa]"
-              >
+              <button type="submit" disabled={loading} className="auth-submit">
                 {loading
-                  ? (passwordRecoveryMode ? 'Modification...' : authMode === 'signup' ? 'Création...' : 'Connexion...')
-                  : (passwordRecoveryMode ? 'Modifier le mot de passe' : authMode === 'signup' ? 'Créer le compte' : 'Accéder au tableau de bord')}
+                  ? (passwordRecoveryMode ? 'Modification…' : authMode === 'signup' ? 'Création…' : 'Connexion…')
+                  : (passwordRecoveryMode ? 'Enregistrer le mot de passe' : authMode === 'signup' ? 'Créer mon espace' : 'Accéder au tableau de bord')}
               </button>
             </form>
+
+            <p className="auth-assurance">Accès chiffré · Données de formation cloisonnées</p>
           </div>
         </section>
       </div>

@@ -119,22 +119,6 @@ a {
   background: transparent;
 }
 
-/* Landing page — Stitch design classes */
-.font-display {
-  font-family: 'Space Grotesk', sans-serif;
-}
-
-.text-gradient {
-  background-clip: text;
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-image: linear-gradient(to right, #5B5BFF, #FF6B8B);
-}
-
-.soft-shadow {
-  box-shadow: 0 20px 40px -10px rgba(91, 91, 255, 0.15);
-}
-
 .material-icons-round {
   font-family: 'Material Icons Round', sans-serif !important;
   font-weight: normal;
