@@ -192,6 +192,8 @@ function StudentClassPreview() {
 
 export default function Landing() {
   const navigate = useNavigate()
+  const platformId = new URLSearchParams(window.location.search).get('p')
+  const studentCourseHref = platformId ? `/cours?p=${encodeURIComponent(platformId)}` : '/cours'
   const [mobileOpen, setMobileOpen] = useState(false)
   const [scrolled, setScrolled] = useState(false)
   const [activeAgent, setActiveAgent] = useState(AGENTS[0])
@@ -241,7 +243,7 @@ export default function Landing() {
       <header className={`site-header ${scrolled ? 'site-header--scrolled' : ''}`}>
         <div className="announcement-bar">
           <span><RadioTower size={14} /> Plateforme conçue pour les centres de formation RNCP</span>
-          <a href="/cours">Accès apprenant <ArrowRight size={14} /></a>
+          <a href={studentCourseHref}>Accès apprenant <ArrowRight size={14} /></a>
         </div>
         <nav className="site-nav" aria-label="Navigation principale">
           <a className="site-nav__brand" href="#accueil" onClick={closeMenu}>
@@ -282,7 +284,7 @@ export default function Landing() {
             <a href="#agents" onClick={closeMenu}>Les agents</a>
             <a href="#experience" onClick={closeMenu}>La classe</a>
             <a href="#pilotage" onClick={closeMenu}>Le pilotage</a>
-            <a href="/cours" onClick={closeMenu}>Accès apprenant</a>
+            <a href={studentCourseHref} onClick={closeMenu}>Accès apprenant</a>
             <button type="button" onClick={() => navigate('/connexion-centre')}>Connexion centre</button>
             <button type="button" className="button--signal" onClick={() => navigate('/connexion-centre?mode=signup')}>
               Créer un espace centre
