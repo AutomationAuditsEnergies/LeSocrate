@@ -17,6 +17,7 @@ import {
   ShieldCheck,
   UsersRound,
   Volume2,
+  WandSparkles,
   X,
 } from 'lucide-react'
 import CadrenzaLogo from '../components/CadrenzaLogo.jsx'
@@ -298,7 +299,7 @@ export default function Landing() {
 
             <div className="hero__command" role="group" aria-label="Découvrir Cadrenza">
               <div className="hero__command-prompt">
-                <FileStack size={21} aria-hidden="true" />
+                <WandSparkles size={22} aria-hidden="true" />
                 <span>Prépare le module TP Employé commercial à partir du REAC</span>
               </div>
               <div className="hero__command-footer">

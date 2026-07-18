@@ -404,52 +404,56 @@
 }
 
 .hero__command {
-  width: min(860px, 100%);
+  width: min(920px, 100%);
   margin: 52px auto 0;
   overflow: hidden;
-  border: 1px solid oklch(1 0 0 / 0.16);
-  border-radius: 16px;
-  background: oklch(0.205 0.038 260 / 0.97);
+  border: 1px solid oklch(0.58 0.035 55 / 0.3);
+  border-radius: 28px;
+  background:
+    radial-gradient(circle at 62% 92%, oklch(0.73 0.17 53 / 0.13), transparent 31%),
+    oklch(0.19 0.028 48 / 0.98);
+  box-shadow:
+    inset 0 1px 0 oklch(1 0 0 / 0.06),
+    0 8px 8px oklch(0.08 0.02 48 / 0.2);
   text-align: left;
 }
 
 .hero__command-prompt {
-  min-height: 96px;
+  min-height: 122px;
   display: flex;
   align-items: flex-start;
-  gap: 14px;
-  padding: 28px 30px;
+  gap: 16px;
+  padding: 31px 38px;
   color: oklch(0.94 0.01 260);
-  font-size: clamp(0.98rem, 1.4vw, 1.12rem);
+  font-size: clamp(1rem, 1.5vw, 1.17rem);
   font-weight: 550;
 }
 
 .hero__command-prompt svg {
   flex: 0 0 auto;
   margin-top: 2px;
-  color: var(--cadrenza-signal);
+  color: oklch(0.7 0.035 55);
 }
 
 .hero__command-footer {
-  min-height: 76px;
+  min-height: 94px;
   display: flex;
   align-items: center;
   gap: 16px;
-  padding: 12px 14px 14px;
-  border-top: 1px solid oklch(1 0 0 / 0.08);
+  padding: 12px 28px 28px 30px;
 }
 
 .hero__command-context {
-  min-height: 44px;
+  min-height: 54px;
   display: inline-flex;
   align-items: center;
   gap: 9px;
   flex: 0 0 auto;
-  padding: 0 16px;
-  border: 1px solid oklch(1 0 0 / 0.16);
+  padding: 0 20px;
+  border: 1px solid oklch(0.62 0.025 55 / 0.35);
   border-radius: 999px;
   color: oklch(0.83 0.02 260);
-  font-size: 0.78rem;
+  font-size: 0.86rem;
   font-weight: 700;
 }
 
@@ -462,6 +466,26 @@
   justify-content: flex-end;
   gap: 12px;
   margin-left: auto;
+}
+
+.hero__actions .button {
+  min-height: 56px;
+  padding-inline: 26px;
+  font-size: 0.96rem;
+}
+
+.hero__actions .button--signal {
+  background: linear-gradient(115deg, oklch(0.78 0.15 62), var(--cadrenza-signal));
+  box-shadow: 0 6px 8px oklch(0.73 0.17 53 / 0.22);
+}
+
+.hero__actions .button--signal:hover {
+  background: linear-gradient(115deg, oklch(0.82 0.14 65), oklch(0.76 0.17 53));
+}
+
+.hero__actions .button--outline {
+  border-color: oklch(0.65 0.025 55 / 0.26);
+  background: oklch(0.27 0.022 48 / 0.82);
 }
 
 .hero__proof {
