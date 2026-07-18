@@ -279,36 +279,53 @@ export default function Landing() {
       <main id="contenu">
         <section className="hero" id="accueil">
           <div className="hero__grid" aria-hidden="true" />
-          <img
-            className="hero__art"
-            src="/cadrenza-robot-fleet.webp"
-            alt="Quatre robots logiciels coordonnent la préparation et la diffusion d'un module de formation"
-            width="1536"
-            height="1024"
-            fetchPriority="high"
-          />
-          <div className="hero__veil" aria-hidden="true" />
+          <div className="hero__glow" aria-hidden="true" />
 
           <div className="hero__content">
+            <div className="hero__trust">
+              <ShieldCheck size={17} aria-hidden="true" />
+              <span>Cadre RNCP conservé</span>
+              <i aria-hidden="true" />
+              <strong>Production traçable</strong>
+            </div>
             <h1>
-              <span className="hero__line">Déployez une armée</span>{' '}
-              <span className="hero__line">de professeurs <span className="hero__accent">IA</span></span>
+              <span className="hero__line">Un module RNCP durable,</span>{' '}
+              <span className="hero__line">au service de toutes vos promotions.</span>
             </h1>
             <p className="hero__lead">
-              Cadrenza structure le référentiel, produit le cours et son audio, puis ouvre la classe aux apprenants à l'heure prévue.
+              Cadrenza transforme votre référentiel en cours audio synchronisé, puis le diffuse à chaque promotion au créneau prévu.
             </p>
-            <div className="hero__actions">
-              <a className="button button--signal button--large" href="#demo">
-                Découvrir le parcours <ArrowRight size={18} />
-              </a>
-              <button className="button button--outline button--large" type="button" onClick={() => navigate('/connexion-centre')}>
-                Accéder à l'espace centre
-              </button>
+
+            <div className="hero__command" role="group" aria-label="Découvrir Cadrenza">
+              <div className="hero__command-prompt">
+                <FileStack size={21} aria-hidden="true" />
+                <span>Prépare le module TP Employé commercial à partir du REAC</span>
+              </div>
+              <div className="hero__command-footer">
+                <span className="hero__command-context">
+                  <GraduationCap size={17} aria-hidden="true" />
+                  Parcours RNCP
+                </span>
+                <div className="hero__actions">
+                  <a className="button button--signal button--large" href="#demo">
+                    Découvrir le parcours <ArrowRight size={18} />
+                  </a>
+                  <button className="button button--outline button--large" type="button" onClick={() => navigate('/connexion-centre')}>
+                    Accéder à l'espace centre
+                  </button>
+                </div>
+              </div>
             </div>
-            <div className="hero__assurance">
-              <span><Check size={15} /> Référentiel conservé</span>
-              <span><Check size={15} /> Modules versionnés</span>
-              <span><Check size={15} /> Promotions séparées</span>
+
+            <div className="hero__proof">
+              <p>Pensé pour les centres de formation</p>
+              <div>
+                <span>Référentiels RNCP</span>
+                <span>Modules versionnés</span>
+                <span>Classes synchrones</span>
+                <span>Suivi par promotion</span>
+                <span>Journaux exportables</span>
+              </div>
             </div>
           </div>
         </section>
