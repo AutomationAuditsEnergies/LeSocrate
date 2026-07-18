@@ -6,6 +6,18 @@
   font-display: swap;
 }
 
+html.limova-landing-active,
+body.limova-landing-active,
+body.limova-landing-active #root {
+  min-height: 100%;
+  background-color: #000;
+  overscroll-behavior-y: none;
+}
+
+html.limova-landing-active {
+  color-scheme: dark;
+}
+
 @font-face {
   font-family: "Geist";
   src: url("https://cdn.prod.website-files.com/6a00594a6766c689a1d88ada/6a005cd5eb004ad5381da3fe_Geist-Medium.woff2") format("woff2");
@@ -165,6 +177,33 @@
     translate: none !important;
     rotate: none !important;
     scale: none !important;
+  }
+
+  .limova-strict-copy .strict-desktop-menu-shell {
+    position: static !important;
+    inset: auto !important;
+    width: auto !important;
+    height: auto !important;
+    overflow: visible !important;
+    translate: none !important;
+    visibility: visible !important;
+  }
+
+  .limova-strict-copy .strict-desktop-menu {
+    position: static !important;
+    inset: auto !important;
+    display: flex !important;
+    flex-direction: row !important;
+    width: auto !important;
+    max-height: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    overflow: visible !important;
+    border-radius: 0 !important;
+    background: transparent !important;
+    color: #fff !important;
+    translate: none !important;
+    visibility: visible !important;
   }
 }
 
