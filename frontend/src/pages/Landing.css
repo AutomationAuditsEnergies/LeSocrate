@@ -2285,3 +2285,417 @@
     border: 1px solid ButtonText;
   }
 }
+
+/* Dark, glassy landing system adapted from the Anima reference. */
+.cadrenza-site {
+  background: var(--cadrenza-ink-deep);
+  color: oklch(0.96 0.008 260);
+}
+
+.button--signal {
+  border: 1px solid oklch(0.86 0.12 65 / 0.42);
+  background:
+    linear-gradient(145deg, oklch(0.86 0.12 70 / 0.3), transparent 42%),
+    linear-gradient(115deg, oklch(0.79 0.15 62), var(--cadrenza-signal));
+  box-shadow:
+    inset 0 1px 0 oklch(1 0 0 / 0.42),
+    inset 0 0 22px oklch(1 0 0 / 0.1),
+    0 8px 28px oklch(0.73 0.17 53 / 0.22);
+}
+
+.button--outline {
+  border-color: oklch(1 0 0 / 0.1);
+  background: oklch(1 0 0 / 0.065);
+  box-shadow:
+    inset 0 1px 0 oklch(1 0 0 / 0.08),
+    inset 0 0 24px oklch(1 0 0 / 0.035);
+  backdrop-filter: blur(8px);
+}
+
+.section-label {
+  width: fit-content;
+  display: inline-flex;
+  align-items: center;
+  min-height: 32px;
+  padding: 0 13px;
+  border: 1px solid oklch(0.73 0.17 53 / 0.14);
+  border-radius: 12px;
+  background: oklch(0.73 0.17 53 / 0.09);
+  color: var(--cadrenza-signal) !important;
+  font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+  font-size: 0.67rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.video-section,
+.method-section,
+.experience-section,
+.trace-section,
+.faq-section {
+  color: oklch(0.96 0.008 260);
+}
+
+.video-section,
+.experience-section,
+.faq-section {
+  position: relative;
+}
+
+.video-section::before,
+.experience-section::before,
+.faq-section::before {
+  content: "";
+  position: absolute;
+  inset: 0 50% auto;
+  width: 100vw;
+  height: 1px;
+  background: oklch(1 0 0 / 0.08);
+  transform: translateX(-50%);
+}
+
+.section-intro h2,
+.trace-section__statement h2,
+.video-slot figcaption h3,
+.surface-story__copy h3,
+.trace-section__list strong,
+.faq-list summary,
+.site-footer__links strong {
+  color: oklch(0.98 0.005 260);
+}
+
+.section-intro > p:not(.section-label),
+.section-intro--split > p,
+.trace-section__statement p,
+.surface-story__copy > p,
+.video-slot figcaption p,
+.trace-section__list span,
+.faq-list details p,
+.site-footer__brand p {
+  color: oklch(0.73 0.02 260);
+}
+
+.video-slot__frame {
+  border: 1px solid oklch(1 0 0 / 0.09);
+  border-radius: 30px;
+  box-shadow:
+    inset 0 1px 0 oklch(1 0 0 / 0.08),
+    0 28px 70px oklch(0.05 0.02 260 / 0.45);
+}
+
+.method-section,
+.faq-section {
+  border-top-color: oklch(1 0 0 / 0.08);
+}
+
+.durable-diagram__source,
+.durable-diagram__module {
+  border-color: oklch(1 0 0 / 0.08);
+  border-radius: 26px;
+  background: oklch(1 0 0 / 0.045);
+  box-shadow:
+    inset 0 1px 0 oklch(1 0 0 / 0.07),
+    inset 0 0 34px oklch(1 0 0 / 0.025);
+  backdrop-filter: blur(8px);
+}
+
+.durable-diagram__module {
+  background:
+    radial-gradient(circle at 80% 0%, oklch(0.63 0.22 292 / 0.16), transparent 40%),
+    oklch(1 0 0 / 0.06);
+}
+
+.durable-diagram__source span,
+.durable-diagram__module > span,
+.durable-diagram__promos span,
+.durable-diagram__source small {
+  color: oklch(0.65 0.02 260);
+}
+
+.durable-diagram__source strong,
+.durable-diagram__module strong,
+.durable-diagram__promos strong {
+  color: oklch(0.96 0.008 260);
+}
+
+.pipeline,
+.pipeline li:not(:last-child)::after,
+.trace-section__list > div,
+.faq-list,
+.faq-list details,
+.site-footer__bottom {
+  border-color: oklch(1 0 0 / 0.1);
+}
+
+.durable-diagram__flow i {
+  background: oklch(1 0 0 / 0.12);
+}
+
+.durable-diagram__promos > div {
+  border: 1px solid oklch(1 0 0 / 0.07);
+  border-radius: 16px;
+  background: oklch(1 0 0 / 0.05);
+  box-shadow: inset 0 1px 0 oklch(1 0 0 / 0.05);
+}
+
+.durable-diagram__promos small,
+.pipeline__number,
+.pipeline li > svg,
+.trace-section__statement > svg,
+.trace-section__list svg {
+  color: var(--cadrenza-signal);
+}
+
+.pipeline p {
+  color: oklch(0.69 0.02 260);
+}
+
+.capabilities-section {
+  position: relative;
+  overflow: hidden;
+  padding-block: clamp(90px, 11vw, 150px);
+  border-top: 1px solid oklch(1 0 0 / 0.08);
+  border-bottom: 1px solid oklch(1 0 0 / 0.08);
+  background:
+    radial-gradient(circle at 50% 15%, oklch(0.63 0.22 292 / 0.12), transparent 35%),
+    oklch(0.12 0.028 260);
+}
+
+.capabilities-section__intro {
+  margin-inline: auto;
+  text-align: center;
+}
+
+.capabilities-section__intro .section-label {
+  margin-inline: auto;
+}
+
+.capabilities-section__intro > p:not(.section-label) {
+  margin-inline: auto !important;
+}
+
+.capability-marquee {
+  width: 100%;
+  margin-top: clamp(44px, 6vw, 72px);
+  overflow: hidden;
+  mask-image: linear-gradient(90deg, transparent, black 12%, black 88%, transparent);
+}
+
+.capability-marquee__track {
+  width: max-content;
+  display: flex;
+  gap: 14px;
+  padding: 2px 7px 18px;
+  animation: capability-drift 38s linear infinite;
+}
+
+.capability-marquee:hover .capability-marquee__track {
+  animation-play-state: paused;
+}
+
+.capability-card {
+  width: 176px;
+  min-height: 150px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: 20px;
+  border: 1px solid oklch(1 0 0 / 0.08);
+  border-radius: 26px;
+  background: oklch(1 0 0 / 0.055);
+  box-shadow:
+    inset 0 1px 0 oklch(1 0 0 / 0.08),
+    inset 0 0 30px oklch(1 0 0 / 0.025);
+  color: oklch(0.9 0.012 260);
+  backdrop-filter: blur(8px);
+}
+
+.capability-card > span {
+  width: 48px;
+  height: 48px;
+  display: grid;
+  place-items: center;
+  border: 1px solid oklch(0.73 0.17 53 / 0.19);
+  border-radius: 16px;
+  background: oklch(0.73 0.17 53 / 0.1);
+  color: var(--cadrenza-signal);
+}
+
+.capability-card strong {
+  max-width: 12ch;
+  font-size: 0.82rem;
+  line-height: 1.35;
+}
+
+.agents-section {
+  background:
+    radial-gradient(circle at 18% 28%, oklch(0.63 0.22 292 / 0.14), transparent 32%),
+    radial-gradient(circle at 84% 75%, oklch(0.73 0.17 53 / 0.09), transparent 30%),
+    var(--cadrenza-ink-deep);
+}
+
+.agent-tabs button {
+  min-width: 168px;
+  min-height: 54px;
+  padding: 8px 18px 8px 9px;
+  border-color: oklch(1 0 0 / 0.09);
+  background: oklch(1 0 0 / 0.025);
+}
+
+.agent-tabs button:hover,
+.agent-tabs button.is-active {
+  border-color: oklch(1 0 0 / 0.12);
+  background: oklch(1 0 0 / 0.075);
+  box-shadow: inset 0 1px 0 oklch(1 0 0 / 0.07);
+}
+
+.agent-tab__icon,
+.conversation-bubble__icon,
+.agent-panel__role-icon {
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  border: 1px solid oklch(1 0 0 / 0.1);
+  background: oklch(1 0 0 / 0.06);
+  color: var(--cadrenza-signal);
+}
+
+.agent-tab__icon {
+  width: 38px;
+  height: 38px;
+  border-radius: 13px;
+}
+
+.agent-panel {
+  border-color: oklch(1 0 0 / 0.09);
+  border-radius: 30px;
+  background: oklch(1 0 0 / 0.045);
+  box-shadow:
+    inset 0 1px 0 oklch(1 0 0 / 0.07),
+    inset 0 0 36px oklch(1 0 0 / 0.02);
+  backdrop-filter: blur(8px);
+}
+
+.conversation-bubble--reply {
+  grid-template-columns: 38px 1fr;
+}
+
+.conversation-bubble__icon {
+  width: 38px;
+  height: 38px;
+  border-radius: 13px;
+}
+
+.agent-panel__role-icon {
+  width: 74px;
+  height: 74px;
+  align-self: center;
+  border-radius: 22px;
+  background:
+    radial-gradient(circle at 35% 20%, oklch(1 0 0 / 0.09), transparent 46%),
+    oklch(0.63 0.22 292 / 0.13);
+}
+
+.surface-story {
+  padding: clamp(28px, 4vw, 54px);
+  border: 1px solid oklch(1 0 0 / 0.08);
+  border-radius: 30px;
+  background: oklch(1 0 0 / 0.04);
+  box-shadow: inset 0 1px 0 oklch(1 0 0 / 0.06);
+}
+
+.surface-story__copy li {
+  color: oklch(0.78 0.02 260);
+}
+
+.trace-section__list > div:first-child {
+  border-top-color: oklch(1 0 0 / 0.1);
+}
+
+.faq-list {
+  border-top-color: oklch(1 0 0 / 0.11);
+}
+
+.faq-list details {
+  border-bottom-color: oklch(1 0 0 / 0.11);
+}
+
+.faq-list summary::after {
+  color: var(--cadrenza-signal);
+}
+
+.final-cta {
+  border: 1px solid oklch(1 0 0 / 0.08);
+  border-radius: 32px;
+  box-shadow:
+    inset 0 1px 0 oklch(1 0 0 / 0.08),
+    0 30px 80px oklch(0.05 0.02 260 / 0.4);
+}
+
+.site-footer {
+  color: oklch(0.94 0.008 260);
+}
+
+.site-footer__links a,
+.site-footer__links span,
+.site-footer__bottom {
+  color: oklch(0.62 0.02 260);
+}
+
+.site-footer__links a:hover {
+  color: var(--cadrenza-signal);
+}
+
+@keyframes capability-drift {
+  to {
+    transform: translateX(calc(-50% - 7px));
+  }
+}
+
+@media (max-width: 960px) {
+  .surface-story {
+    padding: 30px;
+  }
+}
+
+@media (max-width: 700px) {
+  .section-label {
+    min-height: 30px;
+  }
+
+  .video-slot__frame,
+  .agent-panel,
+  .surface-story,
+  .final-cta {
+    border-radius: 22px;
+  }
+
+  .capability-marquee {
+    mask-image: linear-gradient(90deg, transparent, black 6%, black 94%, transparent);
+  }
+
+  .capability-card {
+    width: 148px;
+    min-height: 132px;
+    border-radius: 21px;
+  }
+
+  .surface-story {
+    padding: 22px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .capability-marquee {
+    overflow-x: auto;
+    mask-image: none;
+  }
+
+  .capability-marquee__track {
+    animation: none;
+  }
+
+  .capability-marquee__track .capability-card:nth-child(n + 9) {
+    display: none;
+  }
+}

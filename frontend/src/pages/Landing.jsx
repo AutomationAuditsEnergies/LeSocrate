@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
+  AudioLines,
   ArrowRight,
+  BookOpenCheck,
   CalendarClock,
   Check,
   Clock3,
@@ -28,7 +30,7 @@ const AGENTS = [
     id: 'referentiel',
     label: 'Référentiel',
     name: 'Analyse du référentiel',
-    robot: '/robot-blue.png',
+    icon: BookOpenCheck,
     tone: 'blue',
     prompt: 'Analyse le REAC du titre Employé commercial et structure le socle du parcours.',
     reply: 'Les activités types, compétences et critères ont été reliés à une trame pédagogique vérifiable.',
@@ -38,7 +40,7 @@ const AGENTS = [
     id: 'pedagogie',
     label: 'Pédagogie',
     name: 'Construction pédagogique',
-    robot: '/robot-violet.png',
+    icon: Layers3,
     tone: 'violet',
     prompt: 'Construis les séquences du module sans diluer les exigences du titre.',
     reply: 'Le déroulé est découpé en séances, avec objectifs, exemples métier, transitions et points de contrôle.',
@@ -48,7 +50,7 @@ const AGENTS = [
     id: 'audio',
     label: 'Audio',
     name: 'Production audio',
-    robot: '/robot-amber.png',
+    icon: AudioLines,
     tone: 'amber',
     prompt: 'Prépare une voix de cours stable et les repères nécessaires à la diffusion synchronisée.',
     reply: 'Les scripts ont été contrôlés puis associés à des fichiers audio et à leur chronologie de lecture.',
@@ -58,12 +60,23 @@ const AGENTS = [
     id: 'classe',
     label: 'Classe',
     name: 'Pilotage de la classe',
-    robot: '/robot-green.png',
+    icon: RadioTower,
     tone: 'green',
     prompt: 'Ouvre la séance à 9 h pour la promotion de septembre et garde le contexte du cours disponible.',
     reply: 'La playlist horodatée, les accès et le Q&A contextuel sont prêts pour le créneau planifié.',
     tasks: ['Diffuse le cours à heure fixe', 'Gère les accès de la promotion', 'Conserve le contexte pour le Q&A'],
   },
+]
+
+const CAPABILITIES = [
+  { label: 'Référentiel source', icon: <BookOpenCheck size={24} aria-hidden="true" /> },
+  { label: 'Base versionnée', icon: <Layers3 size={24} aria-hidden="true" /> },
+  { label: 'Cours structurés', icon: <FileStack size={24} aria-hidden="true" /> },
+  { label: 'Audio synchronisé', icon: <AudioLines size={24} aria-hidden="true" /> },
+  { label: 'Classe planifiée', icon: <CalendarClock size={24} aria-hidden="true" /> },
+  { label: 'Q&A contextuel', icon: <GraduationCap size={24} aria-hidden="true" /> },
+  { label: 'Suivi promotion', icon: <UsersRound size={24} aria-hidden="true" /> },
+  { label: 'Journaux exportables', icon: <FileCheck2 size={24} aria-hidden="true" /> },
 ]
 
 const PIPELINE_STEPS = [
@@ -182,6 +195,7 @@ export default function Landing() {
   const [mobileOpen, setMobileOpen] = useState(false)
   const [scrolled, setScrolled] = useState(false)
   const [activeAgent, setActiveAgent] = useState(AGENTS[0])
+  const ActiveAgentIcon = activeAgent.icon
 
   const handleAgentKeyDown = (event, agentId) => {
     const currentIndex = AGENTS.findIndex((agent) => agent.id === agentId)
@@ -236,7 +250,7 @@ export default function Landing() {
 
           <div className="site-nav__links">
             <a href="#methode">La méthode</a>
-            <a href="#agents">Les robots</a>
+            <a href="#agents">Les agents</a>
             <a href="#experience">La classe</a>
             <a href="#pilotage">Le pilotage</a>
           </div>
@@ -265,7 +279,7 @@ export default function Landing() {
         {mobileOpen && (
           <div id="mobile-navigation" className="mobile-nav mobile-nav--open">
             <a href="#methode" onClick={closeMenu}>La méthode</a>
-            <a href="#agents" onClick={closeMenu}>Les robots</a>
+            <a href="#agents" onClick={closeMenu}>Les agents</a>
             <a href="#experience" onClick={closeMenu}>La classe</a>
             <a href="#pilotage" onClick={closeMenu}>Le pilotage</a>
             <a href="/cours" onClick={closeMenu}>Accès apprenant</a>
@@ -393,32 +407,55 @@ export default function Landing() {
           </ol>
         </section>
 
+        <section className="capabilities-section" aria-labelledby="capabilities-title">
+          <div className="section-shell">
+            <div className="section-intro section-intro--on-dark capabilities-section__intro">
+              <p className="section-label">Une chaîne continue</p>
+              <h2 id="capabilities-title">Du référentiel à la classe, sans rupture.</h2>
+              <p>Chaque sortie devient l’entrée contrôlée de l’étape suivante. Le centre garde la source, la version et le suivi au même endroit.</p>
+            </div>
+          </div>
+          <div className="capability-marquee" aria-label="Capacités de Cadrenza">
+            <div className="capability-marquee__track">
+              {[...CAPABILITIES, ...CAPABILITIES].map(({ label, icon }, index) => (
+                <div className="capability-card" key={`${label}-${index}`} aria-hidden={index >= CAPABILITIES.length ? 'true' : undefined}>
+                  <span>{icon}</span>
+                  <strong>{label}</strong>
+                </div>
+              ))}
+            </div>
+          </div>
+        </section>
+
         <section className="agents-section" id="agents">
           <div className="section-shell">
             <div className="section-intro section-intro--on-dark">
-              <p className="section-label">Une chaîne de robots spécialisés</p>
-              <h2>Chaque robot produit un artefact précis.</h2>
-              <p>Pas d'avatar humain ni de personnalité inventée. Chaque agent correspond à une fonction contrôlable de la chaîne pédagogique.</p>
+              <p className="section-label">Des agents spécialisés</p>
+              <h2>Chaque agent produit un artefact précis.</h2>
+              <p>Chaque fonction est identifiable, contrôlable et reliée à une étape concrète de la chaîne pédagogique.</p>
             </div>
 
             <div className="agent-tabs" role="tablist" aria-label="Robots de production">
-              {AGENTS.map((agent) => (
-                <button
-                  key={agent.id}
-                  id={`agent-tab-${agent.id}`}
-                  type="button"
-                  role="tab"
-                  aria-selected={activeAgent.id === agent.id}
-                  aria-controls="agent-panel"
-                  tabIndex={activeAgent.id === agent.id ? 0 : -1}
-                  className={activeAgent.id === agent.id ? 'is-active' : ''}
-                  onClick={() => setActiveAgent(agent)}
-                  onKeyDown={(event) => handleAgentKeyDown(event, agent.id)}
-                >
-                  <img src={agent.robot} alt="" loading="lazy" />
-                  <span>{agent.label}</span>
-                </button>
-              ))}
+              {AGENTS.map((agent) => {
+                const AgentIcon = agent.icon
+                return (
+                  <button
+                    key={agent.id}
+                    id={`agent-tab-${agent.id}`}
+                    type="button"
+                    role="tab"
+                    aria-selected={activeAgent.id === agent.id}
+                    aria-controls="agent-panel"
+                    tabIndex={activeAgent.id === agent.id ? 0 : -1}
+                    className={activeAgent.id === agent.id ? 'is-active' : ''}
+                    onClick={() => setActiveAgent(agent)}
+                    onKeyDown={(event) => handleAgentKeyDown(event, agent.id)}
+                  >
+                    <span className="agent-tab__icon"><AgentIcon size={19} aria-hidden="true" /></span>
+                    <span>{agent.label}</span>
+                  </button>
+                )
+              })}
             </div>
 
             <div
@@ -430,7 +467,7 @@ export default function Landing() {
               <div className="agent-panel__conversation">
                 <div className="conversation-bubble conversation-bubble--request">{activeAgent.prompt}</div>
                 <div className="conversation-bubble conversation-bubble--reply">
-                  <img src={activeAgent.robot} alt="" />
+                  <span className="conversation-bubble__icon"><ActiveAgentIcon size={18} aria-hidden="true" /></span>
                   <p>{activeAgent.reply}</p>
                 </div>
                 <div className="conversation-artifact">
@@ -439,9 +476,9 @@ export default function Landing() {
                 </div>
               </div>
               <div className="agent-panel__detail" aria-live="polite">
-                <img src={activeAgent.robot} alt="" />
+                <span className="agent-panel__role-icon"><ActiveAgentIcon size={28} aria-hidden="true" /></span>
                 <div>
-                  <span>Robot logiciel</span>
+                  <span>Agent logiciel</span>
                   <h3>{activeAgent.name}</h3>
                 </div>
                 <ul>
@@ -551,8 +588,8 @@ export default function Landing() {
               <p>Oui. Les étapes, fichiers, horaires, états de verrouillage et journaux sont pilotés depuis l'espace centre.</p>
             </details>
             <details>
-              <summary>Les apprenants parlent-ils à un avatar humain ?</summary>
-              <p>Non. L'interface représente les fonctions IA comme des robots logiciels. L'expérience de cours reste centrée sur le contenu et la progression de la séance.</p>
+              <summary>Les agents prennent-ils des décisions sans contrôle ?</summary>
+              <p>Non. Chaque agent intervient sur une étape définie et produit une sortie relisible. L'équipe centre conserve le contrôle du contenu, des versions et de la diffusion.</p>
             </details>
           </div>
         </section>
@@ -581,7 +618,7 @@ export default function Landing() {
           <p>Production et diffusion synchrone de parcours RNCP pour les centres de formation.</p>
         </div>
         <div className="site-footer__links">
-          <div><strong>Découvrir</strong><a href="#methode">La méthode</a><a href="#agents">Les robots</a><a href="#experience">La classe</a></div>
+          <div><strong>Découvrir</strong><a href="#methode">La méthode</a><a href="#agents">Les agents</a><a href="#experience">La classe</a></div>
           <div><strong>Accès</strong><a href="/connexion-centre">Espace centre</a><a href="/cours">Espace apprenant</a></div>
           <div><strong>Produit</strong><span>Modules RNCP</span><span>Classes synchrones</span><span>Pilotage multi-promotion</span></div>
         </div>
