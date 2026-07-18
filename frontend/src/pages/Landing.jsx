@@ -1,11 +1,13 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
-  AudioLines,
   ArrowRight,
+  AudioLines,
   BookOpenCheck,
   CalendarClock,
   Check,
+  ChevronDown,
+  CircleCheck,
   Clock3,
   FileCheck2,
   FileStack,
@@ -14,11 +16,12 @@ import {
   Layers3,
   LockKeyhole,
   Menu,
+  MessageSquareText,
   Play,
   RadioTower,
   ShieldCheck,
+  Sparkles,
   UsersRound,
-  Volume2,
   WandSparkles,
   X,
 } from 'lucide-react'
@@ -29,163 +32,189 @@ const AGENTS = [
   {
     id: 'referentiel',
     label: 'Référentiel',
-    name: 'Analyse du référentiel',
+    title: 'Analyse du référentiel',
     icon: BookOpenCheck,
-    tone: 'blue',
-    prompt: 'Analyse le REAC du titre Employé commercial et structure le socle du parcours.',
-    reply: 'Les activités types, compétences et critères ont été reliés à une trame pédagogique vérifiable.',
-    tasks: ['Repère les compétences attendues', 'Conserve le lien avec la source', 'Prépare la base de connaissances'],
+    prompt: 'Analyse le REAC Employé commercial et construis le socle du parcours.',
+    reply: 'Le référentiel est structuré en activités, compétences et critères. Chaque élément reste relié à sa source.',
+    tasks: ['Repère les compétences attendues', 'Conserve chaque source', 'Prépare la base de connaissances'],
+    artifact: 'Socle pédagogique · v1.4',
   },
   {
     id: 'pedagogie',
     label: 'Pédagogie',
-    name: 'Construction pédagogique',
+    title: 'Construction pédagogique',
     icon: Layers3,
-    tone: 'violet',
-    prompt: 'Construis les séquences du module sans diluer les exigences du titre.',
-    reply: 'Le déroulé est découpé en séances, avec objectifs, exemples métier, transitions et points de contrôle.',
-    tasks: ['Rédige les cours à partir du socle', 'Découpe les séances au bon rythme', 'Versionne chaque production'],
+    prompt: 'Construis une séquence de 45 minutes sur la prise en charge client.',
+    reply: 'La séance est découpée en objectifs, exemples métier, transitions et points de contrôle.',
+    tasks: ['Structure les séquences', 'Rédige depuis le socle', 'Versionne chaque production'],
+    artifact: 'Séquence 03 · prête à relire',
   },
   {
     id: 'audio',
     label: 'Audio',
-    name: 'Production audio',
+    title: 'Production audio',
     icon: AudioLines,
-    tone: 'amber',
-    prompt: 'Prépare une voix de cours stable et les repères nécessaires à la diffusion synchronisée.',
-    reply: 'Les scripts ont été contrôlés puis associés à des fichiers audio et à leur chronologie de lecture.',
-    tasks: ['Prépare les scripts pour la voix', 'Produit les fichiers du module', 'Aligne audio, slides et repères'],
+    prompt: 'Prépare la voix et les repères de diffusion de cette séquence.',
+    reply: 'Le script, les fichiers audio et la chronologie des slides ont été alignés.',
+    tasks: ['Contrôle les scripts', 'Produit les fichiers audio', 'Synchronise voix et supports'],
+    artifact: 'Audio 03 · 42 min 18 s',
   },
   {
     id: 'classe',
     label: 'Classe',
-    name: 'Pilotage de la classe',
+    title: 'Pilotage de la classe',
     icon: RadioTower,
-    tone: 'green',
-    prompt: 'Ouvre la séance à 9 h pour la promotion de septembre et garde le contexte du cours disponible.',
-    reply: 'La playlist horodatée, les accès et le Q&A contextuel sont prêts pour le créneau planifié.',
-    tasks: ['Diffuse le cours à heure fixe', 'Gère les accès de la promotion', 'Conserve le contexte pour le Q&A'],
+    prompt: 'Programme cette séance à 9 h pour la promotion de septembre.',
+    reply: 'La playlist, les accès et le Q&A contextuel sont prêts pour le créneau planifié.',
+    tasks: ['Diffuse à heure fixe', 'Gère les accès', 'Conserve le contexte du Q&A'],
+    artifact: 'Classe · lundi 09:00',
   },
 ]
 
 const CAPABILITIES = [
-  { label: 'Référentiel source', icon: <BookOpenCheck size={24} aria-hidden="true" /> },
-  { label: 'Base versionnée', icon: <Layers3 size={24} aria-hidden="true" /> },
-  { label: 'Cours structurés', icon: <FileStack size={24} aria-hidden="true" /> },
-  { label: 'Audio synchronisé', icon: <AudioLines size={24} aria-hidden="true" /> },
-  { label: 'Classe planifiée', icon: <CalendarClock size={24} aria-hidden="true" /> },
-  { label: 'Q&A contextuel', icon: <GraduationCap size={24} aria-hidden="true" /> },
-  { label: 'Suivi promotion', icon: <UsersRound size={24} aria-hidden="true" /> },
-  { label: 'Journaux exportables', icon: <FileCheck2 size={24} aria-hidden="true" /> },
+  { label: 'Référentiel source', icon: <BookOpenCheck size={18} /> },
+  { label: 'Base versionnée', icon: <Layers3 size={18} /> },
+  { label: 'Cours structurés', icon: <FileStack size={18} /> },
+  { label: 'Audio synchronisé', icon: <AudioLines size={18} /> },
+  { label: 'Classe planifiée', icon: <CalendarClock size={18} /> },
+  { label: 'Q&A contextuel', icon: <MessageSquareText size={18} /> },
+  { label: 'Suivi par promotion', icon: <UsersRound size={18} /> },
+  { label: 'Journaux exportables', icon: <FileCheck2 size={18} /> },
 ]
 
-const PIPELINE_STEPS = [
-  { title: 'Référentiel', text: 'Le REAC reste la source de travail.', icon: <FileCheck2 size={24} /> },
-  { title: 'Base durable', text: 'Les connaissances sont organisées et réutilisables.', icon: <Layers3 size={24} /> },
-  { title: 'Cours et audio', text: 'Le contenu, les slides et la voix sont produits ensemble.', icon: <Headphones size={24} /> },
-  { title: 'Classe planifiée', text: 'Chaque promotion rejoint le même module au créneau prévu.', icon: <CalendarClock size={24} /> },
+const FAQS = [
+  {
+    question: 'Cadrenza est-il un catalogue de cours à la demande ?',
+    answer: 'Non. Cadrenza est conçu pour des classes planifiées, avec une heure de début, une playlist horodatée et un suivi distinct pour chaque promotion.',
+  },
+  {
+    question: 'Faut-il reconstruire le cours pour chaque promotion ?',
+    answer: 'Non. Le module reste attaché au titre professionnel. Il peut être repris par plusieurs promotions, avec des calendriers, accès et journaux séparés.',
+  },
+  {
+    question: 'Le centre garde-t-il la main sur la production ?',
+    answer: 'Oui. Les sources, versions, fichiers, horaires et états de verrouillage restent pilotés depuis l’espace centre.',
+  },
+  {
+    question: 'Les agents travaillent-ils sans contrôle ?',
+    answer: 'Chaque agent intervient sur une étape définie et produit une sortie relisible. L’équipe centre conserve le contrôle avant toute diffusion.',
+  },
 ]
 
-function VideoPlaceholder({ number, title, description, compact = false }) {
+function PrimaryButton({ children, onClick, href, className = '' }) {
+  const content = <>{children}<ArrowRight size={17} aria-hidden="true" /></>
+  if (href) return <a className={`landing-button landing-button--primary ${className}`} href={href}>{content}</a>
+  return <button className={`landing-button landing-button--primary ${className}`} type="button" onClick={onClick}>{content}</button>
+}
+
+function ProductPreview() {
   return (
-    <figure className={`video-slot ${compact ? 'video-slot--compact' : ''}`}>
-      <div className="video-slot__frame" role="img" aria-label={`Emplacement pour la vidéo : ${title}`}>
-        <div className="video-slot__browser">
-          <span />
-          <span />
-          <span />
-          <p>Vidéo {number}</p>
-        </div>
-        <div className="video-slot__center">
-          <span className="video-slot__play" aria-hidden="true">
-            <Play size={compact ? 22 : 28} fill="currentColor" />
-          </span>
-          <strong>Emplacement vidéo</strong>
-          <small>Format 16:9, son désactivé au démarrage</small>
-        </div>
-        <div className="video-slot__timeline" aria-hidden="true">
-          <span />
+    <div className="product-preview" aria-label="Aperçu du tableau de bord Cadrenza">
+      <div className="product-preview__bar">
+        <span className="window-dots" aria-hidden="true"><i /><i /><i /></span>
+        <span>cadrenza.app / parcours</span>
+        <span className="product-preview__secure"><LockKeyhole size={13} /> Espace centre</span>
+      </div>
+      <div className="product-preview__app">
+        <aside className="product-preview__rail" aria-hidden="true">
+          <CadrenzaLogo compact />
+          <span className="is-active" /><span /><span /><span />
           <i />
-          <em>00:00</em>
+        </aside>
+        <div className="product-preview__main">
+          <div className="product-preview__heading">
+            <div>
+              <small>TP Employé commercial</small>
+              <strong>Production du module</strong>
+            </div>
+            <span><CircleCheck size={15} /> Socle validé</span>
+          </div>
+          <div className="product-preview__progress" aria-label="Progression du module">
+            <div><span>Référentiel</span><i className="is-done" /></div>
+            <div><span>Base</span><i className="is-done" /></div>
+            <div><span>Cours</span><i className="is-current" /></div>
+            <div><span>Audio</span><i /></div>
+            <div><span>Classe</span><i /></div>
+          </div>
+          <div className="product-preview__grid">
+            <section className="preview-module-card">
+              <div className="preview-module-card__top">
+                <span className="preview-module-card__icon"><FileStack size={19} /></span>
+                <div><small>Module 03</small><strong>Conseiller le client</strong></div>
+                <span className="preview-status">En production</span>
+              </div>
+              <div className="preview-module-card__rows">
+                <span><Check size={13} /> Objectifs pédagogiques <b>6</b></span>
+                <span><Check size={13} /> Séquences structurées <b>4</b></span>
+                <span><Clock3 size={13} /> Durée estimée <b>3 h 20</b></span>
+              </div>
+            </section>
+            <section className="preview-activity-card">
+              <small>Activité des agents</small>
+              <div><span><BookOpenCheck size={14} /></span><p><strong>Référentiel analysé</strong><small>Il y a 2 min</small></p></div>
+              <div><span><Layers3 size={14} /></span><p><strong>Séquence 03 générée</strong><small>En relecture</small></p></div>
+              <div><span><AudioLines size={14} /></span><p><strong>Script audio préparé</strong><small>En attente</small></p></div>
+            </section>
+          </div>
         </div>
       </div>
-      <figcaption>
-        <span>Vidéo {number}</span>
-        <div>
-          <h3>{title}</h3>
-          <p>{description}</p>
-        </div>
-      </figcaption>
-    </figure>
+      <span className="product-preview__play" aria-hidden="true"><Play size={20} fill="currentColor" /></span>
+    </div>
   )
 }
 
-function CenterDashboardPreview() {
+function AgentWorkbench({ agent }) {
+  const AgentIcon = agent.icon
   return (
-    <div className="surface-preview surface-preview--center" role="group" aria-label="Aperçu du pilotage centre">
-      <div className="surface-preview__topbar">
-        <CadrenzaLogo compact />
-        <span>Centre Horizon</span>
-        <i>Session opérateur</i>
-      </div>
-      <div className="surface-preview__body">
-        <aside aria-hidden="true">
-          <span className="is-active" />
-          <span />
-          <span />
-          <span />
-        </aside>
-        <div className="surface-preview__content">
-          <div className="surface-preview__heading">
-            <div>
-              <small>Promotions</small>
-              <strong>Employé commercial</strong>
-            </div>
-            <span className="surface-preview__action">Nouvelle promotion</span>
+    <div className="agent-stage" role="tabpanel" id="agent-panel" aria-labelledby={`agent-tab-${agent.id}`}>
+      <div className="agent-stage__ghost agent-stage__ghost--left" aria-hidden="true" />
+      <div className="agent-stage__ghost agent-stage__ghost--right" aria-hidden="true" />
+      <div className="agent-workbench">
+        <div className="agent-workbench__conversation">
+          <div className="agent-workbench__bar"><span className="window-dots"><i /><i /><i /></span><small>Mission en cours</small></div>
+          <div className="agent-message agent-message--request">{agent.prompt}</div>
+          <div className="agent-message agent-message--reply">
+            <span><AgentIcon size={17} /></span>
+            <p>{agent.reply}</p>
           </div>
-          <div className="promotion-row">
-            <span className="promotion-row__status">En cours</span>
-            <div><strong>Promotion Septembre</strong><small>Lun. à ven. · 09:00</small></div>
-            <b>18 apprenants</b>
-          </div>
-          <div className="promotion-row">
-            <span className="promotion-row__status is-planned">Planifiée</span>
-            <div><strong>Promotion Novembre</strong><small>Module déjà produit</small></div>
-            <b>14 apprenants</b>
-          </div>
-          <div className="surface-preview__footerline">
-            <span><Check size={14} /> Audio verrouillé</span>
-            <span>Journaux exportables</span>
-          </div>
+          <div className="agent-artifact"><FileCheck2 size={15} /><span>{agent.artifact}</span><Check size={15} /></div>
+        </div>
+        <div className="agent-workbench__detail" aria-live="polite">
+          <span className="agent-workbench__icon"><AgentIcon size={28} /></span>
+          <small>Agent logiciel</small>
+          <h3>{agent.title}</h3>
+          <ul>{agent.tasks.map((task) => <li key={task}><Check size={15} />{task}</li>)}</ul>
+          <p>Sa sortie reste disponible pour relecture, version et reprise.</p>
         </div>
       </div>
     </div>
   )
 }
 
-function StudentClassPreview() {
+function CenterPreview() {
   return (
-    <div className="surface-preview surface-preview--student" role="group" aria-label="Aperçu de la classe apprenant">
-      <div className="class-preview__header">
-        <CadrenzaLogo compact />
-        <div>
-          <small>TP Employé commercial</small>
-          <strong>La relation client en magasin</strong>
-        </div>
-        <span><RadioTower size={14} /> En direct</span>
+    <div className="center-preview" aria-label="Aperçu du pilotage d’une promotion">
+      <div className="center-preview__top">
+        <span className="window-dots"><i /><i /><i /></span>
+        <small>Centre Horizon</small>
+        <span><ShieldCheck size={14} /> Session opérateur</span>
       </div>
-      <div className="class-preview__slide">
-        <span>Notion clé</span>
-        <h3>Une écoute active produit des informations exploitables.</h3>
-        <div className="class-preview__wave" aria-hidden="true">
-          {Array.from({ length: 28 }, (_, index) => <i key={index} style={{ height: `${18 + ((index * 17) % 48)}%` }} />)}
-        </div>
+      <div className="center-preview__body">
+        <div className="center-preview__title"><div><small>Promotions</small><strong>Employé commercial</strong></div><button type="button">Nouvelle promotion</button></div>
+        <div className="promotion-card is-live"><span>En cours</span><div><strong>Promotion Septembre</strong><small>Lun. à ven. · 09:00</small></div><b>18 apprenants</b></div>
+        <div className="promotion-card"><span>Planifiée</span><div><strong>Promotion Novembre</strong><small>Module déjà produit</small></div><b>14 apprenants</b></div>
+        <div className="center-preview__foot"><span><Check size={13} /> Audio verrouillé</span><span>Journaux exportables</span></div>
       </div>
-      <div className="class-preview__controls">
-        <span><Volume2 size={17} /> 09:42</span>
-        <div><i /><i /><i /></div>
-        <span className="surface-preview__action">Poser une question</span>
-      </div>
+    </div>
+  )
+}
+
+function ClassPreview() {
+  return (
+    <div className="class-preview" aria-label="Aperçu de la classe apprenant">
+      <div className="class-preview__top"><CadrenzaLogo compact /><div><small>TP Employé commercial</small><strong>La relation client en magasin</strong></div><span><RadioTower size={13} /> En direct</span></div>
+      <div className="class-preview__slide"><small>Notion clé</small><h3>Une écoute active produit des informations exploitables.</h3><div className="class-preview__wave" aria-hidden="true">{Array.from({ length: 26 }, (_, index) => <i key={index} style={{ height: `${18 + ((index * 19) % 54)}%` }} />)}</div></div>
+      <div className="class-preview__control"><span><Headphones size={15} /> 09:42</span><div><i /><i /><i /></div><button type="button">Poser une question</button></div>
     </div>
   )
 }
@@ -197,437 +226,167 @@ export default function Landing() {
   const [mobileOpen, setMobileOpen] = useState(false)
   const [scrolled, setScrolled] = useState(false)
   const [activeAgent, setActiveAgent] = useState(AGENTS[0])
-  const ActiveAgentIcon = activeAgent.icon
-
-  const handleAgentKeyDown = (event, agentId) => {
-    const currentIndex = AGENTS.findIndex((agent) => agent.id === agentId)
-    let nextIndex = currentIndex
-
-    if (event.key === 'ArrowRight') nextIndex = (currentIndex + 1) % AGENTS.length
-    else if (event.key === 'ArrowLeft') nextIndex = (currentIndex - 1 + AGENTS.length) % AGENTS.length
-    else if (event.key === 'Home') nextIndex = 0
-    else if (event.key === 'End') nextIndex = AGENTS.length - 1
-    else return
-
-    event.preventDefault()
-    const nextAgent = AGENTS[nextIndex]
-    setActiveAgent(nextAgent)
-    requestAnimationFrame(() => document.getElementById(`agent-tab-${nextAgent.id}`)?.focus())
-  }
 
   useEffect(() => {
-    const handleScroll = () => setScrolled(window.scrollY > 18)
+    const handleScroll = () => setScrolled(window.scrollY > 16)
     handleScroll()
     window.addEventListener('scroll', handleScroll, { passive: true })
     return () => window.removeEventListener('scroll', handleScroll)
   }, [])
 
   useEffect(() => {
-    const handleKeyDown = (event) => {
-      if (event.key === 'Escape') setMobileOpen(false)
-    }
-    document.addEventListener('keydown', handleKeyDown)
+    const closeOnEscape = (event) => event.key === 'Escape' && setMobileOpen(false)
+    document.addEventListener('keydown', closeOnEscape)
     document.body.style.overflow = mobileOpen ? 'hidden' : ''
     return () => {
-      document.removeEventListener('keydown', handleKeyDown)
+      document.removeEventListener('keydown', closeOnEscape)
       document.body.style.overflow = ''
     }
   }, [mobileOpen])
 
+  const handleAgentKeyDown = (event, agentId) => {
+    const currentIndex = AGENTS.findIndex((agent) => agent.id === agentId)
+    let nextIndex = currentIndex
+    if (event.key === 'ArrowRight') nextIndex = (currentIndex + 1) % AGENTS.length
+    else if (event.key === 'ArrowLeft') nextIndex = (currentIndex - 1 + AGENTS.length) % AGENTS.length
+    else if (event.key === 'Home') nextIndex = 0
+    else if (event.key === 'End') nextIndex = AGENTS.length - 1
+    else return
+    event.preventDefault()
+    const nextAgent = AGENTS[nextIndex]
+    setActiveAgent(nextAgent)
+    requestAnimationFrame(() => document.getElementById(`agent-tab-${nextAgent.id}`)?.focus())
+  }
+
+  const openSignup = () => navigate('/connexion-centre?mode=signup')
   const closeMenu = () => setMobileOpen(false)
 
   return (
-    <div className="cadrenza-site">
-      <a className="skip-link" href="#contenu">Aller au contenu</a>
+    <div className="cadrenza-landing">
+      <a className="landing-skip" href="#contenu">Aller au contenu</a>
 
-      <header className={`site-header ${scrolled ? 'site-header--scrolled' : ''}`}>
-        <div className="announcement-bar">
-          <span><RadioTower size={14} /> Plateforme conçue pour les centres de formation RNCP</span>
+      <header className={`landing-header ${scrolled ? 'is-scrolled' : ''}`}>
+        <div className="landing-announcement">
+          <span><Sparkles size={14} /> Une plateforme pour produire, planifier et diffuser vos parcours RNCP</span>
           <a href={studentCourseHref}>Accès apprenant <ArrowRight size={14} /></a>
         </div>
-        <nav className="site-nav" aria-label="Navigation principale">
-          <a className="site-nav__brand" href="#accueil" onClick={closeMenu}>
-            <CadrenzaLogo />
-          </a>
-
-          <div className="site-nav__links">
+        <nav className="landing-nav" aria-label="Navigation principale">
+          <a href="#accueil" className="landing-nav__brand" onClick={closeMenu}><CadrenzaLogo /></a>
+          <div className="landing-nav__links">
             <a href="#methode">La méthode</a>
             <a href="#agents">Les agents</a>
-            <a href="#experience">La classe</a>
-            <a href="#pilotage">Le pilotage</a>
+            <a href="#experience">L’expérience</a>
+            <a href="#faq">FAQ</a>
           </div>
-
-          <div className="site-nav__actions">
-            <button type="button" className="button button--quiet" onClick={() => navigate('/connexion-centre')}>
-              Connexion
-            </button>
-            <a className="button button--signal" href="#demo">
-              Voir la démo
-            </a>
+          <div className="landing-nav__actions">
+            <button type="button" className="landing-button landing-button--quiet" onClick={() => navigate('/connexion-centre')}>Se connecter</button>
+            <PrimaryButton href="#demo">Voir la démo</PrimaryButton>
           </div>
-
-          <button
-            type="button"
-            className="site-nav__menu"
-            aria-label={mobileOpen ? 'Fermer le menu' : 'Ouvrir le menu'}
-            aria-controls="mobile-navigation"
-            aria-expanded={mobileOpen}
-            onClick={() => setMobileOpen((open) => !open)}
-          >
-            {mobileOpen ? <X /> : <Menu />}
-          </button>
+          <button className="landing-nav__menu" type="button" aria-label={mobileOpen ? 'Fermer le menu' : 'Ouvrir le menu'} aria-expanded={mobileOpen} aria-controls="landing-mobile-nav" onClick={() => setMobileOpen((open) => !open)}>{mobileOpen ? <X /> : <Menu />}</button>
         </nav>
-
-        {mobileOpen && (
-          <div id="mobile-navigation" className="mobile-nav mobile-nav--open">
-            <a href="#methode" onClick={closeMenu}>La méthode</a>
-            <a href="#agents" onClick={closeMenu}>Les agents</a>
-            <a href="#experience" onClick={closeMenu}>La classe</a>
-            <a href="#pilotage" onClick={closeMenu}>Le pilotage</a>
-            <a href={studentCourseHref} onClick={closeMenu}>Accès apprenant</a>
-            <button type="button" onClick={() => navigate('/connexion-centre')}>Connexion centre</button>
-            <button type="button" className="button--signal" onClick={() => navigate('/connexion-centre?mode=signup')}>
-              Créer un espace centre
-            </button>
-          </div>
-        )}
+        {mobileOpen && <div className="landing-mobile-nav" id="landing-mobile-nav">
+          <a href="#methode" onClick={closeMenu}>La méthode</a><a href="#agents" onClick={closeMenu}>Les agents</a><a href="#experience" onClick={closeMenu}>L’expérience</a><a href="#faq" onClick={closeMenu}>FAQ</a><a href={studentCourseHref} onClick={closeMenu}>Accès apprenant</a>
+          <button type="button" onClick={() => navigate('/connexion-centre')}>Se connecter</button><button className="is-primary" type="button" onClick={openSignup}>Créer un espace centre</button>
+        </div>}
       </header>
 
       <main id="contenu">
-        <section className="hero" id="accueil">
-          <div className="hero__grid" aria-hidden="true" />
-          <div className="hero__glow" aria-hidden="true" />
-
-          <div className="hero__content">
-            <div className="hero__trust">
-              <ShieldCheck size={17} aria-hidden="true" />
-              <span>Cadre RNCP conservé</span>
-              <i aria-hidden="true" />
-              <strong>Production traçable</strong>
+        <section className="landing-hero" id="accueil">
+          <div className="landing-hero__aura" aria-hidden="true" />
+          <div className="landing-hero__dots" aria-hidden="true" />
+          <div className="landing-hero__content">
+            <div className="landing-proof-chip"><ShieldCheck size={16} /><span>Cadre RNCP conservé</span><i /><strong>Production traçable</strong></div>
+            <h1>Des agents pédagogiques autonomes au service de vos parcours RNCP.</h1>
+            <p className="landing-hero__lead">Transformez un référentiel en module audio synchronisé, puis diffusez-le à chaque promotion au créneau prévu.</p>
+            <div className="landing-command" role="group" aria-label="Découvrir le parcours Cadrenza">
+              <div className="landing-command__prompt"><WandSparkles size={21} /><span>Prépare le module TP Employé commercial à partir du REAC</span></div>
+              <div className="landing-command__footer"><span><GraduationCap size={17} /> Parcours RNCP</span><div><PrimaryButton href="#demo">Découvrir le parcours</PrimaryButton><button className="landing-button landing-button--secondary" type="button" onClick={() => navigate('/connexion-centre')}>Accéder à l’espace centre</button></div></div>
             </div>
-            <h1>
-              <span className="hero__line">Un module RNCP durable,</span>{' '}
-              <span className="hero__line">au service de toutes vos promotions.</span>
-            </h1>
-            <p className="hero__lead">
-              Cadrenza transforme votre référentiel en cours audio synchronisé, puis le diffuse à chaque promotion au créneau prévu.
-            </p>
+            <div className="landing-proof-strip" aria-label="Principales garanties du produit"><span>Une source</span><i /><span>Un module durable</span><i /><span>Plusieurs promotions</span><i /><span>Une trace complète</span></div>
+          </div>
+          <div className="landing-hero__preview" id="demo"><ProductPreview /></div>
+        </section>
 
-            <div className="hero__command" role="group" aria-label="Découvrir Cadrenza">
-              <div className="hero__command-prompt">
-                <WandSparkles size={22} aria-hidden="true" />
-                <span>Prépare le module TP Employé commercial à partir du REAC</span>
-              </div>
-              <div className="hero__command-footer">
-                <span className="hero__command-context">
-                  <GraduationCap size={17} aria-hidden="true" />
-                  Parcours RNCP
-                </span>
-                <div className="hero__actions">
-                  <a className="button button--signal button--large" href="#demo">
-                    Découvrir le parcours <ArrowRight size={18} />
-                  </a>
-                  <button className="button button--outline button--large" type="button" onClick={() => navigate('/connexion-centre')}>
-                    Accéder à l'espace centre
-                  </button>
-                </div>
-              </div>
+        <section className="landing-section method" id="methode">
+          <div className="section-heading">
+            <span className="section-kicker">Une chaîne continue</span>
+            <h2>Du référentiel à la classe, sans rupture.</h2>
+            <p>Chaque agent prend en charge une étape précise. La sortie reste visible, contrôlable et prête pour l’étape suivante.</p>
+          </div>
+          <div className="method-flow">
+            {[
+              { icon: <FileCheck2 size={22} />, number: '01', title: 'Référentiel', text: 'Le REAC reste la source de travail.' },
+              { icon: <Layers3 size={22} />, number: '02', title: 'Base durable', text: 'Les connaissances sont organisées et versionnées.' },
+              { icon: <Headphones size={22} />, number: '03', title: 'Cours et audio', text: 'Le contenu, les slides et la voix avancent ensemble.' },
+              { icon: <CalendarClock size={22} />, number: '04', title: 'Classe planifiée', text: 'Chaque promotion rejoint le module au créneau prévu.' },
+            ].map(({ icon, number, title, text }, index) => <article key={title}><span className="method-flow__number">{number}</span><span className="method-flow__icon">{icon}</span><h3>{title}</h3><p>{text}</p>{index < 3 && <ArrowRight className="method-flow__arrow" size={18} aria-hidden="true" />}</article>)}
+          </div>
+        </section>
+
+        <section className="capability-band" aria-label="Fonctionnalités de Cadrenza">
+          <div className="capability-band__track">{[...CAPABILITIES, ...CAPABILITIES].map(({ label, icon }, index) => <span key={`${label}-${index}`} aria-hidden={index >= CAPABILITIES.length ? 'true' : undefined}>{icon}{label}</span>)}</div>
+        </section>
+
+        <section className="landing-section agents" id="agents">
+          <div className="section-heading">
+            <span className="section-kicker">Des agents spécialisés</span>
+            <h2>Un rôle clair. Un livrable précis.</h2>
+            <p>Pas de personnage décoratif. Chaque agent correspond à une fonction logicielle et à un artefact vérifiable.</p>
+          </div>
+          <div className="agent-tabs" role="tablist" aria-label="Agents de production">{AGENTS.map((agent) => {
+            const Icon = agent.icon
+            const selected = activeAgent.id === agent.id
+            return <button key={agent.id} id={`agent-tab-${agent.id}`} type="button" role="tab" aria-selected={selected} aria-controls="agent-panel" tabIndex={selected ? 0 : -1} className={selected ? 'is-active' : ''} onClick={() => setActiveAgent(agent)} onKeyDown={(event) => handleAgentKeyDown(event, agent.id)}><span><Icon size={17} /></span>{agent.label}</button>
+          })}</div>
+          <AgentWorkbench agent={activeAgent} />
+        </section>
+
+        <section className="landing-section experience" id="experience">
+          <div className="experience-grid">
+            <CenterPreview />
+            <div className="experience-copy">
+              <span className="section-kicker">Le centre pilote</span>
+              <h2>Produisez une fois. Planifiez chaque promotion.</h2>
+              <p>Le tableau de bord rassemble le pipeline, les horaires, les accès, les audios et les exports de suivi.</p>
+              <ul><li><Check size={16} />Promotions et accès séparés</li><li><Check size={16} />Audio verrouillé avant diffusion</li><li><Check size={16} />Présences et journaux exportables</li></ul>
+              <PrimaryButton href="#contact">Voir le fonctionnement</PrimaryButton>
             </div>
-
-            <div className="hero__proof">
-              <p>Pensé pour les centres de formation</p>
-              <div>
-                <span>Référentiels RNCP</span>
-                <span>Modules versionnés</span>
-                <span>Classes synchrones</span>
-                <span>Suivi par promotion</span>
-                <span>Journaux exportables</span>
-              </div>
+          </div>
+          <div className="experience-grid experience-grid--reverse">
+            <ClassPreview />
+            <div className="experience-copy">
+              <span className="section-kicker">L’apprenant rejoint</span>
+              <h2>Une classe lisible, à l’heure prévue.</h2>
+              <p>La playlist suit le créneau défini. Les slides et le Q&A restent liés au passage réellement enseigné.</p>
+              <ul><li><Check size={16} />Accès par promotion ou invitation</li><li><Check size={16} />Audio et supports synchronisés</li><li><Check size={16} />Questions reliées au contexte du cours</li></ul>
+              <a className="landing-text-link" href={studentCourseHref}>Découvrir l’accès apprenant <ArrowRight size={16} /></a>
             </div>
           </div>
         </section>
 
-        <section className="video-section section-shell" id="demo">
-          <div className="section-intro section-intro--split">
-            <div>
-              <p className="section-label">Présentation</p>
-              <h2>Montrez le produit avant de demander un rendez-vous.</h2>
-            </div>
-            <p>
-              Cet emplacement est prêt pour votre vidéo principale. Le cadre prévoit un poster, des sous-titres et une lecture sans son automatique.
-            </p>
-          </div>
-          <VideoPlaceholder
-            number="01"
-            title="Cadrenza en deux minutes"
-            description="Du référentiel source jusqu'à la première classe planifiée."
-          />
-        </section>
-
-        <section className="method-section section-shell" id="methode">
-          <div className="section-intro">
-            <p className="section-label">Le principe fondateur</p>
-            <h2>Un module durable pour chaque titre professionnel.</h2>
-            <p>
-              L'équipe centre produit le socle une fois. Chaque promotion reçoit ensuite le même cadre pédagogique, avec son propre calendrier, ses accès et son suivi.
-            </p>
-          </div>
-
-          <div className="durable-diagram">
-            <div className="durable-diagram__source">
-              <FileStack size={30} />
-              <span>Source officielle</span>
-              <strong>Référentiel RNCP</strong>
-              <small>Activités, compétences, critères</small>
-            </div>
-            <div className="durable-diagram__flow" aria-hidden="true"><i /><ArrowRight /></div>
-            <div className="durable-diagram__module">
-              <span>Module durable</span>
-              <strong>Cours, audio, slides, Q&A</strong>
-              <div><i /><i /><i /><i /><i /></div>
-            </div>
-            <div className="durable-diagram__flow" aria-hidden="true"><i /><ArrowRight /></div>
-            <div className="durable-diagram__promos">
-              {['Septembre', 'Novembre', 'Février'].map((month, index) => (
-                <div key={month}>
-                  <span>Promotion</span>
-                  <strong>{month}</strong>
-                  <small>{index === 0 ? 'En cours' : 'Planifiée'}</small>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          <ol className="pipeline" aria-label="Étapes de production">
-            {PIPELINE_STEPS.map(({ title, text, icon }, index) => (
-              <li key={title}>
-                <span className="pipeline__number">{String(index + 1).padStart(2, '0')}</span>
-                {icon}
-                <div><h3>{title}</h3><p>{text}</p></div>
-              </li>
-            ))}
+        <section className="landing-section setup">
+          <div className="setup-copy"><span className="section-kicker">Mise en route</span><h2>Votre premier module en trois étapes.</h2><p>Cadrenza guide l’équipe centre depuis le dépôt du référentiel jusqu’à la première classe planifiée.</p><PrimaryButton onClick={openSignup}>Créer un espace centre</PrimaryButton></div>
+          <ol className="setup-steps">
+            <li><span>01</span><div><strong>Ajoutez le référentiel</strong><p>Déposez le REAC et contrôlez les sources reconnues.</p></div><FileCheck2 size={20} /></li>
+            <li><span>02</span><div><strong>Validez le module</strong><p>Relisez le cours, les supports et les fichiers audio.</p></div><CircleCheck size={20} /></li>
+            <li><span>03</span><div><strong>Planifiez la promotion</strong><p>Définissez les horaires, les accès et la diffusion.</p></div><CalendarClock size={20} /></li>
           </ol>
         </section>
 
-        <section className="capabilities-section" aria-labelledby="capabilities-title">
-          <div className="section-shell">
-            <div className="section-intro section-intro--on-dark capabilities-section__intro">
-              <p className="section-label">Une chaîne continue</p>
-              <h2 id="capabilities-title">Du référentiel à la classe, sans rupture.</h2>
-              <p>Chaque sortie devient l’entrée contrôlée de l’étape suivante. Le centre garde la source, la version et le suivi au même endroit.</p>
-            </div>
-          </div>
-          <div className="capability-marquee" aria-label="Capacités de Cadrenza">
-            <div className="capability-marquee__track">
-              {[...CAPABILITIES, ...CAPABILITIES].map(({ label, icon }, index) => (
-                <div className="capability-card" key={`${label}-${index}`} aria-hidden={index >= CAPABILITIES.length ? 'true' : undefined}>
-                  <span>{icon}</span>
-                  <strong>{label}</strong>
-                </div>
-              ))}
-            </div>
-          </div>
+        <section className="landing-section faq" id="faq">
+          <div className="section-heading"><span className="section-kicker">Questions fréquentes</span><h2>Le cadre avant l’automatisation.</h2><p>Cadrenza automatise la production et la diffusion sans masquer les sources, les étapes ni les responsabilités.</p></div>
+          <div className="faq-list">{FAQS.map(({ question, answer }, index) => <details key={question} open={index === 0}><summary>{question}<ChevronDown size={18} /></summary><p>{answer}</p></details>)}</div>
         </section>
 
-        <section className="agents-section" id="agents">
-          <div className="section-shell">
-            <div className="section-intro section-intro--on-dark">
-              <p className="section-label">Des agents spécialisés</p>
-              <h2>Chaque agent produit un artefact précis.</h2>
-              <p>Chaque fonction est identifiable, contrôlable et reliée à une étape concrète de la chaîne pédagogique.</p>
-            </div>
-
-            <div className="agent-tabs" role="tablist" aria-label="Robots de production">
-              {AGENTS.map((agent) => {
-                const AgentIcon = agent.icon
-                return (
-                  <button
-                    key={agent.id}
-                    id={`agent-tab-${agent.id}`}
-                    type="button"
-                    role="tab"
-                    aria-selected={activeAgent.id === agent.id}
-                    aria-controls="agent-panel"
-                    tabIndex={activeAgent.id === agent.id ? 0 : -1}
-                    className={activeAgent.id === agent.id ? 'is-active' : ''}
-                    onClick={() => setActiveAgent(agent)}
-                    onKeyDown={(event) => handleAgentKeyDown(event, agent.id)}
-                  >
-                    <span className="agent-tab__icon"><AgentIcon size={19} aria-hidden="true" /></span>
-                    <span>{agent.label}</span>
-                  </button>
-                )
-              })}
-            </div>
-
-            <div
-              id="agent-panel"
-              className={`agent-panel agent-panel--${activeAgent.tone}`}
-              role="tabpanel"
-              aria-labelledby={`agent-tab-${activeAgent.id}`}
-            >
-              <div className="agent-panel__conversation">
-                <div className="conversation-bubble conversation-bubble--request">{activeAgent.prompt}</div>
-                <div className="conversation-bubble conversation-bubble--reply">
-                  <span className="conversation-bubble__icon"><ActiveAgentIcon size={18} aria-hidden="true" /></span>
-                  <p>{activeAgent.reply}</p>
-                </div>
-                <div className="conversation-artifact">
-                  <span><FileCheck2 size={16} /> Artefact contrôlable</span>
-                  <div><i /><i /><i /></div>
-                </div>
-              </div>
-              <div className="agent-panel__detail" aria-live="polite">
-                <span className="agent-panel__role-icon"><ActiveAgentIcon size={28} aria-hidden="true" /></span>
-                <div>
-                  <span>Agent logiciel</span>
-                  <h3>{activeAgent.name}</h3>
-                </div>
-                <ul>
-                  {activeAgent.tasks.map((task) => <li key={task}><Check size={16} /> {task}</li>)}
-                </ul>
-                <p>La sortie reste disponible dans le pipeline pour relecture, version et reprise.</p>
-              </div>
-            </div>
-          </div>
-        </section>
-
-        <section className="experience-section section-shell" id="experience">
-          <div className="section-intro section-intro--split">
-            <div>
-              <p className="section-label">Deux expériences, un même module</p>
-              <h2>Le centre pilote. L'apprenant rejoint une classe.</h2>
-            </div>
-            <p>
-              Cadrenza sépare les tâches opérateur de l'expérience de cours. Les réglages restent au centre; la séance reste lisible pour l'apprenant.
-            </p>
-          </div>
-
-          <div className="surface-story" id="pilotage">
-            <div className="surface-story__copy">
-              <span><ShieldCheck size={18} /> Vue centre</span>
-              <h3>Produire, planifier et surveiller plusieurs promotions.</h3>
-              <p>Le tableau de bord rassemble le pipeline, les horaires, les accès, les audios et les exports de suivi.</p>
-              <ul>
-                <li><Check size={16} /> Une séparation claire entre centres et promotions</li>
-                <li><Check size={16} /> Verrouillage des audios avant diffusion</li>
-                <li><Check size={16} /> Présences et journaux exportables</li>
-              </ul>
-            </div>
-            <CenterDashboardPreview />
-          </div>
-
-          <div className="surface-story surface-story--reverse">
-            <div className="surface-story__copy">
-              <span><GraduationCap size={18} /> Vue apprenant</span>
-              <h3>Entrer à l'heure dans une classe audio structurée.</h3>
-              <p>La playlist suit le créneau prévu. Les slides et le Q&A restent liés au passage réellement enseigné.</p>
-              <ul>
-                <li><Check size={16} /> Accès par promotion ou invitation</li>
-                <li><Check size={16} /> Audio et supports synchronisés</li>
-                <li><Check size={16} /> Questions reliées au contexte du cours</li>
-              </ul>
-            </div>
-            <StudentClassPreview />
-          </div>
-        </section>
-
-        <section className="video-duo-section">
-          <div className="section-shell">
-            <div className="section-intro section-intro--on-dark section-intro--split">
-              <div>
-                <p className="section-label">Vos démonstrations détaillées</p>
-                <h2>Deux emplacements pour raconter chaque côté du produit.</h2>
-              </div>
-              <p>Vous pourrez déposer vos montages sans reconstruire la page. Les cadres sont déjà responsives et prévus pour des sous-titres.</p>
-            </div>
-            <div className="video-duo">
-              <VideoPlaceholder
-                compact
-                number="02"
-                title="Le pipeline centre"
-                description="Création d'un module, contrôles, audio et planification."
-              />
-              <VideoPlaceholder
-                compact
-                number="03"
-                title="La classe apprenant"
-                description="Connexion, attente, lecture synchronisée et Q&A."
-              />
-            </div>
-          </div>
-        </section>
-
-        <section className="trace-section section-shell">
-          <div className="trace-section__statement">
-            <LockKeyhole size={34} />
-            <h2>Le cadre pédagogique reste visible.</h2>
-            <p>Chaque étape produit une trace exploitable par l'équipe centre, depuis la source jusqu'à la séance diffusée.</p>
-          </div>
-          <div className="trace-section__list">
-            <div><FileCheck2 /><span><strong>Sources reliées</strong>Le contenu reste rattaché au référentiel de travail.</span></div>
-            <div><Clock3 /><span><strong>Chronologie explicite</strong>Les séances et audios suivent un horaire défini.</span></div>
-            <div><UsersRound /><span><strong>Espaces séparés</strong>Chaque promotion utilise ses propres accès et journaux.</span></div>
-          </div>
-        </section>
-
-        <section className="faq-section section-shell">
-          <div className="section-intro">
-            <p className="section-label">Questions fréquentes</p>
-            <h2>Ce que Cadrenza fait, et ce qu'il ne prétend pas faire.</h2>
-          </div>
-          <div className="faq-list">
-            <details>
-              <summary>Est-ce un catalogue de cours à la demande ?</summary>
-              <p>Non. Cadrenza est conçu pour une classe planifiée, avec une heure de début, une playlist horodatée et un suivi par promotion.</p>
-            </details>
-            <details>
-              <summary>Faut-il reconstruire le cours pour chaque promotion ?</summary>
-              <p>Non. Le module est attaché au titre professionnel et peut être repris par plusieurs promotions avec des calendriers distincts.</p>
-            </details>
-            <details>
-              <summary>Le centre garde-t-il la main sur la production ?</summary>
-              <p>Oui. Les étapes, fichiers, horaires, états de verrouillage et journaux sont pilotés depuis l'espace centre.</p>
-            </details>
-            <details>
-              <summary>Les agents prennent-ils des décisions sans contrôle ?</summary>
-              <p>Non. Chaque agent intervient sur une étape définie et produit une sortie relisible. L'équipe centre conserve le contrôle du contenu, des versions et de la diffusion.</p>
-            </details>
-          </div>
-        </section>
-
-        <section className="final-cta">
-          <div className="final-cta__grid" aria-hidden="true" />
-          <div>
-            <CadrenzaLogo compact />
-            <p>Votre premier titre professionnel</p>
-            <h2>Préparez le module. Cadencez les promotions.</h2>
-          </div>
-          <div className="final-cta__actions">
-            <button className="button button--signal button--large" type="button" onClick={() => navigate('/connexion-centre?mode=signup')}>
-              Créer un espace centre <ArrowRight size={18} />
-            </button>
-            <button className="button button--outline button--large" type="button" onClick={() => navigate('/connexion-centre')}>
-              Se connecter
-            </button>
-          </div>
+        <section className="landing-cta" id="contact">
+          <div className="landing-cta__aura" aria-hidden="true" />
+          <div className="landing-cta__content"><CadrenzaLogo compact /><span>Votre premier titre professionnel</span><h2>Préparez le module. Cadencez les promotions.</h2><p>Un même socle pédagogique, plusieurs classes, une trace complète.</p><div><PrimaryButton onClick={openSignup}>Créer un espace centre</PrimaryButton><button className="landing-button landing-button--secondary" type="button" onClick={() => navigate('/connexion-centre')}>Se connecter</button></div></div>
         </section>
       </main>
 
-      <footer className="site-footer">
-        <div className="site-footer__brand">
-          <CadrenzaLogo />
-          <p>Production et diffusion synchrone de parcours RNCP pour les centres de formation.</p>
-        </div>
-        <div className="site-footer__links">
-          <div><strong>Découvrir</strong><a href="#methode">La méthode</a><a href="#agents">Les agents</a><a href="#experience">La classe</a></div>
-          <div><strong>Accès</strong><a href="/connexion-centre">Espace centre</a><a href="/cours">Espace apprenant</a></div>
-          <div><strong>Produit</strong><span>Modules RNCP</span><span>Classes synchrones</span><span>Pilotage multi-promotion</span></div>
-        </div>
-        <div className="site-footer__bottom">
-          <span>© 2026 Cadrenza. Tous droits réservés.</span>
-          <span>Conçu pour les parcours RNCP synchrones.</span>
-        </div>
+      <footer className="landing-footer">
+        <div className="landing-footer__top"><div><CadrenzaLogo /><p>Production et diffusion synchrone de parcours RNCP pour les centres de formation.</p></div><nav aria-label="Navigation de pied de page"><div><strong>Découvrir</strong><a href="#methode">La méthode</a><a href="#agents">Les agents</a><a href="#experience">L’expérience</a></div><div><strong>Accès</strong><a href="/connexion-centre">Espace centre</a><a href={studentCourseHref}>Espace apprenant</a></div><div><strong>Produit</strong><span>Modules RNCP</span><span>Classes synchrones</span><span>Suivi multi-promotion</span></div></nav></div>
+        <div className="landing-footer__bottom"><span>© 2026 Cadrenza. Tous droits réservés.</span><span>Conçu pour les parcours RNCP synchrones.</span></div>
       </footer>
     </div>
   )
