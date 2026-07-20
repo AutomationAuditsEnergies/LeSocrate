@@ -4377,6 +4377,7 @@ function PlatformCard({
   const hasFailed = preparation.status === 'failed'
   const nextCourseSession = getNextCourseSession(p)
   const rosterStage = getTeacherRosterStage(p)
+  const robotTheme = getRobotTheme(p.center_platform_number || p.id, p.teacher_color)
   const rosterMeta = {
     preparing: { label: hasFailed ? 'À vérifier' : 'En préparation', color: hasFailed ? '#dc2626' : '#b45309', background: hasFailed ? '#fef2f2' : '#fffbeb' },
     ready: { label: 'Prêt', color: '#047857', background: '#ecfdf5' },
@@ -4437,6 +4438,19 @@ function PlatformCard({
           className="group relative flex min-h-[332px] cursor-pointer flex-col gap-2 overflow-hidden rounded-2xl p-3 text-left transition-shadow hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/50"
           style={faceStyle}
         >
+          <div
+            className="relative h-[218px] w-full shrink-0 overflow-hidden rounded-xl"
+            style={{ backgroundColor: `${robotTheme.glow}12` }}
+            aria-hidden="true"
+          >
+            <img
+              src={robotTheme.src}
+              alt=""
+              draggable={false}
+              className="h-full w-full select-none object-contain px-2 pt-2 transition-transform duration-200 ease-out group-hover:scale-[1.025] motion-reduce:transition-none"
+            />
+          </div>
+
           <div>
             <h3 className="truncate text-sm font-semibold leading-tight tracking-[-0.025em]" style={{ color: colors.text }}>
               {p.teacher_name || p.name || 'Professeur IA'}
@@ -4535,34 +4549,48 @@ function PlatformCard({
             style={{ border: `1px solid ${colors.border}` }}
           >
             <aside
-              className="flex shrink-0 flex-col justify-between p-6 sm:w-[42%]"
+              className="flex shrink-0 flex-col sm:w-[42%]"
               style={{ backgroundColor: colors.innerBg, borderRight: `1px solid ${colors.border}` }}
             >
-              <div>
+              <div
+                className="relative h-[280px] shrink-0 overflow-hidden"
+                style={{ backgroundColor: `${robotTheme.glow}12` }}
+                aria-hidden="true"
+              >
                 <span
-                  className="inline-flex rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.08em]"
+                  className="absolute left-5 top-5 z-10 inline-flex rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.08em]"
                   style={{ color: rosterMeta.color, backgroundColor: rosterMeta.background }}
                 >
                   {rosterMeta.label}
                 </span>
-                <h2 id={`teacher-details-${p.id}`} className="mt-5 text-3xl font-semibold tracking-[-0.04em]" style={{ color: colors.text }}>
-                  {p.teacher_name || p.name || 'Professeur IA'}
-                </h2>
-                <p className="mt-1 text-sm font-medium" style={{ color: '#6C63FF' }}>
-                  {p.source_tp_name || p.name || 'Formation à définir'}
-                </p>
-                <p className="mt-5 text-xs leading-5" style={{ color: colors.textMuted }}>
-                  {p.source_rncp_code
-                    ? `Professeur autonome configuré pour le titre RNCP ${p.source_rncp_code}.`
-                    : 'Professeur IA configuré pour délivrer et suivre cette formation.'}
-                </p>
+                <img
+                  src={robotTheme.src}
+                  alt=""
+                  draggable={false}
+                  className="h-full w-full select-none object-contain px-4 pt-5"
+                />
               </div>
-              <div className="mt-8 space-y-2 border-t pt-4 text-xs" style={{ borderColor: colors.border, color: colors.textSecondary }}>
-                <p className="flex items-center justify-between gap-4"><span>Plateforme</span><strong>P{p.center_platform_number || p.id}</strong></p>
-                <p className="flex items-center justify-between gap-4"><span>Séances restantes</span><strong>{Number(p.remaining_session_count || 0)}</strong></p>
-                <p className="leading-5" style={{ color: colors.textMuted }}>
-                  {nextCourseSession ? `Prochaine séance : ${formatScheduleDateTime(nextCourseSession.scheduled_at)}` : 'Aucune séance programmée'}
-                </p>
+              <div className="flex flex-1 flex-col justify-between p-6">
+                <div>
+                  <h2 id={`teacher-details-${p.id}`} className="text-3xl font-semibold tracking-[-0.04em]" style={{ color: colors.text }}>
+                    {p.teacher_name || p.name || 'Professeur IA'}
+                  </h2>
+                  <p className="mt-1 text-sm font-medium" style={{ color: '#6C63FF' }}>
+                    {p.source_tp_name || p.name || 'Formation à définir'}
+                  </p>
+                  <p className="mt-5 text-xs leading-5" style={{ color: colors.textMuted }}>
+                    {p.source_rncp_code
+                      ? `Professeur autonome configuré pour le titre RNCP ${p.source_rncp_code}.`
+                      : 'Professeur IA configuré pour délivrer et suivre cette formation.'}
+                  </p>
+                </div>
+                <div className="mt-8 space-y-2 border-t pt-4 text-xs" style={{ borderColor: colors.border, color: colors.textSecondary }}>
+                  <p className="flex items-center justify-between gap-4"><span>Plateforme</span><strong>P{p.center_platform_number || p.id}</strong></p>
+                  <p className="flex items-center justify-between gap-4"><span>Séances restantes</span><strong>{Number(p.remaining_session_count || 0)}</strong></p>
+                  <p className="leading-5" style={{ color: colors.textMuted }}>
+                    {nextCourseSession ? `Prochaine séance : ${formatScheduleDateTime(nextCourseSession.scheduled_at)}` : 'Aucune séance programmée'}
+                  </p>
+                </div>
               </div>
             </aside>
 
