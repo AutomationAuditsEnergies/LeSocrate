@@ -4456,15 +4456,9 @@ function PlatformCard({
               {p.teacher_name || p.name || 'Professeur IA'}
             </h3>
             <p className="mt-1 truncate text-xs font-medium" style={{ color: '#6C63FF' }}>
-              {p.source_tp_name || p.name || 'Formation à définir'}
+              Professeur du {p.source_tp_name || p.name || 'parcours'}
             </p>
           </div>
-
-          <p className="line-clamp-3 min-h-[54px] text-xs leading-[1.55]" style={{ color: colors.textMuted }}>
-            {p.source_rncp_code
-              ? `Professeur configuré pour le titre RNCP ${p.source_rncp_code} et le suivi de ses apprenants.`
-              : 'Professeur IA à configurer pour délivrer une formation et accompagner les apprenants.'}
-          </p>
 
           <ul className="mt-1 space-y-1 text-[11px] leading-[1.45]" style={{ color: colors.textSecondary }}>
             <li className="flex items-start gap-2">
