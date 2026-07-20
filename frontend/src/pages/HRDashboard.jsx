@@ -122,6 +122,7 @@ export default function HRDashboard() {
   const [showCoursFoldersModal, setShowCoursFoldersModal] = useState(false)
   const [selectedCoursPlatform, setSelectedCoursPlatform] = useState(null)
   const [cardPage, setCardPage] = useState(0)
+  const [teacherRosterFilter, setTeacherRosterFilter] = useState('all')
   const [attendancePlatformId, setAttendancePlatformId] = useState('')
   const [attendanceDate, setAttendanceDate] = useState(todayDateInput)
   const [attendanceData, setAttendanceData] = useState(null)
@@ -139,7 +140,7 @@ export default function HRDashboard() {
   const [onboardingStep, setOnboardingStep] = useState(0)
   const [onboardingSaving, setOnboardingSaving] = useState(false)
   const [archivingPlatformId, setArchivingPlatformId] = useState(null)
-  const CARDS_PER_PAGE = 3
+  const CARDS_PER_PAGE = 10
 
   const handleLogout = async () => {
     if (loggingOut) return
@@ -1146,7 +1147,7 @@ export default function HRDashboard() {
   return (
     <div className={darkMode ? 'dark' : ''}>
       <div className="relative min-h-screen overflow-hidden" style={{ backgroundColor: colors.bg, fontFamily: 'Inter, sans-serif' }}>
-        {/* Top Navigation Bar */}
+        {/* En-tête compact, inspiré du playground Anima Workers. */}
         <div
           className="sticky top-0 z-20 border-b"
           style={{
@@ -1155,15 +1156,21 @@ export default function HRDashboard() {
             backdropFilter: 'blur(8px)'
           }}
         >
-          <div className="mx-auto max-w-7xl px-4 pt-4 sm:px-6">
-            <div className="flex items-center justify-between gap-4">
-              <div className="min-w-0">
-                <p className="text-[10px] font-semibold uppercase tracking-[0.18em]" style={{ color: colors.textMuted }}>
-                  Espace centre
-                </p>
-                <h1 className="truncate text-lg font-semibold tracking-tight" style={{ color: colors.text }}>
-                  Cadrenza
-                </h1>
+          <div className="flex h-16 items-center justify-between gap-4 px-4 sm:px-6">
+              <div className="flex min-w-0 items-center gap-3">
+                <div
+                  className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg"
+                  style={{ backgroundColor: colors.innerBg, border: `1px solid ${colors.border}`, color: colors.text }}
+                  aria-hidden="true"
+                >
+                  <Icon name="school" className="text-lg" />
+                </div>
+                <div className="min-w-0">
+                  <h1 className="truncate text-base font-bold tracking-tight" style={{ color: colors.text }}>
+                    Cadrenza
+                  </h1>
+                  <p className="truncate text-[11px]" style={{ color: colors.textMuted }}>Espace centre</p>
+                </div>
               </div>
               <div className="flex items-center gap-2">
                 <button
@@ -1198,28 +1205,6 @@ export default function HRDashboard() {
                   <span className="hidden sm:inline">{loggingOut ? 'Déconnexion…' : 'Se déconnecter'}</span>
                 </button>
               </div>
-            </div>
-
-            <nav className="mt-5 flex items-end gap-8 overflow-x-auto" aria-label="Navigation dashboard formations">
-              <SkoolTab
-                active={!showModulesModal && !showCreateModal}
-                onClick={showDashboardView}
-                label="Mes professeurs IA"
-                colors={colors}
-              />
-              <SkoolTab
-                active={showModulesModal}
-                onClick={showModulesView}
-                label="Réutiliser un ancien professeur IA"
-                colors={colors}
-              />
-              <SkoolTab
-                active={showCreateModal}
-                onClick={openCreateModal}
-                label="Nouveau professeur IA"
-                colors={colors}
-              />
-            </nav>
           </div>
         </div>
 
@@ -1237,7 +1222,17 @@ export default function HRDashboard() {
           />
         )}
 
-        <div className="relative z-10 mx-auto max-w-7xl px-6 py-8">
+        <div className="relative z-10 flex min-h-[calc(100dvh-4rem)]">
+          <CenterSidebar
+            colors={colors}
+            activeView={showModulesModal ? 'library' : showCreateModal ? 'create' : 'teachers'}
+            teacherCount={activeTeachers.length}
+            onShowTeachers={showDashboardView}
+            onShowLibrary={showModulesView}
+            onCreateTeacher={openCreateModal}
+          />
+          <main className="min-w-0 flex-1 px-4 py-8 sm:px-6 xl:px-10">
+          <div className="mx-auto w-full max-w-[1600px]">
           {orderNotice && (
             <div
               className="mb-6 flex items-start gap-3 rounded-xl border px-4 py-3.5 text-sm"
@@ -1371,10 +1366,24 @@ export default function HRDashboard() {
             />
           ) : (
             <PlatformCardsView
-              platforms={activeTeachers}
+              platforms={platforms}
               cardPage={cardPage}
               setCardPage={setCardPage}
               cardsPerPage={CARDS_PER_PAGE}
+              rosterFilter={teacherRosterFilter}
+              onRosterFilterChange={(value) => {
+                setTeacherRosterFilter(value)
+                setCardPage(0)
+              }}
+              onCreateTeacher={openCreateModal}
+              onCreateFromBrief={(brief) => {
+                resetCreateForm()
+                setNewFormTpName(brief)
+                setFormationMode('new')
+                fetchModules()
+                setShowModulesModal(false)
+                setShowCreateModal(true)
+              }}
               expandedPlatform={expandedPlatform}
               platformAudios={platformAudios}
               audiosLoading={audiosLoading}
@@ -1435,6 +1444,8 @@ export default function HRDashboard() {
               onRetryPreparation={handleRetryTeacherPreparation}
             />
           )}
+          </div>
+          </main>
         </div>
       </div>
 
@@ -2021,30 +2032,133 @@ function CenterOnboarding({ colors, darkMode, step, onStepChange, onClose, onCom
   )
 }
 
-function SkoolTab({ active, onClick, label, colors }) {
+function CenterSidebar({
+  colors,
+  activeView,
+  teacherCount,
+  onShowTeachers,
+  onShowLibrary,
+  onCreateTeacher,
+}) {
+  const availableItems = [
+    { id: 'teachers', label: 'Professeurs IA', icon: 'school', onClick: onShowTeachers, count: teacherCount },
+    { id: 'library', label: 'Bibliothèque', icon: 'inventory_2', onClick: onShowLibrary },
+    { id: 'create', label: 'Créer un professeur', icon: 'person_add', onClick: onCreateTeacher, emphasized: true },
+  ]
+  const futureItems = [
+    { label: 'Formations', icon: 'menu_book' },
+    { label: 'Apprenants', icon: 'groups' },
+    { label: 'Séances', icon: 'calendar_month' },
+    { label: 'Résultats', icon: 'analytics' },
+  ]
+
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="relative whitespace-nowrap pb-4 text-sm font-semibold transition-colors sm:text-base"
-      style={{ color: active ? colors.text : '#8A8A8A' }}
+    <aside
+      className="sticky top-16 hidden h-[calc(100dvh-4rem)] w-60 flex-shrink-0 flex-col border-r px-3 py-5 lg:flex"
+      style={{ backgroundColor: colors.cardBg, borderColor: colors.border }}
     >
-      {label}
-      {active && (
-        <span
-          className="absolute bottom-[-1px] left-0 h-[3px] w-full"
-          style={{ backgroundColor: colors.text }}
-        />
-      )}
-    </button>
+      <nav className="space-y-1" aria-label="Navigation de l’espace centre">
+        {availableItems.map((item) => {
+          const selected = activeView === item.id
+          return (
+            <button
+              key={item.id}
+              type="button"
+              onClick={item.onClick}
+              className="flex min-h-10 w-full items-center gap-3 rounded-lg px-3 text-left text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40"
+              style={{
+                backgroundColor: selected ? colors.innerBg : 'transparent',
+                color: selected ? colors.text : colors.textSecondary,
+                border: item.emphasized && !selected ? `1px solid ${colors.border}` : '1px solid transparent',
+              }}
+            >
+              <Icon name={item.icon} className="text-[18px]" />
+              <span className="min-w-0 flex-1 truncate">{item.label}</span>
+              {typeof item.count === 'number' && (
+                <span
+                  className="rounded-full px-2 py-0.5 text-[10px] font-semibold tabular-nums"
+                  style={{ backgroundColor: colors.cardBg, color: colors.textMuted, border: `1px solid ${colors.border}` }}
+                >
+                  {item.count}
+                </span>
+              )}
+            </button>
+          )
+        })}
+      </nav>
+
+      <div className="my-5 h-px" style={{ backgroundColor: colors.border }} />
+
+      <div className="space-y-1">
+        {futureItems.map((item) => (
+          <button
+            key={item.label}
+            type="button"
+            disabled
+            className="flex min-h-10 w-full cursor-not-allowed items-center gap-3 rounded-lg px-3 text-left text-sm opacity-55"
+            style={{ color: colors.textMuted }}
+            title="Bientôt disponible"
+          >
+            <Icon name={item.icon} className="text-[18px]" />
+            <span className="flex-1">{item.label}</span>
+            <span className="text-[9px] font-semibold uppercase tracking-[0.12em]">Bientôt</span>
+          </button>
+        ))}
+      </div>
+
+      <div className="mt-auto">
+        <button
+          type="button"
+          disabled
+          className="flex min-h-10 w-full cursor-not-allowed items-center gap-3 rounded-lg px-3 text-left text-sm opacity-55"
+          style={{ color: colors.textMuted }}
+          title="Bientôt disponible"
+        >
+          <Icon name="settings" className="text-[18px]" />
+          <span>Paramètres</span>
+        </button>
+      </div>
+    </aside>
   )
 }
+
+function getTeacherRosterStage(platform = {}) {
+  const lifecycle = String(platform.lifecycle_status || 'active').toLowerCase()
+  if (lifecycle === 'archived') return 'archived'
+  if (lifecycle === 'completed') return 'completed'
+
+  const preparation = getTeacherPreparation(platform)
+  if (preparation.status === 'preparing' || preparation.status === 'failed' || platform.status === 'pending') {
+    return 'preparing'
+  }
+
+  const total = Number(platform.total_session_count || 0)
+  const remaining = Number(platform.remaining_session_count || 0)
+  if (total > 0 && remaining === 0) return 'completed'
+  if (total > 0 && remaining === total) return 'upcoming'
+  if (total > 0 && remaining > 0 && remaining < total) return 'in_progress'
+  return 'ready'
+}
+
+const TEACHER_ROSTER_FILTERS = [
+  { id: 'all', label: 'Tous' },
+  { id: 'preparing', label: 'En préparation' },
+  { id: 'ready', label: 'Prêts' },
+  { id: 'upcoming', label: 'À venir' },
+  { id: 'in_progress', label: 'En cours' },
+  { id: 'completed', label: 'Terminés' },
+  { id: 'archived', label: 'Archivés' },
+]
 
 function PlatformCardsView({
   platforms,
   cardPage,
   setCardPage,
   cardsPerPage,
+  rosterFilter,
+  onRosterFilterChange,
+  onCreateTeacher,
+  onCreateFromBrief,
   expandedPlatform,
   platformAudios,
   audiosLoading,
@@ -2090,13 +2204,113 @@ function PlatformCardsView({
   retryingPlatformId,
   onRetryPreparation,
 }) {
-  const totalPages = Math.ceil(platforms.length / cardsPerPage)
+  const [teacherBrief, setTeacherBrief] = useState('')
+  const filteredPlatforms = rosterFilter === 'all'
+    ? platforms
+    : platforms.filter((platform) => getTeacherRosterStage(platform) === rosterFilter)
+  const filterCounts = Object.fromEntries(
+    TEACHER_ROSTER_FILTERS.map((filter) => [
+      filter.id,
+      filter.id === 'all'
+        ? platforms.length
+        : platforms.filter((platform) => getTeacherRosterStage(platform) === filter.id).length,
+    ]),
+  )
+  const totalPages = Math.ceil(filteredPlatforms.length / cardsPerPage)
   const safeCardPage = Math.min(cardPage, Math.max(0, totalPages - 1))
+  const visiblePlatforms = filteredPlatforms.slice(
+    safeCardPage * cardsPerPage,
+    (safeCardPage + 1) * cardsPerPage,
+  )
+
+  const submitBrief = (event) => {
+    event.preventDefault()
+    const brief = teacherBrief.trim()
+    if (brief) onCreateFromBrief(brief)
+    else onCreateTeacher()
+  }
 
   return (
-    <>
-      {platforms.length > cardsPerPage && (
-        <div className="mb-6 flex items-center justify-center gap-3">
+    <section>
+      <header className="mx-auto max-w-4xl pb-10 pt-5 text-center sm:pt-9">
+        <h2
+          className="text-[34px] font-bold leading-[1.08] tracking-[-0.035em] sm:text-[46px]"
+          style={{ color: colors.text }}
+        >
+          Quel professeur IA souhaitez-vous recruter&nbsp;?
+        </h2>
+        <p className="mx-auto mt-4 max-w-2xl text-sm leading-6 sm:text-base" style={{ color: colors.textMuted }}>
+          Décrivez votre besoin, nous préparons son profil pédagogique et sa formation.
+        </p>
+
+        <form onSubmit={submitBrief} className="mx-auto mt-8 flex w-full max-w-3xl items-center gap-2 rounded-full p-2 pl-5" style={{ backgroundColor: colors.cardBg, border: `1px solid ${colors.border}` }}>
+          <Icon name="auto_awesome" className="hidden text-lg sm:block" style={{ color: colors.textMuted }} aria-hidden="true" />
+          <label htmlFor="teacher-brief" className="sr-only">Décrire le professeur IA recherché</label>
+          <input
+            id="teacher-brief"
+            type="text"
+            value={teacherBrief}
+            onChange={(event) => setTeacherBrief(event.target.value)}
+            placeholder="Ex. Un professeur pour délivrer le bloc 2 du TP CRCD…"
+            className="min-w-0 flex-1 bg-transparent px-1 py-2 text-sm outline-none placeholder:text-slate-500 sm:text-base"
+            style={{ color: colors.text }}
+          />
+          <button
+            type="submit"
+            className="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-full text-white transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40 focus-visible:ring-offset-2"
+            style={{ backgroundColor: '#8B5CF6' }}
+            aria-label="Créer ce professeur IA"
+            title="Créer ce professeur IA"
+          >
+            <Icon name="arrow_forward" className="text-lg" />
+          </button>
+        </form>
+
+        <div className="mt-4 flex items-center justify-center gap-2 lg:hidden">
+          <button
+            type="button"
+            onClick={onCreateTeacher}
+            className="rounded-lg px-3 py-2 text-xs font-semibold text-white"
+            style={{ backgroundColor: '#8B5CF6' }}
+          >
+            Créer manuellement
+          </button>
+        </div>
+      </header>
+
+      <div className="flex items-center gap-4">
+        <div className="h-px flex-1" style={{ backgroundColor: colors.border }} />
+        <h3 className="whitespace-nowrap text-[11px] font-semibold uppercase tracking-[0.18em]" style={{ color: colors.textMuted }}>
+          Vos professeurs IA
+        </h3>
+        <div className="h-px flex-1" style={{ backgroundColor: colors.border }} />
+      </div>
+
+      <div className="mt-6 flex flex-wrap items-center justify-center gap-2" role="group" aria-label="Filtrer les professeurs IA">
+        {TEACHER_ROSTER_FILTERS.map((filter) => {
+          const selected = rosterFilter === filter.id
+          return (
+            <button
+              key={filter.id}
+              type="button"
+              onClick={() => onRosterFilterChange(filter.id)}
+              aria-pressed={selected}
+              className="inline-flex min-h-9 items-center gap-2 rounded-full px-3.5 text-xs font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40 sm:text-sm"
+              style={{
+                backgroundColor: selected ? colors.text : 'transparent',
+                color: selected ? colors.bg : colors.textSecondary,
+                border: `1px solid ${selected ? colors.text : colors.border}`,
+              }}
+            >
+              <span>{filter.label}</span>
+              <span className="tabular-nums opacity-60">{filterCounts[filter.id]}</span>
+            </button>
+          )
+        })}
+      </div>
+
+      {filteredPlatforms.length > cardsPerPage && (
+        <div className="mt-6 flex items-center justify-end gap-3">
           <span className="text-sm" style={{ color: colors.textMuted, fontVariantNumeric: 'tabular-nums' }}>
             Page <span className="font-semibold" style={{ color: colors.text }}>{safeCardPage + 1}</span> / {totalPages}
           </span>
@@ -2121,27 +2335,29 @@ function PlatformCardsView({
         </div>
       )}
 
-      {platforms.length === 0 ? (
+      {filteredPlatforms.length === 0 ? (
         <div
-          className="rounded-2xl border px-6 py-14 text-center"
+          className="mx-auto mt-10 max-w-xl rounded-2xl border px-6 py-12 text-center"
           style={{ backgroundColor: colors.cardBg, borderColor: colors.border }}
         >
-          <div
-            className="mx-auto flex h-12 w-12 items-center justify-center rounded-xl"
-            style={{ backgroundColor: colors.innerBg, color: colors.textMuted }}
-          >
-            <Icon name="school" className="text-2xl" />
-          </div>
           <h2 className="mt-4 text-base font-semibold" style={{ color: colors.text }}>
-            Aucun professeur IA actif
+            Aucun professeur dans cette catégorie
           </h2>
           <p className="mx-auto mt-2 max-w-md text-sm leading-6" style={{ color: colors.textMuted }}>
-            Créez un nouveau professeur IA ou réutilisez un professeur durable. Les professeurs terminés restent conservés dans la bibliothèque.
+            Modifiez le filtre ou créez un nouveau professeur IA pour une prochaine formation.
           </p>
+          <button
+            type="button"
+            onClick={onCreateTeacher}
+            className="mt-5 rounded-lg px-4 py-2 text-sm font-semibold text-white"
+            style={{ backgroundColor: '#8B5CF6' }}
+          >
+            Créer un professeur IA
+          </button>
         </div>
       ) : (
-      <div className="grid min-h-[calc(100dvh-11rem)] content-center items-start gap-6 md:grid-cols-2 lg:grid-cols-3">
-        {platforms.slice(safeCardPage * cardsPerPage, (safeCardPage + 1) * cardsPerPage).map((p) => (
+      <div className="mt-8 grid items-start gap-4 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-5">
+        {visiblePlatforms.map((p) => (
           <PlatformCard
             key={p.id}
             platform={p}
@@ -2193,7 +2409,7 @@ function PlatformCardsView({
         ))}
       </div>
       )}
-    </>
+    </section>
   )
 }
 
@@ -4294,15 +4510,23 @@ function PlatformCard({
   const pdfInputId = `pdf-input-${p.id}`
   const [deleteHover, setDeleteHover] = useState(false)
   const [flipped, setFlipped] = useState(false)
-  const theme = getRobotTheme(p.id, p.teacher_color)
   const creationProgress = getHiddenPipelineProgress(p)
   const preparation = getTeacherPreparation(p)
   const isPreparing = preparation.status === 'preparing'
   const hasFailed = preparation.status === 'failed'
   const nextCourseSession = getNextCourseSession(p)
+  const rosterStage = getTeacherRosterStage(p)
+  const rosterMeta = {
+    preparing: { label: hasFailed ? 'À vérifier' : 'En préparation', color: hasFailed ? '#dc2626' : '#b45309', background: hasFailed ? '#fef2f2' : '#fffbeb' },
+    ready: { label: 'Prêt', color: '#047857', background: '#ecfdf5' },
+    upcoming: { label: 'À venir', color: '#6d28d9', background: '#f5f3ff' },
+    in_progress: { label: 'En cours', color: '#047857', background: '#ecfdf5' },
+    completed: { label: 'Terminé', color: '#475569', background: '#f1f5f9' },
+    archived: { label: 'Archivé', color: '#64748b', background: '#f1f5f9' },
+  }[rosterStage]
   const faceStyle = {
     backgroundColor: colors.cardBg,
-    border: p.active ? '1px solid #E4E4E4' : `1px solid ${colors.border}`,
+    border: `1px solid ${colors.border}`,
     boxShadow: darkMode ? 'none' : '0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px -1px rgba(0, 0, 0, 0.1)',
   }
   const actionItems = [
@@ -4317,8 +4541,8 @@ function PlatformCard({
   ]
 
   return (
-    // Chaque face pilote sa propre hauteur. La face cachée est positionnée en
-    // absolu afin qu'un robot très haut ne crée jamais de vide sous la fiche.
+    // Le recto est une fiche opérateur compacte. Le verso conserve tous les
+    // outils historiques de gestion du professeur et de sa formation.
     <div className={`w-full self-start ${newlyCreated ? 'teacher-card-enter' : ''}`}>
       <div className="group relative [perspective:1600px]">
       <div
@@ -4327,102 +4551,78 @@ function PlatformCard({
           transformStyle: 'preserve-3d',
         }}
       >
-        {/* ═══ RECTO — le professeur IA (aucun chrome de carte : juste le robot
-            qui flotte sur le fond du dashboard ; la carte n'apparaît qu'au
-            survol via le flip vers le verso) ═══ */}
+        {/* ═══ RECTO — fiche synthétique inspirée du roster Anima Workers. ═══ */}
         <div
-          className={`${flipped ? 'absolute inset-x-0 top-0' : 'relative'} flex flex-col items-center justify-center transition-transform duration-[420ms] ease-out motion-reduce:transition-none`}
+          className={`${flipped ? 'absolute inset-x-0 top-0' : 'relative'} flex min-h-[360px] flex-col overflow-hidden rounded-2xl p-5 transition-transform duration-[420ms] ease-out motion-reduce:transition-none`}
           style={{
+            ...faceStyle,
             backfaceVisibility: 'hidden',
             WebkitBackfaceVisibility: 'hidden',
             transform: flipped ? 'rotateY(-180deg)' : 'rotateY(0deg)',
             pointerEvents: flipped ? 'none' : 'auto',
           }}
         >
-          {/* Halo coloré de la plateforme derrière le robot (lueur, pas une
-              carte). PNG transparent → aucun blend nécessaire, le robot flotte
-              proprement sur n'importe quel fond (clair ou sombre). */}
-          <div
-            className="pointer-events-none absolute left-1/2 top-[46%] h-48 w-48 -translate-x-1/2 -translate-y-1/2 rounded-full blur-3xl"
-            style={{ backgroundColor: theme.glow, opacity: 0.3 }}
-          />
-
-          {/* Robot — en grand, sans cadre */}
-          <img
-            src={theme.src}
-            alt={`Professeur IA ${p.teacher_name || p.name}`}
-            draggable={false}
-            className="relative z-10 w-full max-w-[78%] object-contain transition-transform duration-500 ease-out group-hover:-translate-y-1 group-hover:scale-[1.03]"
-            style={{ minHeight: '250px' }}
-          />
-
-          {/* Nom plateforme sous le robot — texte seul, pas de carte */}
-          <div className="relative z-10 -mt-2 flex items-center gap-2 px-4 pb-1">
-            <span
-              className="text-xs font-semibold tabular-nums"
-              style={{ color: colors.textMuted, letterSpacing: '0.08em' }}
-            >
-              P{p.center_platform_number || p.id}
-            </span>
+          <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
-              <h3 className="truncate text-base font-semibold tracking-tight" style={{ color: colors.text }}>
-                {p.teacher_name || p.name}
+              <p className="text-[10px] font-semibold uppercase tracking-[0.15em]" style={{ color: colors.textMuted }}>
+                Professeur IA · P{p.center_platform_number || p.id}
+              </p>
+              <h3 className="mt-1 truncate text-xl font-semibold tracking-tight" style={{ color: colors.text }}>
+                {p.teacher_name || p.name || 'Professeur IA'}
               </h3>
-              {p.teacher_name && (
-                <p className="truncate text-xs" style={{ color: colors.textMuted }}>
-                  {p.source_tp_name || p.name}
-                </p>
-              )}
             </div>
-            {preparation.status === 'ready' && (
-              <span
-                className="rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase"
-                style={{ backgroundColor: 'rgba(16, 185, 129, 0.12)', color: darkMode ? '#6ee7b7' : '#047857', letterSpacing: '0.1em' }}
-              >
-                Prêt
-              </span>
-            )}
-            {!p.active && (
-              <span className="text-[10px] font-semibold uppercase tracking-wide" style={{ color: '#94a3b8' }}>
-                · bientôt
-              </span>
-            )}
+            <span
+              className="flex-shrink-0 rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.1em]"
+              style={{
+                backgroundColor: darkMode ? colors.innerBg : rosterMeta.background,
+                color: darkMode ? colors.textSecondary : rosterMeta.color,
+                border: darkMode ? `1px solid ${colors.border}` : '1px solid transparent',
+              }}
+            >
+              {rosterMeta.label}
+            </span>
           </div>
-          {p.active && isPreparing && (
+
+          <div className="mt-5 min-h-[72px]">
+            <p className="text-sm font-semibold leading-5" style={{ color: colors.text }}>
+              {p.source_tp_name || p.name || 'Formation à définir'}
+            </p>
+            <p className="mt-1 text-xs leading-5" style={{ color: colors.textMuted }}>
+              {p.source_rncp_code ? `RNCP ${p.source_rncp_code}` : 'Référentiel RNCP à associer'}
+            </p>
+          </div>
+
+          {isPreparing && (
             <div
-              className="relative z-10 mt-4 w-full max-w-[280px] rounded-xl px-4 py-3"
-              style={{ backgroundColor: darkMode ? 'rgba(15, 23, 42, 0.72)' : 'rgba(255, 255, 255, 0.86)', border: `1px solid ${colors.border}`, backdropFilter: 'blur(6px)' }}
+              className="mt-4 rounded-xl px-3 py-3"
+              style={{ backgroundColor: colors.innerBg, border: `1px solid ${colors.border}` }}
             >
               <div className="mb-2 flex items-center justify-between gap-3">
-                <span className="text-xs font-semibold" style={{ color: colors.text }}>
+                <span className="truncate text-xs font-semibold" style={{ color: colors.text }}>
                   {preparation.stage || 'Préparation des cours'}
                 </span>
-                <span className="inline-flex h-4 w-4 animate-spin rounded-full border-2" style={{ borderColor: '#ddd6fe', borderTopColor: '#8B5CF6' }} />
+                <span className="text-[11px] font-semibold tabular-nums" style={{ color: colors.textMuted }}>{creationProgress}%</span>
               </div>
               <div
-                className="h-1.5 overflow-hidden rounded-full"
+                className="h-1 overflow-hidden rounded-full"
                 role="progressbar"
                 aria-label="Création du professeur IA"
                 aria-valuemin={0}
                 aria-valuemax={100}
                 aria-valuenow={creationProgress}
-                style={{ backgroundColor: darkMode ? '#334155' : '#ede9fe' }}
+                style={{ backgroundColor: darkMode ? '#334155' : '#e2e8f0' }}
               >
                 <div
                   className="h-full rounded-full transition-[width] duration-700 ease-out"
                   style={{ width: `${creationProgress}%`, backgroundColor: '#8B5CF6' }}
                 />
               </div>
-              {newlyCreated && (
-                <p className="mt-3 text-xs leading-5" style={{ color: colors.textSecondary }}>
-                  Votre professeur prépare les cours. Vous pouvez revenir plus tard, la préparation continue automatiquement.
-                </p>
-              )}
             </div>
           )}
-          {p.active && hasFailed && (
+
+          {hasFailed && (
             <div
-              className="relative z-10 mt-4 w-full max-w-[280px] rounded-xl px-4 py-3"
+              className="mt-4 rounded-xl px-3 py-3"
               style={{ backgroundColor: darkMode ? 'rgba(127, 29, 29, 0.22)' : '#fef2f2', border: `1px solid ${darkMode ? 'rgba(248, 113, 113, 0.3)' : '#fecaca'}` }}
             >
               <div className="flex items-start gap-2.5">
@@ -4430,9 +4630,6 @@ function PlatformCard({
                 <div className="min-w-0">
                   <p className="text-xs font-semibold" style={{ color: darkMode ? '#fecaca' : '#991b1b' }}>
                     Préparation interrompue
-                  </p>
-                  <p className="mt-1 text-xs leading-5" style={{ color: colors.textSecondary }}>
-                    Les étapes terminées sont conservées.
                   </p>
                 </div>
               </div>
@@ -4450,20 +4647,51 @@ function PlatformCard({
               )}
             </div>
           )}
-          {p.active && preparation.status === 'ready' && nextCourseSession && (
+
+          {!isPreparing && !hasFailed && (
             <div
-              className="relative z-10 mt-4 flex w-full max-w-[280px] items-center justify-between gap-3 rounded-xl px-4 py-3"
-              style={{ backgroundColor: darkMode ? '#0f172a' : '#ffffff', border: `1px solid ${colors.border}` }}
+              className="mt-4 grid grid-cols-2 gap-3 rounded-xl px-3 py-3"
+              style={{ backgroundColor: colors.innerBg, border: `1px solid ${colors.border}` }}
             >
               <div className="min-w-0">
-                <p className="text-[11px] font-medium" style={{ color: colors.textMuted }}>Prochaine séance</p>
+                <p className="text-[10px] font-medium" style={{ color: colors.textMuted }}>Prochaine séance</p>
                 <p className="mt-0.5 truncate text-xs font-semibold" style={{ color: colors.text }}>
-                  {formatScheduleDateTime(nextCourseSession.scheduled_at)}
+                  {nextCourseSession ? formatScheduleDateTime(nextCourseSession.scheduled_at) : 'Non programmée'}
                 </p>
               </div>
-              <AudioStatusBadge status={nextCourseSession.audio_status} darkMode={darkMode} />
+              <div className="min-w-0 border-l pl-3" style={{ borderColor: colors.border }}>
+                <p className="text-[10px] font-medium" style={{ color: colors.textMuted }}>Séances restantes</p>
+                <p className="mt-0.5 text-xs font-semibold tabular-nums" style={{ color: colors.text }}>
+                  {Number(p.remaining_session_count || 0)} / {Number(p.total_session_count || 0)}
+                </p>
+              </div>
             </div>
           )}
+
+          <div className="mt-4 flex flex-wrap gap-1.5" aria-label="Capacités du professeur">
+            {['Slides', 'Voix', 'Q&R', 'Présences'].map((capability) => (
+              <span
+                key={capability}
+                className="rounded-md px-2 py-1 text-[10px] font-medium"
+                style={{ color: colors.textMuted, border: `1px solid ${colors.border}` }}
+              >
+                {capability}
+              </span>
+            ))}
+          </div>
+
+          <button
+            type="button"
+            onClick={() => {
+              onBeforeFlip?.()
+              window.requestAnimationFrame(() => setFlipped(true))
+            }}
+            className="mt-auto flex min-h-10 w-full items-center justify-center gap-2 rounded-lg px-3 text-sm font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40"
+            style={{ backgroundColor: colors.text, color: colors.bg }}
+          >
+            Ouvrir le professeur
+            <Icon name="arrow_forward" className="text-base" />
+          </button>
         </div>
 
         {/* ═══ VERSO — la fiche formation (inchangée) ═══ */}
@@ -4909,25 +5137,19 @@ function PlatformCard({
       </div>
       </div>
 
-      {/* Flèche de bascule : un clic tourne la carte et la maintient, un
-          re-clic remet le robot. Hors du flip pour rester visible des 2 côtés. */}
-      <button
+      {flipped && <button
         type="button"
         onClick={() => {
           onBeforeFlip?.()
-          window.requestAnimationFrame(() => setFlipped((current) => !current))
+          window.requestAnimationFrame(() => setFlipped(false))
         }}
-        aria-label={flipped ? 'Revenir au robot' : 'Voir la fiche formation'}
+        aria-label="Revenir à la liste des professeurs"
         className="mx-auto mt-3 flex min-h-11 items-center gap-1.5 rounded-full px-4 py-2 text-xs font-medium transition-colors hover:bg-black/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40 dark:hover:bg-white/5"
         style={{ color: colors.textMuted, border: `1px solid ${colors.border}` }}
       >
-        <span>{flipped ? 'Voir le robot' : 'Voir la fiche'}</span>
-        <Icon
-          name="keyboard_arrow_down"
-          className="text-base transition-transform duration-500"
-          style={{ transform: flipped ? 'rotate(180deg)' : 'none' }}
-        />
-      </button>
+        <Icon name="arrow_back" className="text-base" />
+        <span>Retour au professeur</span>
+      </button>}
     </div>
   )
 }

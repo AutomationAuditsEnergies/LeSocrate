@@ -37,15 +37,15 @@ export const HeroSection = () => {
             <HeroRating />
             <div className="box-border caret-transparent text-[15.3846px] tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] no-underline w-full md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px]">
               <h1
-                aria-label="Des agents pédagogiques autonomes au service de vos parcours RNCP."
+                aria-label="Des professeurs IA autonomes pour délivrer vos formations."
                 className="box-border caret-transparent text-[32.6923px] font-semibold tracking-[-1.14423px] leading-[35.9615px] outline-[3px] text-center no-underline font-instrumentsans md:text-[60.4444px] md:tracking-[-2.11556px] md:leading-[66.4889px]"
               >
                 <span className="box-border caret-transparent text-[32.6923px] tracking-[-1.14423px] leading-[35.9615px] outline-[3px] no-underline md:text-[60.4444px] md:tracking-[-2.11556px] md:leading-[66.4889px]">
-                  Des agents pédagogiques
+                  Des professeurs IA
                 </span>
                 {" "}
                 <span className="box-border caret-transparent text-[32.6923px] tracking-[-1.14423px] leading-[35.9615px] outline-[3px] no-underline md:text-[60.4444px] md:tracking-[-2.11556px] md:leading-[66.4889px]">
-                  autonomes au service de vos parcours RNCP.
+                  autonomes pour délivrer vos formations.
                 </span>
               </h1>
             </div>
