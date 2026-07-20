@@ -940,12 +940,6 @@ export default function HRDashboard() {
     setModuleSearchQuery('')
   }
 
-  const showModulesView = () => {
-    fetchModules()
-    setShowCreateModal(false)
-    setShowModulesModal(true)
-  }
-
   const handleAssistantComplete = (draft) => {
     resetCreateForm()
     setTeacherFirstName(draft.teacherName)
@@ -1176,8 +1170,6 @@ export default function HRDashboard() {
           activeSection={workspaceSection}
           onShowTeachers={showDashboardView}
           onShowRecruit={showRecruitView}
-          onShowModules={showModulesView}
-          onShowGuide={() => { setOnboardingStep(0); setShowOnboarding(true) }}
           onLogout={handleLogout}
           loggingOut={loggingOut}
           language={interfaceLanguage}
@@ -1884,8 +1876,6 @@ function CenterWorkspaceSidebar({
   activeSection,
   onShowTeachers,
   onShowRecruit,
-  onShowModules,
-  onShowGuide,
   onLogout,
   loggingOut,
   language,
@@ -1942,20 +1932,6 @@ function CenterWorkspaceSidebar({
           )
         })}
       </nav>
-
-      <div className="mt-7 px-5">
-        <p className="text-xs font-medium" style={{ color: colors.textMuted }}>Raccourcis</p>
-        <div className="mt-2 space-y-1">
-          <button type="button" onClick={onShowModules} className="flex w-full items-center gap-3 rounded-lg px-2 py-2 text-left text-sm transition-colors hover:bg-black/[0.04]" style={{ color: colors.textSecondary }}>
-            <Icon name="inventory_2" className="text-[18px]" />
-            Bibliothèque
-          </button>
-          <button type="button" onClick={onShowGuide} className="flex w-full items-center gap-3 rounded-lg px-2 py-2 text-left text-sm transition-colors hover:bg-black/[0.04]" style={{ color: colors.textSecondary }}>
-            <Icon name="help_outline" className="text-[18px]" />
-            Guide de prise en main
-          </button>
-        </div>
-      </div>
 
       <div className="mt-auto p-3">
         <details className="group relative">
