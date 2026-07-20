@@ -1902,9 +1902,7 @@ function CenterWorkspaceSidebar({
       aria-label="Navigation de l’espace centre"
     >
       <div className="flex h-16 items-center gap-3 px-5">
-        <div className="flex h-9 w-9 items-center justify-center rounded-lg" style={{ backgroundColor: '#EEE8FF' }}>
-          <img src="/robot-violet.png" alt="" className="h-8 w-8 object-contain" />
-        </div>
+        <img src="/cadrenza-mark.svg" alt="Cadrenza" className="h-9 w-9 shrink-0 rounded-lg" />
         <div className="min-w-0">
           <p className="truncate text-sm font-semibold" style={{ color: colors.text }}>Bureau des professeurs IA</p>
           <p className="truncate text-xs" style={{ color: colors.textMuted }}>{accountName}</p>
@@ -1998,6 +1996,23 @@ const RECRUITMENT_COLOR_OPTIONS = [
   { id: 'amber', label: 'Ambre', value: '#F59E0B', image: '/robot-amber.png' },
 ]
 
+const RECRUITMENT_CHOICE_TYPES = new Set(['confirm', 'frequency', 'days', 'color'])
+
+function getRecruitmentAssistantText(step, draft, matchingModule) {
+  if (!step) return ''
+  if (step.id === 'rncpConfirm') {
+    const reference = matchingModule
+      ? `${matchingModule.tp_name}, RNCP ${matchingModule.rncp_code}`
+      : `${draft.trainingName}, RNCP ${draft.rncpCode}`
+    return `Je vérifie la référence avant de continuer : ${reference}.`
+  }
+  if (step.id === 'weeklyCourseCount') return 'Définissons maintenant le rythme hebdomadaire de la formation.'
+  if (step.id === 'teachingDays') return 'Choisissez les jours qui correspondent à ce rythme.'
+  if (step.id === 'startDate') return 'Il reste à fixer la date de démarrage de la formation.'
+  if (step.id === 'teacherColor') return 'Dernier choix : l’identité visuelle du professeur IA.'
+  return step.question
+}
+
 function RecruitmentAssistant({ colors, modules, onComplete, onManualCreate }) {
   const [started, setStarted] = useState(false)
   const [brief, setBrief] = useState('')
@@ -2017,6 +2032,7 @@ function RecruitmentAssistant({ colors, modules, onComplete, onManualCreate }) {
   const currentStep = RECRUITMENT_STEPS[stepIndex]
   const matchingModule = modules.find((module) => String(module.rncp_code || '').replace(/\D/g, '') === String(draft.rncpCode || '').replace(/\D/g, ''))
   const completed = stepIndex >= RECRUITMENT_STEPS.length
+  const currentIsChoice = Boolean(currentStep && RECRUITMENT_CHOICE_TYPES.has(currentStep.type))
 
   const displayAnswer = (step, value) => {
     if (step.id === 'teachingDays') return value.map((day) => RECRUITMENT_DAY_OPTIONS.find((option) => option.id === day)?.label || day).join(', ')
@@ -2030,8 +2046,13 @@ function RecruitmentAssistant({ colors, modules, onComplete, onManualCreate }) {
   const advance = (value) => {
     if (!currentStep) return
     if (currentStep.id === 'rncpConfirm' && value === 'Corriger') {
-      setDraft((current) => ({ ...current, trainingName: '', rncpCode: '' }))
-      setHistory((current) => [...current, { role: 'user', text: value }, { role: 'assistant', text: 'D’accord, reprenons le nom de la formation.' }])
+      const correctedDraft = { ...draft, trainingName: '', rncpCode: '' }
+      setDraft(correctedDraft)
+      setHistory((current) => [
+        ...current,
+        { role: 'user', text: value },
+        { role: 'assistant', text: 'D’accord, reprenons le nom de la formation. Quelle formation va-t-il délivrer ?' },
+      ])
       setStepIndex(1)
       setAnswer('')
       return
@@ -2040,9 +2061,16 @@ function RecruitmentAssistant({ colors, modules, onComplete, onManualCreate }) {
     const nextDraft = currentStep.id === 'rncpConfirm'
       ? draft
       : { ...draft, [currentStep.id]: normalizedValue }
+    const nextIndex = stepIndex + 1
+    const nextStep = RECRUITMENT_STEPS[nextIndex]
+    const nextMatchingModule = modules.find((module) => String(module.rncp_code || '').replace(/\D/g, '') === String(nextDraft.rncpCode || '').replace(/\D/g, ''))
     setDraft(nextDraft)
-    setHistory((current) => [...current, { role: 'user', text: displayAnswer(currentStep, currentStep.id === 'rncpConfirm' ? 'Oui, continuer' : normalizedValue) }])
-    setStepIndex((current) => current + 1)
+    setHistory((current) => [
+      ...current,
+      { role: 'user', text: displayAnswer(currentStep, currentStep.id === 'rncpConfirm' ? 'Oui, continuer' : normalizedValue) },
+      ...(nextStep ? [{ role: 'assistant', text: getRecruitmentAssistantText(nextStep, nextDraft, nextMatchingModule) }] : []),
+    ])
+    setStepIndex(nextIndex)
     setAnswer('')
   }
 
@@ -2051,7 +2079,11 @@ function RecruitmentAssistant({ colors, modules, onComplete, onManualCreate }) {
     const value = brief.trim()
     if (!value) return
     setStarted(true)
-    setHistory([{ role: 'user', text: value }])
+    setHistory([
+      { role: 'user', text: value },
+      { role: 'assistant', text: 'Pour préparer ce professeur, j’ai besoin de quelques précisions rapides.' },
+      { role: 'assistant', text: getRecruitmentAssistantText(RECRUITMENT_STEPS[0], draft, null) },
+    ])
     setBrief('')
   }
 
@@ -2141,27 +2173,21 @@ function RecruitmentAssistant({ colors, modules, onComplete, onManualCreate }) {
       </div>
 
       <div className="mx-auto flex w-full max-w-3xl flex-1 flex-col justify-end py-8">
-        <div className="space-y-5">
+        <div className="space-y-6">
           {history.map((message, index) => (
             <div key={`${message.role}-${index}`} className={message.role === 'user' ? 'flex justify-end' : 'flex justify-start'}>
-              <div className={message.role === 'user' ? 'max-w-[78%] rounded-2xl rounded-br-md px-4 py-2.5 text-sm' : 'max-w-[78%] text-sm leading-6'} style={{ backgroundColor: message.role === 'user' ? colors.innerBg : 'transparent', color: colors.text }}>
-                {message.text}
-              </div>
+              {message.role === 'user' ? (
+                <div className="max-w-[78%] rounded-2xl rounded-br-md px-4 py-2.5 text-sm leading-6" style={{ backgroundColor: '#ECE8E2', color: colors.text }}>
+                  {message.text}
+                </div>
+              ) : (
+                <div className="flex max-w-[88%] items-start gap-3">
+                  <img src="/cadrenza-mark.svg" alt="" className="mt-0.5 h-8 w-8 shrink-0 rounded-lg" />
+                  <p className="pt-1 text-sm leading-6" style={{ color: colors.text }}>{message.text}</p>
+                </div>
+              )}
             </div>
           ))}
-          {!completed && (
-            <div className="flex items-start gap-3">
-              <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full" style={{ backgroundColor: '#EDE8FF' }}><Icon name="smart_toy" className="text-base text-[#6D4AC7]" /></span>
-              <div>
-                <p className="text-base font-medium leading-6" style={{ color: colors.text }}>{currentStep.question}</p>
-                {currentStep.id === 'rncpConfirm' && (
-                  <p className="mt-2 text-sm" style={{ color: colors.textMuted }}>
-                    {matchingModule ? `${matchingModule.tp_name} · RNCP ${matchingModule.rncp_code}` : `${draft.trainingName} · RNCP ${draft.rncpCode}`}
-                  </p>
-                )}
-              </div>
-            </div>
-          )}
         </div>
 
         {completed ? (
@@ -2188,33 +2214,77 @@ function RecruitmentAssistant({ colors, modules, onComplete, onManualCreate }) {
           <div className="mt-8">
             {(currentStep.type === 'text' || currentStep.type === 'number') && (
               <form onSubmit={submitAnswer} className="flex items-center gap-2 rounded-xl bg-white p-2 pl-4" style={{ boxShadow: '0 4px 12px rgba(41, 32, 24, 0.08)' }}>
-                <input type={currentStep.type === 'number' ? 'number' : 'text'} min={currentStep.type === 'number' ? '1' : undefined} value={answer} onChange={(event) => setAnswer(event.target.value)} placeholder={currentStep.placeholder} className="min-w-0 flex-1 bg-transparent py-2 text-sm outline-none placeholder:text-[#68625B]" style={{ color: colors.text }} autoFocus />
-                <button type="submit" disabled={!answer.trim()} className="flex h-9 w-9 items-center justify-center rounded-full bg-[#6D4AC7] text-white disabled:bg-[#B9B5AF]" aria-label="Valider la réponse"><Icon name="arrow_upward" className="text-base" /></button>
+                <input type={currentStep.type === 'number' ? 'number' : 'text'} min={currentStep.type === 'number' ? '1' : undefined} value={answer} onChange={(event) => setAnswer(event.target.value)} placeholder={currentStep.placeholder} className="min-w-0 flex-1 bg-transparent py-2.5 text-sm outline-none placeholder:text-[#68625B]" style={{ color: colors.text }} autoFocus />
+                <button type="submit" disabled={!answer.trim()} className="flex h-10 w-10 items-center justify-center rounded-full bg-[#6D4AC7] text-white transition-colors disabled:bg-[#B9B5AF]" aria-label="Valider la réponse"><Icon name="arrow_upward" className="text-base" /></button>
               </form>
             )}
-            {currentStep.type === 'confirm' && (
-              <div className="flex flex-wrap gap-2">
-                <button type="button" onClick={() => advance('Oui, continuer')} className="rounded-lg bg-[#191714] px-4 py-2.5 text-sm font-medium text-white">Oui, continuer</button>
-                <button type="button" onClick={() => advance('Corriger')} className="rounded-lg border px-4 py-2.5 text-sm font-medium" style={{ borderColor: colors.border, color: colors.textSecondary }}>Corriger</button>
-              </div>
-            )}
-            {currentStep.type === 'frequency' && (
-              <div className="flex flex-wrap gap-2">{[1, 2, 3, 4, 5].map((count) => <button key={count} type="button" onClick={() => advance(count)} className="h-11 min-w-11 rounded-lg border px-4 text-sm font-medium transition-colors hover:bg-white" style={{ borderColor: colors.border, color: colors.text }}>{count}</button>)}</div>
-            )}
-            {currentStep.type === 'days' && (
-              <div>
-                <div className="flex flex-wrap gap-2">{RECRUITMENT_DAY_OPTIONS.map((day) => { const selected = draft.teachingDays.includes(day.id); return <button key={day.id} type="button" onClick={() => toggleDay(day.id)} aria-pressed={selected} className="rounded-lg border px-3 py-2.5 text-sm font-medium" style={{ borderColor: selected ? '#6D4AC7' : colors.border, backgroundColor: selected ? '#EDE8FF' : 'transparent', color: selected ? '#5B38B5' : colors.textSecondary }}>{day.label}</button> })}</div>
-                <button type="button" disabled={draft.teachingDays.length !== Number(draft.weeklyCourseCount)} onClick={() => advance(draft.teachingDays)} className="mt-3 rounded-lg bg-[#191714] px-4 py-2.5 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-35">Valider {draft.weeklyCourseCount} jour{Number(draft.weeklyCourseCount) > 1 ? 's' : ''}</button>
+            {currentIsChoice && (
+              <div className="overflow-hidden rounded-xl border bg-white" style={{ borderColor: colors.border }}>
+                <div className="flex items-start justify-between gap-4 px-4 py-3.5 sm:px-5">
+                  <div>
+                    <p className="text-sm font-semibold leading-5" style={{ color: colors.text }}>{currentStep.question}</p>
+                    {currentStep.id === 'rncpConfirm' && (
+                      <p className="mt-1 text-xs" style={{ color: colors.textMuted }}>
+                        {matchingModule ? `${matchingModule.tp_name} · RNCP ${matchingModule.rncp_code}` : `${draft.trainingName} · RNCP ${draft.rncpCode}`}
+                      </p>
+                    )}
+                  </div>
+                  <span className="shrink-0 text-xs tabular-nums" style={{ color: colors.textMuted }}>{stepIndex + 1} / {RECRUITMENT_STEPS.length}</span>
+                </div>
+
+                {currentStep.type === 'confirm' && [
+                  { label: 'Oui, continuer', value: 'Oui, continuer' },
+                  { label: 'Corriger la formation ou le RNCP', value: 'Corriger' },
+                ].map((option, index) => (
+                  <button key={option.value} type="button" onClick={() => advance(option.value)} className="flex w-full items-center gap-3 border-t px-4 py-3 text-left text-sm transition-colors hover:bg-[#F8F6F2] sm:px-5" style={{ borderColor: colors.borderLight, color: colors.text }}>
+                    <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-xs font-medium" style={{ backgroundColor: colors.innerBg, color: colors.textMuted }}>{index + 1}</span>
+                    {option.label}
+                  </button>
+                ))}
+
+                {currentStep.type === 'frequency' && [1, 2, 3, 4, 5].map((count) => (
+                  <button key={count} type="button" onClick={() => advance(count)} className="flex w-full items-center gap-3 border-t px-4 py-3 text-left text-sm transition-colors hover:bg-[#F8F6F2] sm:px-5" style={{ borderColor: colors.borderLight, color: colors.text }}>
+                    <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-xs font-medium" style={{ backgroundColor: colors.innerBg, color: colors.textMuted }}>{count}</span>
+                    {count} journée{count > 1 ? 's' : ''} par semaine
+                  </button>
+                ))}
+
+                {currentStep.type === 'days' && RECRUITMENT_DAY_OPTIONS.map((day, index) => {
+                  const selected = draft.teachingDays.includes(day.id)
+                  return (
+                    <button key={day.id} type="button" onClick={() => toggleDay(day.id)} aria-pressed={selected} className="flex w-full items-center gap-3 border-t px-4 py-3 text-left text-sm transition-colors hover:bg-[#F8F6F2] sm:px-5" style={{ borderColor: colors.borderLight, color: colors.text }}>
+                      <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-xs font-medium" style={{ backgroundColor: selected ? '#6D4AC7' : colors.innerBg, color: selected ? '#fff' : colors.textMuted }}>{selected ? <Icon name="check" className="text-sm" /> : index + 1}</span>
+                      {day.label}
+                    </button>
+                  )
+                })}
+
+                {currentStep.type === 'color' && RECRUITMENT_COLOR_OPTIONS.map((color, index) => {
+                  const selected = draft.teacherColor === color.id
+                  return (
+                    <button key={color.id} type="button" onClick={() => setDraft((current) => ({ ...current, teacherColor: color.id }))} aria-pressed={selected} className="flex w-full items-center gap-3 border-t px-4 py-3 text-left text-sm transition-colors hover:bg-[#F8F6F2] sm:px-5" style={{ borderColor: colors.borderLight, color: colors.text }}>
+                      <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-xs font-medium" style={{ backgroundColor: selected ? `${color.value}22` : colors.innerBg, color: colors.textMuted }}>{index + 1}</span>
+                      <span className="h-3 w-3 rounded-full" style={{ backgroundColor: color.value }} />
+                      <span className="flex-1">{color.label}</span>
+                      {selected && <Icon name="check" className="text-base" style={{ color: color.value }} />}
+                    </button>
+                  )
+                })}
+
+                {(currentStep.type === 'days' || currentStep.type === 'color') && (
+                  <div className="flex items-center justify-between gap-3 border-t px-4 py-3 sm:px-5" style={{ borderColor: colors.borderLight }}>
+                    <span className="text-xs" style={{ color: colors.textMuted }}>
+                      {currentStep.type === 'days' ? `${draft.teachingDays.length} jour${draft.teachingDays.length > 1 ? 's' : ''} sélectionné${draft.teachingDays.length > 1 ? 's' : ''}` : RECRUITMENT_COLOR_OPTIONS.find((color) => color.id === draft.teacherColor)?.label}
+                    </span>
+                    <button type="button" disabled={currentStep.type === 'days' && draft.teachingDays.length !== Number(draft.weeklyCourseCount)} onClick={() => advance(currentStep.type === 'days' ? draft.teachingDays : draft.teacherColor)} className="rounded-lg bg-[#191714] px-4 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-35">
+                      Valider ce choix
+                    </button>
+                  </div>
+                )}
               </div>
             )}
             {currentStep.type === 'date' && (
-              <div className="flex flex-wrap items-center gap-3"><input type="date" min={todayDateInput()} value={draft.startDate} onChange={(event) => setDraft((current) => ({ ...current, startDate: event.target.value }))} className="rounded-lg border bg-white px-4 py-2.5 text-sm" style={{ borderColor: colors.border, color: colors.text }} /><button type="button" onClick={() => advance(draft.startDate)} className="rounded-lg bg-[#191714] px-4 py-2.5 text-sm font-medium text-white">Valider la date</button></div>
-            )}
-            {currentStep.type === 'color' && (
-              <div>
-                <div className="flex flex-wrap gap-2">{RECRUITMENT_COLOR_OPTIONS.map((color) => { const selected = draft.teacherColor === color.id; return <button key={color.id} type="button" onClick={() => setDraft((current) => ({ ...current, teacherColor: color.id }))} aria-pressed={selected} className="flex items-center gap-2 rounded-lg border px-3 py-2 text-sm font-medium" style={{ borderColor: selected ? color.value : colors.border, backgroundColor: selected ? `${color.value}12` : 'transparent', color: colors.text }}><span className="h-3 w-3 rounded-full" style={{ backgroundColor: color.value }} />{color.label}</button> })}</div>
-                <button type="button" onClick={() => advance(draft.teacherColor)} className="mt-3 rounded-lg bg-[#191714] px-4 py-2.5 text-sm font-medium text-white">Choisir cette couleur</button>
-              </div>
+              <div className="flex flex-wrap items-center gap-3 rounded-xl border bg-white p-3" style={{ borderColor: colors.border }}><input type="date" min={todayDateInput()} value={draft.startDate} onChange={(event) => setDraft((current) => ({ ...current, startDate: event.target.value }))} className="min-w-0 flex-1 rounded-lg border px-4 py-2.5 text-sm" style={{ borderColor: colors.borderLight, color: colors.text }} /><button type="button" onClick={() => advance(draft.startDate)} className="rounded-lg bg-[#191714] px-4 py-2.5 text-sm font-medium text-white">Valider la date</button></div>
             )}
           </div>
         )}
