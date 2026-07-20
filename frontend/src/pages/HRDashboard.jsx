@@ -4513,52 +4513,30 @@ function PlatformCard({
             role="dialog"
             aria-modal="true"
             aria-labelledby={`teacher-details-${p.id}`}
-            className="relative flex max-h-[90vh] w-full max-w-3xl flex-col overflow-hidden rounded-xl bg-white shadow-2xl sm:flex-row"
+            className="relative flex max-h-[90vh] w-full max-w-3xl flex-col overflow-hidden rounded-xl bg-white shadow-2xl sm:h-[86vh] sm:max-h-[760px] sm:flex-row"
             style={{ border: `1px solid ${colors.border}` }}
           >
             <aside
-              className="flex shrink-0 flex-col sm:w-[42%]"
+              className="relative min-h-[300px] shrink-0 overflow-hidden sm:min-h-0 sm:w-1/2"
               style={{ backgroundColor: colors.innerBg, borderRight: `1px solid ${colors.border}` }}
             >
-              <div
-                className="relative h-[280px] shrink-0 overflow-hidden"
-                style={{ backgroundColor: `${robotTheme.glow}12` }}
-                aria-hidden="true"
+              <span
+                className="absolute left-5 top-5 z-10 inline-flex rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.08em]"
+                style={{ color: rosterMeta.color, backgroundColor: rosterMeta.background }}
               >
+                {rosterMeta.label}
+              </span>
+              <div className="absolute inset-0" style={{ backgroundColor: `${robotTheme.glow}12` }} aria-hidden="true">
                 <span
-                  className="absolute left-5 top-5 z-10 inline-flex rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.08em]"
-                  style={{ color: rosterMeta.color, backgroundColor: rosterMeta.background }}
-                >
-                  {rosterMeta.label}
-                </span>
+                  className="absolute bottom-[12%] left-1/2 h-8 w-[58%] -translate-x-1/2 rounded-full opacity-20 blur-xl"
+                  style={{ backgroundColor: robotTheme.glow }}
+                />
                 <img
                   src={robotTheme.src}
                   alt=""
                   draggable={false}
-                  className="h-full w-full select-none object-contain px-4 pt-5"
+                  className="teacher-robot-float h-full w-full select-none object-contain px-7 py-10 sm:px-10 sm:py-14"
                 />
-              </div>
-              <div className="flex flex-1 flex-col justify-between p-6">
-                <div>
-                  <h2 id={`teacher-details-${p.id}`} className="text-3xl font-semibold tracking-[-0.04em]" style={{ color: colors.text }}>
-                    {p.teacher_name || p.name || 'Professeur IA'}
-                  </h2>
-                  <p className="mt-1 text-sm font-medium" style={{ color: '#6C63FF' }}>
-                    {p.source_tp_name || p.name || 'Formation à définir'}
-                  </p>
-                  <p className="mt-5 text-xs leading-5" style={{ color: colors.textMuted }}>
-                    {p.source_rncp_code
-                      ? `Professeur autonome configuré pour le titre RNCP ${p.source_rncp_code}.`
-                      : 'Professeur IA configuré pour délivrer et suivre cette formation.'}
-                  </p>
-                </div>
-                <div className="mt-8 space-y-2 border-t pt-4 text-xs" style={{ borderColor: colors.border, color: colors.textSecondary }}>
-                  <p className="flex items-center justify-between gap-4"><span>Plateforme</span><strong>P{p.center_platform_number || p.id}</strong></p>
-                  <p className="flex items-center justify-between gap-4"><span>Séances restantes</span><strong>{Number(p.remaining_session_count || 0)}</strong></p>
-                  <p className="leading-5" style={{ color: colors.textMuted }}>
-                    {nextCourseSession ? `Prochaine séance : ${formatScheduleDateTime(nextCourseSession.scheduled_at)}` : 'Aucune séance programmée'}
-                  </p>
-                </div>
               </div>
             </aside>
 
@@ -4701,10 +4679,13 @@ function PlatformCard({
             >
               P{p.center_platform_number || p.id}
             </span>
-            <h3 className="truncate text-lg font-semibold leading-tight tracking-tight" style={{ color: colors.text }}>
-              {p.name}
-            </h3>
+            <h2 id={`teacher-details-${p.id}`} className="truncate text-lg font-semibold leading-tight tracking-tight" style={{ color: colors.text }}>
+              {p.teacher_name || p.name || 'Professeur IA'}
+            </h2>
           </div>
+          <p className="text-xs font-medium" style={{ color: '#6C63FF' }}>
+            Professeur du {p.source_tp_name || p.name || 'parcours'}
+          </p>
           {p.active && p.audio_count != null && (
             <p
               className="text-xs"
