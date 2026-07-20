@@ -4483,32 +4483,6 @@ function PlatformCard({
             </li>
           </ul>
 
-          <div className="mt-auto flex flex-wrap items-center gap-1.5" aria-label="Capacités du professeur">
-            {[
-              { label: 'S', icon: 'slideshow' },
-              { label: 'V', icon: 'graphic_eq' },
-              { label: 'Q', icon: 'forum' },
-              { label: 'P', icon: 'fact_check' },
-            ].map((capability) => (
-              <span
-                key={capability.label}
-                className="flex h-6 w-6 items-center justify-center rounded-full text-[10px] font-bold"
-                style={{ color: colors.text, backgroundColor: colors.innerBg, border: `1px solid ${colors.border}` }}
-                title={{ S: 'Slides', V: 'Voix', Q: 'Questions-réponses', P: 'Présences' }[capability.label]}
-              >
-                <Icon name={capability.icon} className="text-[13px]" />
-              </span>
-            ))}
-          </div>
-
-          <div className="flex flex-wrap items-center gap-1.5 border-t pt-2 text-[10px]" style={{ borderColor: colors.border, color: colors.textMuted }}>
-            <span>{p.source_rncp_code ? `RNCP ${p.source_rncp_code}` : 'RNCP'}</span>
-            <span>·</span>
-            <span>P{p.center_platform_number || p.id}</span>
-            <span>·</span>
-            <span>{rosterMeta.label}</span>
-          </div>
-
           {hasFailed && preparation.can_retry && onRetryPreparation && (
             <button
               type="button"
@@ -4525,7 +4499,7 @@ function PlatformCard({
           )}
 
           <span
-            className="flex w-full items-center justify-center gap-2 rounded-full px-3 py-1.5 text-xs font-medium transition-opacity group-hover:opacity-85"
+            className="mt-auto flex w-full items-center justify-center gap-2 rounded-full px-3 py-1.5 text-xs font-medium transition-opacity group-hover:opacity-85"
             style={{ backgroundColor: '#121212', color: '#F4F0E7' }}
           >
             Gérer
