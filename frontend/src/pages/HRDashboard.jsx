@@ -6,7 +6,6 @@ import { getHiddenPipelineProgress, getTeacherPreparation } from '../teacherPrep
 import { getAudioStatusMeta, getNextCourseSession, scheduleSelectionIsValid } from '../courseSchedule'
 import {
   CENTER_ONBOARDING_VERSION,
-  getActiveTeachers,
   getReusableTeacherDefaults,
   shouldShowCenterOnboarding,
 } from '../centerWorkspace'
@@ -876,8 +875,6 @@ export default function HRDashboard() {
     })
   }, [modules, moduleSearchQuery])
 
-  const activeTeachers = useMemo(() => getActiveTeachers(platforms), [platforms])
-
   const closeModulesModal = () => {
     setShowModulesModal(false)
     setModuleSearchQuery('')
@@ -1119,75 +1116,62 @@ export default function HRDashboard() {
     )
   }
 
-  const colors = darkMode ? {
-    bg: '#0f172a',
-    cardBg: '#1e293b',
-    innerBg: '#0f172a',
-    text: '#f1f5f9',
-    textSecondary: '#cbd5e1',
-    textMuted: '#64748b',
-    border: '#334155',
-    borderLight: '#1e293b',
-    hoverBg: '#1e293b',
-    gridOpacity: '0.03'
-  } : {
-    bg: '#F8F7F5',
-    cardBg: '#ffffff',
-    innerBg: '#f1f5f9',
-    text: '#0f172a',
-    textSecondary: '#334155',
-    textMuted: '#64748b',
-    border: '#e2e8f0',
-    borderLight: '#cbd5e1',
-    hoverBg: '#f1f5f9',
-    gridOpacity: '0.5'
+  // Palette exacte du playground Anima Workers.
+  const colors = {
+    bg: '#F4F0E7',
+    cardBg: '#F7F7F7',
+    innerBg: '#F7F7F7',
+    text: '#121212',
+    textSecondary: '#34312F',
+    textMuted: '#6D6965',
+    border: '#D8D4CE',
+    borderLight: '#E2DED7',
+    hoverBg: '#ECE9E3',
+    gridOpacity: '0',
   }
   const platformsAlertIsWarning = platformsErrorTone === 'warning'
 
   return (
     <div className={darkMode ? 'dark' : ''}>
       <div className="relative min-h-screen overflow-hidden" style={{ backgroundColor: colors.bg, fontFamily: 'Inter, sans-serif' }}>
-        {/* En-tête compact, inspiré du playground Anima Workers. */}
+        {/* En-tête reproduit depuis le playground Anima Workers. */}
         <div
-          className="sticky top-0 z-20 border-b"
+          className="sticky top-0 z-20 border-b py-3"
           style={{
-            backgroundColor: colors.cardBg,
+            backgroundColor: colors.bg,
             borderColor: colors.border,
-            backdropFilter: 'blur(8px)'
           }}
         >
-          <div className="flex h-16 items-center justify-between gap-4 px-4 sm:px-6">
-              <div className="flex min-w-0 items-center gap-3">
+          <div className="mx-auto flex max-w-[1480px] items-center justify-between gap-4 px-6">
+              <button type="button" onClick={showDashboardView} className="flex min-w-0 items-center gap-2 text-left">
                 <div
-                  className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg"
-                  style={{ backgroundColor: colors.innerBg, border: `1px solid ${colors.border}`, color: colors.text }}
+                  className="flex h-8 w-8 flex-shrink-0 items-center justify-center"
+                  style={{ color: colors.text }}
                   aria-hidden="true"
                 >
-                  <Icon name="school" className="text-lg" />
+                  <Icon name="school" className="text-[26px]" />
                 </div>
-                <div className="min-w-0">
-                  <h1 className="truncate text-base font-bold tracking-tight" style={{ color: colors.text }}>
-                    Cadrenza
-                  </h1>
-                  <p className="truncate text-[11px]" style={{ color: colors.textMuted }}>Espace centre</p>
+                <div className="flex min-w-0 items-baseline gap-1.5">
+                  <h1 className="truncate text-base font-bold uppercase tracking-wide" style={{ color: colors.text }}>Cadrenza</h1>
+                  <span className="hidden text-sm font-normal sm:inline" style={{ color: colors.textMuted }}>Espace centre</span>
                 </div>
-              </div>
-              <div className="flex items-center gap-2">
+              </button>
+              <div className="flex items-center gap-3">
                 <button
                   type="button"
-                  onClick={() => setDarkMode((current) => !current)}
-                  className="flex h-10 w-10 items-center justify-center rounded-lg transition-colors hover:bg-black/5 dark:hover:bg-white/5"
-                  style={{ color: colors.textMuted, border: `1px solid ${colors.border}` }}
-                  title={darkMode ? 'Utiliser le thème clair' : 'Utiliser le thème sombre'}
-                  aria-label={darkMode ? 'Utiliser le thème clair' : 'Utiliser le thème sombre'}
+                  onClick={showModulesView}
+                  className="flex h-9 w-9 items-center justify-center rounded-lg transition-colors hover:bg-black/5"
+                  style={{ color: colors.text }}
+                  title="Bibliothèque des professeurs IA"
+                  aria-label="Bibliothèque des professeurs IA"
                 >
-                  <Icon name={darkMode ? 'light_mode' : 'dark_mode'} className="text-lg" />
+                  <Icon name="grid_view" className="text-lg" />
                 </button>
                 <button
                   type="button"
                   onClick={() => { setOnboardingStep(0); setShowOnboarding(true) }}
-                  className="flex h-10 w-10 items-center justify-center rounded-lg transition-colors hover:bg-black/5 dark:hover:bg-white/5"
-                  style={{ color: colors.textMuted, border: `1px solid ${colors.border}` }}
+                  className="hidden h-9 w-9 items-center justify-center rounded-lg transition-colors hover:bg-black/5 sm:flex"
+                  style={{ color: colors.text }}
                   title="Revoir le guide de l’espace centre"
                   aria-label="Revoir le guide de l’espace centre"
                 >
@@ -1197,42 +1181,19 @@ export default function HRDashboard() {
                   type="button"
                   onClick={handleLogout}
                   disabled={loggingOut}
-                  className="flex items-center gap-2 rounded-lg px-3.5 py-2 text-sm font-medium transition-colors hover:bg-black/5 dark:hover:bg-white/5"
-                  style={{ color: colors.textMuted, border: `1px solid ${colors.border}` }}
+                  className="flex items-center gap-1.5 rounded-full px-4 py-2 text-sm font-medium transition-colors hover:bg-black/5"
+                  style={{ color: colors.text, border: `1px solid rgba(18,18,18,.2)` }}
                   title="Se déconnecter de l’espace centre"
                 >
-                  <Icon name="logout" className="text-base" />
+                  <Icon name="logout" className="text-[16px]" />
                   <span className="hidden sm:inline">{loggingOut ? 'Déconnexion…' : 'Se déconnecter'}</span>
                 </button>
               </div>
           </div>
         </div>
 
-        {/* Background grid pattern */}
-        {darkMode && (
-          <div
-            className="pointer-events-none absolute inset-0"
-            style={{
-              backgroundImage: `radial-gradient(circle at 20% 30%, rgba(139, 92, 246, 0.1) 0%, transparent 50%),
-                 radial-gradient(circle at 80% 70%, rgba(139, 92, 246, 0.08) 0%, transparent 50%),
-                 linear-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px),
-                 linear-gradient(90deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px)`,
-              backgroundSize: '100% 100%, 100% 100%, 32px 32px, 32px 32px',
-            }}
-          />
-        )}
-
-        <div className="relative z-10 flex min-h-[calc(100dvh-4rem)]">
-          <CenterSidebar
-            colors={colors}
-            activeView={showModulesModal ? 'library' : showCreateModal ? 'create' : 'teachers'}
-            teacherCount={activeTeachers.length}
-            onShowTeachers={showDashboardView}
-            onShowLibrary={showModulesView}
-            onCreateTeacher={openCreateModal}
-          />
-          <main className="min-w-0 flex-1 px-4 py-8 sm:px-6 xl:px-10">
-          <div className="mx-auto w-full max-w-[1600px]">
+        <main className="relative z-10 min-w-0 px-6 pb-12">
+          <div className="mx-auto w-full max-w-[1480px]">
           {orderNotice && (
             <div
               className="mb-6 flex items-start gap-3 rounded-xl border px-4 py-3.5 text-sm"
@@ -1445,8 +1406,7 @@ export default function HRDashboard() {
             />
           )}
           </div>
-          </main>
-        </div>
+        </main>
       </div>
 
       {/* Modal Audios */}
@@ -2032,96 +1992,6 @@ function CenterOnboarding({ colors, darkMode, step, onStepChange, onClose, onCom
   )
 }
 
-function CenterSidebar({
-  colors,
-  activeView,
-  teacherCount,
-  onShowTeachers,
-  onShowLibrary,
-  onCreateTeacher,
-}) {
-  const availableItems = [
-    { id: 'teachers', label: 'Professeurs IA', icon: 'school', onClick: onShowTeachers, count: teacherCount },
-    { id: 'library', label: 'Bibliothèque', icon: 'inventory_2', onClick: onShowLibrary },
-    { id: 'create', label: 'Créer un professeur', icon: 'person_add', onClick: onCreateTeacher, emphasized: true },
-  ]
-  const futureItems = [
-    { label: 'Formations', icon: 'menu_book' },
-    { label: 'Apprenants', icon: 'groups' },
-    { label: 'Séances', icon: 'calendar_month' },
-    { label: 'Résultats', icon: 'analytics' },
-  ]
-
-  return (
-    <aside
-      className="sticky top-16 hidden h-[calc(100dvh-4rem)] w-60 flex-shrink-0 flex-col border-r px-3 py-5 lg:flex"
-      style={{ backgroundColor: colors.cardBg, borderColor: colors.border }}
-    >
-      <nav className="space-y-1" aria-label="Navigation de l’espace centre">
-        {availableItems.map((item) => {
-          const selected = activeView === item.id
-          return (
-            <button
-              key={item.id}
-              type="button"
-              onClick={item.onClick}
-              className="flex min-h-10 w-full items-center gap-3 rounded-lg px-3 text-left text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40"
-              style={{
-                backgroundColor: selected ? colors.innerBg : 'transparent',
-                color: selected ? colors.text : colors.textSecondary,
-                border: item.emphasized && !selected ? `1px solid ${colors.border}` : '1px solid transparent',
-              }}
-            >
-              <Icon name={item.icon} className="text-[18px]" />
-              <span className="min-w-0 flex-1 truncate">{item.label}</span>
-              {typeof item.count === 'number' && (
-                <span
-                  className="rounded-full px-2 py-0.5 text-[10px] font-semibold tabular-nums"
-                  style={{ backgroundColor: colors.cardBg, color: colors.textMuted, border: `1px solid ${colors.border}` }}
-                >
-                  {item.count}
-                </span>
-              )}
-            </button>
-          )
-        })}
-      </nav>
-
-      <div className="my-5 h-px" style={{ backgroundColor: colors.border }} />
-
-      <div className="space-y-1">
-        {futureItems.map((item) => (
-          <button
-            key={item.label}
-            type="button"
-            disabled
-            className="flex min-h-10 w-full cursor-not-allowed items-center gap-3 rounded-lg px-3 text-left text-sm opacity-55"
-            style={{ color: colors.textMuted }}
-            title="Bientôt disponible"
-          >
-            <Icon name={item.icon} className="text-[18px]" />
-            <span className="flex-1">{item.label}</span>
-            <span className="text-[9px] font-semibold uppercase tracking-[0.12em]">Bientôt</span>
-          </button>
-        ))}
-      </div>
-
-      <div className="mt-auto">
-        <button
-          type="button"
-          disabled
-          className="flex min-h-10 w-full cursor-not-allowed items-center gap-3 rounded-lg px-3 text-left text-sm opacity-55"
-          style={{ color: colors.textMuted }}
-          title="Bientôt disponible"
-        >
-          <Icon name="settings" className="text-[18px]" />
-          <span>Paramètres</span>
-        </button>
-      </div>
-    </aside>
-  )
-}
-
 function getTeacherRosterStage(platform = {}) {
   const lifecycle = String(platform.lifecycle_status || 'active').toLowerCase()
   if (lifecycle === 'archived') return 'archived'
@@ -2232,19 +2102,22 @@ function PlatformCardsView({
 
   return (
     <section>
-      <header className="mx-auto max-w-4xl pb-10 pt-5 text-center sm:pt-9">
+      <header className="mx-auto flex max-w-7xl flex-col items-center px-4 py-12 text-center sm:px-6 lg:px-8">
         <h2
-          className="text-[34px] font-bold leading-[1.08] tracking-[-0.035em] sm:text-[46px]"
+          className="mb-3 text-[36px] font-bold leading-[1.1] tracking-tight sm:text-[48px]"
           style={{ color: colors.text }}
         >
           Quel professeur IA souhaitez-vous recruter&nbsp;?
         </h2>
-        <p className="mx-auto mt-4 max-w-2xl text-sm leading-6 sm:text-base" style={{ color: colors.textMuted }}>
-          Décrivez votre besoin, nous préparons son profil pédagogique et sa formation.
+        <p className="mb-8 text-sm" style={{ color: colors.textMuted }}>
+          Décrivez votre besoin ci-dessous, ou choisissez un professeur déjà disponible.
         </p>
 
-        <form onSubmit={submitBrief} className="mx-auto mt-8 flex w-full max-w-3xl items-center gap-2 rounded-full p-2 pl-5" style={{ backgroundColor: colors.cardBg, border: `1px solid ${colors.border}` }}>
-          <Icon name="auto_awesome" className="hidden text-lg sm:block" style={{ color: colors.textMuted }} aria-hidden="true" />
+        <form
+          onSubmit={submitBrief}
+          className="flex w-full max-w-[620px] items-center gap-3 rounded-full px-5 py-3"
+          style={{ backgroundColor: colors.cardBg, border: '1px solid #D4D0CA', boxShadow: '0 1px 2px rgba(0,0,0,.08)' }}
+        >
           <label htmlFor="teacher-brief" className="sr-only">Décrire le professeur IA recherché</label>
           <input
             id="teacher-brief"
@@ -2252,41 +2125,31 @@ function PlatformCardsView({
             value={teacherBrief}
             onChange={(event) => setTeacherBrief(event.target.value)}
             placeholder="Ex. Un professeur pour délivrer le bloc 2 du TP CRCD…"
-            className="min-w-0 flex-1 bg-transparent px-1 py-2 text-sm outline-none placeholder:text-slate-500 sm:text-base"
+            className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-[#6D6965]"
             style={{ color: colors.text }}
           />
           <button
             type="submit"
-            className="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-full text-white transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40 focus-visible:ring-offset-2"
-            style={{ backgroundColor: '#8B5CF6' }}
+            className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full text-white transition-colors hover:bg-[#6D6965] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-black/30 focus-visible:ring-offset-2"
+            style={{ backgroundColor: '#9B9B9B' }}
             aria-label="Créer ce professeur IA"
             title="Créer ce professeur IA"
           >
-            <Icon name="arrow_forward" className="text-lg" />
+            <Icon name="arrow_forward" className="text-base" />
           </button>
         </form>
-
-        <div className="mt-4 flex items-center justify-center gap-2 lg:hidden">
-          <button
-            type="button"
-            onClick={onCreateTeacher}
-            className="rounded-lg px-3 py-2 text-xs font-semibold text-white"
-            style={{ backgroundColor: '#8B5CF6' }}
-          >
-            Créer manuellement
-          </button>
-        </div>
       </header>
 
-      <div className="flex items-center gap-4">
-        <div className="h-px flex-1" style={{ backgroundColor: colors.border }} />
-        <h3 className="whitespace-nowrap text-[11px] font-semibold uppercase tracking-[0.18em]" style={{ color: colors.textMuted }}>
-          Vos professeurs IA
-        </h3>
-        <div className="h-px flex-1" style={{ backgroundColor: colors.border }} />
-      </div>
+      <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
+        <div className="mb-6 flex items-center gap-4">
+          <div className="h-px flex-1" style={{ backgroundColor: 'rgba(18,18,18,.1)' }} />
+          <h3 className="whitespace-nowrap text-[11px] font-medium uppercase tracking-[0.18em]" style={{ color: colors.textMuted }}>
+            Vos professeurs IA
+          </h3>
+          <div className="h-px flex-1" style={{ backgroundColor: 'rgba(18,18,18,.1)' }} />
+        </div>
 
-      <div className="mt-6 flex flex-wrap items-center justify-center gap-2" role="group" aria-label="Filtrer les professeurs IA">
+      <div className="flex flex-wrap items-center justify-center gap-2" role="group" aria-label="Filtrer les professeurs IA">
         {TEACHER_ROSTER_FILTERS.map((filter) => {
           const selected = rosterFilter === filter.id
           return (
@@ -2295,7 +2158,7 @@ function PlatformCardsView({
               type="button"
               onClick={() => onRosterFilterChange(filter.id)}
               aria-pressed={selected}
-              className="inline-flex min-h-9 items-center gap-2 rounded-full px-3.5 text-xs font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40 sm:text-sm"
+              className="inline-flex items-center gap-2 rounded-full px-4 py-2 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-black/30"
               style={{
                 backgroundColor: selected ? colors.text : 'transparent',
                 color: selected ? colors.bg : colors.textSecondary,
@@ -2307,6 +2170,7 @@ function PlatformCardsView({
             </button>
           )
         })}
+      </div>
       </div>
 
       {filteredPlatforms.length > cardsPerPage && (
@@ -2356,7 +2220,7 @@ function PlatformCardsView({
           </button>
         </div>
       ) : (
-      <div className="mt-8 grid items-start gap-4 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-5">
+      <div className="mt-2 grid items-start gap-5 px-0 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
         {visiblePlatforms.map((p) => (
           <PlatformCard
             key={p.id}
@@ -4526,8 +4390,8 @@ function PlatformCard({
   }[rosterStage]
   const faceStyle = {
     backgroundColor: colors.cardBg,
-    border: `1px solid ${colors.border}`,
-    boxShadow: darkMode ? 'none' : '0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px -1px rgba(0, 0, 0, 0.1)',
+    border: '1px solid #D8D4CE',
+    boxShadow: '0 1px 2px rgba(0,0,0,.08)',
   }
   const actionItems = [
     { key: 'pdf', label: 'PDF', icon: 'picture_as_pdf', onClick: onOpenPdfModal },
@@ -4553,7 +4417,7 @@ function PlatformCard({
       >
         {/* ═══ RECTO — fiche synthétique inspirée du roster Anima Workers. ═══ */}
         <div
-          className={`${flipped ? 'absolute inset-x-0 top-0' : 'relative'} flex min-h-[360px] flex-col overflow-hidden rounded-2xl p-5 transition-transform duration-[420ms] ease-out motion-reduce:transition-none`}
+          className={`${flipped ? 'absolute inset-x-0 top-0' : 'relative'} flex min-h-[390px] flex-col gap-3 overflow-hidden rounded-2xl p-4 transition-transform duration-[420ms] ease-out motion-reduce:transition-none`}
           style={{
             ...faceStyle,
             backfaceVisibility: 'hidden',
@@ -4562,123 +4426,75 @@ function PlatformCard({
             pointerEvents: flipped ? 'none' : 'auto',
           }}
         >
-          <div className="flex items-start justify-between gap-3">
-            <div className="min-w-0">
-              <p className="text-[10px] font-semibold uppercase tracking-[0.15em]" style={{ color: colors.textMuted }}>
-                Professeur IA · P{p.center_platform_number || p.id}
-              </p>
-              <h3 className="mt-1 truncate text-xl font-semibold tracking-tight" style={{ color: colors.text }}>
-                {p.teacher_name || p.name || 'Professeur IA'}
-              </h3>
-            </div>
-            <span
-              className="flex-shrink-0 rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.1em]"
-              style={{
-                backgroundColor: darkMode ? colors.innerBg : rosterMeta.background,
-                color: darkMode ? colors.textSecondary : rosterMeta.color,
-                border: darkMode ? `1px solid ${colors.border}` : '1px solid transparent',
-              }}
-            >
-              {rosterMeta.label}
-            </span>
-          </div>
-
-          <div className="mt-5 min-h-[72px]">
-            <p className="text-sm font-semibold leading-5" style={{ color: colors.text }}>
+          <div>
+            <h3 className="truncate text-lg font-semibold" style={{ color: colors.text }}>
+              {p.teacher_name || p.name || 'Professeur IA'}
+            </h3>
+            <p className="truncate text-sm font-medium" style={{ color: '#6C63FF' }}>
               {p.source_tp_name || p.name || 'Formation à définir'}
             </p>
-            <p className="mt-1 text-xs leading-5" style={{ color: colors.textMuted }}>
-              {p.source_rncp_code ? `RNCP ${p.source_rncp_code}` : 'Référentiel RNCP à associer'}
-            </p>
           </div>
 
-          {isPreparing && (
-            <div
-              className="mt-4 rounded-xl px-3 py-3"
-              style={{ backgroundColor: colors.innerBg, border: `1px solid ${colors.border}` }}
-            >
-              <div className="mb-2 flex items-center justify-between gap-3">
-                <span className="truncate text-xs font-semibold" style={{ color: colors.text }}>
-                  {preparation.stage || 'Préparation des cours'}
-                </span>
-                <span className="text-[11px] font-semibold tabular-nums" style={{ color: colors.textMuted }}>{creationProgress}%</span>
-              </div>
-              <div
-                className="h-1 overflow-hidden rounded-full"
-                role="progressbar"
-                aria-label="Création du professeur IA"
-                aria-valuemin={0}
-                aria-valuemax={100}
-                aria-valuenow={creationProgress}
-                style={{ backgroundColor: darkMode ? '#334155' : '#e2e8f0' }}
-              >
-                <div
-                  className="h-full rounded-full transition-[width] duration-700 ease-out"
-                  style={{ width: `${creationProgress}%`, backgroundColor: '#8B5CF6' }}
-                />
-              </div>
-            </div>
-          )}
+          <p className="min-h-[60px] text-sm leading-relaxed" style={{ color: colors.textSecondary }}>
+            {p.source_rncp_code
+              ? `Professeur configuré pour le titre RNCP ${p.source_rncp_code} et le suivi de ses apprenants.`
+              : 'Professeur IA à configurer pour délivrer une formation et accompagner les apprenants.'}
+          </p>
 
-          {hasFailed && (
-            <div
-              className="mt-4 rounded-xl px-3 py-3"
-              style={{ backgroundColor: darkMode ? 'rgba(127, 29, 29, 0.22)' : '#fef2f2', border: `1px solid ${darkMode ? 'rgba(248, 113, 113, 0.3)' : '#fecaca'}` }}
-            >
-              <div className="flex items-start gap-2.5">
-                <Icon name="error_outline" className="mt-0.5 text-[17px]" style={{ color: '#dc2626' }} aria-hidden="true" />
-                <div className="min-w-0">
-                  <p className="text-xs font-semibold" style={{ color: darkMode ? '#fecaca' : '#991b1b' }}>
-                    Préparation interrompue
-                  </p>
-                </div>
-              </div>
-              {preparation.can_retry && onRetryPreparation && (
-                <button
-                  type="button"
-                  onClick={onRetryPreparation}
-                  disabled={retryingPreparation}
-                  className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-lg px-3 py-2 text-xs font-semibold text-white transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40 disabled:cursor-wait disabled:opacity-60"
-                  style={{ backgroundColor: '#8B5CF6' }}
-                >
-                  <Icon name={retryingPreparation ? 'hourglass_top' : 'refresh'} className="text-[16px]" aria-hidden="true" />
-                  {retryingPreparation ? 'Reprise en cours…' : 'Reprendre la préparation'}
-                </button>
-              )}
-            </div>
-          )}
+          <ul className="space-y-1 text-sm" style={{ color: colors.textSecondary }}>
+            <li className="flex items-start gap-2">
+              <span className="mt-[7px] h-1.5 w-1.5 flex-shrink-0 rounded-full" style={{ backgroundColor: rosterMeta.color }} />
+              <span>{rosterMeta.label}{isPreparing ? ` · ${creationProgress}%` : ''}</span>
+            </li>
+            <li className="flex items-start gap-2">
+              <span className="mt-[7px] h-1.5 w-1.5 flex-shrink-0 rounded-full" style={{ backgroundColor: colors.text }} />
+              <span className="line-clamp-2">
+                {nextCourseSession ? `Prochaine séance ${formatScheduleDateTime(nextCourseSession.scheduled_at)}` : 'Aucune séance programmée'}
+              </span>
+            </li>
+            <li className="flex items-start gap-2">
+              <span className="mt-[7px] h-1.5 w-1.5 flex-shrink-0 rounded-full" style={{ backgroundColor: colors.text }} />
+              <span>{Number(p.remaining_session_count || 0)} séance(s) restante(s)</span>
+            </li>
+          </ul>
 
-          {!isPreparing && !hasFailed && (
-            <div
-              className="mt-4 grid grid-cols-2 gap-3 rounded-xl px-3 py-3"
-              style={{ backgroundColor: colors.innerBg, border: `1px solid ${colors.border}` }}
-            >
-              <div className="min-w-0">
-                <p className="text-[10px] font-medium" style={{ color: colors.textMuted }}>Prochaine séance</p>
-                <p className="mt-0.5 truncate text-xs font-semibold" style={{ color: colors.text }}>
-                  {nextCourseSession ? formatScheduleDateTime(nextCourseSession.scheduled_at) : 'Non programmée'}
-                </p>
-              </div>
-              <div className="min-w-0 border-l pl-3" style={{ borderColor: colors.border }}>
-                <p className="text-[10px] font-medium" style={{ color: colors.textMuted }}>Séances restantes</p>
-                <p className="mt-0.5 text-xs font-semibold tabular-nums" style={{ color: colors.text }}>
-                  {Number(p.remaining_session_count || 0)} / {Number(p.total_session_count || 0)}
-                </p>
-              </div>
-            </div>
-          )}
-
-          <div className="mt-4 flex flex-wrap gap-1.5" aria-label="Capacités du professeur">
-            {['Slides', 'Voix', 'Q&R', 'Présences'].map((capability) => (
+          <div className="mt-auto flex flex-wrap items-center gap-2" aria-label="Capacités du professeur">
+            {[
+              { label: 'S', icon: 'slideshow' },
+              { label: 'V', icon: 'graphic_eq' },
+              { label: 'Q', icon: 'forum' },
+              { label: 'P', icon: 'fact_check' },
+            ].map((capability) => (
               <span
-                key={capability}
-                className="rounded-md px-2 py-1 text-[10px] font-medium"
-                style={{ color: colors.textMuted, border: `1px solid ${colors.border}` }}
+                key={capability.label}
+                className="flex h-7 w-7 items-center justify-center rounded-lg text-xs font-bold"
+                style={{ color: colors.text, backgroundColor: '#E8E8E8', border: '1px solid #D3D3D3' }}
+                title={{ S: 'Slides', V: 'Voix', Q: 'Questions-réponses', P: 'Présences' }[capability.label]}
               >
-                {capability}
+                <Icon name={capability.icon} className="text-[14px]" />
               </span>
             ))}
           </div>
+
+          <div className="flex flex-wrap items-center gap-2 border-t pt-2 text-xs" style={{ borderColor: '#D8D4CE', color: colors.textMuted }}>
+            <span>{p.source_rncp_code ? `RNCP ${p.source_rncp_code}` : 'RNCP'}</span>
+            <span>·</span>
+            <span>P{p.center_platform_number || p.id}</span>
+            <span>·</span>
+            <span>{rosterMeta.label}</span>
+          </div>
+
+          {hasFailed && preparation.can_retry && onRetryPreparation && (
+            <button
+              type="button"
+              onClick={onRetryPreparation}
+              disabled={retryingPreparation}
+              className="w-full rounded-full border border-[#D8D4CE] py-2 text-xs font-semibold disabled:opacity-50"
+              style={{ color: '#991b1b' }}
+            >
+              {retryingPreparation ? 'Reprise en cours…' : 'Reprendre la préparation'}
+            </button>
+          )}
 
           <button
             type="button"
@@ -4686,8 +4502,8 @@ function PlatformCard({
               onBeforeFlip?.()
               window.requestAnimationFrame(() => setFlipped(true))
             }}
-            className="mt-auto flex min-h-10 w-full items-center justify-center gap-2 rounded-lg px-3 text-sm font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40"
-            style={{ backgroundColor: colors.text, color: colors.bg }}
+            className="flex w-full items-center justify-center gap-2 rounded-full py-2 text-sm font-medium transition-colors hover:bg-black/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-black/30"
+            style={{ backgroundColor: '#121212', color: '#F4F0E7' }}
           >
             Ouvrir le professeur
             <Icon name="arrow_forward" className="text-base" />
