@@ -2435,14 +2435,15 @@ function getTeacherRosterStage(platform = {}) {
   return 'ready'
 }
 
+function getTeacherRosterFilterGroup(platform = {}) {
+  const stage = getTeacherRosterStage(platform)
+  return stage === 'completed' || stage === 'archived' ? 'completed' : 'in_progress'
+}
+
 const TEACHER_ROSTER_FILTERS = [
   { id: 'all', label: 'Tous' },
-  { id: 'preparing', label: 'En préparation' },
-  { id: 'ready', label: 'Prêts' },
-  { id: 'upcoming', label: 'À venir' },
   { id: 'in_progress', label: 'En cours' },
   { id: 'completed', label: 'Terminés' },
-  { id: 'archived', label: 'Archivés' },
 ]
 
 function PlatformCardsView({
@@ -2500,13 +2501,13 @@ function PlatformCardsView({
 }) {
   const filteredPlatforms = rosterFilter === 'all'
     ? platforms
-    : platforms.filter((platform) => getTeacherRosterStage(platform) === rosterFilter)
+    : platforms.filter((platform) => getTeacherRosterFilterGroup(platform) === rosterFilter)
   const filterCounts = Object.fromEntries(
     TEACHER_ROSTER_FILTERS.map((filter) => [
       filter.id,
       filter.id === 'all'
         ? platforms.length
-        : platforms.filter((platform) => getTeacherRosterStage(platform) === filter.id).length,
+        : platforms.filter((platform) => getTeacherRosterFilterGroup(platform) === filter.id).length,
     ]),
   )
   const totalPages = Math.ceil(filteredPlatforms.length / cardsPerPage)
@@ -2521,7 +2522,7 @@ function PlatformCardsView({
       <header className="mx-auto flex w-full max-w-[1204px] items-end justify-between gap-5">
         <div>
           <h1 className="text-2xl font-semibold tracking-[-0.025em]" style={{ color: colors.text }}>Mes professeurs</h1>
-          <p className="mt-1.5 text-sm" style={{ color: colors.textMuted }}>Retrouvez les professeurs en préparation, actifs ou archivés.</p>
+          <p className="mt-1.5 text-sm" style={{ color: colors.textMuted }}>Retrouvez les professeurs en cours ou terminés.</p>
         </div>
       </header>
 
