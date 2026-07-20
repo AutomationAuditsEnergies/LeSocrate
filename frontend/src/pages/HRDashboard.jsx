@@ -2103,7 +2103,7 @@ function PlatformCardsView({
     <section className="mx-auto flex w-full max-w-[90rem] flex-col pb-16 pt-3 sm:pt-5">
       <header className="flex flex-col items-center text-center">
         <h2
-          className="mx-auto mt-4 max-w-4xl text-balance text-[38px] font-semibold leading-[1.02] tracking-[-0.04em] sm:text-[48px]"
+          className="mx-auto mt-4 max-w-[1120px] text-balance text-[34px] font-semibold leading-[1.02] tracking-[-0.04em] sm:text-[42px]"
           style={{ color: colors.text }}
         >
           Quel professeur IA souhaitez-vous recruter&nbsp;?
@@ -4591,7 +4591,7 @@ function PlatformCard({
             onArchivePlatform()
           }}
           disabled={archiving}
-          className="absolute right-3 top-3 z-30 flex h-9 items-center justify-center gap-1.5 rounded-lg px-2.5 text-xs font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-400/40 disabled:cursor-wait disabled:opacity-60"
+          className="absolute right-12 top-3 z-30 flex h-9 items-center justify-center gap-1.5 rounded-lg px-2.5 text-xs font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-400/40 disabled:cursor-wait disabled:opacity-60"
           style={{
             backgroundColor: darkMode ? 'rgba(15, 23, 42, 0.7)' : 'rgba(255, 255, 255, 0.9)',
             color: colors.textSecondary,
@@ -4613,7 +4613,7 @@ function PlatformCard({
           }}
           onMouseEnter={() => setDeleteHover(true)}
           onMouseLeave={() => setDeleteHover(false)}
-          className="absolute right-3 top-3 z-30 flex h-8 w-8 items-center justify-center rounded-lg transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-400/40"
+          className="absolute right-12 top-3 z-30 flex h-8 w-8 items-center justify-center rounded-lg transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-400/40"
           style={{
             backgroundColor: deleteHover ? (darkMode ? 'rgba(220, 38, 38, 0.18)' : '#fee2e2') : (darkMode ? 'rgba(15, 23, 42, 0.55)' : 'rgba(255, 255, 255, 0.85)'),
             color: deleteHover ? '#dc2626' : colors.textMuted,
