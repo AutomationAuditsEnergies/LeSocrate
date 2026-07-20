@@ -1116,17 +1116,17 @@ export default function HRDashboard() {
     )
   }
 
-  // Palette exacte du playground Anima Workers.
+  // Palette chaude et très légère du roster Delos Workers.
   const colors = {
-    bg: '#F4F0E7',
-    cardBg: '#F7F7F7',
-    innerBg: '#F7F7F7',
-    text: '#121212',
-    textSecondary: '#34312F',
-    textMuted: '#6D6965',
-    border: '#D8D4CE',
-    borderLight: '#E2DED7',
-    hoverBg: '#ECE9E3',
+    bg: '#F4F1EA',
+    cardBg: '#F8F6F2',
+    innerBg: '#F1EEE8',
+    text: '#191714',
+    textSecondary: '#48443F',
+    textMuted: '#7A746C',
+    border: '#DCD7CE',
+    borderLight: '#E8E3DA',
+    hoverBg: '#ECE8E0',
     gridOpacity: '0',
   }
   const platformsAlertIsWarning = platformsErrorTone === 'warning'
@@ -1134,65 +1134,64 @@ export default function HRDashboard() {
   return (
     <div className={darkMode ? 'dark' : ''}>
       <div className="relative min-h-screen overflow-hidden" style={{ backgroundColor: colors.bg, fontFamily: 'Inter, sans-serif' }}>
-        {/* En-tête reproduit depuis le playground Anima Workers. */}
+        {/* Barre volontairement discrète pour laisser la priorité au roster. */}
         <div
-          className="sticky top-0 z-20 border-b py-3"
+          className="sticky top-0 z-20 h-11"
           style={{
             backgroundColor: colors.bg,
-            borderColor: colors.border,
           }}
         >
-          <div className="mx-auto flex max-w-[1480px] items-center justify-between gap-4 px-6">
+          <div className="flex h-full items-center justify-between gap-3 px-4">
               <button type="button" onClick={showDashboardView} className="flex min-w-0 items-center gap-2 text-left">
                 <div
-                  className="flex h-8 w-8 flex-shrink-0 items-center justify-center"
+                  className="flex h-7 w-7 flex-shrink-0 items-center justify-center"
                   style={{ color: colors.text }}
                   aria-hidden="true"
                 >
-                  <Icon name="school" className="text-[26px]" />
+                  <Icon name="school" className="text-[21px]" />
                 </div>
-                <div className="flex min-w-0 items-baseline gap-1.5">
-                  <h1 className="truncate text-base font-bold uppercase tracking-wide" style={{ color: colors.text }}>Cadrenza</h1>
-                  <span className="hidden text-sm font-normal sm:inline" style={{ color: colors.textMuted }}>Espace centre</span>
+                <div className="flex min-w-0 items-baseline gap-1.5 text-sm">
+                  <h1 className="truncate font-bold uppercase tracking-tight" style={{ color: colors.text }}>Cadrenza</h1>
+                  <span className="hidden text-xs font-normal sm:inline" style={{ color: colors.textMuted }}>Espace centre</span>
                 </div>
               </button>
-              <div className="flex items-center gap-3">
+              <div className="flex items-center gap-2">
                 <button
                   type="button"
                   onClick={showModulesView}
-                  className="flex h-9 w-9 items-center justify-center rounded-lg transition-colors hover:bg-black/5"
+                  className="flex h-7 w-7 items-center justify-center rounded-full transition-colors hover:bg-black/5"
                   style={{ color: colors.text }}
                   title="Bibliothèque des professeurs IA"
                   aria-label="Bibliothèque des professeurs IA"
                 >
-                  <Icon name="grid_view" className="text-lg" />
+                  <Icon name="grid_view" className="text-base" />
                 </button>
                 <button
                   type="button"
                   onClick={() => { setOnboardingStep(0); setShowOnboarding(true) }}
-                  className="hidden h-9 w-9 items-center justify-center rounded-lg transition-colors hover:bg-black/5 sm:flex"
+                  className="hidden h-7 w-7 items-center justify-center rounded-full transition-colors hover:bg-black/5 sm:flex"
                   style={{ color: colors.text }}
                   title="Revoir le guide de l’espace centre"
                   aria-label="Revoir le guide de l’espace centre"
                 >
-                  <Icon name="help_outline" className="text-lg" />
+                  <Icon name="help_outline" className="text-base" />
                 </button>
                 <button
                   type="button"
                   onClick={handleLogout}
                   disabled={loggingOut}
-                  className="flex items-center gap-1.5 rounded-full px-4 py-2 text-sm font-medium transition-colors hover:bg-black/5"
+                  className="flex h-7 items-center gap-1.5 rounded-full px-3 text-xs font-medium transition-colors hover:bg-black/5"
                   style={{ color: colors.text, border: `1px solid rgba(18,18,18,.2)` }}
                   title="Se déconnecter de l’espace centre"
                 >
-                  <Icon name="logout" className="text-[16px]" />
+                  <Icon name="logout" className="text-[14px]" />
                   <span className="hidden sm:inline">{loggingOut ? 'Déconnexion…' : 'Se déconnecter'}</span>
                 </button>
               </div>
           </div>
         </div>
 
-        <main className="relative z-10 min-w-0 px-6 pb-12">
+        <main className="relative z-10 min-w-0 px-4 pb-12 sm:px-6 lg:px-8">
           <div className="mx-auto w-full max-w-[1480px]">
           {orderNotice && (
             <div
@@ -2101,22 +2100,22 @@ function PlatformCardsView({
   }
 
   return (
-    <section>
-      <header className="mx-auto flex max-w-7xl flex-col items-center px-4 py-12 text-center sm:px-6 lg:px-8">
+    <section className="mx-auto flex w-full max-w-[90rem] flex-col pb-16 pt-3 sm:pt-5">
+      <header className="flex flex-col items-center text-center">
         <h2
-          className="mb-3 text-[36px] font-bold leading-[1.1] tracking-tight sm:text-[48px]"
+          className="mx-auto mt-4 max-w-4xl text-balance text-[38px] font-semibold leading-[1.02] tracking-[-0.04em] sm:text-[48px]"
           style={{ color: colors.text }}
         >
           Quel professeur IA souhaitez-vous recruter&nbsp;?
         </h2>
-        <p className="mb-8 text-sm" style={{ color: colors.textMuted }}>
+        <p className="mx-auto mt-2 max-w-2xl text-sm font-normal leading-relaxed" style={{ color: colors.textMuted }}>
           Décrivez votre besoin ci-dessous, ou choisissez un professeur déjà disponible.
         </p>
 
         <form
           onSubmit={submitBrief}
-          className="flex w-full max-w-[620px] items-center gap-3 rounded-full px-5 py-3"
-          style={{ backgroundColor: colors.cardBg, border: '1px solid #D4D0CA', boxShadow: '0 1px 2px rgba(0,0,0,.08)' }}
+          className="mx-auto mt-5 flex h-[62px] w-full max-w-2xl items-center gap-2 rounded-full py-2 pl-7 pr-2"
+          style={{ backgroundColor: colors.cardBg, border: `1px solid ${colors.border}`, boxShadow: '0 4px 6px -1px rgba(0,0,0,.08), 0 2px 4px -2px rgba(0,0,0,.08)' }}
         >
           <label htmlFor="teacher-brief" className="sr-only">Décrire le professeur IA recherché</label>
           <input
@@ -2125,12 +2124,12 @@ function PlatformCardsView({
             value={teacherBrief}
             onChange={(event) => setTeacherBrief(event.target.value)}
             placeholder="Ex. Un professeur pour délivrer le bloc 2 du TP CRCD…"
-            className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-[#6D6965]"
+            className="min-w-0 flex-1 bg-transparent py-2 text-base outline-none placeholder:text-[#7A746C]"
             style={{ color: colors.text }}
           />
           <button
             type="submit"
-            className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full text-white transition-colors hover:bg-[#6D6965] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-black/30 focus-visible:ring-offset-2"
+            className="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-full text-white transition-opacity hover:opacity-85 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-black/30 focus-visible:ring-offset-2"
             style={{ backgroundColor: '#9B9B9B' }}
             aria-label="Créer ce professeur IA"
             title="Créer ce professeur IA"
@@ -2140,16 +2139,15 @@ function PlatformCardsView({
         </form>
       </header>
 
-      <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
-        <div className="mb-6 flex items-center gap-4">
+      <div className="mx-auto mt-6 flex w-full max-w-3xl items-center gap-4">
           <div className="h-px flex-1" style={{ backgroundColor: 'rgba(18,18,18,.1)' }} />
-          <h3 className="whitespace-nowrap text-[11px] font-medium uppercase tracking-[0.18em]" style={{ color: colors.textMuted }}>
+          <h3 className="whitespace-nowrap text-[11px] font-medium uppercase tracking-[0.2em]" style={{ color: colors.textMuted }}>
             Vos professeurs IA
           </h3>
           <div className="h-px flex-1" style={{ backgroundColor: 'rgba(18,18,18,.1)' }} />
-        </div>
+      </div>
 
-      <div className="flex flex-wrap items-center justify-center gap-2" role="group" aria-label="Filtrer les professeurs IA">
+      <div className="mx-auto mt-5 flex w-full max-w-[1204px] flex-wrap items-center justify-center gap-2" role="group" aria-label="Filtrer les professeurs IA">
         {TEACHER_ROSTER_FILTERS.map((filter) => {
           const selected = rosterFilter === filter.id
           return (
@@ -2158,7 +2156,7 @@ function PlatformCardsView({
               type="button"
               onClick={() => onRosterFilterChange(filter.id)}
               aria-pressed={selected}
-              className="inline-flex items-center gap-2 rounded-full px-4 py-2 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-black/30"
+              className="inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-black/30"
               style={{
                 backgroundColor: selected ? colors.text : 'transparent',
                 color: selected ? colors.bg : colors.textSecondary,
@@ -2171,10 +2169,9 @@ function PlatformCardsView({
           )
         })}
       </div>
-      </div>
 
       {filteredPlatforms.length > cardsPerPage && (
-        <div className="mt-6 flex items-center justify-end gap-3">
+        <div className="mx-auto mt-5 flex w-full max-w-[1204px] items-center justify-end gap-3">
           <span className="text-sm" style={{ color: colors.textMuted, fontVariantNumeric: 'tabular-nums' }}>
             Page <span className="font-semibold" style={{ color: colors.text }}>{safeCardPage + 1}</span> / {totalPages}
           </span>
@@ -2220,7 +2217,7 @@ function PlatformCardsView({
           </button>
         </div>
       ) : (
-      <div className="mt-2 grid items-start gap-5 px-0 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
+      <div className="mx-auto mt-6 grid w-full max-w-[1204px] grid-cols-1 items-start gap-3 sm:grid-cols-2 sm:gap-4 lg:grid-cols-4 xl:grid-cols-5">
         {visiblePlatforms.map((p) => (
           <PlatformCard
             key={p.id}
@@ -4373,7 +4370,7 @@ function PlatformCard({
 }) {
   const pdfInputId = `pdf-input-${p.id}`
   const [deleteHover, setDeleteHover] = useState(false)
-  const [flipped, setFlipped] = useState(false)
+  const [detailsOpen, setDetailsOpen] = useState(false)
   const creationProgress = getHiddenPipelineProgress(p)
   const preparation = getTeacherPreparation(p)
   const isPreparing = preparation.status === 'preparing'
@@ -4390,8 +4387,8 @@ function PlatformCard({
   }[rosterStage]
   const faceStyle = {
     backgroundColor: colors.cardBg,
-    border: '1px solid #D8D4CE',
-    boxShadow: '0 1px 2px rgba(0,0,0,.08)',
+    border: `1px solid ${colors.border}`,
+    boxShadow: '0 1px 3px rgba(0,0,0,.08), 0 1px 2px -1px rgba(0,0,0,.08)',
   }
   const actionItems = [
     { key: 'pdf', label: 'PDF', icon: 'picture_as_pdf', onClick: onOpenPdfModal },
@@ -4404,61 +4401,75 @@ function PlatformCard({
     ] : []),
   ]
 
+  useEffect(() => {
+    if (!detailsOpen) return undefined
+    const previousOverflow = document.body.style.overflow
+    const handleEscape = (event) => {
+      if (event.key === 'Escape') setDetailsOpen(false)
+    }
+    document.body.style.overflow = 'hidden'
+    window.addEventListener('keydown', handleEscape)
+    return () => {
+      document.body.style.overflow = previousOverflow
+      window.removeEventListener('keydown', handleEscape)
+    }
+  }, [detailsOpen])
+
   return (
-    // Le recto est une fiche opérateur compacte. Le verso conserve tous les
-    // outils historiques de gestion du professeur et de sa formation.
-    <div className={`w-full self-start ${newlyCreated ? 'teacher-card-enter' : ''}`}>
-      <div className="group relative [perspective:1600px]">
-      <div
-        className="relative"
-        style={{
-          transformStyle: 'preserve-3d',
-        }}
-      >
-        {/* ═══ RECTO — fiche synthétique inspirée du roster Anima Workers. ═══ */}
+    <>
+      {/* Carte de roster : toute la surface ouvre la fiche, comme chez Delos. */}
+      <div className={`w-full self-start ${newlyCreated ? 'teacher-card-enter' : ''}`}>
         <div
-          className={`${flipped ? 'absolute inset-x-0 top-0' : 'relative'} flex min-h-[390px] flex-col gap-3 overflow-hidden rounded-2xl p-4 transition-transform duration-[420ms] ease-out motion-reduce:transition-none`}
-          style={{
-            ...faceStyle,
-            backfaceVisibility: 'hidden',
-            WebkitBackfaceVisibility: 'hidden',
-            transform: flipped ? 'rotateY(-180deg)' : 'rotateY(0deg)',
-            pointerEvents: flipped ? 'none' : 'auto',
+          role="button"
+          tabIndex={0}
+          aria-label={`Ouvrir le professeur ${p.teacher_name || p.name || 'IA'}`}
+          onClick={() => {
+            onBeforeFlip?.()
+            setDetailsOpen(true)
           }}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' || event.key === ' ') {
+              event.preventDefault()
+              onBeforeFlip?.()
+              setDetailsOpen(true)
+            }
+          }}
+          className="group relative flex min-h-[332px] cursor-pointer flex-col gap-2 overflow-hidden rounded-2xl p-3 text-left transition-shadow hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/50"
+          style={faceStyle}
         >
           <div>
-            <h3 className="truncate text-lg font-semibold" style={{ color: colors.text }}>
+            <h3 className="truncate text-sm font-semibold leading-tight tracking-[-0.025em]" style={{ color: colors.text }}>
               {p.teacher_name || p.name || 'Professeur IA'}
             </h3>
-            <p className="truncate text-sm font-medium" style={{ color: '#6C63FF' }}>
+            <p className="mt-1 truncate text-xs font-medium" style={{ color: '#6C63FF' }}>
               {p.source_tp_name || p.name || 'Formation à définir'}
             </p>
           </div>
 
-          <p className="min-h-[60px] text-sm leading-relaxed" style={{ color: colors.textSecondary }}>
+          <p className="line-clamp-3 min-h-[54px] text-xs leading-[1.55]" style={{ color: colors.textMuted }}>
             {p.source_rncp_code
               ? `Professeur configuré pour le titre RNCP ${p.source_rncp_code} et le suivi de ses apprenants.`
               : 'Professeur IA à configurer pour délivrer une formation et accompagner les apprenants.'}
           </p>
 
-          <ul className="space-y-1 text-sm" style={{ color: colors.textSecondary }}>
+          <ul className="mt-1 space-y-1 text-[11px] leading-[1.45]" style={{ color: colors.textSecondary }}>
             <li className="flex items-start gap-2">
-              <span className="mt-[7px] h-1.5 w-1.5 flex-shrink-0 rounded-full" style={{ backgroundColor: rosterMeta.color }} />
+              <span className="mt-[5px] h-1 w-1 flex-shrink-0 rounded-full" style={{ backgroundColor: rosterMeta.color }} />
               <span>{rosterMeta.label}{isPreparing ? ` · ${creationProgress}%` : ''}</span>
             </li>
             <li className="flex items-start gap-2">
-              <span className="mt-[7px] h-1.5 w-1.5 flex-shrink-0 rounded-full" style={{ backgroundColor: colors.text }} />
+              <span className="mt-[5px] h-1 w-1 flex-shrink-0 rounded-full" style={{ backgroundColor: '#6C63FF' }} />
               <span className="line-clamp-2">
                 {nextCourseSession ? `Prochaine séance ${formatScheduleDateTime(nextCourseSession.scheduled_at)}` : 'Aucune séance programmée'}
               </span>
             </li>
             <li className="flex items-start gap-2">
-              <span className="mt-[7px] h-1.5 w-1.5 flex-shrink-0 rounded-full" style={{ backgroundColor: colors.text }} />
+              <span className="mt-[5px] h-1 w-1 flex-shrink-0 rounded-full" style={{ backgroundColor: '#6C63FF' }} />
               <span>{Number(p.remaining_session_count || 0)} séance(s) restante(s)</span>
             </li>
           </ul>
 
-          <div className="mt-auto flex flex-wrap items-center gap-2" aria-label="Capacités du professeur">
+          <div className="mt-auto flex flex-wrap items-center gap-1.5" aria-label="Capacités du professeur">
             {[
               { label: 'S', icon: 'slideshow' },
               { label: 'V', icon: 'graphic_eq' },
@@ -4467,16 +4478,16 @@ function PlatformCard({
             ].map((capability) => (
               <span
                 key={capability.label}
-                className="flex h-7 w-7 items-center justify-center rounded-lg text-xs font-bold"
-                style={{ color: colors.text, backgroundColor: '#E8E8E8', border: '1px solid #D3D3D3' }}
+                className="flex h-6 w-6 items-center justify-center rounded-full text-[10px] font-bold"
+                style={{ color: colors.text, backgroundColor: colors.innerBg, border: `1px solid ${colors.border}` }}
                 title={{ S: 'Slides', V: 'Voix', Q: 'Questions-réponses', P: 'Présences' }[capability.label]}
               >
-                <Icon name={capability.icon} className="text-[14px]" />
+                <Icon name={capability.icon} className="text-[13px]" />
               </span>
             ))}
           </div>
 
-          <div className="flex flex-wrap items-center gap-2 border-t pt-2 text-xs" style={{ borderColor: '#D8D4CE', color: colors.textMuted }}>
+          <div className="flex flex-wrap items-center gap-1.5 border-t pt-2 text-[10px]" style={{ borderColor: colors.border, color: colors.textMuted }}>
             <span>{p.source_rncp_code ? `RNCP ${p.source_rncp_code}` : 'RNCP'}</span>
             <span>·</span>
             <span>P{p.center_platform_number || p.id}</span>
@@ -4487,7 +4498,10 @@ function PlatformCard({
           {hasFailed && preparation.can_retry && onRetryPreparation && (
             <button
               type="button"
-              onClick={onRetryPreparation}
+              onClick={(event) => {
+                event.stopPropagation()
+                onRetryPreparation()
+              }}
               disabled={retryingPreparation}
               className="w-full rounded-full border border-[#D8D4CE] py-2 text-xs font-semibold disabled:opacity-50"
               style={{ color: '#991b1b' }}
@@ -4496,31 +4510,74 @@ function PlatformCard({
             </button>
           )}
 
-          <button
-            type="button"
-            onClick={() => {
-              onBeforeFlip?.()
-              window.requestAnimationFrame(() => setFlipped(true))
-            }}
-            className="flex w-full items-center justify-center gap-2 rounded-full py-2 text-sm font-medium transition-colors hover:bg-black/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-black/30"
+          <span
+            className="flex w-full items-center justify-center gap-2 rounded-full px-3 py-1.5 text-xs font-medium transition-opacity group-hover:opacity-85"
             style={{ backgroundColor: '#121212', color: '#F4F0E7' }}
           >
-            Ouvrir le professeur
-            <Icon name="arrow_forward" className="text-base" />
-          </button>
+            Gérer
+            <Icon name="arrow_forward" className="text-sm" />
+          </span>
         </div>
+      </div>
 
-        {/* ═══ VERSO — la fiche formation (inchangée) ═══ */}
+      {detailsOpen && createPortal(
         <div
-          className={`${flipped ? 'relative' : 'absolute inset-x-0 top-0'} overflow-hidden rounded-2xl transition-transform duration-[420ms] ease-out motion-reduce:transition-none`}
-          style={{
-            ...faceStyle,
-            backfaceVisibility: 'hidden',
-            WebkitBackfaceVisibility: 'hidden',
-            transform: flipped ? 'rotateY(0deg)' : 'rotateY(180deg)',
-            pointerEvents: flipped ? 'auto' : 'none',
+          className="fixed inset-0 z-[70] flex items-center justify-center bg-black/30 p-4 backdrop-blur-[3px]"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setDetailsOpen(false)
           }}
         >
+          <section
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby={`teacher-details-${p.id}`}
+            className="relative flex max-h-[90vh] w-full max-w-3xl flex-col overflow-hidden rounded-xl bg-white shadow-2xl sm:flex-row"
+            style={{ border: `1px solid ${colors.border}` }}
+          >
+            <aside
+              className="flex shrink-0 flex-col justify-between p-6 sm:w-[42%]"
+              style={{ backgroundColor: colors.innerBg, borderRight: `1px solid ${colors.border}` }}
+            >
+              <div>
+                <span
+                  className="inline-flex rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.08em]"
+                  style={{ color: rosterMeta.color, backgroundColor: rosterMeta.background }}
+                >
+                  {rosterMeta.label}
+                </span>
+                <h2 id={`teacher-details-${p.id}`} className="mt-5 text-3xl font-semibold tracking-[-0.04em]" style={{ color: colors.text }}>
+                  {p.teacher_name || p.name || 'Professeur IA'}
+                </h2>
+                <p className="mt-1 text-sm font-medium" style={{ color: '#6C63FF' }}>
+                  {p.source_tp_name || p.name || 'Formation à définir'}
+                </p>
+                <p className="mt-5 text-xs leading-5" style={{ color: colors.textMuted }}>
+                  {p.source_rncp_code
+                    ? `Professeur autonome configuré pour le titre RNCP ${p.source_rncp_code}.`
+                    : 'Professeur IA configuré pour délivrer et suivre cette formation.'}
+                </p>
+              </div>
+              <div className="mt-8 space-y-2 border-t pt-4 text-xs" style={{ borderColor: colors.border, color: colors.textSecondary }}>
+                <p className="flex items-center justify-between gap-4"><span>Plateforme</span><strong>P{p.center_platform_number || p.id}</strong></p>
+                <p className="flex items-center justify-between gap-4"><span>Séances restantes</span><strong>{Number(p.remaining_session_count || 0)}</strong></p>
+                <p className="leading-5" style={{ color: colors.textMuted }}>
+                  {nextCourseSession ? `Prochaine séance : ${formatScheduleDateTime(nextCourseSession.scheduled_at)}` : 'Aucune séance programmée'}
+                </p>
+              </div>
+            </aside>
+
+            <div className="relative min-h-0 flex-1 overflow-y-auto" style={{ backgroundColor: colors.cardBg }}>
+              <button
+                type="button"
+                onClick={() => setDetailsOpen(false)}
+                aria-label="Fermer la fiche du professeur"
+                className="absolute right-2 top-2 z-40 flex h-7 w-7 items-center justify-center rounded-lg transition-colors hover:bg-black/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-black/30"
+                style={{ color: colors.textMuted }}
+              >
+                <Icon name="close" className="text-base" />
+              </button>
+
+              <div className="relative overflow-hidden">
       {/* L’archivage retire la promo de l’espace actif sans effacer le module
           durable ni ses ressources Azure. La suppression définitive reste un
           outil superadmin de dernier recours. */}
@@ -4948,25 +5005,14 @@ function PlatformCard({
           </a>
         )}
 
-      </div>
-        </div>
-      </div>
-      </div>
-
-      {flipped && <button
-        type="button"
-        onClick={() => {
-          onBeforeFlip?.()
-          window.requestAnimationFrame(() => setFlipped(false))
-        }}
-        aria-label="Revenir à la liste des professeurs"
-        className="mx-auto mt-3 flex min-h-11 items-center gap-1.5 rounded-full px-4 py-2 text-xs font-medium transition-colors hover:bg-black/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40 dark:hover:bg-white/5"
-        style={{ color: colors.textMuted, border: `1px solid ${colors.border}` }}
-      >
-        <Icon name="arrow_back" className="text-base" />
-        <span>Retour au professeur</span>
-      </button>}
-    </div>
+              </div>
+            </div>
+            </div>
+          </section>
+        </div>,
+        document.body,
+      )}
+    </>
   )
 }
 
