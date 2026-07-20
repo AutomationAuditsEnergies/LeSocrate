@@ -122,6 +122,9 @@ export default function HRDashboard() {
   const [selectedCoursPlatform, setSelectedCoursPlatform] = useState(null)
   const [cardPage, setCardPage] = useState(0)
   const [teacherRosterFilter, setTeacherRosterFilter] = useState('all')
+  const [workspaceSection, setWorkspaceSection] = useState('recruit')
+  const [interfaceLanguage, setInterfaceLanguage] = useState(() => localStorage.getItem('center_interface_language') || 'fr')
+  const [recruitmentPrefilled, setRecruitmentPrefilled] = useState(false)
   const [attendancePlatformId, setAttendancePlatformId] = useState('')
   const [attendanceDate, setAttendanceDate] = useState(todayDateInput)
   const [attendanceData, setAttendanceData] = useState(null)
@@ -151,6 +154,8 @@ export default function HRDashboard() {
     } finally {
       localStorage.removeItem('admin_auth_token')
       localStorage.removeItem('auth_token')
+      localStorage.removeItem('center_account_email')
+      localStorage.removeItem('center_account_name')
       window.location.assign('/connexion-centre')
     }
   }
@@ -906,6 +911,8 @@ export default function HRDashboard() {
     setFormationMode('new')
     setShowModulesModal(false)
     setShowCreateModal(true)
+    setWorkspaceSection('recruit')
+    setRecruitmentPrefilled(false)
   }
 
   const openCreateModal = () => {
@@ -913,11 +920,23 @@ export default function HRDashboard() {
     fetchModules()
     setShowModulesModal(false)
     setShowCreateModal(true)
+    setWorkspaceSection('recruit')
+    setRecruitmentPrefilled(false)
   }
 
   const showDashboardView = () => {
+    setWorkspaceSection('teachers')
     setShowModulesModal(false)
     setShowCreateModal(false)
+    setRecruitmentPrefilled(false)
+    setModuleSearchQuery('')
+  }
+
+  const showRecruitView = () => {
+    setWorkspaceSection('recruit')
+    setShowModulesModal(false)
+    setShowCreateModal(false)
+    setRecruitmentPrefilled(false)
     setModuleSearchQuery('')
   }
 
@@ -925,6 +944,24 @@ export default function HRDashboard() {
     fetchModules()
     setShowCreateModal(false)
     setShowModulesModal(true)
+  }
+
+  const handleAssistantComplete = (draft) => {
+    resetCreateForm()
+    setTeacherFirstName(draft.teacherName)
+    setTeacherColor(draft.teacherColor)
+    setNewFormTpName(draft.trainingName)
+    setNewFormRncp(draft.rncpCode)
+    setNewFormHours(String(draft.trainingDays))
+    setWeeklyCourseCount(String(draft.weeklyCourseCount))
+    setTeachingDays(draft.teachingDays)
+    setScheduleStartDate(draft.startDate)
+    setFormationMode('new')
+    fetchModules()
+    setShowModulesModal(false)
+    setShowCreateModal(true)
+    setWorkspaceSection('recruit')
+    setRecruitmentPrefilled(true)
   }
 
   useEffect(() => {
@@ -1133,66 +1170,40 @@ export default function HRDashboard() {
 
   return (
     <div className={darkMode ? 'dark' : ''}>
-      <div className="relative min-h-screen overflow-hidden" style={{ backgroundColor: colors.bg, fontFamily: 'Inter, sans-serif' }}>
-        {/* Barre volontairement discrète pour laisser la priorité au roster. */}
-        <div
-          className="sticky top-0 z-20 h-11"
-          style={{
-            backgroundColor: colors.bg,
+      <div className="relative flex min-h-screen overflow-hidden" style={{ backgroundColor: colors.bg, fontFamily: 'Inter, sans-serif' }}>
+        <CenterWorkspaceSidebar
+          colors={colors}
+          activeSection={workspaceSection}
+          onShowTeachers={showDashboardView}
+          onShowRecruit={showRecruitView}
+          onShowModules={showModulesView}
+          onShowGuide={() => { setOnboardingStep(0); setShowOnboarding(true) }}
+          onLogout={handleLogout}
+          loggingOut={loggingOut}
+          language={interfaceLanguage}
+          onLanguageChange={(language) => {
+            setInterfaceLanguage(language)
+            localStorage.setItem('center_interface_language', language)
           }}
-        >
-          <div className="flex h-full items-center justify-between gap-3 px-4">
-              <button type="button" onClick={showDashboardView} className="flex min-w-0 items-center gap-2 text-left">
-                <div
-                  className="flex h-7 w-7 flex-shrink-0 items-center justify-center"
-                  style={{ color: colors.text }}
-                  aria-hidden="true"
-                >
-                  <Icon name="school" className="text-[21px]" />
-                </div>
-                <div className="flex min-w-0 items-baseline gap-1.5 text-sm">
-                  <h1 className="truncate font-bold uppercase tracking-tight" style={{ color: colors.text }}>Cadrenza</h1>
-                  <span className="hidden text-xs font-normal sm:inline" style={{ color: colors.textMuted }}>Espace centre</span>
-                </div>
-              </button>
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={showModulesView}
-                  className="flex h-7 w-7 items-center justify-center rounded-full transition-colors hover:bg-black/5"
-                  style={{ color: colors.text }}
-                  title="Bibliothèque des professeurs IA"
-                  aria-label="Bibliothèque des professeurs IA"
-                >
-                  <Icon name="grid_view" className="text-base" />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => { setOnboardingStep(0); setShowOnboarding(true) }}
-                  className="hidden h-7 w-7 items-center justify-center rounded-full transition-colors hover:bg-black/5 sm:flex"
-                  style={{ color: colors.text }}
-                  title="Revoir le guide de l’espace centre"
-                  aria-label="Revoir le guide de l’espace centre"
-                >
-                  <Icon name="help_outline" className="text-base" />
-                </button>
-                <button
-                  type="button"
-                  onClick={handleLogout}
-                  disabled={loggingOut}
-                  className="flex h-7 items-center gap-1.5 rounded-full px-3 text-xs font-medium transition-colors hover:bg-black/5"
-                  style={{ color: colors.text, border: `1px solid rgba(18,18,18,.2)` }}
-                  title="Se déconnecter de l’espace centre"
-                >
-                  <Icon name="logout" className="text-[14px]" />
-                  <span className="hidden sm:inline">{loggingOut ? 'Déconnexion…' : 'Se déconnecter'}</span>
-                </button>
-              </div>
-          </div>
-        </div>
+        />
 
-        <main className="relative z-10 min-w-0 px-4 pb-12 sm:px-6 lg:px-8">
-          <div className="mx-auto w-full max-w-[1480px]">
+        <div className="flex min-w-0 flex-1 flex-col">
+          <div className="flex h-14 items-center justify-between border-b px-4 md:hidden" style={{ borderColor: colors.borderLight, backgroundColor: colors.cardBg }}>
+            <span className="text-sm font-semibold" style={{ color: colors.text }}>
+              {workspaceSection === 'teachers' ? 'Mes professeurs' : 'Recruter un professeur'}
+            </span>
+            <div className="flex items-center gap-1">
+              <button type="button" onClick={showRecruitView} className="flex h-9 w-9 items-center justify-center rounded-lg" aria-label="Recruter un professeur">
+                <Icon name="add_comment" className="text-lg" />
+              </button>
+              <button type="button" onClick={showDashboardView} className="flex h-9 w-9 items-center justify-center rounded-lg" aria-label="Mes professeurs">
+                <Icon name="smart_toy" className="text-lg" />
+              </button>
+            </div>
+          </div>
+
+        <main className="relative z-10 min-w-0 flex-1 overflow-y-auto px-4 pb-12 sm:px-6 lg:px-8">
+          <div className="mx-auto w-full max-w-[1480px] pt-4 md:pt-6">
           {orderNotice && (
             <div
               className="mb-6 flex items-start gap-3 rounded-xl border px-4 py-3.5 text-sm"
@@ -1321,8 +1332,16 @@ export default function HRDashboard() {
               creating={creating}
               billing={billing}
               billingLoading={billingLoading}
+              prefilledFromAssistant={recruitmentPrefilled}
               onCreate={handleCreatePlatform}
-              onCancel={() => { setShowCreateModal(false); resetCreateForm() }}
+              onCancel={() => { setShowCreateModal(false); setRecruitmentPrefilled(false); resetCreateForm() }}
+            />
+          ) : workspaceSection === 'recruit' ? (
+            <RecruitmentAssistant
+              colors={colors}
+              modules={modules}
+              onComplete={handleAssistantComplete}
+              onManualCreate={openCreateModal}
             />
           ) : (
             <PlatformCardsView
@@ -1336,14 +1355,6 @@ export default function HRDashboard() {
                 setCardPage(0)
               }}
               onCreateTeacher={openCreateModal}
-              onCreateFromBrief={(brief) => {
-                resetCreateForm()
-                setNewFormTpName(brief)
-                setFormationMode('new')
-                fetchModules()
-                setShowModulesModal(false)
-                setShowCreateModal(true)
-              }}
               expandedPlatform={expandedPlatform}
               platformAudios={platformAudios}
               audiosLoading={audiosLoading}
@@ -1864,6 +1875,375 @@ export default function HRDashboard() {
       )}
 
     </div>
+    </div>
+  )
+}
+
+function CenterWorkspaceSidebar({
+  colors,
+  activeSection,
+  onShowTeachers,
+  onShowRecruit,
+  onShowModules,
+  onShowGuide,
+  onLogout,
+  loggingOut,
+  language,
+  onLanguageChange,
+}) {
+  const accountEmail = localStorage.getItem('center_account_email') || 'Compte centre'
+  const accountName = localStorage.getItem('center_account_name') || 'Centre de formation'
+  const initials = accountName
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0])
+    .join('')
+    .toUpperCase() || 'CF'
+  const navItems = [
+    { id: 'recruit', label: 'Recruter un professeur', icon: 'add_comment', onClick: onShowRecruit },
+    { id: 'teachers', label: 'Mes professeurs', icon: 'smart_toy', onClick: onShowTeachers },
+  ]
+
+  return (
+    <aside
+      className="relative z-30 hidden min-h-screen w-[248px] shrink-0 flex-col border-r md:flex"
+      style={{ backgroundColor: colors.cardBg, borderColor: colors.borderLight }}
+      aria-label="Navigation de l’espace centre"
+    >
+      <div className="flex h-16 items-center gap-3 px-5">
+        <div className="flex h-9 w-9 items-center justify-center rounded-lg" style={{ backgroundColor: '#EEE8FF' }}>
+          <img src="/robot-violet.png" alt="" className="h-8 w-8 object-contain" />
+        </div>
+        <div className="min-w-0">
+          <p className="truncate text-sm font-semibold" style={{ color: colors.text }}>Bureau des professeurs IA</p>
+          <p className="truncate text-xs" style={{ color: colors.textMuted }}>{accountName}</p>
+        </div>
+      </div>
+
+      <nav className="mt-4 space-y-1 px-3">
+        {navItems.map((item) => {
+          const selected = activeSection === item.id
+          return (
+            <button
+              key={item.id}
+              type="button"
+              onClick={item.onClick}
+              aria-current={selected ? 'page' : undefined}
+              className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500"
+              style={{
+                backgroundColor: selected ? '#EDE8FF' : 'transparent',
+                color: selected ? '#5B38B5' : colors.textSecondary,
+              }}
+            >
+              <Icon name={item.icon} className="text-[19px]" />
+              <span>{item.label}</span>
+            </button>
+          )
+        })}
+      </nav>
+
+      <div className="mt-7 px-5">
+        <p className="text-xs font-medium" style={{ color: colors.textMuted }}>Raccourcis</p>
+        <div className="mt-2 space-y-1">
+          <button type="button" onClick={onShowModules} className="flex w-full items-center gap-3 rounded-lg px-2 py-2 text-left text-sm transition-colors hover:bg-black/[0.04]" style={{ color: colors.textSecondary }}>
+            <Icon name="inventory_2" className="text-[18px]" />
+            Bibliothèque
+          </button>
+          <button type="button" onClick={onShowGuide} className="flex w-full items-center gap-3 rounded-lg px-2 py-2 text-left text-sm transition-colors hover:bg-black/[0.04]" style={{ color: colors.textSecondary }}>
+            <Icon name="help_outline" className="text-[18px]" />
+            Guide de prise en main
+          </button>
+        </div>
+      </div>
+
+      <div className="mt-auto p-3">
+        <details className="group relative">
+          <summary className="flex cursor-pointer list-none items-center gap-3 rounded-xl px-2 py-2.5 transition-colors hover:bg-black/[0.04] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500">
+            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-xs font-semibold text-white" style={{ backgroundColor: '#6D4AC7' }}>
+              {initials}
+            </span>
+            <span className="min-w-0 flex-1">
+              <span className="block truncate text-sm font-semibold" style={{ color: colors.text }}>{accountName}</span>
+              <span className="block truncate text-xs" style={{ color: colors.textMuted }}>{accountEmail}</span>
+            </span>
+            <Icon name="unfold_more" className="text-base" style={{ color: colors.textMuted }} />
+          </summary>
+
+          <div className="absolute bottom-[calc(100%+8px)] left-0 w-full overflow-hidden rounded-xl border bg-white" style={{ borderColor: colors.border }}>
+            <div className="border-b px-3 py-3" style={{ borderColor: colors.borderLight }}>
+              <p className="truncate text-sm font-semibold" style={{ color: colors.text }}>{accountName}</p>
+              <p className="mt-0.5 truncate text-xs" style={{ color: colors.textMuted }}>{accountEmail}</p>
+            </div>
+            <div className="px-2 py-2">
+              <div className="flex items-center gap-2 px-2 py-1.5 text-sm" style={{ color: colors.textSecondary }}>
+                <Icon name="language" className="text-lg" />
+                <span className="flex-1">Langue</span>
+                <button type="button" onClick={() => onLanguageChange('fr')} className="rounded px-2 py-1 text-xs font-medium" style={{ backgroundColor: language === 'fr' ? '#EDE8FF' : 'transparent', color: language === 'fr' ? '#5B38B5' : colors.textMuted }}>FR</button>
+                <button type="button" onClick={() => onLanguageChange('en')} className="rounded px-2 py-1 text-xs font-medium" style={{ backgroundColor: language === 'en' ? '#EDE8FF' : 'transparent', color: language === 'en' ? '#5B38B5' : colors.textMuted }}>EN</button>
+              </div>
+              <button type="button" onClick={onLogout} disabled={loggingOut} className="mt-1 flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm font-medium text-red-600 transition-colors hover:bg-red-50 disabled:opacity-60">
+                <Icon name="logout" className="text-lg" />
+                {loggingOut ? 'Déconnexion…' : 'Se déconnecter'}
+              </button>
+            </div>
+          </div>
+        </details>
+      </div>
+    </aside>
+  )
+}
+
+const RECRUITMENT_STEPS = [
+  { id: 'teacherName', question: 'Comment souhaitez-vous appeler ce professeur IA ?', placeholder: 'Ex. Pierre, Lina, Sofia…', type: 'text' },
+  { id: 'trainingName', question: 'Quelle formation va-t-il délivrer ?', placeholder: 'Ex. TP Conseiller relation client à distance', type: 'text' },
+  { id: 'rncpCode', question: 'Quel est le code RNCP de cette formation ?', placeholder: 'Ex. 35304', type: 'number' },
+  { id: 'rncpConfirm', question: 'S’agit-il bien de cette formation ?', type: 'confirm' },
+  { id: 'trainingDays', question: 'Combien de journées de formation faut-il prévoir au total ?', placeholder: 'Ex. 52', type: 'number' },
+  { id: 'weeklyCourseCount', question: 'Combien de journées de cours auront lieu chaque semaine ?', type: 'frequency' },
+  { id: 'teachingDays', question: 'Quels jours de la semaine souhaitez-vous programmer ?', type: 'days' },
+  { id: 'startDate', question: 'À quelle date la formation doit-elle commencer ?', type: 'date' },
+  { id: 'teacherColor', question: 'Quelle couleur souhaitez-vous pour le robot professeur ?', type: 'color' },
+]
+
+const RECRUITMENT_DAY_OPTIONS = [
+  { id: 'lundi', label: 'Lundi' },
+  { id: 'mardi', label: 'Mardi' },
+  { id: 'mercredi', label: 'Mercredi' },
+  { id: 'jeudi', label: 'Jeudi' },
+  { id: 'vendredi', label: 'Vendredi' },
+]
+
+const RECRUITMENT_COLOR_OPTIONS = [
+  { id: 'violet', label: 'Violet', value: '#8B5CF6', image: '/robot-violet.png' },
+  { id: 'blue', label: 'Bleu', value: '#3B82F6', image: '/robot-blue.png' },
+  { id: 'pink', label: 'Rose', value: '#EC4899', image: '/robot-pink.png' },
+  { id: 'green', label: 'Vert', value: '#10B981', image: '/robot-green.png' },
+  { id: 'amber', label: 'Ambre', value: '#F59E0B', image: '/robot-amber.png' },
+]
+
+function RecruitmentAssistant({ colors, modules, onComplete, onManualCreate }) {
+  const [started, setStarted] = useState(false)
+  const [brief, setBrief] = useState('')
+  const [stepIndex, setStepIndex] = useState(0)
+  const [answer, setAnswer] = useState('')
+  const [draft, setDraft] = useState({
+    teacherName: '',
+    trainingName: '',
+    rncpCode: '',
+    trainingDays: '',
+    weeklyCourseCount: 2,
+    teachingDays: ['mardi', 'jeudi'],
+    startDate: todayDateInput(),
+    teacherColor: 'violet',
+  })
+  const [history, setHistory] = useState([])
+  const currentStep = RECRUITMENT_STEPS[stepIndex]
+  const matchingModule = modules.find((module) => String(module.rncp_code || '').replace(/\D/g, '') === String(draft.rncpCode || '').replace(/\D/g, ''))
+  const completed = stepIndex >= RECRUITMENT_STEPS.length
+
+  const displayAnswer = (step, value) => {
+    if (step.id === 'teachingDays') return value.map((day) => RECRUITMENT_DAY_OPTIONS.find((option) => option.id === day)?.label || day).join(', ')
+    if (step.id === 'teacherColor') return RECRUITMENT_COLOR_OPTIONS.find((color) => color.id === value)?.label || value
+    if (step.id === 'weeklyCourseCount') return `${value} jour${Number(value) > 1 ? 's' : ''} par semaine`
+    if (step.id === 'trainingDays') return `${value} journées`
+    if (step.id === 'rncpCode') return `RNCP ${String(value).replace(/\D/g, '')}`
+    return String(value)
+  }
+
+  const advance = (value) => {
+    if (!currentStep) return
+    if (currentStep.id === 'rncpConfirm' && value === 'Corriger') {
+      setDraft((current) => ({ ...current, trainingName: '', rncpCode: '' }))
+      setHistory((current) => [...current, { role: 'user', text: value }, { role: 'assistant', text: 'D’accord, reprenons le nom de la formation.' }])
+      setStepIndex(1)
+      setAnswer('')
+      return
+    }
+    const normalizedValue = currentStep.id === 'rncpCode' ? String(value).replace(/\D/g, '') : value
+    const nextDraft = currentStep.id === 'rncpConfirm'
+      ? draft
+      : { ...draft, [currentStep.id]: normalizedValue }
+    setDraft(nextDraft)
+    setHistory((current) => [...current, { role: 'user', text: displayAnswer(currentStep, currentStep.id === 'rncpConfirm' ? 'Oui, continuer' : normalizedValue) }])
+    setStepIndex((current) => current + 1)
+    setAnswer('')
+  }
+
+  const submitInitialBrief = (event) => {
+    event.preventDefault()
+    const value = brief.trim()
+    if (!value) return
+    setStarted(true)
+    setHistory([{ role: 'user', text: value }])
+    setBrief('')
+  }
+
+  const submitAnswer = (event) => {
+    event.preventDefault()
+    const value = answer.trim()
+    if (!value) return
+    if (currentStep?.type === 'number' && Number(value) <= 0) return
+    advance(value)
+  }
+
+  const toggleDay = (day) => {
+    setDraft((current) => {
+      const selected = current.teachingDays.includes(day)
+      const teachingDays = selected
+        ? current.teachingDays.filter((item) => item !== day)
+        : current.teachingDays.length < Number(current.weeklyCourseCount)
+          ? [...current.teachingDays, day]
+          : current.teachingDays
+      return { ...current, teachingDays }
+    })
+  }
+
+  if (!started) {
+    const suggestions = [
+      'Créer un professeur pour le TP CRCD',
+      'Préparer un professeur pour une nouvelle formation',
+      'Planifier une formation RNCP dès le mois prochain',
+    ]
+    return (
+      <section className="mx-auto flex min-h-[calc(100vh-6rem)] w-full max-w-5xl flex-col justify-center py-10">
+        <div className="mx-auto w-full max-w-3xl">
+          <div className="mb-7 flex items-center justify-between gap-4">
+            <div>
+              <h1 className="text-3xl font-semibold tracking-[-0.03em] sm:text-4xl" style={{ color: colors.text }}>Quel professeur souhaitez-vous recruter ?</h1>
+              <p className="mt-3 max-w-2xl text-sm leading-6" style={{ color: colors.textMuted }}>Décrivez votre besoin. Je vous poserai ensuite quelques questions pour préparer sa configuration.</p>
+            </div>
+            <img src="/robot-violet.png" alt="" className="hidden h-24 w-24 object-contain sm:block" />
+          </div>
+
+          <form onSubmit={submitInitialBrief} className="rounded-2xl bg-white p-4" style={{ boxShadow: '0 8px 24px rgba(41, 32, 24, 0.08)' }}>
+            <label htmlFor="recruitment-brief" className="sr-only">Décrire le professeur recherché</label>
+            <textarea
+              id="recruitment-brief"
+              value={brief}
+              onChange={(event) => setBrief(event.target.value)}
+              placeholder="Ex. Je cherche un professeur pour délivrer le TP CRCD à partir de septembre…"
+              rows={4}
+              className="w-full resize-none bg-transparent px-2 py-1 text-base leading-7 outline-none placeholder:text-[#68625B]"
+              style={{ color: colors.text }}
+              autoFocus
+            />
+            <div className="mt-3 flex items-center justify-between border-t pt-3" style={{ borderColor: colors.borderLight }}>
+              <button type="button" onClick={onManualCreate} className="inline-flex items-center gap-2 rounded-lg px-2 py-2 text-sm font-medium transition-colors hover:bg-black/[0.04]" style={{ color: colors.textSecondary }}>
+                <Icon name="tune" className="text-lg" />
+                Créer manuellement
+              </button>
+              <button type="submit" disabled={!brief.trim()} className="flex h-10 w-10 items-center justify-center rounded-full text-white transition-colors disabled:cursor-not-allowed disabled:bg-[#B9B5AF]" style={{ backgroundColor: brief.trim() ? '#6D4AC7' : undefined }} aria-label="Commencer la configuration">
+                <Icon name="arrow_upward" className="text-lg" />
+              </button>
+            </div>
+          </form>
+
+          <div className="mt-6">
+            <p className="mb-3 text-sm font-medium" style={{ color: colors.textSecondary }}>Vous pouvez commencer par</p>
+            <div className="grid gap-2 sm:grid-cols-3">
+              {suggestions.map((suggestion) => (
+                <button key={suggestion} type="button" onClick={() => setBrief(suggestion)} className="rounded-xl border px-4 py-3 text-left text-sm leading-5 transition-colors hover:bg-white" style={{ borderColor: colors.border, color: colors.textSecondary }}>
+                  {suggestion}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      </section>
+    )
+  }
+
+  return (
+    <section className="mx-auto flex min-h-[calc(100vh-6rem)] w-full max-w-5xl flex-col py-6">
+      <div className="flex items-center justify-between gap-4 border-b pb-4" style={{ borderColor: colors.borderLight }}>
+        <div>
+          <h1 className="text-lg font-semibold" style={{ color: colors.text }}>Nouveau professeur IA</h1>
+          <p className="mt-0.5 text-xs" style={{ color: colors.textMuted }}>{completed ? 'Configuration prête à vérifier' : `Question ${Math.min(stepIndex + 1, RECRUITMENT_STEPS.length)} sur ${RECRUITMENT_STEPS.length}`}</p>
+        </div>
+        <button type="button" onClick={onManualCreate} className="rounded-lg border px-3 py-2 text-sm font-medium" style={{ borderColor: colors.border, color: colors.textSecondary }}>Créer manuellement</button>
+      </div>
+
+      <div className="mx-auto flex w-full max-w-3xl flex-1 flex-col justify-end py-8">
+        <div className="space-y-5">
+          {history.map((message, index) => (
+            <div key={`${message.role}-${index}`} className={message.role === 'user' ? 'flex justify-end' : 'flex justify-start'}>
+              <div className={message.role === 'user' ? 'max-w-[78%] rounded-2xl rounded-br-md px-4 py-2.5 text-sm' : 'max-w-[78%] text-sm leading-6'} style={{ backgroundColor: message.role === 'user' ? colors.innerBg : 'transparent', color: colors.text }}>
+                {message.text}
+              </div>
+            </div>
+          ))}
+          {!completed && (
+            <div className="flex items-start gap-3">
+              <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full" style={{ backgroundColor: '#EDE8FF' }}><Icon name="smart_toy" className="text-base text-[#6D4AC7]" /></span>
+              <div>
+                <p className="text-base font-medium leading-6" style={{ color: colors.text }}>{currentStep.question}</p>
+                {currentStep.id === 'rncpConfirm' && (
+                  <p className="mt-2 text-sm" style={{ color: colors.textMuted }}>
+                    {matchingModule ? `${matchingModule.tp_name} · RNCP ${matchingModule.rncp_code}` : `${draft.trainingName} · RNCP ${draft.rncpCode}`}
+                  </p>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+
+        {completed ? (
+          <div className="recruitment-review-enter mt-8 rounded-2xl bg-white p-5 sm:p-6" style={{ boxShadow: '0 8px 24px rgba(41, 32, 24, 0.08)' }}>
+            <div className="flex items-start gap-5">
+              <img src={RECRUITMENT_COLOR_OPTIONS.find((color) => color.id === draft.teacherColor)?.image} alt="" className="teacher-robot-float h-24 w-24 shrink-0 object-contain" />
+              <div className="min-w-0 flex-1">
+                <p className="text-lg font-semibold" style={{ color: colors.text }}>Vérifiez la configuration proposée</p>
+                <p className="mt-1 text-sm leading-6" style={{ color: colors.textMuted }}>Le formulaire de recrutement sera déjà complété. Vous pourrez encore tout modifier avant de lancer la préparation.</p>
+              </div>
+            </div>
+            <dl className="mt-5 grid gap-x-6 gap-y-3 border-t pt-5 text-sm sm:grid-cols-2" style={{ borderColor: colors.borderLight }}>
+              <div><dt style={{ color: colors.textMuted }}>Professeur</dt><dd className="mt-0.5 font-medium" style={{ color: colors.text }}>{draft.teacherName}</dd></div>
+              <div><dt style={{ color: colors.textMuted }}>Formation</dt><dd className="mt-0.5 font-medium" style={{ color: colors.text }}>{draft.trainingName}</dd></div>
+              <div><dt style={{ color: colors.textMuted }}>Référence</dt><dd className="mt-0.5 font-medium" style={{ color: colors.text }}>RNCP {draft.rncpCode}</dd></div>
+              <div><dt style={{ color: colors.textMuted }}>Calendrier</dt><dd className="mt-0.5 font-medium" style={{ color: colors.text }}>{draft.trainingDays} journées, {draft.weeklyCourseCount}/semaine</dd></div>
+            </dl>
+            <button type="button" onClick={() => onComplete(draft)} className="mt-6 inline-flex w-full items-center justify-center gap-2 rounded-lg bg-[#191714] px-4 py-3 text-sm font-semibold text-white transition-colors hover:bg-[#302D28]">
+              Vérifier le professeur
+              <Icon name="arrow_forward" className="text-base" />
+            </button>
+          </div>
+        ) : (
+          <div className="mt-8">
+            {(currentStep.type === 'text' || currentStep.type === 'number') && (
+              <form onSubmit={submitAnswer} className="flex items-center gap-2 rounded-xl bg-white p-2 pl-4" style={{ boxShadow: '0 4px 12px rgba(41, 32, 24, 0.08)' }}>
+                <input type={currentStep.type === 'number' ? 'number' : 'text'} min={currentStep.type === 'number' ? '1' : undefined} value={answer} onChange={(event) => setAnswer(event.target.value)} placeholder={currentStep.placeholder} className="min-w-0 flex-1 bg-transparent py-2 text-sm outline-none placeholder:text-[#68625B]" style={{ color: colors.text }} autoFocus />
+                <button type="submit" disabled={!answer.trim()} className="flex h-9 w-9 items-center justify-center rounded-full bg-[#6D4AC7] text-white disabled:bg-[#B9B5AF]" aria-label="Valider la réponse"><Icon name="arrow_upward" className="text-base" /></button>
+              </form>
+            )}
+            {currentStep.type === 'confirm' && (
+              <div className="flex flex-wrap gap-2">
+                <button type="button" onClick={() => advance('Oui, continuer')} className="rounded-lg bg-[#191714] px-4 py-2.5 text-sm font-medium text-white">Oui, continuer</button>
+                <button type="button" onClick={() => advance('Corriger')} className="rounded-lg border px-4 py-2.5 text-sm font-medium" style={{ borderColor: colors.border, color: colors.textSecondary }}>Corriger</button>
+              </div>
+            )}
+            {currentStep.type === 'frequency' && (
+              <div className="flex flex-wrap gap-2">{[1, 2, 3, 4, 5].map((count) => <button key={count} type="button" onClick={() => advance(count)} className="h-11 min-w-11 rounded-lg border px-4 text-sm font-medium transition-colors hover:bg-white" style={{ borderColor: colors.border, color: colors.text }}>{count}</button>)}</div>
+            )}
+            {currentStep.type === 'days' && (
+              <div>
+                <div className="flex flex-wrap gap-2">{RECRUITMENT_DAY_OPTIONS.map((day) => { const selected = draft.teachingDays.includes(day.id); return <button key={day.id} type="button" onClick={() => toggleDay(day.id)} aria-pressed={selected} className="rounded-lg border px-3 py-2.5 text-sm font-medium" style={{ borderColor: selected ? '#6D4AC7' : colors.border, backgroundColor: selected ? '#EDE8FF' : 'transparent', color: selected ? '#5B38B5' : colors.textSecondary }}>{day.label}</button> })}</div>
+                <button type="button" disabled={draft.teachingDays.length !== Number(draft.weeklyCourseCount)} onClick={() => advance(draft.teachingDays)} className="mt-3 rounded-lg bg-[#191714] px-4 py-2.5 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-35">Valider {draft.weeklyCourseCount} jour{Number(draft.weeklyCourseCount) > 1 ? 's' : ''}</button>
+              </div>
+            )}
+            {currentStep.type === 'date' && (
+              <div className="flex flex-wrap items-center gap-3"><input type="date" min={todayDateInput()} value={draft.startDate} onChange={(event) => setDraft((current) => ({ ...current, startDate: event.target.value }))} className="rounded-lg border bg-white px-4 py-2.5 text-sm" style={{ borderColor: colors.border, color: colors.text }} /><button type="button" onClick={() => advance(draft.startDate)} className="rounded-lg bg-[#191714] px-4 py-2.5 text-sm font-medium text-white">Valider la date</button></div>
+            )}
+            {currentStep.type === 'color' && (
+              <div>
+                <div className="flex flex-wrap gap-2">{RECRUITMENT_COLOR_OPTIONS.map((color) => { const selected = draft.teacherColor === color.id; return <button key={color.id} type="button" onClick={() => setDraft((current) => ({ ...current, teacherColor: color.id }))} aria-pressed={selected} className="flex items-center gap-2 rounded-lg border px-3 py-2 text-sm font-medium" style={{ borderColor: selected ? color.value : colors.border, backgroundColor: selected ? `${color.value}12` : 'transparent', color: colors.text }}><span className="h-3 w-3 rounded-full" style={{ backgroundColor: color.value }} />{color.label}</button> })}</div>
+                <button type="button" onClick={() => advance(draft.teacherColor)} className="mt-3 rounded-lg bg-[#191714] px-4 py-2.5 text-sm font-medium text-white">Choisir cette couleur</button>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </section>
   )
 }
 
@@ -2027,7 +2407,6 @@ function PlatformCardsView({
   rosterFilter,
   onRosterFilterChange,
   onCreateTeacher,
-  onCreateFromBrief,
   expandedPlatform,
   platformAudios,
   audiosLoading,
@@ -2073,7 +2452,6 @@ function PlatformCardsView({
   retryingPlatformId,
   onRetryPreparation,
 }) {
-  const [teacherBrief, setTeacherBrief] = useState('')
   const filteredPlatforms = rosterFilter === 'all'
     ? platforms
     : platforms.filter((platform) => getTeacherRosterStage(platform) === rosterFilter)
@@ -2092,62 +2470,17 @@ function PlatformCardsView({
     (safeCardPage + 1) * cardsPerPage,
   )
 
-  const submitBrief = (event) => {
-    event.preventDefault()
-    const brief = teacherBrief.trim()
-    if (brief) onCreateFromBrief(brief)
-    else onCreateTeacher()
-  }
-
   return (
     <section className="mx-auto flex w-full max-w-[90rem] flex-col pb-16 pt-3 sm:pt-5">
-      <header className="flex flex-col items-center text-center">
-        <h2
-          className="mx-auto mt-4 max-w-[1120px] text-balance text-[34px] font-semibold leading-[1.02] tracking-[-0.04em] sm:text-[42px]"
-          style={{ color: colors.text }}
-        >
-          Quel professeur IA souhaitez-vous recruter&nbsp;?
-        </h2>
-        <p className="mx-auto mt-2 max-w-2xl text-sm font-normal leading-relaxed" style={{ color: colors.textMuted }}>
-          Décrivez votre besoin ci-dessous, ou choisissez un professeur déjà disponible.
-        </p>
-
-        <form
-          onSubmit={submitBrief}
-          className="mx-auto mt-5 flex h-[62px] w-full max-w-2xl items-center gap-2 rounded-full py-2 pl-7 pr-2"
-          style={{ backgroundColor: colors.cardBg, border: `1px solid ${colors.border}`, boxShadow: '0 4px 6px -1px rgba(0,0,0,.08), 0 2px 4px -2px rgba(0,0,0,.08)' }}
-        >
-          <label htmlFor="teacher-brief" className="sr-only">Décrire le professeur IA recherché</label>
-          <input
-            id="teacher-brief"
-            type="text"
-            value={teacherBrief}
-            onChange={(event) => setTeacherBrief(event.target.value)}
-            placeholder="Ex. Un professeur pour délivrer le bloc 2 du TP CRCD…"
-            className="min-w-0 flex-1 bg-transparent py-2 text-base outline-none placeholder:text-[#7A746C]"
-            style={{ color: colors.text }}
-          />
-          <button
-            type="submit"
-            className="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-full text-white transition-opacity hover:opacity-85 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-black/30 focus-visible:ring-offset-2"
-            style={{ backgroundColor: '#9B9B9B' }}
-            aria-label="Créer ce professeur IA"
-            title="Créer ce professeur IA"
-          >
-            <Icon name="arrow_forward" className="text-base" />
-          </button>
-        </form>
+      <header className="mx-auto flex w-full max-w-[1204px] items-end justify-between gap-5">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-[-0.025em]" style={{ color: colors.text }}>Mes professeurs</h1>
+          <p className="mt-1.5 text-sm" style={{ color: colors.textMuted }}>Retrouvez les professeurs en préparation, actifs ou archivés.</p>
+        </div>
+        <button type="button" onClick={onCreateTeacher} className="hidden rounded-lg bg-[#191714] px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-[#302D28] sm:inline-flex">Recruter un professeur</button>
       </header>
 
-      <div className="mx-auto mt-6 flex w-full max-w-3xl items-center gap-4">
-          <div className="h-px flex-1" style={{ backgroundColor: 'rgba(18,18,18,.1)' }} />
-          <h3 className="whitespace-nowrap text-[11px] font-medium uppercase tracking-[0.2em]" style={{ color: colors.textMuted }}>
-            Vos professeurs IA
-          </h3>
-          <div className="h-px flex-1" style={{ backgroundColor: 'rgba(18,18,18,.1)' }} />
-      </div>
-
-      <div className="mx-auto mt-5 flex w-full max-w-[1204px] flex-wrap items-center justify-center gap-2" role="group" aria-label="Filtrer les professeurs IA">
+      <div className="mx-auto mt-7 flex w-full max-w-[1204px] flex-wrap items-center gap-2" role="group" aria-label="Filtrer les professeurs IA">
         {TEACHER_ROSTER_FILTERS.map((filter) => {
           const selected = rosterFilter === filter.id
           return (
@@ -3180,6 +3513,7 @@ function CreatePlatformView({
   creating,
   billing,
   billingLoading,
+  prefilledFromAssistant,
   onCreate,
   onCancel,
 }) {
@@ -3236,6 +3570,17 @@ function CreatePlatformView({
     <section
       className="mx-auto w-full max-w-3xl"
     >
+      {prefilledFromAssistant && (
+        <div className="recruitment-review-enter mb-6 flex items-center gap-4 rounded-xl bg-white px-4 py-3.5" role="status" style={{ boxShadow: '0 4px 12px rgba(41, 32, 24, 0.08)' }}>
+          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[#EDE8FF] text-[#6D4AC7]">
+            <Icon name="auto_awesome" className="text-lg" />
+          </span>
+          <div>
+            <p className="text-sm font-semibold" style={{ color: colors.text }}>Est-ce bien ce professeur IA que vous souhaitez recruter ?</p>
+            <p className="mt-0.5 text-xs leading-5" style={{ color: colors.textMuted }}>Les réponses de la conversation sont déjà reportées ci-dessous. Vérifiez-les avant de continuer.</p>
+          </div>
+        </div>
+      )}
       <header
         className="mb-7 flex items-start justify-between gap-4"
       >

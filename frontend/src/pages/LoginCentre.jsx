@@ -143,6 +143,10 @@ export default function LoginCentre({ preloadAdminRoute, preloadDashboardRoute }
 
       if (response.ok && data.success) {
         if (data.token) localStorage.setItem('admin_auth_token', data.token)
+        if (data.account) {
+          localStorage.setItem('center_account_email', data.account.username || '')
+          localStorage.setItem('center_account_name', data.account.center_name || '')
+        }
         if (data.account?.type === 'legacy_admin') {
           preloadAdminRoute?.().catch(() => {})
           navigate('/admin')
