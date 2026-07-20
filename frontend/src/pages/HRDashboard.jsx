@@ -2523,7 +2523,6 @@ function PlatformCardsView({
           <h1 className="text-2xl font-semibold tracking-[-0.025em]" style={{ color: colors.text }}>Mes professeurs</h1>
           <p className="mt-1.5 text-sm" style={{ color: colors.textMuted }}>Retrouvez les professeurs en préparation, actifs ou archivés.</p>
         </div>
-        <button type="button" onClick={onCreateTeacher} className="hidden rounded-lg bg-[#191714] px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-[#302D28] sm:inline-flex">Recruter un professeur</button>
       </header>
 
       <div className="mx-auto mt-7 flex w-full max-w-[1204px] flex-wrap items-center gap-2" role="group" aria-label="Filtrer les professeurs IA">
