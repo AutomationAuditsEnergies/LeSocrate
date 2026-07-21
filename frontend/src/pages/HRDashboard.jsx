@@ -1147,17 +1147,19 @@ export default function HRDashboard() {
     )
   }
 
-  // Palette chaude et très légère du roster Delos Workers.
+  // Palette blanche commune aux références Coursebox et Delos. Le violet reste
+  // réservé aux actions et aux états actifs de l'espace centre.
   const colors = {
-    bg: '#F4F1EA',
-    cardBg: '#F8F6F2',
-    innerBg: '#F1EEE8',
-    text: '#191714',
-    textSecondary: '#48443F',
-    textMuted: '#7A746C',
-    border: '#DCD7CE',
-    borderLight: '#E8E3DA',
-    hoverBg: '#ECE8E0',
+    bg: '#FFFFFF',
+    cardBg: '#FFFFFF',
+    innerBg: '#F7F7F6',
+    text: '#18181B',
+    textSecondary: '#3F3F46',
+    textMuted: '#6B6B72',
+    border: '#D9D9DE',
+    borderLight: '#E9E9EC',
+    hoverBg: '#F5F5F6',
+    primary: '#6D4AC7',
     gridOpacity: '0',
   }
   const platformsAlertIsWarning = platformsErrorTone === 'warning'
@@ -1179,7 +1181,7 @@ export default function HRDashboard() {
           }}
         />
 
-        <div className="flex min-w-0 flex-1 flex-col">
+        <div className="m-2 ml-0 flex min-w-0 flex-1 flex-col overflow-hidden rounded-2xl border" style={{ borderColor: colors.borderLight }}>
           <div className="flex h-14 items-center justify-between border-b px-4 md:hidden" style={{ borderColor: colors.borderLight, backgroundColor: colors.cardBg }}>
             <span className="text-sm font-semibold" style={{ color: colors.text }}>
               {workspaceSection === 'teachers' ? 'Mes professeurs' : 'Recruter un professeur'}
@@ -1194,7 +1196,7 @@ export default function HRDashboard() {
             </div>
           </div>
 
-        <main className="relative z-10 min-w-0 flex-1 overflow-y-auto px-4 pb-12 sm:px-6 lg:px-8">
+        <main className="relative z-10 min-w-0 flex-1 overflow-y-auto bg-white px-4 pb-12 sm:px-6 lg:px-8">
           <div className="mx-auto w-full max-w-[1480px] pt-4 md:pt-6">
           {orderNotice && (
             <div
@@ -1881,8 +1883,15 @@ function CenterWorkspaceSidebar({
   language,
   onLanguageChange,
 }) {
+  const [collapsed, setCollapsed] = useState(false)
+  const [accountPanel, setAccountPanel] = useState('menu')
   const accountEmail = localStorage.getItem('center_account_email') || 'Compte centre'
   const accountName = localStorage.getItem('center_account_name') || 'Centre de formation'
+  const isSignedIn = Boolean(
+    localStorage.getItem('admin_auth_token')
+    || localStorage.getItem('auth_token')
+    || localStorage.getItem('center_account_email'),
+  )
   const initials = accountName
     .split(/\s+/)
     .filter(Boolean)
@@ -1897,19 +1906,30 @@ function CenterWorkspaceSidebar({
 
   return (
     <aside
-      className="relative z-30 hidden min-h-screen w-[248px] shrink-0 flex-col border-r md:flex"
-      style={{ backgroundColor: colors.cardBg, borderColor: colors.borderLight }}
+      className={`relative z-30 hidden min-h-screen shrink-0 flex-col md:flex ${collapsed ? 'w-[72px]' : 'w-[248px]'}`}
+      style={{ backgroundColor: colors.cardBg, transition: 'width 200ms cubic-bezier(0.16, 1, 0.3, 1)' }}
       aria-label="Navigation de l’espace centre"
     >
-      <div className="flex h-16 items-center gap-3 px-5">
-        <img src="/cadrenza-mark.svg" alt="Cadrenza" className="h-9 w-9 shrink-0 rounded-lg" />
-        <div className="min-w-0">
-          <p className="truncate text-sm font-semibold" style={{ color: colors.text }}>Bureau des professeurs IA</p>
-          <p className="truncate text-xs" style={{ color: colors.textMuted }}>{accountName}</p>
-        </div>
+      <div className={`flex h-16 items-center ${collapsed ? 'justify-center px-2' : 'justify-between px-4'}`}>
+        {!collapsed && (
+          <a href="/admin" className="inline-flex items-center gap-2 rounded-lg px-2 py-2 text-sm font-medium transition-colors hover:bg-black/[0.04]" style={{ color: colors.textSecondary }}>
+            <Icon name="chevron_left" className="text-xl" />
+            <span>Retour</span>
+          </a>
+        )}
+        <button
+          type="button"
+          onClick={() => setCollapsed((value) => !value)}
+          className="flex h-9 w-9 items-center justify-center rounded-lg transition-colors hover:bg-black/[0.04] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40"
+          aria-label={collapsed ? 'Déployer la barre latérale' : 'Réduire la barre latérale'}
+          aria-expanded={!collapsed}
+          style={{ color: colors.textSecondary }}
+        >
+          <Icon name={collapsed ? 'right_panel_open' : 'left_panel_close'} className="text-[19px]" />
+        </button>
       </div>
 
-      <nav className="mt-4 space-y-1 px-3">
+      <nav className={`mt-5 space-y-1 ${collapsed ? 'px-2' : 'px-3'}`}>
         {navItems.map((item) => {
           const selected = activeSection === item.id
           return (
@@ -1918,49 +1938,86 @@ function CenterWorkspaceSidebar({
               type="button"
               onClick={item.onClick}
               aria-current={selected ? 'page' : undefined}
-              className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500"
+              className={`flex w-full items-center rounded-lg py-2.5 text-left text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40 ${collapsed ? 'justify-center px-2' : 'gap-3 px-3'}`}
               style={{
-                backgroundColor: selected ? '#EDE8FF' : 'transparent',
+                backgroundColor: selected ? '#F0EEFA' : 'transparent',
                 color: selected ? '#5B38B5' : colors.textSecondary,
               }}
+              title={collapsed ? item.label : undefined}
             >
               <Icon name={item.icon} className="text-[19px]" />
-              <span>{item.label}</span>
+              {!collapsed && <span>{item.label}</span>}
             </button>
           )
         })}
       </nav>
 
-      <div className="mt-auto p-3">
-        <details className="group relative">
-          <summary className="flex cursor-pointer list-none items-center gap-3 rounded-xl px-2 py-2.5 transition-colors hover:bg-black/[0.04] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500">
-            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-xs font-semibold text-white" style={{ backgroundColor: '#6D4AC7' }}>
+      <div className={`mt-auto ${collapsed ? 'p-2' : 'p-3'}`}>
+        <details className="group relative" onToggle={(event) => { if (!event.currentTarget.open) setAccountPanel('menu') }}>
+          <summary className={`flex cursor-pointer list-none items-center rounded-xl py-2.5 transition-colors hover:bg-black/[0.04] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40 ${collapsed ? 'justify-center px-1' : 'gap-3 px-2'}`}>
+            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#18181B] text-xs font-semibold text-white">
               {initials}
             </span>
-            <span className="min-w-0 flex-1">
-              <span className="block truncate text-sm font-semibold" style={{ color: colors.text }}>{accountName}</span>
-              <span className="block truncate text-xs" style={{ color: colors.textMuted }}>{accountEmail}</span>
-            </span>
-            <Icon name="unfold_more" className="text-base" style={{ color: colors.textMuted }} />
+            {!collapsed && (
+              <>
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-sm font-semibold" style={{ color: colors.text }}>{accountName}</span>
+                  <span className="block truncate text-xs" style={{ color: colors.textMuted }}>{accountEmail}</span>
+                </span>
+                <Icon name="unfold_more" className="text-base" style={{ color: colors.textMuted }} />
+              </>
+            )}
           </summary>
 
-          <div className="absolute bottom-[calc(100%+8px)] left-0 w-full overflow-hidden rounded-xl border bg-white" style={{ borderColor: colors.border }}>
-            <div className="border-b px-3 py-3" style={{ borderColor: colors.borderLight }}>
-              <p className="truncate text-sm font-semibold" style={{ color: colors.text }}>{accountName}</p>
-              <p className="mt-0.5 truncate text-xs" style={{ color: colors.textMuted }}>{accountEmail}</p>
-            </div>
-            <div className="px-2 py-2">
-              <div className="flex items-center gap-2 px-2 py-1.5 text-sm" style={{ color: colors.textSecondary }}>
-                <Icon name="language" className="text-lg" />
-                <span className="flex-1">Langue</span>
-                <button type="button" onClick={() => onLanguageChange('fr')} className="rounded px-2 py-1 text-xs font-medium" style={{ backgroundColor: language === 'fr' ? '#EDE8FF' : 'transparent', color: language === 'fr' ? '#5B38B5' : colors.textMuted }}>FR</button>
-                <button type="button" onClick={() => onLanguageChange('en')} className="rounded px-2 py-1 text-xs font-medium" style={{ backgroundColor: language === 'en' ? '#EDE8FF' : 'transparent', color: language === 'en' ? '#5B38B5' : colors.textMuted }}>EN</button>
+          <div className={`absolute bottom-[calc(100%+8px)] overflow-hidden rounded-xl border bg-white shadow-[0_8px_20px_rgba(24,24,27,0.10)] ${collapsed ? 'left-0 w-[220px]' : 'left-0 w-full'}`} style={{ borderColor: colors.borderLight }}>
+            {accountPanel === 'menu' && (
+              <div className="p-2">
+                <button type="button" onClick={() => setAccountPanel('profile')} className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm transition-colors hover:bg-[#F5F5F6]" style={{ color: colors.textSecondary }}>
+                  <Icon name="person_outline" className="text-lg" />
+                  <span>Profil</span>
+                </button>
+                <button type="button" onClick={() => setAccountPanel('settings')} className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm transition-colors hover:bg-[#F5F5F6]" style={{ color: colors.textSecondary }}>
+                  <Icon name="settings" className="text-lg" />
+                  <span>Paramètres</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={isSignedIn ? onLogout : () => window.location.assign('/connexion-centre')}
+                  disabled={isSignedIn && loggingOut}
+                  className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm transition-colors hover:bg-[#F5F5F6] disabled:opacity-60"
+                  style={{ color: colors.textSecondary }}
+                >
+                  <Icon name={isSignedIn ? 'logout' : 'login'} className="text-lg" />
+                  {isSignedIn ? (loggingOut ? 'Déconnexion…' : 'Se déconnecter') : 'Se connecter'}
+                </button>
               </div>
-              <button type="button" onClick={onLogout} disabled={loggingOut} className="mt-1 flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm font-medium text-red-600 transition-colors hover:bg-red-50 disabled:opacity-60">
-                <Icon name="logout" className="text-lg" />
-                {loggingOut ? 'Déconnexion…' : 'Se déconnecter'}
-              </button>
-            </div>
+            )}
+
+            {accountPanel === 'profile' && (
+              <div className="p-3">
+                <button type="button" onClick={() => setAccountPanel('menu')} className="mb-3 flex items-center gap-1 rounded-md px-1 py-1 text-xs font-medium" style={{ color: colors.textMuted }}>
+                  <Icon name="chevron_left" className="text-base" /> Retour
+                </button>
+                <p className="truncate text-sm font-semibold" style={{ color: colors.text }}>{accountName}</p>
+                <p className="mt-1 truncate text-xs" style={{ color: colors.textMuted }}>{accountEmail}</p>
+              </div>
+            )}
+
+            {accountPanel === 'settings' && (
+              <div className="p-3">
+                <button type="button" onClick={() => setAccountPanel('menu')} className="mb-3 flex items-center gap-1 rounded-md px-1 py-1 text-xs font-medium" style={{ color: colors.textMuted }}>
+                  <Icon name="chevron_left" className="text-base" /> Retour
+                </button>
+                <p className="mb-2 text-xs font-semibold" style={{ color: colors.text }}>Langue de l’interface</p>
+                <div className="grid grid-cols-2 gap-2">
+                  {['fr', 'en'].map((option) => (
+                    <button key={option} type="button" onClick={() => onLanguageChange(option)} className="rounded-lg border px-3 py-2 text-xs font-semibold" style={{ backgroundColor: language === option ? '#F0EEFA' : '#fff', borderColor: language === option ? '#CFC5F0' : colors.border, color: language === option ? '#5B38B5' : colors.textMuted }}>
+                      {option.toUpperCase()}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         </details>
       </div>
@@ -1997,6 +2054,44 @@ const RECRUITMENT_COLOR_OPTIONS = [
 ]
 
 const RECRUITMENT_CHOICE_TYPES = new Set(['confirm', 'frequency', 'days', 'color'])
+const RECRUITMENT_PLACEHOLDER_EXAMPLES = [
+  'Recruter un professeur pour le TP Conseiller relation client à distance',
+  'Préparer un professeur pour une nouvelle promotion en septembre',
+  'Réutiliser un professeur et ses cours pour un nouveau groupe',
+]
+
+function useAnimatedPlaceholder(examples) {
+  const [reducedMotion] = useState(() => window.matchMedia('(prefers-reduced-motion: reduce)').matches)
+  const [exampleIndex, setExampleIndex] = useState(0)
+  const [characterCount, setCharacterCount] = useState(() => reducedMotion ? examples[0].length : 0)
+  const [deleting, setDeleting] = useState(false)
+
+  useEffect(() => {
+    const example = examples[exampleIndex]
+    if (reducedMotion) return undefined
+
+    let delay = deleting ? 24 : 48
+    if (!deleting && characterCount === example.length) delay = 1500
+    if (deleting && characterCount === 0) delay = 420
+
+    const timeoutId = window.setTimeout(() => {
+      if (!deleting && characterCount === example.length) {
+        setDeleting(true)
+        return
+      }
+      if (deleting && characterCount === 0) {
+        setDeleting(false)
+        setExampleIndex((index) => (index + 1) % examples.length)
+        return
+      }
+      setCharacterCount((count) => count + (deleting ? -1 : 1))
+    }, delay)
+
+    return () => window.clearTimeout(timeoutId)
+  }, [characterCount, deleting, exampleIndex, examples, reducedMotion])
+
+  return examples[exampleIndex].slice(0, characterCount)
+}
 
 function getRecruitmentAssistantText(step, draft, matchingModule) {
   if (!step) return ''
@@ -2029,6 +2124,7 @@ function RecruitmentAssistant({ colors, modules, onComplete, onManualCreate }) {
     teacherColor: 'violet',
   })
   const [history, setHistory] = useState([])
+  const animatedPlaceholder = useAnimatedPlaceholder(RECRUITMENT_PLACEHOLDER_EXAMPLES)
   const currentStep = RECRUITMENT_STEPS[stepIndex]
   const matchingModule = modules.find((module) => String(module.rncp_code || '').replace(/\D/g, '') === String(draft.rncpCode || '').replace(/\D/g, ''))
   const completed = stepIndex >= RECRUITMENT_STEPS.length
@@ -2109,50 +2205,54 @@ function RecruitmentAssistant({ colors, modules, onComplete, onManualCreate }) {
 
   if (!started) {
     const suggestions = [
-      'Créer un professeur pour le TP CRCD',
-      'Préparer un professeur pour une nouvelle formation',
-      'Planifier une formation RNCP dès le mois prochain',
+      { icon: 'verified_user', text: 'Recruter un professeur pour un titre professionnel RNCP' },
+      { icon: 'group_add', text: 'Préparer un professeur pour une nouvelle promotion' },
+      { icon: 'content_copy', text: 'Réutiliser un professeur et ses cours existants' },
+      { icon: 'event_available', text: 'Planifier une formation dès le mois prochain' },
     ]
     return (
-      <section className="mx-auto flex min-h-[calc(100vh-6rem)] w-full max-w-5xl flex-col justify-center py-10">
-        <div className="mx-auto w-full max-w-3xl">
-          <div className="mb-7 flex items-center justify-between gap-4">
-            <div>
-              <h1 className="text-3xl font-semibold tracking-[-0.03em] sm:text-4xl" style={{ color: colors.text }}>Quel professeur souhaitez-vous recruter ?</h1>
-              <p className="mt-3 max-w-2xl text-sm leading-6" style={{ color: colors.textMuted }}>Décrivez votre besoin. Je vous poserai ensuite quelques questions pour préparer sa configuration.</p>
-            </div>
-            <img src="/robot-violet.png" alt="" className="hidden h-24 w-24 object-contain sm:block" />
+      <section className="mx-auto flex min-h-[calc(100vh-5rem)] w-full max-w-5xl flex-col justify-center py-12">
+        <div className="mx-auto w-full max-w-[860px]">
+          <div className="mb-8 text-center">
+            <h1 className="text-[2rem] font-semibold leading-tight tracking-[-0.035em] sm:text-[2.4rem]" style={{ color: colors.text }}>Quel professeur recruterez-vous ?</h1>
+            <p className="mx-auto mt-3 max-w-2xl text-sm leading-6" style={{ color: colors.textMuted }}>Décrivez votre besoin, puis précisez la formation et son calendrier.</p>
           </div>
 
-          <form onSubmit={submitInitialBrief} className="rounded-2xl bg-white p-4" style={{ boxShadow: '0 8px 24px rgba(41, 32, 24, 0.08)' }}>
+          <form onSubmit={submitInitialBrief} className="rounded-2xl border bg-white p-4" style={{ borderColor: colors.border, boxShadow: '0 4px 12px rgba(24, 24, 27, 0.07)' }}>
             <label htmlFor="recruitment-brief" className="sr-only">Décrire le professeur recherché</label>
             <textarea
               id="recruitment-brief"
               value={brief}
               onChange={(event) => setBrief(event.target.value)}
-              placeholder="Ex. Je cherche un professeur pour délivrer le TP CRCD à partir de septembre…"
-              rows={4}
-              className="w-full resize-none bg-transparent px-2 py-1 text-base leading-7 outline-none placeholder:text-[#68625B]"
+              placeholder={animatedPlaceholder}
+              rows={5}
+              className="w-full resize-none bg-transparent px-2 py-1 text-base leading-7 outline-none placeholder:text-[#626269]"
               style={{ color: colors.text }}
               autoFocus
             />
-            <div className="mt-3 flex items-center justify-between border-t pt-3" style={{ borderColor: colors.borderLight }}>
-              <button type="button" onClick={onManualCreate} className="inline-flex items-center gap-2 rounded-lg px-2 py-2 text-sm font-medium transition-colors hover:bg-black/[0.04]" style={{ color: colors.textSecondary }}>
-                <Icon name="tune" className="text-lg" />
-                Créer manuellement
-              </button>
+            <div className="mt-2 flex items-center justify-between pt-2">
+              <div className="flex items-center gap-1">
+                <button type="button" onClick={onManualCreate} className="flex h-9 w-9 items-center justify-center rounded-lg transition-colors hover:bg-black/[0.04] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40" style={{ color: colors.textSecondary }} aria-label="Créer le professeur manuellement" title="Créer manuellement">
+                  <Icon name="add" className="text-xl" />
+                </button>
+                <span className="mx-1 h-5 w-px" style={{ backgroundColor: colors.borderLight }} aria-hidden="true" />
+                <span className="inline-flex items-center gap-1.5 px-2 text-sm font-medium" style={{ color: colors.textSecondary }}>
+                  <Icon name="language" className="text-lg" />
+                  FR
+                </span>
+              </div>
               <button type="submit" disabled={!brief.trim()} className="flex h-10 w-10 items-center justify-center rounded-full text-white transition-colors disabled:cursor-not-allowed disabled:bg-[#B9B5AF]" style={{ backgroundColor: brief.trim() ? '#6D4AC7' : undefined }} aria-label="Commencer la configuration">
                 <Icon name="arrow_upward" className="text-lg" />
               </button>
             </div>
           </form>
 
-          <div className="mt-6">
-            <p className="mb-3 text-sm font-medium" style={{ color: colors.textSecondary }}>Vous pouvez commencer par</p>
-            <div className="grid gap-2 sm:grid-cols-3">
+          <div className="mx-auto mt-7 max-w-[820px]">
+            <div className="space-y-1">
               {suggestions.map((suggestion) => (
-                <button key={suggestion} type="button" onClick={() => setBrief(suggestion)} className="rounded-xl border px-4 py-3 text-left text-sm leading-5 transition-colors hover:bg-white" style={{ borderColor: colors.border, color: colors.textSecondary }}>
-                  {suggestion}
+                <button key={suggestion.text} type="button" onClick={() => setBrief(suggestion.text)} className="flex w-full items-center gap-4 rounded-lg px-3 py-3 text-left text-sm leading-5 transition-colors hover:bg-[#F7F7F8] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40" style={{ color: colors.textSecondary }}>
+                  <Icon name={suggestion.icon} className="text-xl" style={{ color: '#56565D' }} />
+                  <span>{suggestion.text}</span>
                 </button>
               ))}
             </div>
@@ -2499,9 +2599,19 @@ function PlatformCardsView({
   retryingPlatformId,
   onRetryPreparation,
 }) {
+  const [rosterSearch, setRosterSearch] = useState('')
+  const normalizedRosterSearch = rosterSearch.trim().toLocaleLowerCase('fr-FR')
+  const searchedPlatforms = normalizedRosterSearch
+    ? platforms.filter((platform) => [
+      platform.teacher_name,
+      platform.name,
+      platform.source_tp_name,
+      platform.rncp_code,
+    ].some((value) => String(value || '').toLocaleLowerCase('fr-FR').includes(normalizedRosterSearch)))
+    : platforms
   const filteredPlatforms = rosterFilter === 'all'
-    ? platforms
-    : platforms.filter((platform) => getTeacherRosterFilterGroup(platform) === rosterFilter)
+    ? searchedPlatforms
+    : searchedPlatforms.filter((platform) => getTeacherRosterFilterGroup(platform) === rosterFilter)
   const filterCounts = Object.fromEntries(
     TEACHER_ROSTER_FILTERS.map((filter) => [
       filter.id,
@@ -2518,15 +2628,39 @@ function PlatformCardsView({
   )
 
   return (
-    <section className="mx-auto flex w-full max-w-[90rem] flex-col pb-16 pt-3 sm:pt-5">
-      <header className="mx-auto flex w-full max-w-[1204px] items-end justify-between gap-5">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-[-0.025em]" style={{ color: colors.text }}>Mes professeurs</h1>
-          <p className="mt-1.5 text-sm" style={{ color: colors.textMuted }}>Retrouvez les professeurs en cours ou terminés.</p>
-        </div>
+    <section className="mx-auto flex w-full max-w-[90rem] flex-col pb-16 pt-8 sm:pt-12">
+      <header className="mx-auto w-full max-w-[860px] text-center">
+        <h1 className="text-[2rem] font-semibold leading-tight tracking-[-0.035em] sm:text-[2.4rem]" style={{ color: colors.text }}>Mes professeurs</h1>
+        <p className="mt-2 text-sm" style={{ color: colors.textMuted }}>Retrouvez vos professeurs, leurs formations et leur prochaine séance.</p>
       </header>
 
-      <div className="mx-auto mt-7 flex w-full max-w-[1204px] flex-wrap items-center gap-2" role="group" aria-label="Filtrer les professeurs IA">
+      <div className="mx-auto mt-7 flex w-full max-w-[760px] items-center gap-2 rounded-full border bg-white p-2 pl-5" style={{ borderColor: colors.border, boxShadow: '0 3px 8px rgba(24, 24, 27, 0.07)' }}>
+        <Icon name="search" className="text-xl" style={{ color: colors.textMuted }} />
+        <label htmlFor="teacher-roster-search" className="sr-only">Rechercher un professeur ou une formation</label>
+        <input
+          id="teacher-roster-search"
+          type="search"
+          value={rosterSearch}
+          onChange={(event) => {
+            setRosterSearch(event.target.value)
+            setCardPage(0)
+          }}
+          placeholder="Rechercher un professeur ou une formation…"
+          className="min-w-0 flex-1 bg-transparent py-2 text-sm outline-none placeholder:text-[#626269]"
+          style={{ color: colors.text }}
+        />
+        <button type="button" onClick={onCreateTeacher} className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[#18181B] text-white transition-colors hover:bg-[#303036] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40" aria-label="Recruter un professeur" title="Recruter un professeur">
+          <Icon name="person_add" className="text-lg" />
+        </button>
+      </div>
+
+      <div className="mx-auto mt-8 flex w-full max-w-[980px] items-center gap-5" aria-hidden="true">
+        <span className="h-px flex-1" style={{ backgroundColor: colors.borderLight }} />
+        <span className="text-[10px] font-semibold uppercase tracking-[0.22em]" style={{ color: colors.textMuted }}>Filtrer par statut</span>
+        <span className="h-px flex-1" style={{ backgroundColor: colors.borderLight }} />
+      </div>
+
+      <div className="mx-auto mt-5 flex w-full max-w-[1204px] flex-wrap items-center justify-center gap-2" role="group" aria-label="Filtrer les professeurs IA">
         {TEACHER_ROSTER_FILTERS.map((filter) => {
           const selected = rosterFilter === filter.id
           return (
@@ -2538,7 +2672,7 @@ function PlatformCardsView({
               className="inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-black/30"
               style={{
                 backgroundColor: selected ? colors.text : 'transparent',
-                color: selected ? colors.bg : colors.textSecondary,
+                color: selected ? '#FFFFFF' : colors.textSecondary,
                 border: `1px solid ${selected ? colors.text : colors.border}`,
               }}
             >
@@ -2581,10 +2715,10 @@ function PlatformCardsView({
           style={{ backgroundColor: colors.cardBg, borderColor: colors.border }}
         >
           <h2 className="mt-4 text-base font-semibold" style={{ color: colors.text }}>
-            Aucun professeur dans cette catégorie
+            {rosterSearch ? 'Aucun professeur ne correspond à cette recherche' : 'Aucun professeur dans cette catégorie'}
           </h2>
           <p className="mx-auto mt-2 max-w-md text-sm leading-6" style={{ color: colors.textMuted }}>
-            Modifiez le filtre ou créez un nouveau professeur IA pour une prochaine formation.
+            {rosterSearch ? 'Essayez un autre prénom, une formation ou un code RNCP.' : 'Modifiez le filtre ou créez un nouveau professeur IA pour une prochaine formation.'}
           </p>
           <button
             type="button"
