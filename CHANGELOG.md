@@ -17,7 +17,11 @@ dispose d'un mouvement d'attente discret et d'un halo orbital, tous deux coupés
 par `prefers-reduced-motion`. La description est bornée à 600 caractères côté
 serveur et conservée dans la commande professeur. La fiche propose désormais
 une palette compacte de cinq pastilles à la place du bouton d'identité visuelle,
-et le formulaire utilise des séparateurs et contours plus discrets.
+et le formulaire utilise des séparateurs et contours plus discrets. L'aperçu
+devient ensuite un véritable panneau scindé sur un studio réaliste, avec le
+robot 3D animé au premier plan. Le choix de couleur est masqué derrière l'action
+« Change visual color » et la section d'identité visuelle du formulaire est
+retirée.
 
 ## 2026-07-01
 

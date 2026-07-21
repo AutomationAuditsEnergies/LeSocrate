@@ -3907,6 +3907,7 @@ export function CreatePlatformView({
     [trainingTitle],
   )
   const [teacherDescription, setTeacherDescription] = useState(generatedDescription)
+  const [colorPickerOpen, setColorPickerOpen] = useState(false)
   const descriptionEditedRef = useRef(false)
   const operationType = formationMode === 'existing' ? 'reuse_teacher' : 'new_teacher'
   const product = billing?.products?.[operationType]
@@ -3948,86 +3949,99 @@ export function CreatePlatformView({
   const inputClassName = 'teacher-identity-control w-full rounded-lg border border-[#E1E5EA] bg-white px-3.5 py-2.5 text-sm text-[#0F172A] transition-[border-color,box-shadow,background-color] placeholder:text-[#64748B]'
 
   return (
-    <section className="w-full pb-10">
-      <div className="grid items-start gap-5 lg:grid-cols-[minmax(17.5rem,1fr)_minmax(0,2fr)] xl:gap-6">
-        <aside className="teacher-identity-panel relative overflow-hidden rounded-2xl border border-[#E2E8F0] bg-white p-5 lg:sticky lg:top-6 lg:flex lg:min-h-[calc(100vh-7rem)] lg:flex-col xl:p-6">
-          <div className="relative z-10 flex items-center justify-between gap-3">
-            <div className="flex items-center gap-3">
-              <img src="/socrate-mark.svg" alt="" className="h-9 w-9" />
+    <section className="w-full">
+      <div className="grid items-start overflow-visible rounded-xl border border-[#E7EAEE] bg-white lg:grid-cols-[minmax(22rem,0.9fr)_minmax(0,1.45fr)]">
+        <aside
+          className="relative flex min-h-[44rem] flex-col overflow-visible rounded-t-xl bg-cover bg-center p-5 lg:sticky lg:top-6 lg:min-h-[calc(100vh-7rem)] lg:rounded-l-xl lg:rounded-tr-none xl:p-6"
+          style={{ backgroundImage: "url('/teacher-studio-background.webp')" }}
+        >
+          <div className="pointer-events-none absolute inset-0 rounded-t-xl bg-[linear-gradient(180deg,rgba(15,23,42,0.42)_0%,rgba(15,23,42,0.08)_42%,rgba(15,23,42,0.78)_100%)] lg:rounded-l-xl lg:rounded-tr-none" aria-hidden="true" />
+
+          <div className="relative z-20 flex items-start justify-between gap-3">
+            <div className="flex items-center gap-2.5 text-white">
+              <img src="/socrate-mark.svg" alt="" className="h-8 w-8" />
               <div>
-                <p className="text-sm font-bold tracking-[-0.01em] text-[#0F172A]">LE SOCRATE</p>
-                <p className="text-xs text-[#64748B]">Professeur IA</p>
+                <p className="text-sm font-bold tracking-[-0.01em]">LE SOCRATE</p>
+                <p className="text-xs text-white/70">Professeur IA</p>
               </div>
             </div>
-            <span className="rounded-full border border-[#DDD6FE] bg-[#F5F3FF] px-2.5 py-1 text-[0.6875rem] font-semibold text-[#6D28D9]">
-              En configuration
-            </span>
+
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => setColorPickerOpen((open) => !open)}
+                aria-expanded={colorPickerOpen}
+                aria-controls="teacher-color-picker"
+                className="inline-flex min-h-11 items-center gap-2 rounded-full border border-white/20 bg-[#111827]/75 px-4 py-2 text-xs font-semibold text-white transition-colors hover:bg-[#111827]/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70"
+              >
+                <Icon name="palette" className="text-base" />
+                Change visual color
+              </button>
+
+              {colorPickerOpen && (
+                <div id="teacher-color-picker" className="absolute right-0 top-full z-30 mt-2 w-52 rounded-xl bg-white p-2 shadow-[0_6px_8px_rgba(15,23,42,0.16)]" role="group" aria-label="Couleur du professeur">
+                  {teacherColors.map((color) => {
+                    const selected = teacherColor === color.id
+                    return (
+                      <button
+                        key={color.id}
+                        type="button"
+                        onClick={() => {
+                          setTeacherColor(color.id)
+                          setColorPickerOpen(false)
+                        }}
+                        aria-pressed={selected}
+                        className="flex min-h-11 w-full items-center gap-3 rounded-lg px-3 text-sm font-medium text-[#334155] transition-colors hover:bg-[#F8FAFC] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#8B5CF6]/40"
+                      >
+                        <span className="h-4 w-4 rounded-full" style={{ backgroundColor: color.swatch }} aria-hidden="true" />
+                        <span className="flex-1 text-left">{color.label}</span>
+                        {selected && <Icon name="check" className="text-base text-[#7C3AED]" />}
+                      </button>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
           </div>
 
-          <div className="teacher-identity-stage relative z-10 mt-4 flex min-h-72 items-center justify-center sm:min-h-80 lg:flex-1">
-            <span className="teacher-identity-halo absolute h-60 w-60 rounded-full border border-[#DDD6FE] bg-[#F5F3FF]" style={{ '--teacher-accent': selectedColor.swatch }} aria-hidden="true" />
-            <span className="teacher-identity-orbit absolute h-72 w-72 rounded-full border border-[#EDE9FE]" aria-hidden="true">
-              <span className="absolute left-8 top-3 h-2 w-2 rounded-full" style={{ backgroundColor: selectedColor.swatch }} />
-              <span className="absolute bottom-8 right-1 h-1.5 w-1.5 rounded-full bg-[#C4B5FD]" />
-            </span>
+          <div className="relative z-10 flex min-h-80 flex-1 items-center justify-center py-6 sm:min-h-96">
             <img
               key={selectedColor.id}
               src={selectedColor.image}
               alt={`Aperçu du professeur en ${selectedColor.label.toLowerCase()}`}
-              className="teacher-identity-avatar relative z-10 h-72 w-72 object-contain sm:h-80 sm:w-80 lg:h-[22rem] lg:w-[22rem]"
+              className="teacher-identity-avatar h-[24rem] w-[24rem] object-contain sm:h-[28rem] sm:w-[28rem] lg:h-[min(52vh,31rem)] lg:w-[min(52vh,31rem)]"
               draggable="false"
             />
           </div>
 
-          <div className="relative z-10 mt-2">
-            <p className="text-sm font-medium text-[#64748B]">{trainingTitle || 'Formation à renseigner'}</p>
-            <h2 className="mt-1 text-3xl font-bold tracking-[-0.035em] text-[#0F172A]">
-              {teacherFirstName.trim() || 'Votre professeur'}
-            </h2>
-            <p className="mt-3 max-w-[42ch] text-sm leading-6 text-[#475569]">
-              {teacherDescription || 'La description du professeur apparaîtra ici dès que vous aurez renseigné la formation.'}
-            </p>
-            <div className="mt-4 flex flex-wrap gap-2">
+          <div className="relative z-10 max-w-[34rem] text-white">
+            <div className="mb-3 flex items-center gap-2">
+              <span className="inline-flex items-center gap-2 rounded-full bg-black/35 px-3 py-1.5 text-xs font-semibold backdrop-blur-sm">
+                <span className="h-2 w-2 rounded-full bg-[#34D399]" />
+                En configuration
+              </span>
               {(formationMode === 'existing' ? selectedModule?.rncp_code : newFormRncp.trim()) && (
-                <span className="rounded-full border border-[#E2E8F0] bg-[#F8FAFC] px-3 py-1.5 text-xs font-medium text-[#475569]">
+                <span className="rounded-full bg-black/35 px-3 py-1.5 text-xs font-medium text-white/80 backdrop-blur-sm">
                   RNCP {formationMode === 'existing' ? selectedModule.rncp_code : newFormRncp.trim()}
                 </span>
               )}
-              {trainingDays > 0 && (
-                <span className="rounded-full border border-[#E2E8F0] bg-[#F8FAFC] px-3 py-1.5 text-xs font-medium text-[#475569]">
-                  {trainingDays} journée{trainingDays > 1 ? 's' : ''}
-                </span>
-              )}
             </div>
-            <div className="mt-5 flex items-center gap-2" role="group" aria-label="Couleur du professeur">
-              {teacherColors.map((color) => {
-                const selected = teacherColor === color.id
-                return (
-                  <button
-                    key={color.id}
-                    type="button"
-                    onClick={() => setTeacherColor(color.id)}
-                    aria-label={`Choisir la couleur ${color.label.toLowerCase()}`}
-                    aria-pressed={selected}
-                    title={color.label}
-                    className="flex h-11 w-11 items-center justify-center rounded-full transition-transform duration-200 ease-out hover:scale-105 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#8B5CF6]/40 focus-visible:ring-offset-2 active:scale-95"
-                  >
-                    <span
-                      className="h-5 w-5 rounded-full"
-                      style={{
-                        backgroundColor: color.swatch,
-                        boxShadow: selected ? `0 0 0 3px #FFFFFF, 0 0 0 4px ${color.swatch}` : '0 0 0 1px rgba(15, 23, 42, 0.08)',
-                      }}
-                      aria-hidden="true"
-                    />
-                  </button>
-                )
-              })}
-            </div>
+            <p className="text-sm font-medium text-white/70">{trainingTitle || 'Formation à renseigner'}</p>
+            <h2 className="mt-1 text-3xl font-bold tracking-[-0.03em] sm:text-4xl">
+              {teacherFirstName.trim() || 'Votre professeur'}
+            </h2>
+            <p className="mt-3 max-w-[58ch] text-sm leading-6 text-white/80">
+              {teacherDescription || 'La description du professeur apparaîtra ici dès que vous aurez renseigné la formation.'}
+            </p>
+            {trainingDays > 0 && (
+              <p className="mt-4 text-xs font-medium text-white/65">
+                {trainingDays} journée{trainingDays > 1 ? 's' : ''} de formation
+              </p>
+            )}
           </div>
         </aside>
 
-        <div className="min-w-0 overflow-hidden rounded-xl border border-[#E7EAEE] bg-white">
+        <div className="min-w-0 overflow-hidden rounded-b-xl bg-white lg:rounded-bl-none lg:rounded-r-xl lg:border-l lg:border-[#E7EAEE]">
           <header className="px-5 py-6 sm:px-6 lg:px-8">
             <h1 className="text-2xl font-bold tracking-[-0.025em] text-[#0F172A]">
               {formationMode === 'existing' ? 'Réutiliser un professeur IA' : 'Recruter un professeur IA'}
@@ -4102,30 +4116,6 @@ export function CreatePlatformView({
                 <span>Générée automatiquement, vous pouvez la modifier.</span>
                 <span className="tabular-nums">{teacherDescription.length}/600</span>
               </div>
-            </div>
-          </div>
-
-          <div id="teacher-visual-identity" className="scroll-mt-6 border-t border-[#EEF0F3] px-5 py-6 sm:px-6 lg:px-8">
-            <h2 className="text-lg font-semibold text-[#0F172A]">Identité visuelle</h2>
-            <p className="mt-1 text-sm text-[#64748B]">La couleur personnalise le robot sans modifier le contenu pédagogique.</p>
-            <div className="mt-4 grid grid-cols-2 gap-2.5 sm:grid-cols-5">
-              {teacherColors.map((color) => {
-                const selected = teacherColor === color.id
-                return (
-                  <button
-                    key={color.id}
-                    type="button"
-                    onClick={() => setTeacherColor(color.id)}
-                    aria-pressed={selected}
-                    className="relative flex min-h-24 flex-col items-center justify-center gap-1 rounded-lg border bg-white px-2 py-2 text-xs font-medium transition-[border-color,background-color,transform] hover:bg-[#FCFCFD] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#8B5CF6]/40 active:scale-[0.98]"
-                    style={{ borderColor: selected ? `${color.swatch}66` : '#E7EAEE', backgroundColor: selected ? `${color.swatch}08` : '#FFFFFF', color: '#334155' }}
-                  >
-                    {selected && <Icon name="check_circle" className="absolute right-2 top-2 text-base" style={{ color: color.swatch }} />}
-                    <img src={color.image} alt="" className="h-16 w-16 object-contain" />
-                    <span>{color.label}</span>
-                  </button>
-                )
-              })}
             </div>
           </div>
 

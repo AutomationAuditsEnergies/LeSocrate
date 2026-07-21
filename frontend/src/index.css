@@ -112,35 +112,10 @@ body {
   }
 }
 
-@keyframes teacher-identity-orbit {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-@keyframes teacher-identity-halo {
-  0%, 100% {
-    opacity: 0.72;
-    transform: scale(0.98);
-  }
-  50% {
-    opacity: 1;
-    transform: scale(1.03);
-  }
-}
-
 .teacher-identity-avatar {
   animation: teacher-identity-idle 5.2s cubic-bezier(0.45, 0, 0.55, 1) infinite;
   filter: drop-shadow(0 10px 7px rgba(76, 29, 149, 0.14));
   transform-origin: center bottom;
-}
-
-.teacher-identity-orbit {
-  animation: teacher-identity-orbit 18s linear infinite;
-}
-
-.teacher-identity-halo {
-  animation: teacher-identity-halo 4.8s cubic-bezier(0.45, 0, 0.55, 1) infinite;
 }
 
 .teacher-identity-control:focus {
@@ -187,8 +162,6 @@ body {
   .teacher-card-enter,
   .teacher-robot-float,
   .teacher-identity-avatar,
-  .teacher-identity-orbit,
-  .teacher-identity-halo,
   .recruitment-review-enter,
   .recruitment-thinking-dot {
     animation: none;
