@@ -2800,56 +2800,51 @@ function PlatformCardsView({
   )
 
   return (
-    <section className="mx-auto flex h-full min-h-0 w-full max-w-[90rem] flex-col overflow-hidden pt-8 sm:pt-12">
+    <section className="mx-auto flex h-full min-h-0 w-full max-w-[90rem] flex-col overflow-hidden pt-4 sm:pt-6">
       <header className="mx-auto w-full max-w-[860px] text-center">
-        <h1 className="text-[2rem] font-semibold leading-tight tracking-[-0.035em] sm:text-[2.4rem]" style={{ color: colors.text }}>Mes professeurs</h1>
-        <p className="mt-2 text-sm" style={{ color: colors.textMuted }}>Retrouvez vos professeurs, leurs formations et leur prochaine séance.</p>
+        <h1 className="text-[1.75rem] font-semibold leading-tight tracking-[-0.03em] sm:text-[2rem]" style={{ color: colors.text }}>Mes professeurs</h1>
+        <p className="mt-1 text-sm" style={{ color: colors.textMuted }}>Retrouvez vos professeurs, leurs formations et leur prochaine séance.</p>
       </header>
 
-      <div className="mx-auto mt-7 flex w-full max-w-[760px] items-center gap-2 rounded-full border bg-white p-2 pl-5" style={{ borderColor: colors.border, boxShadow: '0 3px 8px rgba(24, 24, 27, 0.07)' }}>
-        <Icon name="search" className="text-xl" style={{ color: colors.textMuted }} />
-        <label htmlFor="teacher-roster-search" className="sr-only">Rechercher un professeur ou une formation</label>
-        <input
-          id="teacher-roster-search"
-          type="search"
-          value={rosterSearch}
-          onChange={(event) => {
-            setRosterSearch(event.target.value)
-            setCardPage(0)
-          }}
-          placeholder="Rechercher un professeur ou une formation…"
-          className="min-w-0 flex-1 bg-transparent py-2 text-sm outline-none placeholder:text-[#626269]"
-          style={{ color: colors.text }}
-        />
-      </div>
+      <div className="mx-auto mt-4 flex w-full max-w-[900px] flex-col gap-2 sm:flex-row sm:items-center">
+        <div className="flex h-11 min-w-0 flex-1 items-center gap-2 rounded-lg border bg-white px-3 transition-shadow focus-within:ring-1 focus-within:ring-[#A6A6AC]" style={{ borderColor: colors.borderLight }}>
+          <Icon name="search" className="text-lg" style={{ color: colors.textMuted }} />
+          <label htmlFor="teacher-roster-search" className="sr-only">Rechercher un professeur ou une formation</label>
+          <input
+            id="teacher-roster-search"
+            type="search"
+            value={rosterSearch}
+            onChange={(event) => {
+              setRosterSearch(event.target.value)
+              setCardPage(0)
+            }}
+            placeholder="Rechercher un professeur ou une formation…"
+            className="min-w-0 flex-1 bg-transparent py-2 text-sm outline-none placeholder:text-[#626269]"
+            style={{ color: colors.text }}
+          />
+        </div>
 
-      <div className="mx-auto mt-8 flex w-full max-w-[980px] items-center gap-5" aria-hidden="true">
-        <span className="h-px flex-1" style={{ backgroundColor: colors.borderLight }} />
-        <span className="text-[10px] font-semibold uppercase tracking-[0.22em]" style={{ color: colors.textMuted }}>Filtrer par statut</span>
-        <span className="h-px flex-1" style={{ backgroundColor: colors.borderLight }} />
-      </div>
-
-      <div className="mx-auto mt-5 flex w-full max-w-[1204px] flex-wrap items-center justify-center gap-2" role="group" aria-label="Filtrer les professeurs IA">
-        {TEACHER_ROSTER_FILTERS.map((filter) => {
-          const selected = rosterFilter === filter.id
-          return (
-            <button
-              key={filter.id}
-              type="button"
-              onClick={() => onRosterFilterChange(filter.id)}
-              aria-pressed={selected}
-              className="inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-black/30"
-              style={{
-                backgroundColor: selected ? colors.text : 'transparent',
-                color: selected ? '#FFFFFF' : colors.textSecondary,
-                border: `1px solid ${selected ? colors.text : colors.border}`,
-              }}
-            >
-              <span>{filter.label}</span>
-              <span className="tabular-nums opacity-60">{filterCounts[filter.id]}</span>
-            </button>
-          )
-        })}
+        <div className="flex min-h-11 shrink-0 items-center justify-center gap-1 rounded-lg bg-[#F7F7F6] p-1" role="group" aria-label="Filtrer les professeurs IA">
+          {TEACHER_ROSTER_FILTERS.map((filter) => {
+            const selected = rosterFilter === filter.id
+            return (
+              <button
+                key={filter.id}
+                type="button"
+                onClick={() => onRosterFilterChange(filter.id)}
+                aria-pressed={selected}
+                className="inline-flex h-9 items-center gap-1.5 rounded-md px-3 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-black/30"
+                style={{
+                  backgroundColor: selected ? colors.text : 'transparent',
+                  color: selected ? '#FFFFFF' : colors.textSecondary,
+                }}
+              >
+                <span>{filter.label}</span>
+                <span className="tabular-nums opacity-60">{filterCounts[filter.id]}</span>
+              </button>
+            )
+          })}
+        </div>
       </div>
 
       {filteredPlatforms.length > cardsPerPage && (
@@ -2879,7 +2874,7 @@ function PlatformCardsView({
       )}
 
       {filteredPlatforms.length > 0 && (
-        <div className="mt-6 min-h-0 flex-1 overflow-y-auto overscroll-contain pb-6 pr-1">
+        <div className="mt-4 min-h-0 flex-1 overflow-y-auto overscroll-contain pb-6 pr-1">
         <div className="mx-auto grid w-full max-w-[1204px] grid-cols-1 items-start gap-3 sm:grid-cols-2 sm:gap-4 lg:grid-cols-4 xl:grid-cols-5">
         {visiblePlatforms.map((p) => (
           <PlatformCard
