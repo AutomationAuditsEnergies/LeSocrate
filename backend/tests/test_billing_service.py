@@ -176,6 +176,8 @@ class BillingServiceTest(unittest.TestCase):
             }, True
 
         create_order.side_effect = capture
+        future_date = date.today() + timedelta(days=8)
+        future_monday = future_date + timedelta(days=(7 - future_date.weekday()) % 7)
         result = billing_service.create_teacher_order(9, {
             "operation_type": "reuse_teacher",
             "creation_request_id": "request_abcdefghijklmnop",
@@ -187,7 +189,7 @@ class BillingServiceTest(unittest.TestCase):
                 "schedule": {
                     "weekly_course_count": 1,
                     "weekdays": ["lundi"],
-                    "start_date": "2026-07-20",
+                    "start_date": future_monday.isoformat(),
                     "start_time": "09:00",
                 },
             },
