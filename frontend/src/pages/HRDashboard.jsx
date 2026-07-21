@@ -26,6 +26,7 @@ import {
   getReusableTeacherDefaults,
   shouldShowCenterOnboarding,
 } from '../centerWorkspace'
+import { applyKnownRncpTraining, validateRecruitmentAnswer } from '../recruitmentConversation'
 
 // ─── Material Icon Component ─────────────────────────────────────────────────
 const Icon = ({ name, className = '' }) => (
@@ -2190,12 +2191,18 @@ function RecruitmentAssistant({ colors, modules, onComplete, onManualCreate }) {
       return
     }
     const normalizedValue = currentStep.id === 'rncpCode' ? String(value).replace(/\D/g, '') : value
-    const nextDraft = currentStep.id === 'rncpConfirm'
+    let nextDraft = currentStep.id === 'rncpConfirm'
       ? draft
       : { ...draft, [currentStep.id]: normalizedValue }
+    let knownRncpModule = null
+    if (currentStep.id === 'rncpCode') {
+      const knownRncp = applyKnownRncpTraining(nextDraft, modules, normalizedValue)
+      nextDraft = knownRncp.draft
+      knownRncpModule = knownRncp.matchingModule
+    }
     const nextIndex = stepIndex + 1
     const nextStep = RECRUITMENT_STEPS[nextIndex]
-    const nextMatchingModule = modules.find((module) => String(module.rncp_code || '').replace(/\D/g, '') === String(nextDraft.rncpCode || '').replace(/\D/g, ''))
+    const nextMatchingModule = knownRncpModule || modules.find((module) => String(module.rncp_code || '').replace(/\D/g, '') === String(nextDraft.rncpCode || '').replace(/\D/g, ''))
     setDraft(nextDraft)
     setHistory((current) => [...current, {
       role: 'user',
@@ -2230,7 +2237,13 @@ function RecruitmentAssistant({ colors, modules, onComplete, onManualCreate }) {
     event.preventDefault()
     const value = answer.trim()
     if (!value) return
-    if (currentStep?.type === 'number' && Number(value) <= 0) return
+    const validation = validateRecruitmentAnswer(currentStep?.id, value)
+    if (!validation.valid) {
+      setHistory((current) => [...current, { role: 'user', text: value }])
+      setAnswer('')
+      revealAssistantMessages([{ role: 'assistant', text: validation.message }])
+      return
+    }
     advance(value)
   }
 
