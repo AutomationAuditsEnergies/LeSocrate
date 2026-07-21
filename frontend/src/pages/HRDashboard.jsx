@@ -1919,7 +1919,9 @@ function CenterWorkspaceSidebar({
           aria-expanded={!collapsed}
           style={{ color: colors.textSecondary }}
         >
-          <Icon name="view_sidebar" className="text-[19px]" />
+          <span className="relative block h-[17px] w-[19px] rounded-[4px] border-2 border-current" aria-hidden="true">
+            <span className="absolute bottom-[2px] left-[4px] top-[2px] w-[2px] rounded-full bg-current" />
+          </span>
         </button>
       </div>
 
