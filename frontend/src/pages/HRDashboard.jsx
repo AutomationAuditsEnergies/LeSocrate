@@ -1,12 +1,18 @@
 import { useState, useEffect, useRef, useMemo } from 'react'
 import { createPortal } from 'react-dom'
 import {
+  ArrowUp,
+  CalendarDays,
   ChevronLeft,
   ChevronsUpDown,
+  Copy,
+  Globe2,
   LogIn,
   LogOut,
   PanelLeft,
+  PenLine,
   Settings,
+  ShieldCheck,
   UserPlus,
   UserRound,
   UsersRound,
@@ -2212,61 +2218,64 @@ function RecruitmentAssistant({ colors, modules, onComplete, onManualCreate }) {
 
   if (!started) {
     const suggestions = [
-      { icon: 'verified_user', text: 'Recruter un professeur pour un titre professionnel RNCP' },
-      { icon: 'group_add', text: 'Préparer un professeur pour une nouvelle promotion' },
-      { icon: 'content_copy', text: 'Réutiliser un professeur et ses cours existants' },
-      { icon: 'event_available', text: 'Planifier une formation dès le mois prochain' },
+      { icon: ShieldCheck, text: 'Recruter un professeur pour un titre professionnel RNCP' },
+      { icon: UserPlus, text: 'Préparer un professeur pour une nouvelle promotion' },
+      { icon: Copy, text: 'Réutiliser un professeur et ses cours existants' },
+      { icon: CalendarDays, text: 'Planifier une formation dès le mois prochain' },
     ]
     return (
-      <section className="mx-auto flex min-h-[calc(100vh-5rem)] w-full max-w-5xl flex-col justify-center py-12">
-        <div className="mx-auto w-full max-w-[860px]">
-          <div className="mb-8 text-center">
+      <section className="mx-auto flex min-h-full w-full max-w-5xl flex-col justify-start pt-16 sm:pt-20 lg:pt-24">
+        <div className="mx-auto w-full max-w-[800px]">
+          <div className="mb-7 text-center">
             <h1 className="text-[2rem] font-semibold leading-tight tracking-[-0.035em] sm:text-[2.4rem]" style={{ color: colors.text }}>Quel professeur recruterez-vous ?</h1>
-            <p className="mx-auto mt-3 max-w-2xl text-sm leading-6" style={{ color: colors.textMuted }}>Décrivez votre besoin, puis précisez la formation et son calendrier.</p>
+            <p className="mx-auto mt-2.5 max-w-2xl text-sm leading-6" style={{ color: colors.textMuted }}>Décrivez votre besoin, puis précisez la formation et son calendrier.</p>
           </div>
 
-          <form onSubmit={submitInitialBrief} className="rounded-2xl border bg-white p-4" style={{ borderColor: colors.border, boxShadow: '0 4px 12px rgba(24, 24, 27, 0.07)' }}>
+          <form onSubmit={submitInitialBrief} className="mx-auto max-w-[760px] rounded-xl border bg-white p-3" style={{ borderColor: '#DFDCD9' }}>
             <label htmlFor="recruitment-brief" className="sr-only">Décrire le professeur recherché</label>
             <textarea
               id="recruitment-brief"
               value={brief}
               onChange={(event) => setBrief(event.target.value)}
               placeholder={animatedPlaceholder}
-              rows={5}
-              className="w-full resize-none bg-transparent px-2 py-1 text-base leading-7 outline-none placeholder:text-[#626269]"
+              rows={3}
+              className="min-h-[82px] w-full resize-none bg-transparent px-2 py-1 text-[15px] leading-6 outline-none placeholder:text-[#73736F]"
               style={{ color: colors.text }}
               autoFocus
             />
-            <div className="mt-2 flex items-center justify-between pt-2">
-              <span className="inline-flex items-center gap-1.5 px-2 text-sm font-medium" style={{ color: colors.textSecondary }}>
-                <Icon name="language" className="text-lg" />
+            <div className="mt-1 flex items-center justify-between pt-1">
+              <span className="inline-flex items-center gap-1.5 px-2 text-xs font-medium text-[#73736F]">
+                <Globe2 size={15} strokeWidth={1.6} aria-hidden="true" />
                 FR
               </span>
-              <button type="submit" disabled={!brief.trim()} className="flex h-10 w-10 items-center justify-center rounded-full text-white transition-colors disabled:cursor-not-allowed disabled:bg-[#B9B5AF]" style={{ backgroundColor: brief.trim() ? '#6D4AC7' : undefined }} aria-label="Commencer la configuration">
-                <Icon name="arrow_upward" className="text-lg" />
+              <button type="submit" disabled={!brief.trim()} className="flex h-9 w-9 items-center justify-center rounded-full bg-[#097FE8] text-white transition-colors duration-150 hover:bg-[#0075DE] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#097FE8]/60 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:bg-[#C7C5C1]" aria-label="Commencer la configuration">
+                <ArrowUp size={17} strokeWidth={1.8} aria-hidden="true" />
               </button>
             </div>
           </form>
 
-          <div className="mt-4 flex justify-end">
-            <button
-              type="button"
-              onClick={onManualCreate}
-              className="inline-flex items-center gap-2 rounded-full bg-[#18181B] px-5 py-3 text-sm font-semibold text-white transition-colors hover:bg-[#303036] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400 focus-visible:ring-offset-2"
-            >
-              <Icon name="edit_note" className="text-lg" />
-              <span>Recruter manuellement un professeur</span>
+          <div className="mx-auto mt-3 flex max-w-[760px] flex-col gap-3 rounded-lg bg-[#F7F7F5] px-3 py-2.5 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <p className="text-[13px] font-medium text-[#191918]">Vous préférez renseigner les informations vous-même ?</p>
+              <p className="mt-0.5 text-xs text-[#73736F]">Ouvrez directement le formulaire complet.</p>
+            </div>
+            <button type="button" onClick={onManualCreate} className="inline-flex min-h-9 shrink-0 items-center justify-center gap-2 rounded-md border border-black/10 bg-white px-3 text-[13px] font-medium text-[#191918] transition-colors duration-150 hover:bg-[#F6F5F4] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#097FE8]/60">
+              <PenLine size={15} strokeWidth={1.6} aria-hidden="true" />
+              <span>Recruter manuellement</span>
             </button>
           </div>
 
-          <div className="mx-auto mt-7 max-w-[820px]">
-            <div className="space-y-1">
-              {suggestions.map((suggestion) => (
-                <button key={suggestion.text} type="button" onClick={() => setBrief(suggestion.text)} className="flex w-full items-center gap-4 rounded-lg px-3 py-3 text-left text-sm leading-5 transition-colors hover:bg-[#F7F7F8] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40" style={{ color: colors.textSecondary }}>
-                  <Icon name={suggestion.icon} className="text-xl" style={{ color: '#56565D' }} />
-                  <span>{suggestion.text}</span>
-                </button>
-              ))}
+          <div className="mx-auto mt-5 max-w-[760px]">
+            <div className="space-y-0.5">
+              {suggestions.map((suggestion) => {
+                const SuggestionIcon = suggestion.icon
+                return (
+                  <button key={suggestion.text} type="button" onClick={() => setBrief(suggestion.text)} className="flex w-full items-center gap-3 rounded-md px-2.5 py-2 text-left text-sm leading-5 text-[#5F5E5A] transition-colors duration-150 hover:bg-[#F7F7F5] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#097FE8]/60">
+                    <SuggestionIcon size={17} strokeWidth={1.6} aria-hidden="true" />
+                    <span>{suggestion.text}</span>
+                  </button>
+                )
+              })}
             </div>
           </div>
         </div>
