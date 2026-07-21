@@ -3955,14 +3955,14 @@ export function CreatePlatformView({
           className="relative flex min-h-[44rem] flex-col overflow-visible rounded-t-xl bg-cover bg-center p-5 lg:sticky lg:top-6 lg:min-h-[calc(100vh-7rem)] lg:rounded-l-xl lg:rounded-tr-none xl:p-6"
           style={{ backgroundImage: "url('/teacher-studio-background.webp')" }}
         >
-          <div className="pointer-events-none absolute inset-0 rounded-t-xl bg-[linear-gradient(180deg,rgba(15,23,42,0.42)_0%,rgba(15,23,42,0.08)_42%,rgba(15,23,42,0.78)_100%)] lg:rounded-l-xl lg:rounded-tr-none" aria-hidden="true" />
+          <div className="pointer-events-none absolute inset-0 rounded-t-xl bg-[linear-gradient(180deg,rgba(35,29,26,0.04)_0%,rgba(35,29,26,0)_48%,rgba(25,21,19,0.74)_100%)] lg:rounded-l-xl lg:rounded-tr-none" aria-hidden="true" />
 
           <div className="relative z-20 flex items-start justify-between gap-3">
-            <div className="flex items-center gap-2.5 text-white">
+            <div className="flex items-center gap-2.5 text-[#26211F]">
               <img src="/socrate-mark.svg" alt="" className="h-8 w-8" />
               <div>
                 <p className="text-sm font-bold tracking-[-0.01em]">LE SOCRATE</p>
-                <p className="text-xs text-white/70">Professeur IA</p>
+                <p className="text-xs text-[#5E534D]">Professeur IA</p>
               </div>
             </div>
 
@@ -3972,7 +3972,7 @@ export function CreatePlatformView({
                 onClick={() => setColorPickerOpen((open) => !open)}
                 aria-expanded={colorPickerOpen}
                 aria-controls="teacher-color-picker"
-                className="inline-flex min-h-11 items-center gap-2 rounded-full border border-white/20 bg-[#111827]/75 px-4 py-2 text-xs font-semibold text-white transition-colors hover:bg-[#111827]/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70"
+                className="inline-flex min-h-11 items-center gap-2 rounded-full border border-white/25 bg-[#403A36]/90 px-4 py-2 text-xs font-semibold text-white transition-colors hover:bg-[#332E2B] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70"
               >
                 <Icon name="palette" className="text-base" />
                 Change visual color

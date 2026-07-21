@@ -21,7 +21,8 @@ et le formulaire utilise des séparateurs et contours plus discrets. L'aperçu
 devient ensuite un véritable panneau scindé sur un studio réaliste, avec le
 robot 3D animé au premier plan. Le choix de couleur est masqué derrière l'action
 « Change visual color » et la section d'identité visuelle du formulaire est
-retirée.
+retirée. Le décor aménagé est remplacé par un fond de studio taupe, doux et
+progressivement assombri vers le bas, fidèle à la référence retenue.
 
 ## 2026-07-01
 
