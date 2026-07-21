@@ -87,6 +87,7 @@ from services.scheduled_audio_service import (
     retry_scheduled_audio_generation,
 )
 from services.teacher_preparation_service import build_teacher_preparation_state
+from services.recruitment_conversation_service import interpret_recruitment_answer
 from services.teacher_asset_service import resolve_folder_blob_path
 from services.audio_publish_service import archive_public_platform_audios, publish_playlist_audio_to_platform
 from utils.logger import get_logger
@@ -338,6 +339,37 @@ def create_hr_blueprint(socketio):
             "completed_at": onboarding.get("onboarding_completed_at"),
             "completed": int(onboarding.get("onboarding_version") or 0) >= CENTER_ONBOARDING_VERSION,
         }), 200
+
+    @hr_bp.route("/api/hr/recruitment/interpret", methods=["POST"])
+    def interpret_hr_recruitment_answer():
+        """Extract exactly one required recruitment field from free-form text."""
+        denied = _require_admin()
+        if denied:
+            return denied
+        if _admin_account_type() not in _HR_SUPERADMIN_ACCOUNT_TYPES | {"training_center"}:
+            return jsonify({"success": False, "error": "Compte centre requis"}), 403
+
+        data = request.get_json(silent=True) or {}
+        field = str(data.get("field") or "").strip()
+        message = str(data.get("message") or "").strip()
+        draft = data.get("draft") if isinstance(data.get("draft"), dict) else {}
+        try:
+            attempt = max(0, min(5, int(data.get("attempt") or 0)))
+        except (TypeError, ValueError):
+            attempt = 0
+        if not message or len(message) > 2000:
+            return jsonify({"success": False, "error": "Réponse invalide"}), 400
+
+        try:
+            result = interpret_recruitment_answer(
+                field,
+                message,
+                draft=draft,
+                attempt=attempt,
+            )
+        except ValueError as exc:
+            return jsonify({"success": False, "error": str(exc)}), 400
+        return jsonify({"success": True, **result}), 200
 
     @hr_bp.before_request
     def check_hr_enabled():

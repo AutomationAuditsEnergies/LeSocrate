@@ -2140,6 +2140,8 @@ function RecruitmentAssistant({ colors, modules, onComplete, onManualCreate }) {
   })
   const [history, setHistory] = useState([])
   const [isThinking, setIsThinking] = useState(false)
+  const [pendingConfirmation, setPendingConfirmation] = useState(null)
+  const [clarificationAttempts, setClarificationAttempts] = useState({})
   const chatScrollRef = useRef(null)
   const responseTimeoutRef = useRef(null)
   const animatedPlaceholder = useAnimatedPlaceholder(RECRUITMENT_PLACEHOLDER_EXAMPLES)
@@ -2177,7 +2179,7 @@ function RecruitmentAssistant({ colors, modules, onComplete, onManualCreate }) {
     return String(value)
   }
 
-  const advance = (value) => {
+  const advance = (value, { recordUser = true } = {}) => {
     if (!currentStep) return
     if (currentStep.id === 'rncpConfirm' && value === 'Corriger') {
       const correctedDraft = { ...draft, trainingName: '', rncpCode: '' }
@@ -2204,10 +2206,12 @@ function RecruitmentAssistant({ colors, modules, onComplete, onManualCreate }) {
     const nextStep = RECRUITMENT_STEPS[nextIndex]
     const nextMatchingModule = knownRncpModule || modules.find((module) => String(module.rncp_code || '').replace(/\D/g, '') === String(nextDraft.rncpCode || '').replace(/\D/g, ''))
     setDraft(nextDraft)
-    setHistory((current) => [...current, {
-      role: 'user',
-      text: displayAnswer(currentStep, currentStep.id === 'rncpConfirm' ? 'Oui, continuer' : normalizedValue),
-    }])
+    if (recordUser) {
+      setHistory((current) => [...current, {
+        role: 'user',
+        text: displayAnswer(currentStep, currentStep.id === 'rncpConfirm' ? 'Oui, continuer' : normalizedValue),
+      }])
+    }
     setStepIndex(nextIndex)
     setAnswer('')
     revealAssistantMessages([
@@ -2220,6 +2224,60 @@ function RecruitmentAssistant({ colors, modules, onComplete, onManualCreate }) {
     ])
   }
 
+  const interpretFreeTextAnswer = async (field, value, { includeIntroduction = false } = {}) => {
+    setIsThinking(true)
+    const introduction = includeIntroduction
+      ? [{ role: 'assistant', text: 'Pour préparer ce professeur, je vais vérifier chaque information avec vous.' }]
+      : []
+
+    let interpretation
+    try {
+      const response = await apiFetch('/api/hr/recruitment/interpret', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          field,
+          message: value,
+          draft,
+          attempt: clarificationAttempts[field] || 0,
+        }),
+        timeoutMs: 25000,
+      })
+      const payload = await response.json().catch(() => ({}))
+      if (!response.ok || !payload.success) throw new Error(payload.error || 'Analyse indisponible')
+      interpretation = payload
+    } catch {
+      const fallback = validateRecruitmentAnswer(field, value)
+      interpretation = fallback.valid
+        ? { answered: true, value: fallback.value || value }
+        : { answered: false, value: null, reply: fallback.message }
+    }
+
+    if (!interpretation.answered) {
+      setClarificationAttempts((current) => ({
+        ...current,
+        [field]: (current[field] || 0) + 1,
+      }))
+      revealAssistantMessages([...introduction, { role: 'assistant', text: interpretation.reply }])
+      return
+    }
+
+    setClarificationAttempts((current) => ({ ...current, [field]: 0 }))
+    const interpretedValue = interpretation.value
+    if (field === 'teacherName' || field === 'trainingName') {
+      setPendingConfirmation({ field, value: interpretedValue })
+      revealAssistantMessages([...introduction, {
+        role: 'assistant',
+        text: field === 'teacherName'
+          ? `J’ai compris « ${interpretedValue} ». Est-ce bien le nom que vous souhaitez donner au professeur IA ?`
+          : `J’ai compris « ${interpretedValue} ». Est-ce bien l’intitulé de la formation qu’il devra assurer ?`,
+      }])
+      return
+    }
+
+    advance(interpretedValue, { recordUser: false })
+  }
+
   const submitInitialBrief = (event) => {
     event.preventDefault()
     const value = brief.trim()
@@ -2227,24 +2285,37 @@ function RecruitmentAssistant({ colors, modules, onComplete, onManualCreate }) {
     setStarted(true)
     setHistory([{ role: 'user', text: value }])
     setBrief('')
-    revealAssistantMessages([
-      { role: 'assistant', text: 'Pour préparer ce professeur, j’ai besoin de quelques précisions rapides.' },
-      { role: 'assistant', text: getRecruitmentAssistantText(RECRUITMENT_STEPS[0], draft, null) },
-    ])
+    interpretFreeTextAnswer('teacherName', value, { includeIntroduction: true })
   }
 
   const submitAnswer = (event) => {
     event.preventDefault()
     const value = answer.trim()
     if (!value) return
-    const validation = validateRecruitmentAnswer(currentStep?.id, value)
-    if (!validation.valid) {
-      setHistory((current) => [...current, { role: 'user', text: value }])
-      setAnswer('')
-      revealAssistantMessages([{ role: 'assistant', text: validation.message }])
+    const field = currentStep?.id
+    setHistory((current) => [...current, { role: 'user', text: value }])
+    setAnswer('')
+    interpretFreeTextAnswer(field, value)
+  }
+
+  const resolvePendingConfirmation = (confirmed) => {
+    if (!pendingConfirmation) return
+    const { field, value } = pendingConfirmation
+    setPendingConfirmation(null)
+    if (confirmed) {
+      setHistory((current) => [...current, { role: 'user', text: 'Oui, c’est bien cela' }])
+      advance(value, { recordUser: false })
       return
     }
-    advance(value)
+
+    setHistory((current) => [...current, { role: 'user', text: 'Non, je veux le corriger' }])
+    const step = RECRUITMENT_STEPS.find((item) => item.id === field)
+    revealAssistantMessages([{
+      role: 'assistant',
+      text: field === 'teacherName'
+        ? 'D’accord. Quel prénom ou quel nom voulez-vous précisément donner au professeur IA ? Par exemple « Pierre » ou « Sofia ».'
+        : `D’accord. Quel est l’intitulé précis de la formation ? Par exemple « ${step?.placeholder?.replace('Ex. ', '') || 'Développeur web'} ».`,
+    }])
   }
 
   const toggleDay = (day) => {
@@ -2392,13 +2463,31 @@ function RecruitmentAssistant({ colors, modules, onComplete, onManualCreate }) {
           </div>
         ) : !completed ? (
           <div className="shrink-0 border-t bg-white py-4" style={{ borderColor: colors.borderLight }}>
-            {(currentStep.type === 'text' || currentStep.type === 'number') && (
+            {!isThinking && pendingConfirmation && (
+              <div className="overflow-hidden rounded-xl border bg-white" style={{ borderColor: colors.border }}>
+                <div className="px-4 py-3.5 sm:px-5">
+                  <p className="text-sm font-semibold leading-5" style={{ color: colors.text }}>
+                    {pendingConfirmation.field === 'teacherName' ? 'Confirmer le nom du professeur' : 'Confirmer la formation'}
+                  </p>
+                  <p className="mt-1 text-sm" style={{ color: colors.textMuted }}>{pendingConfirmation.value}</p>
+                </div>
+                <button type="button" onClick={() => resolvePendingConfirmation(true)} className="flex w-full items-center gap-3 border-t px-4 py-3 text-left text-sm transition-colors hover:bg-[#F8F6F2] sm:px-5" style={{ borderColor: colors.borderLight, color: colors.text }}>
+                  <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-xs font-medium" style={{ backgroundColor: colors.innerBg, color: colors.textMuted }}>1</span>
+                  Oui, confirmer
+                </button>
+                <button type="button" onClick={() => resolvePendingConfirmation(false)} className="flex w-full items-center gap-3 border-t px-4 py-3 text-left text-sm transition-colors hover:bg-[#F8F6F2] sm:px-5" style={{ borderColor: colors.borderLight, color: colors.text }}>
+                  <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-xs font-medium" style={{ backgroundColor: colors.innerBg, color: colors.textMuted }}>2</span>
+                  Non, modifier
+                </button>
+              </div>
+            )}
+            {!pendingConfirmation && (currentStep.type === 'text' || currentStep.type === 'number') && (
               <form onSubmit={submitAnswer} className="flex items-center gap-2 rounded-xl border bg-white p-2 pl-4" style={{ borderColor: colors.borderLight }}>
-                <input type={currentStep.type === 'number' ? 'number' : 'text'} min={currentStep.type === 'number' ? '1' : undefined} value={answer} onChange={(event) => setAnswer(event.target.value)} placeholder={isThinking ? 'Réflexion en cours…' : currentStep.placeholder} disabled={isThinking} className="min-w-0 flex-1 bg-transparent py-2.5 text-sm outline-none placeholder:text-[#68625B] disabled:cursor-wait disabled:text-[#73736F]" style={{ color: colors.text }} autoFocus={!isThinking} />
+                <input type="text" inputMode={currentStep.type === 'number' ? 'numeric' : undefined} value={answer} onChange={(event) => setAnswer(event.target.value)} placeholder={isThinking ? 'Réflexion en cours…' : currentStep.placeholder} disabled={isThinking} className="min-w-0 flex-1 bg-transparent py-2.5 text-sm outline-none placeholder:text-[#68625B] disabled:cursor-wait disabled:text-[#73736F]" style={{ color: colors.text }} autoFocus={!isThinking} />
                 <button type="submit" disabled={isThinking || !answer.trim()} className="flex h-9 w-9 items-center justify-center rounded-full bg-[#191918] text-white transition-colors hover:bg-[#30302E] disabled:cursor-not-allowed disabled:bg-[#C7C7C4]" aria-label="Valider la réponse"><ArrowUp size={17} strokeWidth={1.8} aria-hidden="true" /></button>
               </form>
             )}
-            {!isThinking && currentIsChoice && (
+            {!isThinking && !pendingConfirmation && currentIsChoice && (
               <div className="overflow-hidden rounded-xl border bg-white" style={{ borderColor: colors.border }}>
                 <div className="flex items-start justify-between gap-4 px-4 py-3.5 sm:px-5">
                   <div>
@@ -2463,7 +2552,7 @@ function RecruitmentAssistant({ colors, modules, onComplete, onManualCreate }) {
                 )}
               </div>
             )}
-            {!isThinking && currentStep.type === 'date' && (
+            {!isThinking && !pendingConfirmation && currentStep.type === 'date' && (
               <div className="flex flex-wrap items-center gap-3 rounded-xl border bg-white p-3" style={{ borderColor: colors.border }}><input type="date" min={todayDateInput()} value={draft.startDate} onChange={(event) => setDraft((current) => ({ ...current, startDate: event.target.value }))} className="min-w-0 flex-1 rounded-lg border px-4 py-2.5 text-sm" style={{ borderColor: colors.borderLight, color: colors.text }} /><button type="button" onClick={() => advance(draft.startDate)} className="rounded-lg bg-[#191714] px-4 py-2.5 text-sm font-medium text-white">Valider la date</button></div>
             )}
           </div>
