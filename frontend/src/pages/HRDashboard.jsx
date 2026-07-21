@@ -3908,7 +3908,7 @@ export function CreatePlatformView({
     descriptionEditedRef.current = false
     setTeacherDescription(generatedDescription)
   }
-  const inputClassName = 'teacher-identity-control w-full rounded-lg border border-[#CBD5E1] bg-[#F8FAFC] px-3.5 py-2.5 text-sm text-[#0F172A] transition-[border-color,box-shadow,background-color] placeholder:text-[#64748B]'
+  const inputClassName = 'teacher-identity-control w-full rounded-lg border border-[#E1E5EA] bg-white px-3.5 py-2.5 text-sm text-[#0F172A] transition-[border-color,box-shadow,background-color] placeholder:text-[#64748B]'
 
   return (
     <section className="w-full pb-10">
@@ -3962,14 +3962,35 @@ export function CreatePlatformView({
                 </span>
               )}
             </div>
-            <a href="#teacher-visual-identity" className="mt-5 flex min-h-11 w-full items-center justify-center gap-2 rounded-lg border border-[#C4B5FD] bg-white px-4 py-2.5 text-sm font-semibold text-[#6D28D9] transition-colors hover:bg-[#F5F3FF] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#8B5CF6]/50">
-              <Icon name="palette" className="text-lg" />
-              Changer l’identité visuelle
-            </a>
+            <div className="mt-5 flex items-center gap-2" role="group" aria-label="Couleur du professeur">
+              {teacherColors.map((color) => {
+                const selected = teacherColor === color.id
+                return (
+                  <button
+                    key={color.id}
+                    type="button"
+                    onClick={() => setTeacherColor(color.id)}
+                    aria-label={`Choisir la couleur ${color.label.toLowerCase()}`}
+                    aria-pressed={selected}
+                    title={color.label}
+                    className="flex h-11 w-11 items-center justify-center rounded-full transition-transform duration-200 ease-out hover:scale-105 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#8B5CF6]/40 focus-visible:ring-offset-2 active:scale-95"
+                  >
+                    <span
+                      className="h-5 w-5 rounded-full"
+                      style={{
+                        backgroundColor: color.swatch,
+                        boxShadow: selected ? `0 0 0 3px #FFFFFF, 0 0 0 4px ${color.swatch}` : '0 0 0 1px rgba(15, 23, 42, 0.08)',
+                      }}
+                      aria-hidden="true"
+                    />
+                  </button>
+                )
+              })}
+            </div>
           </div>
         </aside>
 
-        <div className="min-w-0 overflow-hidden rounded-2xl border border-[#E2E8F0] bg-white">
+        <div className="min-w-0 overflow-hidden rounded-xl border border-[#E7EAEE] bg-white">
           <header className="px-5 py-6 sm:px-6 lg:px-8">
             <h1 className="text-2xl font-bold tracking-[-0.025em] text-[#0F172A]">
               {formationMode === 'existing' ? 'Réutiliser un professeur IA' : 'Recruter un professeur IA'}
@@ -3989,7 +4010,7 @@ export function CreatePlatformView({
             </div>
           )}
 
-          <div className="border-t border-[#E2E8F0] px-5 py-6 sm:px-6 lg:px-8">
+          <div className="border-t border-[#EEF0F3] px-5 py-6 sm:px-6 lg:px-8">
             <h2 className="text-lg font-semibold text-[#0F172A]">Identité et formation</h2>
             <div className="mt-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
               <div>
@@ -4000,7 +4021,7 @@ export function CreatePlatformView({
               {formationMode === 'existing' ? (
                 <div className="sm:col-span-1 lg:col-span-2">
                   <span className="mb-2 block text-sm font-medium text-[#334155]">Professeur à réutiliser</span>
-                  <div className="rounded-lg border border-[#CBD5E1] bg-[#F8FAFC] px-3.5 py-2.5">
+                  <div className="rounded-lg border border-[#E1E5EA] bg-[#FCFCFD] px-3.5 py-2.5">
                     <p className="text-sm font-semibold text-[#0F172A]">{selectedModule?.tp_name || 'Professeur introuvable'}</p>
                     <p className="mt-1 text-xs text-[#64748B]">{selectedModule?.rncp_code ? `RNCP ${selectedModule.rncp_code}` : 'Formation archivée'}</p>
                   </div>
@@ -4047,7 +4068,7 @@ export function CreatePlatformView({
             </div>
           </div>
 
-          <div id="teacher-visual-identity" className="scroll-mt-6 border-t border-[#E2E8F0] px-5 py-6 sm:px-6 lg:px-8">
+          <div id="teacher-visual-identity" className="scroll-mt-6 border-t border-[#EEF0F3] px-5 py-6 sm:px-6 lg:px-8">
             <h2 className="text-lg font-semibold text-[#0F172A]">Identité visuelle</h2>
             <p className="mt-1 text-sm text-[#64748B]">La couleur personnalise le robot sans modifier le contenu pédagogique.</p>
             <div className="mt-4 grid grid-cols-2 gap-2.5 sm:grid-cols-5">
@@ -4059,8 +4080,8 @@ export function CreatePlatformView({
                     type="button"
                     onClick={() => setTeacherColor(color.id)}
                     aria-pressed={selected}
-                    className="relative flex min-h-28 flex-col items-center justify-center gap-1.5 rounded-xl border bg-white px-2 py-2.5 text-xs font-semibold transition-[border-color,background-color,transform] hover:bg-[#F8FAFC] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#8B5CF6]/50 active:scale-[0.98]"
-                    style={{ borderColor: selected ? color.swatch : '#E2E8F0', backgroundColor: selected ? `${color.swatch}0D` : '#FFFFFF', color: '#334155' }}
+                    className="relative flex min-h-24 flex-col items-center justify-center gap-1 rounded-lg border bg-white px-2 py-2 text-xs font-medium transition-[border-color,background-color,transform] hover:bg-[#FCFCFD] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#8B5CF6]/40 active:scale-[0.98]"
+                    style={{ borderColor: selected ? `${color.swatch}66` : '#E7EAEE', backgroundColor: selected ? `${color.swatch}08` : '#FFFFFF', color: '#334155' }}
                   >
                     {selected && <Icon name="check_circle" className="absolute right-2 top-2 text-base" style={{ color: color.swatch }} />}
                     <img src={color.image} alt="" className="h-16 w-16 object-contain" />
@@ -4071,7 +4092,7 @@ export function CreatePlatformView({
             </div>
           </div>
 
-          <div className="border-t border-[#E2E8F0] px-5 py-6 sm:px-6 lg:px-8">
+          <div className="border-t border-[#EEF0F3] px-5 py-6 sm:px-6 lg:px-8">
             <h2 className="text-lg font-semibold text-[#0F172A]">Calendrier</h2>
             <div className="mt-5 grid gap-4 md:grid-cols-2">
               {formationMode !== 'existing' && (
@@ -4093,7 +4114,7 @@ export function CreatePlatformView({
                 {weekDays.map((day) => {
                   const selected = teachingDays.includes(day.id)
                   return (
-                    <button key={day.id} type="button" onClick={() => toggleTeachingDay(day.id)} aria-pressed={selected} className="min-h-11 rounded-lg border px-2 py-2 text-xs font-semibold transition-[background-color,border-color,transform] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#8B5CF6]/50 active:scale-[0.98]" style={{ color: selected ? '#FFFFFF' : '#334155', backgroundColor: selected ? '#8B5CF6' : '#F8FAFC', borderColor: selected ? '#8B5CF6' : '#CBD5E1' }}>
+                    <button key={day.id} type="button" onClick={() => toggleTeachingDay(day.id)} aria-pressed={selected} className="min-h-11 rounded-lg border px-2 py-2 text-xs font-semibold transition-[background-color,border-color,transform] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#8B5CF6]/40 active:scale-[0.98]" style={{ color: selected ? '#FFFFFF' : '#334155', backgroundColor: selected ? '#8B5CF6' : '#FFFFFF', borderColor: selected ? '#8B5CF6' : '#E1E5EA' }}>
                       {day.label}
                     </button>
                   )
@@ -4111,7 +4132,7 @@ export function CreatePlatformView({
               </div>
               <div>
                 <span className="mb-2 block text-sm font-medium text-[#334155]">Heure de chaque journée</span>
-                <div className="flex min-h-11 items-center justify-between rounded-lg border border-[#CBD5E1] bg-[#F8FAFC] px-3.5 py-2.5 text-sm">
+                <div className="flex min-h-11 items-center justify-between rounded-lg border border-[#E1E5EA] bg-[#FCFCFD] px-3.5 py-2.5 text-sm">
                   <span className="font-semibold text-[#0F172A]">09:00</span>
                   <span className="text-xs text-[#64748B]">Horaire pédagogique fixe</span>
                 </div>
@@ -4120,14 +4141,14 @@ export function CreatePlatformView({
             <p className="mt-3 text-xs leading-5 text-[#64748B]">La journée suit la playlist de 09:00 à 18:30. L’audio est préparé automatiquement 24 h avant.</p>
           </div>
 
-          <footer className="border-t border-[#E2E8F0] bg-[#F8FAFC] px-5 py-4 sm:px-6 lg:flex lg:items-center lg:justify-between lg:gap-5 lg:px-8">
+          <footer className="border-t border-[#EEF0F3] bg-[#FCFCFD] px-5 py-4 sm:px-6 lg:flex lg:items-center lg:justify-between lg:gap-5 lg:px-8">
             <div>
               <p className="text-xs font-medium text-[#64748B]">{paymentRequired ? 'Paiement unique' : 'Compte interne'}</p>
               <p className="mt-0.5 text-base font-bold text-[#0F172A]">{paymentRequired ? formatPrice(estimatedAmountCents, product?.currency) : 'Paiement non requis'}</p>
               {paymentRequired && product?.unit_amount_cents && trainingDays > 0 && <p className="mt-0.5 text-xs text-[#64748B]">{formatPrice(product.unit_amount_cents, product.currency)} × {trainingDays} journée{trainingDays > 1 ? 's' : ''}</p>}
             </div>
             <div className="mt-4 flex flex-col-reverse gap-2 sm:flex-row lg:mt-0">
-              <button type="button" onClick={onCancel} disabled={creating} className="min-h-11 rounded-lg border border-[#CBD5E1] bg-white px-4 py-2 text-sm font-semibold text-[#334155] transition-colors hover:bg-[#F1F5F9] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#8B5CF6]/50 disabled:opacity-50">Annuler</button>
+              <button type="button" onClick={onCancel} disabled={creating} className="min-h-11 rounded-lg border border-[#E1E5EA] bg-white px-4 py-2 text-sm font-semibold text-[#334155] transition-colors hover:bg-[#F8FAFC] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#8B5CF6]/40 disabled:opacity-50">Annuler</button>
               <button type="button" onClick={() => onCreate(teacherDescription)} disabled={creating || !canCreateTeacher} className="min-h-11 rounded-lg bg-[#8B5CF6] px-5 py-2 text-sm font-semibold text-white transition-[background-color,transform] hover:bg-[#7C3AED] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#8B5CF6]/50 focus-visible:ring-offset-2 active:scale-[0.98] disabled:cursor-not-allowed disabled:bg-[#A78BFA] disabled:opacity-60">
                 {creating ? 'Préparation de la commande…' : billingLoading ? 'Chargement du tarif…' : paymentRequired ? billing ? `Payer ${formatPrice(estimatedAmountCents, product?.currency)} et lancer` : 'Paiement temporairement indisponible' : formationMode === 'existing' ? 'Réutiliser ce professeur' : 'Lancer la préparation'}
               </button>

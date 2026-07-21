@@ -15,7 +15,9 @@ violettes, sans reprendre le pictogramme fictif de la maquette. Les cinq robots
 3D existants restent les seules variantes d'identité. Le robot sélectionné
 dispose d'un mouvement d'attente discret et d'un halo orbital, tous deux coupés
 par `prefers-reduced-motion`. La description est bornée à 600 caractères côté
-serveur et conservée dans la commande professeur.
+serveur et conservée dans la commande professeur. La fiche propose désormais
+une palette compacte de cinq pastilles à la place du bouton d'identité visuelle,
+et le formulaire utilise des séparateurs et contours plus discrets.
 
 ## 2026-07-01
 
