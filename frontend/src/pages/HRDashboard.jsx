@@ -1349,7 +1349,6 @@ export default function HRDashboard() {
                 setTeacherRosterFilter(value)
                 setCardPage(0)
               }}
-              onCreateTeacher={openCreateModal}
               expandedPlatform={expandedPlatform}
               platformAudios={platformAudios}
               audiosLoading={audiosLoading}
@@ -2557,7 +2556,6 @@ function PlatformCardsView({
   cardsPerPage,
   rosterFilter,
   onRosterFilterChange,
-  onCreateTeacher,
   expandedPlatform,
   platformAudios,
   audiosLoading,
@@ -2710,28 +2708,8 @@ function PlatformCardsView({
         </div>
       )}
 
-      <div className="mt-6 min-h-0 flex-1 overflow-y-auto overscroll-contain pb-6 pr-1">
-        {filteredPlatforms.length === 0 ? (
-          <div
-            className="mx-auto mt-4 max-w-xl rounded-2xl border px-6 py-12 text-center"
-            style={{ backgroundColor: colors.cardBg, borderColor: colors.border }}
-          >
-            <h2 className="mt-4 text-base font-semibold" style={{ color: colors.text }}>
-              {rosterSearch ? 'Aucun professeur ne correspond à cette recherche' : 'Aucun professeur dans cette catégorie'}
-            </h2>
-            <p className="mx-auto mt-2 max-w-md text-sm leading-6" style={{ color: colors.textMuted }}>
-              {rosterSearch ? 'Essayez un autre prénom, une formation ou un code RNCP.' : 'Modifiez le filtre ou créez un nouveau professeur IA pour une prochaine formation.'}
-            </p>
-            <button
-              type="button"
-              onClick={onCreateTeacher}
-              className="mt-5 rounded-lg px-4 py-2 text-sm font-semibold text-white"
-              style={{ backgroundColor: '#8B5CF6' }}
-            >
-              Créer un professeur IA
-            </button>
-          </div>
-        ) : (
+      {filteredPlatforms.length > 0 && (
+        <div className="mt-6 min-h-0 flex-1 overflow-y-auto overscroll-contain pb-6 pr-1">
         <div className="mx-auto grid w-full max-w-[1204px] grid-cols-1 items-start gap-3 sm:grid-cols-2 sm:gap-4 lg:grid-cols-4 xl:grid-cols-5">
         {visiblePlatforms.map((p) => (
           <PlatformCard
@@ -2784,8 +2762,8 @@ function PlatformCardsView({
           />
         ))}
         </div>
-        )}
-      </div>
+        </div>
+      )}
     </section>
   )
 }
