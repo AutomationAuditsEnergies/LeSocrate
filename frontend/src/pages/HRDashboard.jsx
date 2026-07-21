@@ -1910,17 +1910,11 @@ function CenterWorkspaceSidebar({
       style={{ backgroundColor: colors.cardBg, transition: 'width 200ms cubic-bezier(0.16, 1, 0.3, 1)' }}
       aria-label="Navigation de l’espace centre"
     >
-      <div className={`flex h-16 items-center ${collapsed ? 'justify-center px-2' : 'justify-between px-4'}`}>
-        {!collapsed && (
-          <a href="/admin" className="inline-flex items-center gap-2 rounded-lg px-2 py-2 text-sm font-medium transition-colors hover:bg-black/[0.04]" style={{ color: colors.textSecondary }}>
-            <Icon name="chevron_left" className="text-xl" />
-            <span>Retour</span>
-          </a>
-        )}
+      <div className={`flex h-16 items-center ${collapsed ? 'justify-center px-2' : 'justify-end px-4'}`}>
         <button
           type="button"
           onClick={() => setCollapsed((value) => !value)}
-          className="flex h-9 w-9 items-center justify-center rounded-lg transition-colors hover:bg-black/[0.04] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40"
+          className="flex h-9 w-9 items-center justify-center rounded-lg transition-colors hover:bg-black/[0.04] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400/50"
           aria-label={collapsed ? 'Déployer la barre latérale' : 'Réduire la barre latérale'}
           aria-expanded={!collapsed}
           style={{ color: colors.textSecondary }}
