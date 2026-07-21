@@ -29,7 +29,7 @@ export function validateRecruitmentAnswer(stepId, rawValue) {
     if (value.length < 2 || isGeneric) {
       return {
         valid: false,
-        message: 'J’ai besoin d’un prénom ou d’un nom pour identifier ce professeur, par exemple « Pierre » ou « Sofia ».',
+        message: 'Quel nom souhaitez-vous donner au professeur IA ? Par exemple : « Pierre » ou « Sofia ».',
       }
     }
   }

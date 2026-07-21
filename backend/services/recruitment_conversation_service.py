@@ -59,10 +59,15 @@ def _normalize(value: Any) -> str:
 
 def _clarification(field: str, attempt: int = 0) -> str:
     rule = FIELD_RULES[field]
-    prefix = "Je n’ai pas trouvé cette information dans votre réponse. "
-    if attempt > 0:
-        prefix = "Il me manque toujours cette information pour continuer. "
-    return f"{prefix}Indiquez {rule['label']}, par exemple « {rule['example']} »."
+    if attempt <= 0:
+        questions = {
+            "teacherName": "Quel nom souhaitez-vous donner au professeur IA ?",
+            "trainingName": "Quel est le nom précis de la formation qu’il enseignera ?",
+            "rncpCode": "Quel est le code RNCP de cette formation ?",
+            "trainingDays": "Combien de journées la formation doit-elle durer au total ?",
+        }
+        return questions[field]
+    return f"Pour continuer, j’ai besoin de {rule['label']}. Par exemple : « {rule['example']} »."
 
 
 def _validate_value(field: str, value: Any) -> str | int | None:

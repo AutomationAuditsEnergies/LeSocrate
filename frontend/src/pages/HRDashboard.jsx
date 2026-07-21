@@ -2224,11 +2224,8 @@ function RecruitmentAssistant({ colors, modules, onComplete, onManualCreate }) {
     ])
   }
 
-  const interpretFreeTextAnswer = async (field, value, { includeIntroduction = false } = {}) => {
+  const interpretFreeTextAnswer = async (field, value, { initialBrief = false } = {}) => {
     setIsThinking(true)
-    const introduction = includeIntroduction
-      ? [{ role: 'assistant', text: 'Pour préparer ce professeur, je vais vérifier chaque information avec vous.' }]
-      : []
 
     let interpretation
     try {
@@ -2258,7 +2255,12 @@ function RecruitmentAssistant({ colors, modules, onComplete, onManualCreate }) {
         ...current,
         [field]: (current[field] || 0) + 1,
       }))
-      revealAssistantMessages([...introduction, { role: 'assistant', text: interpretation.reply }])
+      revealAssistantMessages([{
+        role: 'assistant',
+        text: initialBrief
+          ? 'Très bien. Quel nom souhaitez-vous donner à ce professeur IA ?'
+          : interpretation.reply,
+      }])
       return
     }
 
@@ -2266,7 +2268,7 @@ function RecruitmentAssistant({ colors, modules, onComplete, onManualCreate }) {
     const interpretedValue = interpretation.value
     if (field === 'teacherName' || field === 'trainingName') {
       setPendingConfirmation({ field, value: interpretedValue })
-      revealAssistantMessages([...introduction, {
+      revealAssistantMessages([{
         role: 'assistant',
         text: field === 'teacherName'
           ? `J’ai compris « ${interpretedValue} ». Est-ce bien le nom que vous souhaitez donner au professeur IA ?`
@@ -2285,7 +2287,7 @@ function RecruitmentAssistant({ colors, modules, onComplete, onManualCreate }) {
     setStarted(true)
     setHistory([{ role: 'user', text: value }])
     setBrief('')
-    interpretFreeTextAnswer('teacherName', value, { includeIntroduction: true })
+    interpretFreeTextAnswer('teacherName', value, { initialBrief: true })
   }
 
   const submitAnswer = (event) => {
@@ -2398,7 +2400,7 @@ function RecruitmentAssistant({ colors, modules, onComplete, onManualCreate }) {
   }
 
   return (
-    <section className="mx-auto flex h-full min-h-0 w-full max-w-5xl flex-col">
+    <section className="mx-auto flex min-h-0 w-full max-w-5xl flex-1 flex-col">
       <div className="flex h-14 shrink-0 items-center justify-between gap-4 border-b" style={{ borderColor: colors.borderLight }}>
         <div>
           <h1 className="text-sm font-semibold" style={{ color: colors.text }}>Nouveau professeur IA</h1>
@@ -2406,9 +2408,9 @@ function RecruitmentAssistant({ colors, modules, onComplete, onManualCreate }) {
         </div>
       </div>
 
-      <div className="mx-auto flex min-h-0 w-full max-w-3xl flex-1 flex-col">
-        <div ref={chatScrollRef} className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-1" aria-live="polite">
-          <div className="py-6">
+      <div className="mx-auto flex min-h-0 w-full max-w-3xl flex-1 flex-col px-1 sm:px-3">
+        <div ref={chatScrollRef} className="min-h-0 flex-1 overflow-y-auto overscroll-contain" aria-live="polite">
+          <div className="flex min-h-full flex-col justify-end py-5 sm:py-6">
           {history.map((message, index) => (
             <div
               key={`${message.role}-${index}`}
@@ -2419,7 +2421,7 @@ function RecruitmentAssistant({ colors, modules, onComplete, onManualCreate }) {
                   {message.text}
                 </div>
               ) : (
-                <p className="max-w-[88%] text-sm leading-6" style={{ color: colors.text }}>{message.text}</p>
+                <p className="max-w-[68ch] text-sm leading-6" style={{ color: colors.text }}>{message.text}</p>
               )}
               <button
                 type="button"
@@ -2462,7 +2464,7 @@ function RecruitmentAssistant({ colors, modules, onComplete, onManualCreate }) {
             </button>
           </div>
         ) : !completed ? (
-          <div className="shrink-0 border-t bg-white py-4" style={{ borderColor: colors.borderLight }}>
+          <div className="shrink-0 border-t bg-white py-3 sm:py-4" style={{ borderColor: colors.borderLight }}>
             {!isThinking && pendingConfirmation && (
               <div className="overflow-hidden rounded-xl border bg-white" style={{ borderColor: colors.border }}>
                 <div className="px-4 py-3.5 sm:px-5">

@@ -12,7 +12,7 @@ class RecruitmentConversationServiceTest(unittest.TestCase):
         result = interpret_recruitment_answer("trainingName", "une formation longue")
 
         self.assertFalse(result["answered"])
-        self.assertIn("intitulé", result["reply"])
+        self.assertIn("nom précis", result["reply"])
 
     @patch("services.recruitment_conversation_service._llm_post")
     def test_extracts_requested_value_from_a_longer_message(self, llm_post):
@@ -32,8 +32,16 @@ class RecruitmentConversationServiceTest(unittest.TestCase):
         result = interpret_recruitment_answer("rncpCode", "Pourquoi ?", attempt=2)
 
         self.assertFalse(result["answered"])
-        self.assertIn("toujours", result["reply"])
+        self.assertIn("Pour continuer", result["reply"])
         self.assertIn("35304", result["reply"])
+
+    @patch("services.recruitment_conversation_service._llm_post")
+    def test_first_clarification_is_a_direct_question(self, llm_post):
+        llm_post.return_value = '{"answered": false, "value": null}'
+
+        result = interpret_recruitment_answer("teacherName", "Je veux recruter un professeur")
+
+        self.assertEqual(result["reply"], "Quel nom souhaitez-vous donner au professeur IA ?")
 
     @patch("services.recruitment_conversation_service._llm_post")
     def test_falls_back_without_letting_provider_failure_block_the_form(self, llm_post):
