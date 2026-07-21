@@ -1335,6 +1335,7 @@ export default function HRDashboard() {
               colors={colors}
               modules={modules}
               onComplete={handleAssistantComplete}
+              onManualCreate={openCreateModal}
             />
           ) : (
             <PlatformCardsView
@@ -2107,7 +2108,7 @@ function getRecruitmentAssistantText(step, draft, matchingModule) {
   return step.question
 }
 
-function RecruitmentAssistant({ colors, modules, onComplete }) {
+function RecruitmentAssistant({ colors, modules, onComplete, onManualCreate }) {
   const [started, setStarted] = useState(false)
   const [brief, setBrief] = useState('')
   const [stepIndex, setStepIndex] = useState(0)
@@ -2239,6 +2240,17 @@ function RecruitmentAssistant({ colors, modules, onComplete }) {
               </button>
             </div>
           </form>
+
+          <div className="mt-4 flex justify-end">
+            <button
+              type="button"
+              onClick={onManualCreate}
+              className="inline-flex items-center gap-2 rounded-full bg-[#18181B] px-5 py-3 text-sm font-semibold text-white transition-colors hover:bg-[#303036] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400 focus-visible:ring-offset-2"
+            >
+              <Icon name="edit_note" className="text-lg" />
+              <span>Recruter manuellement un professeur</span>
+            </button>
+          </div>
 
           <div className="mx-auto mt-7 max-w-[820px]">
             <div className="space-y-1">
@@ -2641,10 +2653,6 @@ function PlatformCardsView({
           className="min-w-0 flex-1 bg-transparent py-2 text-sm outline-none placeholder:text-[#626269]"
           style={{ color: colors.text }}
         />
-        <button type="button" onClick={onCreateTeacher} className="inline-flex h-10 shrink-0 items-center justify-center gap-2 whitespace-nowrap rounded-full bg-[#18181B] px-4 text-sm font-semibold text-white transition-colors hover:bg-[#303036] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400/50" aria-label="Créer un professeur manuellement">
-          <Icon name="edit_note" className="text-lg" />
-          <span>Créer manuellement</span>
-        </button>
       </div>
 
       <div className="mx-auto mt-8 flex w-full max-w-[980px] items-center gap-5" aria-hidden="true">
