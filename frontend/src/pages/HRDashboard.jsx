@@ -27,6 +27,7 @@ import {
   shouldShowCenterOnboarding,
 } from '../centerWorkspace'
 import { applyKnownRncpTraining, validateRecruitmentAnswer } from '../recruitmentConversation'
+import { buildTeacherDescription } from '../teacherIdentity'
 
 // ─── Material Icon Component ─────────────────────────────────────────────────
 const Icon = ({ name, className = '' }) => (
@@ -988,7 +989,7 @@ export default function HRDashboard() {
     return () => window.clearTimeout(timeoutId)
   }, [newlyCreatedPlatformId])
 
-  const handleCreatePlatform = async () => {
+  const handleCreatePlatform = async (teacherDescription = '') => {
     if (creatingRef.current) return
     const teacherName = teacherFirstName.trim()
     const selectedModule = modules.find((module) => String(module.id) === String(selectedModuleId))
@@ -1002,6 +1003,7 @@ export default function HRDashboard() {
       name: platformName,
       teacher_name: teacherName,
       teacher_color: teacherColor || 'violet',
+      teacher_description: String(teacherDescription || '').trim(),
     }
     let operationType = 'new_teacher'
     const weeklyCount = parseInt(weeklyCourseCount, 10)
@@ -1931,7 +1933,7 @@ function CenterWorkspaceSidebar({
     >
       <div className={`flex h-16 shrink-0 items-center ${collapsed ? 'justify-center px-2' : 'justify-between px-4'}`}>
         {!collapsed && (
-          <img src="/cadrenza-mark.svg" alt="Cadrenza" className="h-[30px] w-[30px] rounded-md" />
+          <img src="/socrate-mark.svg" alt="Le Socrate" className="h-8 w-8" />
         )}
         <button
           type="button"
@@ -3816,9 +3818,7 @@ function ModulesCatalogueView({
   )
 }
 
-function CreatePlatformView({
-  colors,
-  darkMode,
+export function CreatePlatformView({
   modules,
   formationMode,
   selectedModuleId,
@@ -3862,6 +3862,15 @@ function CreatePlatformView({
   ]
   const selectedColor = teacherColors.find((color) => color.id === teacherColor) || teacherColors[0]
   const selectedModule = modules.find((module) => String(module.id) === String(selectedModuleId))
+  const trainingTitle = formationMode === 'existing'
+    ? String(selectedModule?.tp_name || '').trim()
+    : newFormTpName.trim()
+  const generatedDescription = useMemo(
+    () => buildTeacherDescription(trainingTitle),
+    [trainingTitle],
+  )
+  const [teacherDescription, setTeacherDescription] = useState(generatedDescription)
+  const descriptionEditedRef = useRef(false)
   const operationType = formationMode === 'existing' ? 'reuse_teacher' : 'new_teacher'
   const product = billing?.products?.[operationType]
   const trainingDays = formationMode === 'existing'
@@ -3880,13 +3889,14 @@ function CreatePlatformView({
     && teachingDays.length > 0
     && scheduleStartDate
     && scheduleStartTime
+    && teacherDescription.trim()
     && billingReady
   )
-  const inputStyle = {
-    backgroundColor: darkMode ? '#0f172a' : '#F8F7F5',
-    color: darkMode ? '#f1f5f9' : '#1e293b',
-    border: `1px solid ${darkMode ? '#334155' : '#e2e8f0'}`,
-  }
+
+  useEffect(() => {
+    if (!descriptionEditedRef.current) setTeacherDescription(generatedDescription)
+  }, [generatedDescription])
+
   const toggleTeachingDay = (dayId) => {
     setTeachingDays((current) => (
       current.includes(dayId)
@@ -3894,305 +3904,235 @@ function CreatePlatformView({
         : [...current, dayId]
     ))
   }
+  const regenerateDescription = () => {
+    descriptionEditedRef.current = false
+    setTeacherDescription(generatedDescription)
+  }
+  const inputClassName = 'teacher-identity-control w-full rounded-lg border border-[#CBD5E1] bg-[#F8FAFC] px-3.5 py-2.5 text-sm text-[#0F172A] transition-[border-color,box-shadow,background-color] placeholder:text-[#64748B]'
 
   return (
-    <section
-      className="mx-auto w-full max-w-3xl"
-    >
-      {prefilledFromAssistant && (
-        <div className="recruitment-review-enter mb-6 flex items-center gap-4 rounded-xl bg-white px-4 py-3.5" role="status" style={{ boxShadow: '0 4px 12px rgba(41, 32, 24, 0.08)' }}>
-          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[#EDE8FF] text-[#6D4AC7]">
-            <Icon name="auto_awesome" className="text-lg" />
-          </span>
-          <div>
-            <p className="text-sm font-semibold" style={{ color: colors.text }}>Est-ce bien ce professeur IA que vous souhaitez recruter ?</p>
-            <p className="mt-0.5 text-xs leading-5" style={{ color: colors.textMuted }}>Les réponses de la conversation sont déjà reportées ci-dessous. Vérifiez-les avant de continuer.</p>
+    <section className="w-full pb-10">
+      <div className="grid items-start gap-5 lg:grid-cols-[minmax(17.5rem,1fr)_minmax(0,2fr)] xl:gap-6">
+        <aside className="teacher-identity-panel relative overflow-hidden rounded-2xl border border-[#E2E8F0] bg-white p-5 lg:sticky lg:top-6 lg:flex lg:min-h-[calc(100vh-7rem)] lg:flex-col xl:p-6">
+          <div className="relative z-10 flex items-center justify-between gap-3">
+            <div className="flex items-center gap-3">
+              <img src="/socrate-mark.svg" alt="" className="h-9 w-9" />
+              <div>
+                <p className="text-sm font-bold tracking-[-0.01em] text-[#0F172A]">LE SOCRATE</p>
+                <p className="text-xs text-[#64748B]">Professeur IA</p>
+              </div>
+            </div>
+            <span className="rounded-full border border-[#DDD6FE] bg-[#F5F3FF] px-2.5 py-1 text-[0.6875rem] font-semibold text-[#6D28D9]">
+              En configuration
+            </span>
           </div>
-        </div>
-      )}
-      <header
-        className="mb-7 flex items-start justify-between gap-4"
-      >
-        <div className="flex flex-col leading-tight">
-          <span
-            className="text-[10px] font-semibold uppercase"
-            style={{ color: colors.textMuted, letterSpacing: '0.22em' }}
-          >
-            Création
-          </span>
-          <h2 className="mt-1 text-xl font-semibold tracking-tight" style={{ color: colors.text }}>
-            {formationMode === 'existing' ? 'Réutiliser un professeur IA' : 'Nouveau professeur IA'}
-          </h2>
-        </div>
-      </header>
 
-      <div>
-        <div className="grid gap-5 md:grid-cols-[1fr_180px]">
-          <div className="space-y-5">
-            <div>
-              <label className="mb-2 block text-sm font-medium" style={{ color: darkMode ? '#94a3b8' : '#64748b' }}>
-                Prénom du professeur IA
-              </label>
-              <input
-                type="text"
-                value={teacherFirstName}
-                onChange={(e) => setTeacherFirstName(e.target.value)}
-                placeholder="Ex: Lina"
-                autoFocus
-                className="w-full rounded-lg px-4 py-3 text-sm outline-none transition-all"
-                style={inputStyle}
-              />
+          <div className="teacher-identity-stage relative z-10 mt-4 flex min-h-72 items-center justify-center sm:min-h-80 lg:flex-1">
+            <span className="teacher-identity-halo absolute h-60 w-60 rounded-full border border-[#DDD6FE] bg-[#F5F3FF]" style={{ '--teacher-accent': selectedColor.swatch }} aria-hidden="true" />
+            <span className="teacher-identity-orbit absolute h-72 w-72 rounded-full border border-[#EDE9FE]" aria-hidden="true">
+              <span className="absolute left-8 top-3 h-2 w-2 rounded-full" style={{ backgroundColor: selectedColor.swatch }} />
+              <span className="absolute bottom-8 right-1 h-1.5 w-1.5 rounded-full bg-[#C4B5FD]" />
+            </span>
+            <img
+              key={selectedColor.id}
+              src={selectedColor.image}
+              alt={`Aperçu du professeur en ${selectedColor.label.toLowerCase()}`}
+              className="teacher-identity-avatar relative z-10 h-72 w-72 object-contain sm:h-80 sm:w-80 lg:h-[22rem] lg:w-[22rem]"
+              draggable="false"
+            />
+          </div>
+
+          <div className="relative z-10 mt-2">
+            <p className="text-sm font-medium text-[#64748B]">{trainingTitle || 'Formation à renseigner'}</p>
+            <h2 className="mt-1 text-3xl font-bold tracking-[-0.035em] text-[#0F172A]">
+              {teacherFirstName.trim() || 'Votre professeur'}
+            </h2>
+            <p className="mt-3 max-w-[42ch] text-sm leading-6 text-[#475569]">
+              {teacherDescription || 'La description du professeur apparaîtra ici dès que vous aurez renseigné la formation.'}
+            </p>
+            <div className="mt-4 flex flex-wrap gap-2">
+              {(formationMode === 'existing' ? selectedModule?.rncp_code : newFormRncp.trim()) && (
+                <span className="rounded-full border border-[#E2E8F0] bg-[#F8FAFC] px-3 py-1.5 text-xs font-medium text-[#475569]">
+                  RNCP {formationMode === 'existing' ? selectedModule.rncp_code : newFormRncp.trim()}
+                </span>
+              )}
+              {trainingDays > 0 && (
+                <span className="rounded-full border border-[#E2E8F0] bg-[#F8FAFC] px-3 py-1.5 text-xs font-medium text-[#475569]">
+                  {trainingDays} journée{trainingDays > 1 ? 's' : ''}
+                </span>
+              )}
+            </div>
+            <a href="#teacher-visual-identity" className="mt-5 flex min-h-11 w-full items-center justify-center gap-2 rounded-lg border border-[#C4B5FD] bg-white px-4 py-2.5 text-sm font-semibold text-[#6D28D9] transition-colors hover:bg-[#F5F3FF] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#8B5CF6]/50">
+              <Icon name="palette" className="text-lg" />
+              Changer l’identité visuelle
+            </a>
+          </div>
+        </aside>
+
+        <div className="min-w-0 overflow-hidden rounded-2xl border border-[#E2E8F0] bg-white">
+          <header className="px-5 py-6 sm:px-6 lg:px-8">
+            <h1 className="text-2xl font-bold tracking-[-0.025em] text-[#0F172A]">
+              {formationMode === 'existing' ? 'Réutiliser un professeur IA' : 'Recruter un professeur IA'}
+            </h1>
+            <p className="mt-1.5 text-sm leading-6 text-[#475569]">
+              Renseignez son identité, sa formation et son calendrier.
+            </p>
+          </header>
+
+          {prefilledFromAssistant && (
+            <div className="recruitment-review-enter mx-5 mb-1 flex items-start gap-3 rounded-xl border border-[#DDD6FE] bg-[#F5F3FF] px-4 py-3.5 sm:mx-6 lg:mx-8" role="status">
+              <Icon name="check_circle" className="mt-0.5 text-lg text-[#7C3AED]" />
+              <div>
+                <p className="text-sm font-semibold text-[#0F172A]">Réponses reportées dans le formulaire</p>
+                <p className="mt-0.5 text-xs leading-5 text-[#475569]">Vérifiez les informations avant de continuer.</p>
+              </div>
+            </div>
+          )}
+
+          <div className="border-t border-[#E2E8F0] px-5 py-6 sm:px-6 lg:px-8">
+            <h2 className="text-lg font-semibold text-[#0F172A]">Identité et formation</h2>
+            <div className="mt-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+              <div>
+                <label htmlFor="teacher-first-name" className="mb-2 block text-sm font-medium text-[#334155]">Prénom du professeur</label>
+                <input id="teacher-first-name" type="text" value={teacherFirstName} onChange={(event) => setTeacherFirstName(event.target.value)} placeholder="Ex. Lina" autoFocus className={inputClassName} />
+              </div>
+
+              {formationMode === 'existing' ? (
+                <div className="sm:col-span-1 lg:col-span-2">
+                  <span className="mb-2 block text-sm font-medium text-[#334155]">Professeur à réutiliser</span>
+                  <div className="rounded-lg border border-[#CBD5E1] bg-[#F8FAFC] px-3.5 py-2.5">
+                    <p className="text-sm font-semibold text-[#0F172A]">{selectedModule?.tp_name || 'Professeur introuvable'}</p>
+                    <p className="mt-1 text-xs text-[#64748B]">{selectedModule?.rncp_code ? `RNCP ${selectedModule.rncp_code}` : 'Formation archivée'}</p>
+                  </div>
+                </div>
+              ) : (
+                <>
+                  <div>
+                    <label htmlFor="teacher-training-name" className="mb-2 block text-sm font-medium text-[#334155]">Nom de la formation</label>
+                    <input id="teacher-training-name" type="text" value={newFormTpName} onChange={(event) => setNewFormTpName(event.target.value)} placeholder="Ex. TP CRCD" className={inputClassName} />
+                  </div>
+                  <div>
+                    <label htmlFor="teacher-rncp" className="mb-2 block text-sm font-medium text-[#334155]">Code RNCP</label>
+                    <input id="teacher-rncp" type="text" value={newFormRncp} onChange={(event) => setNewFormRncp(event.target.value)} placeholder="Ex. 35304" className={inputClassName} />
+                  </div>
+                </>
+              )}
             </div>
 
-            {formationMode === 'existing' ? (
-              <div>
-                <label className="mb-2 block text-sm font-medium" style={{ color: darkMode ? '#94a3b8' : '#64748b' }}>
-                  Professeur à réutiliser
-                </label>
-                <div className="rounded-lg px-4 py-3" style={inputStyle}>
-                  <p className="text-sm font-semibold">{selectedModule?.tp_name || 'Professeur introuvable'}</p>
-                  <p className="mt-1 text-xs" style={{ color: colors.textMuted }}>
-                    {selectedModule?.rncp_code ? `RNCP ${selectedModule.rncp_code}` : 'Formation archivée'}
-                  </p>
-                </div>
-              </div>
-            ) : (
-              <div>
-                <label className="mb-2 block text-sm font-medium" style={{ color: darkMode ? '#94a3b8' : '#64748b' }}>
-                  Nom de la formation
-                </label>
-                <input
-                  type="text"
-                  value={newFormTpName}
-                  onChange={(e) => setNewFormTpName(e.target.value)}
-                  placeholder="Ex: TP CRCD"
-                  className="w-full rounded-lg px-4 py-3 text-sm outline-none transition-all"
-                  style={inputStyle}
-                />
-              </div>
-            )}
-          </div>
-
-          <div
-            className="flex items-center justify-center rounded-xl"
-            style={{ backgroundColor: darkMode ? '#0f172a' : '#F8F7F5', border: `1px solid ${colors.border}` }}
-          >
-            <img src={selectedColor.image} alt="" className="h-36 w-36 object-contain" draggable="false" />
-          </div>
-        </div>
-
-        <div className="mt-5">
-          <label className="mb-2 block text-sm font-medium" style={{ color: darkMode ? '#94a3b8' : '#64748b' }}>
-            Couleur du professeur IA
-          </label>
-          <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
-            {teacherColors.map((color) => {
-              const selected = teacherColor === color.id
-              return (
-                <button
-                  key={color.id}
-                  type="button"
-                  onClick={() => setTeacherColor(color.id)}
-                  aria-pressed={selected}
-                  className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition-all"
-                  style={{
-                    color: selected ? colors.text : colors.textSecondary,
-                    border: `1px solid ${selected ? color.swatch : colors.border}`,
-                    backgroundColor: selected ? `${color.swatch}14` : 'transparent',
-                  }}
-                >
-                  <span className="h-3 w-3 rounded-full" style={{ backgroundColor: color.swatch }} />
-                  {color.label}
+            <div className="mt-5">
+              <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                <label htmlFor="teacher-description" className="text-sm font-medium text-[#334155]">Description du professeur</label>
+                <button type="button" onClick={regenerateDescription} disabled={!generatedDescription} className="inline-flex min-h-9 items-center gap-1.5 rounded-lg px-2.5 text-xs font-semibold text-[#6D28D9] transition-colors hover:bg-[#F5F3FF] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#8B5CF6]/50 disabled:cursor-not-allowed disabled:opacity-40">
+                  <Icon name="refresh" className="text-sm" />
+                  Régénérer
                 </button>
-              )
-            })}
+              </div>
+              <textarea
+                id="teacher-description"
+                value={teacherDescription}
+                onChange={(event) => {
+                  descriptionEditedRef.current = true
+                  setTeacherDescription(event.target.value.slice(0, 600))
+                }}
+                rows="4"
+                maxLength="600"
+                placeholder="La description sera générée à partir du nom de la formation."
+                className={`${inputClassName} min-h-28 resize-y leading-6`}
+                aria-describedby="teacher-description-help"
+              />
+              <div id="teacher-description-help" className="mt-1.5 flex items-center justify-between gap-3 text-xs text-[#64748B]">
+                <span>Générée automatiquement, vous pouvez la modifier.</span>
+                <span className="tabular-nums">{teacherDescription.length}/600</span>
+              </div>
+            </div>
           </div>
-        </div>
 
-        {formationMode !== 'existing' && <div className="mt-5 grid gap-4 md:grid-cols-2">
-          <div>
-            <label className="mb-2 block text-sm font-medium" style={{ color: darkMode ? '#94a3b8' : '#64748b' }}>
-              Code RNCP
-            </label>
-            <input
-              type="text"
-              value={newFormRncp}
-              onChange={(e) => setNewFormRncp(e.target.value)}
-              placeholder="Ex: 35304"
-              className="w-full rounded-lg px-4 py-3 text-sm outline-none transition-all"
-              style={inputStyle}
-            />
-          </div>
-          <div>
-            <label className="mb-2 flex items-center gap-2 text-sm font-medium" style={{ color: darkMode ? '#94a3b8' : '#64748b' }}>
-              <span>Nombre de journées que doit durer la formation</span>
-              <span className="group relative inline-flex">
-                <button
-                  type="button"
-                  className="inline-flex h-5 w-5 items-center justify-center rounded-full text-xs font-bold"
-                  style={{ color: '#8B5CF6', border: '1px solid rgba(139, 92, 246, 0.35)', backgroundColor: 'rgba(139, 92, 246, 0.08)' }}
-                  aria-label="Aide sur le nombre de journées"
-                >
-                  i
-                </button>
-                <span
-                  className="pointer-events-none absolute bottom-7 right-0 z-30 hidden w-72 rounded-lg px-3 py-2 text-xs font-medium leading-5 shadow-lg group-hover:block group-focus-within:block"
-                  style={{ color: '#334155', backgroundColor: '#ffffff', border: '1px solid #e2e8f0' }}
-                >
-                  Si la formation dure 52 semaines à raison de 1 jour par semaine, indiquez 52. Si elle dure 52 semaines à raison de 2 jours par semaine, indiquez 104.
-                </span>
-              </span>
-            </label>
-            <input
-              type="number"
-              value={newFormHours}
-              onChange={(e) => setNewFormHours(e.target.value)}
-              placeholder="Ex: 52"
-              min="1"
-              className="w-full rounded-lg px-4 py-3 text-sm outline-none transition-all"
-              style={inputStyle}
-            />
-          </div>
-        </div>}
-
-        <div className="mt-5 grid gap-4 md:grid-cols-[180px_1fr]">
-          <div>
-            <label className="mb-2 block text-sm font-medium" style={{ color: darkMode ? '#94a3b8' : '#64748b' }}>
-              Cours par semaine
-            </label>
-            <input
-              type="number"
-              value={weeklyCourseCount}
-              onChange={(e) => setWeeklyCourseCount(e.target.value)}
-              min="1"
-              max="5"
-              className="w-full rounded-lg px-4 py-3 text-sm outline-none transition-all"
-              style={inputStyle}
-            />
-          </div>
-          <div>
-            <label className="mb-2 block text-sm font-medium" style={{ color: darkMode ? '#94a3b8' : '#64748b' }}>
-              Jours de cours
-            </label>
-            <div className="grid grid-cols-5 gap-2">
-              {weekDays.map((day) => {
-                const selected = teachingDays.includes(day.id)
+          <div id="teacher-visual-identity" className="scroll-mt-6 border-t border-[#E2E8F0] px-5 py-6 sm:px-6 lg:px-8">
+            <h2 className="text-lg font-semibold text-[#0F172A]">Identité visuelle</h2>
+            <p className="mt-1 text-sm text-[#64748B]">La couleur personnalise le robot sans modifier le contenu pédagogique.</p>
+            <div className="mt-4 grid grid-cols-2 gap-2.5 sm:grid-cols-5">
+              {teacherColors.map((color) => {
+                const selected = teacherColor === color.id
                 return (
                   <button
-                    key={day.id}
+                    key={color.id}
                     type="button"
-                    onClick={() => toggleTeachingDay(day.id)}
-                    className="rounded-lg px-2 py-3 text-xs font-semibold transition-all"
-                    style={{
-                      color: selected ? '#ffffff' : colors.textSecondary,
-                      backgroundColor: selected ? '#8B5CF6' : darkMode ? '#0f172a' : '#F8F7F5',
-                      border: `1px solid ${selected ? '#8B5CF6' : colors.border}`,
-                    }}
+                    onClick={() => setTeacherColor(color.id)}
+                    aria-pressed={selected}
+                    className="relative flex min-h-28 flex-col items-center justify-center gap-1.5 rounded-xl border bg-white px-2 py-2.5 text-xs font-semibold transition-[border-color,background-color,transform] hover:bg-[#F8FAFC] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#8B5CF6]/50 active:scale-[0.98]"
+                    style={{ borderColor: selected ? color.swatch : '#E2E8F0', backgroundColor: selected ? `${color.swatch}0D` : '#FFFFFF', color: '#334155' }}
                   >
-                    {day.label}
+                    {selected && <Icon name="check_circle" className="absolute right-2 top-2 text-base" style={{ color: color.swatch }} />}
+                    <img src={color.image} alt="" className="h-16 w-16 object-contain" />
+                    <span>{color.label}</span>
                   </button>
                 )
               })}
             </div>
           </div>
-        </div>
 
-        <div className="mt-5 grid gap-4 md:grid-cols-2">
-          <div>
-            <label className="mb-2 block text-sm font-medium" style={{ color: darkMode ? '#94a3b8' : '#64748b' }}>
-              Début de la formation
-            </label>
-            <input
-              type="date"
-              value={scheduleStartDate}
-              min={todayDateInput()}
-              onChange={(event) => setScheduleStartDate(event.target.value)}
-              className="w-full rounded-lg px-4 py-3 text-sm outline-none transition-all"
-              style={inputStyle}
-            />
-          </div>
-          <div>
-            <label className="mb-2 block text-sm font-medium" style={{ color: darkMode ? '#94a3b8' : '#64748b' }}>
-              Heure de chaque journée
-            </label>
-            <div className="flex h-12 items-center justify-between rounded-lg px-4 text-sm" style={inputStyle}>
-              <span className="font-semibold" style={{ color: colors.text }}>09:00</span>
-              <span className="text-xs" style={{ color: colors.textMuted }}>Horaire pédagogique fixe</span>
-            </div>
-            <p className="mt-2 text-xs leading-5" style={{ color: colors.textMuted }}>
-              La journée suit la playlist de 09:00 à 18:30. L’audio est préparé automatiquement 24 h avant.
-            </p>
-          </div>
-        </div>
-
-        <div
-          className="mt-7 rounded-xl border p-5"
-          style={{ backgroundColor: darkMode ? 'rgba(15,23,42,.72)' : '#ffffff', borderColor: colors.border }}
-        >
-          <div className="flex items-start justify-between gap-5">
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.16em]" style={{ color: colors.textMuted }}>
-                Récapitulatif
-              </p>
-              <h3 className="mt-1.5 text-base font-semibold" style={{ color: colors.text }}>
-                {teacherFirstName.trim() || 'Votre professeur'} · {formationMode === 'existing' ? (selectedModule?.tp_name || 'Formation') : (newFormTpName.trim() || 'Formation')}
-              </h3>
-              <p className="mt-2 text-sm leading-6" style={{ color: colors.textSecondary }}>
-                {teachingDays.length ? teachingDays.join(', ') : 'Jours à choisir'} à {scheduleStartTime || '—'} · début le {scheduleStartDate || '—'}
-              </p>
-            </div>
-            <div className="text-right">
-              <p className="text-xs" style={{ color: colors.textMuted }}>
-                {paymentRequired ? 'Paiement unique' : 'Compte interne'}
-              </p>
-              <p className="mt-1 text-lg font-semibold" style={{ color: colors.text }}>
-                {paymentRequired ? formatPrice(estimatedAmountCents, product?.currency) : 'Paiement non requis'}
-              </p>
-              {paymentRequired && product?.unit_amount_cents && trainingDays > 0 && (
-                <p className="mt-1 text-xs" style={{ color: colors.textMuted }}>
-                  {formatPrice(product.unit_amount_cents, product.currency)} × {trainingDays} journée{trainingDays > 1 ? 's' : ''}
-                </p>
+          <div className="border-t border-[#E2E8F0] px-5 py-6 sm:px-6 lg:px-8">
+            <h2 className="text-lg font-semibold text-[#0F172A]">Calendrier</h2>
+            <div className="mt-5 grid gap-4 md:grid-cols-2">
+              {formationMode !== 'existing' && (
+                <div>
+                  <label htmlFor="teacher-training-days" className="mb-2 block text-sm font-medium text-[#334155]">Journées de formation</label>
+                  <input id="teacher-training-days" type="number" value={newFormHours} onChange={(event) => setNewFormHours(event.target.value)} placeholder="Ex. 104" min="1" className={inputClassName} aria-describedby="teacher-training-days-help" />
+                  <p id="teacher-training-days-help" className="mt-1.5 text-xs leading-5 text-[#64748B]">Indiquez le nombre total de journées prévues par le parcours.</p>
+                </div>
               )}
+              <div>
+                <label htmlFor="teacher-weekly-count" className="mb-2 block text-sm font-medium text-[#334155]">Cours par semaine</label>
+                <input id="teacher-weekly-count" type="number" value={weeklyCourseCount} onChange={(event) => setWeeklyCourseCount(event.target.value)} min="1" max="5" className={inputClassName} />
+              </div>
             </div>
-          </div>
-          <div className="mt-4 flex items-start gap-2 border-t pt-4 text-xs leading-5" style={{ color: colors.textMuted, borderColor: colors.border }}>
-            <Icon name="verified_user" className="mt-0.5 text-sm" />
-            <span>
-              {paymentRequired
-                ? 'Paiement sécurisé par Stripe. La préparation démarre uniquement après confirmation du paiement.'
-                : (billing?.exemption_label || 'Ce compte est autorisé à lancer la préparation sans paiement.')}
-            </span>
-          </div>
-        </div>
 
-        <div className="mt-6 flex justify-end gap-3">
-          <button
-            onClick={onCancel}
-            disabled={creating}
-            className="rounded-lg px-4 py-2 text-sm font-medium transition-all"
-            style={{ backgroundColor: darkMode ? '#334155' : '#f1f5f9', color: darkMode ? '#94a3b8' : '#64748b' }}
-          >
-            Annuler
-          </button>
-          <button
-            onClick={onCreate}
-            disabled={creating || !canCreateTeacher}
-            className="rounded-lg px-5 py-2 text-sm font-medium text-white transition-all"
-            style={{
-              backgroundColor: creating || !canCreateTeacher ? '#a78bfa' : '#8B5CF6',
-              opacity: creating || !canCreateTeacher ? 0.6 : 1,
-            }}
-          >
-            {creating
-              ? 'Préparation de la commande...'
-              : billingLoading
-                ? 'Chargement du tarif...'
-                : paymentRequired
-                  ? billing
-                    ? `Payer ${formatPrice(estimatedAmountCents, product?.currency)} et lancer`
-                    : 'Paiement temporairement indisponible'
-                  : formationMode === 'existing' ? 'Réutiliser ce professeur' : 'Lancer la préparation'}
-          </button>
+            <fieldset className="mt-5">
+              <legend className="mb-2 text-sm font-medium text-[#334155]">Jours de cours</legend>
+              <div className="grid grid-cols-5 gap-2">
+                {weekDays.map((day) => {
+                  const selected = teachingDays.includes(day.id)
+                  return (
+                    <button key={day.id} type="button" onClick={() => toggleTeachingDay(day.id)} aria-pressed={selected} className="min-h-11 rounded-lg border px-2 py-2 text-xs font-semibold transition-[background-color,border-color,transform] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#8B5CF6]/50 active:scale-[0.98]" style={{ color: selected ? '#FFFFFF' : '#334155', backgroundColor: selected ? '#8B5CF6' : '#F8FAFC', borderColor: selected ? '#8B5CF6' : '#CBD5E1' }}>
+                      {day.label}
+                    </button>
+                  )
+                })}
+              </div>
+              {Number(weeklyCourseCount) !== teachingDays.length && (
+                <p className="mt-2 text-xs font-medium text-[#B45309]" role="status">Choisissez {weeklyCourseCount || 0} jour{Number(weeklyCourseCount) > 1 ? 's' : ''} pour correspondre au rythme hebdomadaire.</p>
+              )}
+            </fieldset>
+
+            <div className="mt-5 grid gap-4 md:grid-cols-2">
+              <div>
+                <label htmlFor="teacher-start-date" className="mb-2 block text-sm font-medium text-[#334155]">Début de la formation</label>
+                <input id="teacher-start-date" type="date" value={scheduleStartDate} min={todayDateInput()} onChange={(event) => setScheduleStartDate(event.target.value)} className={inputClassName} />
+              </div>
+              <div>
+                <span className="mb-2 block text-sm font-medium text-[#334155]">Heure de chaque journée</span>
+                <div className="flex min-h-11 items-center justify-between rounded-lg border border-[#CBD5E1] bg-[#F8FAFC] px-3.5 py-2.5 text-sm">
+                  <span className="font-semibold text-[#0F172A]">09:00</span>
+                  <span className="text-xs text-[#64748B]">Horaire pédagogique fixe</span>
+                </div>
+              </div>
+            </div>
+            <p className="mt-3 text-xs leading-5 text-[#64748B]">La journée suit la playlist de 09:00 à 18:30. L’audio est préparé automatiquement 24 h avant.</p>
+          </div>
+
+          <footer className="border-t border-[#E2E8F0] bg-[#F8FAFC] px-5 py-4 sm:px-6 lg:flex lg:items-center lg:justify-between lg:gap-5 lg:px-8">
+            <div>
+              <p className="text-xs font-medium text-[#64748B]">{paymentRequired ? 'Paiement unique' : 'Compte interne'}</p>
+              <p className="mt-0.5 text-base font-bold text-[#0F172A]">{paymentRequired ? formatPrice(estimatedAmountCents, product?.currency) : 'Paiement non requis'}</p>
+              {paymentRequired && product?.unit_amount_cents && trainingDays > 0 && <p className="mt-0.5 text-xs text-[#64748B]">{formatPrice(product.unit_amount_cents, product.currency)} × {trainingDays} journée{trainingDays > 1 ? 's' : ''}</p>}
+            </div>
+            <div className="mt-4 flex flex-col-reverse gap-2 sm:flex-row lg:mt-0">
+              <button type="button" onClick={onCancel} disabled={creating} className="min-h-11 rounded-lg border border-[#CBD5E1] bg-white px-4 py-2 text-sm font-semibold text-[#334155] transition-colors hover:bg-[#F1F5F9] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#8B5CF6]/50 disabled:opacity-50">Annuler</button>
+              <button type="button" onClick={() => onCreate(teacherDescription)} disabled={creating || !canCreateTeacher} className="min-h-11 rounded-lg bg-[#8B5CF6] px-5 py-2 text-sm font-semibold text-white transition-[background-color,transform] hover:bg-[#7C3AED] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#8B5CF6]/50 focus-visible:ring-offset-2 active:scale-[0.98] disabled:cursor-not-allowed disabled:bg-[#A78BFA] disabled:opacity-60">
+                {creating ? 'Préparation de la commande…' : billingLoading ? 'Chargement du tarif…' : paymentRequired ? billing ? `Payer ${formatPrice(estimatedAmountCents, product?.currency)} et lancer` : 'Paiement temporairement indisponible' : formationMode === 'existing' ? 'Réutiliser ce professeur' : 'Lancer la préparation'}
+              </button>
+            </div>
+          </footer>
         </div>
       </div>
     </section>

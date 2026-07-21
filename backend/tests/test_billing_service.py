@@ -35,6 +35,15 @@ def _project():
 
 
 class BillingServiceTest(unittest.TestCase):
+    def test_teacher_description_is_trimmed_and_bounded_in_order_payload(self):
+        payload = _project()
+        payload["project"]["teacher_description"] = f"  {'x' * 700}  "
+
+        _, project, _ = billing_service._normalize_project(payload, 42)
+
+        self.assertEqual(len(project["teacher_description"]), 600)
+        self.assertFalse(project["teacher_description"].startswith(" "))
+
     def test_catalog_applies_margin_to_daily_production_cost(self):
         with patch.dict(os.environ, {"AI_TEACHER_COST_PER_DAY_CENTS": "1500", "STRIPE_SECRET_KEY": "sk_test"}):
             catalog = billing_service.get_product_catalog()

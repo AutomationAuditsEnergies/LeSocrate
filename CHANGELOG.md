@@ -1,5 +1,22 @@
 # Changelog
 
+## 2026-07-21
+
+### feat(hr-dashboard): recrutement manuel avec identité professeur en direct
+
+Le formulaire manuel adopte une composition 1/3–2/3 : aperçu permanent du
+robot à gauche, formulaire complet à droite. Le nom, la formation, le RNCP, la
+durée et la couleur actualisent la fiche du professeur pendant la saisie. Une
+description est générée localement depuis le titre de formation (avec un texte
+spécifique au TP CRCD), puis reste modifiable et régénérable avant paiement.
+
+Ajout d'un symbole vectoriel original du Socrate composé de deux bandes
+violettes, sans reprendre le pictogramme fictif de la maquette. Les cinq robots
+3D existants restent les seules variantes d'identité. Le robot sélectionné
+dispose d'un mouvement d'attente discret et d'un halo orbital, tous deux coupés
+par `prefers-reduced-motion`. La description est bornée à 600 caractères côté
+serveur et conservée dans la commande professeur.
+
 ## 2026-07-01
 
 ### feat(database): socle de migration pipeline vers Postgres
