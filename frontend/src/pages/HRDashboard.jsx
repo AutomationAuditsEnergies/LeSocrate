@@ -2322,11 +2322,14 @@ function RecruitmentAssistant({ colors, modules, onComplete, onManualCreate }) {
         </div>
       </div>
 
-      <div className="mx-auto flex min-h-0 w-full max-w-3xl flex-1 flex-col py-4">
+      <div className="mx-auto flex min-h-0 w-full max-w-3xl flex-1 flex-col">
         <div ref={chatScrollRef} className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-1" aria-live="polite">
-          <div className="flex min-h-full flex-col justify-end space-y-5 py-4">
+          <div className="py-6">
           {history.map((message, index) => (
-            <div key={`${message.role}-${index}`} className={`group flex flex-col ${message.role === 'user' ? 'items-end' : 'items-start'}`}>
+            <div
+              key={`${message.role}-${index}`}
+              className={`group relative flex flex-col ${message.role === 'user' ? 'items-end' : 'items-start'} ${index === 0 ? '' : history[index - 1]?.role === message.role ? 'mt-2' : 'mt-6'}`}
+            >
               {message.role === 'user' ? (
                 <div className="max-w-[82%] rounded-2xl bg-[#F1F1EF] px-4 py-2.5 text-sm leading-6" style={{ color: colors.text }}>
                   {message.text}
@@ -2337,7 +2340,7 @@ function RecruitmentAssistant({ colors, modules, onComplete, onManualCreate }) {
               <button
                 type="button"
                 onClick={() => navigator.clipboard?.writeText(message.text)}
-                className="mt-1 flex h-7 w-7 items-center justify-center rounded-md opacity-0 transition-opacity duration-150 hover:bg-[#F3F3F1] group-hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#8B5CF6]/40"
+                className={`absolute top-full mt-0.5 flex h-7 w-7 items-center justify-center rounded-md opacity-0 transition-opacity duration-150 hover:bg-[#F3F3F1] group-hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#097FE8]/40 ${message.role === 'user' ? 'right-0' : 'left-0'}`}
                 style={{ color: colors.textMuted }}
                 aria-label="Copier le message"
               >
@@ -2346,7 +2349,7 @@ function RecruitmentAssistant({ colors, modules, onComplete, onManualCreate }) {
             </div>
           ))}
           {isThinking && (
-            <div className="flex items-center gap-2 py-1 text-sm" style={{ color: colors.textMuted }}>
+            <div className="mt-6 flex items-center gap-2 py-1 text-sm" style={{ color: colors.textMuted }}>
               <span className="recruitment-thinking-dot h-1.5 w-1.5 rounded-full bg-current" aria-hidden="true" />
               <span>Réflexion…</span>
             </div>
@@ -2374,15 +2377,15 @@ function RecruitmentAssistant({ colors, modules, onComplete, onManualCreate }) {
               <Icon name="arrow_forward" className="text-base" />
             </button>
           </div>
-        ) : !isThinking ? (
-          <div className="mt-4 shrink-0">
+        ) : !completed ? (
+          <div className="shrink-0 border-t bg-white py-4" style={{ borderColor: colors.borderLight }}>
             {(currentStep.type === 'text' || currentStep.type === 'number') && (
               <form onSubmit={submitAnswer} className="flex items-center gap-2 rounded-xl border bg-white p-2 pl-4" style={{ borderColor: colors.borderLight }}>
-                <input type={currentStep.type === 'number' ? 'number' : 'text'} min={currentStep.type === 'number' ? '1' : undefined} value={answer} onChange={(event) => setAnswer(event.target.value)} placeholder={currentStep.placeholder} className="min-w-0 flex-1 bg-transparent py-2.5 text-sm outline-none placeholder:text-[#68625B]" style={{ color: colors.text }} autoFocus />
-                <button type="submit" disabled={!answer.trim()} className="flex h-9 w-9 items-center justify-center rounded-full bg-[#191918] text-white transition-colors hover:bg-[#30302E] disabled:bg-[#C7C7C4]" aria-label="Valider la réponse"><ArrowUp size={17} strokeWidth={1.8} aria-hidden="true" /></button>
+                <input type={currentStep.type === 'number' ? 'number' : 'text'} min={currentStep.type === 'number' ? '1' : undefined} value={answer} onChange={(event) => setAnswer(event.target.value)} placeholder={isThinking ? 'Réflexion en cours…' : currentStep.placeholder} disabled={isThinking} className="min-w-0 flex-1 bg-transparent py-2.5 text-sm outline-none placeholder:text-[#68625B] disabled:cursor-wait disabled:text-[#73736F]" style={{ color: colors.text }} autoFocus={!isThinking} />
+                <button type="submit" disabled={isThinking || !answer.trim()} className="flex h-9 w-9 items-center justify-center rounded-full bg-[#191918] text-white transition-colors hover:bg-[#30302E] disabled:cursor-not-allowed disabled:bg-[#C7C7C4]" aria-label="Valider la réponse"><ArrowUp size={17} strokeWidth={1.8} aria-hidden="true" /></button>
               </form>
             )}
-            {currentIsChoice && (
+            {!isThinking && currentIsChoice && (
               <div className="overflow-hidden rounded-xl border bg-white" style={{ borderColor: colors.border }}>
                 <div className="flex items-start justify-between gap-4 px-4 py-3.5 sm:px-5">
                   <div>
@@ -2447,7 +2450,7 @@ function RecruitmentAssistant({ colors, modules, onComplete, onManualCreate }) {
                 )}
               </div>
             )}
-            {currentStep.type === 'date' && (
+            {!isThinking && currentStep.type === 'date' && (
               <div className="flex flex-wrap items-center gap-3 rounded-xl border bg-white p-3" style={{ borderColor: colors.border }}><input type="date" min={todayDateInput()} value={draft.startDate} onChange={(event) => setDraft((current) => ({ ...current, startDate: event.target.value }))} className="min-w-0 flex-1 rounded-lg border px-4 py-2.5 text-sm" style={{ borderColor: colors.borderLight, color: colors.text }} /><button type="button" onClick={() => advance(draft.startDate)} className="rounded-lg bg-[#191714] px-4 py-2.5 text-sm font-medium text-white">Valider la date</button></div>
             )}
           </div>
