@@ -1163,10 +1163,11 @@ export default function HRDashboard() {
     gridOpacity: '0',
   }
   const platformsAlertIsWarning = platformsErrorTone === 'warning'
+  const teacherRosterVisible = !showModulesModal && !showCreateModal && workspaceSection === 'teachers'
 
   return (
     <div className={darkMode ? 'dark' : ''}>
-      <div className="relative flex min-h-screen overflow-hidden" style={{ backgroundColor: colors.bg, fontFamily: 'Inter, sans-serif' }}>
+      <div className="relative flex h-screen overflow-hidden" style={{ backgroundColor: colors.bg, fontFamily: 'Inter, sans-serif' }}>
         <CenterWorkspaceSidebar
           colors={colors}
           activeSection={workspaceSection}
@@ -1181,7 +1182,7 @@ export default function HRDashboard() {
           }}
         />
 
-        <div className="m-2 ml-0 flex min-w-0 flex-1 flex-col overflow-hidden rounded-2xl border" style={{ borderColor: colors.borderLight }}>
+        <div className="m-2 ml-0 flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-2xl border" style={{ borderColor: colors.borderLight }}>
           <div className="flex h-14 items-center justify-between border-b px-4 md:hidden" style={{ borderColor: colors.borderLight, backgroundColor: colors.cardBg }}>
             <span className="text-sm font-semibold" style={{ color: colors.text }}>
               {workspaceSection === 'teachers' ? 'Mes professeurs' : 'Recruter un professeur'}
@@ -1196,8 +1197,8 @@ export default function HRDashboard() {
             </div>
           </div>
 
-        <main className="relative z-10 min-w-0 flex-1 overflow-y-auto bg-white px-4 pb-12 sm:px-6 lg:px-8">
-          <div className="mx-auto w-full max-w-[1480px] pt-4 md:pt-6">
+        <main className={`relative z-10 min-h-0 min-w-0 flex-1 bg-white px-4 sm:px-6 lg:px-8 ${teacherRosterVisible ? 'overflow-hidden' : 'overflow-y-auto pb-12'}`}>
+          <div className="mx-auto flex h-full min-h-0 w-full max-w-[1480px] flex-col pt-4 md:pt-6">
           {orderNotice && (
             <div
               className="mb-6 flex items-start gap-3 rounded-xl border px-4 py-3.5 text-sm"
@@ -1906,11 +1907,14 @@ function CenterWorkspaceSidebar({
 
   return (
     <aside
-      className={`relative z-30 hidden min-h-screen shrink-0 flex-col md:flex ${collapsed ? 'w-[72px]' : 'w-[248px]'}`}
+      className={`relative z-30 hidden h-screen min-h-0 shrink-0 flex-col md:flex ${collapsed ? 'w-[72px]' : 'w-[248px]'}`}
       style={{ backgroundColor: colors.cardBg, transition: 'width 200ms cubic-bezier(0.16, 1, 0.3, 1)' }}
       aria-label="Navigation de l’espace centre"
     >
-      <div className={`flex h-16 items-center ${collapsed ? 'justify-center px-2' : 'justify-end px-4'}`}>
+      <div className={`flex h-16 shrink-0 items-center ${collapsed ? 'justify-center px-2' : 'justify-between px-4'}`}>
+        {!collapsed && (
+          <img src="/cadrenza-mark.svg" alt="Cadrenza" className="h-9 w-9 rounded-lg" />
+        )}
         <button
           type="button"
           onClick={() => setCollapsed((value) => !value)}
@@ -2628,7 +2632,7 @@ function PlatformCardsView({
   )
 
   return (
-    <section className="mx-auto flex w-full max-w-[90rem] flex-col pb-16 pt-8 sm:pt-12">
+    <section className="mx-auto flex h-full min-h-0 w-full max-w-[90rem] flex-col overflow-hidden pt-8 sm:pt-12">
       <header className="mx-auto w-full max-w-[860px] text-center">
         <h1 className="text-[2rem] font-semibold leading-tight tracking-[-0.035em] sm:text-[2.4rem]" style={{ color: colors.text }}>Mes professeurs</h1>
         <p className="mt-2 text-sm" style={{ color: colors.textMuted }}>Retrouvez vos professeurs, leurs formations et leur prochaine séance.</p>
@@ -2706,28 +2710,29 @@ function PlatformCardsView({
         </div>
       )}
 
-      {filteredPlatforms.length === 0 ? (
-        <div
-          className="mx-auto mt-10 max-w-xl rounded-2xl border px-6 py-12 text-center"
-          style={{ backgroundColor: colors.cardBg, borderColor: colors.border }}
-        >
-          <h2 className="mt-4 text-base font-semibold" style={{ color: colors.text }}>
-            {rosterSearch ? 'Aucun professeur ne correspond à cette recherche' : 'Aucun professeur dans cette catégorie'}
-          </h2>
-          <p className="mx-auto mt-2 max-w-md text-sm leading-6" style={{ color: colors.textMuted }}>
-            {rosterSearch ? 'Essayez un autre prénom, une formation ou un code RNCP.' : 'Modifiez le filtre ou créez un nouveau professeur IA pour une prochaine formation.'}
-          </p>
-          <button
-            type="button"
-            onClick={onCreateTeacher}
-            className="mt-5 rounded-lg px-4 py-2 text-sm font-semibold text-white"
-            style={{ backgroundColor: '#8B5CF6' }}
+      <div className="mt-6 min-h-0 flex-1 overflow-y-auto overscroll-contain pb-6 pr-1">
+        {filteredPlatforms.length === 0 ? (
+          <div
+            className="mx-auto mt-4 max-w-xl rounded-2xl border px-6 py-12 text-center"
+            style={{ backgroundColor: colors.cardBg, borderColor: colors.border }}
           >
-            Créer un professeur IA
-          </button>
-        </div>
-      ) : (
-      <div className="mx-auto mt-6 grid w-full max-w-[1204px] grid-cols-1 items-start gap-3 sm:grid-cols-2 sm:gap-4 lg:grid-cols-4 xl:grid-cols-5">
+            <h2 className="mt-4 text-base font-semibold" style={{ color: colors.text }}>
+              {rosterSearch ? 'Aucun professeur ne correspond à cette recherche' : 'Aucun professeur dans cette catégorie'}
+            </h2>
+            <p className="mx-auto mt-2 max-w-md text-sm leading-6" style={{ color: colors.textMuted }}>
+              {rosterSearch ? 'Essayez un autre prénom, une formation ou un code RNCP.' : 'Modifiez le filtre ou créez un nouveau professeur IA pour une prochaine formation.'}
+            </p>
+            <button
+              type="button"
+              onClick={onCreateTeacher}
+              className="mt-5 rounded-lg px-4 py-2 text-sm font-semibold text-white"
+              style={{ backgroundColor: '#8B5CF6' }}
+            >
+              Créer un professeur IA
+            </button>
+          </div>
+        ) : (
+        <div className="mx-auto grid w-full max-w-[1204px] grid-cols-1 items-start gap-3 sm:grid-cols-2 sm:gap-4 lg:grid-cols-4 xl:grid-cols-5">
         {visiblePlatforms.map((p) => (
           <PlatformCard
             key={p.id}
@@ -2778,8 +2783,9 @@ function PlatformCardsView({
             onRetryPreparation={() => onRetryPreparation(p)}
           />
         ))}
+        </div>
+        )}
       </div>
-      )}
     </section>
   )
 }
