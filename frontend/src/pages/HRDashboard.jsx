@@ -1187,11 +1187,11 @@ export default function HRDashboard() {
               {workspaceSection === 'teachers' ? 'Mes professeurs' : 'Recruter un professeur'}
             </span>
             <div className="flex items-center gap-1">
-              <button type="button" onClick={showRecruitView} className="flex h-9 w-9 items-center justify-center rounded-lg" aria-label="Recruter un professeur">
-                <Icon name="add_comment" className="text-lg" />
+              <button type="button" onClick={showRecruitView} className="flex h-9 w-9 items-center justify-center rounded-lg transition-colors hover:bg-[#F3F4F6]" aria-label="Recruter un professeur" style={{ color: '#3F3F46' }}>
+                <Icon name="person_add_alt_1" className="text-lg" />
               </button>
-              <button type="button" onClick={showDashboardView} className="flex h-9 w-9 items-center justify-center rounded-lg" aria-label="Mes professeurs">
-                <Icon name="smart_toy" className="text-lg" />
+              <button type="button" onClick={showDashboardView} className="flex h-9 w-9 items-center justify-center rounded-lg transition-colors hover:bg-[#F3F4F6]" aria-label="Mes professeurs" style={{ color: '#3F3F46' }}>
+                <Icon name="groups" className="text-lg" />
               </button>
             </div>
           </div>
@@ -1335,7 +1335,6 @@ export default function HRDashboard() {
               colors={colors}
               modules={modules}
               onComplete={handleAssistantComplete}
-              onManualCreate={openCreateModal}
             />
           ) : (
             <PlatformCardsView
@@ -1900,8 +1899,8 @@ function CenterWorkspaceSidebar({
     .join('')
     .toUpperCase() || 'CF'
   const navItems = [
-    { id: 'recruit', label: 'Recruter un professeur', icon: 'add_comment', onClick: onShowRecruit },
-    { id: 'teachers', label: 'Mes professeurs', icon: 'smart_toy', onClick: onShowTeachers },
+    { id: 'recruit', label: 'Recruter un professeur', icon: 'person_add_alt_1', onClick: onShowRecruit },
+    { id: 'teachers', label: 'Mes professeurs', icon: 'groups', onClick: onShowTeachers },
   ]
 
   return (
@@ -1938,10 +1937,10 @@ function CenterWorkspaceSidebar({
               type="button"
               onClick={item.onClick}
               aria-current={selected ? 'page' : undefined}
-              className={`flex w-full items-center rounded-lg py-2.5 text-left text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40 ${collapsed ? 'justify-center px-2' : 'gap-3 px-3'}`}
+              className={`flex w-full items-center rounded-lg py-2.5 text-left text-sm font-medium transition-colors hover:bg-[#F3F4F6] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400/50 ${collapsed ? 'justify-center px-2' : 'gap-3 px-3'}`}
               style={{
-                backgroundColor: selected ? '#F0EEFA' : 'transparent',
-                color: selected ? '#5B38B5' : colors.textSecondary,
+                backgroundColor: selected ? '#F3F4F6' : 'transparent',
+                color: selected ? '#18181B' : colors.textSecondary,
               }}
               title={collapsed ? item.label : undefined}
             >
@@ -2108,7 +2107,7 @@ function getRecruitmentAssistantText(step, draft, matchingModule) {
   return step.question
 }
 
-function RecruitmentAssistant({ colors, modules, onComplete, onManualCreate }) {
+function RecruitmentAssistant({ colors, modules, onComplete }) {
   const [started, setStarted] = useState(false)
   const [brief, setBrief] = useState('')
   const [stepIndex, setStepIndex] = useState(0)
@@ -2231,16 +2230,10 @@ function RecruitmentAssistant({ colors, modules, onComplete, onManualCreate }) {
               autoFocus
             />
             <div className="mt-2 flex items-center justify-between pt-2">
-              <div className="flex items-center gap-1">
-                <button type="button" onClick={onManualCreate} className="flex h-9 w-9 items-center justify-center rounded-lg transition-colors hover:bg-black/[0.04] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40" style={{ color: colors.textSecondary }} aria-label="Créer le professeur manuellement" title="Créer manuellement">
-                  <Icon name="add" className="text-xl" />
-                </button>
-                <span className="mx-1 h-5 w-px" style={{ backgroundColor: colors.borderLight }} aria-hidden="true" />
-                <span className="inline-flex items-center gap-1.5 px-2 text-sm font-medium" style={{ color: colors.textSecondary }}>
-                  <Icon name="language" className="text-lg" />
-                  FR
-                </span>
-              </div>
+              <span className="inline-flex items-center gap-1.5 px-2 text-sm font-medium" style={{ color: colors.textSecondary }}>
+                <Icon name="language" className="text-lg" />
+                FR
+              </span>
               <button type="submit" disabled={!brief.trim()} className="flex h-10 w-10 items-center justify-center rounded-full text-white transition-colors disabled:cursor-not-allowed disabled:bg-[#B9B5AF]" style={{ backgroundColor: brief.trim() ? '#6D4AC7' : undefined }} aria-label="Commencer la configuration">
                 <Icon name="arrow_upward" className="text-lg" />
               </button>
@@ -2269,7 +2262,6 @@ function RecruitmentAssistant({ colors, modules, onComplete, onManualCreate }) {
           <h1 className="text-lg font-semibold" style={{ color: colors.text }}>Nouveau professeur IA</h1>
           <p className="mt-0.5 text-xs" style={{ color: colors.textMuted }}>{completed ? 'Configuration prête à vérifier' : `Question ${Math.min(stepIndex + 1, RECRUITMENT_STEPS.length)} sur ${RECRUITMENT_STEPS.length}`}</p>
         </div>
-        <button type="button" onClick={onManualCreate} className="rounded-lg border px-3 py-2 text-sm font-medium" style={{ borderColor: colors.border, color: colors.textSecondary }}>Créer manuellement</button>
       </div>
 
       <div className="mx-auto flex w-full max-w-3xl flex-1 flex-col justify-end py-8">
@@ -2649,8 +2641,9 @@ function PlatformCardsView({
           className="min-w-0 flex-1 bg-transparent py-2 text-sm outline-none placeholder:text-[#626269]"
           style={{ color: colors.text }}
         />
-        <button type="button" onClick={onCreateTeacher} className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[#18181B] text-white transition-colors hover:bg-[#303036] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40" aria-label="Recruter un professeur" title="Recruter un professeur">
-          <Icon name="person_add" className="text-lg" />
+        <button type="button" onClick={onCreateTeacher} className="inline-flex h-10 shrink-0 items-center justify-center gap-2 whitespace-nowrap rounded-full bg-[#18181B] px-4 text-sm font-semibold text-white transition-colors hover:bg-[#303036] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400/50" aria-label="Créer un professeur manuellement">
+          <Icon name="edit_note" className="text-lg" />
+          <span>Créer manuellement</span>
         </button>
       </div>
 
