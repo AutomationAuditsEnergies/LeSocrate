@@ -1919,7 +1919,7 @@ function CenterWorkspaceSidebar({
           aria-expanded={!collapsed}
           style={{ color: colors.textSecondary }}
         >
-          <Icon name={collapsed ? 'right_panel_open' : 'left_panel_close'} className="text-[19px]" />
+          <Icon name="view_sidebar" className="text-[19px]" />
         </button>
       </div>
 
