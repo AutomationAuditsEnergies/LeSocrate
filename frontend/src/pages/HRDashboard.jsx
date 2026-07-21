@@ -1927,9 +1927,9 @@ function CenterWorkspaceSidebar({
       style={{ backgroundColor: '#F7F7F5', transition: 'width 180ms cubic-bezier(0.16, 1, 0.3, 1)' }}
       aria-label="Navigation de l’espace centre"
     >
-      <div className={`flex h-14 shrink-0 items-center ${collapsed ? 'justify-center px-2' : 'justify-between px-3'}`}>
+      <div className={`flex h-16 shrink-0 items-center ${collapsed ? 'justify-center px-2' : 'justify-between px-4'}`}>
         {!collapsed && (
-          <img src="/cadrenza-mark.svg" alt="Cadrenza" className="h-8 w-8 rounded-md" />
+          <img src="/cadrenza-mark.svg" alt="Cadrenza" className="h-[30px] w-[30px] rounded-md" />
         )}
         <button
           type="button"
@@ -1942,7 +1942,7 @@ function CenterWorkspaceSidebar({
         </button>
       </div>
 
-      <nav className={`mt-3 space-y-0.5 ${collapsed ? 'px-2' : 'px-2'}`}>
+      <nav className={`mt-4 space-y-2 ${collapsed ? 'px-2' : 'px-3'}`}>
         {navItems.map((item) => {
           const selected = activeSection === item.id
           const NavIcon = item.icon
