@@ -120,10 +120,24 @@ body {
   animation: recruitment-review-enter 240ms cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
+@keyframes recruitment-thinking-pulse {
+  0%, 100% {
+    opacity: 0.35;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+.recruitment-thinking-dot {
+  animation: recruitment-thinking-pulse 900ms cubic-bezier(0.16, 1, 0.3, 1) infinite;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .teacher-card-enter,
   .teacher-robot-float,
-  .recruitment-review-enter {
+  .recruitment-review-enter,
+  .recruitment-thinking-dot {
     animation: none;
   }
 }

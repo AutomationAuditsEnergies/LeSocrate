@@ -1181,6 +1181,7 @@ export default function HRDashboard() {
   }
   const platformsAlertIsWarning = platformsErrorTone === 'warning'
   const teacherRosterVisible = !showModulesModal && !showCreateModal && workspaceSection === 'teachers'
+  const recruitmentAssistantVisible = !showModulesModal && !showCreateModal && workspaceSection === 'recruit'
 
   return (
     <div className={darkMode ? 'dark' : ''}>
@@ -1214,7 +1215,7 @@ export default function HRDashboard() {
             </div>
           </div>
 
-        <main className={`relative z-10 min-h-0 min-w-0 flex-1 bg-white px-4 sm:px-6 lg:px-8 ${teacherRosterVisible ? 'overflow-hidden' : 'overflow-y-auto pb-12'}`}>
+        <main className={`relative z-10 min-h-0 min-w-0 flex-1 bg-white px-4 sm:px-6 lg:px-8 ${teacherRosterVisible || recruitmentAssistantVisible ? 'overflow-hidden' : 'overflow-y-auto pb-12'}`}>
           <div className="mx-auto flex h-full min-h-0 w-full max-w-[1480px] flex-col pt-4 md:pt-6">
           {orderNotice && (
             <div
@@ -2137,11 +2138,34 @@ function RecruitmentAssistant({ colors, modules, onComplete, onManualCreate }) {
     teacherColor: 'violet',
   })
   const [history, setHistory] = useState([])
+  const [isThinking, setIsThinking] = useState(false)
+  const chatScrollRef = useRef(null)
+  const responseTimeoutRef = useRef(null)
   const animatedPlaceholder = useAnimatedPlaceholder(RECRUITMENT_PLACEHOLDER_EXAMPLES)
   const currentStep = RECRUITMENT_STEPS[stepIndex]
   const matchingModule = modules.find((module) => String(module.rncp_code || '').replace(/\D/g, '') === String(draft.rncpCode || '').replace(/\D/g, ''))
   const completed = stepIndex >= RECRUITMENT_STEPS.length
   const currentIsChoice = Boolean(currentStep && RECRUITMENT_CHOICE_TYPES.has(currentStep.type))
+
+  useEffect(() => () => window.clearTimeout(responseTimeoutRef.current), [])
+
+  useEffect(() => {
+    const scrollArea = chatScrollRef.current
+    if (!scrollArea) return
+    const frameId = window.requestAnimationFrame(() => {
+      scrollArea.scrollTop = scrollArea.scrollHeight
+    })
+    return () => window.cancelAnimationFrame(frameId)
+  }, [history, isThinking, stepIndex])
+
+  const revealAssistantMessages = (messages) => {
+    window.clearTimeout(responseTimeoutRef.current)
+    setIsThinking(true)
+    responseTimeoutRef.current = window.setTimeout(() => {
+      setHistory((current) => [...current, ...messages])
+      setIsThinking(false)
+    }, 620)
+  }
 
   const displayAnswer = (step, value) => {
     if (step.id === 'teachingDays') return value.map((day) => RECRUITMENT_DAY_OPTIONS.find((option) => option.id === day)?.label || day).join(', ')
@@ -2157,13 +2181,12 @@ function RecruitmentAssistant({ colors, modules, onComplete, onManualCreate }) {
     if (currentStep.id === 'rncpConfirm' && value === 'Corriger') {
       const correctedDraft = { ...draft, trainingName: '', rncpCode: '' }
       setDraft(correctedDraft)
-      setHistory((current) => [
-        ...current,
-        { role: 'user', text: value },
-        { role: 'assistant', text: 'D’accord, reprenons le nom de la formation. Quelle formation va-t-il délivrer ?' },
-      ])
+      setHistory((current) => [...current, { role: 'user', text: value }])
       setStepIndex(1)
       setAnswer('')
+      revealAssistantMessages([
+        { role: 'assistant', text: 'D’accord, reprenons le nom de la formation. Quelle formation va-t-il délivrer ?' },
+      ])
       return
     }
     const normalizedValue = currentStep.id === 'rncpCode' ? String(value).replace(/\D/g, '') : value
@@ -2174,13 +2197,20 @@ function RecruitmentAssistant({ colors, modules, onComplete, onManualCreate }) {
     const nextStep = RECRUITMENT_STEPS[nextIndex]
     const nextMatchingModule = modules.find((module) => String(module.rncp_code || '').replace(/\D/g, '') === String(nextDraft.rncpCode || '').replace(/\D/g, ''))
     setDraft(nextDraft)
-    setHistory((current) => [
-      ...current,
-      { role: 'user', text: displayAnswer(currentStep, currentStep.id === 'rncpConfirm' ? 'Oui, continuer' : normalizedValue) },
-      ...(nextStep ? [{ role: 'assistant', text: getRecruitmentAssistantText(nextStep, nextDraft, nextMatchingModule) }] : []),
-    ])
+    setHistory((current) => [...current, {
+      role: 'user',
+      text: displayAnswer(currentStep, currentStep.id === 'rncpConfirm' ? 'Oui, continuer' : normalizedValue),
+    }])
     setStepIndex(nextIndex)
     setAnswer('')
+    revealAssistantMessages([
+      {
+        role: 'assistant',
+        text: nextStep
+          ? getRecruitmentAssistantText(nextStep, nextDraft, nextMatchingModule)
+          : 'La configuration est prête. Vérifiez les informations avant de poursuivre.',
+      },
+    ])
   }
 
   const submitInitialBrief = (event) => {
@@ -2188,12 +2218,12 @@ function RecruitmentAssistant({ colors, modules, onComplete, onManualCreate }) {
     const value = brief.trim()
     if (!value) return
     setStarted(true)
-    setHistory([
-      { role: 'user', text: value },
+    setHistory([{ role: 'user', text: value }])
+    setBrief('')
+    revealAssistantMessages([
       { role: 'assistant', text: 'Pour préparer ce professeur, j’ai besoin de quelques précisions rapides.' },
       { role: 'assistant', text: getRecruitmentAssistantText(RECRUITMENT_STEPS[0], draft, null) },
     ])
-    setBrief('')
   }
 
   const submitAnswer = (event) => {
@@ -2284,34 +2314,48 @@ function RecruitmentAssistant({ colors, modules, onComplete, onManualCreate }) {
   }
 
   return (
-    <section className="mx-auto flex min-h-[calc(100vh-6rem)] w-full max-w-5xl flex-col py-6">
-      <div className="flex items-center justify-between gap-4 border-b pb-4" style={{ borderColor: colors.borderLight }}>
+    <section className="mx-auto flex h-full min-h-0 w-full max-w-5xl flex-col">
+      <div className="flex h-14 shrink-0 items-center justify-between gap-4 border-b" style={{ borderColor: colors.borderLight }}>
         <div>
-          <h1 className="text-lg font-semibold" style={{ color: colors.text }}>Nouveau professeur IA</h1>
-          <p className="mt-0.5 text-xs" style={{ color: colors.textMuted }}>{completed ? 'Configuration prête à vérifier' : `Question ${Math.min(stepIndex + 1, RECRUITMENT_STEPS.length)} sur ${RECRUITMENT_STEPS.length}`}</p>
+          <h1 className="text-sm font-semibold" style={{ color: colors.text }}>Nouveau professeur IA</h1>
+          <p className="mt-0.5 text-[11px]" style={{ color: colors.textMuted }}>{completed ? 'Configuration prête à vérifier' : `Question ${Math.min(stepIndex + 1, RECRUITMENT_STEPS.length)} sur ${RECRUITMENT_STEPS.length}`}</p>
         </div>
       </div>
 
-      <div className="mx-auto flex w-full max-w-3xl flex-1 flex-col justify-end py-8">
-        <div className="space-y-6">
+      <div className="mx-auto flex min-h-0 w-full max-w-3xl flex-1 flex-col py-4">
+        <div ref={chatScrollRef} className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-1" aria-live="polite">
+          <div className="flex min-h-full flex-col justify-end space-y-5 py-4">
           {history.map((message, index) => (
-            <div key={`${message.role}-${index}`} className={message.role === 'user' ? 'flex justify-end' : 'flex justify-start'}>
+            <div key={`${message.role}-${index}`} className={`group flex flex-col ${message.role === 'user' ? 'items-end' : 'items-start'}`}>
               {message.role === 'user' ? (
-                <div className="max-w-[78%] rounded-2xl rounded-br-md px-4 py-2.5 text-sm leading-6" style={{ backgroundColor: '#ECE8E2', color: colors.text }}>
+                <div className="max-w-[82%] rounded-2xl bg-[#F1F1EF] px-4 py-2.5 text-sm leading-6" style={{ color: colors.text }}>
                   {message.text}
                 </div>
               ) : (
-                <div className="flex max-w-[88%] items-start gap-3">
-                  <img src="/cadrenza-mark.svg" alt="" className="mt-0.5 h-8 w-8 shrink-0 rounded-lg" />
-                  <p className="pt-1 text-sm leading-6" style={{ color: colors.text }}>{message.text}</p>
-                </div>
+                <p className="max-w-[88%] text-sm leading-6" style={{ color: colors.text }}>{message.text}</p>
               )}
+              <button
+                type="button"
+                onClick={() => navigator.clipboard?.writeText(message.text)}
+                className="mt-1 flex h-7 w-7 items-center justify-center rounded-md opacity-0 transition-opacity duration-150 hover:bg-[#F3F3F1] group-hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#8B5CF6]/40"
+                style={{ color: colors.textMuted }}
+                aria-label="Copier le message"
+              >
+                <Copy size={14} strokeWidth={1.6} aria-hidden="true" />
+              </button>
             </div>
           ))}
+          {isThinking && (
+            <div className="flex items-center gap-2 py-1 text-sm" style={{ color: colors.textMuted }}>
+              <span className="recruitment-thinking-dot h-1.5 w-1.5 rounded-full bg-current" aria-hidden="true" />
+              <span>Réflexion…</span>
+            </div>
+          )}
+          </div>
         </div>
 
-        {completed ? (
-          <div className="recruitment-review-enter mt-8 rounded-2xl bg-white p-5 sm:p-6" style={{ boxShadow: '0 8px 24px rgba(41, 32, 24, 0.08)' }}>
+        {completed && !isThinking ? (
+          <div className="recruitment-review-enter mt-4 max-h-[48vh] shrink-0 overflow-y-auto rounded-xl border bg-white p-5 sm:p-6" style={{ borderColor: colors.borderLight }}>
             <div className="flex items-start gap-5">
               <img src={RECRUITMENT_COLOR_OPTIONS.find((color) => color.id === draft.teacherColor)?.image} alt="" className="teacher-robot-float h-24 w-24 shrink-0 object-contain" />
               <div className="min-w-0 flex-1">
@@ -2330,12 +2374,12 @@ function RecruitmentAssistant({ colors, modules, onComplete, onManualCreate }) {
               <Icon name="arrow_forward" className="text-base" />
             </button>
           </div>
-        ) : (
-          <div className="mt-8">
+        ) : !isThinking ? (
+          <div className="mt-4 shrink-0">
             {(currentStep.type === 'text' || currentStep.type === 'number') && (
-              <form onSubmit={submitAnswer} className="flex items-center gap-2 rounded-xl bg-white p-2 pl-4" style={{ boxShadow: '0 4px 12px rgba(41, 32, 24, 0.08)' }}>
+              <form onSubmit={submitAnswer} className="flex items-center gap-2 rounded-xl border bg-white p-2 pl-4" style={{ borderColor: colors.borderLight }}>
                 <input type={currentStep.type === 'number' ? 'number' : 'text'} min={currentStep.type === 'number' ? '1' : undefined} value={answer} onChange={(event) => setAnswer(event.target.value)} placeholder={currentStep.placeholder} className="min-w-0 flex-1 bg-transparent py-2.5 text-sm outline-none placeholder:text-[#68625B]" style={{ color: colors.text }} autoFocus />
-                <button type="submit" disabled={!answer.trim()} className="flex h-10 w-10 items-center justify-center rounded-full bg-[#6D4AC7] text-white transition-colors disabled:bg-[#B9B5AF]" aria-label="Valider la réponse"><Icon name="arrow_upward" className="text-base" /></button>
+                <button type="submit" disabled={!answer.trim()} className="flex h-9 w-9 items-center justify-center rounded-full bg-[#191918] text-white transition-colors hover:bg-[#30302E] disabled:bg-[#C7C7C4]" aria-label="Valider la réponse"><ArrowUp size={17} strokeWidth={1.8} aria-hidden="true" /></button>
               </form>
             )}
             {currentIsChoice && (
@@ -2407,7 +2451,7 @@ function RecruitmentAssistant({ colors, modules, onComplete, onManualCreate }) {
               <div className="flex flex-wrap items-center gap-3 rounded-xl border bg-white p-3" style={{ borderColor: colors.border }}><input type="date" min={todayDateInput()} value={draft.startDate} onChange={(event) => setDraft((current) => ({ ...current, startDate: event.target.value }))} className="min-w-0 flex-1 rounded-lg border px-4 py-2.5 text-sm" style={{ borderColor: colors.borderLight, color: colors.text }} /><button type="button" onClick={() => advance(draft.startDate)} className="rounded-lg bg-[#191714] px-4 py-2.5 text-sm font-medium text-white">Valider la date</button></div>
             )}
           </div>
-        )}
+        ) : null}
       </div>
     </section>
   )
