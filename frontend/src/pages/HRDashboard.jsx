@@ -1,5 +1,16 @@
 import { useState, useEffect, useRef, useMemo } from 'react'
 import { createPortal } from 'react-dom'
+import {
+  ChevronLeft,
+  ChevronsUpDown,
+  LogIn,
+  LogOut,
+  PanelLeft,
+  Settings,
+  UserPlus,
+  UserRound,
+  UsersRound,
+} from 'lucide-react'
 import { apiFetch } from '../api'
 import CoursFoldersModal from '../components/CoursFolders'
 import { getHiddenPipelineProgress, getTeacherPreparation } from '../teacherPreparation'
@@ -1900,93 +1911,90 @@ function CenterWorkspaceSidebar({
     .join('')
     .toUpperCase() || 'CF'
   const navItems = [
-    { id: 'recruit', label: 'Recruter un professeur', icon: 'person_add_alt_1', onClick: onShowRecruit },
-    { id: 'teachers', label: 'Mes professeurs', icon: 'groups', onClick: onShowTeachers },
+    { id: 'recruit', label: 'Recruter un professeur', icon: UserPlus, onClick: onShowRecruit },
+    { id: 'teachers', label: 'Mes professeurs', icon: UsersRound, onClick: onShowTeachers },
   ]
 
   return (
     <aside
       className={`relative z-30 hidden h-screen min-h-0 shrink-0 flex-col md:flex ${collapsed ? 'w-[72px]' : 'w-[248px]'}`}
-      style={{ backgroundColor: colors.cardBg, transition: 'width 200ms cubic-bezier(0.16, 1, 0.3, 1)' }}
+      style={{ backgroundColor: '#F7F7F5', transition: 'width 180ms cubic-bezier(0.16, 1, 0.3, 1)' }}
       aria-label="Navigation de l’espace centre"
     >
-      <div className={`flex h-16 shrink-0 items-center ${collapsed ? 'justify-center px-2' : 'justify-between px-4'}`}>
+      <div className={`flex h-14 shrink-0 items-center ${collapsed ? 'justify-center px-2' : 'justify-between px-3'}`}>
         {!collapsed && (
-          <img src="/cadrenza-mark.svg" alt="Cadrenza" className="h-9 w-9 rounded-lg" />
+          <img src="/cadrenza-mark.svg" alt="Cadrenza" className="h-8 w-8 rounded-md" />
         )}
         <button
           type="button"
           onClick={() => setCollapsed((value) => !value)}
-          className="flex h-9 w-9 items-center justify-center rounded-lg transition-colors hover:bg-black/[0.04] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400/50"
+          className="flex h-8 w-8 items-center justify-center rounded-md text-[#6B6B68] transition-colors duration-150 hover:bg-black/[0.055] hover:text-[#191918] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#097FE8]/60"
           aria-label={collapsed ? 'Déployer la barre latérale' : 'Réduire la barre latérale'}
           aria-expanded={!collapsed}
-          style={{ color: colors.textSecondary }}
         >
-          <span className="relative block h-[17px] w-[19px] rounded-[4px] border-2 border-current" aria-hidden="true">
-            <span className="absolute bottom-[2px] left-[4px] top-[2px] w-[2px] rounded-full bg-current" />
-          </span>
+          <PanelLeft size={17} strokeWidth={1.65} aria-hidden="true" />
         </button>
       </div>
 
-      <nav className={`mt-5 space-y-1 ${collapsed ? 'px-2' : 'px-3'}`}>
+      <nav className={`mt-3 space-y-0.5 ${collapsed ? 'px-2' : 'px-2'}`}>
         {navItems.map((item) => {
           const selected = activeSection === item.id
+          const NavIcon = item.icon
           return (
             <button
               key={item.id}
               type="button"
               onClick={item.onClick}
               aria-current={selected ? 'page' : undefined}
-              className={`flex w-full items-center rounded-lg py-2.5 text-left text-sm font-medium transition-colors hover:bg-[#F3F4F6] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400/50 ${collapsed ? 'justify-center px-2' : 'gap-3 px-3'}`}
+              className={`flex min-h-8 w-full items-center rounded-md py-1.5 text-left text-sm font-medium transition-colors duration-150 hover:bg-black/[0.045] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#097FE8]/60 ${collapsed ? 'justify-center px-2' : 'gap-2.5 px-2'}`}
               style={{
-                backgroundColor: selected ? '#F3F4F6' : 'transparent',
-                color: selected ? '#18181B' : colors.textSecondary,
+                backgroundColor: selected ? '#E9E9E7' : 'transparent',
+                color: selected ? '#191918' : '#5F5E5A',
               }}
               title={collapsed ? item.label : undefined}
             >
-              <Icon name={item.icon} className="text-[19px]" />
+              <NavIcon size={17} strokeWidth={selected ? 1.8 : 1.6} aria-hidden="true" />
               {!collapsed && <span>{item.label}</span>}
             </button>
           )
         })}
       </nav>
 
-      <div className={`mt-auto ${collapsed ? 'p-2' : 'p-3'}`}>
+      <div className={`mt-auto ${collapsed ? 'p-2' : 'p-2'}`}>
         <details className="group relative" onToggle={(event) => { if (!event.currentTarget.open) setAccountPanel('menu') }}>
-          <summary className={`flex cursor-pointer list-none items-center rounded-xl py-2.5 transition-colors hover:bg-black/[0.04] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40 ${collapsed ? 'justify-center px-1' : 'gap-3 px-2'}`}>
-            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#18181B] text-xs font-semibold text-white">
+          <summary className={`flex cursor-pointer list-none items-center rounded-md py-1.5 transition-colors duration-150 hover:bg-black/[0.045] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#097FE8]/60 ${collapsed ? 'justify-center px-1' : 'gap-2.5 px-2'}`}>
+            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[#191918] text-[11px] font-semibold text-white">
               {initials}
             </span>
             {!collapsed && (
               <>
                 <span className="min-w-0 flex-1">
-                  <span className="block truncate text-sm font-semibold" style={{ color: colors.text }}>{accountName}</span>
-                  <span className="block truncate text-xs" style={{ color: colors.textMuted }}>{accountEmail}</span>
+                  <span className="block truncate text-[13px] font-medium leading-4 text-[#191918]">{accountName}</span>
+                  <span className="mt-0.5 block truncate text-xs leading-4 text-[#73736F]">{accountEmail}</span>
                 </span>
-                <Icon name="unfold_more" className="text-base" style={{ color: colors.textMuted }} />
+                <ChevronsUpDown size={15} strokeWidth={1.6} className="text-[#73736F]" aria-hidden="true" />
               </>
             )}
           </summary>
 
-          <div className={`absolute bottom-[calc(100%+8px)] overflow-hidden rounded-xl border bg-white shadow-[0_8px_20px_rgba(24,24,27,0.10)] ${collapsed ? 'left-0 w-[220px]' : 'left-0 w-full'}`} style={{ borderColor: colors.borderLight }}>
+          <div className={`absolute bottom-[calc(100%+6px)] overflow-hidden rounded-lg border border-black/10 bg-white shadow-[0_2px_8px_rgba(0,0,0,0.08)] ${collapsed ? 'left-0 w-[220px]' : 'left-0 w-full'}`}>
             {accountPanel === 'menu' && (
-              <div className="p-2">
-                <button type="button" onClick={() => setAccountPanel('profile')} className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm transition-colors hover:bg-[#F5F5F6]" style={{ color: colors.textSecondary }}>
-                  <Icon name="person_outline" className="text-lg" />
+              <div className="p-1.5">
+                <button type="button" onClick={() => setAccountPanel('profile')} className="flex min-h-8 w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-left text-sm text-[#5F5E5A] transition-colors hover:bg-[#F6F5F4] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#097FE8]/60">
+                  <UserRound size={16} strokeWidth={1.6} aria-hidden="true" />
                   <span>Profil</span>
                 </button>
-                <button type="button" onClick={() => setAccountPanel('settings')} className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm transition-colors hover:bg-[#F5F5F6]" style={{ color: colors.textSecondary }}>
-                  <Icon name="settings" className="text-lg" />
+                <button type="button" onClick={() => setAccountPanel('settings')} className="flex min-h-8 w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-left text-sm text-[#5F5E5A] transition-colors hover:bg-[#F6F5F4] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#097FE8]/60">
+                  <Settings size={16} strokeWidth={1.6} aria-hidden="true" />
                   <span>Paramètres</span>
                 </button>
                 <button
                   type="button"
                   onClick={isSignedIn ? onLogout : () => window.location.assign('/connexion-centre')}
                   disabled={isSignedIn && loggingOut}
-                  className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm transition-colors hover:bg-[#F5F5F6] disabled:opacity-60"
-                  style={{ color: colors.textSecondary }}
+                  className="flex min-h-8 w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-left text-sm text-[#5F5E5A] transition-colors hover:bg-[#F6F5F4] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#097FE8]/60 disabled:opacity-60"
                 >
-                  <Icon name={isSignedIn ? 'logout' : 'login'} className="text-lg" />
+                  {isSignedIn ? <LogOut size={16} strokeWidth={1.6} aria-hidden="true" /> : <LogIn size={16} strokeWidth={1.6} aria-hidden="true" />}
                   {isSignedIn ? (loggingOut ? 'Déconnexion…' : 'Se déconnecter') : 'Se connecter'}
                 </button>
               </div>
@@ -1994,8 +2002,8 @@ function CenterWorkspaceSidebar({
 
             {accountPanel === 'profile' && (
               <div className="p-3">
-                <button type="button" onClick={() => setAccountPanel('menu')} className="mb-3 flex items-center gap-1 rounded-md px-1 py-1 text-xs font-medium" style={{ color: colors.textMuted }}>
-                  <Icon name="chevron_left" className="text-base" /> Retour
+                <button type="button" onClick={() => setAccountPanel('menu')} className="mb-3 flex items-center gap-1 rounded-md px-1 py-1 text-xs font-medium text-[#73736F] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#097FE8]/60">
+                  <ChevronLeft size={14} strokeWidth={1.6} aria-hidden="true" /> Retour
                 </button>
                 <p className="truncate text-sm font-semibold" style={{ color: colors.text }}>{accountName}</p>
                 <p className="mt-1 truncate text-xs" style={{ color: colors.textMuted }}>{accountEmail}</p>
@@ -2004,13 +2012,13 @@ function CenterWorkspaceSidebar({
 
             {accountPanel === 'settings' && (
               <div className="p-3">
-                <button type="button" onClick={() => setAccountPanel('menu')} className="mb-3 flex items-center gap-1 rounded-md px-1 py-1 text-xs font-medium" style={{ color: colors.textMuted }}>
-                  <Icon name="chevron_left" className="text-base" /> Retour
+                <button type="button" onClick={() => setAccountPanel('menu')} className="mb-3 flex items-center gap-1 rounded-md px-1 py-1 text-xs font-medium text-[#73736F] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#097FE8]/60">
+                  <ChevronLeft size={14} strokeWidth={1.6} aria-hidden="true" /> Retour
                 </button>
                 <p className="mb-2 text-xs font-semibold" style={{ color: colors.text }}>Langue de l’interface</p>
                 <div className="grid grid-cols-2 gap-2">
                   {['fr', 'en'].map((option) => (
-                    <button key={option} type="button" onClick={() => onLanguageChange(option)} className="rounded-lg border px-3 py-2 text-xs font-semibold" style={{ backgroundColor: language === option ? '#F0EEFA' : '#fff', borderColor: language === option ? '#CFC5F0' : colors.border, color: language === option ? '#5B38B5' : colors.textMuted }}>
+                    <button key={option} type="button" onClick={() => onLanguageChange(option)} className="rounded-md border px-3 py-2 text-xs font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#097FE8]/60" style={{ backgroundColor: language === option ? '#F2F9FF' : '#fff', borderColor: language === option ? '#97CFF8' : '#DFDCD9', color: language === option ? '#005BAB' : '#73736F' }}>
                       {option.toUpperCase()}
                     </button>
                   ))}
