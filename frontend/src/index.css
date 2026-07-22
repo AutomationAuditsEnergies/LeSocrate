@@ -1,4 +1,4 @@
-@import url("https://fonts.googleapis.com/css2?family=Caveat:wght@600;700&family=Poppins:wght@400;600&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=Caveat:wght@600;700&family=Poppins:wght@400;600&family=Space+Grotesk:wght@600;700&display=swap");
 @import "tailwindcss";
 
 /* Material Icons - Self-hosted for Windows compatibility */
@@ -70,6 +70,17 @@ body {
   margin: 0;
   min-height: 100vh;
   background-color: #F8F7F5;
+}
+
+.workspace-display-title {
+  font-family: "Space Grotesk", "Poppins", system-ui, sans-serif;
+  font-optical-sizing: auto;
+  font-kerning: normal;
+  text-wrap: balance;
+}
+
+.workspace-display-title__accent {
+  color: #6d4aff;
 }
 
 @keyframes teacher-card-enter {
