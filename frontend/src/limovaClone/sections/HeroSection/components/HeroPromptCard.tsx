@@ -9,9 +9,10 @@ export const HeroPromptCard = () => {
             className="box-border caret-transparent inline text-[15.3846px] tracking-[-0.107692px] leading-[21.5385px] outline-[3px] no-underline w-full md:block md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px]"
           />
         </div>
-        <div className="box-border caret-transparent text-[15.3846px] h-[43.0769px] tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] relative no-underline w-full md:text-[14.2222px] md:h-auto md:tracking-[-0.0995556px] md:leading-[19.9111px]">
+        <div className="box-border caret-transparent text-[15.3846px] h-auto tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] relative no-underline w-full md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px]">
           <p className="cadrenza-hero-prompt-text box-border caret-transparent text-[15.3846px] tracking-[-0.107692px] leading-[21.5385px] outline-[3px] no-underline md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px]">
-            Prépare le module TP Employé commercial à partir du REAC
+            Anime lundi prochain une journée de formation au titre professionnel
+            CRCD. Prépare les diapositives et interagis avec les élèves.
           </p>
         </div>
       </div>
