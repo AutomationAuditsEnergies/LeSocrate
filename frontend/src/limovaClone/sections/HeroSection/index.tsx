@@ -1,5 +1,4 @@
 import { HeroPromptCard } from "@/sections/HeroSection/components/HeroPromptCard";
-import { PressLogoMarquee } from "@/sections/HeroSection/components/PressLogoMarquee";
 import { HeroVideo } from "@/sections/HeroSection/components/HeroVideo";
 
 export const HeroSection = () => {
@@ -56,7 +55,6 @@ export const HeroSection = () => {
             </div>
           </div>
           <HeroPromptCard />
-          <PressLogoMarquee />
         </div>
         <HeroVideo />
       </div>
