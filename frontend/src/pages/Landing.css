@@ -270,13 +270,28 @@ html.limova-landing-active {
   background-color: var(--cadrenza-ink) !important;
 }
 
-.limova-strict-copy nav {
-  padding: 10px 14px;
-  border: 1px solid rgba(61, 70, 82, 0.9);
-  border-radius: 14px;
-  background: rgba(28, 32, 38, 0.9);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.14);
-  backdrop-filter: blur(12px);
+.limova-strict-copy .cadrenza-navbar {
+  background: transparent;
+  transition:
+    background-color 220ms cubic-bezier(0.22, 1, 0.36, 1),
+    box-shadow 220ms cubic-bezier(0.22, 1, 0.36, 1),
+    backdrop-filter 220ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.limova-strict-copy .cadrenza-navbar nav {
+  padding: 0 14px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  backdrop-filter: none;
+}
+
+.limova-strict-copy .cadrenza-navbar--scrolled {
+  background: rgba(28, 32, 38, 0.76);
+  box-shadow: 0 1px 0 rgba(244, 248, 252, 0.08);
+  backdrop-filter: blur(18px) saturate(135%);
+  -webkit-backdrop-filter: blur(18px) saturate(135%);
 }
 
 .limova-strict-copy .strict-desktop-menu :is(a, button),

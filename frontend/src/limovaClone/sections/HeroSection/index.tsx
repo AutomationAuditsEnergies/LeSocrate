@@ -1,4 +1,3 @@
-import { HeroRating } from "@/sections/HeroSection/components/HeroRating";
 import { HeroPromptCard } from "@/sections/HeroSection/components/HeroPromptCard";
 import { PressLogoMarquee } from "@/sections/HeroSection/components/PressLogoMarquee";
 import { HeroVideo } from "@/sections/HeroSection/components/HeroVideo";
@@ -35,7 +34,6 @@ export const HeroSection = () => {
       <div className="box-border caret-transparent text-[15.3846px] tracking-[-0.107692px] leading-[21.5385px] max-w-[1192.31px] outline-[3px] relative no-underline w-full z-[1] mx-auto pt-[57.6923px] px-[19.2308px] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px] md:max-w-[1137.78px] md:pt-[71.1111px] md:px-[35.5556px]">
         <div className="box-border caret-transparent gap-x-[26.9231px] flex flex-col text-[15.3846px] tracking-[-0.107692px] leading-[21.5385px] outline-[3px] gap-y-[26.9231px] no-underline md:gap-x-[42.6667px] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px] md:gap-y-[42.6667px]">
           <div className="box-border caret-transparent gap-x-[15.3846px] flex flex-col text-[15.3846px] tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] gap-y-[15.3846px] no-underline md:gap-x-[14.2222px] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px] md:gap-y-[14.2222px]">
-            <HeroRating />
             <div className="box-border caret-transparent text-[15.3846px] tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] no-underline w-full md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px]">
               <h1
                 aria-label="Des professeurs IA autonomes pour délivrer vos formations."
