@@ -278,7 +278,7 @@ html.limova-landing-active {
 
 @media (min-width: 768px) {
   .limova-strict-copy .cadrenza-hero-prompt-card {
-    max-width: 760px;
+    max-width: 640px;
     padding: 24px 26px;
     gap: 48px;
     border-radius: 24px;
