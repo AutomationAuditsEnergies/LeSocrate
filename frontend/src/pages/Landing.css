@@ -270,6 +270,75 @@ html.limova-landing-active {
   background-color: var(--cadrenza-ink) !important;
 }
 
+.limova-strict-copy .cadrenza-hero-agent-avatar {
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(47, 107, 255, 0.12);
+}
+
+@media (min-width: 768px) {
+  .limova-strict-copy .cadrenza-hero-prompt-card {
+    max-width: 1060px;
+    padding: 32px 34px;
+    gap: 68px;
+    border-radius: 28px;
+  }
+
+  .limova-strict-copy .cadrenza-hero-prompt-copy {
+    align-items: center;
+    gap: 14px;
+  }
+
+  .limova-strict-copy .cadrenza-hero-prompt-copy > div:first-child {
+    width: 26px;
+    height: 26px;
+  }
+
+  .limova-strict-copy .cadrenza-hero-prompt-text {
+    font-size: 22px;
+    line-height: 1.35;
+    letter-spacing: -0.02em;
+  }
+
+  .limova-strict-copy .cadrenza-hero-prompt-footer {
+    gap: 24px;
+  }
+
+  .limova-strict-copy .cadrenza-hero-agent-pill {
+    gap: 12px;
+    padding: 8px 14px 8px 8px;
+  }
+
+  .limova-strict-copy .cadrenza-hero-agent-avatar {
+    width: 34px;
+    height: 34px;
+  }
+
+  .limova-strict-copy .cadrenza-hero-agent-name {
+    font-size: 16px;
+    line-height: 22px;
+  }
+
+  .limova-strict-copy .cadrenza-hero-prompt-actions {
+    gap: 10px;
+  }
+
+  .limova-strict-copy .cadrenza-hero-prompt-actions > a {
+    padding: 12px 24px;
+  }
+
+  .limova-strict-copy .cadrenza-hero-prompt-actions span,
+  .limova-strict-copy .cadrenza-hero-prompt-actions a > div:first-child {
+    font-size: 16px;
+    line-height: 24px;
+  }
+
+  .limova-strict-copy .cadrenza-hero-prompt-actions span,
+  .limova-strict-copy .cadrenza-hero-prompt-actions a > div:first-child > div:first-child {
+    height: 24px;
+  }
+}
+
 .limova-strict-copy .cadrenza-navbar {
   background: transparent;
   transition:
