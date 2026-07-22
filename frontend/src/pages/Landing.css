@@ -146,8 +146,8 @@ html.limova-landing-active {
   outline-offset: 3px;
 }
 
-/* Cadence visuelle propre à Cadrenza : deux nappes de points froids encadrent
-   le contenu, sans concurrencer le CTA ni reprendre les halos orange source. */
+/* Cadence visuelle propre à Cadrenza : une lumière orbitale traverse deux
+   nappes fixes de points bleus, déphasées de 180 degrés. */
 .limova-strict-copy .cadrenza-cadence-field {
   position: absolute;
   inset: 0;
@@ -159,37 +159,68 @@ html.limova-landing-active {
   display: none !important;
 }
 
-.limova-strict-copy .cadrenza-cadence-field::before,
-.limova-strict-copy .cadrenza-cadence-field::after {
-  content: "";
+.limova-strict-copy .cadrenza-particle-cloud {
   position: absolute;
   width: min(52vw, 760px);
   height: 72%;
-  background-image:
-    radial-gradient(circle, rgba(96, 117, 138, 0.46) 0 1px, transparent 1.35px),
-    radial-gradient(circle, rgba(47, 107, 255, 0.2) 0 0.8px, transparent 1.15px);
-  background-position: 0 0, 3px 3px;
-  background-size: 7px 7px;
-  mask-image: radial-gradient(ellipse at center, #000 0 24%, rgba(0, 0, 0, 0.82) 42%, transparent 76%);
+  background: rgba(83, 105, 127, 0.44);
+  -webkit-mask-image:
+    radial-gradient(ellipse at center, #000 0 24%, rgba(0, 0, 0, 0.82) 42%, transparent 76%),
+    radial-gradient(circle, #000 0 1px, transparent 1.35px);
+  -webkit-mask-position: center, 0 0;
+  -webkit-mask-size: 100% 100%, 7px 7px;
+  -webkit-mask-composite: source-in;
+  mask-image:
+    radial-gradient(ellipse at center, #000 0 24%, rgba(0, 0, 0, 0.82) 42%, transparent 76%),
+    radial-gradient(circle, #000 0 1px, transparent 1.35px);
+  mask-position: center, 0 0;
+  mask-size: 100% 100%, 7px 7px;
+  mask-composite: intersect;
 }
 
-.limova-strict-copy .cadrenza-cadence-field::before {
+.limova-strict-copy .cadrenza-particle-cloud::before {
+  content: "";
+  position: absolute;
+  inset: -42%;
+  background: conic-gradient(
+    from 12deg,
+    transparent 0 16%,
+    rgba(47, 107, 255, 0.08) 21%,
+    rgba(75, 132, 255, 0.95) 29%,
+    rgba(47, 107, 255, 0.28) 38%,
+    transparent 47% 100%
+  );
+  filter: blur(8px);
+  animation: cadrenza-particle-orbit 10s linear infinite;
+  will-change: transform;
+}
+
+.limova-strict-copy .cadrenza-particle-cloud--left {
   top: 10%;
   left: -10%;
   transform: rotate(-7deg) scaleY(0.82);
 }
 
-.limova-strict-copy .cadrenza-cadence-field::after {
+.limova-strict-copy .cadrenza-particle-cloud--right {
   right: -11%;
   bottom: 2%;
   transform: rotate(7deg) scaleY(0.78);
 }
 
-.limova-strict-copy .cadrenza-cadence-field--compact::before,
-.limova-strict-copy .cadrenza-cadence-field--compact::after {
+.limova-strict-copy .cadrenza-particle-cloud--right::before {
+  animation-delay: -5s;
+}
+
+.limova-strict-copy .cadrenza-cadence-field--compact .cadrenza-particle-cloud {
   height: 120%;
   top: -10%;
   bottom: auto;
+}
+
+@keyframes cadrenza-particle-orbit {
+  to {
+    transform: rotate(1turn);
+  }
 }
 
 @media (max-width: 47.999rem) {
@@ -197,19 +228,29 @@ html.limova-landing-active {
     opacity: 0.58;
   }
 
-  .limova-strict-copy .cadrenza-cadence-field::before,
-  .limova-strict-copy .cadrenza-cadence-field::after {
+  .limova-strict-copy .cadrenza-particle-cloud {
     width: 78vw;
     height: 58%;
-    background-size: 8px 8px;
+    -webkit-mask-size: 100% 100%, 8px 8px;
+    mask-size: 100% 100%, 8px 8px;
   }
 
-  .limova-strict-copy .cadrenza-cadence-field::before {
+  .limova-strict-copy .cadrenza-particle-cloud--left {
     left: -35%;
   }
 
-  .limova-strict-copy .cadrenza-cadence-field::after {
+  .limova-strict-copy .cadrenza-particle-cloud--right {
     right: -36%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .limova-strict-copy .cadrenza-particle-cloud::before {
+    animation: none;
+  }
+
+  .limova-strict-copy .cadrenza-particle-cloud--right::before {
+    transform: rotate(0.5turn);
   }
 }
 
