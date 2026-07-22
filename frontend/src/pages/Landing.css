@@ -146,13 +146,43 @@ html.limova-landing-active {
   outline-offset: 3px;
 }
 
-/* Le marqueur reste dans le DOM pour neutraliser les fonds orange importés. */
+/* Points blancs fixes : aucun halo coloré ni mouvement orbital. */
 .limova-strict-copy .cadrenza-cadence-field {
-  display: none;
+  position: absolute;
+  inset: -10% 0 auto;
+  height: 92%;
+  overflow: hidden;
+  opacity: 0.72;
+  background: rgba(225, 234, 244, 0.2);
+  -webkit-mask-image:
+    radial-gradient(ellipse at 50% 38%, #000 0 21%, rgba(0, 0, 0, 0.9) 43%, transparent 76%),
+    radial-gradient(circle, #000 0 1px, transparent 1.35px);
+  -webkit-mask-position: center, 0 0;
+  -webkit-mask-size: 100% 100%, 7px 7px;
+  -webkit-mask-composite: source-in;
+  mask-image:
+    radial-gradient(ellipse at 50% 38%, #000 0 21%, rgba(0, 0, 0, 0.9) 43%, transparent 76%),
+    radial-gradient(circle, #000 0 1px, transparent 1.35px);
+  mask-position: center, 0 0;
+  mask-size: 100% 100%, 7px 7px;
+  mask-composite: intersect;
+}
+
+.limova-strict-copy .cadrenza-cadence-field--compact {
+  inset: 0;
+  height: 100%;
 }
 
 .limova-strict-copy .cadrenza-cadence-field ~ * {
   display: none !important;
+}
+
+@media (max-width: 47.999rem) {
+  .limova-strict-copy .cadrenza-cadence-field {
+    opacity: 0.54;
+    -webkit-mask-size: 100% 100%, 8px 8px;
+    mask-size: 100% 100%, 8px 8px;
+  }
 }
 
 /* Thème graphite : un gris sombre lisible, distinct du noir pur. Le bleu vif
