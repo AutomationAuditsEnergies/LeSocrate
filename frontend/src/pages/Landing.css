@@ -10,12 +10,12 @@ html.limova-landing-active,
 body.limova-landing-active,
 body.limova-landing-active #root {
   min-height: 100%;
-  background-color: #f7faff;
+  background-color: #0d2633;
   overscroll-behavior-y: none;
 }
 
 html.limova-landing-active {
-  color-scheme: light;
+  color-scheme: dark;
 }
 
 @font-face {
@@ -51,17 +51,18 @@ html.limova-landing-active {
 }
 
 .limova-strict-copy {
-  --cadrenza-blue: #2563eb;
-  --cadrenza-blue-hover: #1d4ed8;
-  --cadrenza-blue-soft: #eaf2ff;
-  --cadrenza-blue-mist: #f4f8ff;
-  --cadrenza-ink: #10233d;
-  --cadrenza-copy: #425a76;
-  --cadrenza-muted: #61758d;
-  --cadrenza-border: #d7e2f0;
+  --cadrenza-blue: #2f6bff;
+  --cadrenza-blue-hover: #2457d6;
+  --cadrenza-blue-soft: #153a4a;
+  --cadrenza-blue-mist: #123242;
+  --cadrenza-surface: #183c4d;
+  --cadrenza-ink: #f4f8fc;
+  --cadrenza-copy: #c2d0da;
+  --cadrenza-muted: #a9bdca;
+  --cadrenza-border: #294b5c;
   min-height: 100vh;
   overflow-x: clip;
-  background: #f7faff;
+  background: #0d2633;
   color: var(--cadrenza-ink);
   font-family: "Geist", system-ui, sans-serif;
   font-size: 14px;
@@ -137,7 +138,7 @@ html.limova-landing-active {
 .limova-strict-copy :is(div, span):has(> img[src*="_Julia.avif"]),
 .limova-strict-copy :is(div, span):has(> img[src*="_Rony.avif"]),
 .limova-strict-copy :is(div, span):has(> img[src*="_Charly.png"]) {
-  background: radial-gradient(circle, #2563eb 0 22%, #dbeafe 23% 48%, #eff6ff 49%) !important;
+  background: radial-gradient(circle, #2f6bff 0 22%, #1d4f67 23% 48%, #153a4a 49%) !important;
 }
 
 .limova-strict-copy :focus-visible {
@@ -145,10 +146,10 @@ html.limova-landing-active {
   outline-offset: 3px;
 }
 
-/* Variante claire, volontairement retenue : le bleu ne sert qu'aux actions,
-   aux états actifs et aux petits repères de navigation. */
+/* Thème bleu pétrole : le fond garde la profondeur du modèle d'origine sans
+   reprendre son noir pur. Le bleu vif reste réservé aux actions et repères. */
 .limova-strict-copy [class~="bg-black"] {
-  background-color: #fff !important;
+  background-color: #0d2633 !important;
 }
 
 .limova-strict-copy [class*="bg-[color(srgb_1_1_1_/_0."] {
@@ -204,10 +205,10 @@ html.limova-landing-active {
 
 .limova-strict-copy nav {
   padding: 10px 14px;
-  border: 1px solid rgba(215, 226, 240, 0.86);
+  border: 1px solid rgba(41, 75, 92, 0.9);
   border-radius: 14px;
-  background: rgba(255, 255, 255, 0.92);
-  box-shadow: 0 2px 8px rgba(37, 99, 235, 0.06);
+  background: rgba(13, 38, 51, 0.9);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.14);
   backdrop-filter: blur(12px);
 }
 
@@ -240,8 +241,8 @@ html.limova-landing-active {
   padding: 12px;
   border: 1px solid var(--cadrenza-border);
   border-radius: 15px;
-  background: #fff;
-  box-shadow: 0 8px 20px rgba(37, 99, 235, 0.12);
+  background: var(--cadrenza-blue-mist);
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.24);
 }
 
 .limova-strict-copy .strict-mobile-menu a {
