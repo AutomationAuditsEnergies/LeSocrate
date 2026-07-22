@@ -1203,7 +1203,7 @@ export default function HRDashboard() {
           }}
         />
 
-        <div className="m-2 ml-0 flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-2xl border" style={{ borderColor: colors.borderLight }}>
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
           <div className="flex h-14 items-center justify-between border-b px-4 md:hidden" style={{ borderColor: colors.borderLight, backgroundColor: colors.cardBg }}>
             <span className="text-sm font-semibold" style={{ color: colors.text }}>
               {workspaceSection === 'teachers' ? 'Mes professeurs' : 'Recruter un professeur'}
@@ -1927,8 +1927,12 @@ function CenterWorkspaceSidebar({
 
   return (
     <aside
-      className={`relative z-30 hidden h-screen min-h-0 shrink-0 flex-col md:flex ${collapsed ? 'w-[72px]' : 'w-[248px]'}`}
-      style={{ backgroundColor: '#F7F7F5', transition: 'width 180ms cubic-bezier(0.16, 1, 0.3, 1)' }}
+      className={`relative z-30 hidden h-screen min-h-0 shrink-0 flex-col border-r md:flex ${collapsed ? 'w-[72px]' : 'w-[248px]'}`}
+      style={{
+        backgroundColor: '#F7F7F5',
+        borderColor: colors.borderLight,
+        transition: 'width 180ms cubic-bezier(0.16, 1, 0.3, 1)',
+      }}
       aria-label="Navigation de l’espace centre"
     >
       <div className={`flex h-16 shrink-0 items-center ${collapsed ? 'justify-center px-2' : 'justify-between px-4'}`}>
