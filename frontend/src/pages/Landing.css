@@ -146,6 +146,73 @@ html.limova-landing-active {
   outline-offset: 3px;
 }
 
+/* Cadence visuelle propre à Cadrenza : deux nappes de points froids encadrent
+   le contenu, sans concurrencer le CTA ni reprendre les halos orange source. */
+.limova-strict-copy .cadrenza-cadence-field {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  opacity: 0.78;
+}
+
+.limova-strict-copy .cadrenza-cadence-field ~ * {
+  display: none !important;
+}
+
+.limova-strict-copy .cadrenza-cadence-field::before,
+.limova-strict-copy .cadrenza-cadence-field::after {
+  content: "";
+  position: absolute;
+  width: min(52vw, 760px);
+  height: 72%;
+  background-image:
+    radial-gradient(circle, rgba(96, 117, 138, 0.46) 0 1px, transparent 1.35px),
+    radial-gradient(circle, rgba(47, 107, 255, 0.2) 0 0.8px, transparent 1.15px);
+  background-position: 0 0, 3px 3px;
+  background-size: 7px 7px;
+  mask-image: radial-gradient(ellipse at center, #000 0 24%, rgba(0, 0, 0, 0.82) 42%, transparent 76%);
+}
+
+.limova-strict-copy .cadrenza-cadence-field::before {
+  top: 10%;
+  left: -10%;
+  transform: rotate(-7deg) scaleY(0.82);
+}
+
+.limova-strict-copy .cadrenza-cadence-field::after {
+  right: -11%;
+  bottom: 2%;
+  transform: rotate(7deg) scaleY(0.78);
+}
+
+.limova-strict-copy .cadrenza-cadence-field--compact::before,
+.limova-strict-copy .cadrenza-cadence-field--compact::after {
+  height: 120%;
+  top: -10%;
+  bottom: auto;
+}
+
+@media (max-width: 47.999rem) {
+  .limova-strict-copy .cadrenza-cadence-field {
+    opacity: 0.58;
+  }
+
+  .limova-strict-copy .cadrenza-cadence-field::before,
+  .limova-strict-copy .cadrenza-cadence-field::after {
+    width: 78vw;
+    height: 58%;
+    background-size: 8px 8px;
+  }
+
+  .limova-strict-copy .cadrenza-cadence-field::before {
+    left: -35%;
+  }
+
+  .limova-strict-copy .cadrenza-cadence-field::after {
+    right: -36%;
+  }
+}
+
 /* Thème graphite : un gris sombre lisible, distinct du noir pur. Le bleu vif
    reste réservé aux actions et aux repères de navigation. */
 .limova-strict-copy [class~="bg-black"] {
