@@ -1,0 +1,143 @@
+.cadrenza-pierre-card {
+  display: grid;
+  grid-template-columns: minmax(0, 0.92fr) minmax(0, 1.08fr);
+  width: 100%;
+  max-width: 885px;
+  min-height: 430px;
+  margin: 0 auto;
+  overflow: hidden;
+  border: 1px solid #414b58;
+  border-radius: 16px;
+  background: #252b34;
+}
+
+.cadrenza-pierre-visual {
+  position: relative;
+  min-height: 430px;
+  overflow: hidden;
+  border-right: 1px solid #414b58;
+  background: #101a2c;
+}
+
+.cadrenza-pierre-visual::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, transparent 58%, rgba(16, 26, 44, 0.46));
+  pointer-events: none;
+}
+
+.cadrenza-pierre-visual img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: 58% center;
+}
+
+.cadrenza-pierre-content {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 28px;
+  padding: 44px;
+}
+
+.cadrenza-pierre-heading {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.cadrenza-pierre-avatar {
+  width: 64px;
+  height: 64px;
+  flex: 0 0 auto;
+  overflow: hidden;
+  border-radius: 12px;
+  background: rgba(47, 107, 255, 0.14);
+}
+
+.cadrenza-pierre-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.cadrenza-pierre-heading h3 {
+  margin: 0;
+  color: #f3f6fa;
+  font-size: 30px;
+  font-weight: 650;
+  line-height: 1.05;
+  letter-spacing: -0.03em;
+}
+
+.cadrenza-pierre-heading p {
+  margin: 6px 0 0;
+  color: #8fb0ff;
+  font-size: 15px;
+  font-weight: 550;
+}
+
+.cadrenza-pierre-description {
+  max-width: 48ch;
+  margin: 0;
+  color: var(--cadrenza-copy);
+  font-size: 16px;
+  line-height: 1.55;
+}
+
+.cadrenza-pierre-capabilities {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.cadrenza-pierre-capabilities li {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 48px;
+  padding: 10px 14px;
+  border: 1px solid #414b58;
+  border-radius: 12px;
+  color: #eef2f7;
+  font-size: 15px;
+  line-height: 1.35;
+}
+
+.cadrenza-pierre-capabilities span {
+  display: grid;
+  width: 26px;
+  height: 26px;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 50%;
+  background: rgba(47, 107, 255, 0.14);
+  color: #75a3ff;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+@media (max-width: 767px) {
+  .cadrenza-pierre-card {
+    grid-template-columns: 1fr;
+  }
+
+  .cadrenza-pierre-visual {
+    min-height: 280px;
+    border-right: 0;
+    border-bottom: 1px solid #414b58;
+  }
+
+  .cadrenza-pierre-content {
+    gap: 22px;
+    padding: 28px 22px;
+  }
+
+  .cadrenza-pierre-heading h3 {
+    font-size: 26px;
+  }
+}
