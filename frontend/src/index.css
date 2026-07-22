@@ -79,10 +79,6 @@ body {
   text-wrap: balance;
 }
 
-.workspace-display-title__accent {
-  color: #6d4aff;
-}
-
 @keyframes teacher-card-enter {
   from {
     opacity: 0;

@@ -2346,7 +2346,7 @@ function RecruitmentAssistant({ colors, modules, onComplete, onManualCreate }) {
         <div className="mx-auto w-full max-w-[800px]">
           <div className="mb-7 text-center">
             <h1 className="workspace-display-title text-[2rem] font-semibold leading-tight tracking-[-0.025em] sm:text-[2.4rem]" style={{ color: colors.text }}>
-              Quel <span className="workspace-display-title__accent">professeur</span> recruterez-vous&nbsp;?
+              Quel professeur recruterez-vous&nbsp;?
             </h1>
             <p className="mx-auto mt-2.5 max-w-2xl text-sm leading-6" style={{ color: colors.textMuted }}>Décrivez votre besoin, puis précisez la formation et son calendrier.</p>
           </div>
@@ -2806,7 +2806,7 @@ function PlatformCardsView({
     <section className="mx-auto flex h-full min-h-0 w-full max-w-[90rem] flex-col overflow-hidden pt-4 sm:pt-6">
       <header className="relative mx-auto w-full max-w-[1204px] px-12 text-center">
         <h1 className="workspace-display-title text-[1.75rem] font-semibold leading-tight tracking-[-0.02em] sm:text-[2rem]" style={{ color: colors.text }}>
-          Mes <span className="workspace-display-title__accent">professeurs</span>
+          Mes professeurs
         </h1>
         <p className="mt-1 text-sm" style={{ color: colors.textMuted }}>Retrouvez vos professeurs, leurs formations et leur prochaine séance.</p>
 
