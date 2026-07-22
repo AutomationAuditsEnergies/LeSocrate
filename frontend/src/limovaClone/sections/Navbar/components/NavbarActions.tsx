@@ -21,7 +21,8 @@ export const NavbarActions = ({ mobileOpen = false, onToggle }: NavbarActionsPro
           <div className="box-border caret-transparent text-[15.3846px] tracking-[-0.107692px] leading-[21.5385px] outline-[color(srgb_1_1_1_/_0.06)] -outline-offset-1 outline outline-1 absolute no-underline z-0 rounded-[1523.08px] inset-0 md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px] md:rounded-[1408px]"></div>
         </a>
         <a
-          href="/cours?p=3"
+          href="tel:+33768533382"
+          aria-label="Appeler Mehdi au +33 7 68 53 33 82"
           className="items-center box-border caret-transparent flex text-[15.3846px] font-medium justify-center tracking-[-0.107692px] leading-[21.5385px] max-w-full min-h-0 min-w-0 outline-[3px] relative no-underline z-[1] pl-[11.5385px] pr-[13.4615px] py-[5.76923px] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px] md:min-h-[auto] md:min-w-[auto] md:pl-[10.6667px] md:pr-[12.4444px] md:py-[5.33333px]"
         >
           <div className="items-center box-border caret-transparent gap-x-[7.69231px] flex text-[15.3846px] justify-center tracking-[-0.107692px] leading-[21.5385px] min-h-0 min-w-0 outline-[3px] relative gap-y-[7.69231px] no-underline z-[2] rounded-[375px] md:gap-x-[7.11111px] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px] md:min-h-[auto] md:min-w-[auto] md:gap-y-[7.11111px] md:rounded-[1280px]">
@@ -34,7 +35,7 @@ export const NavbarActions = ({ mobileOpen = false, onToggle }: NavbarActionsPro
             </div>
             <div className="box-border caret-transparent flex text-[13.4615px] h-[18.8462px] tracking-[-0.107692px] leading-[18.8462px] min-h-0 min-w-0 outline-[3px] no-underline overflow-hidden md:text-[12.4444px] md:h-[17.4222px] md:tracking-[-0.0995556px] md:leading-[17.4222px] md:min-h-[auto] md:min-w-[auto]">
               <span className="box-border caret-transparent block text-[13.4615px] tracking-[-0.107692px] leading-[18.8462px] min-h-0 min-w-0 outline-[3px] no-underline md:text-[12.4444px] md:tracking-[-0.0995556px] md:leading-[17.4222px] md:min-h-[auto] md:min-w-[auto]">
-                Accès apprenant
+                +33 7 68 53 33 82
               </span>
             </div>
           </div>
