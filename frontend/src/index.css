@@ -1,4 +1,4 @@
-@import url("https://fonts.googleapis.com/css2?family=Caveat:wght@600;700&family=Poppins:wght@400;600&family=Space+Grotesk:wght@600;700&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=Caveat:wght@600;700&family=Poppins:wght@400;600&display=swap");
 @import "tailwindcss";
 
 /* Material Icons - Self-hosted for Windows compatibility */
@@ -73,9 +73,11 @@ body {
 }
 
 .workspace-display-title {
-  font-family: "Space Grotesk", "Poppins", system-ui, sans-serif;
-  font-optical-sizing: auto;
+  font-family: "Caveat", "Segoe Print", cursive;
+  font-weight: 700;
   font-kerning: normal;
+  letter-spacing: 0.01em;
+  line-height: 1.05;
   text-wrap: balance;
 }
 
