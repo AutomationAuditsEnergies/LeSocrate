@@ -196,14 +196,14 @@ html.limova-landing-active {
 }
 
 .limova-strict-copy .cadrenza-particle-cloud--left {
-  top: 10%;
+  top: 4%;
   left: -10%;
   transform: rotate(-7deg) scaleY(0.82);
 }
 
 .limova-strict-copy .cadrenza-particle-cloud--right {
   right: -11%;
-  bottom: 2%;
+  bottom: 10%;
   transform: rotate(7deg) scaleY(0.78);
 }
 
