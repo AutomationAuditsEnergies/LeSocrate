@@ -1,0 +1,84 @@
+/* Planificateur interactif de la section Méthode. */
+.cadrenza-course-planner {
+  align-self: center;
+  width: 100%;
+  max-width: 490px;
+  overflow: hidden;
+  border: 1px solid #3d4652;
+  border-radius: 16px;
+  background: #171c23;
+  color: #f4f8fc;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .22);
+}
+
+.cadrenza-course-planner__topbar {
+  display: flex;
+  min-height: 56px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 20px;
+  border-bottom: 1px solid #333c47;
+  background: #20262e;
+}
+
+.cadrenza-course-planner__brand { display: flex; align-items: center; gap: 9px; font-weight: 600; }
+.cadrenza-course-planner__brand img { width: 24px; height: 24px; }
+.cadrenza-course-planner__status { display: flex; align-items: center; gap: 7px; color: #aab4bf; font-size: 12px; }
+.cadrenza-course-planner__status i { width: 7px; height: 7px; border-radius: 50%; background: #35c98b; }
+.cadrenza-course-planner__content { padding: 26px; }
+.cadrenza-course-planner__heading > span { color: #7fa3ff; font: 500 11px/1.3 "Geist Mono", monospace; text-transform: uppercase; letter-spacing: .08em; }
+.cadrenza-course-planner__heading h2 { max-width: 390px; margin: 9px 0 0; color: #f4f8fc; font: 600 25px/1.18 "Instrument Sans", sans-serif; letter-spacing: -.035em; }
+.cadrenza-course-planner__heading p { max-width: 430px; margin: 10px 0 0; color: #aab4bf; font-size: 13px; line-height: 1.55; }
+.cadrenza-course-planner__days { margin: 24px 0 0; padding: 0; border: 0; }
+.cadrenza-course-planner__days legend { margin-bottom: 10px; color: #cbd2da; font-size: 12px; font-weight: 500; }
+.cadrenza-course-planner__days > div { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; }
+.cadrenza-course-planner__days button {
+  min-height: 58px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 1px solid #3d4652;
+  border-radius: 9px;
+  background: #242a33;
+  color: #aab4bf;
+  font: 600 13px/1 "Geist", sans-serif;
+  cursor: pointer;
+  transition: background-color 180ms ease, border-color 180ms ease, color 180ms ease;
+}
+.cadrenza-course-planner__days button:hover { border-color: #637083; color: #f4f8fc; }
+.cadrenza-course-planner__days button.is-selected { border-color: #4779ff; background: #2f6bff; color: #fff; }
+.cadrenza-course-planner__days button i { width: 5px; height: 5px; border-radius: 50%; background: transparent; }
+.cadrenza-course-planner__days button.is-selected i { background: #fff; }
+.cadrenza-course-planner__duration {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 18px;
+  padding: 14px 15px;
+  border-radius: 10px;
+  background: #242a33;
+}
+.cadrenza-course-planner__duration > div:first-child { display: flex; flex-direction: column; gap: 3px; }
+.cadrenza-course-planner__duration > div:first-child span { color: #8f9ba9; font-size: 11px; }
+.cadrenza-course-planner__duration strong { color: #eef4fa; font-size: 14px; }
+.cadrenza-course-planner__stepper { display: flex; align-items: center; gap: 8px; }
+.cadrenza-course-planner__stepper button { width: 34px; height: 34px; border: 1px solid #47515e; border-radius: 8px; background: #1c2128; color: #eef4fa; font-size: 18px; cursor: pointer; }
+.cadrenza-course-planner__stepper button:hover { background: #303844; }
+.cadrenza-course-planner__stepper button:disabled { cursor: not-allowed; opacity: .35; }
+.cadrenza-course-planner__stepper > span { min-width: 24px; color: #fff; text-align: center; font-weight: 600; font-variant-numeric: tabular-nums; }
+.cadrenza-course-planner__summary { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 12px; margin-top: 18px; padding-top: 18px; border-top: 1px solid #333c47; }
+.cadrenza-course-planner__calendar-icon { width: 48px; height: 48px; display: grid; place-items: center; border-radius: 10px; background: rgba(47, 107, 255, .15); color: #8babff; }
+.cadrenza-course-planner__calendar-icon span { font: 600 10px/1 "Geist Mono", monospace; }
+.cadrenza-course-planner__summary > div:nth-child(2) { display: flex; min-width: 0; flex-direction: column; gap: 4px; }
+.cadrenza-course-planner__summary strong { font-size: 13px; }
+.cadrenza-course-planner__summary > div:nth-child(2) span { color: #8f9ba9; font-size: 11px; }
+.cadrenza-course-planner__check { width: 25px; height: 25px; display: grid; place-items: center; border-radius: 50%; background: rgba(53, 201, 139, .14); color: #52daa0; font-weight: 700; }
+.cadrenza-course-planner__note { margin: 14px 0 0; color: #7f8b99; font-size: 11px; text-align: center; }
+
+@media (max-width: 47.999rem) {
+  .cadrenza-course-planner { order: 2; }
+  .cadrenza-course-planner__content { padding: 20px; }
+  .cadrenza-course-planner__heading h2 { font-size: 22px; }
+}

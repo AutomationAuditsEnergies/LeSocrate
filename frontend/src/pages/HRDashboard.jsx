@@ -3905,6 +3905,7 @@ export function CreatePlatformView({
     { id: 'jeudi', label: 'Jeu.' },
     { id: 'vendredi', label: 'Ven.' },
   ]
+  const selectedColor = teacherColors.find((color) => color.id === teacherColor) || teacherColors[0]
   const selectedModule = modules.find((module) => String(module.id) === String(selectedModuleId))
   const trainingTitle = formationMode === 'existing'
     ? String(selectedModule?.tp_name || '').trim()
@@ -3921,8 +3922,6 @@ export function CreatePlatformView({
   const trainingDays = formationMode === 'existing'
     ? Math.max(1, Number(selectedModule?.schedule?.total_training_days || Math.ceil(Number(selectedModule?.total_hours || 7) / 7)))
     : Math.max(0, Number(newFormHours) || 0)
-  const selectedDaysCount = Math.max(1, teachingDays.length || Number(weeklyCourseCount) || 1)
-  const trainingWeeks = Math.max(1, Math.ceil(trainingDays / selectedDaysCount))
   const estimatedAmountCents = typeof product?.unit_amount_cents === 'number'
     ? product.unit_amount_cents * trainingDays
     : null
@@ -3945,18 +3944,11 @@ export function CreatePlatformView({
   }, [generatedDescription])
 
   const toggleTeachingDay = (dayId) => {
-    setTeachingDays((current) => {
-      const next = current.includes(dayId)
+    setTeachingDays((current) => (
+      current.includes(dayId)
         ? current.filter((day) => day !== dayId)
         : [...current, dayId]
-      if (next.length > 0) setWeeklyCourseCount(String(next.length))
-      return next
-    })
-  }
-  const updateTrainingWeeks = (nextWeeks) => {
-    if (formationMode === 'existing') return
-    const safeWeeks = Math.min(52, Math.max(1, Number(nextWeeks) || 1))
-    setNewFormHours(String(safeWeeks * selectedDaysCount))
+    ))
   }
   const regenerateDescription = () => {
     descriptionEditedRef.current = false
@@ -4020,68 +4012,14 @@ export function CreatePlatformView({
             </div>
           </div>
 
-          <div className="relative z-10 flex flex-1 items-center justify-center py-8">
-            <div className="w-full max-w-[25rem] overflow-hidden rounded-2xl bg-[#171A1F] text-white shadow-[0_8px_24px_rgba(15,23,42,0.24)]">
-              <div className="flex items-center justify-between border-b border-white/10 px-5 py-4">
-                <div>
-                  <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-white/50">Planning de diffusion</p>
-                  <p className="mt-1 text-base font-semibold">Rythme du professeur IA</p>
-                </div>
-                <span className="flex h-10 w-10 items-center justify-center rounded-full bg-[#8B5CF6]/20 text-[#C4B5FD]">
-                  <CalendarDays size={19} strokeWidth={1.8} aria-hidden="true" />
-                </span>
-              </div>
-
-              <div className="p-5">
-                <fieldset>
-                  <legend className="text-xs font-medium text-white/65">Jours de diffusion</legend>
-                  <div className="mt-3 grid grid-cols-5 gap-2">
-                    {weekDays.map((day) => {
-                      const selected = teachingDays.includes(day.id)
-                      return (
-                        <button
-                          key={day.id}
-                          type="button"
-                          onClick={() => toggleTeachingDay(day.id)}
-                          aria-pressed={selected}
-                          className="flex min-h-14 flex-col items-center justify-center rounded-lg border text-xs font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#C4B5FD]"
-                          style={{
-                            backgroundColor: selected ? '#8B5CF6' : 'rgba(255,255,255,0.04)',
-                            borderColor: selected ? '#A78BFA' : 'rgba(255,255,255,0.12)',
-                            color: selected ? '#FFFFFF' : 'rgba(255,255,255,0.58)',
-                          }}
-                        >
-                          <span>{day.label.slice(0, 1)}</span>
-                          <span className="mt-1 h-1.5 w-1.5 rounded-full" style={{ backgroundColor: selected ? '#FFFFFF' : 'transparent' }} />
-                        </button>
-                      )
-                    })}
-                  </div>
-                </fieldset>
-
-                <div className="mt-5 flex items-center justify-between rounded-xl bg-white/[0.06] px-4 py-3.5">
-                  <div>
-                    <p className="text-xs text-white/55">Durée du parcours</p>
-                    <p className="mt-0.5 text-sm font-semibold">{trainingWeeks} semaine{trainingWeeks > 1 ? 's' : ''}</p>
-                  </div>
-                  <div className="flex items-center gap-1.5" aria-label="Nombre de semaines">
-                    <button type="button" onClick={() => updateTrainingWeeks(trainingWeeks - 1)} disabled={formationMode === 'existing' || trainingWeeks <= 1} className="flex h-9 w-9 items-center justify-center rounded-lg border border-white/15 text-lg text-white transition-colors hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#C4B5FD] disabled:cursor-not-allowed disabled:opacity-30" aria-label="Retirer une semaine">−</button>
-                    <span className="min-w-10 text-center text-base font-semibold tabular-nums">{trainingWeeks}</span>
-                    <button type="button" onClick={() => updateTrainingWeeks(trainingWeeks + 1)} disabled={formationMode === 'existing' || trainingWeeks >= 52} className="flex h-9 w-9 items-center justify-center rounded-lg border border-white/15 text-lg text-white transition-colors hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#C4B5FD] disabled:cursor-not-allowed disabled:opacity-30" aria-label="Ajouter une semaine">+</button>
-                  </div>
-                </div>
-
-                <div className="mt-4 flex items-start gap-3 border-t border-white/10 pt-4">
-                  <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[#10B981]/15 text-[#6EE7B7]">
-                    <Icon name="schedule" className="text-base" />
-                  </span>
-                  <div>
-                    <p className="text-sm font-medium">{teachingDays.length || 0} cours par semaine, à {scheduleStartTime || '09:00'}</p>
-                    <p className="mt-1 text-xs leading-5 text-white/50">L’agent prépare chaque cours 24 h avant sa diffusion.</p>
-                  </div>
-                </div>
-              </div>
-            </div>
+          <div className="relative z-10 flex min-h-80 flex-1 items-center justify-center py-6 sm:min-h-96">
+            <img
+              key={selectedColor.id}
+              src={selectedColor.image}
+              alt={`Aperçu du professeur en ${selectedColor.label.toLowerCase()}`}
+              className="teacher-identity-avatar h-[24rem] w-[24rem] object-contain sm:h-[28rem] sm:w-[28rem] lg:h-[min(52vh,31rem)] lg:w-[min(52vh,31rem)]"
+              draggable="false"
+            />
           </div>
 
           <div className="relative z-10 max-w-[34rem] text-white">
@@ -4100,10 +4038,12 @@ export function CreatePlatformView({
             <h2 className="mt-1 text-3xl font-bold tracking-[-0.03em] sm:text-4xl">
               {teacherFirstName.trim() || 'Votre professeur'}
             </h2>
-            <p className="mt-3 max-w-[58ch] text-sm leading-6 text-white/80">Sélectionnez directement les jours de cours et la durée du parcours dans le calendrier.</p>
+            <p className="mt-3 max-w-[58ch] text-sm leading-6 text-white/80">
+              {teacherDescription || 'La description du professeur apparaîtra ici dès que vous aurez renseigné la formation.'}
+            </p>
             {trainingDays > 0 && (
               <p className="mt-4 text-xs font-medium text-white/65">
-                {trainingDays} journée{trainingDays > 1 ? 's' : ''} sur {trainingWeeks} semaine{trainingWeeks > 1 ? 's' : ''}
+                {trainingDays} journée{trainingDays > 1 ? 's' : ''} de formation
               </p>
             )}
           </div>
