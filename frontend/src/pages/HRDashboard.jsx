@@ -2808,8 +2808,8 @@ function PlatformCardsView({
 
         <div className="absolute right-0 top-0 flex h-11 items-center justify-end">
           {rosterSearchOpen ? (
-            <div className="flex h-10 w-[min(18rem,calc(100vw-7rem))] items-center gap-2 rounded-lg border bg-white px-3 shadow-sm" style={{ borderColor: colors.borderLight }} role="search">
-              <Icon name="search" className="text-lg" style={{ color: colors.textMuted }} />
+            <div className="flex h-9 w-[min(12.5rem,calc(100vw-7rem))] items-center gap-1.5 rounded-md border bg-white px-2.5 shadow-sm" style={{ borderColor: colors.borderLight }} role="search">
+              <Icon name="search" className="text-base" style={{ color: colors.textMuted }} />
               <label htmlFor="teacher-roster-search" className="sr-only">Rechercher un professeur ou une formation</label>
               <input
                 id="teacher-roster-search"
@@ -2827,7 +2827,7 @@ function PlatformCardsView({
                   }
                 }}
                 placeholder="Rechercher…"
-                className="min-w-0 flex-1 bg-transparent py-2 text-sm outline-none placeholder:text-[#626269]"
+                className="min-w-0 flex-1 bg-transparent py-1.5 text-[13px] outline-none placeholder:text-[#626269]"
                 style={{ color: colors.text }}
                 autoFocus
               />
@@ -2842,7 +2842,7 @@ function PlatformCardsView({
                 aria-label="Fermer la recherche"
                 style={{ color: colors.textMuted }}
               >
-                <Icon name="close" className="text-base" />
+                <Icon name="close" className="text-sm" />
               </button>
             </div>
           ) : (
