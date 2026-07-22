@@ -10,12 +10,12 @@ html.limova-landing-active,
 body.limova-landing-active,
 body.limova-landing-active #root {
   min-height: 100%;
-  background-color: #000;
+  background-color: #f7faff;
   overscroll-behavior-y: none;
 }
 
 html.limova-landing-active {
-  color-scheme: dark;
+  color-scheme: light;
 }
 
 @font-face {
@@ -51,10 +51,18 @@ html.limova-landing-active {
 }
 
 .limova-strict-copy {
+  --cadrenza-blue: #2563eb;
+  --cadrenza-blue-hover: #1d4ed8;
+  --cadrenza-blue-soft: #eaf2ff;
+  --cadrenza-blue-mist: #f4f8ff;
+  --cadrenza-ink: #10233d;
+  --cadrenza-copy: #425a76;
+  --cadrenza-muted: #61758d;
+  --cadrenza-border: #d7e2f0;
   min-height: 100vh;
   overflow-x: clip;
-  background: #000;
-  color: #fff;
+  background: #f7faff;
+  color: var(--cadrenza-ink);
   font-family: "Geist", system-ui, sans-serif;
   font-size: 14px;
   line-height: 1.4;
@@ -80,7 +88,7 @@ html.limova-landing-active {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  color: #fff;
+  color: var(--cadrenza-ink);
 }
 
 .limova-strict-copy .cadrenza-logo__mark {
@@ -98,8 +106,8 @@ html.limova-landing-active {
   stroke-linejoin: round;
 }
 
-.limova-strict-copy .cadrenza-logo__cadence { stroke: #dc8e21; }
-.limova-strict-copy .cadrenza-logo__node { fill: #dc8e21; }
+.limova-strict-copy .cadrenza-logo__cadence { stroke: var(--cadrenza-blue); }
+.limova-strict-copy .cadrenza-logo__node { fill: var(--cadrenza-blue); }
 .limova-strict-copy .cadrenza-logo__wordmark { font-size: 18px; font-weight: 600; letter-spacing: -0.04em; }
 
 .limova-strict-copy a[href*="instagram.com/limova"],
@@ -129,12 +137,92 @@ html.limova-landing-active {
 .limova-strict-copy :is(div, span):has(> img[src*="_Julia.avif"]),
 .limova-strict-copy :is(div, span):has(> img[src*="_Rony.avif"]),
 .limova-strict-copy :is(div, span):has(> img[src*="_Charly.png"]) {
-  background: radial-gradient(circle, #dc8e21 0 22%, rgba(220, 142, 33, 0.22) 23% 48%, rgba(255, 255, 255, 0.06) 49%) !important;
+  background: radial-gradient(circle, #2563eb 0 22%, #dbeafe 23% 48%, #eff6ff 49%) !important;
 }
 
 .limova-strict-copy :focus-visible {
-  outline: 2px solid #dc8e21;
+  outline: 2px solid var(--cadrenza-blue);
   outline-offset: 3px;
+}
+
+/* Variante claire, volontairement retenue : le bleu ne sert qu'aux actions,
+   aux états actifs et aux petits repères de navigation. */
+.limova-strict-copy [class~="bg-black"] {
+  background-color: #fff !important;
+}
+
+.limova-strict-copy [class*="bg-[color(srgb_1_1_1_/_0."] {
+  background-color: var(--cadrenza-blue-mist) !important;
+  background-image: none !important;
+}
+
+.limova-strict-copy [class*="text-[color(srgb_1_1_1_/_0.73)]"] {
+  color: var(--cadrenza-copy) !important;
+}
+
+.limova-strict-copy [class*="text-[color(srgb_1_1_1_/_0.5)]"] {
+  color: var(--cadrenza-muted) !important;
+}
+
+.limova-strict-copy [class*="outline-[color(srgb_1_1_1_/_0."] {
+  outline-color: var(--cadrenza-border) !important;
+}
+
+.limova-strict-copy [class*="shadow-[rgba(255,255,255"] {
+  box-shadow: none !important;
+}
+
+.limova-strict-copy [class*="bg-[linear-gradient(270deg,rgba(220,155,65"],
+.limova-strict-copy [class*="bg-[linear-gradient(270deg,rgb(232,93,6"],
+.limova-strict-copy [class*="bg-[radial-gradient"][class*="rgb(232,93,6"],
+.limova-strict-copy [class*="bg-[color(srgb_0.862745_0.556863_0.129412"] {
+  background-color: var(--cadrenza-blue-soft) !important;
+  background-image: none !important;
+}
+
+.limova-strict-copy [class*="rgb(241,115,36)"],
+.limova-strict-copy [class*="rgb(220,142,33)"] {
+  background-color: var(--cadrenza-blue) !important;
+  background-image: linear-gradient(136deg, #3b82f6, var(--cadrenza-blue)) !important;
+}
+
+.limova-strict-copy :is(a, button):has(> [class*="rgb(241,115,36)"]),
+.limova-strict-copy > div > a[class*="rgb(241,115,36)"] {
+  color: #fff !important;
+}
+
+.limova-strict-copy .text-yellow-600,
+.limova-strict-copy [class*="bg-clip-text"][class*="rgb(241,115,36)"] {
+  color: var(--cadrenza-blue) !important;
+  -webkit-text-fill-color: currentColor;
+}
+
+.limova-strict-copy [class~="bg-white"],
+.limova-strict-copy [class*="bg-white/"] {
+  background-color: var(--cadrenza-ink) !important;
+}
+
+.limova-strict-copy nav {
+  padding: 10px 14px;
+  border: 1px solid rgba(215, 226, 240, 0.86);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: 0 2px 8px rgba(37, 99, 235, 0.06);
+  backdrop-filter: blur(12px);
+}
+
+.limova-strict-copy .strict-desktop-menu :is(a, button),
+.limova-strict-copy .strict-desktop-menu :is(a, button) * {
+  color: var(--cadrenza-ink) !important;
+}
+
+.limova-strict-copy video + button,
+.limova-strict-copy video ~ div {
+  color: #fff;
+}
+
+.limova-strict-copy video + button [class*="outline-[color(srgb_1_1_1_/_0."] {
+  outline-color: rgba(255, 255, 255, 0.28) !important;
 }
 
 .limova-strict-copy div:has(> img[src*="LCI_"]) {
@@ -150,10 +238,10 @@ html.limova-landing-active {
   display: grid;
   gap: 2px;
   padding: 12px;
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  border: 1px solid var(--cadrenza-border);
   border-radius: 15px;
-  background: #11100f;
-  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.42);
+  background: #fff;
+  box-shadow: 0 8px 20px rgba(37, 99, 235, 0.12);
 }
 
 .limova-strict-copy .strict-mobile-menu a {
@@ -162,14 +250,14 @@ html.limova-landing-active {
   align-items: center;
   padding: 0 12px;
   border-radius: 9px;
-  color: rgba(255, 255, 255, 0.8);
+  color: var(--cadrenza-copy);
   font-size: 14px;
   font-weight: 500;
   text-decoration: none;
 }
 
-.limova-strict-copy .strict-mobile-menu a:hover { background: rgba(255, 255, 255, 0.06); color: #fff; }
-.limova-strict-copy .strict-mobile-menu .strict-mobile-menu__primary { justify-content: center; margin-top: 5px; background: linear-gradient(136deg, #f17324, #dc8e21); color: #fff; }
+.limova-strict-copy .strict-mobile-menu a:hover { background: var(--cadrenza-blue-soft); color: var(--cadrenza-blue-hover); }
+.limova-strict-copy .strict-mobile-menu .strict-mobile-menu__primary { justify-content: center; margin-top: 5px; background: var(--cadrenza-blue); color: #fff; }
 
 @media (min-width: 48rem) {
   .limova-strict-copy .md\:transform-none {
@@ -201,7 +289,7 @@ html.limova-landing-active {
     overflow: visible !important;
     border-radius: 0 !important;
     background: transparent !important;
-    color: #fff !important;
+    color: var(--cadrenza-ink) !important;
     translate: none !important;
     visibility: visible !important;
   }
