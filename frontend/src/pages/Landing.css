@@ -10,7 +10,7 @@ html.limova-landing-active,
 body.limova-landing-active,
 body.limova-landing-active #root {
   min-height: 100%;
-  background-color: #0d2633;
+  background-color: #1c2026;
   overscroll-behavior-y: none;
 }
 
@@ -53,16 +53,16 @@ html.limova-landing-active {
 .limova-strict-copy {
   --cadrenza-blue: #2f6bff;
   --cadrenza-blue-hover: #2457d6;
-  --cadrenza-blue-soft: #153a4a;
-  --cadrenza-blue-mist: #123242;
-  --cadrenza-surface: #183c4d;
+  --cadrenza-blue-soft: #2b313a;
+  --cadrenza-blue-mist: #272c34;
+  --cadrenza-surface: #303640;
   --cadrenza-ink: #f4f8fc;
-  --cadrenza-copy: #c2d0da;
-  --cadrenza-muted: #a9bdca;
-  --cadrenza-border: #294b5c;
+  --cadrenza-copy: #cbd2da;
+  --cadrenza-muted: #aab4bf;
+  --cadrenza-border: #3d4652;
   min-height: 100vh;
   overflow-x: clip;
-  background: #0d2633;
+  background: #1c2026;
   color: var(--cadrenza-ink);
   font-family: "Geist", system-ui, sans-serif;
   font-size: 14px;
@@ -138,7 +138,7 @@ html.limova-landing-active {
 .limova-strict-copy :is(div, span):has(> img[src*="_Julia.avif"]),
 .limova-strict-copy :is(div, span):has(> img[src*="_Rony.avif"]),
 .limova-strict-copy :is(div, span):has(> img[src*="_Charly.png"]) {
-  background: radial-gradient(circle, #2f6bff 0 22%, #1d4f67 23% 48%, #153a4a 49%) !important;
+  background: radial-gradient(circle, #2f6bff 0 22%, #394454 23% 48%, #2b313a 49%) !important;
 }
 
 .limova-strict-copy :focus-visible {
@@ -146,10 +146,10 @@ html.limova-landing-active {
   outline-offset: 3px;
 }
 
-/* Thème bleu pétrole : le fond garde la profondeur du modèle d'origine sans
-   reprendre son noir pur. Le bleu vif reste réservé aux actions et repères. */
+/* Thème graphite : un gris sombre lisible, distinct du noir pur. Le bleu vif
+   reste réservé aux actions et aux repères de navigation. */
 .limova-strict-copy [class~="bg-black"] {
-  background-color: #0d2633 !important;
+  background-color: #1c2026 !important;
 }
 
 .limova-strict-copy [class*="bg-[color(srgb_1_1_1_/_0."] {
@@ -205,9 +205,9 @@ html.limova-landing-active {
 
 .limova-strict-copy nav {
   padding: 10px 14px;
-  border: 1px solid rgba(41, 75, 92, 0.9);
+  border: 1px solid rgba(61, 70, 82, 0.9);
   border-radius: 14px;
-  background: rgba(13, 38, 51, 0.9);
+  background: rgba(28, 32, 38, 0.9);
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.14);
   backdrop-filter: blur(12px);
 }
