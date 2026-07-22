@@ -185,55 +185,6 @@ html.limova-landing-active {
   transform: rotate(7deg) scaleY(0.78);
 }
 
-.limova-strict-copy .cadrenza-prompt-card {
-  isolation: isolate;
-}
-
-.limova-strict-copy .cadrenza-prompt-orbit {
-  position: absolute;
-  z-index: 3;
-  top: 0;
-  left: 0;
-  width: 52px;
-  height: 30px;
-  pointer-events: none;
-  background-image:
-    radial-gradient(circle at 12% 58%, rgba(92, 149, 255, 0.38) 0 1px, transparent 1.6px),
-    radial-gradient(circle at 30% 28%, rgba(77, 137, 255, 0.72) 0 1.4px, transparent 2px),
-    radial-gradient(circle at 46% 68%, rgba(113, 166, 255, 0.98) 0 1.8px, transparent 2.5px),
-    radial-gradient(circle at 64% 38%, rgba(68, 130, 255, 0.86) 0 1.3px, transparent 2px),
-    radial-gradient(circle at 82% 62%, rgba(61, 120, 255, 0.46) 0 1px, transparent 1.7px);
-  filter: drop-shadow(0 0 5px rgba(47, 107, 255, 0.46));
-  offset-path: inset(-7px round 25px);
-  offset-rotate: 0deg;
-  animation: cadrenza-prompt-spark 12s linear infinite;
-}
-
-@keyframes cadrenza-prompt-spark {
-  0%, 100% {
-    offset-distance: 0%;
-    opacity: 0.42;
-  }
-  12% {
-    opacity: 0.78;
-  }
-  26% {
-    opacity: 0.58;
-  }
-  43% {
-    opacity: 0.92;
-  }
-  61% {
-    opacity: 0.62;
-  }
-  78% {
-    opacity: 0.86;
-  }
-  100% {
-    offset-distance: 100%;
-  }
-}
-
 .limova-strict-copy .cadrenza-cadence-field--compact::before,
 .limova-strict-copy .cadrenza-cadence-field--compact::after {
   height: 120%;
@@ -428,10 +379,6 @@ html.limova-landing-active {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .limova-strict-copy .cadrenza-prompt-orbit {
-    display: none;
-  }
-
   .limova-strict-copy *,
   .limova-strict-copy *::before,
   .limova-strict-copy *::after {
