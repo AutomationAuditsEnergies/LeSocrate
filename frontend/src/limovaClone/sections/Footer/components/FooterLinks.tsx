@@ -1,6 +1,6 @@
 export const FooterLinks = () => {
   return (
-    <div className="box-border caret-transparent gap-x-[23.0769px] grid text-[15.3846px] grid-cols-[repeat(2,minmax(0px,1fr))] tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] gap-y-[23.0769px] no-underline mt-[15.3846px] md:gap-x-[71.1111px] md:text-[14.2222px] md:grid-cols-[repeat(4,auto)] md:tracking-[-0.0995556px] md:leading-[19.9111px] md:gap-y-[71.1111px] md:mt-0">
+    <div className="box-border caret-transparent gap-x-[23.0769px] grid text-[15.3846px] grid-cols-[repeat(2,minmax(0px,1fr))] tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] gap-y-[23.0769px] no-underline mt-[15.3846px] md:gap-x-[71.1111px] md:text-[14.2222px] md:grid-cols-[repeat(3,auto)] md:tracking-[-0.0995556px] md:leading-[19.9111px] md:gap-y-[71.1111px] md:mt-0">
       <div className="box-border caret-transparent gap-x-[11.5385px] flex flex-col text-[15.3846px] tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] gap-y-[11.5385px] no-underline md:gap-x-[10.6667px] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px] md:gap-y-[10.6667px]">
         <div className="box-border caret-transparent text-[15.3846px] font-medium tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] no-underline md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px]">
           Entreprise
@@ -86,20 +86,6 @@ export const FooterLinks = () => {
           >
             CGV
           </a>
-        </div>
-      </div>
-      <div className="box-border caret-transparent gap-x-[15.3846px] flex flex-col text-[15.3846px] justify-between tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] gap-y-[15.3846px] no-underline md:gap-x-[14.2222px] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px] md:gap-y-[14.2222px]">
-        <div className="bg-[color(srgb_1_1_1_/_0.04)] shadow-[rgba(255,255,255,0.06)_0px_0px_30px_0px_inset] box-border caret-transparent gap-x-[11.5385px] flex flex-col text-[15.3846px] tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[color(srgb_1_1_1_/_0.04)] -outline-offset-1 outline outline-1 gap-y-[11.5385px] text-center no-underline w-fit px-[19.2308px] py-[15.3846px] rounded-[23.0769px] md:gap-x-[10.6667px] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px] md:gap-y-[10.6667px] md:px-[17.7778px] md:py-[14.2222px] md:rounded-[21.3333px]">
-          <div className="box-border caret-transparent text-[13.4615px] tracking-[-0.107692px] leading-[18.8462px] min-h-[auto] min-w-[auto] outline-[3px] no-underline md:text-[12.4444px] md:tracking-[-0.0995556px] md:leading-[17.4222px]">
-            Certifications
-          </div>
-          <div className="aspect-[89_/_122] box-border caret-transparent text-[15.3846px] tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] no-underline w-[76.9231px] overflow-hidden md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px] md:w-[71.1111px]">
-            <img
-              src="https://c.animaapp.com/mrq6puj7YRWjJs/assets/6a00ed17304bd3d22ef7fbea_certif_(1).png"
-              alt=""
-              className="box-border caret-transparent inline-block text-[15.3846px] h-full tracking-[-0.107692px] leading-[21.5385px] max-w-full object-cover outline-[3px] no-underline w-full md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px]"
-            />
-          </div>
         </div>
       </div>
     </div>
