@@ -1,36 +1,90 @@
+const PipelineStep = ({ index, label }: { index: number; label: string }) => (
+  <div className={`cadrenza-film__step cadrenza-film__step--${index}`}>
+    <span>{index}</span>
+    <strong>{label}</strong>
+    <i aria-hidden="true" />
+  </div>
+)
+
 export const HeroVideo = () => {
   return (
-    <div className="aspect-video shadow-[rgba(255,255,255,0.05)_0px_0px_32px_0px_inset,rgba(255,255,255,0.04)_0px_0px_6px_0px_inset] box-border caret-transparent text-[15.3846px] tracking-[-0.107692px] leading-[21.5385px] outline-[color(srgb_1_1_1_/_0.04)] -outline-offset-1 outline outline-1 relative no-underline w-full overflow-hidden mt-[34.6154px] rounded-[26.9231px] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px] md:mt-8 md:rounded-[24.8889px]">
-      <div className="items-center box-border caret-transparent flex text-[15.3846px] h-full isolate justify-center tracking-[-0.107692px] leading-[21.5385px] outline-[3px] pointer-events-none absolute no-underline w-full overflow-hidden rounded-[26.9231px] inset-0 md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px] md:rounded-[24.8889px]">
-        <div className="box-border caret-transparent text-[15.3846px] tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] no-underline pt-[62.5%] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px]"></div>
-        <video
-          preload="auto"
-          playsInline=""
-          loop=""
-          muted=""
-          src="https://vz-0b0707c4-1c8.b-cdn.net/0e5f8efa-e243-4f0c-8be3-cbc0b292c2aa/playlist.m3u8"
-          className="aspect-[auto_1920_/_1080] box-border caret-transparent text-[15.3846px] h-full tracking-[-0.107692px] leading-[21.5385px] object-cover outline-[3px] absolute no-underline align-baseline w-full left-0 top-0 md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px]"
-        ></video>
-        <button className="items-center bg-transparent caret-transparent block text-[15.3846px] justify-center tracking-[normal] leading-[21.5385px] outline-[3px] pointer-events-auto absolute text-center no-underline z-[4] p-[15.3846px] right-0 top-0 md:text-[14.2222px] md:leading-[19.9111px] md:p-[14.2222px]">
-          <div className="box-border caret-transparent text-[15.3846px] leading-[21.5385px] outline-[3px] no-underline md:text-[14.2222px] md:leading-[19.9111px]">
-            <div className="items-center backdrop-blur-[5px] bg-stone-950/20 shadow-[rgba(255,255,255,0.05)_0px_0px_32px_0px_inset,rgba(255,255,255,0.04)_0px_0px_6px_0px_inset] box-border caret-transparent gap-x-[5.76923px] flex text-[15.3846px] justify-center leading-[21.5385px] outline-[color(srgb_1_1_1_/_0.08)] -outline-offset-1 outline outline-1 gap-y-[5.76923px] no-underline px-[11.5385px] py-[5.76923px] rounded-[15369.2px] md:gap-x-[5.33333px] md:text-[14.2222px] md:leading-[19.9111px] md:gap-y-[5.33333px] md:px-[10.6667px] md:py-[5.33333px] md:rounded-[14208px]">
-              <img
-                src="https://c.animaapp.com/mrq6puj7YRWjJs/assets/icon-17.svg"
-                alt="Icon"
-                className="items-center box-border caret-transparent flex shrink-0 text-[15.3846px] h-[17.3077px] justify-center leading-[21.5385px] outline-[3px] no-underline w-[17.3077px] md:text-[14.2222px] md:h-4 md:leading-[19.9111px] md:w-4"
-              />
-              <div className="box-border caret-transparent text-[13.4615px] font-medium leading-[18.8462px] min-h-[auto] min-w-[auto] outline-[3px] no-underline md:text-[12.4444px] md:leading-[17.4222px]">
-                Activer le son
-              </div>
-            </div>
+    <div className="cadrenza-film" role="img" aria-label="Démonstration animée de la création et de la diffusion d’un module de formation Cadrenza">
+      <div className="cadrenza-film__glow" aria-hidden="true" />
+      <div className="cadrenza-film__window">
+        <header className="cadrenza-film__chrome">
+          <div className="cadrenza-film__brand">
+            <img src="/cadrenza-mark.svg" alt="" />
+            <span>Cadrenza</span>
           </div>
-        </button>
-        <div className="items-center backdrop-blur-[6px] bg-[color(srgb_1_1_1_/_0.06)] shadow-[rgba(255,255,255,0.05)_0px_-2px_6px_0px_inset] box-border caret-transparent gap-x-[3.84615px] flex text-[15.3846px] justify-center tracking-[-0.107692px] leading-[21.5385px] outline-[color(srgb_1_1_1_/_0.06)] -outline-offset-1 outline outline-1 absolute gap-y-[3.84615px] no-underline px-[7.69231px] py-[5.76923px] rounded-[15369.2px] left-[15.3846px] top-[15.3846px] md:gap-x-[3.55556px] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px] md:gap-y-[3.55556px] md:px-[7.11111px] md:py-[5.33333px] md:rounded-[14208px] md:left-[14.2222px] md:top-[14.2222px]">
-          <div className="bg-red-500 box-border caret-transparent shrink-0 text-[15.3846px] h-[5.76923px] tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] no-underline w-[5.76923px] rounded-[1523.08px] md:text-[14.2222px] md:h-[5.33333px] md:tracking-[-0.0995556px] md:leading-[19.9111px] md:w-[5.33333px] md:rounded-[1408px]"></div>
-          <div className="bg-amber-400 box-border caret-transparent shrink-0 text-[15.3846px] h-[5.76923px] tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] no-underline w-[5.76923px] rounded-[1523.08px] md:text-[14.2222px] md:h-[5.33333px] md:tracking-[-0.0995556px] md:leading-[19.9111px] md:w-[5.33333px] md:rounded-[1408px]"></div>
-          <div className="bg-green-500 box-border caret-transparent shrink-0 text-[15.3846px] h-[5.76923px] tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] no-underline w-[5.76923px] rounded-[1523.08px] md:text-[14.2222px] md:h-[5.33333px] md:tracking-[-0.0995556px] md:leading-[19.9111px] md:w-[5.33333px] md:rounded-[1408px]"></div>
+          <div className="cadrenza-film__workspace">Centre de formation · Paris</div>
+          <div className="cadrenza-film__avatar">AM</div>
+        </header>
+
+        <div className="cadrenza-film__body">
+          <aside className="cadrenza-film__nav" aria-hidden="true">
+            <span className="is-active">Vue d’ensemble</span>
+            <span>Formations</span>
+            <span>Promotions</span>
+            <span>Planning</span>
+          </aside>
+
+          <main className="cadrenza-film__stage">
+            <section className="cadrenza-film__scene cadrenza-film__scene--source">
+              <div className="cadrenza-film__scene-heading">
+                <div><small>Nouveau module</small><h2>Employé commercial</h2></div>
+                <span className="cadrenza-film__status">RNCP 37099</span>
+              </div>
+              <div className="cadrenza-film__dropzone">
+                <div className="cadrenza-film__document"><b>REAC</b><span>Référentiel officiel</span></div>
+                <div className="cadrenza-film__upload-copy"><strong>Référentiel importé</strong><span>42 pages · structure vérifiée</span></div>
+                <span className="cadrenza-film__check">✓</span>
+              </div>
+              <div className="cadrenza-film__cursor cadrenza-film__cursor--one" aria-hidden="true" />
+            </section>
+
+            <section className="cadrenza-film__scene cadrenza-film__scene--pipeline">
+              <div className="cadrenza-film__scene-heading">
+                <div><small>Production</small><h2>Votre module prend forme</h2></div>
+                <span className="cadrenza-film__live"><i /> En cours</span>
+              </div>
+              <div className="cadrenza-film__pipeline">
+                <PipelineStep index={1} label="Référentiel analysé" />
+                <PipelineStep index={2} label="Cours structuré" />
+                <PipelineStep index={3} label="Voix générée" />
+                <PipelineStep index={4} label="Contrôle qualité" />
+              </div>
+              <div className="cadrenza-film__progress"><span /></div>
+            </section>
+
+            <section className="cadrenza-film__scene cadrenza-film__scene--schedule">
+              <div className="cadrenza-film__scene-heading">
+                <div><small>Diffusion</small><h2>Planifier la prochaine promotion</h2></div>
+                <span className="cadrenza-film__status">Module prêt</span>
+              </div>
+              <div className="cadrenza-film__schedule-card">
+                <div className="cadrenza-film__calendar"><b>16</b><span>SEPT.</span></div>
+                <div><strong>Promotion EC · Automne</strong><span>Du lundi au vendredi · 9h00</span></div>
+                <button type="button" tabIndex={-1}>Programmer le cours</button>
+              </div>
+              <div className="cadrenza-film__cursor cadrenza-film__cursor--two" aria-hidden="true" />
+            </section>
+
+            <section className="cadrenza-film__scene cadrenza-film__scene--classroom">
+              <div className="cadrenza-film__classroom-top">
+                <span className="cadrenza-film__onair"><i /> COURS EN DIRECT</span>
+                <span>09:18</span>
+              </div>
+              <div className="cadrenza-film__lesson">
+                <div className="cadrenza-film__teacher"><img src="/professor-icon.png" alt="" /></div>
+                <div><small>Votre professeur IA</small><h2>Accueillir et conseiller le client</h2><p>Le cours avance au même rythme pour toute la promotion.</p></div>
+              </div>
+              <div className="cadrenza-film__wave" aria-hidden="true">{Array.from({ length: 28 }, (_, i) => <i key={i} />)}</div>
+              <div className="cadrenza-film__lesson-progress"><span /></div>
+            </section>
+          </main>
         </div>
       </div>
+      <div className="cadrenza-film__caption"><span>Un référentiel.</span><span>Un module durable.</span><span>Chaque promotion formée.</span></div>
     </div>
-  );
-};
+  )
+}
