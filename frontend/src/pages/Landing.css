@@ -182,39 +182,6 @@ html.limova-landing-active {
   box-shadow: none !important;
 }
 
-@property --cadrenza-prompt-border-angle {
-  syntax: "<angle>";
-  inherits: false;
-  initial-value: 0deg;
-}
-
-.limova-strict-copy .cadrenza-hero-prompt-card::before {
-  content: "";
-  position: absolute;
-  z-index: 2;
-  inset: -1px;
-  padding: 1px;
-  border-radius: inherit;
-  background: conic-gradient(
-    from var(--cadrenza-prompt-border-angle),
-    transparent 0 78%,
-    rgba(96, 165, 250, 0.12) 83%,
-    rgba(96, 165, 250, 0.62) 88%,
-    transparent 94%
-  );
-  opacity: 0.72;
-  pointer-events: none;
-  -webkit-mask:
-    linear-gradient(#fff 0 0) content-box,
-    linear-gradient(#fff 0 0);
-  -webkit-mask-composite: xor;
-  mask:
-    linear-gradient(#fff 0 0) content-box,
-    linear-gradient(#fff 0 0);
-  mask-composite: exclude;
-  animation: cadrenza-prompt-border-sweep 12s linear infinite;
-}
-
 .limova-strict-copy .cadrenza-hero-primary-action {
   overflow: hidden;
   border-radius: 999px;
@@ -238,18 +205,6 @@ html.limova-landing-active {
   pointer-events: none;
   transform: translateX(-180%) skewX(-18deg);
   animation: cadrenza-primary-action-clean 5s ease-in-out infinite;
-}
-
-@keyframes cadrenza-prompt-border-sweep {
-  0% {
-    --cadrenza-prompt-border-angle: 0deg;
-    opacity: 0.52;
-  }
-  50% { opacity: 0.76; }
-  100% {
-    --cadrenza-prompt-border-angle: 360deg;
-    opacity: 0.52;
-  }
 }
 
 @keyframes cadrenza-primary-action-clean {
@@ -487,7 +442,6 @@ html.limova-landing-active {
 @media (prefers-reduced-motion: reduce) { .cadrenza-film *, .cadrenza-film *::before, .cadrenza-film *::after { animation-duration:1ms !important; animation-iteration-count:1 !important; }.cadrenza-film__scene--classroom { opacity:1; transform:none; } }
 
 @media (prefers-reduced-motion: reduce) {
-  .limova-strict-copy .cadrenza-hero-prompt-card::before,
   .limova-strict-copy .cadrenza-hero-primary-action::after {
     animation: none;
     opacity: 0;
