@@ -218,6 +218,26 @@ html.limova-landing-active {
   background: rgba(47, 107, 255, 0.12);
 }
 
+.limova-strict-copy .cadrenza-hero-teacher-portrait {
+  width: 0.98em;
+  height: 0.98em;
+  display: inline-grid;
+  place-items: center;
+  overflow: hidden;
+  border: 1px solid rgba(244, 248, 252, 0.22);
+  border-radius: 50%;
+  background: rgba(47, 107, 255, 0.18);
+  vertical-align: -0.14em;
+}
+
+.limova-strict-copy .cadrenza-hero-teacher-portrait img {
+  width: 118%;
+  max-width: none;
+  height: 118%;
+  object-fit: contain;
+  transform: translateY(7%);
+}
+
 @media (min-width: 768px) {
   .limova-strict-copy .cadrenza-hero-prompt-card {
     max-width: 640px;
