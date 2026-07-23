@@ -66,8 +66,8 @@ export const AgentCarousel = () => {
           </defs>
           <path d="M236 154C315 154 334 202 424 228" />
           <circle cx="424" cy="228" r="5" />
-          <path d="M236 484C350 484 438 335 610 250" />
-          <circle cx="610" cy="250" r="5" />
+          <path d="M236 484C360 484 478 314 680 224" />
+          <circle cx="680" cy="224" r="5" />
           <path d="M884 172C835 172 803 158 756 148" />
           <circle cx="756" cy="148" r="5" />
         </svg>
