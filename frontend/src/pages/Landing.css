@@ -198,11 +198,11 @@ html.limova-landing-active {
   background: conic-gradient(
     from var(--cadrenza-prompt-border-angle),
     transparent 0 78%,
-    rgba(96, 165, 250, 0.2) 83%,
-    rgba(96, 165, 250, 0.95) 88%,
+    rgba(96, 165, 250, 0.12) 83%,
+    rgba(96, 165, 250, 0.62) 88%,
     transparent 94%
   );
-  opacity: 0;
+  opacity: 0.72;
   pointer-events: none;
   -webkit-mask:
     linear-gradient(#fff 0 0) content-box,
@@ -212,7 +212,7 @@ html.limova-landing-active {
     linear-gradient(#fff 0 0) content-box,
     linear-gradient(#fff 0 0);
   mask-composite: exclude;
-  animation: cadrenza-prompt-border-sweep 7s linear infinite;
+  animation: cadrenza-prompt-border-sweep 12s linear infinite;
 }
 
 .limova-strict-copy .cadrenza-hero-primary-action {
@@ -241,20 +241,14 @@ html.limova-landing-active {
 }
 
 @keyframes cadrenza-prompt-border-sweep {
-  0%, 68% {
+  0% {
     --cadrenza-prompt-border-angle: 0deg;
-    opacity: 0;
+    opacity: 0.52;
   }
-  72% {
-    opacity: 0.9;
-  }
-  94% {
-    --cadrenza-prompt-border-angle: 360deg;
-    opacity: 0.75;
-  }
+  50% { opacity: 0.76; }
   100% {
     --cadrenza-prompt-border-angle: 360deg;
-    opacity: 0;
+    opacity: 0.52;
   }
 }
 
