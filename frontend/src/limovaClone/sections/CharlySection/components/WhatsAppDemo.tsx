@@ -5,7 +5,7 @@ export const WhatsAppDemo = () => (
       alt="Interface mobile Cadrenza pour planifier les jours de formation"
       width="637"
       height="1332"
-      className="h-auto w-full max-w-[380px] object-contain"
+      className="h-auto w-full max-w-[280px] object-contain md:max-w-[300px]"
       loading="lazy"
       decoding="async"
     />
