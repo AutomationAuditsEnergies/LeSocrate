@@ -281,6 +281,16 @@ html.limova-landing-active {
   transform: translateY(7%);
 }
 
+.limova-strict-copy .cadrenza-hero-neon-title {
+  color: #f7faff;
+  -webkit-text-stroke: 1px #3b82f6;
+  paint-order: stroke fill;
+  text-shadow:
+    0 0 5px rgba(59, 130, 246, 0.72),
+    0 0 14px rgba(37, 99, 235, 0.52),
+    0 0 28px rgba(29, 78, 216, 0.28);
+}
+
 @media (min-width: 768px) {
   .limova-strict-copy .cadrenza-hero-prompt-card {
     max-width: 640px;
