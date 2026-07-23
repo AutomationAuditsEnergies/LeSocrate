@@ -182,6 +182,11 @@ html.limova-landing-active {
   box-shadow: none !important;
 }
 
+.limova-strict-copy .cadrenza-hero-prompt-card {
+  background-color: rgba(47, 107, 255, 0.08) !important;
+  outline-color: rgba(96, 145, 255, 0.26) !important;
+}
+
 .limova-strict-copy [class*="bg-[linear-gradient(270deg,rgba(220,155,65"],
 .limova-strict-copy [class*="bg-[linear-gradient(270deg,rgb(232,93,6"],
 .limova-strict-copy [class*="bg-[radial-gradient"][class*="rgb(232,93,6"],
