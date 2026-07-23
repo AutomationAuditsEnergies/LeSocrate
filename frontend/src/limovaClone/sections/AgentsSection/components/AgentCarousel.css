@@ -70,23 +70,6 @@
   width: 100%;
   aspect-ratio: 1120 / 650;
   min-height: 560px;
-  overflow: hidden;
-  border: 1px solid rgba(106, 151, 255, 0.2);
-  border-radius: 20px;
-  background:
-    radial-gradient(circle at 54% 45%, rgba(47, 107, 255, 0.12), transparent 42%),
-    #181e27;
-}
-
-.cadrenza-pierre-stage::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  background-image: linear-gradient(rgba(129, 165, 255, 0.035) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(129, 165, 255, 0.035) 1px, transparent 1px);
-  background-size: 48px 48px;
-  mask-image: radial-gradient(circle at center, #000, transparent 76%);
-  pointer-events: none;
 }
 
 .cadrenza-pierre-visual {
@@ -97,25 +80,10 @@
   transform: translate(-50%, -50%);
 }
 
-.cadrenza-pierre-visual::after {
-  content: "";
-  position: absolute;
-  inset: -1px;
-  background: linear-gradient(
-    90deg,
-    #181e27 0%,
-    transparent 12%,
-    transparent 88%,
-    #181e27 100%
-  );
-  pointer-events: none;
-}
-
 .cadrenza-pierre-visual img {
   display: block;
   width: 100%;
   height: auto;
-  border-radius: 18px;
 }
 
 .cadrenza-pierre-connectors {
@@ -216,7 +184,6 @@
   .cadrenza-pierre-stage {
     aspect-ratio: auto;
     min-height: 0;
-    padding: 22px;
   }
 
   .cadrenza-pierre-visual {
@@ -257,8 +224,7 @@
   }
 
   .cadrenza-pierre-stage {
-    padding: 12px;
-    border-radius: 16px;
+    padding: 0;
   }
 
   .cadrenza-pierre-visual {
