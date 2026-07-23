@@ -39,30 +39,7 @@ export const HeroSection = () => {
                 className="box-border caret-transparent text-[32.6923px] font-semibold tracking-[-1.14423px] leading-[35.9615px] outline-[3px] text-center no-underline font-instrumentsans md:text-[60.4444px] md:tracking-[-2.11556px] md:leading-[66.4889px]"
               >
                 <span className="box-border caret-transparent text-[32.6923px] tracking-[-1.14423px] leading-[35.9615px] outline-[3px] no-underline md:text-[60.4444px] md:tracking-[-2.11556px] md:leading-[66.4889px]">
-                  Des{" "}
-                  <span className="cadrenza-hero-electric-stack">
-                    <span
-                      className="cadrenza-hero-electric-outline"
-                      aria-hidden="true"
-                    >
-                      professeurs IA
-                    </span>
-                    <span
-                      className="cadrenza-hero-electric-arcs"
-                      aria-hidden="true"
-                    >
-                      professeurs IA
-                    </span>
-                    <span className="cadrenza-hero-electric-foreground">
-                      professeurs IA
-                    </span>
-                    <span
-                      className="cadrenza-hero-electric-fragment"
-                      aria-hidden="true"
-                    >
-                      professeurs IA
-                    </span>
-                  </span>
+                  Des professeurs IA
                 </span>
                 {" "}
                 <span className="cadrenza-hero-teacher-portrait" aria-hidden="true">
