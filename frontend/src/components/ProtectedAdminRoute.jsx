@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Navigate } from 'react-router-dom'
 import { apiFetch } from '../api'
+import AppLoader from './AppLoader.jsx'
 
 export default function ProtectedAdminRoute({ children, loginPath = '/connexion-centre', allowedAccountTypes = null }) {
   const [isAuthenticated, setIsAuthenticated] = useState(null) // null = loading, true/false = résultat
@@ -62,15 +63,7 @@ export default function ProtectedAdminRoute({ children, loginPath = '/connexion-
   }, [allowedAccountTypes])
 
   if (isLoading) {
-    // Afficher un loader pendant la vérification
-    return (
-      <div className="min-h-screen bg-gray-100 flex items-center justify-center">
-        <div className="text-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
-          <p className="text-gray-600">Vérification...</p>
-        </div>
-      </div>
-    )
+    return <AppLoader label="Vérification de votre accès" />
   }
 
   if (!isAuthenticated) {

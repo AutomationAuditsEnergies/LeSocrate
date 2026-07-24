@@ -3,6 +3,7 @@ import { BrowserRouter, Route, Routes, useNavigate, useSearchParams } from 'reac
 import { apiUrl } from './api'
 import Index from './pages/Index.jsx'
 import ProtectedAdminRoute from './components/ProtectedAdminRoute.jsx'
+import AppLoader from './components/AppLoader.jsx'
 
 // Code splitting : les grosses pages restent chargées à la demande, mais les
 // routes du flux apprenant sont préchargées depuis la page d'accueil pour éviter
@@ -44,39 +45,8 @@ function preloadVideoRoute() {
   return loadVideoPage()
 }
 
-// Fallback de route volontairement clair : s'il apparaît encore sur une page
-// non préchargée, il ne révèle plus le fond noir global.
 function RouteFallback() {
-  return (
-    <div
-      style={{
-        position: 'fixed',
-        inset: 0,
-        background: '#0b1424',
-        display: 'flex',
-        flexDirection: 'column',
-        gap: 16,
-        alignItems: 'center',
-        justifyContent: 'center',
-        color: '#e5e7eb',
-        fontFamily: 'Archivo, Inter, system-ui, sans-serif',
-      }}
-    >
-      <div
-        style={{
-          width: 52,
-          height: 52,
-          borderRadius: '50%',
-          border: '3px solid rgba(242, 138, 75, 0.25)',
-          borderTopColor: '#f28a4b',
-          animation: 'cadrenza-spin 0.8s linear infinite',
-        }}
-      />
-      <div style={{ fontSize: 13, fontWeight: 700, letterSpacing: '0.28em', textTransform: 'uppercase' }}>
-        Cadrenza
-      </div>
-    </div>
-  )
+  return <AppLoader label="Chargement" />
 }
 
 class AppErrorBoundary extends Component {

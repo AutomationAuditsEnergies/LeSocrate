@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import ChatPanel from '../components/ChatPanel.jsx'
+import AppLoader from '../components/AppLoader.jsx'
 import { apiFetch, apiUrl, getPlatformId, getPlatformName, getStudentLoginPath, setPlatformId } from '../api'
 import { SlidePreviewFrame } from '../components/slides/PipelineSlidePreview.jsx'
 import {
@@ -26,6 +27,10 @@ function CourseStatusScreen({ tone = 'loading', title, message }) {
   const isError = tone === 'error'
   const isDone = tone === 'done'
 
+  if (tone === 'loading') {
+    return <AppLoader label={title} message={message} surface="light" />
+  }
+
   return (
     <div
       className="flex h-screen w-full items-center justify-center px-6"
@@ -39,11 +44,7 @@ function CourseStatusScreen({ tone = 'loading', title, message }) {
             color: isError ? '#dc2626' : isDone ? '#059669' : '#7c3aed',
           }}
         >
-          {tone === 'loading' ? (
-            <div className="h-6 w-6 animate-spin rounded-full border-2 border-violet-200 border-t-violet-600" />
-          ) : (
-            <span className="material-icons text-xl">{isError ? 'warning' : 'check'}</span>
-          )}
+          <span className="material-icons text-xl">{isError ? 'warning' : 'check'}</span>
         </div>
         <h1 className="text-lg font-semibold text-gray-900">{title}</h1>
         {message && <p className="mt-2 text-sm leading-6 text-gray-500">{message}</p>}

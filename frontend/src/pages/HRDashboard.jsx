@@ -18,6 +18,7 @@ import {
   UsersRound,
 } from 'lucide-react'
 import { apiFetch } from '../api'
+import AppLoader from '../components/AppLoader.jsx'
 import CoursFoldersModal from '../components/CoursFolders'
 import { getHiddenPipelineProgress, getTeacherPreparation } from '../teacherPreparation'
 import { getAudioStatusMeta, getNextCourseSession, scheduleSelectionIsValid } from '../courseSchedule'
@@ -1160,11 +1161,7 @@ export default function HRDashboard() {
 
   // ─── Render ──────────────────────────────────────────────────────────
   if (loading) {
-    return (
-      <div className="flex min-h-screen items-center justify-center" style={{ backgroundColor: darkMode ? '#0f172a' : '#F8F7F5', fontFamily: 'Inter, sans-serif' }}>
-        <div className="h-10 w-10 animate-spin rounded-full border-3 border-gray-700 border-t-purple-500" />
-      </div>
-    )
+    return <AppLoader label="Chargement du tableau de bord" surface={darkMode ? 'dark' : 'light'} />
   }
 
   // Palette blanche commune aux références Coursebox et Delos. Le violet reste

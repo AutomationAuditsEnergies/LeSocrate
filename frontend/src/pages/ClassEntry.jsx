@@ -3,6 +3,7 @@ import { useParams } from 'react-router-dom'
 import { apiUrl, setPlatformId, setPlatformName, setStudentLoginPath } from '../api'
 import Index from './Index.jsx'
 import CadrenzaLogo from '../components/CadrenzaLogo.jsx'
+import AppLoader from '../components/AppLoader.jsx'
 import './Auth.css'
 
 function ClassEntryFallback({ title, message }) {
@@ -12,7 +13,6 @@ function ClassEntryFallback({ title, message }) {
         <CadrenzaLogo />
         <h1>{title}</h1>
         {message && <p>{message}</p>}
-        {title.startsWith('Chargement') && <div className="auth-loader" aria-hidden="true" />}
       </section>
     </main>
   )
@@ -55,7 +55,13 @@ export default function ClassEntry({ preloadCourseRoutes, preloadAttenteRoute, p
   }, [centerSlug, platformSlug])
 
   if (state.status === 'loading') {
-    return <ClassEntryFallback title="Chargement de la classe" message="Préparation de l'espace de connexion." />
+    return (
+      <AppLoader
+        label="Chargement de la classe"
+        message="Préparation de l'espace de connexion."
+        surface="light"
+      />
+    )
   }
 
   if (state.status === 'error') {

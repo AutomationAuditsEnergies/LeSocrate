@@ -35,50 +35,49 @@
       #root:empty::before {
         content: "";
         position: absolute;
-        top: calc(50% - 32px);
-        left: calc(50% - 28px);
-        width: 56px;
-        height: 56px;
-        background: url("/cadrenza-mark.svg") center / contain no-repeat;
-        animation: cadrenza-pulse 1.2s ease-in-out infinite;
+        top: calc(50% - 41px);
+        left: calc(50% - 32px);
+        width: 64px;
+        height: 64px;
+        background: url("/socrate-mark.svg") center / contain no-repeat;
+        animation: app-loader-breathe 1.35s cubic-bezier(0.4, 0, 0.2, 1) infinite;
       }
       #root:empty::after {
-        content: "CADRENZA";
+        content: "Chargement";
         position: absolute;
-        top: calc(50% + 40px);
+        top: calc(50% + 41px);
         left: 0;
         right: 0;
         text-align: center;
-        font-family: "Archivo", "Inter", system-ui, sans-serif;
+        font-family: "Inter", system-ui, sans-serif;
         font-size: 13px;
-        font-weight: 700;
-        letter-spacing: 0.28em;
-        color: #0b1424;
+        font-weight: 650;
+        letter-spacing: 0.04em;
+        color: #0f172a;
       }
-      @keyframes cadrenza-spin {
-        to { transform: rotate(360deg); }
-      }
-      @keyframes cadrenza-pulse {
-        0%, 100% { opacity: 0.72; transform: scale(0.96); }
-        50% { opacity: 1; transform: scale(1); }
+      @keyframes app-loader-breathe {
+        0%, 100% { opacity: 0.72; transform: translateY(2px) scale(0.96); }
+        50% { opacity: 1; transform: translateY(-2px) scale(1); }
       }
 
       /* La landing amorce directement son univers graphite. */
       html.landing-boot #root:empty {
         background-color: #1c2026;
-        background-image:
-          linear-gradient(90deg, rgba(28, 32, 38, 0.98) 0%, rgba(28, 32, 38, 0.88) 45%, rgba(28, 32, 38, 0.5) 100%),
-          url("/cadrenza-robot-fleet.webp");
-        background-size: cover;
-        background-position: center;
       }
       html.landing-boot #root:empty::after {
         color: #f4f8fc;
       }
+      @media (prefers-reduced-motion: reduce) {
+        #root:empty::before {
+          animation: none;
+        }
+      }
     </style>
     <script>
       // Détecte la landing avant le rendu pour adapter le splash.
-      if (window.location.pathname === '/' || window.location.pathname === '/landing') {
+      const isLanding = window.location.pathname === '/landing'
+        || (window.location.pathname === '/' && new URLSearchParams(window.location.search).get('p') === '3');
+      if (isLanding) {
         document.documentElement.classList.add('landing-boot');
       }
     </script>

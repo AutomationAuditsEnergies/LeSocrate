@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { apiFetch, apiUrl, getPlatformId, setPlatformId, setPlatformName } from '../api'
+import AppLoader from '../components/AppLoader.jsx'
 
 export default function DebugCours() {
   const [debugInfo, setDebugInfo] = useState(null)
@@ -169,11 +170,7 @@ export default function DebugCours() {
   }
 
   if (loading) {
-    return (
-      <div className="bg-gray-900 text-white p-8 min-h-screen flex items-center justify-center">
-        <p className="text-xl">Chargement des informations de debug...</p>
-      </div>
-    )
+    return <AppLoader label="Chargement des informations de debug" surface="dark" />
   }
 
   if (error) {

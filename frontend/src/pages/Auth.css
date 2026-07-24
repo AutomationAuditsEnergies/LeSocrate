@@ -549,20 +549,6 @@
   line-height: 1.65;
 }
 
-.auth-loader {
-  width: 26px;
-  height: 26px;
-  margin-top: 28px;
-  border: 3px solid oklch(1 0 0 / 0.14);
-  border-top-color: var(--auth-signal);
-  border-radius: 50%;
-  animation: auth-spin 800ms linear infinite;
-}
-
-@keyframes auth-spin {
-  to { transform: rotate(360deg); }
-}
-
 @media (max-width: 980px) {
   .auth-layout {
     grid-template-columns: 1fr;
@@ -611,7 +597,4 @@
     transition: none;
   }
 
-  .auth-loader {
-    animation-duration: 1.6s;
-  }
 }
