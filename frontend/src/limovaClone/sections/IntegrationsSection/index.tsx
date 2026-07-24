@@ -1,5 +1,4 @@
 import { useMemo, useState, type CSSProperties } from "react";
-import { WalletCards } from "lucide-react";
 import "./SavingsSection.css";
 
 const formatEuros = (value: number) =>
@@ -51,19 +50,6 @@ export const IntegrationsSection = () => {
         </header>
 
         <div className="cadrenza-savings__comparison">
-          <aside className="cadrenza-savings__wallet" aria-hidden="true">
-            <span className="cadrenza-savings__wallet-icon">
-              <WalletCards strokeWidth={1.7} />
-            </span>
-            <strong>Budget maîtrisé</strong>
-            <small>
-              {result.totalTrainingDays} journée
-              {result.totalTrainingDays > 1 ? "s" : ""} planifiée
-              {result.totalTrainingDays > 1 ? "s" : ""} sur l’ensemble du
-              parcours.
-            </small>
-          </aside>
-
           <div className="cadrenza-savings__calculator">
             <label className="cadrenza-savings__range cadrenza-savings__range--frequency">
               <span className="cadrenza-savings__range-heading">

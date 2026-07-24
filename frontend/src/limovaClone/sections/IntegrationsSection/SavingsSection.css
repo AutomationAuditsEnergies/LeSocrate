@@ -42,51 +42,10 @@
 }
 
 .cadrenza-savings__comparison {
-  display: grid;
-  grid-template-columns: 190px minmax(0, 1fr);
   overflow: hidden;
   border: 1px solid #3c4654;
   border-radius: 16px;
   background: #20262f;
-}
-
-.cadrenza-savings__wallet {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-direction: column;
-  gap: 9px;
-  padding: 28px 22px;
-  border-right: 1px solid #3c4654;
-  background: #242a33;
-  text-align: center;
-}
-
-.cadrenza-savings__wallet-icon {
-  display: grid;
-  width: 64px;
-  height: 64px;
-  margin-bottom: 3px;
-  place-items: center;
-  border: 1px solid rgba(111, 156, 255, 0.38);
-  border-radius: 16px;
-  color: #91b1ff;
-}
-
-.cadrenza-savings__wallet-icon svg {
-  width: 32px;
-  height: 32px;
-}
-
-.cadrenza-savings__wallet strong {
-  color: #eef2f7;
-  font-size: 15px;
-}
-
-.cadrenza-savings__wallet small {
-  color: #8f9aaa;
-  font-size: 12px;
-  line-height: 1.45;
 }
 
 .cadrenza-savings__calculator {
@@ -306,32 +265,6 @@
 }
 
 @media (max-width: 700px) {
-  .cadrenza-savings__comparison {
-    grid-template-columns: 1fr;
-  }
-
-  .cadrenza-savings__wallet {
-    align-items: center;
-    justify-content: flex-start;
-    flex-direction: row;
-    padding: 18px 20px;
-    border-right: 0;
-    border-bottom: 1px solid #3c4654;
-    text-align: left;
-  }
-
-  .cadrenza-savings__wallet-icon {
-    width: 48px;
-    height: 48px;
-    margin: 0 4px 0 0;
-    border-radius: 12px;
-  }
-
-  .cadrenza-savings__wallet-icon svg {
-    width: 25px;
-    height: 25px;
-  }
-
   .cadrenza-savings__calculator {
     padding: 24px 20px;
   }
