@@ -389,34 +389,25 @@ export const AgentCarousel = () => {
                 }
               />
             ))}
-          {(Object.keys(arrowPoints) as ArrowId[]).map((id) => (
-            <circle
-              key={id}
-              className={
-                isArrowEditMode ? "cadrenza-pierre-arrow-handle" : undefined
-              }
-              cx={arrowPoints[id].x}
-              cy={arrowPoints[id].y}
-              r={isArrowEditMode ? 10 : 5}
-              role={isArrowEditMode ? "slider" : undefined}
-              aria-label={
-                isArrowEditMode
-                  ? `Déplacer la pointe de la flèche ${id}`
-                  : undefined
-              }
-              aria-valuetext={
-                isArrowEditMode
-                  ? `${arrowPoints[id].x}, ${arrowPoints[id].y}`
-                  : undefined
-              }
-              tabIndex={isArrowEditMode ? 0 : undefined}
-              onPointerDown={(event) => {
-                event.preventDefault();
-                draggedArrowRef.current = { id, kind: "tip" };
-              }}
-              onKeyDown={(event) => handleArrowKeyDown(event, id, "tip")}
-            />
-          ))}
+          {isArrowEditMode &&
+            (Object.keys(arrowPoints) as ArrowId[]).map((id) => (
+              <circle
+                key={id}
+                className="cadrenza-pierre-arrow-handle"
+                cx={arrowPoints[id].x}
+                cy={arrowPoints[id].y}
+                r="10"
+                role="slider"
+                aria-label={`Déplacer la pointe de la flèche ${id}`}
+                aria-valuetext={`${arrowPoints[id].x}, ${arrowPoints[id].y}`}
+                tabIndex={0}
+                onPointerDown={(event) => {
+                  event.preventDefault();
+                  draggedArrowRef.current = { id, kind: "tip" };
+                }}
+                onKeyDown={(event) => handleArrowKeyDown(event, id, "tip")}
+              />
+            ))}
         </svg>
 
         <ul className="cadrenza-pierre-callouts">
