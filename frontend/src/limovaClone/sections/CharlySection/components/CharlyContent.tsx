@@ -4,41 +4,13 @@ export const CharlyContent = () => {
       <div className="box-border caret-transparent gap-x-[11.5385px] flex flex-col text-[15.3846px] tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] gap-y-[11.5385px] no-underline md:gap-x-[10.6667px] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px] md:gap-y-[10.6667px]">
         <div className="items-center bg-[color(srgb_0.862745_0.556863_0.129412_/_0.08)] box-border caret-transparent text-yellow-600 gap-x-[6.34615px] flex text-[12.6923px] justify-center tracking-[-0.107692px] leading-[17.7692px] min-h-[auto] min-w-[auto] outline-[3px] gap-y-[6.34615px] no-underline w-fit px-[11.1058px] py-[6.34615px] rounded-[11.1058px] md:gap-x-[7.11111px] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px] md:gap-y-[7.11111px] md:px-[12.4444px] md:py-[7.11111px] md:rounded-[12.4444px]">
           <div className="bg-clip-text bg-[linear-gradient(136deg,rgb(241,115,36)_-1.65%,rgb(220,142,33)_100.28%)] box-border text-transparent text-[11.1058px] tracking-[-0.107692px] leading-[15.5481px] min-h-[auto] min-w-[auto] outline-[3px] no-underline uppercase font-geistmono md:text-[12.4444px] md:tracking-[-0.0995556px] md:leading-[17.4222px]">
-            charly+ votre nouvelle assistante générale
+            Fini le stress opérationnel
           </div>
         </div>
         <div className="box-border caret-transparent text-[15.3846px] tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] no-underline w-full md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px]">
-          <h2 className="items-center box-border caret-transparent gap-x-[5.03462px] flex flex-wrap text-[28.7692px] font-semibold justify-start tracking-[-1.00692px] leading-[31.6462px] outline-[3px] gap-y-0 no-underline font-instrumentsans md:gap-x-[8.71111px] md:text-[49.7778px] md:tracking-[-1.74222px] md:leading-[54.7556px]">
-            <span className="box-border caret-transparent block text-[28.7692px] tracking-[-1.00692px] leading-[31.6462px] min-h-[auto] min-w-[auto] outline-[3px] no-underline md:text-[49.7778px] md:tracking-[-1.74222px] md:leading-[54.7556px]">
-              Pilotez
-            </span>
-            <span className="box-border caret-transparent block text-[28.7692px] tracking-[-1.00692px] leading-[31.6462px] min-h-[auto] min-w-[auto] outline-[3px] no-underline md:text-[49.7778px] md:tracking-[-1.74222px] md:leading-[54.7556px]">
-              votre
-            </span>
-            <span className="box-border caret-transparent block text-[28.7692px] tracking-[-1.00692px] leading-[31.6462px] min-h-[auto] min-w-[auto] outline-[3px] no-underline md:text-[49.7778px] md:tracking-[-1.74222px] md:leading-[54.7556px]">
-              entreprise
-            </span>
-            <span className="box-border caret-transparent block text-[28.7692px] tracking-[-1.00692px] leading-[31.6462px] min-h-[auto] min-w-[auto] outline-[3px] no-underline md:text-[49.7778px] md:tracking-[-1.74222px] md:leading-[54.7556px]">
-              sur
-            </span>
-            <span className="box-border caret-transparent block text-[28.7692px] tracking-[-1.00692px] leading-[31.6462px] min-h-[auto] min-w-[auto] outline-[3px] no-underline md:text-[49.7778px] md:tracking-[-1.74222px] md:leading-[54.7556px]">
-              WhatsApp
-            </span>
-            <span className="box-border caret-transparent block text-[28.7692px] tracking-[-1.00692px] leading-[31.6462px] min-h-[auto] min-w-[auto] outline-[3px] no-underline md:text-[49.7778px] md:tracking-[-1.74222px] md:leading-[54.7556px]">
-              avec
-            </span>
-            <span className="items-center bg-[color(srgb_1_1_1_/_0.08)] box-border caret-transparent gap-x-[6.16484px] flex text-[28.7692px] justify-start tracking-[-1.00692px] leading-[31.6462px] min-h-[auto] min-w-[auto] outline-[color(srgb_1_1_1_/_0.08)] -outline-offset-1 outline outline-1 gap-y-[6.16484px] no-underline pl-[4.10989px] pr-[10.2747px] py-[4.10989px] rounded-[14.3846px] md:gap-x-[10.6667px] md:text-[49.7778px] md:tracking-[-1.74222px] md:leading-[54.7556px] md:gap-y-[10.6667px] md:pl-[7.1111px] md:pr-[17.7778px] md:py-[7.1111px] md:rounded-[24.8889px]">
-              <div className="backdrop-blur-[7.69231px] bg-white/10 bg-[linear-gradient(138deg,rgba(220,142,33,0)_-2.68%,rgba(220,142,33,0.32)_103.93%),none] bg-[position:0%_0%,0%_0%] bg-size-[auto,auto] shadow-[rgba(255,255,255,0.06)_0px_0px_30px_0px_inset] box-border caret-transparent flex text-[28.7692px] h-[26.7143px] tracking-[-1.00692px] leading-[31.6462px] min-h-[auto] min-w-[auto] outline-[color(srgb_1_1_1_/_0.06)] -outline-offset-1 outline outline-1 no-underline w-[26.7143px] overflow-hidden rounded-[10.2747px] md:backdrop-blur-[7.11111px] md:text-[49.7778px] md:h-[46.2222px] md:tracking-[-1.74222px] md:leading-[54.7556px] md:w-[46.2222px] md:rounded-[17.7778px]">
-                <img
-                  src="https://c.animaapp.com/mrq6puj7YRWjJs/assets/69a2dbf4fe3d8388efc3599c_Charly.avif"
-                  alt=""
-                  className="box-border caret-transparent text-[28.7692px] h-full tracking-[-1.00692px] leading-[31.6462px] max-w-full min-h-[auto] min-w-[auto] object-cover outline-[3px] no-underline w-full md:text-[49.7778px] md:tracking-[-1.74222px] md:leading-[54.7556px]"
-                />
-              </div>
-              <span className="box-border caret-transparent block text-[22.6044px] tracking-[-1.00692px] leading-[24.8648px] min-h-[auto] min-w-[auto] outline-[3px] no-underline md:text-[39.1111px] md:tracking-[-1.74222px] md:leading-[43.0222px]">
-                Charly
-              </span>
-            </span>
+          <h2 className="box-border caret-transparent text-[28.7692px] font-semibold tracking-[-1.00692px] leading-[31.6462px] outline-[3px] no-underline font-instrumentsans [text-wrap:balance] md:text-[49.7778px] md:tracking-[-1.74222px] md:leading-[54.7556px]">
+            Programmez l'ensemble des cours de votre formation professionnelle à
+            l'avance
           </h2>
         </div>
         <div className="box-border caret-transparent text-[color(srgb_1_1_1_/_0.73)] text-[15.3846px] tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] no-underline w-full mt-[3.84615px] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px] md:mt-[3.55556px]">
