@@ -1,4 +1,5 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, type CSSProperties } from "react";
+import { WalletCards } from "lucide-react";
 import "./SavingsSection.css";
 
 const formatEuros = (value: number) =>
@@ -8,154 +9,108 @@ const formatEuros = (value: number) =>
     maximumFractionDigits: 0,
   }).format(value);
 
-const clampNumber = (value: number, min: number, max: number) =>
-  Math.min(max, Math.max(min, Number.isFinite(value) ? value : min));
+const rangeStyle = (value: number, min: number, max: number) =>
+  ({
+    "--range-progress": `${((value - min) / (max - min)) * 100}%`,
+  }) as CSSProperties;
 
 export const IntegrationsSection = () => {
-  const [trainingDays, setTrainingDays] = useState(8);
-  const [dailyRate, setDailyRate] = useState(650);
-  const [cadrenzaBudget, setCadrenzaBudget] = useState(300);
+  const [freelanceCost, setFreelanceCost] = useState(1800);
+  const [cadrenzaCost, setCadrenzaCost] = useState(300);
 
-  const simulation = useMemo(() => {
-    const freelanceCost = trainingDays * dailyRate;
-    const savings = Math.max(0, freelanceCost - cadrenzaBudget);
-    const savingsRate =
+  const result = useMemo(() => {
+    const savings = Math.max(0, freelanceCost - cadrenzaCost);
+    const rate =
       freelanceCost > 0 ? Math.round((savings / freelanceCost) * 100) : 0;
-    const cadrenzaRatio =
-      freelanceCost > 0
-        ? Math.max(4, Math.min(100, (cadrenzaBudget / freelanceCost) * 100))
-        : 4;
-
-    return { freelanceCost, savings, savingsRate, cadrenzaRatio };
-  }, [cadrenzaBudget, dailyRate, trainingDays]);
+    return { savings, rate };
+  }, [cadrenzaCost, freelanceCost]);
 
   return (
     <section id="pilotage" className="cadrenza-savings">
       <div className="cadrenza-savings__inner">
         <header className="cadrenza-savings__header">
-          <span className="cadrenza-savings__label">
-            Simulateur d’économies
-          </span>
-          <h2>Mesurez ce que Pierre peut vous faire économiser.</h2>
+          <span>Votre budget formation</span>
+          <h2>Formez davantage, sans multiplier les coûts.</h2>
           <p>
-            Comparez le coût mensuel d’un formateur freelance avec le budget
-            d’un professeur IA Cadrenza. Ajustez les hypothèses à votre
-            activité.
+            Comparez directement votre budget formateur avec celui d’un
+            professeur IA Cadrenza.
           </p>
         </header>
 
-        <div className="cadrenza-savings__inputs" aria-label="Hypothèses du calcul">
-          <label>
-            <span>Journées par mois</span>
-            <span className="cadrenza-savings__input-shell">
-              <input
-                type="number"
-                min="1"
-                max="31"
-                value={trainingDays}
-                onChange={(event) =>
-                  setTrainingDays(
-                    clampNumber(event.currentTarget.valueAsNumber, 1, 31),
-                  )
-                }
-              />
-              <small>jours</small>
-            </span>
-          </label>
-          <label>
-            <span>Tarif du freelance</span>
-            <span className="cadrenza-savings__input-shell">
-              <input
-                type="number"
-                min="100"
-                max="3000"
-                step="50"
-                value={dailyRate}
-                onChange={(event) =>
-                  setDailyRate(
-                    clampNumber(event.currentTarget.valueAsNumber, 100, 3000),
-                  )
-                }
-              />
-              <small>€ / jour</small>
-            </span>
-          </label>
-          <label>
-            <span>Budget Cadrenza estimé</span>
-            <span className="cadrenza-savings__input-shell">
-              <input
-                type="number"
-                min="0"
-                max="10000"
-                step="50"
-                value={cadrenzaBudget}
-                onChange={(event) =>
-                  setCadrenzaBudget(
-                    clampNumber(event.currentTarget.valueAsNumber, 0, 10000),
-                  )
-                }
-              />
-              <small>€ / mois</small>
-            </span>
-          </label>
-        </div>
-
         <div className="cadrenza-savings__comparison">
-          <div className="cadrenza-savings__row cadrenza-savings__row--human">
-            <div className="cadrenza-savings__row-heading">
-              <span>
-                <strong>Formateur freelance</strong>
-                <small>
-                  {trainingDays} jours × {formatEuros(dailyRate)}
-                </small>
-              </span>
-              <strong>{formatEuros(simulation.freelanceCost)} / mois</strong>
-            </div>
-            <div className="cadrenza-savings__track" aria-hidden="true">
-              <span />
-            </div>
-          </div>
-
-          <div className="cadrenza-savings__row cadrenza-savings__row--ai">
-            <div className="cadrenza-savings__row-heading">
-              <span>
-                <strong>Professeur IA Pierre</strong>
-                <small>Budget mensuel renseigné</small>
-              </span>
-              <strong>{formatEuros(cadrenzaBudget)} / mois</strong>
-            </div>
-            <div className="cadrenza-savings__track" aria-hidden="true">
-              <span style={{ width: `${simulation.cadrenzaRatio}%` }} />
-            </div>
-          </div>
-
-          <div className="cadrenza-savings__result" aria-live="polite">
-            <span>
-              <small>Économie mensuelle estimée</small>
-              <strong>{formatEuros(simulation.savings)}</strong>
+          <aside className="cadrenza-savings__wallet" aria-hidden="true">
+            <span className="cadrenza-savings__wallet-icon">
+              <WalletCards strokeWidth={1.7} />
             </span>
-            <span className="cadrenza-savings__percentage">
-              {simulation.savingsRate}% de budget en moins
-            </span>
+            <strong>Budget maîtrisé</strong>
+            <small>Deux curseurs, une estimation immédiate.</small>
+          </aside>
+
+          <div className="cadrenza-savings__calculator">
+            <label className="cadrenza-savings__range cadrenza-savings__range--human">
+              <span className="cadrenza-savings__range-heading">
+                <span>
+                  <strong>Formateur freelance</strong>
+                  <small>Coût mensuel estimé</small>
+                </span>
+                <strong>{formatEuros(freelanceCost)} / mois</strong>
+              </span>
+              <input
+                type="range"
+                min="500"
+                max="10000"
+                step="100"
+                value={freelanceCost}
+                style={rangeStyle(freelanceCost, 500, 10000)}
+                aria-label="Coût mensuel du formateur freelance"
+                onChange={(event) =>
+                  setFreelanceCost(event.currentTarget.valueAsNumber)
+                }
+              />
+            </label>
+
+            <label className="cadrenza-savings__range cadrenza-savings__range--ai">
+              <span className="cadrenza-savings__range-heading">
+                <span>
+                  <strong>Professeur IA Pierre</strong>
+                  <small>Budget Cadrenza estimé</small>
+                </span>
+                <strong>{formatEuros(cadrenzaCost)} / mois</strong>
+              </span>
+              <input
+                type="range"
+                min="50"
+                max="2000"
+                step="50"
+                value={cadrenzaCost}
+                style={rangeStyle(cadrenzaCost, 50, 2000)}
+                aria-label="Budget mensuel Cadrenza"
+                onChange={(event) =>
+                  setCadrenzaCost(event.currentTarget.valueAsNumber)
+                }
+              />
+            </label>
+
+            <div className="cadrenza-savings__result" aria-live="polite">
+              <span>
+                <small>Économie mensuelle estimée</small>
+                <strong>{formatEuros(result.savings)}</strong>
+              </span>
+              <span className="cadrenza-savings__percentage">
+                {result.rate}% de budget en moins
+              </span>
+            </div>
           </div>
         </div>
 
-        <p className="cadrenza-savings__disclaimer">
-          Simulation indicative hors taxes, calculée à partir des montants que
-          vous renseignez. Elle n’inclut pas les éventuels frais annexes d’un
-          formateur.
-        </p>
-
-        <div className="cadrenza-savings__actions">
-          <a
-            className="cadrenza-savings__primary"
-            href="/connexion-centre?mode=signup"
-          >
+        <div className="cadrenza-savings__footer">
+          <p>
+            Simulation indicative hors taxes, calculée à partir des montants
+            sélectionnés.
+          </p>
+          <a href="/connexion-centre?mode=signup">
             Créer un espace
             <span aria-hidden="true">→</span>
-          </a>
-          <a className="cadrenza-savings__secondary" href="tel:+33768533382">
-            Parler à un conseiller
           </a>
         </div>
       </div>
