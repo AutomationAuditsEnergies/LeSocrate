@@ -40,7 +40,23 @@ export const AgentCarousel = () => {
 
       <div className="cadrenza-pierre-stage">
         <div className="cadrenza-pierre-visual">
+          <figure
+            className="cadrenza-classroom-monitor"
+            aria-label="Écran de présentation de Pierre"
+          >
+            <span
+              className="cadrenza-classroom-monitor__camera"
+              aria-hidden="true"
+            />
+            <span className="cadrenza-classroom-monitor__display">
+              <img
+                src="/cadrenza-chapter-slide.png"
+                alt="Diapo du chapitre 1 sur la communication professionnelle"
+              />
+            </span>
+          </figure>
           <img
+            className="cadrenza-pierre-foreground"
             src="/pierre-classe-ia.png"
             alt="Pierre, professeur IA, présente un cours devant trois postes élèves"
           />
