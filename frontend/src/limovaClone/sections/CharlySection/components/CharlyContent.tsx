@@ -9,8 +9,7 @@ export const CharlyContent = () => {
         </div>
         <div className="box-border caret-transparent text-[15.3846px] tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] no-underline w-full md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px]">
           <h2 className="box-border caret-transparent text-[28.7692px] font-semibold tracking-[-1.00692px] leading-[31.6462px] outline-[3px] no-underline font-instrumentsans [text-wrap:balance] md:text-[49.7778px] md:tracking-[-1.74222px] md:leading-[54.7556px]">
-            Programmez l'ensemble des cours de votre formation professionnelle à
-            l'avance
+            Programmez vos cours à l'avance
           </h2>
         </div>
         <div className="box-border caret-transparent text-[color(srgb_1_1_1_/_0.73)] text-[15.3846px] tracking-[-0.107692px] leading-[21.5385px] min-h-[auto] min-w-[auto] outline-[3px] no-underline w-full mt-[3.84615px] md:text-[14.2222px] md:tracking-[-0.0995556px] md:leading-[19.9111px] md:mt-[3.55556px]">
