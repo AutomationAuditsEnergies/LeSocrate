@@ -1,4 +1,16 @@
+import { useEffect, useState, type KeyboardEvent, type PointerEvent } from "react";
 import "./AgentCarousel.css";
+
+type ArrowId = "slides" | "training" | "students";
+type ArrowPoint = { x: number; y: number };
+type ArrowPoints = Record<ArrowId, ArrowPoint>;
+
+const ARROW_STORAGE_KEY = "cadrenza-pierre-arrow-points";
+const defaultArrowPoints: ArrowPoints = {
+  slides: { x: 424, y: 228 },
+  training: { x: 680, y: 224 },
+  students: { x: 756, y: 148 },
+};
 
 const capabilities = [
   {
@@ -19,6 +31,77 @@ const capabilities = [
 ];
 
 export const AgentCarousel = () => {
+  const [arrowPoints, setArrowPoints] = useState<ArrowPoints>(() => {
+    if (typeof window === "undefined") return defaultArrowPoints;
+
+    try {
+      const savedPoints = window.localStorage.getItem(ARROW_STORAGE_KEY);
+      return savedPoints
+        ? ({ ...defaultArrowPoints, ...JSON.parse(savedPoints) } as ArrowPoints)
+        : defaultArrowPoints;
+    } catch {
+      return defaultArrowPoints;
+    }
+  });
+  const [draggedArrow, setDraggedArrow] = useState<ArrowId | null>(null);
+  const [copyLabel, setCopyLabel] = useState("Copier le réglage");
+  const isArrowEditMode =
+    typeof window !== "undefined" &&
+    new URLSearchParams(window.location.search).get("editArrows") === "1";
+
+  useEffect(() => {
+    window.localStorage.setItem(
+      ARROW_STORAGE_KEY,
+      JSON.stringify(arrowPoints),
+    );
+  }, [arrowPoints]);
+
+  const moveArrow = (id: ArrowId, point: ArrowPoint) => {
+    setArrowPoints((currentPoints) => ({
+      ...currentPoints,
+      [id]: {
+        x: Math.round(Math.min(1100, Math.max(20, point.x))),
+        y: Math.round(Math.min(630, Math.max(20, point.y))),
+      },
+    }));
+  };
+
+  const handlePointerMove = (event: PointerEvent<SVGSVGElement>) => {
+    if (!draggedArrow) return;
+
+    const bounds = event.currentTarget.getBoundingClientRect();
+    moveArrow(draggedArrow, {
+      x: ((event.clientX - bounds.left) / bounds.width) * 1120,
+      y: ((event.clientY - bounds.top) / bounds.height) * 650,
+    });
+  };
+
+  const handleArrowKeyDown = (
+    event: KeyboardEvent<SVGCircleElement>,
+    id: ArrowId,
+  ) => {
+    const movements: Partial<Record<string, ArrowPoint>> = {
+      ArrowLeft: { x: -4, y: 0 },
+      ArrowRight: { x: 4, y: 0 },
+      ArrowUp: { x: 0, y: -4 },
+      ArrowDown: { x: 0, y: 4 },
+    };
+    const movement = movements[event.key];
+    if (!movement) return;
+
+    event.preventDefault();
+    moveArrow(id, {
+      x: arrowPoints[id].x + movement.x,
+      y: arrowPoints[id].y + movement.y,
+    });
+  };
+
+  const copyArrowSettings = async () => {
+    await navigator.clipboard.writeText(JSON.stringify(arrowPoints));
+    setCopyLabel("Réglage copié");
+    window.setTimeout(() => setCopyLabel("Copier le réglage"), 1800);
+  };
+
   return (
     <article className="cadrenza-pierre-showcase">
       <header className="cadrenza-pierre-intro">
@@ -39,6 +122,21 @@ export const AgentCarousel = () => {
       </header>
 
       <div className="cadrenza-pierre-stage">
+        {isArrowEditMode && (
+          <div className="cadrenza-arrow-editor" role="status">
+            <span>Glisse les points bleus</span>
+            <button type="button" onClick={copyArrowSettings}>
+              {copyLabel}
+            </button>
+            <button
+              type="button"
+              onClick={() => setArrowPoints(defaultArrowPoints)}
+            >
+              Réinitialiser
+            </button>
+          </div>
+        )}
+
         <div className="cadrenza-pierre-visual">
           <figure
             className="cadrenza-classroom-monitor"
@@ -63,10 +161,21 @@ export const AgentCarousel = () => {
         </div>
 
         <svg
-          className="cadrenza-pierre-connectors"
+          className={`cadrenza-pierre-connectors ${
+            isArrowEditMode ? "cadrenza-pierre-connectors--editable" : ""
+          }`}
           viewBox="0 0 1120 650"
-          role="presentation"
-          aria-hidden="true"
+          role={isArrowEditMode ? "group" : "presentation"}
+          aria-label={
+            isArrowEditMode
+              ? "Points de réglage des flèches de Pierre"
+              : undefined
+          }
+          aria-hidden={!isArrowEditMode}
+          onPointerMove={handlePointerMove}
+          onPointerUp={() => setDraggedArrow(null)}
+          onPointerCancel={() => setDraggedArrow(null)}
+          onPointerLeave={() => setDraggedArrow(null)}
         >
           <defs>
             <marker
@@ -80,12 +189,47 @@ export const AgentCarousel = () => {
               <path d="M0 0L8 4L0 8Z" />
             </marker>
           </defs>
-          <path d="M236 154C315 154 334 202 424 228" />
-          <circle cx="424" cy="228" r="5" />
-          <path d="M236 484C360 484 478 314 680 224" />
-          <circle cx="680" cy="224" r="5" />
-          <path d="M884 172C835 172 803 158 756 148" />
-          <circle cx="756" cy="148" r="5" />
+          <path
+            d={`M236 154C315 154 ${arrowPoints.slides.x - 90} ${
+              arrowPoints.slides.y - 26
+            } ${arrowPoints.slides.x} ${arrowPoints.slides.y}`}
+          />
+          <path
+            d={`M236 484C360 484 ${arrowPoints.training.x - 202} ${
+              arrowPoints.training.y + 90
+            } ${arrowPoints.training.x} ${arrowPoints.training.y}`}
+          />
+          <path
+            d={`M884 172C835 172 ${arrowPoints.students.x + 47} ${
+              arrowPoints.students.y + 10
+            } ${arrowPoints.students.x} ${arrowPoints.students.y}`}
+          />
+          {(Object.keys(arrowPoints) as ArrowId[]).map((id) => (
+            <circle
+              key={id}
+              className={
+                isArrowEditMode ? "cadrenza-pierre-arrow-handle" : undefined
+              }
+              cx={arrowPoints[id].x}
+              cy={arrowPoints[id].y}
+              r={isArrowEditMode ? 10 : 5}
+              role={isArrowEditMode ? "slider" : undefined}
+              aria-label={
+                isArrowEditMode ? `Déplacer la flèche ${id}` : undefined
+              }
+              aria-valuetext={
+                isArrowEditMode
+                  ? `${arrowPoints[id].x}, ${arrowPoints[id].y}`
+                  : undefined
+              }
+              tabIndex={isArrowEditMode ? 0 : undefined}
+              onPointerDown={(event) => {
+                event.currentTarget.setPointerCapture(event.pointerId);
+                setDraggedArrow(id);
+              }}
+              onKeyDown={(event) => handleArrowKeyDown(event, id)}
+            />
+          ))}
         </svg>
 
         <ul className="cadrenza-pierre-callouts">

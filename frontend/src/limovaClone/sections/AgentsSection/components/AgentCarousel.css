@@ -146,6 +146,12 @@
   pointer-events: none;
 }
 
+.cadrenza-pierre-connectors--editable {
+  z-index: 4;
+  pointer-events: auto;
+  touch-action: none;
+}
+
 .cadrenza-pierre-connectors path {
   fill: none;
   stroke: #6f9cff;
@@ -163,6 +169,56 @@
   fill: #91b1ff;
   stroke: rgba(47, 107, 255, 0.22);
   stroke-width: 8;
+}
+
+.cadrenza-pierre-arrow-handle {
+  cursor: grab;
+  outline: none;
+  stroke: rgba(143, 176, 255, 0.3);
+  stroke-width: 18;
+}
+
+.cadrenza-pierre-arrow-handle:hover,
+.cadrenza-pierre-arrow-handle:focus-visible {
+  fill: #c9d8ff;
+  stroke: rgba(47, 107, 255, 0.42);
+}
+
+.cadrenza-pierre-arrow-handle:active {
+  cursor: grabbing;
+}
+
+.cadrenza-arrow-editor {
+  position: absolute;
+  right: 0;
+  top: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  border-radius: 10px;
+  background: #272e39;
+  color: #cbd3df;
+  font-size: 12px;
+}
+
+.cadrenza-arrow-editor button {
+  min-height: 34px;
+  padding: 0 12px;
+  border: 1px solid #4d5a6c;
+  border-radius: 8px;
+  background: #1f252e;
+  color: #f5f7fb;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.cadrenza-arrow-editor button:hover,
+.cadrenza-arrow-editor button:focus-visible {
+  border-color: #6f9cff;
+  outline: none;
 }
 
 .cadrenza-pierre-callouts {
@@ -247,6 +303,10 @@
   }
 
   .cadrenza-pierre-connectors {
+    display: none;
+  }
+
+  .cadrenza-arrow-editor {
     display: none;
   }
 
