@@ -1,36 +1,60 @@
-import { useEffect, useState, type KeyboardEvent, type PointerEvent } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type PointerEvent,
+} from "react";
 import "./AgentCarousel.css";
 
 type ArrowId = "slides" | "training" | "students";
 type ArrowPoint = { x: number; y: number };
 type ArrowPoints = Record<ArrowId, ArrowPoint>;
+type CalloutPositions = Record<ArrowId, ArrowPoint>;
+type DraggedCallout = {
+  id: ArrowId;
+  offsetX: number;
+  offsetY: number;
+};
 
 const ARROW_STORAGE_KEY = "cadrenza-pierre-arrow-points";
+const CALLOUT_STORAGE_KEY = "cadrenza-pierre-callout-positions";
+const CALLOUT_WIDTH = 236;
+const CALLOUT_HEIGHT = 64;
 const defaultArrowPoints: ArrowPoints = {
   slides: { x: 424, y: 228 },
   training: { x: 680, y: 224 },
   students: { x: 756, y: 148 },
 };
+const defaultCalloutPositions: CalloutPositions = {
+  slides: { x: 0, y: 122 },
+  training: { x: 0, y: 498 },
+  students: { x: 884, y: 140 },
+};
 
 const capabilities = [
   {
     className: "cadrenza-pierre-callout--slides",
+    id: "slides" as const,
     index: "01",
     text: "Prépare les diapositives du module",
   },
   {
     className: "cadrenza-pierre-callout--training",
+    id: "training" as const,
     index: "02",
     text: "Anime les journées de formation",
   },
   {
     className: "cadrenza-pierre-callout--students",
+    id: "students" as const,
     index: "03",
     text: "Interagit avec les élèves en direct",
   },
 ];
 
 export const AgentCarousel = () => {
+  const stageRef = useRef<HTMLDivElement>(null);
   const [arrowPoints, setArrowPoints] = useState<ArrowPoints>(() => {
     if (typeof window === "undefined") return defaultArrowPoints;
 
@@ -43,7 +67,26 @@ export const AgentCarousel = () => {
       return defaultArrowPoints;
     }
   });
+  const [calloutPositions, setCalloutPositions] = useState<CalloutPositions>(
+    () => {
+      if (typeof window === "undefined") return defaultCalloutPositions;
+
+      try {
+        const savedPositions = window.localStorage.getItem(CALLOUT_STORAGE_KEY);
+        return savedPositions
+          ? ({
+              ...defaultCalloutPositions,
+              ...JSON.parse(savedPositions),
+            } as CalloutPositions)
+          : defaultCalloutPositions;
+      } catch {
+        return defaultCalloutPositions;
+      }
+    },
+  );
   const [draggedArrow, setDraggedArrow] = useState<ArrowId | null>(null);
+  const [draggedCallout, setDraggedCallout] =
+    useState<DraggedCallout | null>(null);
   const [copyLabel, setCopyLabel] = useState("Copier le réglage");
   const isArrowEditMode =
     typeof window !== "undefined" &&
@@ -55,6 +98,13 @@ export const AgentCarousel = () => {
       JSON.stringify(arrowPoints),
     );
   }, [arrowPoints]);
+
+  useEffect(() => {
+    window.localStorage.setItem(
+      CALLOUT_STORAGE_KEY,
+      JSON.stringify(calloutPositions),
+    );
+  }, [calloutPositions]);
 
   const moveArrow = (id: ArrowId, point: ArrowPoint) => {
     setArrowPoints((currentPoints) => ({
@@ -96,8 +146,72 @@ export const AgentCarousel = () => {
     });
   };
 
+  const moveCallout = (event: PointerEvent<HTMLLIElement>) => {
+    if (!draggedCallout || !stageRef.current) return;
+
+    const bounds = stageRef.current.getBoundingClientRect();
+    const x = ((event.clientX - bounds.left) / bounds.width) * 1120;
+    const y = ((event.clientY - bounds.top) / bounds.height) * 650;
+    setCalloutPositions((currentPositions) => ({
+      ...currentPositions,
+      [draggedCallout.id]: {
+        x: Math.round(
+          Math.min(
+            1120 - CALLOUT_WIDTH,
+            Math.max(0, x - draggedCallout.offsetX),
+          ),
+        ),
+        y: Math.round(
+          Math.min(
+            650 - CALLOUT_HEIGHT,
+            Math.max(0, y - draggedCallout.offsetY),
+          ),
+        ),
+      },
+    }));
+  };
+
+  const getCalloutAnchor = (id: ArrowId) => {
+    const position = calloutPositions[id];
+    const target = arrowPoints[id];
+    const center = {
+      x: position.x + CALLOUT_WIDTH / 2,
+      y: position.y + CALLOUT_HEIGHT / 2,
+    };
+    const deltaX = target.x - center.x;
+    const deltaY = target.y - center.y;
+
+    if (Math.abs(deltaX) >= Math.abs(deltaY)) {
+      return {
+        x: deltaX >= 0 ? position.x + CALLOUT_WIDTH : position.x,
+        y: center.y,
+      };
+    }
+
+    return {
+      x: center.x,
+      y: deltaY >= 0 ? position.y + CALLOUT_HEIGHT : position.y,
+    };
+  };
+
+  const buildConnectorPath = (id: ArrowId) => {
+    const start = getCalloutAnchor(id);
+    const target = arrowPoints[id];
+    const deltaX = target.x - start.x;
+    const curve = Math.max(52, Math.abs(deltaX) * 0.38) * Math.sign(deltaX || 1);
+
+    return `M${start.x} ${start.y}C${start.x + curve} ${start.y} ${
+      target.x - curve * 0.55
+    } ${target.y} ${target.x} ${target.y}`;
+  };
+
   const copyArrowSettings = async () => {
-    await navigator.clipboard.writeText(JSON.stringify(arrowPoints));
+    await navigator.clipboard.writeText(
+      JSON.stringify({
+        arrows: arrowPoints,
+        blocks: calloutPositions,
+      }),
+    );
     setCopyLabel("Réglage copié");
     window.setTimeout(() => setCopyLabel("Copier le réglage"), 1800);
   };
@@ -121,16 +235,19 @@ export const AgentCarousel = () => {
         </p>
       </header>
 
-      <div className="cadrenza-pierre-stage">
+      <div className="cadrenza-pierre-stage" ref={stageRef}>
         {isArrowEditMode && (
           <div className="cadrenza-arrow-editor" role="status">
-            <span>Glisse les points bleus</span>
+            <span>Glisse les points et les textes</span>
             <button type="button" onClick={copyArrowSettings}>
               {copyLabel}
             </button>
             <button
               type="button"
-              onClick={() => setArrowPoints(defaultArrowPoints)}
+              onClick={() => {
+                setArrowPoints(defaultArrowPoints);
+                setCalloutPositions(defaultCalloutPositions);
+              }}
             >
               Réinitialiser
             </button>
@@ -189,21 +306,9 @@ export const AgentCarousel = () => {
               <path d="M0 0L8 4L0 8Z" />
             </marker>
           </defs>
-          <path
-            d={`M236 154C315 154 ${arrowPoints.slides.x - 90} ${
-              arrowPoints.slides.y - 26
-            } ${arrowPoints.slides.x} ${arrowPoints.slides.y}`}
-          />
-          <path
-            d={`M236 484C360 484 ${arrowPoints.training.x - 202} ${
-              arrowPoints.training.y + 90
-            } ${arrowPoints.training.x} ${arrowPoints.training.y}`}
-          />
-          <path
-            d={`M884 172C835 172 ${arrowPoints.students.x + 47} ${
-              arrowPoints.students.y + 10
-            } ${arrowPoints.students.x} ${arrowPoints.students.y}`}
-          />
+          <path d={buildConnectorPath("slides")} />
+          <path d={buildConnectorPath("training")} />
+          <path d={buildConnectorPath("students")} />
           {(Object.keys(arrowPoints) as ArrowId[]).map((id) => (
             <circle
               key={id}
@@ -235,8 +340,40 @@ export const AgentCarousel = () => {
         <ul className="cadrenza-pierre-callouts">
           {capabilities.map((capability) => (
             <li
-              className={`cadrenza-pierre-callout ${capability.className}`}
+              className={`cadrenza-pierre-callout ${capability.className} ${
+                isArrowEditMode ? "cadrenza-pierre-callout--editable" : ""
+              }`}
               key={capability.text}
+              style={{
+                left: `${(calloutPositions[capability.id].x / 1120) * 100}%`,
+                top: `${(calloutPositions[capability.id].y / 650) * 100}%`,
+              }}
+              tabIndex={isArrowEditMode ? 0 : undefined}
+              aria-label={
+                isArrowEditMode
+                  ? `Déplacer le bloc ${capability.index} : ${capability.text}`
+                  : undefined
+              }
+              onPointerDown={(event) => {
+                if (!isArrowEditMode || !stageRef.current) return;
+
+                const bounds = stageRef.current.getBoundingClientRect();
+                const pointerX =
+                  ((event.clientX - bounds.left) / bounds.width) * 1120;
+                const pointerY =
+                  ((event.clientY - bounds.top) / bounds.height) * 650;
+                event.currentTarget.setPointerCapture(event.pointerId);
+                setDraggedCallout({
+                  id: capability.id,
+                  offsetX:
+                    pointerX - calloutPositions[capability.id].x,
+                  offsetY:
+                    pointerY - calloutPositions[capability.id].y,
+                });
+              }}
+              onPointerMove={moveCallout}
+              onPointerUp={() => setDraggedCallout(null)}
+              onPointerCancel={() => setDraggedCallout(null)}
             >
               <span aria-hidden="true">{capability.index}</span>
               <p>{capability.text}</p>

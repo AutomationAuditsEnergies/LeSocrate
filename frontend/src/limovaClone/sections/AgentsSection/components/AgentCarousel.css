@@ -148,7 +148,7 @@
 
 .cadrenza-pierre-connectors--editable {
   z-index: 4;
-  pointer-events: auto;
+  pointer-events: none;
   touch-action: none;
 }
 
@@ -174,6 +174,7 @@
 .cadrenza-pierre-arrow-handle {
   cursor: grab;
   outline: none;
+  pointer-events: all;
   stroke: rgba(143, 176, 255, 0.3);
   stroke-width: 18;
 }
@@ -192,7 +193,7 @@
   position: absolute;
   right: 0;
   top: 0;
-  z-index: 5;
+  z-index: 6;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -235,12 +236,27 @@
   align-items: center;
   gap: 12px;
   width: 236px;
-  min-height: 94px;
-  padding: 16px;
-  border: 1px solid #465363;
-  border-radius: 14px;
-  background: rgba(35, 42, 53, 0.96);
-  backdrop-filter: blur(12px);
+  min-height: 64px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.cadrenza-pierre-callout--editable {
+  z-index: 5;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+
+.cadrenza-pierre-callout--editable:hover,
+.cadrenza-pierre-callout--editable:focus-visible {
+  outline: 1px dashed rgba(111, 156, 255, 0.72);
+  outline-offset: 8px;
+}
+
+.cadrenza-pierre-callout--editable:active {
+  cursor: grabbing;
 }
 
 .cadrenza-pierre-callout > span {
@@ -263,21 +279,6 @@
   font-size: 15px;
   font-weight: 560;
   line-height: 1.4;
-}
-
-.cadrenza-pierre-callout--slides {
-  left: 0;
-  top: 106px;
-}
-
-.cadrenza-pierre-callout--training {
-  left: 0;
-  bottom: 72px;
-}
-
-.cadrenza-pierre-callout--students {
-  right: 0;
-  top: 124px;
 }
 
 @media (max-width: 900px) {
@@ -313,14 +314,13 @@
   .cadrenza-pierre-callouts {
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 10px;
+    gap: 18px;
   }
 
   .cadrenza-pierre-callout {
     position: static;
     width: auto;
-    min-height: 112px;
-    padding: 14px;
+    min-height: 64px;
   }
 }
 
