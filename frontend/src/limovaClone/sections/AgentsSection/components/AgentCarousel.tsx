@@ -315,7 +315,7 @@ export const AgentCarousel = () => {
             />
             <span className="cadrenza-classroom-monitor__display">
               <img
-                src="/cadrenza-chapter-slide.png"
+                src="/cadrenza-chapter-slide-clean.png"
                 alt="Diapo du chapitre 1 sur la communication professionnelle"
               />
             </span>
