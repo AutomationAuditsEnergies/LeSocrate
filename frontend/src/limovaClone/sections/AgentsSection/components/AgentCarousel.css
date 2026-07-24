@@ -165,10 +165,37 @@
   stroke: none;
 }
 
+.cadrenza-pierre-curve-guide {
+  fill: none;
+  stroke: rgba(143, 176, 255, 0.38);
+  stroke-width: 1;
+  stroke-dasharray: 5 7;
+  pointer-events: none;
+}
+
 .cadrenza-pierre-connectors circle {
   fill: #91b1ff;
   stroke: rgba(47, 107, 255, 0.22);
   stroke-width: 8;
+}
+
+.cadrenza-pierre-curve-handle {
+  fill: #1c2026;
+  stroke: #91b1ff;
+  stroke-width: 3;
+  cursor: grab;
+  outline: none;
+  pointer-events: all;
+}
+
+.cadrenza-pierre-curve-handle:hover,
+.cadrenza-pierre-curve-handle:focus-visible {
+  fill: #2f6bff;
+  stroke: #d8e3ff;
+}
+
+.cadrenza-pierre-curve-handle:active {
+  cursor: grabbing;
 }
 
 .cadrenza-pierre-arrow-handle {

@@ -11,6 +11,7 @@ type ArrowId = "slides" | "training" | "students";
 type ArrowPoint = { x: number; y: number };
 type ArrowPoints = Record<ArrowId, ArrowPoint>;
 type CalloutPositions = Record<ArrowId, ArrowPoint>;
+type ArrowHandleKind = "curve" | "tip";
 type DraggedCallout = {
   id: ArrowId;
   offsetX: number;
@@ -18,6 +19,7 @@ type DraggedCallout = {
 };
 
 const ARROW_STORAGE_KEY = "cadrenza-pierre-arrow-points";
+const CURVE_STORAGE_KEY = "cadrenza-pierre-arrow-curves";
 const CALLOUT_STORAGE_KEY = "cadrenza-pierre-callout-positions";
 const CALLOUT_WIDTH = 236;
 const CALLOUT_HEIGHT = 64;
@@ -25,6 +27,11 @@ const defaultArrowPoints: ArrowPoints = {
   slides: { x: 424, y: 228 },
   training: { x: 680, y: 224 },
   students: { x: 756, y: 148 },
+};
+const defaultCurvePoints: ArrowPoints = {
+  slides: { x: 330, y: 154 },
+  training: { x: 450, y: 420 },
+  students: { x: 830, y: 165 },
 };
 const defaultCalloutPositions: CalloutPositions = {
   slides: { x: 0, y: 122 },
@@ -84,7 +91,22 @@ export const AgentCarousel = () => {
       }
     },
   );
-  const [draggedArrow, setDraggedArrow] = useState<ArrowId | null>(null);
+  const [curvePoints, setCurvePoints] = useState<ArrowPoints>(() => {
+    if (typeof window === "undefined") return defaultCurvePoints;
+
+    try {
+      const savedPoints = window.localStorage.getItem(CURVE_STORAGE_KEY);
+      return savedPoints
+        ? ({ ...defaultCurvePoints, ...JSON.parse(savedPoints) } as ArrowPoints)
+        : defaultCurvePoints;
+    } catch {
+      return defaultCurvePoints;
+    }
+  });
+  const draggedArrowRef = useRef<{
+    id: ArrowId;
+    kind: ArrowHandleKind;
+  } | null>(null);
   const [draggedCallout, setDraggedCallout] =
     useState<DraggedCallout | null>(null);
   const [copyLabel, setCopyLabel] = useState("Copier le réglage");
@@ -106,8 +128,17 @@ export const AgentCarousel = () => {
     );
   }, [calloutPositions]);
 
-  const moveArrow = (id: ArrowId, point: ArrowPoint) => {
-    setArrowPoints((currentPoints) => ({
+  useEffect(() => {
+    window.localStorage.setItem(CURVE_STORAGE_KEY, JSON.stringify(curvePoints));
+  }, [curvePoints]);
+
+  const moveArrowHandle = (
+    id: ArrowId,
+    kind: ArrowHandleKind,
+    point: ArrowPoint,
+  ) => {
+    const setPoints = kind === "tip" ? setArrowPoints : setCurvePoints;
+    setPoints((currentPoints) => ({
       ...currentPoints,
       [id]: {
         x: Math.round(Math.min(1100, Math.max(20, point.x))),
@@ -116,19 +147,25 @@ export const AgentCarousel = () => {
     }));
   };
 
-  const handlePointerMove = (event: PointerEvent<SVGSVGElement>) => {
+  const handleArrowPointerMove = (event: PointerEvent<HTMLDivElement>) => {
+    const draggedArrow = draggedArrowRef.current;
     if (!draggedArrow) return;
 
     const bounds = event.currentTarget.getBoundingClientRect();
-    moveArrow(draggedArrow, {
-      x: ((event.clientX - bounds.left) / bounds.width) * 1120,
-      y: ((event.clientY - bounds.top) / bounds.height) * 650,
-    });
+    moveArrowHandle(
+      draggedArrow.id,
+      draggedArrow.kind,
+      {
+        x: ((event.clientX - bounds.left) / bounds.width) * 1120,
+        y: ((event.clientY - bounds.top) / bounds.height) * 650,
+      },
+    );
   };
 
   const handleArrowKeyDown = (
     event: KeyboardEvent<SVGCircleElement>,
     id: ArrowId,
+    kind: ArrowHandleKind,
   ) => {
     const movements: Partial<Record<string, ArrowPoint>> = {
       ArrowLeft: { x: -4, y: 0 },
@@ -140,9 +177,10 @@ export const AgentCarousel = () => {
     if (!movement) return;
 
     event.preventDefault();
-    moveArrow(id, {
-      x: arrowPoints[id].x + movement.x,
-      y: arrowPoints[id].y + movement.y,
+    const currentPoint = kind === "tip" ? arrowPoints[id] : curvePoints[id];
+    moveArrowHandle(id, kind, {
+      x: currentPoint.x + movement.x,
+      y: currentPoint.y + movement.y,
     });
   };
 
@@ -197,12 +235,9 @@ export const AgentCarousel = () => {
   const buildConnectorPath = (id: ArrowId) => {
     const start = getCalloutAnchor(id);
     const target = arrowPoints[id];
-    const deltaX = target.x - start.x;
-    const curve = Math.max(52, Math.abs(deltaX) * 0.38) * Math.sign(deltaX || 1);
+    const curve = curvePoints[id];
 
-    return `M${start.x} ${start.y}C${start.x + curve} ${start.y} ${
-      target.x - curve * 0.55
-    } ${target.y} ${target.x} ${target.y}`;
+    return `M${start.x} ${start.y}Q${curve.x} ${curve.y} ${target.x} ${target.y}`;
   };
 
   const copyArrowSettings = async () => {
@@ -210,6 +245,7 @@ export const AgentCarousel = () => {
       JSON.stringify({
         arrows: arrowPoints,
         blocks: calloutPositions,
+        curves: curvePoints,
       }),
     );
     setCopyLabel("Réglage copié");
@@ -235,10 +271,23 @@ export const AgentCarousel = () => {
         </p>
       </header>
 
-      <div className="cadrenza-pierre-stage" ref={stageRef}>
+      <div
+        className="cadrenza-pierre-stage"
+        ref={stageRef}
+        onPointerMove={handleArrowPointerMove}
+        onPointerUp={() => {
+          draggedArrowRef.current = null;
+        }}
+        onPointerCancel={() => {
+          draggedArrowRef.current = null;
+        }}
+        onPointerLeave={() => {
+          draggedArrowRef.current = null;
+        }}
+      >
         {isArrowEditMode && (
           <div className="cadrenza-arrow-editor" role="status">
-            <span>Glisse les points et les textes</span>
+            <span>Plein = pointe · creux = courbe · texte = bloc</span>
             <button type="button" onClick={copyArrowSettings}>
               {copyLabel}
             </button>
@@ -247,6 +296,7 @@ export const AgentCarousel = () => {
               onClick={() => {
                 setArrowPoints(defaultArrowPoints);
                 setCalloutPositions(defaultCalloutPositions);
+                setCurvePoints(defaultCurvePoints);
               }}
             >
               Réinitialiser
@@ -289,26 +339,56 @@ export const AgentCarousel = () => {
               : undefined
           }
           aria-hidden={!isArrowEditMode}
-          onPointerMove={handlePointerMove}
-          onPointerUp={() => setDraggedArrow(null)}
-          onPointerCancel={() => setDraggedArrow(null)}
-          onPointerLeave={() => setDraggedArrow(null)}
         >
           <defs>
             <marker
               id="cadrenza-arrow"
               markerWidth="8"
               markerHeight="8"
-              refX="6.5"
+              refX="8"
               refY="4"
               orient="auto"
             >
               <path d="M0 0L8 4L0 8Z" />
             </marker>
           </defs>
+          {isArrowEditMode &&
+            (Object.keys(arrowPoints) as ArrowId[]).map((id) => {
+              const start = getCalloutAnchor(id);
+              return (
+                <polyline
+                  key={`guide-${id}`}
+                  className="cadrenza-pierre-curve-guide"
+                  points={`${start.x},${start.y} ${curvePoints[id].x},${
+                    curvePoints[id].y
+                  } ${arrowPoints[id].x},${arrowPoints[id].y}`}
+                />
+              );
+            })}
           <path d={buildConnectorPath("slides")} />
           <path d={buildConnectorPath("training")} />
           <path d={buildConnectorPath("students")} />
+          {isArrowEditMode &&
+            (Object.keys(curvePoints) as ArrowId[]).map((id) => (
+              <circle
+                key={`curve-${id}`}
+                className="cadrenza-pierre-curve-handle"
+                cx={curvePoints[id].x}
+                cy={curvePoints[id].y}
+                r="8"
+                role="slider"
+                aria-label={`Régler la courbe de la flèche ${id}`}
+                aria-valuetext={`${curvePoints[id].x}, ${curvePoints[id].y}`}
+                tabIndex={0}
+                onPointerDown={(event) => {
+                  event.preventDefault();
+                  draggedArrowRef.current = { id, kind: "curve" };
+                }}
+                onKeyDown={(event) =>
+                  handleArrowKeyDown(event, id, "curve")
+                }
+              />
+            ))}
           {(Object.keys(arrowPoints) as ArrowId[]).map((id) => (
             <circle
               key={id}
@@ -320,7 +400,9 @@ export const AgentCarousel = () => {
               r={isArrowEditMode ? 10 : 5}
               role={isArrowEditMode ? "slider" : undefined}
               aria-label={
-                isArrowEditMode ? `Déplacer la flèche ${id}` : undefined
+                isArrowEditMode
+                  ? `Déplacer la pointe de la flèche ${id}`
+                  : undefined
               }
               aria-valuetext={
                 isArrowEditMode
@@ -329,10 +411,10 @@ export const AgentCarousel = () => {
               }
               tabIndex={isArrowEditMode ? 0 : undefined}
               onPointerDown={(event) => {
-                event.currentTarget.setPointerCapture(event.pointerId);
-                setDraggedArrow(id);
+                event.preventDefault();
+                draggedArrowRef.current = { id, kind: "tip" };
               }}
-              onKeyDown={(event) => handleArrowKeyDown(event, id)}
+              onKeyDown={(event) => handleArrowKeyDown(event, id, "tip")}
             />
           ))}
         </svg>
