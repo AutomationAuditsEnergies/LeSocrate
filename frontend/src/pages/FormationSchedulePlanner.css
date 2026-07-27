@@ -302,7 +302,7 @@
   grid-template-rows: repeat(6, minmax(34px, 44px));
 }
 
-.formation-schedule__month-grid button:hover:not(:disabled) {
+.formation-schedule__month-grid button:hover:not(:disabled):not([aria-pressed="true"]) {
   border-color: var(--fsp-border);
   background: var(--fsp-canvas);
 }
