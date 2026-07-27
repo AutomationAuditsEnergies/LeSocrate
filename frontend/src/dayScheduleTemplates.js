@@ -78,8 +78,8 @@ export function reflowScheduleBlocks(blocks, startMinute = null) {
   })
 }
 
-function makeSequenceBlocks(courseNumber) {
-  return [
+function makeSequenceBlocks(courseNumber, includePause = true) {
+  const sequence = [
     {
       block_key: `course-${courseNumber}`,
       block_type: 'course',
@@ -93,20 +93,21 @@ function makeSequenceBlocks(courseNumber) {
       duration_minutes: 15,
     },
   ]
+  if (includePause) {
+    sequence.push({
+      block_key: `pause-${courseNumber}`,
+      block_type: 'pause',
+      pause_kind: courseNumber === 2 ? 'lunch' : 'short',
+      duration_minutes: courseNumber === 2 ? 60 : 15,
+    })
+  }
+  return sequence
 }
 
 export function createDefaultScheduleBlocks(startMinute = DEFAULT_START_MINUTE) {
   const blocks = []
   for (let courseNumber = 1; courseNumber <= DAY_SCHEDULE_RULES.minCourses; courseNumber += 1) {
     blocks.push(...makeSequenceBlocks(courseNumber))
-    if (courseNumber < DAY_SCHEDULE_RULES.minCourses) {
-      blocks.push({
-        block_key: `pause-${courseNumber}`,
-        block_type: 'pause',
-        pause_kind: courseNumber === 2 ? 'lunch' : 'short',
-        duration_minutes: courseNumber === 2 ? 60 : 15,
-      })
-    }
   }
   return reflowScheduleBlocks(blocks, startMinute)
 }
@@ -119,6 +120,13 @@ export function createScheduleTemplateDraft(name = '') {
     used_at: null,
     locked_at: null,
     blocks: createDefaultScheduleBlocks(),
+  }
+}
+
+export function createEmptyScheduleTemplateDraft(name = '') {
+  return {
+    ...createScheduleTemplateDraft(name),
+    blocks: [],
   }
 }
 
@@ -328,6 +336,8 @@ export function addScheduleSequence(blocks) {
   if (stats.courseCount >= DAY_SCHEDULE_RULES.maxCourses) return source
 
   const updated = [...source]
+  // Les anciens templates pouvaient finir après le Q&R. On complète d'abord
+  // leur dernière séquence afin que chaque ajout conserve le contrat Cours/Q&R/Pause.
   if (updated.at(-1)?.block_type === 'qa') {
     updated.push({
       block_key: `pause-${stats.courseCount}`,
@@ -337,20 +347,19 @@ export function addScheduleSequence(blocks) {
     })
   }
   updated.push(...makeSequenceBlocks(stats.courseCount + 1))
-  return reflowScheduleBlocks(updated, source[0]?.start_minute)
+  return reflowScheduleBlocks(updated, source[0]?.start_minute ?? DEFAULT_START_MINUTE)
 }
 
 export function removeLastScheduleSequence(blocks) {
   const source = reflowScheduleBlocks(blocks)
   const stats = getScheduleStats(source)
-  if (stats.courseCount <= DAY_SCHEDULE_RULES.minCourses) return source
+  if (stats.courseCount === 0) return source
 
   const updated = [...source]
   if (updated.at(-1)?.block_type === 'pause') updated.pop()
   if (updated.at(-1)?.block_type === 'qa') updated.pop()
   if (updated.at(-1)?.block_type === 'course') updated.pop()
-  if (updated.at(-1)?.block_type === 'pause') updated.pop()
-  return reflowScheduleBlocks(updated, source[0]?.start_minute)
+  return reflowScheduleBlocks(updated, source[0]?.start_minute ?? DEFAULT_START_MINUTE)
 }
 
 export function setScheduleFinalPause(blocks, enabled) {

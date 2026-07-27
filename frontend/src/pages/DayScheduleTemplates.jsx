@@ -22,14 +22,13 @@ import {
 import {
   addScheduleSequence,
   cloneScheduleTemplateAsDraft,
-  createScheduleTemplateDraft,
+  createEmptyScheduleTemplateDraft,
   DAY_SCHEDULE_RULES,
   formatScheduleMinute,
   getScheduleStats,
   isScheduleTemplateUsed,
   parseScheduleTime,
   removeLastScheduleSequence,
-  setScheduleFinalPause,
   setSchedulePauseKind,
   updateScheduleBlockDuration,
   updateScheduleBlockStart,
@@ -103,177 +102,275 @@ function ScheduleTimeline({
   readOnly,
   blockErrors,
   onBlocksChange,
+  onAddSequence,
+  canAddSequence,
 }) {
   const adjustmentRef = useRef(null)
+  const [activeResizeIndex, setActiveResizeIndex] = useState(null)
+  const [dropActive, setDropActive] = useState(false)
 
   useEffect(() => () => {
     const adjustment = adjustmentRef.current
     if (!adjustment) return
     window.removeEventListener('pointermove', adjustment.onMove)
     window.removeEventListener('pointerup', adjustment.onEnd)
+    window.removeEventListener('pointercancel', adjustment.onEnd)
   }, [])
 
-  const beginAdjustment = (event, blockIndex, mode) => {
+  const updateDuration = (blockIndex, duration) => {
+    const block = blocks[blockIndex]
+    if (!block) return
+    const bounds = durationBounds(block)
+    const snapped = Math.round(Number(duration) / 5) * 5
+    const constrained = Math.min(bounds.max, Math.max(bounds.min, snapped))
+    onBlocksChange(updateScheduleBlockDuration(blocks, blockIndex, constrained))
+  }
+
+  const beginAdjustment = (event, blockIndex) => {
     if (readOnly) return
     event.preventDefault()
     const startY = event.clientY
     const original = blocks.map((block) => ({ ...block }))
-    const initialStart = original[blockIndex].start_minute
     const initialDuration = original[blockIndex].duration_minutes
+    const bounds = durationBounds(original[blockIndex])
+    setActiveResizeIndex(blockIndex)
 
     const onMove = (pointerEvent) => {
-      const deltaMinutes = Math.round((pointerEvent.clientY - startY) / 1.15)
-      const next = mode === 'move'
-        ? updateScheduleBlockStart(original, blockIndex, initialStart + deltaMinutes)
-        : updateScheduleBlockDuration(original, blockIndex, initialDuration + deltaMinutes)
+      const deltaSteps = Math.round((pointerEvent.clientY - startY) / 6)
+      const requestedDuration = initialDuration + (deltaSteps * 5)
+      const nextDuration = Math.min(bounds.max, Math.max(bounds.min, requestedDuration))
+      const next = updateScheduleBlockDuration(original, blockIndex, nextDuration)
       onBlocksChange(next)
     }
     const onEnd = () => {
       window.removeEventListener('pointermove', onMove)
       window.removeEventListener('pointerup', onEnd)
+      window.removeEventListener('pointercancel', onEnd)
       adjustmentRef.current = null
+      setActiveResizeIndex(null)
     }
     adjustmentRef.current = { onMove, onEnd }
     window.addEventListener('pointermove', onMove)
     window.addEventListener('pointerup', onEnd, { once: true })
+    window.addEventListener('pointercancel', onEnd, { once: true })
   }
 
   const counters = { course: 0, qa: 0 }
+  const firstBlock = blocks[0]
+
+  const handleDrop = (event) => {
+    if (readOnly || !canAddSequence) return
+    if (event.dataTransfer.getData('application/x-day-sequence') !== 'course-qa-pause') return
+    event.preventDefault()
+    setDropActive(false)
+    onAddSequence()
+  }
 
   return (
-    <div className="day-schedule-timeline" aria-label="Déroulé de la journée">
-      {blocks.map((block, index) => {
-        const presentation = blockPresentation(block, counters)
-        const BlockIcon = presentation.icon
-        const bounds = durationBounds(block)
-        const errors = blockErrors[block.block_key] || []
-        const minimumBlockHeight = readOnly ? 76 : 132
-        const blockHeight = Math.max(
-          minimumBlockHeight,
-          Math.min(block.duration_minutes * 1.15, 150),
-        )
-        return (
-          <div
-            key={block.block_key}
-            className="day-schedule-timeline-row"
-            data-editable={readOnly ? 'false' : 'true'}
-            style={{ '--day-schedule-row-height': `${blockHeight}px` }}
-          >
-            <time className="day-schedule-timeline-time" dateTime={formatScheduleMinute(block.start_minute)}>
-              {formatScheduleMinute(block.start_minute)}
-            </time>
-            <div className="day-schedule-block-wrap">
-              <article
-                className="day-schedule-block"
-                data-kind={presentation.kind}
-                data-invalid={errors.length ? 'true' : 'false'}
+    <div
+      className="day-schedule-timeline-shell"
+      data-drop-active={dropActive ? 'true' : 'false'}
+      onDragEnter={(event) => {
+        if (readOnly || !canAddSequence) return
+        if (!Array.from(event.dataTransfer.types).includes('application/x-day-sequence')) return
+        event.preventDefault()
+        setDropActive(true)
+      }}
+      onDragOver={(event) => {
+        if (readOnly || !canAddSequence) return
+        if (!Array.from(event.dataTransfer.types).includes('application/x-day-sequence')) return
+        event.preventDefault()
+        event.dataTransfer.dropEffect = 'copy'
+      }}
+      onDragLeave={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget)) setDropActive(false)
+      }}
+      onDrop={handleDrop}
+    >
+      <div className="day-schedule-timeline-toolbar">
+        <div>
+          <h3>Déroulé de la journée</h3>
+          <p>L’ordre des blocs est verrouillé. Étirez leur bord inférieur pour régler les horaires.</p>
+        </div>
+        {firstBlock && (
+          <label className="day-schedule-start-control">
+            <span>Début</span>
+            <input
+              type="time"
+              step="300"
+              value={formatScheduleMinute(firstBlock.start_minute)}
+              disabled={readOnly}
+              onChange={(event) => {
+                const minute = parseScheduleTime(event.target.value)
+                if (minute !== null) onBlocksChange(updateScheduleBlockStart(blocks, 0, minute))
+              }}
+            />
+          </label>
+        )}
+      </div>
+
+      {blocks.length === 0 ? (
+        <button
+          type="button"
+          className="day-schedule-empty-timeline"
+          onClick={onAddSequence}
+          disabled={readOnly || !canAddSequence}
+        >
+          <GripVertical size={22} aria-hidden="true" />
+          <strong>Déposez une séquence ici</strong>
+          <span>Elle ajoutera automatiquement un cours, un Q&amp;R et une pause.</span>
+        </button>
+      ) : (
+        <div className="day-schedule-timeline" aria-label="Déroulé de la journée">
+          {blocks.map((block, index) => {
+            const presentation = blockPresentation(block, counters)
+            const BlockIcon = presentation.icon
+            const bounds = durationBounds(block)
+            const errors = blockErrors[block.block_key] || []
+            const blockHeight = Math.max(34, block.duration_minutes * 1.18)
+            const sequenceNumber = counters.course
+            const isCourse = block.block_type === 'course'
+            return (
+              <div
+                key={block.block_key}
+                className="day-schedule-timeline-row"
+                data-editable={readOnly ? 'false' : 'true'}
+                style={{ '--day-schedule-row-height': `${blockHeight}px` }}
               >
-                <div className="flex min-w-0 items-start gap-2.5 pr-8">
-                  <BlockIcon size={16} strokeWidth={1.7} className="mt-0.5 shrink-0 text-[#52525B]" aria-hidden="true" />
-                  <div className="min-w-0">
-                    <h3 className="truncate text-sm font-semibold text-[#18181B]">{presentation.title}</h3>
-                    <p className="mt-0.5 text-xs tabular-nums text-[#71717A]">
-                      {formatScheduleMinute(block.start_minute)} à {formatScheduleMinute(block.end_minute)}
-                    </p>
-                  </div>
-                </div>
-
-                {!readOnly && (
-                  <>
-                    <span
-                      className="day-schedule-drag-button"
-                      onPointerDown={(event) => beginAdjustment(event, index, 'move')}
-                      aria-hidden="true"
-                      title="Déplacer le début du bloc"
-                    >
-                      <GripVertical size={16} aria-hidden="true" />
-                    </span>
-                    <span
-                      className="day-schedule-resize-button"
-                      onPointerDown={(event) => beginAdjustment(event, index, 'resize')}
-                      aria-hidden="true"
-                      title="Modifier la durée"
-                    >
-                      <GripHorizontal size={16} aria-hidden="true" />
-                    </span>
-                  </>
-                )}
-
-                <div className="day-schedule-block-controls">
-                  <div className="day-schedule-field">
-                    <label htmlFor={`schedule-start-${block.block_key}`}>Début</label>
-                    <input
-                      id={`schedule-start-${block.block_key}`}
-                      type="time"
-                      step="60"
-                      value={formatScheduleMinute(block.start_minute)}
-                      disabled={readOnly}
-                      onChange={(event) => {
-                        const minute = parseScheduleTime(event.target.value)
-                        if (minute !== null) onBlocksChange(updateScheduleBlockStart(blocks, index, minute))
-                      }}
-                    />
-                  </div>
-                  <div className="day-schedule-field">
-                    <label htmlFor={`schedule-duration-${block.block_key}`}>Durée (min)</label>
-                    <input
-                      id={`schedule-duration-${block.block_key}`}
-                      type="number"
-                      min={bounds.min}
-                      max={bounds.max}
-                      step="1"
-                      value={block.duration_minutes}
-                      disabled={readOnly}
-                      onChange={(event) => {
-                        if (event.target.value === '') return
-                        onBlocksChange(updateScheduleBlockDuration(blocks, index, event.target.value))
-                      }}
-                    />
-                  </div>
-                  {block.block_type === 'pause' ? (
-                    <div className="day-schedule-field">
-                      <label htmlFor={`schedule-kind-${block.block_key}`}>Type de pause</label>
-                      <select
-                        id={`schedule-kind-${block.block_key}`}
-                        value={block.pause_kind}
-                        disabled={readOnly || index === blocks.length - 1}
-                        onChange={(event) => onBlocksChange(
-                          setSchedulePauseKind(blocks, index, event.target.value),
-                        )}
-                      >
-                        <option value="short">Pause courte</option>
-                        <option value="lunch">Pause déjeuner</option>
-                      </select>
-                    </div>
-                  ) : (
-                    <div className="day-schedule-field">
-                      <label>Durée autorisée</label>
-                      <div className="flex min-h-11 items-center rounded-lg border border-[#E4E4E7] bg-white px-2.5 text-xs text-[#71717A]">
-                        {bounds.min} à {bounds.max} min
+                <time className="day-schedule-timeline-time" dateTime={formatScheduleMinute(block.start_minute)}>
+                  {formatScheduleMinute(block.start_minute)}
+                </time>
+                <div className="day-schedule-block-wrap">
+                  <article
+                    className="day-schedule-block"
+                    data-kind={presentation.kind}
+                    data-invalid={errors.length ? 'true' : 'false'}
+                    data-resizing={activeResizeIndex === index ? 'true' : 'false'}
+                    title={errors.join(' ')}
+                  >
+                    <div className="day-schedule-block-copy">
+                      <BlockIcon size={16} strokeWidth={1.8} aria-hidden="true" />
+                      <div className="min-w-0">
+                        {isCourse && <span className="day-schedule-sequence-label">Séquence {sequenceNumber}</span>}
+                        <h3>{presentation.title}</h3>
+                        <p>
+                          {formatScheduleMinute(block.start_minute)} à {formatScheduleMinute(block.end_minute)}
+                          <span aria-hidden="true"> · </span>
+                          {formatDuration(block.duration_minutes)}
+                        </p>
                       </div>
                     </div>
-                  )}
-                </div>
 
-                {errors.length > 0 && (
-                  <p className="mt-2 text-xs font-medium leading-5 text-[#3F3F46]" role="alert">
-                    {errors.join(' ')}
-                  </p>
-                )}
-              </article>
-            </div>
+                    {block.block_type === 'pause' && !readOnly && index < blocks.length - 1 && (
+                      <button
+                        type="button"
+                        className="day-schedule-pause-kind"
+                        onClick={() => onBlocksChange(setSchedulePauseKind(
+                          blocks,
+                          index,
+                          block.pause_kind === 'lunch' ? 'short' : 'lunch',
+                        ))}
+                      >
+                        {block.pause_kind === 'lunch' ? 'Déjeuner' : 'Pause courte'}
+                      </button>
+                    )}
+
+                    {!readOnly && (
+                      <button
+                        type="button"
+                        className="day-schedule-resize-button"
+                        onPointerDown={(event) => beginAdjustment(event, index)}
+                        onKeyDown={(event) => {
+                          if (!['ArrowUp', 'ArrowDown'].includes(event.key)) return
+                          event.preventDefault()
+                          updateDuration(
+                            index,
+                            block.duration_minutes + (event.key === 'ArrowDown' ? 5 : -5),
+                          )
+                        }}
+                        aria-label={`Modifier la durée de ${presentation.title}, ${bounds.min} à ${bounds.max} minutes`}
+                        title={`Étirez pour régler la durée, ${bounds.min} à ${bounds.max} min`}
+                      >
+                        <GripHorizontal size={18} aria-hidden="true" />
+                      </button>
+                    )}
+                  </article>
+                </div>
+              </div>
+            )
+          })}
+          <div className="day-schedule-timeline-end">
+            <time dateTime={formatScheduleMinute(blocks.at(-1).end_minute)}>
+              {formatScheduleMinute(blocks.at(-1).end_minute)}
+            </time>
+            <span />
           </div>
-        )
-      })}
-      {blocks.length > 0 && (
-        <div className="grid grid-cols-[52px_minmax(0,1fr)] sm:grid-cols-[64px_minmax(0,1fr)]">
-          <time className="day-schedule-timeline-time pb-3" dateTime={formatScheduleMinute(blocks.at(-1).end_minute)}>
-            {formatScheduleMinute(blocks.at(-1).end_minute)}
-          </time>
-          <div className="mx-3 border-t border-[#D4D4D8]" />
+        </div>
+      )}
+
+      {dropActive && (
+        <div className="day-schedule-drop-overlay" aria-hidden="true">
+          Relâchez pour ajouter la séquence
         </div>
       )}
     </div>
+  )
+}
+
+function SequencePalette({
+  courseCount,
+  onAdd,
+  onRemove,
+}) {
+  const atMaximum = courseCount >= DAY_SCHEDULE_RULES.maxCourses
+  return (
+    <aside className="day-schedule-palette" aria-label="Blocs à ajouter">
+      <div className="day-schedule-palette-heading">
+        <h2>Blocs à ajouter</h2>
+        <span>{courseCount}/{DAY_SCHEDULE_RULES.maxCourses}</span>
+      </div>
+      <p className="day-schedule-palette-intro">
+        Glissez la séquence dans le planning. Son ordre intérieur restera fixe.
+      </p>
+
+      <button
+        type="button"
+        className="day-schedule-sequence-source"
+        draggable={!atMaximum}
+        disabled={atMaximum}
+        onDragStart={(event) => {
+          event.dataTransfer.effectAllowed = 'copy'
+          event.dataTransfer.setData('application/x-day-sequence', 'course-qa-pause')
+        }}
+        onClick={onAdd}
+      >
+        <span className="day-schedule-source-grip"><GripVertical size={18} aria-hidden="true" /></span>
+        <span className="day-schedule-source-copy">
+          <strong>Séquence pédagogique</strong>
+          <small>Ajoute toujours ces 3 blocs</small>
+        </span>
+        <Plus size={17} aria-hidden="true" />
+        <span className="day-schedule-source-preview" aria-hidden="true">
+          <span><BookOpen size={13} /> Cours</span>
+          <span><MessageCircleQuestion size={13} /> Q&amp;R</span>
+          <span><Coffee size={13} /> Pause</span>
+        </span>
+      </button>
+
+      <div className="day-schedule-palette-note">
+        <Clock3 size={15} aria-hidden="true" />
+        <p>Les durées se règlent par pas de 5 minutes directement dans la timeline.</p>
+      </div>
+
+      <button
+        type="button"
+        className={BUTTON_SECONDARY}
+        onClick={onRemove}
+        disabled={courseCount === 0}
+      >
+        Retirer la dernière séquence
+      </button>
+    </aside>
   )
 }
 
@@ -412,7 +509,6 @@ export default function DayScheduleTemplates({ onUseTemplate }) {
   const selectedTemplate = templates.find(
     (template) => String(template.id) === String(selectedId),
   ) || null
-  const hasTemplates = templates.length > 0
   const visibleTemplate = mode === 'edit' ? draft : selectedTemplate
   const validation = useMemo(
     () => visibleTemplate
@@ -422,7 +518,7 @@ export default function DayScheduleTemplates({ onUseTemplate }) {
   )
 
   const startCreate = () => {
-    setDraft(createScheduleTemplateDraft())
+    setDraft(createEmptyScheduleTemplateDraft())
     setMode('edit')
     setFeedback(null)
   }
@@ -539,6 +635,9 @@ export default function DayScheduleTemplates({ onUseTemplate }) {
     'Cours cumulés ≥ 4 h',
     'Journée ≥ 6 h',
   ]
+  const showTemplateLibrary = mode === 'preview' && templates.length > 0
+  const showSequencePalette = mode === 'edit'
+  const hasSidePanel = showTemplateLibrary || showSequencePalette
 
   return (
     <section className="day-schedule-page pb-12" aria-labelledby="day-schedule-title">
@@ -551,10 +650,12 @@ export default function DayScheduleTemplates({ onUseTemplate }) {
             Préparez des journées réutilisables. Un template devient immuable dès sa première utilisation dans une formation.
           </p>
         </div>
-        <button type="button" className={`${BUTTON_PRIMARY} shrink-0`} onClick={startCreate}>
-          <Plus size={16} aria-hidden="true" />
-          Créer un template
-        </button>
+        {mode !== 'edit' && (
+          <button type="button" className={`${BUTTON_PRIMARY} shrink-0`} onClick={startCreate}>
+            <Plus size={16} aria-hidden="true" />
+            Créer un template
+          </button>
+        )}
       </header>
 
       {feedback && (
@@ -569,8 +670,8 @@ export default function DayScheduleTemplates({ onUseTemplate }) {
         </div>
       )}
 
-      <div className={`day-schedule-layout${hasTemplates ? '' : ' day-schedule-layout--single'}`}>
-        {hasTemplates && (
+      <div className={`day-schedule-layout${hasSidePanel ? '' : ' day-schedule-layout--single'}`}>
+        {showTemplateLibrary && (
           <TemplateList
             templates={templates}
             selectedId={selectedId}
@@ -586,6 +687,13 @@ export default function DayScheduleTemplates({ onUseTemplate }) {
             onCreate={startCreate}
             onRetry={loadTemplates}
             error={error}
+          />
+        )}
+        {showSequencePalette && (
+          <SequencePalette
+            courseCount={validation.stats.courseCount}
+            onAdd={() => updateDraftBlocks(addScheduleSequence(draft.blocks))}
+            onRemove={() => updateDraftBlocks(removeLastScheduleSequence(draft.blocks))}
           />
         )}
 
@@ -696,38 +804,6 @@ export default function DayScheduleTemplates({ onUseTemplate }) {
                   {rules.map((rule) => <span key={rule} className="day-schedule-rule">{rule}</span>)}
                 </div>
 
-                {mode === 'edit' && (
-                  <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-[#ECECEF] pt-4">
-                    <button
-                      type="button"
-                      className={BUTTON_SECONDARY}
-                      onClick={() => updateDraftBlocks(addScheduleSequence(draft.blocks))}
-                      disabled={validation.stats.courseCount >= DAY_SCHEDULE_RULES.maxCourses}
-                    >
-                      <Plus size={15} aria-hidden="true" />
-                      Ajouter une séquence
-                    </button>
-                    <button
-                      type="button"
-                      className={BUTTON_SECONDARY}
-                      onClick={() => updateDraftBlocks(removeLastScheduleSequence(draft.blocks))}
-                      disabled={validation.stats.courseCount <= DAY_SCHEDULE_RULES.minCourses}
-                    >
-                      Retirer la dernière séquence
-                    </button>
-                    <label className="day-schedule-focusable ml-auto inline-flex min-h-11 cursor-pointer items-center gap-2 rounded-lg px-2 text-sm font-medium text-[#52525B]">
-                      <input
-                        type="checkbox"
-                        className="h-4 w-4 accent-[#18181B]"
-                        checked={validation.stats.hasFinalPause}
-                        onChange={(event) => updateDraftBlocks(
-                          setScheduleFinalPause(draft.blocks, event.target.checked),
-                        )}
-                      />
-                      Ajouter une pause finale
-                    </label>
-                  </div>
-                )}
               </div>
 
               {mode === 'preview' && isScheduleTemplateUsed(selectedTemplate) && (
@@ -761,6 +837,8 @@ export default function DayScheduleTemplates({ onUseTemplate }) {
                   readOnly={mode !== 'edit'}
                   blockErrors={validation.blockErrors}
                   onBlocksChange={updateDraftBlocks}
+                  onAddSequence={() => updateDraftBlocks(addScheduleSequence(draft.blocks))}
+                  canAddSequence={validation.stats.courseCount < DAY_SCHEDULE_RULES.maxCourses}
                 />
               </div>
             </>

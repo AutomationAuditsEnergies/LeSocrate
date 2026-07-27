@@ -4,6 +4,7 @@ import test from 'node:test'
 import {
   addScheduleSequence,
   cloneScheduleTemplateAsDraft,
+  createEmptyScheduleTemplateDraft,
   createScheduleTemplateDraft,
   formatScheduleMinute,
   getScheduleStats,
@@ -24,12 +25,12 @@ test('creates a valid full-day template with four course sequences', () => {
 
   assert.equal(result.valid, true)
   assert.deepEqual(result.stats, {
-    blockCount: 11,
+    blockCount: 12,
     courseCount: 4,
     courseMinutes: 240,
-    dayMinutes: 390,
+    dayMinutes: 405,
     lunchCount: 1,
-    hasFinalPause: false,
+    hasFinalPause: true,
   })
 })
 
@@ -38,12 +39,21 @@ test('adds and removes complete course, Q&R and pause sequences', () => {
   const withFifthCourse = addScheduleSequence(draft.blocks)
 
   assert.equal(getScheduleStats(withFifthCourse).courseCount, 5)
-  assert.equal(withFifthCourse.length, 14)
-  assert.equal(withFifthCourse.at(-1).block_type, 'qa')
+  assert.equal(withFifthCourse.length, 15)
+  assert.equal(withFifthCourse.at(-1).block_type, 'pause')
 
   const restored = removeLastScheduleSequence(withFifthCourse)
   assert.equal(getScheduleStats(restored).courseCount, 4)
-  assert.equal(restored.length, 11)
+  assert.equal(restored.length, 12)
+})
+
+test('starts the interactive builder empty and adds one locked trio at a time', () => {
+  const emptyDraft = createEmptyScheduleTemplateDraft('Nouvelle journée')
+  const firstSequence = addScheduleSequence(emptyDraft.blocks)
+
+  assert.equal(emptyDraft.blocks.length, 0)
+  assert.deepEqual(firstSequence.map((block) => block.block_type), ['course', 'qa', 'pause'])
+  assert.equal(removeLastScheduleSequence(firstSequence).length, 0)
 })
 
 test('supports an optional final short pause', () => {

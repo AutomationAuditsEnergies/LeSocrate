@@ -18,6 +18,18 @@ test('keeps the planning and template UI strictly monochrome', async () => {
   }
 })
 
+test('uses locked sequence drops and resize handles instead of per-block forms', async () => {
+  const source = await readFile(new URL('../../src/pages/DayScheduleTemplates.jsx', import.meta.url), 'utf8')
+
+  assert.match(source, /draggable=\{!atMaximum\}/)
+  assert.match(source, /application\/x-day-sequence/)
+  assert.match(source, /Séquence pédagogique/)
+  assert.match(source, /onPointerDown=\{\(event\) => beginAdjustment\(event, index\)\}/)
+  assert.match(source, /deltaSteps \* 5/)
+  assert.doesNotMatch(source, /schedule-duration-/)
+  assert.doesNotMatch(source, /Déplacer le début du bloc/)
+})
+
 test('renders the audio modal from the real playlist instead of the legacy 19-file list', async () => {
   const source = await readFile(new URL('../../src/pages/HRDashboard.jsx', import.meta.url), 'utf8')
   const modalStart = source.indexOf('function AudiosModal(')
