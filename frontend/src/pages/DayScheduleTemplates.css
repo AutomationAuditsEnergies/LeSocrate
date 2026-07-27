@@ -18,6 +18,10 @@
   gap: 20px;
 }
 
+.day-schedule-layout--single {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .day-schedule-library {
   position: sticky;
   top: 24px;

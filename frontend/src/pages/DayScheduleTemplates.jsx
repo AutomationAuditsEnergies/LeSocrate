@@ -412,6 +412,7 @@ export default function DayScheduleTemplates({ onUseTemplate }) {
   const selectedTemplate = templates.find(
     (template) => String(template.id) === String(selectedId),
   ) || null
+  const hasTemplates = templates.length > 0
   const visibleTemplate = mode === 'edit' ? draft : selectedTemplate
   const validation = useMemo(
     () => visibleTemplate
@@ -568,37 +569,55 @@ export default function DayScheduleTemplates({ onUseTemplate }) {
         </div>
       )}
 
-      <div className="day-schedule-layout">
-        <TemplateList
-          templates={templates}
-          selectedId={selectedId}
-          loading={loading}
-          search={search}
-          onSearchChange={setSearch}
-          onSelect={(templateId) => {
-            setSelectedId(templateId)
-            setMode('preview')
-            setDraft(null)
-            setFeedback(null)
-          }}
-          onCreate={startCreate}
-          onRetry={loadTemplates}
-          error={error}
-        />
+      <div className={`day-schedule-layout${hasTemplates ? '' : ' day-schedule-layout--single'}`}>
+        {hasTemplates && (
+          <TemplateList
+            templates={templates}
+            selectedId={selectedId}
+            loading={loading}
+            search={search}
+            onSearchChange={setSearch}
+            onSelect={(templateId) => {
+              setSelectedId(templateId)
+              setMode('preview')
+              setDraft(null)
+              setFeedback(null)
+            }}
+            onCreate={startCreate}
+            onRetry={loadTemplates}
+            error={error}
+          />
+        )}
 
         <div className="day-schedule-workspace">
           {!visibleTemplate ? (
-            <div className="flex min-h-80 flex-col items-center justify-center px-6 py-12 text-center">
-              <Clock3 size={28} strokeWidth={1.5} className="text-[#71717A]" aria-hidden="true" />
-              <h2 className="mt-4 text-base font-semibold text-[#18181B]">Créez une organisation de journée</h2>
-              <p className="mt-1 max-w-sm text-sm leading-6 text-[#71717A]">
-                La timeline impose l’ordre cours, questions-réponses et pause.
-              </p>
-              <button type="button" className={`${BUTTON_PRIMARY} mt-5`} onClick={startCreate}>
-                <Plus size={15} aria-hidden="true" />
-                Créer le premier template
-              </button>
-            </div>
+            loading ? (
+              <div className="flex min-h-80 flex-col items-center justify-center px-6 py-12 text-center" aria-live="polite">
+                <div className="h-7 w-7 animate-pulse rounded-full bg-[#E4E4E7]" aria-hidden="true" />
+                <p className="mt-4 text-sm font-semibold text-[#52525B]">Chargement des templates…</p>
+              </div>
+            ) : error ? (
+              <div className="flex min-h-80 flex-col items-center justify-center px-6 py-12 text-center" role="alert">
+                <CircleAlert size={28} strokeWidth={1.5} className="text-[#71717A]" aria-hidden="true" />
+                <h2 className="mt-4 text-base font-semibold text-[#18181B]">Templates indisponibles</h2>
+                <p className="mt-1 max-w-sm text-sm leading-6 text-[#71717A]">{error}</p>
+                <button type="button" className={`${BUTTON_SECONDARY} mt-5`} onClick={loadTemplates}>
+                  Réessayer
+                </button>
+              </div>
+            ) : (
+              <div className="flex min-h-80 flex-col items-center justify-center px-6 py-12 text-center">
+                <Clock3 size={28} strokeWidth={1.5} className="text-[#71717A]" aria-hidden="true" />
+                <h2 className="mt-4 text-base font-semibold text-[#18181B]">Créez une organisation de journée</h2>
+                <p className="mt-1 max-w-sm text-sm leading-6 text-[#71717A]">
+                  La timeline impose l’ordre cours, questions-réponses et pause.
+                </p>
+                <button type="button" className={`${BUTTON_PRIMARY} mt-5`} onClick={startCreate}>
+                  <Plus size={15} aria-hidden="true" />
+                  Créer le premier template
+                </button>
+              </div>
+            )
           ) : (
             <>
               <div className="border-b border-[#ECECEF] p-4 sm:p-5">
