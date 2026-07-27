@@ -1,5 +1,17 @@
 # Changelog
 
+## 2026-07-27
+
+### fix(ci): alignement de la fixture planning V2
+
+La fixture SQLite des tests de parité du repository pipeline expose désormais
+`module_day_id` et `local_date`, comme le schéma `course_sessions` V2. Le contrôle
+PostgreSQL peut ainsi valider la sélection dynamique des journées audio sans
+échouer sur une table de test historique incomplète.
+
+Ajout du guide `AI-Mentor-Prompt.md` à la racine du projet pour faciliter sa
+réutilisation.
+
 ## 2026-07-26
 
 ### feat(planning): journées pédagogiques modulables et pipeline audio dynamique
