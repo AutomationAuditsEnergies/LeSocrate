@@ -132,9 +132,9 @@ body {
 }
 
 .teacher-identity-control:focus-visible {
-  border-color: #8B5CF6;
+  border-color: #18181B;
   background-color: #FFFFFF;
-  box-shadow: 0 0 0 3px rgba(139, 92, 246, 0.18);
+  box-shadow: 0 0 0 3px rgba(24, 24, 27, 0.14);
 }
 
 @keyframes recruitment-review-enter {

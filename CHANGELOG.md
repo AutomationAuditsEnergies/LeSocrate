@@ -2,6 +2,19 @@
 
 ## 2026-07-27
 
+### feat(ui): calendrier de recrutement en plein espace
+
+L’écran de recrutement devient un espace de travail fixe sans défilement global
+sur ordinateur. L’aperçu du professeur occupe toute la hauteur disponible,
+les éléments décoratifs redondants sont retirés et les trois informations
+d’identité restent regroupées dans un bandeau compact.
+
+Le calendrier devient l’élément principal de la configuration : il occupe la
+majorité de la largeur et de la hauteur, tandis que les dates retenues et leurs
+templates restent dans un rail secondaire à défilement interne. L’aide au
+préremplissage est désormais repliable afin de laisser le calendrier visible
+dès l’ouverture, sans retirer les réglages de rythme existants.
+
 ### fix(ci): alignement de la fixture planning V2
 
 La fixture SQLite des tests de parité du repository pipeline expose désormais

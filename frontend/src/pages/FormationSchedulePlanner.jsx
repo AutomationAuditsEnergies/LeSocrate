@@ -343,8 +343,16 @@ export default function FormationSchedulePlanner({
         </span>
       </div>
 
-      <div className="formation-schedule__helper" aria-label="Préremplissage du calendrier">
-        <div className="formation-schedule__helper-fields">
+      <details className="formation-schedule__helper">
+        <summary>
+          <span>
+            <WandSparkles size={16} aria-hidden="true" />
+            Préremplir rapidement
+          </span>
+          <small>Date de début, rythme et jours habituels</small>
+        </summary>
+        <div className="formation-schedule__helper-content" aria-label="Préremplissage du calendrier">
+          <div className="formation-schedule__helper-fields">
           <label>
             <span>Date de début</span>
             <input
@@ -383,9 +391,9 @@ export default function FormationSchedulePlanner({
               }}
             />
           </label>
-        </div>
+          </div>
 
-        <fieldset>
+          <fieldset>
           <legend>Jours généralement préférés</legend>
           <div className="formation-schedule__weekdays">
             {TRAINING_WEEKDAYS.map((day) => {
@@ -402,17 +410,18 @@ export default function FormationSchedulePlanner({
               )
             })}
           </div>
-        </fieldset>
+          </fieldset>
 
-        <div className="formation-schedule__helper-action">
+          <div className="formation-schedule__helper-action">
           <button type="button" onClick={applyPrefill}>
             <WandSparkles size={16} aria-hidden="true" />
             {normalizedDates.length ? 'Recalculer le préremplissage' : 'Préremplir le calendrier'}
           </button>
           <p>Vous pourrez ensuite cocher ou décocher chaque date, y compris le week-end.</p>
+          </div>
+          {helperError && <p className="formation-schedule__inline-error" role="alert">{helperError}</p>}
         </div>
-        {helperError && <p className="formation-schedule__inline-error" role="alert">{helperError}</p>}
-      </div>
+      </details>
 
       <div className="formation-schedule__workspace">
         <div className="formation-schedule__calendar">
@@ -540,40 +549,39 @@ export default function FormationSchedulePlanner({
               })}
             </ol>
           )}
-        </div>
-      </div>
+          <div className="formation-schedule__review">
+            <div className="formation-schedule__review-copy">
+              <AlertTriangle size={19} aria-hidden="true" />
+              <div>
+                <h3>Validation définitive</h3>
+                <p>
+                  {reuse
+                    ? `Sélectionnez exactement ${expectedDayCount || 0} nouvelles dates. Le déroulé reste inchangé.`
+                    : 'Planning verrouillé après validation. Première date à J+2 minimum.'}
+                </p>
+              </div>
+            </div>
 
-      <div className="formation-schedule__review">
-        <div className="formation-schedule__review-copy">
-          <AlertTriangle size={19} aria-hidden="true" />
-          <div>
-            <h3>Validation définitive du planning</h3>
-            <p>
-              {reuse
-                ? `Ce module contient ${expectedDayCount || 0} journées. Vous devez sélectionner exactement ${expectedDayCount || 0} nouvelles dates, sans modifier son déroulé.`
-                : 'Après validation, les dates et l’organisation pédagogique seront verrouillées. La première journée doit commencer au moins 48 h plus tard.'}
-            </p>
+            {validation.errors.length > 0 && (
+              <ul className="formation-schedule__errors" aria-label="Points à corriger">
+                {validation.errors.map((error) => <li key={error}>{error}</li>)}
+              </ul>
+            )}
+
+            <label className="formation-schedule__confirmation">
+              <input
+                type="checkbox"
+                checked={lockedConfirmed && validation.valid}
+                disabled={!validation.valid}
+                onChange={(event) => setLockedConfirmed(event.target.checked)}
+              />
+              <span>
+                <CircleCheck size={17} aria-hidden="true" />
+                Je confirme ce calendrier définitif.
+              </span>
+            </label>
           </div>
         </div>
-
-        {validation.errors.length > 0 && (
-          <ul className="formation-schedule__errors" aria-label="Points à corriger">
-            {validation.errors.map((error) => <li key={error}>{error}</li>)}
-          </ul>
-        )}
-
-        <label className="formation-schedule__confirmation">
-          <input
-            type="checkbox"
-            checked={lockedConfirmed && validation.valid}
-            disabled={!validation.valid}
-            onChange={(event) => setLockedConfirmed(event.target.checked)}
-          />
-          <span>
-            <CircleCheck size={17} aria-hidden="true" />
-            Je confirme ce calendrier et comprends qu’il ne pourra plus être modifié après validation.
-          </span>
-        </label>
       </div>
     </section>
   )

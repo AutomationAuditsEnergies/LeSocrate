@@ -22,6 +22,7 @@ import AppLoader from '../components/AppLoader.jsx'
 import CoursFoldersModal from '../components/CoursFolders'
 import DayScheduleTemplates from './DayScheduleTemplates.jsx'
 import FormationSchedulePlanner from './FormationSchedulePlanner.jsx'
+import './CreatePlatformView.css'
 import { getHiddenPipelineProgress, getTeacherPreparation } from '../teacherPreparation'
 import { getAudioStatusMeta, getNextCourseSession, scheduleSelectionIsValid } from '../courseSchedule'
 import {
@@ -1271,8 +1272,14 @@ export default function HRDashboard() {
             </div>
           </div>
 
-        <main className={`relative z-10 min-h-0 min-w-0 flex-1 bg-white px-4 sm:px-6 lg:px-8 ${teacherRosterVisible || recruitmentAssistantVisible ? 'overflow-hidden' : 'overflow-y-auto pb-12'}`}>
-          <div className="mx-auto flex h-full min-h-0 w-full max-w-[1480px] flex-col pt-4 md:pt-6">
+        <main className={`relative z-10 min-h-0 min-w-0 flex-1 bg-white ${
+          showCreateModal
+            ? 'overflow-hidden'
+            : `px-4 sm:px-6 lg:px-8 ${teacherRosterVisible || recruitmentAssistantVisible ? 'overflow-hidden' : 'overflow-y-auto pb-12'}`
+        }`}>
+          <div className={`mx-auto flex h-full min-h-0 w-full flex-col ${
+            showCreateModal ? 'max-w-none' : 'max-w-[1480px] pt-4 md:pt-6'
+          }`}>
           {orderNotice && (
             <div
               className="mb-6 flex items-start gap-3 rounded-xl border px-4 py-3.5 text-sm"
@@ -4021,10 +4028,6 @@ export function CreatePlatformView({
     if (!descriptionEditedRef.current) setTeacherDescription(generatedDescription)
   }, [generatedDescription])
 
-  const regenerateDescription = () => {
-    descriptionEditedRef.current = false
-    setTeacherDescription(generatedDescription)
-  }
   const toggleTeachingDay = (dayId) => {
     setTeachingDays((current) => (
       current.includes(dayId)
@@ -4043,33 +4046,25 @@ export function CreatePlatformView({
   const inputClassName = 'teacher-identity-control w-full rounded-lg border border-[#E1E5EA] bg-white px-3.5 py-2.5 text-sm text-[#0F172A] transition-[border-color,box-shadow,background-color] placeholder:text-[#64748B]'
 
   return (
-    <section className="w-full">
-      <div className="grid items-start overflow-visible rounded-xl border border-[#E7EAEE] bg-white lg:grid-cols-[minmax(22rem,0.9fr)_minmax(0,1.45fr)]">
+    <section className="create-platform-workspace">
+      <div className="create-platform-workspace__layout">
         <aside
-          className="relative flex min-h-[30rem] flex-col overflow-visible rounded-t-xl bg-cover bg-center p-5 sm:min-h-[38rem] lg:sticky lg:top-6 lg:min-h-[calc(100vh-7rem)] lg:rounded-l-xl lg:rounded-tr-none xl:p-6"
+          className="create-platform-workspace__preview"
           style={{ backgroundImage: "url('/teacher-studio-background.webp')" }}
         >
-          <div className="pointer-events-none absolute inset-0 rounded-t-xl bg-[linear-gradient(180deg,rgba(35,29,26,0.04)_0%,rgba(35,29,26,0)_48%,rgba(25,21,19,0.74)_100%)] lg:rounded-l-xl lg:rounded-tr-none" aria-hidden="true" />
+          <div className="create-platform-workspace__preview-shade" aria-hidden="true" />
 
-          <div className="relative z-20 flex items-start justify-between gap-3">
-            <div className="flex items-center gap-2.5 text-[#26211F]">
-              <img src="/socrate-mark.svg" alt="" className="h-8 w-8" />
-              <div>
-                <p className="text-sm font-bold tracking-[-0.01em]">LE SOCRATE</p>
-                <p className="text-xs text-[#5E534D]">Professeur IA</p>
-              </div>
-            </div>
-
+          <div className="create-platform-workspace__customize">
             <div className="relative">
               <button
                 type="button"
                 onClick={() => setColorPickerOpen((open) => !open)}
                 aria-expanded={colorPickerOpen}
                 aria-controls="teacher-color-picker"
-                className="inline-flex min-h-11 items-center gap-2 rounded-full border border-white/25 bg-[#403A36]/90 px-4 py-2 text-xs font-semibold text-white transition-colors hover:bg-[#332E2B] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70"
+                className="create-platform-workspace__customize-button"
               >
                 <Icon name="palette" className="text-base" />
-                Change visual color
+                Personnaliser
               </button>
 
               {colorPickerOpen && (
@@ -4098,143 +4093,81 @@ export function CreatePlatformView({
             </div>
           </div>
 
-          <div className="relative z-10 flex min-h-80 flex-1 items-center justify-center py-6 sm:min-h-96">
+          <div className="create-platform-workspace__avatar-stage">
             <img
               key={selectedColor.id}
               src={selectedColor.image}
               alt={`Aperçu du professeur en ${selectedColor.label.toLowerCase()}`}
-              className="teacher-identity-avatar h-[17rem] w-[17rem] object-contain sm:h-[24rem] sm:w-[24rem] lg:h-[min(52vh,31rem)] lg:w-[min(52vh,31rem)]"
+              className="teacher-identity-avatar create-platform-workspace__avatar"
               draggable="false"
             />
           </div>
 
-          <div className="relative z-10 max-w-[34rem] text-white">
-            <div className="mb-3 flex items-center gap-2">
-              <span className="inline-flex items-center gap-2 rounded-full bg-black/35 px-3 py-1.5 text-xs font-semibold backdrop-blur-sm">
-                <span className="h-2 w-2 rounded-full bg-[#34D399]" />
-                En configuration
-              </span>
-              {(formationMode === 'existing' ? selectedModule?.rncp_code : newFormRncp.trim()) && (
-                <span className="rounded-full bg-black/35 px-3 py-1.5 text-xs font-medium text-white/80 backdrop-blur-sm">
-                  RNCP {formationMode === 'existing' ? selectedModule.rncp_code : newFormRncp.trim()}
-                </span>
-              )}
-            </div>
+          <div className="create-platform-workspace__preview-copy">
             <p className="text-sm font-medium text-white/70">{trainingTitle || 'Formation à renseigner'}</p>
-            <h2 className="mt-1 text-3xl font-bold tracking-[-0.03em] sm:text-4xl">
+            <h2>
               {teacherFirstName.trim() || 'Votre professeur'}
             </h2>
-            <p className="mt-3 max-w-[58ch] text-sm leading-6 text-white/80">
+            <p className="create-platform-workspace__description">
               {teacherDescription || 'La description du professeur apparaîtra ici dès que vous aurez renseigné la formation.'}
             </p>
-            {trainingDays > 0 && (
-              <p className="mt-4 text-xs font-medium text-white/65">
-                {trainingDays} journée{trainingDays > 1 ? 's' : ''} de formation
-              </p>
-            )}
+            <div className="create-platform-workspace__preview-meta">
+              {(formationMode === 'existing' ? selectedModule?.rncp_code : newFormRncp.trim()) && (
+                <span>RNCP {formationMode === 'existing' ? selectedModule.rncp_code : newFormRncp.trim()}</span>
+              )}
+              {trainingDays > 0 && <span>{trainingDays} journée{trainingDays > 1 ? 's' : ''}</span>}
+            </div>
           </div>
         </aside>
 
-        <div className="min-w-0 overflow-hidden rounded-b-xl bg-white lg:rounded-bl-none lg:rounded-r-xl lg:border-l lg:border-[#E7EAEE]">
-          <header className="px-5 py-6 sm:px-6 lg:px-8">
-            <h1 className="text-2xl font-bold tracking-[-0.025em] text-[#0F172A]">
+        <div className="create-platform-workspace__editor">
+          <header className="create-platform-workspace__identity">
+            <div className="create-platform-workspace__identity-heading">
+              <h1>
               {formationMode === 'existing' ? 'Réutiliser un professeur IA' : 'Recruter un professeur IA'}
-            </h1>
-            <p className="mt-1.5 text-sm leading-6 text-[#475569]">
-              Renseignez son identité, sa formation et son calendrier.
-            </p>
-          </header>
-
-          {prefilledFromAssistant && (
-            <div className="recruitment-review-enter mx-5 mb-1 flex items-start gap-3 rounded-xl border border-[#D4D4D8] bg-[#F4F4F5] px-4 py-3.5 sm:mx-6 lg:mx-8" role="status">
-              <Icon name="check_circle" className="mt-0.5 text-lg text-[#3F3F46]" />
-              <div>
-                <p className="text-sm font-semibold text-[#0F172A]">Réponses reportées dans le formulaire</p>
-                <p className="mt-0.5 text-xs leading-5 text-[#475569]">Vérifiez les informations avant de continuer.</p>
-              </div>
+              </h1>
+              <p>Identité et formation</p>
             </div>
-          )}
 
-          <div className="border-t border-[#EEF0F3] px-5 py-6 sm:px-6 lg:px-8">
-            <h2 className="text-lg font-semibold text-[#0F172A]">Identité et formation</h2>
-            <div className="mt-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            <div className="create-platform-workspace__identity-fields">
               <div>
-                <label htmlFor="teacher-first-name" className="mb-2 block text-sm font-medium text-[#334155]">Prénom du professeur</label>
+                <label htmlFor="teacher-first-name">Prénom</label>
                 <input id="teacher-first-name" type="text" value={teacherFirstName} onChange={(event) => setTeacherFirstName(event.target.value)} placeholder="Ex. Lina" autoFocus className={inputClassName} />
               </div>
 
               {formationMode === 'existing' ? (
-                <div className="sm:col-span-1 lg:col-span-2">
-                  <span className="mb-2 block text-sm font-medium text-[#334155]">Professeur à réutiliser</span>
-                  <div className="rounded-lg border border-[#E1E5EA] bg-[#FCFCFD] px-3.5 py-2.5">
+                <div className="create-platform-workspace__existing-module">
+                  <span>Professeur à réutiliser</span>
+                  <div>
                     <p className="text-sm font-semibold text-[#0F172A]">{selectedModule?.tp_name || 'Professeur introuvable'}</p>
-                    <p className="mt-1 text-xs text-[#64748B]">{selectedModule?.rncp_code ? `RNCP ${selectedModule.rncp_code}` : 'Formation archivée'}</p>
+                    <p className="text-xs text-[#64748B]">{selectedModule?.rncp_code ? `RNCP ${selectedModule.rncp_code}` : 'Formation archivée'}</p>
                   </div>
                 </div>
               ) : (
                 <>
                   <div>
-                    <label htmlFor="teacher-training-name" className="mb-2 block text-sm font-medium text-[#334155]">Nom de la formation</label>
+                    <label htmlFor="teacher-training-name">Formation</label>
                     <input id="teacher-training-name" type="text" value={newFormTpName} onChange={(event) => setNewFormTpName(event.target.value)} placeholder="Ex. TP CRCD" className={inputClassName} />
                   </div>
                   <div>
-                    <label htmlFor="teacher-rncp" className="mb-2 block text-sm font-medium text-[#334155]">Code RNCP</label>
+                    <label htmlFor="teacher-rncp">Code RNCP</label>
                     <input id="teacher-rncp" type="text" value={newFormRncp} onChange={(event) => setNewFormRncp(event.target.value)} placeholder="Ex. 35304" className={inputClassName} />
-                  </div>
-                  <div>
-                    <label htmlFor="teacher-training-days" className="mb-2 block text-sm font-medium text-[#334155]">
-                      Nombre approximatif de journées
-                    </label>
-                    <input
-                      id="teacher-training-days"
-                      type="number"
-                      min="1"
-                      max="365"
-                      value={newFormHours}
-                      onChange={(event) => setNewFormHours(event.target.value)}
-                      placeholder="Ex. 16"
-                      className={inputClassName}
-                      aria-describedby="teacher-training-days-help"
-                    />
-                    <p id="teacher-training-days-help" className="mt-1.5 text-xs leading-5 text-[#64748B]">
-                      Aide au préremplissage uniquement. Le nombre final correspondra aux dates cochées.
-                    </p>
                   </div>
                 </>
               )}
             </div>
 
-            <div className="mt-5">
-              <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-                <label htmlFor="teacher-description" className="text-sm font-medium text-[#334155]">Description du professeur</label>
-                <button type="button" onClick={regenerateDescription} disabled={!generatedDescription} className="inline-flex min-h-11 items-center gap-1.5 rounded-lg px-2.5 text-xs font-semibold text-[#3F3F46] transition-colors hover:bg-[#F4F4F5] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#18181B]/50 disabled:cursor-not-allowed disabled:opacity-40">
-                  <Icon name="refresh" className="text-sm" />
-                  Régénérer
-                </button>
-              </div>
-              <textarea
-                id="teacher-description"
-                value={teacherDescription}
-                onChange={(event) => {
-                  descriptionEditedRef.current = true
-                  setTeacherDescription(event.target.value.slice(0, 600))
-                }}
-                rows="4"
-                maxLength="600"
-                placeholder="La description sera générée à partir du nom de la formation."
-                className={`${inputClassName} min-h-28 resize-y leading-6`}
-                aria-describedby="teacher-description-help"
-              />
-              <div id="teacher-description-help" className="mt-1.5 flex items-center justify-between gap-3 text-xs text-[#64748B]">
-                <span>Générée automatiquement, vous pouvez la modifier.</span>
-                <span className="tabular-nums">{teacherDescription.length}/600</span>
-              </div>
-            </div>
-          </div>
+            {prefilledFromAssistant && (
+              <p className="create-platform-workspace__prefilled recruitment-review-enter" role="status">
+                <Icon name="check_circle" className="text-base" />
+                Informations préremplies
+              </p>
+            )}
+          </header>
 
-          <div className="border-t border-[#EEF0F3] px-5 py-6 sm:px-6 lg:px-8">
+          <div className="create-platform-workspace__schedule">
             {usesLegacyReuseSchedule ? (
-              <section aria-labelledby="legacy-schedule-title">
+              <section className="create-platform-workspace__legacy" aria-labelledby="legacy-schedule-title">
                 <h2 id="legacy-schedule-title" className="text-lg font-semibold text-[#18181B]">
                   Calendrier du module historique
                 </h2>
@@ -4324,7 +4257,7 @@ export function CreatePlatformView({
           </div>
 
           {submissionError && (
-            <div className="border-t border-[#D4D4D8] bg-[#F4F4F5] px-5 py-3.5 text-sm text-[#3F3F46] sm:px-6 lg:px-8" role="alert">
+            <div className="create-platform-workspace__error" role="alert">
               <div className="flex items-start gap-2.5">
                 <Icon name="error_outline" className="mt-0.5 text-base" />
                 <span>{submissionError}</span>
@@ -4332,13 +4265,13 @@ export function CreatePlatformView({
             </div>
           )}
 
-          <footer className="border-t border-[#EEF0F3] bg-[#FCFCFD] px-5 py-4 sm:px-6 lg:flex lg:items-center lg:justify-between lg:gap-5 lg:px-8">
-            <div>
+          <footer className="create-platform-workspace__footer">
+            <div className="create-platform-workspace__price">
               <p className="text-xs font-medium text-[#64748B]">{paymentRequired ? 'Paiement unique' : 'Compte interne'}</p>
               <p className="mt-0.5 text-base font-bold text-[#0F172A]">{paymentRequired ? formatPrice(estimatedAmountCents, product?.currency) : 'Paiement non requis'}</p>
               {paymentRequired && product?.unit_amount_cents && trainingDays > 0 && <p className="mt-0.5 text-xs text-[#64748B]">{formatPrice(product.unit_amount_cents, product.currency)} × {trainingDays} journée{trainingDays > 1 ? 's' : ''}</p>}
             </div>
-            <div className="mt-4 flex flex-col-reverse gap-2 sm:flex-row lg:mt-0">
+            <div className="create-platform-workspace__actions">
               <button type="button" onClick={onCancel} disabled={creating} className="min-h-11 rounded-lg border border-[#D4D4D8] bg-white px-4 py-2 text-sm font-semibold text-[#3F3F46] transition-colors hover:bg-[#F4F4F5] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#18181B]/40 disabled:opacity-50">Annuler</button>
               <button type="button" onClick={() => onCreate(teacherDescription, usesLegacyReuseSchedule ? legacySchedulePayload : schedulePlan.payload)} disabled={creating || !canCreateTeacher} className="min-h-11 rounded-lg bg-[#18181B] px-5 py-2 text-sm font-semibold text-white transition-[background-color,transform] hover:bg-[#27272A] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#18181B]/50 focus-visible:ring-offset-2 active:scale-[0.98] disabled:cursor-not-allowed disabled:bg-[#A1A1AA] disabled:opacity-60">
                 {creating ? 'Préparation de la commande…' : billingLoading ? 'Chargement du tarif…' : paymentRequired ? billing ? `Payer ${formatPrice(estimatedAmountCents, product?.currency)} et lancer` : 'Paiement temporairement indisponible' : formationMode === 'existing' ? 'Réutiliser ce professeur' : 'Lancer la préparation'}
